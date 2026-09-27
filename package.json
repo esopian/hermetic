@@ -33,6 +33,7 @@
     "app:build:stable": "cd packages/app && PATH=$PATH:$HOME/.hutch/bin hutch run build:stable",
     "build:host": "bun scripts/build.ts host",
     "build:all": "bun scripts/build.ts all",
+    "release": "bun scripts/release.ts",
     "prepare": "git config core.hooksPath .githooks",
     "dev": "bun scripts/dev-app.ts dev",
     "dev:fixture": "bun scripts/dev-app.ts dev:fixture",
