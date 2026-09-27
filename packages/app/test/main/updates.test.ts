@@ -35,7 +35,7 @@ function runningOp(): OpSummary {
   return {
     id: "op-1",
     method: "agents.create",
-    target: "tel-aviv",
+    target: "lisbon",
     status: "running",
     started_at: "2026-09-21T00:00:00.000Z",
     finished_at: null,

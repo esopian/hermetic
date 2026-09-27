@@ -37,10 +37,10 @@ describe("closeDecision", () => {
   });
 
   test("one op is named, in the singular", () => {
-    const decision = closeDecision([op("agents.create", "tel-aviv")]);
+    const decision = closeDecision([op("agents.create", "lisbon")]);
     expect(decision.needsPrompt).toBe(true);
     expect(decision.message).toContain("1 operation is still running");
-    expect(decision.message).toContain("agents.create tel-aviv");
+    expect(decision.message).toContain("agents.create lisbon");
   });
 
   test("an op with no target is named by method alone", () => {
@@ -52,12 +52,12 @@ describe("closeDecision", () => {
 
   test("several ops are all named, in the plural", () => {
     const decision = closeDecision([
-      op("agents.create", "tel-aviv"),
+      op("agents.create", "lisbon"),
       op("agents.destroy", "oslo"),
       op("plan.apply", "lima"),
     ]);
     expect(decision.message).toContain("3 operations are still running");
-    for (const line of ["agents.create tel-aviv", "agents.destroy oslo", "plan.apply lima"]) {
+    for (const line of ["agents.create lisbon", "agents.destroy oslo", "plan.apply lima"]) {
       expect(decision.message).toContain(line);
     }
     expect(decision.message).not.toContain("more");
@@ -175,7 +175,7 @@ describe("installCloseGuard", () => {
   });
 
   test("running ops deny the close in the same tick", () => {
-    const h = harness([op("agents.create", "tel-aviv")], new Promise<boolean>(() => {}));
+    const h = harness([op("agents.create", "lisbon")], new Promise<boolean>(() => {}));
     // Nothing awaited: the native side reads the response the moment the
     // listener returns, and the dialog has not even been drawn yet.
     expect(h.fire("will-close")).toBe(true);
@@ -183,12 +183,12 @@ describe("installCloseGuard", () => {
   });
 
   test("a quit reaches the same guard", () => {
-    const h = harness([op("agents.create", "tel-aviv")], new Promise<boolean>(() => {}));
+    const h = harness([op("agents.create", "lisbon")], new Promise<boolean>(() => {}));
     expect(h.fire("before-quit")).toBe(true);
   });
 
   test("running ops prompt with the decision's message", async () => {
-    const running = [op("agents.create", "tel-aviv")];
+    const running = [op("agents.create", "lisbon")];
     const h = harness(running, true);
     h.fire("before-quit");
     await tick();
@@ -209,7 +209,7 @@ describe("installCloseGuard", () => {
   });
 
   test("declining leaves the app up", async () => {
-    const h = harness([op("agents.create", "tel-aviv")], false);
+    const h = harness([op("agents.create", "lisbon")], false);
     expect(h.fire("will-close")).toBe(true);
     await tick();
     expect(h.calls.filter((c) => c === "shutdown")).toEqual([]);
@@ -224,7 +224,7 @@ describe("installCloseGuard", () => {
     const pending = new Promise<boolean>((r) => {
       resolve = r;
     });
-    const h = harness([op("agents.create", "tel-aviv")], pending);
+    const h = harness([op("agents.create", "lisbon")], pending);
 
     expect(h.fire("will-close")).toBe(true);
     await tick();
@@ -242,7 +242,7 @@ describe("installCloseGuard", () => {
   });
 
   test("declining then trying again asks again", async () => {
-    const h = harness([op("agents.create", "tel-aviv")], false);
+    const h = harness([op("agents.create", "lisbon")], false);
     h.fire("will-close");
     await tick();
     h.fire("will-close");
