@@ -1,0 +1,100 @@
+/* GFM and math inside a message body.
+   ---------------------------------------------------------------------------
+   Split out of `chat.css` rather than appended to it: that file is already
+   2261 lines against the 2500-line ceiling in `scripts/lint.ts`, and these
+   rules are one self-contained subject. Everything here is scoped to
+   `.ch-msg-body`, so it styles rendered markdown and nothing else, and it
+   borrows the same tokens the code and blockquote rules next door use. */
+
+.ch-msg-body .ch-md-table {
+  margin: 0 0 11px;
+  border-collapse: collapse;
+  font-size: 13px;
+  /* A model can write a table wider than the column. Scrolling it is wrong
+     inside a table element, so it shrinks to fit and wraps its cells. */
+  width: 100%;
+  table-layout: auto;
+}
+.ch-msg-body .ch-md-table th,
+.ch-msg-body .ch-md-table td {
+  border: 1px solid var(--line2);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.ch-msg-body .ch-md-table th {
+  background: var(--bg3);
+  font-weight: 800;
+}
+
+.ch-msg-body hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--line2);
+}
+
+/* A task item carries its own box, so it opts out of the bullet the list
+   would otherwise draw beside it. */
+.ch-msg-body li.ch-task {
+  list-style: none;
+  margin-left: -20px;
+}
+.ch-msg-body li.ch-task input[type="checkbox"] {
+  margin: 0 7px 0 0;
+  vertical-align: baseline;
+}
+
+/* TeX kept as source — the fallback path, for an expression KaTeX refused or
+   one carrying a redaction marker (`chat-math.ts`): monospace so the symbols
+   and grouping read, tinted so it is visibly an expression and not prose that
+   happened to contain a caret. */
+.ch-msg-body .ch-math {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--fg2);
+}
+.ch-msg-body .ch-math.block {
+  display: block;
+  margin: 0 0 11px;
+  padding: 7px 10px;
+  background: var(--bg3);
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* Typeset by KaTeX. It brings its own faces, sizes and spacing, so the source
+   styling above is handed back — the mono face in particular would be applied
+   to the glyphs KaTeX positioned for a serif one. `.katex-display` does its own
+   centring and margins, so the wrapper only keeps the bottom gap that separates
+   a display expression from the paragraph under it. */
+.ch-msg-body .ch-math.rendered {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+.ch-msg-body .ch-math.block.rendered {
+  padding: 4px 0;
+  background: none;
+  white-space: normal;
+}
+/* A long expression is not worth a horizontal scrollbar on the whole column. */
+.ch-msg-body .ch-math.rendered .katex-display {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* GFM strikethrough. The browser's own line-through is kept; the colour drops
+   to the dim token because struck text is, by definition, no longer the point. */
+.ch-msg-body del {
+  color: var(--fg3);
+  text-decoration-thickness: 1px;
+}
+
+/* A sublist sits inside its parent `<li>`, so it needs its own indent and no
+   blank line either side of it — a nested run must read as one list. */
+.ch-msg-body li > ul,
+.ch-msg-body li > ol {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}

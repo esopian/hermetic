@@ -1,0 +1,22 @@
+# Pinned action SHAs (.github/workflows/, .github/actions/) do not update
+# themselves, and an unmaintained pin is as much a liability as a mutable tag.
+# Dependabot proposes the bumps; the diff still gets read like any other change
+# — a pin makes an action immutable, not trustworthy.
+#
+# There is deliberately no `bun` ecosystem entry: Dependabot's support for this
+# repository's text `bun.lock` is unconfirmed, and generating a second
+# package-manager lockfile to satisfy the bot would break the
+# `bun install --frozen-lockfile` parity between CI and a laptop. Advisories
+# against the resolved tree are covered instead by `bun run audit:dependencies`.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # Composite actions are not discovered through the workflow entry above; the
+  # directory holding the action.yml has to be listed on its own.
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup
+    schedule:
+      interval: weekly

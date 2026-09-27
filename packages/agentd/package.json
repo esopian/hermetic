@@ -1,0 +1,19 @@
+{
+  "name": "@hermetic/agentd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build --compile --target=bun-linux-arm64 src/main.ts --outfile dist/hermeticd"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1124.0",
+    "@aws-sdk/client-s3": "^3.1124.0",
+    "@aws-sdk/client-ssm": "^3.1124.0",
+    "@aws-sdk/lib-dynamodb": "^3.1124.0",
+    "@hermetic/core": "workspace:*"
+  }
+}

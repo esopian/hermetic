@@ -1,0 +1,80 @@
+name: Release
+
+# Tag-triggered, not branch-triggered: `git tag v<version>` on master (after the
+# version bump lands there) is what starts a release. See CONTRIBUTING.md
+# "Cutting a release" for the full procedure this workflow is one half of.
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Nothing here writes to the repository except the one job that has to
+# (publish, below) — its own permissions block carries the grant and the
+# reason, same shape as ci.yml's default.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish
+    runs-on: macos-14
+    timeout-minutes: 30
+    permissions:
+      # contents: write — publishes the GitHub Release and uploads packages/app/artifacts/*
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          hutch: true
+
+      # A tag that does not match the version in package.json means someone
+      # tagged the wrong commit, or forgot to bump the version first — fail
+      # before anything is built, not after `gh release create` half-runs.
+      - name: Assert the tag matches package.json version
+        shell: bash
+        run: |
+          version=$(jq -r .version package.json)
+          expected="v${version}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package.json version ${version} (expected ${expected})" >&2
+            exit 1
+          fi
+
+      # `bun run check` ends in lint:cfn and lint:sh, which run cfn-lint and
+      # shellcheck through `uvx` (pinned in scripts/lint-cfn.ts and
+      # scripts/lint-sh.ts) — the same install ci.yml's lint jobs make.
+      - name: Install uv (for cfn-lint and shellcheck)
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - run: bun run check
+      # Headroom, not a fix: v0.1.4's and v0.1.5's "No space left on device"
+      # came from the DMG's own mounted volume being sized by hdiutil's
+      # estimator, not from the runner's disk (v0.1.5 failed with 110 GB
+      # free) — `packages/app/hooks/post-package.ts` is what addresses that.
+      # The macos-14 image still leaves only a few GB free once Xcode,
+      # Android and .NET are on it, and this build writes a few hundred MB of
+      # sidecars, so drop the toolchains it never touches and print what is
+      # left.
+      - name: Free runner disk
+        shell: bash
+        run: |
+          df -h / | tail -1
+          sudo rm -rf ~/Library/Android/sdk /usr/local/share/dotnet /Library/Frameworks/Mono.framework \
+            ~/.rustup ~/.cargo /usr/local/lib/node_modules ~/Library/Developer/CoreSimulator/Caches
+          df -h / | tail -1
+      - run: bun run app:build
+
+      - name: Publish the GitHub Release
+        env:
+          # Scoped to this job by the `permissions` block above; every other
+          # job in every other workflow keeps the read-only default.
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" packages/app/artifacts/* --generate-notes

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Wired up by `bun install` (root package.json's `prepare` sets core.hooksPath).
+#
+# The fast half of `bun run check`, on the staged bytes only. Formatting is
+# applied, never enforced: Biome formats and applies its safe fixes to what is
+# about to be committed, the result is re-staged, and only then does the hook
+# check. A commit is never blocked over whitespace — it simply carries the
+# formatted bytes. What Biome cannot fix on its own (real lint errors, unsafe
+# fixes) still fails, as do the repo's own four rules (scripts/lint.ts).
+# Typecheck and the test suite stay in `bun run check` / `bun run ci` — a hook
+# that takes a minute is a hook people learn to skip.
+#
+# Two paths, because `git add` is only safe for one of them:
+#
+#   * A file staged whole is formatted on disk and re-staged, so the working
+#     tree and the commit agree.
+#   * A file staged with other edits left unstaged cannot be `git add`-ed —
+#     that would sweep those edits into the commit. Its staged blob is formatted
+#     through Biome's stdin mode and written straight to the index, leaving the
+#     working tree untouched.
+#
+# Emergency escape: `git commit --no-verify`. CI runs the same checks as jobs,
+# so anything skipped here is caught before merge, not swallowed.
+#
+# Bash 3.2 (the macOS system bash) runs this: no mapfile, no associative arrays.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# Files whose working tree already differs from the index, before Biome runs.
+dirty=$(git diff --name-only --diff-filter=ACMR)
+
+is_dirty() { printf '%s\n' "$dirty" | grep -Fxq -- "$1"; }
+
+echo "pre-commit: biome format + safe fixes (staged)"
+
+# Partially staged files first: format the index blob only, via stdin.
+held=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  is_dirty "$f" || continue
+  before=$(git rev-parse ":$f" 2>/dev/null) || continue
+  after=$(git cat-file blob "$before" |
+    bunx biome check --write --stdin-file-path="$f" 2>/dev/null |
+    git hash-object -w --path "$f" --stdin) || continue
+  [ -n "$after" ] && [ "$after" != "$before" ] || continue
+  git update-index --cacheinfo "$(git ls-files -s -- "$f" | awk '{print $1}'),$after,$f"
+  held="$held  $f
+"
+done <<EOF
+$staged
+EOF
+
+if [ -n "$held" ]; then
+  echo "pre-commit: formatted in the index only (other edits left unstaged):"
+  printf '%s' "$held"
+fi
+
+# Everything else: format on disk and re-stage it.
+# Quiet: whatever it could not fix is reported by the check pass below.
+bunx biome check --write --staged --no-errors-on-unmatched >/dev/null 2>&1 || true
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  is_dirty "$f" || git add -- "$f"
+done <<EOF
+$(git diff --name-only --diff-filter=ACMR | grep -Fxf <(printf '%s\n' "$staged") || true)
+EOF
+
+echo "pre-commit: biome check (staged)"
+bunx biome check --staged --no-errors-on-unmatched
+
+echo "pre-commit: bun run lint"
+bun run lint

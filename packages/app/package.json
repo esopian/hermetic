@@ -1,0 +1,16 @@
+{
+  "name": "@hermetic/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hermetic/core": "workspace:*",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "electrobun": "2.0.1"
+  }
+}

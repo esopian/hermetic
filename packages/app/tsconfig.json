@@ -1,0 +1,25 @@
+{
+  // The devkit's own `tsconfig.json` cannot be extended: it carries a `baseUrl`,
+  // which TypeScript 7 removed outright (TS5102), and the error is fatal
+  // wherever it appears in an `extends` chain. So the repo's strict options stay
+  // the single parent and the one mapping this package needs is written out
+  // here, pointing straight at the SDK `hutch electrobun prepare` projects into
+  // `.hutch/devkit/` — the `electrobun` npm package is a bootstrap whose exports
+  // throw and ships no types at all.
+  //
+  // `bun run typecheck` refuses with a pointer to `bun run app:prepare` when
+  // that directory is absent, because "cannot find module electrobun/bun" does
+  // not say which command is missing.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": { "electrobun/bun": ["./.hutch/devkit/api/sdks/main/index.ts"] }
+  },
+  "include": [
+    "hooks/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "hutch.config.ts",
+    "electrobun.config.ts"
+  ]
+}

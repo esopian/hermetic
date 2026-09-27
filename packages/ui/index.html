@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hermetic</title>
+<!--
+  The app's page, copied to `views/main/index.html` beside
+  what Electrobun built from `src/entry-app.tsx`. Both names below are the
+  builder's and neither is negotiable: the script is always `index.js`, the
+  stylesheet is named after the entry file (`entry-app.css`), and `index.js`
+  does not inject it — so the link has to be here.
+
+  That is why the tags name *built* files rather than the source entry a
+  bundler would be given: Electrobun copies this html across without rewriting
+  anything in it. It was `index-app.html` until the HTTP head was deleted, when
+  the Bun HTML import that wanted `src/main.tsx` went with it.
+
+  `fonts/` is carried by the same `build.copy`, so the relative paths in
+  `fonts.css` resolve here exactly as they do under the dev server.
+-->
+<link rel="stylesheet" href="./fonts/fonts.css" />
+<link rel="stylesheet" href="./entry-app.css" />
+<div id="root"></div>
+<script type="module" src="./index.js"></script>

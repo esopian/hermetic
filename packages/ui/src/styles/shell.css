@@ -1,0 +1,107 @@
+/*
+ * The app shell's fleet page: the `N AGENTS | N VOLUMES` lens switch that is
+ * the toolbar's headline, `+ New agent` at the toolbar's right end, and the
+ * loose-volume suffix on the Fleet tab's badge (docs/ui-brief.md, Layout).
+ */
+
+/* ── lens switch ────────────────────────────────────────────────────────── */
+
+.lens-switch {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.lens-switch button {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 18px 4px 0;
+  margin-right: 18px;
+  border-bottom: 4px solid transparent;
+  font-size: 18px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.lens-switch button:hover {
+  color: var(--fg2);
+}
+.lens-switch button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.lens-switch button[aria-pressed="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+.lens-switch b {
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.lens-switch .skel {
+  align-self: center;
+}
+.lens-switch em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: none;
+  color: var(--text-accent, var(--acc));
+}
+.lens-switch .lens-pending {
+  color: var(--fg3);
+  font-weight: 500;
+  animation: hpulse 1.6s infinite;
+}
+/* The legend sits under the switch rather than beside a bare number now. */
+.lens-switch + .toolbar-counts {
+  margin-top: 10px;
+}
+
+/* ── + New agent ────────────────────────────────────────────────────────── */
+
+.toolbar-divider {
+  align-self: stretch;
+  width: 1px;
+  min-height: 40px;
+  background: var(--line2);
+  margin: 0 4px;
+}
+.toolbar-new {
+  height: 40px;
+  flex-shrink: 0;
+}
+.toolbar-new-plus {
+  font-size: 18px;
+  line-height: 1;
+}
+.toolbar-new-key {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.6;
+}
+
+/* ── Fleet tab badge ────────────────────────────────────────────────────── */
+
+.viewnav-loose {
+  color: var(--text-accent, var(--acc));
+  font-weight: 700;
+}
+/* On an inverted tab, the foreground is the page colour, not accent ink. */
+.viewnav button[aria-pressed="true"] .viewnav-loose {
+  color: inherit;
+}
+
+/* ── empty fleet ────────────────────────────────────────────────────────── */
+
+.empty-first-agent {
+  height: 48px;
+  padding: 0 28px;
+  font-size: 16px;
+}

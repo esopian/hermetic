@@ -1,0 +1,519 @@
+/*
+ * The agent drawer (`AgentDrawer.tsx`, `components/agent/*`): a short header,
+ * the env strip, then a 190px left nav of sections beside one section at a
+ * time. Every colour is a theme token from `styles.css`, so light and dark
+ * both follow the app's theme without rules of their own here.
+ */
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+.dr-head {
+  padding: 16px 24px 14px;
+  align-items: start;
+}
+.dr-head .detail-name {
+  font-size: 26px;
+}
+.dr-head .drawer-title {
+  margin-top: 4px;
+}
+.dr-head-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.dr-head-status .detail-host {
+  margin-top: 0;
+  font-size: 11px;
+}
+.dr-head-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg2);
+  flex: none;
+}
+.dr-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dr-head-actions .btn-sm {
+  height: 32px;
+  box-sizing: border-box;
+}
+
+/* ── the two columns ────────────────────────────────────────────────────── */
+.dr-side {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.dr-snav {
+  border-right: 3px solid var(--fg);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-height: 0;
+  overflow: auto;
+}
+.dr-snav [role="tablist"] {
+  display: flex;
+  flex-direction: column;
+}
+.dr-snav [role="tab"] {
+  all: unset;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px;
+  font-weight: 800;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dr-snav [role="tab"]:hover:not([disabled]):not(.on) {
+  background: var(--bg2);
+}
+.dr-snav [role="tab"]:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+.dr-snav [role="tab"] small {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-snav [role="tab"] small.acc {
+  color: var(--acc);
+}
+.dr-snav [role="tab"].on {
+  background: var(--fg);
+  color: var(--bg);
+}
+.dr-snav [role="tab"].on small {
+  color: var(--bg);
+  opacity: 0.75;
+}
+.dr-snav [role="tab"][disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.dr-snav-listen {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.dr-snav-listen .hint {
+  font-size: 11px;
+  color: var(--fg3);
+  line-height: 1.4;
+}
+.dr-snav-foot {
+  margin-top: auto;
+  padding: 12px 16px;
+  font-size: 11px;
+  color: var(--fg3);
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+/* The right column: the pinned op rail, then the section, which scrolls. */
+.dr-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.dr-main > .drawer-op,
+.dr-main > .opbar {
+  flex: none;
+}
+.dr-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── a section ──────────────────────────────────────────────────────────── */
+.dr-pane {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.dr-pane .hint {
+  font-size: 12px;
+  color: var(--fg3);
+  line-height: 1.45;
+}
+.dr-pane .kv {
+  margin-top: 10px;
+}
+.dr-say p {
+  margin: 4px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--fg2);
+}
+.dr-say b {
+  color: var(--fg);
+}
+.dr-say-go {
+  margin-top: 10px;
+  height: 30px;
+  align-self: flex-start;
+  display: inline-flex;
+}
+.dr-callout {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-left: 3px solid var(--acc);
+  background: var(--bg2);
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.dr-callout.warn {
+  border-left-color: var(--warn);
+}
+.dr-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.dr-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.dr-kv2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+.dr-kv2 .kv {
+  grid-template-columns: 80px minmax(0, 1fr);
+  margin-top: 0;
+}
+.dr-kv-sub {
+  display: block;
+  color: var(--fg3);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.dr-kv2 + .hint {
+  margin-top: 10px;
+}
+
+/* Health: four checks as a 2×2 grid of chips, the detail under the name. */
+.dr-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  background: var(--line);
+  border: 2px solid var(--line);
+}
+.dr-check {
+  background: var(--bg);
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.dr-check i {
+  width: 12px;
+  height: 12px;
+  display: inline-block;
+}
+/* A check's label never breaks mid-word (DASHBOARD did in the old 90px column). */
+.dr-check b {
+  white-space: nowrap;
+}
+.dr-check small {
+  grid-column: 2;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg3);
+  overflow-wrap: anywhere;
+}
+.dr-pane .probe-head .kicker {
+  font-family: inherit;
+}
+.dr-tiles {
+  border: 2px solid var(--line);
+}
+.dr-act {
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg2);
+  overflow-wrap: anywhere;
+}
+.dr-act.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* The bootstrap checklist and the skew band bring their own padding for the
+   old full-width body; inside a section they sit on the section's gutter. */
+.dr-pane > .skew-wrap {
+  padding: 0;
+}
+.dr-pane > .bootstrap {
+  border: 2px solid var(--line);
+}
+.dr-pane > .bootstrap .bootstrap-head {
+  padding: 12px 14px;
+}
+.dr-pane > .bootstrap .stage-list {
+  padding: 0 14px 12px;
+}
+
+/* ── Chat, Desktop ──────────────────────────────────────────────────────── */
+.dr-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dr-chat .ch-drawer-chat {
+  flex: 1;
+  height: auto;
+  min-height: 420px;
+}
+.dr-desktop {
+  padding: 0;
+  flex: 1;
+}
+
+/* ── Logs ───────────────────────────────────────────────────────────────── */
+.dr-logbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.dr-logsel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.dr-logsel select {
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 0;
+}
+.dr-logbar .btn-sm {
+  height: 34px;
+  box-sizing: border-box;
+}
+.dr-logpane {
+  line-height: 1.6;
+  max-height: none;
+  min-height: 240px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── Lifecycle ──────────────────────────────────────────────────────────── */
+.dr-lcg {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.dr-lc {
+  border: 2px solid var(--line2);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.dr-lc > .between {
+  width: 100%;
+}
+.dr-lc-title {
+  font-size: 14px;
+  text-transform: uppercase;
+  font-weight: 900;
+}
+.dr-lc p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg2);
+  line-height: 1.45;
+}
+.dr-lc.rec {
+  border-color: var(--acc);
+}
+.dr-lc.off > :not(.between):not(.hint):not(button) {
+  opacity: 0.6;
+}
+.dr-lc.wide {
+  grid-column: 1 / -1;
+}
+.dr-lc .hint {
+  margin: 0 0 4px;
+}
+.dr-lc .btn-sm {
+  margin-top: auto;
+}
+.dr-pane .between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.dr-kl {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 2px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--fg2);
+  margin-bottom: 4px;
+}
+.dr-kl span {
+  color: var(--fg3);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding-top: 1px;
+}
+.dr-tag,
+.dr-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border: 1px solid var(--line2);
+  color: var(--fg3);
+  white-space: nowrap;
+}
+.dr-tag {
+  border-color: var(--acc);
+  color: var(--acc);
+  font-weight: 700;
+}
+.dr-pill.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.dr-btn-warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.dr-btn-ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.dr-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg2);
+}
+.dr-ask > span {
+  flex-basis: 100%;
+}
+.dr-gone {
+  font-size: 12px;
+  color: var(--fg3);
+  border: 2px solid var(--line2);
+  padding: 12px 14px;
+}
+
+.dr-danger {
+  border: 2px solid var(--bad);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dr-danger-title {
+  font-size: 15px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.dr-danger p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--fg2);
+  max-width: 52ch;
+}
+.dr-danger .btn-danger {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+}
+/* The destroy confirm keeps its own panel look, fitted inside the zone. */
+.dr-danger .confirm {
+  margin: 0 -14px -14px;
+  border-top-width: 2px;
+  padding: 16px 14px;
+}
+
+/* Keep / delete the data volume: two labelled radios, the chosen one filled. */
+.dr-vol {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  border: 2px solid var(--line2);
+}
+.dr-vol > label {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.dr-vol > label + label {
+  border-left: 1px solid var(--line2);
+}
+.dr-vol > label.on {
+  background: var(--bg);
+}
+.dr-vol input[type="radio"] {
+  accent-color: var(--fg);
+  margin-top: 3px;
+}
+.dr-vol small {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg3);
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}

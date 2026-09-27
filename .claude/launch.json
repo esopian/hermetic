@@ -1,0 +1,27 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev"]
+    },
+    {
+      "name": "dev:hmr",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev:hmr"],
+      "port": 5273,
+      "autoPort": false
+    },
+    {
+      "name": "dev:fixture",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev:fixture"]
+    },
+    {
+      "name": "dev:wizard",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev:wizard"]
+    }
+  ]
+}

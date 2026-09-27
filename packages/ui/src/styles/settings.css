@@ -1,0 +1,1102 @@
+/*
+ * Settings, the S-1 template (`docs/ui-brief.md` § Settings): a grouped rail,
+ * a header stating scope, and bodies built only from setting rows, lists and
+ * status blocks (`components/settings/Section.tsx`). Every rule is scoped under
+ * `.st-view` or carries an `st-` prefix, so nothing here reaches another view.
+ */
+
+/* ── frame ───────────────────────────────────────────────────────────────── */
+
+.st-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+
+.st-rail {
+  border-right: 3px solid var(--fg);
+  padding: 14px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.st-back {
+  all: unset;
+  cursor: pointer;
+  margin: 0 18px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+.st-back:hover {
+  color: var(--fg);
+}
+.st-back:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+.st-rg {
+  display: flex;
+  flex-direction: column;
+}
+.st-rgh {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 18px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.st-rgh .mono {
+  letter-spacing: 0;
+  font-weight: 500;
+  text-transform: none;
+}
+.st-ri {
+  height: 34px;
+  border-left: 3px solid transparent;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 0 18px 0 15px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--fg2);
+  text-decoration: none;
+  transition:
+    background-color var(--motion-fast, 0.12s) var(--ease-ui, ease),
+    color var(--motion-fast, 0.12s) var(--ease-ui, ease);
+}
+.st-ri:hover {
+  color: var(--fg);
+  background: var(--bg2);
+}
+.st-ri:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+.st-ri .sq,
+.st-nosq {
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  display: inline-block;
+}
+.st-ri-l {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-ri em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg3);
+}
+.st-ri.on {
+  background: var(--sel);
+  border-left-color: var(--acc);
+  color: var(--fg);
+  font-weight: 900;
+}
+.st-rdanger {
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+/* Danger leads to teardown, so the rail says so before the click — and keeps
+   saying it when the section is open. */
+.st-ri-d,
+.st-ri-d:hover,
+.st-ri-d.on {
+  color: var(--bad);
+}
+.st-ri-d.on {
+  border-left-color: var(--bad);
+}
+
+.st-main {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+/* The squares Settings uses beyond the shared ok/warn/bad. */
+.st-view .sq.acc {
+  background: var(--acc);
+}
+.st-view .sq.off {
+  background: var(--line2);
+}
+
+/* ── page header ─────────────────────────────────────────────────────────── */
+
+.st-page {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 26px 40px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+.st-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  border-bottom: 3px solid var(--fg);
+  padding-bottom: 16px;
+  margin-bottom: -4px;
+}
+.st-hd-main {
+  min-width: 0;
+}
+.st-hd-k {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.st-title {
+  margin: 8px 0 6px;
+  font-size: 26px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.st-desc {
+  margin: 0;
+  color: var(--fg2);
+  font-size: 13px;
+}
+.st-hd-a {
+  display: flex;
+  gap: 10px;
+  flex: none;
+}
+.st-hd-a .btn {
+  height: 40px;
+}
+.st-hd-a .btn[disabled] {
+  opacity: 0.4;
+}
+
+.st-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 2px solid var(--fg);
+  white-space: nowrap;
+}
+.st-scope b {
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.st-fleet {
+  background: var(--fg);
+  color: var(--bg);
+}
+.st-laptop {
+  color: var(--fg);
+}
+.st-ro {
+  border-style: dotted;
+  border-color: var(--fg2);
+  color: var(--fg2);
+}
+
+/* ── blocks ──────────────────────────────────────────────────────────────── */
+
+.st-blk {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.st-bh {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  border-bottom: 2px solid var(--fg);
+  padding-bottom: 6px;
+  min-height: 26px;
+}
+.st-bh-t {
+  margin: 0;
+}
+.st-bh-r {
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.st-bh-r .mono {
+  font-size: 11px;
+}
+.st-tally {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg2);
+}
+.st-blk > .st-hint,
+.st-blk > .st-callout,
+.st-blk > .kv {
+  margin-top: 12px;
+}
+.st-hint {
+  color: var(--fg3);
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+.st-err {
+  color: var(--bad);
+}
+.st-foot {
+  font-size: 11px;
+  color: var(--fg3);
+  margin: -12px 0 0;
+}
+
+/* ── A · setting rows ────────────────────────────────────────────────────── */
+
+.st-sr {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 120px;
+  gap: 20px;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 0 10px 12px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  margin-left: -15px;
+}
+.st-sr.chg {
+  border-left-color: var(--acc);
+}
+.st-sl {
+  min-width: 0;
+}
+.st-sl-l {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+}
+.st-sl-d {
+  display: block;
+  font-size: 12px;
+  color: var(--fg3);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-sc {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.st-w {
+  width: 100%;
+  max-width: 420px;
+}
+.st-sc .select-input,
+.st-sc .key-input {
+  height: 38px;
+}
+.st-sc .key-input {
+  width: 100%;
+  max-width: 420px;
+}
+.st-sc .key-input.st-num {
+  max-width: 140px;
+}
+.st-seg button {
+  height: 34px;
+  font-size: 12px;
+}
+.st-si {
+  justify-self: end;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.st-def {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.st-chg {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--acc);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.st-chg small {
+  font-weight: 500;
+  color: var(--fg3);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+.st-tick {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ok);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.st-tick:empty {
+  display: none;
+}
+.st-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg2);
+}
+.st-check input {
+  accent-color: var(--fg);
+}
+.st-time {
+  height: 36px;
+  width: 110px;
+  padding: 0 8px;
+  border: 2px solid var(--line2);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.st-inline-input {
+  height: 34px;
+  padding: 0 10px;
+  border: 2px solid var(--line2);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+}
+
+/* ── B · lists ───────────────────────────────────────────────────────────── */
+
+.st-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.st-list th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--line2);
+  white-space: nowrap;
+}
+.st-list td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.st-list .sq {
+  margin: 0;
+}
+.st-list td.st-c-sq,
+.st-list th.st-c-sq {
+  width: 26px;
+  padding-right: 0;
+}
+.st-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.st-cell-sm {
+  font-size: 12px;
+  color: var(--fg2);
+}
+.st-sub {
+  font-size: 11px;
+  margin-top: 2px;
+  color: var(--fg3);
+}
+.st-why {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 3px;
+}
+.st-why.warn {
+  color: var(--warn);
+}
+.st-acts {
+  text-align: right;
+  white-space: nowrap;
+}
+.st-acts-in {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.st-list tr.st-open td {
+  background: var(--bg2);
+}
+.st-list .st-row-empty td {
+  color: var(--fg3);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.st-tb {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line2);
+  text-underline-offset: 3px;
+}
+.st-tb:hover:not([disabled]) {
+  text-decoration-color: var(--fg);
+}
+.st-tb:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+.st-tb[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.st-tb.d {
+  color: var(--bad);
+}
+.st-tb-p {
+  color: var(--acc);
+  text-decoration-color: var(--acc);
+}
+
+.st-more-wrap {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+.st-more {
+  width: 28px;
+  height: 26px;
+  margin-left: 6px;
+  border: 1px solid var(--line2);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 900;
+  color: var(--fg2);
+}
+.st-more.on {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+.st-more[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.st-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  text-align: left;
+  white-space: normal;
+}
+.st-mi {
+  all: unset;
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.st-mi:last-child {
+  border-bottom: 0;
+}
+.st-mi:hover:not([disabled]),
+.st-mi:focus-visible {
+  background: var(--bg2);
+}
+.st-mi.d {
+  color: var(--bad);
+}
+.st-mi[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.st-mi small {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg3);
+}
+
+/* The in-place confirm a list command asks for (e.g. deleting a profile). */
+.st-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--bad);
+  background: var(--bg2);
+  font-size: 13px;
+}
+.st-confirm .btn {
+  height: 32px;
+}
+
+/* ── C · status ──────────────────────────────────────────────────────────── */
+
+.st-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+.st-facts > div {
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+.st-facts > div:first-child {
+  padding-left: 0;
+}
+.st-facts > div:last-child {
+  border-right: 0;
+}
+.st-facts b {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.st-fact-warn {
+  color: var(--warn);
+}
+.st-fact-bad {
+  color: var(--bad);
+}
+.st-fact-ok {
+  color: var(--ok);
+}
+.st-callout {
+  border-left: 3px solid var(--acc);
+  padding: 10px 14px;
+  background: var(--bg2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.st-callout.warn {
+  border-left-color: var(--warn);
+}
+.st-callout.bad {
+  border-left-color: var(--bad);
+}
+.st-callout.ok {
+  border-left-color: var(--ok);
+}
+.st-callout.info {
+  border-left-color: var(--line2);
+}
+.st-callout + .st-callout {
+  margin-top: 8px;
+}
+
+/* ── save bar ────────────────────────────────────────────────────────────── */
+
+/* Sticky to the bottom of the scrolling column, so the staged count stays in
+   view however far down the form the operator has gone. */
+.st-save {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin: 0 -40px -40px;
+  min-height: 64px;
+  border-top: 3px solid var(--fg);
+  background: var(--bg);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 40px;
+  flex-wrap: wrap;
+}
+.st-save-conf {
+  border-top-color: var(--warn);
+  background: var(--bg2);
+}
+.st-save-say {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.st-save-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.st-save-line b {
+  font-weight: 900;
+  text-transform: uppercase;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+.st-save-line .mono {
+  font-size: 11px;
+}
+.st-save-sub {
+  font-size: 12px;
+  color: var(--fg2);
+  margin-top: 3px;
+}
+.st-save-err {
+  color: var(--bad);
+}
+.st-save-acts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.st-save-acts .btn {
+  height: 38px;
+}
+.st-save-ctx {
+  font-size: 11px;
+}
+
+/* ── section specifics ───────────────────────────────────────────────────── */
+
+/* Chat: the three avatar cards sit in the block, full width. */
+.st-view .chat-avatar-options {
+  margin-top: 16px;
+}
+
+/* Runs: a command can be long; the table cell ellipsises it (full text on hover). */
+.runs-cmd {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-list tr.st-log td {
+  padding: 0;
+}
+.st-log pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+}
+
+/* Notifications: the inbox's own bar, and the rows it holds. */
+.st-view .nt-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.st-mute-add {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 10px;
+}
+
+/* Diagnostics: a check's rows, folded or not. */
+.st-items {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg2);
+}
+.st-view details.st-more-rows summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 3px;
+}
+
+/* Danger keeps its bespoke red block; the page only gives it room. */
+.st-view .danger-block {
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .st-sr {
+    grid-template-columns: minmax(0, 1fr) 100px;
+  }
+  .st-sr .st-sc {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .st-sr .st-si {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .st-page {
+    padding: 22px 24px 32px;
+  }
+  .st-save {
+    margin: 0 -24px -32px;
+    padding: 10px 24px;
+  }
+}
+
+@media (max-width: 800px) {
+  .st-view {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+  .st-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .st-hd {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ── This laptop › Create presets (§4.6): loadout cards and the library ──── */
+.pr-load {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.pr-card {
+  position: relative;
+  border: 2px solid var(--line2);
+  background: var(--bg);
+  padding: 14px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 132px;
+  min-width: 0;
+}
+.pr-card[draggable="true"] {
+  cursor: grab;
+}
+.pr-card b {
+  font-size: 16px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-card b.pr-empty {
+  font-size: 12px;
+  text-transform: none;
+  color: var(--fg2);
+}
+.pr-card.pr-def {
+  border-color: var(--fg);
+}
+.pr-card.pr-drop {
+  border: 2px dashed var(--acc);
+  background: var(--bg2);
+}
+.pr-deftag {
+  position: absolute;
+  top: -9px;
+  left: 10px;
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+}
+.pr-grip {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: var(--fg3);
+  font-size: 13px;
+  line-height: 1;
+}
+.pr-cardmenu {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+}
+.pr-g {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--fg);
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 12px;
+  flex: none;
+}
+.pr-g.sm {
+  width: 18px;
+  height: 18px;
+  border-width: 1.5px;
+  font-size: 10px;
+}
+.pr-g-gpu {
+  border-color: var(--listen);
+  color: var(--listen);
+}
+.pr-g-custom {
+  border-style: dashed;
+}
+.pr-sub {
+  font-size: 11px;
+  color: var(--fg3);
+}
+.pr-cost {
+  font-size: 12px;
+  color: var(--fg2);
+  margin-top: auto;
+  padding-top: 6px;
+}
+.pr-lib {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.pr-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pr-colh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg2);
+  margin-bottom: 2px;
+}
+.pr-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 18px auto 14px;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line2);
+  font-size: 13px;
+}
+.pr-row[draggable="true"] {
+  cursor: grab;
+}
+.pr-row b {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pr-row.in {
+  border-color: var(--fg2);
+}
+.pr-row .pr-grip {
+  position: static;
+}
+/* The expand arrow: 16px, so a row reads as openable without hunting for it. */
+.pr-car {
+  all: unset;
+  cursor: pointer;
+  color: var(--fg2);
+  font-size: 16px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+.pr-car:focus-visible,
+.pr-tick:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+.pr-tick {
+  all: unset;
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--line2);
+  display: grid;
+  place-items: center;
+  color: var(--ok);
+  font-weight: 900;
+  font-size: 12px;
+}
+.pr-tick.on {
+  border-color: var(--ok);
+}
+.pr-tick:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.pr-rc {
+  font-size: 11px;
+  color: var(--fg3);
+}
+.pr-exp {
+  border: 1px solid var(--fg2);
+}
+.pr-exp .pr-row {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+.pr-det {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg2);
+}
+.pr-kv {
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 4px 10px;
+}
+.pr-cb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--fg3);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  align-items: baseline;
+}
+.pr-cb b {
+  color: var(--fg);
+  font-size: 13px;
+  margin-left: auto;
+}
+.pr-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pr-note {
+  font-size: 11px;
+  color: var(--fg3);
+  line-height: 1.4;
+  margin: 8px 0 0;
+}
+.pr-full {
+  font-size: 11px;
+  color: var(--warn);
+  margin: 0;
+}
+.pr-err {
+  margin: 0 0 8px;
+}
+.pr-add {
+  height: 40px;
+  border: 1px dashed var(--line2);
+  background: transparent;
+  color: var(--fg2);
+  font-weight: 700;
+  font-size: 12px;
+  text-align: left;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.pr-drawer-sub {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 6px;
+}
+.pr-check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.pr-check small {
+  grid-column: 2;
+}
+.pr-total b {
+  font-size: 18px;
+  font-weight: 900;
+}
+@media (max-width: 1000px) {
+  .pr-lib {
+    grid-template-columns: 1fr;
+  }
+  .pr-load {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

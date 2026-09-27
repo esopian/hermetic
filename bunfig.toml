@@ -1,0 +1,9 @@
+# Bun reads `bunfig.toml` from the working directory, and every documented way
+# of running this repo's tests is run from the repo root (`bun test`,
+# `bun test packages/core`, `bun test tests/parity.test.ts`),
+# so the root file is the one that applies to all of them.
+#
+# `[test]`, not the top-level `preload`, because this must not load into
+# `bun run dev`, the CLI, or a build.
+[test]
+preload = ["./tests/preload.ts"]

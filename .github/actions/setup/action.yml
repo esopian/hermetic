@@ -1,0 +1,69 @@
+name: Setup
+description: Toolchain setup shared by every CI job — pinned bun, a warm install cache, dependencies, and the sandbox env every job runs under.
+
+inputs:
+  hutch:
+    description: >-
+      Install Hutch (pinned by .hutch-version) and project the Electrobun devkit
+      into packages/app. Only the jobs that build or typecheck the desktop app
+      need it: the devkit is a few hundred megabytes and every other job would
+      pay for it to sit unused.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        # Pinned by .bun-version so CI and laptops run the same bun.
+        bun-version-file: .bun-version
+
+    - name: Cache bun install cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.bun/install/cache
+        key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: bun-cache-${{ runner.os }}-
+
+    - name: Install dependencies
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    # Belt and braces, for every job: nothing may reach AWS. Any credential here
+    # would be a bug, not a secret. Set through $GITHUB_ENV to keep one place
+    # for the job's sandbox variables.
+    #
+    # HERMETIC_HOME is deliberately not named here. `tests/preload.ts` owns it:
+    # it makes its own directory and refuses to run when that directory resolves
+    # inside the real home, and `${runner.temp}` on a GitHub runner is under
+    # /home/runner — so naming one here would have meant weakening the check
+    # that keeps a developer's ~/.hermetic safe locally.
+    - name: Sandbox the job
+      shell: bash
+      run: |
+        echo "AWS_EC2_METADATA_DISABLED=true" >> "$GITHUB_ENV"
+
+    # The desktop app only. The installer verifies the archive it
+    # downloads against the release manifest's sha256 and byte size, and
+    # --no-modify-path keeps it from rewriting a shell profile that no later
+    # step reads anyway — the PATH entry below is what the rest of the job uses.
+    - name: Install Hutch
+      if: inputs.hutch == 'true'
+      shell: bash
+      run: |
+        curl -fsSL https://hutch.blackboard.sh/hutch/install.sh \
+          | sh -s -- --version "$(cat .hutch-version)" --no-modify-path
+        echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+
+    # Projects the Electrobun SDK into packages/app/.hutch/devkit, which is
+    # where a built app's imports resolve from — and now where its types come
+    # from too. The hand-written shims are gone, so `bun run typecheck` refuses
+    # without this step: every job that typechecks needs hutch: true, not only
+    # the one that builds the app.
+    - name: Prepare the Electrobun devkit
+      if: inputs.hutch == 'true'
+      shell: bash
+      working-directory: packages/app
+      run: hutch electrobun prepare

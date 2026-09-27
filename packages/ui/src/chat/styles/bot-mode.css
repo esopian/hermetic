@@ -1,0 +1,418 @@
+/* Bot Mode controls extend the existing shell and soft chat skin. */
+.bm-workspace {
+  position: relative;
+}
+.bm-thread-frame {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.bm-thread-frame > .ch-thread {
+  flex: 1;
+  min-height: 0;
+}
+.bm-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  font: 10px / 1.5 var(--mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.bm-strip > div {
+  display: flex;
+  gap: 12px;
+}
+.bm-strip button,
+.bm-job-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--fg2);
+  font: 10px var(--mono);
+  padding: 2px;
+  cursor: pointer;
+}
+.bm-strip button:hover,
+.bm-job-actions button:hover {
+  color: var(--text-accent);
+}
+.bm-strip button:disabled,
+.bm-job-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.bm-active {
+  grid-column: 1 / -1;
+  font: 10px var(--mono);
+  color: var(--text-muted);
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.bm-rail-foot {
+  justify-content: space-between;
+  gap: 8px;
+}
+.bm-rail-foot .btn {
+  padding: 0 10px;
+  height: 32px;
+  font-size: 10px;
+}
+.bm-rail-foot > span {
+  font-size: 9px;
+}
+.bm-note {
+  font: 12px / 1.7 var(--sans);
+  color: var(--text-muted);
+  margin: 10px 0;
+}
+.ch-list > .bm-note {
+  padding: 0 14px;
+}
+.bm-room-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line2);
+  color: var(--fg2);
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.bm-profile-summary,
+.bm-member {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bm-profile-summary p {
+  font: 10px var(--mono);
+  color: var(--text-muted);
+}
+.bm-job {
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  margin-bottom: 12px;
+}
+.bm-job h3 {
+  font-size: 13px;
+  margin: 0 0 12px;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+.bm-job h3 i {
+  width: 6px;
+  height: 6px;
+  background: var(--ok);
+}
+.bm-job h3 i.paused {
+  background: var(--fg3);
+}
+.bm-job .mono {
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--fg2);
+}
+.bm-job .bm-note {
+  font: 10px / 1.7 var(--mono);
+}
+.bm-job-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.bm-wide {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  font-size: 12px;
+}
+.bm-error {
+  color: var(--bad);
+  font: 12px / 1.6 var(--sans);
+  padding: 8px 14px;
+  overflow-wrap: anywhere;
+}
+/*
+ * The single column is stated rather than left implicit. An implicit `auto`
+ * track is sized from its item's max-content contribution, so the 520px dialog
+ * made the track 520px wide and its own `max-width: 100%` then resolved against
+ * that same 520px — a clamp that could never bite. At 390px the dialog measured
+ * 520px wide starting at x=16, 146px past the viewport, with nothing to scroll
+ * because the fixed overlay does not extend the document. `minmax(0, 1fr)` sizes
+ * the track from the container instead, so `max-width: 100%` below resolves
+ * against the space that actually exists.
+ */
+.bm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  background: #0009;
+  padding: 16px;
+}
+.bm-dialog {
+  background: var(--bg);
+  color: var(--fg);
+  border: 2px solid var(--fg);
+  width: 520px;
+  max-width: 100%;
+  max-height: 90dvh;
+  overflow: auto;
+  padding: 24px;
+  box-shadow: 8px 8px 0 var(--line);
+  font: 14px var(--sans);
+}
+.bm-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.bm-dialog h2 {
+  margin: 0;
+  font-size: 22px;
+}
+.bm-dialog fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.bm-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+.bm-dialog footer .btn {
+  height: 36px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+.bm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+  font: 11px var(--mono);
+  color: var(--fg2);
+}
+.bm-field .wiz-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-size: 14px;
+  padding: 10px;
+  height: auto;
+  min-height: 40px;
+}
+.bm-field textarea {
+  resize: vertical;
+}
+.bm-member {
+  margin: 16px 0;
+}
+.bm-member-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  padding: 12px;
+  margin: 8px 0;
+}
+.bm-member-check small {
+  display: block;
+  color: var(--text-muted);
+  margin-top: 5px;
+}
+.bm-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bm-input-wrap {
+  position: relative;
+}
+.bm-mentions {
+  position: absolute;
+  bottom: 100%;
+  left: 20px;
+  right: 20px;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  z-index: 20;
+  box-shadow: 0 -10px 25px #0005;
+}
+.bm-mentions button {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  cursor: pointer;
+}
+.bm-mentions button[aria-selected="true"] {
+  background: var(--sel);
+  box-shadow: inset 2px 0 var(--acc);
+}
+.bm-mentions .mono {
+  font-size: 10px;
+  color: var(--fg2);
+}
+.bm-request-actions {
+  width: 100%;
+}
+.bm-request-actions .ch-prompts {
+  flex-wrap: wrap;
+}
+.bm-request-actions .btn {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.bm-answer {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.bm-answer .wiz-input {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  height: 36px;
+}
+.bm-narrow-actions,
+.bm-scrim {
+  display: none;
+}
+@media (max-width: 1180px) {
+  .bm-workspace.ch-body.with-context {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+  .bm-workspace .bm-jobs {
+    display: none;
+  }
+  .bm-narrow-actions {
+    display: flex;
+    position: absolute;
+    right: 12px;
+    top: 8px;
+    z-index: 30;
+    gap: 8px;
+  }
+  .bm-strip {
+    padding-right: 120px;
+    flex-wrap: wrap;
+  }
+  .bm-workspace.ch-body.bm-show-jobs > .bm-jobs {
+    display: flex;
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 320px;
+    max-width: 90vw;
+    z-index: 102;
+  }
+  .bm-workspace > .bm-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: #0008;
+    border: 0;
+    z-index: 101;
+  }
+  .bm-room-head {
+    padding-top: 42px;
+  }
+}
+.bm-workspace .btn-mini {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 26px;
+  padding: 3px 8px;
+  background: transparent;
+  color: var(--fg2);
+  border: 1px solid var(--line2);
+  font: 10px var(--mono);
+  cursor: pointer;
+}
+.bm-workspace .btn-mini:hover {
+  background: var(--bg3);
+  color: var(--fg);
+}
+.bm-jobs .bm-wide {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+}
+.bm-jobs .ch-ctx-head {
+  justify-content: space-between;
+}
+.bm-mention-hint {
+  font: 10px / 1.6 var(--mono);
+  color: var(--text-muted);
+  padding: 0 20px;
+}
+.bm-rail .ch-bucket {
+  gap: 9px;
+}
+.bm-rail .ch-bucket .ch-time {
+  margin-left: auto;
+}
+/* A closed capability gate. No new palette: the existing note colours, plus the
+   warn rail the rest of the shell uses for "this is not settled". */
+.bm-gate {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--fg3);
+  background: var(--bg2);
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+.bm-gate.undetermined {
+  border-left-color: var(--warn);
+}
+.bm-gate > b {
+  display: block;
+  font: 12px / 1.5 var(--sans);
+  color: var(--fg2);
+}
+.bm-gate > .bm-note {
+  margin: 6px 0 0;
+}
+.bm-gate > button {
+  margin-top: 8px;
+}
+.bm-gated {
+  border-left: 2px solid var(--line2);
+  padding-left: 10px;
+}
+.bm-rail .bm-offline-reason {
+  min-width: 0;
+  font: 10px / 1 var(--mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bm-rail .ch-bucket .bm-offline-reason + .ch-time {
+  margin-left: 0;
+}

@@ -1,0 +1,88 @@
+{
+  "id3": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "processes": []
+    }
+  },
+  "id1": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "sessions": [
+        {
+          "id": "20260917_164150_c64654",
+          "title": "Reply with pong #2",
+          "preview": "Reply with exactly the word: pong",
+          "started_at": 1789663310.4430764,
+          "message_count": 2,
+          "source": "tui"
+        },
+        {
+          "id": "20260917_163043_52c177",
+          "title": "Reply with pong",
+          "preview": "Reply with exactly the word: pong",
+          "started_at": 1789662643.7005107,
+          "message_count": 2,
+          "source": "tui"
+        },
+        {
+          "id": "20260917_154617_a19d11",
+          "title": "Test remote browser with Reddit homepage",
+          "preview": "I'm trying to test the remote browser setup.  can you open t...",
+          "started_at": 1789660034.1768892,
+          "message_count": 41,
+          "source": "tui"
+        },
+        {
+          "id": "20260915_215552_9264f9",
+          "title": "Testing chat with barco",
+          "preview": "testing chat.  barco",
+          "started_at": 1789509357.2930636,
+          "message_count": 4,
+          "source": "tui"
+        }
+      ]
+    }
+  },
+  "id4": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "rooms": [],
+      "next_offset": null
+    }
+  },
+  "id2": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "profiles": [
+        {
+          "name": "default",
+          "path": "/data/hermes/.hermes",
+          "is_default": true,
+          "model": null,
+          "provider": null,
+          "description": "",
+          "display_name": "",
+          "skill_count": 58,
+          "last_session": {
+            "id": "20260917_164150_c64654",
+            "title": "Reply with pong #2",
+            "preview": "pong",
+            "started_at": 1789663310.4430764,
+            "last_active": 1789663313.0670137,
+            "message_count": 2
+          },
+          "worker_session": null,
+          "canonical_session": null,
+          "ui_meta_revisions": {},
+          "has_avatar": false
+        }
+      ],
+      "bot_mode_protocol": true
+    }
+  }
+}

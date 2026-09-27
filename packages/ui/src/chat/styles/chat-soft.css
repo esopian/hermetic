@@ -1,0 +1,697 @@
+/* The soft chat skin (§9.2).
+
+   Every selector here is prefixed with `[data-skin="soft"]`, and `data-skin`
+   lives on `.ch-body` and nowhere else. That is not a style preference: it is
+   the term the decision was approved on. Deleting this file, and the one
+   attribute that switches it on, returns the chat to the app's brutalist voice
+   with nothing left behind. The scoping also enforces the other half of the
+   deal — the header, env strip, view nav and footer are byte-identical to the
+   fleet view, because no selector in this file can reach them.
+
+   The reasoning. Brutalism works for the fleet views because they are scanned,
+   not read: you glance at thirteen rows for a colour and a number, and hard 3px
+   seams are what make that glance land. A conversation is the opposite — read
+   linearly, for minutes — and the same devices that make a table scannable make
+   a transcript exhausting. Four of them do most of the damage:
+
+     1. `2–3px solid var(--fg)` seams: near-maximum contrast at the exact
+        frequency of a message list, so every row shouts as loudly as the text.
+     2. A 1px rule under every single message, which draws a ladder the eye has
+        to climb even when four rows are one author talking.
+     3. Uppercase 900 on things that are not headings.
+     4. `#0a0a09` code panes — pure black against a `#0e0e0d` page reads as a
+        hole punched in the screen.
+
+   So this file keeps every token, every colour and every rule about what things
+   *mean*, and changes only how loudly they are drawn: hairlines instead of
+   seams, tone instead of borders, grouping instead of ladders, and air.
+
+   Two things it does not do. It introduces no border radius — `* {
+   border-radius: 0 }` in `styles.css` is a real law and "the chat felt busy" is
+   not grounds for the app to hold two opinions about corners; the one curve on
+   screen is the blob avatar, which is the documented exception. And it does not
+   soften the approval card (§8 below). */
+
+/* ── 1 · seams ──────────────────────────────────────────────────────────────
+   The three panes were separated by a 1px `--line` grid gap plus 2px `--fg`
+   internal borders. One hairline each, and the rail and context panes take a
+   fractionally recessed background so the thread reads as the front layer
+   without a border doing the work. */
+
+.ch-body[data-skin="soft"] {
+  gap: 0;
+  background: var(--bg);
+}
+[data-skin="soft"] .ch-rail,
+[data-skin="soft"] .ch-ctx {
+  background: color-mix(in srgb, var(--bg2) 55%, var(--bg));
+}
+[data-skin="soft"] .ch-rail {
+  border-right: 1px solid var(--line);
+}
+[data-skin="soft"] .ch-ctx {
+  border-left: 1px solid var(--line);
+}
+
+/* ── 2 · rail ───────────────────────────────────────────────────────────────
+   Per-row rules are gone. A list of conversations does not need lines between
+   the rows: the avatar column and the baseline grid already group it, and the
+   selected row is the only one that needs an edge. */
+
+[data-skin="soft"] .ch-rail-top {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 14px 12px;
+}
+[data-skin="soft"] .ch-search {
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  height: 38px;
+  font-size: 12.5px;
+}
+[data-skin="soft"] .ch-search:focus {
+  border-color: var(--acc);
+}
+[data-skin="soft"] .ch-newchat {
+  border: 1px solid var(--line2);
+  background: transparent;
+  color: var(--fg2);
+  width: 38px;
+  height: 38px;
+  font-weight: 500;
+}
+[data-skin="soft"] .ch-newchat:hover {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+[data-skin="soft"] .ch-filters {
+  border-bottom: 1px solid var(--line);
+}
+[data-skin="soft"] .ch-filters button {
+  border-right: 0;
+  height: 34px;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+/* Underline, not a fill: at 34px a filled tab is a slab. */
+[data-skin="soft"] .ch-filters button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--acc);
+}
+[data-skin="soft"] .ch-group {
+  background: transparent;
+  border: 0;
+  height: 32px;
+  padding: 0 14px;
+  margin-top: 8px;
+}
+[data-skin="soft"] .ch-group .kicker {
+  letter-spacing: 0.1em;
+  font-size: 9.5px;
+}
+[data-skin="soft"] .ch-conv {
+  border-bottom: 0;
+  padding: 9px 14px;
+  min-height: 56px;
+  gap: 11px;
+}
+[data-skin="soft"] .ch-conv:hover {
+  background: color-mix(in srgb, var(--bg3) 60%, transparent);
+}
+/* Selected is a filled block, not a bar plus a fill: one signal. */
+[data-skin="soft"] .ch-conv[aria-current="true"] {
+  background: var(--sel);
+  box-shadow: none;
+}
+[data-skin="soft"] .ch-conv-name {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+[data-skin="soft"] .ch-conv[data-unread="true"] .ch-conv-name {
+  font-weight: 800;
+}
+/* The preview is a sentence, so it stops pretending to be an identifier. */
+[data-skin="soft"] .ch-conv-prev {
+  font-family: var(--sans);
+  font-size: 12px;
+  margin-top: 2px;
+}
+[data-skin="soft"] .ch-unread {
+  font-size: 9.5px;
+  padding: 2px 5px;
+  font-weight: 700;
+}
+[data-skin="soft"] .ch-rail-foot {
+  border-top: 1px solid var(--line);
+}
+/* The swarm bucket keeps its sticky header but gives up the double rule: with a
+   bucket every few rows, two hairlines per bucket is a ladder of its own. */
+[data-skin="soft"] .ch-bucket {
+  background: color-mix(in srgb, var(--bg2) 92%, var(--bg));
+  border-top: 0;
+}
+[data-skin="soft"] .ch-feed-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+/* ── 3 · thread head ────────────────────────────────────────────────────────
+   The agent's name is a hostname, not a headline. Dropping the uppercase and
+   the 900 weight takes about 40% of the shout out of the pane on its own. */
+
+[data-skin="soft"] .ch-thead {
+  border-bottom: 1px solid var(--line);
+  padding: 15px 26px;
+  gap: 18px;
+}
+[data-skin="soft"] .ch-thead-name {
+  text-transform: none;
+  font-weight: 700;
+  font-size: 21px;
+  letter-spacing: -0.015em;
+  gap: 12px;
+}
+[data-skin="soft"] .ch-thead-sub {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+[data-skin="soft"] .ch-chip {
+  border-color: var(--line);
+  font-weight: 500;
+  height: 24px;
+}
+[data-skin="soft"] .ch-chip:hover {
+  border-color: var(--line2);
+  background: var(--bg2);
+}
+/* A status chip keeps its coloured border in both skins: that is meaning, not
+   decoration, and softening it would be softening the fact. */
+[data-skin="soft"] .ch-chip.warn {
+  border-color: var(--warn);
+}
+[data-skin="soft"] .ch-chip.bad {
+  border-color: var(--bad);
+}
+[data-skin="soft"] .ch-chip.ok {
+  border-color: var(--ok);
+}
+[data-skin="soft"] .ch-thead-actions .btn-secondary {
+  border: 1px solid var(--line2);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fg2);
+}
+[data-skin="soft"] .ch-thead-actions .btn-secondary:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+  background: transparent;
+}
+
+/* ── 4 · bands ──────────────────────────────────────────────────────────────
+   The condition banner keeps its coloured left rule — that is meaning — but
+   loses the filled strip and the 700 weight. */
+
+[data-skin="soft"] .ch-band {
+  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+  border-bottom: 1px solid var(--line);
+  padding: 11px 26px;
+  font-size: 13px;
+}
+[data-skin="soft"] .ch-band > span:first-of-type {
+  font-weight: 600;
+}
+[data-skin="soft"] .ch-band.warn,
+[data-skin="soft"] .ch-band.bad,
+[data-skin="soft"] .ch-band.acc {
+  border-left-width: 3px;
+}
+
+/* ── 5 · messages ───────────────────────────────────────────────────────────
+   No rule between rows. Turns are separated by space, and a run of messages
+   from one author collapses into a group: only the first carries an avatar and
+   a name, the rest are indented continuations. That is the single biggest
+   reduction in visual noise in the whole file. */
+
+[data-skin="soft"] .ch-log {
+  padding: 10px 0 16px;
+}
+[data-skin="soft"] .ch-msg {
+  border-bottom: 0;
+  padding: 16px 26px;
+  grid-template-columns: 36px 1fr;
+  gap: 14px;
+  animation: chrise 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+[data-skin="soft"] .ch-msg:hover {
+  background: transparent;
+}
+[data-skin="soft"] .ch-msg.cont {
+  padding-top: 0;
+  padding-bottom: 12px;
+}
+/* `visibility`, not `display`. `.ch-msg` is a two-column grid and the avatar is
+   the item holding the 36px track — `display: none` takes the item out of the
+   grid, the body slides into column 1 and the whole message renders one word
+   wide. The head is inside the body rather than a grid item, so it may go. */
+[data-skin="soft"] .ch-msg.cont .ch-avatar,
+[data-skin="soft"] .ch-msg.cont .ch-ava {
+  visibility: hidden;
+}
+[data-skin="soft"] .ch-msg.cont .ch-msg-head {
+  display: none;
+}
+[data-skin="soft"] .ch-msg.cont .ch-msg-body {
+  margin-top: 0;
+}
+
+/* The operator's turn: not a full-width slab of `--sel`, which at this
+   frequency stripes the whole pane. A recessed panel indented to the content
+   column instead, so "I said this" is quiet but unmistakable. */
+[data-skin="soft"] .ch-msg.me {
+  background: transparent;
+}
+[data-skin="soft"] .ch-msg.me .ch-msg-body {
+  background: color-mix(in srgb, var(--sel) 70%, var(--bg));
+  border-left: 2px solid var(--line2);
+  padding: 11px 14px;
+  margin-top: 7px;
+}
+[data-skin="soft"] .ch-msg.me:hover .ch-msg-body {
+  border-left-color: var(--fg3);
+}
+/* The row is no longer filled, so the status square's outline goes back to the
+   page colour it is actually sitting on. */
+[data-skin="soft"] .ch-msg.me .ch-ava > .st {
+  outline-color: var(--bg);
+}
+
+[data-skin="soft"] .ch-avatar {
+  border: 0;
+  width: 36px;
+  height: 36px;
+  background: var(--bg3);
+  color: var(--fg2);
+  font-weight: 500;
+}
+[data-skin="soft"] .ch-msg-who {
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+[data-skin="soft"] .ch-msg-meta {
+  font-size: 10px;
+}
+
+/* Prose gets a measure. Cards and code stay full width — the point of the
+   log-row layout was that wide things can be wide — but a paragraph at 900px is
+   unreadable, and a paragraph is most of what a chat is. */
+[data-skin="soft"] .ch-msg-body {
+  font-size: 14.5px;
+  line-height: 1.72;
+  color: color-mix(in srgb, var(--fg) 92%, var(--fg2));
+}
+[data-skin="soft"] .ch-msg-body > p,
+[data-skin="soft"] .ch-msg-body > ul,
+[data-skin="soft"] .ch-msg-body > ol,
+[data-skin="soft"] .ch-msg-body > blockquote {
+  max-width: 72ch;
+}
+[data-skin="soft"] .ch-msg-body > p {
+  margin-bottom: 13px;
+}
+[data-skin="soft"] .ch-msg-body h3 {
+  text-transform: none;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+[data-skin="soft"] .ch-msg-body code {
+  background: color-mix(in srgb, var(--bg3) 75%, transparent);
+  font-size: 12.5px;
+  padding: 1px 5px;
+}
+[data-skin="soft"] .ch-msg-body strong {
+  font-weight: 700;
+  color: var(--fg);
+}
+[data-skin="soft"] .ch-msg-tools button {
+  border: 1px solid var(--line);
+  background: var(--bg2);
+}
+[data-skin="soft"] .ch-divider {
+  background: transparent;
+  border: 0;
+  height: 44px;
+  padding: 0 26px;
+}
+[data-skin="soft"] .ch-divider hr {
+  border-color: var(--line);
+}
+[data-skin="soft"] .ch-event {
+  border-bottom: 0;
+  padding: 7px 26px;
+  grid-template-columns: 36px 1fr auto;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+[data-skin="soft"] .ch-meter {
+  font-size: 10px;
+  margin-top: 12px;
+  opacity: 0.75;
+}
+
+/* ── 6 · cards ──────────────────────────────────────────────────────────────
+   Was: a 1px box, a filled 28px header strip and a coloured left rule, on every
+   block. Now the card is a tinted panel with no outer border, the head is a
+   quiet label row, and the coloured rule appears ONLY when the verdict is not
+   "fine". A successful tool call should be almost invisible — it is a footnote,
+   and the old treatment gave it the same weight as an error. A green exit code
+   was never news. */
+
+[data-skin="soft"] .ch-card {
+  border: 0;
+  background: color-mix(in srgb, var(--bg2) 82%, var(--bg));
+  margin-bottom: 13px;
+}
+[data-skin="soft"] .ch-card-head {
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  min-height: 30px;
+  padding: 4px 12px;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+[data-skin="soft"] .ch-card.collapsed .ch-card-head {
+  border-bottom: 0;
+}
+[data-skin="soft"] .ch-card-head.clickable:hover {
+  background: color-mix(in srgb, var(--bg3) 70%, transparent);
+}
+/* The left rule is reserved for the three verdicts that are worth an
+   interruption, plus in-flight. `ok` and `muted` give it up entirely. */
+[data-skin="soft"] .ch-card.ok,
+[data-skin="soft"] .ch-card.muted {
+  border-left: 0;
+}
+[data-skin="soft"] .ch-card.acc {
+  border-left: 2px solid var(--acc);
+}
+[data-skin="soft"] .ch-card.warn {
+  border-left: 2px solid var(--warn);
+}
+[data-skin="soft"] .ch-card.bad {
+  border-left: 2px solid var(--bad);
+}
+[data-skin="soft"] .ch-card-body {
+  padding: 13px;
+}
+
+/* Tables: no filled header, one rule under it. */
+[data-skin="soft"] .ch-table th {
+  background: transparent;
+  border-bottom: 1px solid var(--line2);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 9px 12px;
+}
+[data-skin="soft"] .ch-table td {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  padding: 9px 12px;
+}
+[data-skin="soft"] .ch-src {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+[data-skin="soft"] .ch-src-n {
+  border-color: var(--line);
+}
+
+/* ── 7 · code and diff ──────────────────────────────────────────────────────
+   `#0a0a09` on a `#0e0e0d` page is a hole. One step *above* the page instead of
+   below it, which is also what every editor does. */
+
+[data-skin="soft"] .ch-code,
+[data-skin="soft"] .ch-diff,
+[data-skin="soft"] .logpane {
+  background: color-mix(in srgb, var(--bg3) 88%, #000);
+  color: color-mix(in srgb, var(--fg) 82%, var(--fg2));
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 13px;
+}
+[data-skin="soft"] .logpane {
+  border: 0;
+}
+[data-skin="soft"] .ch-diff div {
+  padding: 0 13px;
+}
+[data-skin="soft"] .ch-diff .add {
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+}
+[data-skin="soft"] .ch-diff .del {
+  background: color-mix(in srgb, var(--bad) 13%, transparent);
+}
+
+/* In the light theme the pane stops being dark, so every ink drawn for a dark
+   pane has to be redrawn — including the syntax spans and the diff's own
+   add/del text, which the sharp skin can leave alone because there the pane is
+   dark in both themes. */
+[data-theme="light"] [data-skin="soft"] .ch-code,
+[data-theme="light"] [data-skin="soft"] .ch-diff,
+[data-theme="light"] [data-skin="soft"] .logpane {
+  background: color-mix(in srgb, var(--bg3) 75%, var(--bg2));
+  color: var(--fg);
+}
+[data-theme="light"] [data-skin="soft"] .ch-code .c-key {
+  color: var(--text-accent);
+}
+[data-theme="light"] [data-skin="soft"] .ch-code .c-str {
+  color: var(--text-ok);
+}
+[data-theme="light"] [data-skin="soft"] .ch-code .c-com {
+  color: var(--fg3);
+}
+[data-theme="light"] [data-skin="soft"] .ch-code .c-fn {
+  color: var(--text-warn);
+}
+[data-theme="light"] [data-skin="soft"] .ch-diff .add {
+  color: var(--text-ok);
+}
+[data-theme="light"] [data-skin="soft"] .ch-diff .del {
+  color: var(--bad);
+}
+[data-theme="light"] [data-skin="soft"] .ch-diff .hunk {
+  color: var(--fg3);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+/* ── 8 · approval ───────────────────────────────────────────────────────────
+   The one card that does not soften. It blocks a turn and holds a warm slot on
+   a live box while it waits, so it keeps the 2px gold border and the filled
+   gold header the sharp skin gives it, and against a softened transcript it is
+   now, on purpose, the loudest object on screen.
+
+   These rules restate `chat.css` rather than change it. They have to exist:
+   `.ch-approve .ch-card-head` and `[data-skin="soft"] .ch-card-head` have equal
+   specificity, and this file loads second, so without them the soft card head
+   would win the tie and quietly take the gold away. */
+
+[data-skin="soft"] .ch-approve {
+  border: 2px solid var(--warn);
+  background: var(--bg);
+}
+[data-skin="soft"] .ch-approve .ch-card-head {
+  background: var(--warn);
+  color: #0e0e0d;
+  border-bottom: 0;
+  height: 30px;
+  font-weight: 900;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+[data-skin="soft"] .ch-approve .ch-card-head .right {
+  color: #0e0e0d;
+  opacity: 0.7;
+}
+[data-skin="soft"] .ch-approve .ch-card-body {
+  padding: 12px;
+}
+[data-skin="soft"] .ch-approve-foot {
+  background: var(--bg2);
+  border-top: 1px solid var(--line);
+}
+
+/* ── 9 · composer ───────────────────────────────────────────────────────────
+   Was a 2px `--fg` box with a black slab of a send button — the highest
+   contrast object on a page you are trying to think on. Now: a hairline that
+   only lights up on focus, and a send control that stays quiet until there is
+   something to send. */
+
+[data-skin="soft"] .ch-composer {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg2) 45%, var(--bg));
+}
+[data-skin="soft"] .ch-composer-chips {
+  border-bottom: 0;
+  padding: 10px 20px 0;
+}
+[data-skin="soft"] .ch-input-wrap {
+  padding: 10px 20px 4px;
+  gap: 8px;
+}
+[data-skin="soft"] .ch-input {
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  padding: 13px 14px;
+  min-height: 50px;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+/* A second hairline rather than a thicker border, so the box does not grow by a
+   pixel and reflow the text in it when it takes focus. The accent focus ring
+   from `polish.css` still draws on `:focus-visible`; this is the always-on
+   pointer affordance underneath it. */
+[data-skin="soft"] .ch-input:focus {
+  border-color: var(--fg3);
+  box-shadow: 0 0 0 1px var(--fg3);
+}
+[data-skin="soft"] .ch-send {
+  height: 50px;
+  min-width: 50px;
+  background: transparent;
+  border: 1px solid var(--line2);
+  color: var(--text-muted);
+  font-size: 17px;
+}
+[data-skin="soft"] .ch-send:hover,
+[data-skin="soft"] .ch-send.ready {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: var(--acc-fg);
+}
+/* Stop is still destructive in either skin. */
+[data-skin="soft"] .ch-send.stop {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--danger-text);
+}
+[data-skin="soft"] .ch-composer-foot {
+  padding: 4px 20px 11px;
+  opacity: 0.8;
+}
+[data-skin="soft"] .ch-kbd {
+  border-color: var(--line);
+}
+[data-skin="soft"] .ch-slash {
+  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+[data-skin="soft"] .ch-slash-row {
+  border-bottom: 0;
+  padding: 9px 20px;
+}
+[data-skin="soft"] .ch-slash-row[aria-selected="true"] {
+  background: var(--sel);
+  box-shadow: none;
+}
+
+/* ── 10 · context pane ──────────────────────────────────────────────────────
+   A sidebar of facts, not a dashboard. Same content, half the chrome. */
+
+[data-skin="soft"] .ch-ctx-head {
+  border-bottom: 1px solid var(--line);
+  height: 44px;
+  padding: 0 18px;
+}
+[data-skin="soft"] .ch-ctx-sec {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  padding: 16px 18px;
+}
+/* Tiles separated by air rather than by a grid of `--line`: three numbers do
+   not need to be in a table to be read as a set. */
+[data-skin="soft"] .ch-tiles {
+  border: 0;
+  background: transparent;
+  gap: 8px;
+}
+[data-skin="soft"] .ch-tile {
+  background: color-mix(in srgb, var(--bg3) 55%, transparent);
+  padding: 10px;
+}
+[data-skin="soft"] .ch-tile b {
+  font-weight: 800;
+}
+[data-skin="soft"] .ch-ctx-actions .btn-secondary {
+  border: 1px solid var(--line);
+  color: var(--fg2);
+  font-weight: 600;
+  font-size: 12.5px;
+  text-transform: none;
+  letter-spacing: 0;
+  height: 36px;
+}
+[data-skin="soft"] .ch-ctx-actions .btn-secondary:hover {
+  border-color: var(--fg3);
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg3) 60%, transparent);
+}
+[data-skin="soft"] .ch-toolchip {
+  border-color: var(--line);
+}
+[data-skin="soft"] .kv {
+  font-size: 11.5px;
+  gap: 8px 14px;
+}
+
+/* ── 11 · small controls ────────────────────────────────────────────────────
+   A 2px border on a 26px control is a sixth of its height. */
+
+[data-skin="soft"] .btn-mini {
+  border: 1px solid var(--line2);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  height: 28px;
+}
+[data-skin="soft"] .ch-prompt {
+  border-color: var(--line);
+  padding: 13px 15px;
+}
+[data-skin="soft"] .ch-prompt:hover {
+  border-color: var(--fg3);
+  background: color-mix(in srgb, var(--bg2) 70%, transparent);
+}
+[data-skin="soft"] .ch-empty h2 {
+  text-transform: none;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+[data-skin="soft"] .ch-empty p {
+  font-family: var(--sans);
+  font-size: 13.5px;
+}
+
+/* ── 12 · dock ──────────────────────────────────────────────────────────────
+   The floating dock keeps a hard edge, because it is an object sitting on top
+   of another view and the edge is what says so. Everything inside it softens.
+   `data-skin` sits on the dock itself, as it does on `.ch-body`. */
+
+.ch-dock[data-skin="soft"] {
+  border: 2px solid var(--fg);
+}
+[data-skin="soft"] .ch-dock-tabs {
+  border-bottom: 1px solid var(--line);
+}
+[data-skin="soft"] .ch-dock-tab {
+  border-right: 0;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}

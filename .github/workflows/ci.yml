@@ -1,0 +1,285 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing in CI writes to the repository: every job reads the checkout, runs a
+# script, and reports. A job that needs more says so itself, beside the reason.
+permissions:
+  contents: read
+
+# Remote actions are pinned to a full commit SHA, with the release they were
+# resolved from in the comment beside them — a tag is mutable, and a moved tag
+# is a code change nobody reviewed. `.github/dependabot.yml` proposes the
+# updates; `tests/ci-contract.test.ts` fails if a mutable ref reappears.
+#
+# `bun run ci` on a laptop is check + build, i.e. typecheck -> test ->
+# lint:biome -> lint -> lint:cfn -> lint:sh -> build (lint:biome is `biome
+# check`, format and lint in one pass; tests/boundaries.test.ts runs inside
+# test). Here each of those runs as its own job so a failure names itself in the
+# checks list and the slow ones (test, build) do not queue behind the fast ones.
+# The scripts are the same, so green here still means green locally and vice
+# versa.
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        # packages/app/tsconfig.json extends the devkit Hutch projects in —
+        # typecheck needs it or the app package's types do not resolve here.
+        with:
+          hutch: true
+      - run: bun run typecheck
+
+  test:
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # A failed shard should not hide failures in its peer.
+      fail-fast: false
+      matrix:
+        shard: [cli, non-cli]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun scripts/test-shard.ts "$TEST_SHARD"
+        env:
+          # Keep matrix data out of the shell command. The script accepts only
+          # the two committed shard names and owns their paths and environment.
+          TEST_SHARD: ${{ matrix.shard }}
+
+  lint-biome:
+    name: lint:biome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun run lint:biome
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun run lint
+
+  lint-cfn:
+    name: lint:cfn
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # cfn-lint (Python) runs through `uvx`, pinned in scripts/lint-cfn.ts, so
+      # the template is linted by the same rules here and on a laptop.
+      - name: Install uv (for cfn-lint)
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - run: bun run lint:cfn
+
+  lint-sh:
+    name: lint:sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # shellcheck comes from uvx --from shellcheck-py, pinned in scripts/lint-sh.ts.
+      - name: Install uv (for shellcheck)
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - run: bun run lint:sh
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun run build
+
+  # §11.2: core's conditional writes against a real DynamoDB engine. It is the
+  # one suite `bun run check` does not run — it needs a container, so a laptop
+  # opts in with `docker run -p 8000:8000 amazon/dynamodb-local` and
+  # `bun run test:dynamodb-local`, while here it is always on.
+  #
+  # The image is pinned by digest for the same reason every action is: `latest`
+  # is mutable, and a moved tag is a change to what this gate means that nobody
+  # reviewed. The digest is the multi-architecture index, so it resolves on any
+  # runner.
+  dynamodb-local:
+    name: test:dynamodb-local
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local@sha256:ff89bd48ff32cd8d9be5fee8873b65b8854dc408f1afe881be6eb00247bc0dab # 3.3.1
+        ports:
+          - "8000:8000"
+        # DynamoDB Local ships no shell utilities, so the container cannot
+        # health-check itself. The step below waits on the port instead, which
+        # is the same question asked from somewhere that can ask it.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Wait for DynamoDB Local
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
+            sleep 1
+          done
+          echo "DynamoDB Local did not answer on 127.0.0.1:8000" >&2
+          exit 1
+      - run: bun run test:dynamodb-local
+        env:
+          HERMETIC_DYNAMODB_LOCAL: http://127.0.0.1:8000
+
+  # The macOS ARM64 job: canary channel, no publish — this is verification
+  # that the desktop app still builds, not a release (that is release.yml,
+  # tag-triggered).
+  app:
+    name: app
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          hutch: true
+      # Headroom, not a fix: v0.1.4's and v0.1.5's "No space left on device"
+      # came from the DMG's own mounted volume being sized by hdiutil's
+      # estimator, not from the runner's disk (v0.1.5 failed with 110 GB
+      # free) — `packages/app/hooks/post-package.ts` is what addresses that.
+      # The macos-14 image still leaves only a few GB free once Xcode,
+      # Android and .NET are on it, and this build writes a few hundred MB of
+      # sidecars, so drop the toolchains it never touches and print what is
+      # left.
+      - name: Free runner disk
+        shell: bash
+        run: |
+          df -h / | tail -1
+          sudo rm -rf ~/Library/Android/sdk /usr/local/share/dotnet /Library/Frameworks/Mono.framework \
+            ~/.rustup ~/.cargo /usr/local/lib/node_modules ~/Library/Developer/CoreSimulator/Caches
+          df -h / | tail -1
+      - run: bun run app:build:canary
+      - run: ls -R packages/app/artifacts
+
+  # The one job that reaches the network for something other than the install
+  # cache: `bun audit` asks GitHub's advisory service about the resolved tree.
+  # Frozen dependencies do not stop being vulnerable, so this has to run on a
+  # schedule of commits rather than only when bun.lock changes.
+  audit:
+    name: audit:dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun run audit:dependencies
+
+  # Scans the full commit history reachable from the checkout (`fetch-depth:
+  # 0`, otherwise the checkout is a one-commit shard and gitleaks would only
+  # ever see the tip) for hardcoded secrets. It runs the gitleaks binary
+  # directly, pinned by version and sha256, rather than gitleaks-action: the
+  # action lists a PR's commits through the API, which needs `pull-requests:
+  # read`, and scans only that range, where the binary needs no token at all
+  # and scans the same history on a push and on a PR. `.gitleaks.toml` extends
+  # the default ruleset with an allowlist for this repo's own FIXTURE/LEAKED
+  # sentinel values (`packages/core/test/secrets-leak.test.ts` already proves
+  # nothing else looks like a real secret).
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.24.3
+      GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan history
+        run: '"$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --exit-code 1 .'
+
+  # One green/red check for branch protection to point at, so the required
+  # check does not have to be re-listed every time a job is added or renamed.
+  # `scripts/ci-results.ts` decides: every job in `needs` must have reported
+  # `success`, and skipped, cancelled, missing and unknown all fail. It needs
+  # bun but no dependencies, so it skips ./.github/actions/setup and its install.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      [
+        typecheck,
+        test,
+        lint-biome,
+        lint,
+        lint-cfn,
+        lint-sh,
+        build,
+        dynamodb-local,
+        app,
+        audit,
+        gitleaks,
+      ]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - name: Report
+        # Through the environment, never interpolated into the shell command:
+        # `needs` is data, and data that becomes shell is an injection.
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: bun scripts/ci-results.ts

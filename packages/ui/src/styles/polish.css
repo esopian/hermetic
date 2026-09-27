@@ -1,0 +1,599 @@
+@import "./styles.css";
+
+/* Responsive and interaction layer. Keep the mockup's palette, type and seams;
+   text tokens are separate so stronger contrast never repaints status surfaces. */
+:root {
+  --text-muted: #969289;
+  --text-accent: #ff7847;
+  --text-ok: #37c27f;
+  --text-warn: #e8b03a;
+  --ease-ui: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --motion-fast: 120ms;
+  --motion-enter: 180ms;
+}
+
+[data-theme="light"] {
+  --text-muted: #625f57;
+  --text-accent: #a93610;
+  --text-ok: #146b42;
+  --text-warn: #805800;
+}
+
+.kicker,
+.dim,
+.footer,
+.foot-shortcuts,
+.popover-head,
+.popover-foot .hint,
+.card-sub,
+.cell-ts .ip,
+.thead,
+.group-empty,
+.infobox .k,
+.kv .k,
+.kv dt,
+.tile-val span,
+.status-sub,
+.stage-meta,
+.stage-empty,
+.bootstrap-sum,
+.step span,
+.check-hint,
+.verify-sub,
+.wiz-rail-foot,
+.acl-part-purpose,
+.settings-hint,
+.settings-account .k,
+.foundation-agents .fa-status,
+.foundation-agents .fa-label,
+.doctor-tally,
+.doctor-row .dc-items,
+.doctor-row .dc-more,
+.doctor-row.is-skip .dc-label,
+.doctor-row.is-skip .dc-detail,
+.runs-head,
+.runs-status,
+.providers-head,
+.secrets-head,
+.claim-note,
+.td-summary .k,
+.td-option-note,
+.td-plan-source,
+.td-hint,
+.tr-sub,
+.tr-detail,
+.fleet-sw-facts .k,
+.fleet-sw-note {
+  color: var(--text-muted);
+}
+
+a,
+.popover-doctor-btn,
+.fleet-sw-link,
+.fleet-sw-tag.current,
+.fleet-sw-confirm-head,
+.sort-glyph,
+.viewnav .badge.alert {
+  color: var(--text-accent);
+}
+
+.check-hint,
+.name-hint,
+.verify-sub,
+.wiz-copy,
+.wiz-note,
+.detail-host-note {
+  line-height: 1.5;
+}
+
+/* These text-only hints also receive inline colour variables. Rebind locally
+   rather than replacing the brand/status tokens used by squares and fills. */
+.name-hint,
+.scan-detail,
+.inline-scan {
+  --fg3: var(--text-muted);
+  --warn: var(--text-warn);
+  --ok: var(--text-ok);
+}
+
+.skew-mark,
+.cell-config.warn,
+.doctor-note.warn,
+.doctor-row.is-warn .dc-state,
+.td-kicker-warn,
+.td-warnings,
+.td-warnings li::before,
+.save-bar-conflict {
+  color: var(--text-warn);
+}
+
+.doctor-check.ok,
+.wiz-done,
+.wiz-substep.is-done .wiz-substep-state,
+.td-done-title,
+.td-hint-ok {
+  color: var(--text-ok);
+}
+
+.td-option-danger {
+  color: var(--bad);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* On an inverted tab, the foreground is the page colour, not accent ink. */
+.viewnav button[aria-pressed="true"] .badge {
+  color: inherit;
+  opacity: 1;
+}
+
+.btn-danger:hover:not([disabled]) {
+  color: var(--danger-text);
+}
+
+/* Declared after all: unset controls. Inset rings survive scroll clipping and
+   remain visible on both outlined and inverted segmented buttons. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+.switch button:focus-visible,
+.seg button:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: -2px;
+}
+
+.copy-id:focus-visible,
+.linkish:focus-visible,
+.fleet-sw-link:focus-visible,
+.verify-check:focus-visible {
+  outline-offset: 2px;
+}
+
+.btn,
+.envstrip-fleet,
+.theme-toggle,
+.switch button,
+.seg button,
+.size-cell,
+.card-open,
+.fleet-sw-btn,
+.fleet-sw-go,
+.fleet-sw-cancel,
+.settings-rail-item,
+.viewnav button {
+  transition:
+    background-color var(--motion-fast) var(--ease-ui),
+    color var(--motion-fast) var(--ease-ui),
+    border-color var(--motion-fast) var(--ease-ui);
+}
+
+.size-cell:hover:not([aria-pressed="true"]),
+.seg button:hover:not([aria-pressed="true"]) {
+  background: var(--bg3);
+}
+
+.btn:active:not(:disabled),
+.fleet-sw-go:active:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+/* Pulse status squares, never the entire action the operator is reading. */
+.btn {
+  /* biome-ignore lint/complexity/noImportantStyles: Overrides the inline pending-action pulse. */
+  animation: none !important;
+}
+
+.drawer {
+  container-type: inline-size;
+  animation: drawer-enter var(--motion-enter) var(--ease-ui);
+  overscroll-behavior: contain;
+  overflow-y: auto;
+}
+
+.drawer > * {
+  flex-shrink: 0;
+}
+
+.drawer > .drawer-body,
+.drawer > .form {
+  flex-shrink: 1;
+  min-height: 160px;
+}
+
+.popover,
+.tr-modal,
+.check-fade {
+  animation: hfade var(--motion-fast) var(--ease-ui);
+}
+
+@keyframes drawer-enter {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Intrinsic sizing: long identifiers may grow down, never force tracks wider.
+   Dense table tracks retain their own horizontal scroll instead. */
+.header {
+  height: auto;
+  min-height: 64px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.detail-host,
+.fleet-sw-facts .v,
+.fleet-sw-name b,
+.fleet-sw-sub {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
+
+.legend i {
+  flex-shrink: 0;
+}
+
+.drawer .skew-mark {
+  white-space: normal;
+}
+
+.envstrip {
+  height: auto;
+  min-height: 28px;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding-block: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.envstrip .right {
+  overflow: visible;
+}
+
+.toolbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.toolbar-right {
+  flex-wrap: wrap;
+}
+
+.board {
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+}
+
+.claims {
+  grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr));
+}
+
+.loose-cards {
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+}
+
+.lane {
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+
+.card,
+.claim,
+.tile,
+.toolbar-right,
+.drawer-head > *,
+.drawer-foot > *,
+.card-foot > *,
+.options > *,
+.provider-card-fields > *,
+.runs-filters > *,
+.infobox > *,
+.kv > *,
+.settings-account > * {
+  min-width: 0;
+}
+
+.drawer,
+.wiz-panel,
+.settings-col,
+.claim,
+.card-sub,
+.card-ver,
+.empty,
+.footer {
+  overflow-wrap: anywhere;
+}
+
+.options,
+.sizes {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Four tiles since the two filesystems became siblings (`styles.css`). Split
+   out of the group above rather than left in it, because that rule is what was
+   quietly wrapping the fourth tile onto a row of its own beside an empty cell. */
+.tiles {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.kv,
+.infobox,
+.settings-account,
+.td-summary {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.seg button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tile-val,
+.claim-foot,
+.confirm-actions,
+.check-actions,
+.save-bar-acts,
+.provider-card-head,
+.secrets-actions,
+.runs-status,
+.fleet-sw-confirm-actions,
+.fleet-sw-name {
+  flex-wrap: wrap;
+}
+
+.runs-table,
+.secrets-table,
+.providers-table,
+.vrows {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.vrow {
+  min-width: 760px;
+}
+
+.popover {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The header gets a second row, for the view nav, before the nav competes with
+   the bell and the theme toggle. */
+@media (max-width: 860px) {
+  .header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .header-logo,
+  .header-right {
+    min-height: 56px;
+  }
+  .header-logo {
+    border-right: 0;
+  }
+  .header-mid:has(.viewnav) {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    border-top: 2px solid var(--fg);
+  }
+  .header-mid:not(:has(.viewnav)) {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .toolbar-right .filter {
+    flex: 1 1 260px;
+  }
+  .runs-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .runs-seg {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 800px) {
+  .settings-shell {
+    flex-direction: column;
+    gap: 24px;
+  }
+  .settings-rail .kicker {
+    grid-column: 1 / -1;
+  }
+  .wiz-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wiz-rail {
+    border-right: 0;
+    border-bottom: 3px solid var(--fg);
+  }
+  .wiz-rail .steps {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 18px;
+  }
+  .wiz-rail-foot {
+    padding-top: 12px;
+  }
+  .lane,
+  .group {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lane-label,
+  .group-side {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 16px;
+    align-items: center;
+  }
+  .lane-n,
+  .group-count {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    font-size: 36px;
+    margin: 0;
+  }
+  .lane-hint,
+  .group-hint {
+    margin: 0;
+  }
+  .group > :not(.group-side) {
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .grow {
+    min-width: 900px;
+  }
+  .viewnav {
+    flex-wrap: wrap;
+  }
+  .viewnav button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .skew-band {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .skew-acts {
+    grid-column: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+}
+
+/* Container queries also fix narrow desktop create/delete drawers. */
+@container (max-width: 620px) {
+  .drawer-foot {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .drawer-foot > .btn:first-child {
+    justify-self: stretch;
+  }
+  .progress-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@container (max-width: 480px) {
+  .options,
+  .sizes,
+  .tiles,
+  .locked-volume {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .size-cell {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 4px 12px;
+  }
+  .size-cell .g {
+    grid-column: 1;
+    grid-row: 1 / 6;
+    align-self: center;
+  }
+  .size-cell > :not(.g) {
+    grid-column: 2;
+  }
+  .stage-row,
+  .step {
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 8px;
+  }
+  .stage-meta,
+  .step > span {
+    grid-column: 2;
+  }
+  .progress-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .check {
+    grid-template-columns: 14px minmax(0, 1fr);
+  }
+  .check > span {
+    grid-column: 2;
+  }
+  .bootstrap-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .bootstrap-sum {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .bootstrap-caret {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+/* Let the entire drawer scroll when a short window leaves too little
+   height for fixed chrome plus content. Never trap actions below the fold. */
+@media (max-height: 650px) {
+  .drawer > .drawer-body,
+  .drawer > .form {
+    overflow: visible;
+    flex: 1 0 auto;
+  }
+}
+
+/* Narrow or short windows use a viewport sheet: a wrapped header can be taller
+   than the available space below the JS anchor. */
+@media (max-width: 1100px), (max-height: 650px) {
+  .popover {
+    /* biome-ignore lint/complexity/noImportantStyles: Overrides JS anchor coordinates in narrow or short windows. */
+    top: 12px !important;
+    /* biome-ignore lint/complexity/noImportantStyles: The viewport sheet must override JS inline anchored maxHeight as well as top. */
+    max-height: calc(100dvh - 24px) !important;
+    border-top: 3px solid var(--fg);
+  }
+}
+
+/* Includes inline OpProgress/AgentDrawer styles and pseudo-elements. A static
+   full-width sweep still announces loading; determinate bars keep their value. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: Reduced motion must override inline animation. */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: OpProgress and AgentDrawer set inline transitions. */
+    transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: Respect reduced motion regardless of local scrolling styles. */
+    scroll-behavior: auto !important;
+  }
+  .sweep > i {
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+  .caret,
+  .scan-square,
+  .stage-mark.running,
+  .tick-dot.pulse {
+    opacity: 1;
+  }
+}

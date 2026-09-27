@@ -1,0 +1,21 @@
+/*
+ * The one live status line under a turn's steps.
+ *
+ * Transport and progress snapshots — connecting, queued, replaying history,
+ * preparing a call — are replaced rather than accumulated, so the group shows
+ * the current one here instead of growing a step per snapshot. It is drawn
+ * quieter than a step: it is what is happening, not what the turn did, and it
+ * disappears when the turn ends.
+ */
+.ch-msg-body .ch-activity .ch-activity-status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 0 12px;
+  padding: 6px 0 2px 12px;
+  color: var(--fg3);
+  font-size: 12px;
+}
+.ch-msg-body .ch-activity .ch-activity-status .ch-activity-name {
+  color: var(--fg2);
+}

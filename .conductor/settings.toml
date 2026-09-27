@@ -1,0 +1,42 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+# A new workspace is a fresh checkout: install, bring the local toolchain up to
+# spec, then wire the agent tools and build graft's graph for this worktree
+# (each worktree needs its own — graft/ is git-ignored). All repo-scoped; no
+# machine-wide agent config is written.
+#
+# Every run script below binds $CONDUCTOR_PORT instead of the default 7433, so
+# several workspaces can serve at once.
+[scripts]
+setup = "bun install && bun run setup && bun run agent-setup"
+run_mode = "concurrent"
+
+# Fixture backend: in-memory fleet, no AWS. HERMETIC_HOME is pinned to the
+# workspace so the seeded run log never touches the real ~/.hermetic/hermetic.db.
+[scripts.run.fixture]
+command = "mkdir -p \"$CONDUCTOR_WORKSPACE_PATH/.context/hermetic-home\" && HERMETIC_HOME=\"$CONDUCTOR_WORKSPACE_PATH/.context/hermetic-home\" PORT=\"$CONDUCTOR_PORT\" bun run dev:fixture"
+available_in = [ "local" ]
+default = true
+icon = "flask-conical"
+
+# Real mode: talks to the AWS account frozen by `init` and the shared
+# ~/.hermetic/hermetic.db. Wizard if uninitialized, dashboard if not.
+[scripts.run.dev]
+command = "PORT=\"$CONDUCTOR_PORT\" bun run dev"
+available_in = [ "local" ]
+icon = "cloud"
+
+# Init wizard against the fixture backend, workspace-local home.
+[scripts.run.wizard]
+command = "mkdir -p \"$CONDUCTOR_WORKSPACE_PATH/.context/hermetic-home\" && HERMETIC_HOME=\"$CONDUCTOR_WORKSPACE_PATH/.context/hermetic-home\" PORT=\"$CONDUCTOR_PORT\" bun run dev:wizard"
+available_in = [ "local" ]
+icon = "wand-sparkles"
+
+[scripts.run.test]
+command = "bun run test:watch"
+icon = "test-tube"
+
+# typecheck + test + boundaries + lint, the pre-push gate from CONTRIBUTING.md
+[scripts.run.check]
+command = "bun run check"
+icon = "check-check"

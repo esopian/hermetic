@@ -1,0 +1,14 @@
+{
+  // `electrobun/view` resolves to the SDK `hutch electrobun prepare` projects
+  // into `packages/app/.hutch/devkit/` — the `electrobun` npm package is a
+  // bootstrap whose exports throw and ships no types at all. The devkit's own
+  // `tsconfig.json` is not extended: it carries a `baseUrl`, which TypeScript 7
+  // removed outright (TS5102), and the error is fatal anywhere in an `extends`
+  // chain. This is a path map into a sibling package's generated directory and
+  // not an import boundary — nothing in `src/` reaches for `@hermetic/app`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": { "electrobun/view": ["../app/.hutch/devkit/api/browser/index.ts"] }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+}

@@ -1,0 +1,1498 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the foundation template snapshot 1`] = `
+"{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "hermetic foundation: dedicated dual-stack VPC, sealed agent security group, fleet-scoped agent role, versioned bucket, agents/events tables, daily snapshots.",
+  "Metadata": {
+    "cfn-lint": {
+      "config": {
+        "ignore_checks": [
+          "W2506"
+        ]
+      }
+    }
+  },
+  "Parameters": {
+    "FleetId": {
+      "Type": "String",
+      "Description": "8-character lowercase Crockford base32 id minted by \`hermetic init\`; ties this stack to one hermetic home (§4.6).",
+      "AllowedPattern": "^[0-9abcdefghjkmnpqrstvwxyz]{8}$"
+    },
+    "HermeticVersion": {
+      "Type": "String",
+      "Description": "hermetic version that created this stack."
+    },
+    "Network": {
+      "Type": "String",
+      "Default": "public",
+      "AllowedValues": [
+        "public",
+        "nat"
+      ],
+      "Description": "\`public\` (default, §10) or \`nat\` for private subnets behind fck-nat."
+    },
+    "BedrockModelArns": {
+      "Type": "CommaDelimitedList",
+      "Description": "Model ARNs resolved for the region at init and recorded on _fleet (§5.1)."
+    },
+    "FckNatAmiId": {
+      "Type": "String",
+      "Default": "ami-00000000000000000",
+      "Description": "fck-nat arm64 AMI, looked up by name at init. Unused when Network=public."
+    }
+  },
+  "Conditions": {
+    "IsNat": {
+      "Fn::Equals": [
+        {
+          "Ref": "Network"
+        },
+        "nat"
+      ]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.42.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          }
+        ]
+      }
+    },
+    "Ipv6Cidr": {
+      "Type": "AWS::EC2::VPCCidrBlock",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AmazonProvidedIpv6CidrBlock": true
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "InternetGatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnet0": {
+      "Type": "AWS::EC2::Subnet",
+      "DependsOn": "Ipv6Cidr",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.42.0.0/20",
+        "Ipv6CidrBlock": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::Cidr": [
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Fn::GetAtt": [
+                        "Vpc",
+                        "Ipv6CidrBlocks"
+                      ]
+                    }
+                  ]
+                },
+                8,
+                "64"
+              ]
+            }
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": true,
+        "AssignIpv6AddressOnCreation": true,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-public-0"
+            }
+          }
+        ]
+      }
+    },
+    "PublicSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "DependsOn": "Ipv6Cidr",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.42.16.0/20",
+        "Ipv6CidrBlock": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::Cidr": [
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Fn::GetAtt": [
+                        "Vpc",
+                        "Ipv6CidrBlocks"
+                      ]
+                    }
+                  ]
+                },
+                8,
+                "64"
+              ]
+            }
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": true,
+        "AssignIpv6AddressOnCreation": true,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-public-1"
+            }
+          }
+        ]
+      }
+    },
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-public"
+            }
+          }
+        ]
+      }
+    },
+    "PublicDefaultRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "InternetGatewayAttachment",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicDefaultRouteV6": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "InternetGatewayAttachment",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationIpv6CidrBlock": "::/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnet0RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "PublicSubnet1RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "S3Endpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.s3"
+        },
+        "VpcEndpointType": "Gateway",
+        "RouteTableIds": {
+          "Fn::If": [
+            "IsNat",
+            [
+              {
+                "Ref": "PublicRouteTable"
+              },
+              {
+                "Ref": "PrivateRouteTable"
+              }
+            ],
+            [
+              {
+                "Ref": "PublicRouteTable"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "DynamoDbEndpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.dynamodb"
+        },
+        "VpcEndpointType": "Gateway",
+        "RouteTableIds": {
+          "Fn::If": [
+            "IsNat",
+            [
+              {
+                "Ref": "PublicRouteTable"
+              },
+              {
+                "Ref": "PrivateRouteTable"
+              }
+            ],
+            [
+              {
+                "Ref": "PublicRouteTable"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "AgentSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "hermetic agents: zero inbound rules, outbound open (sealed inbound, open outbound)",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0",
+            "Description": "outbound open"
+          },
+          {
+            "IpProtocol": "-1",
+            "CidrIpv6": "::/0",
+            "Description": "outbound open (v6)"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-agent"
+            }
+          }
+        ]
+      }
+    },
+    "AgentRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "\${AWS::StackName}-agent"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "hermetic-agent",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "FleetParameters",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:GetParameter",
+                    "ssm:GetParameters",
+                    "ssm:GetParametersByPath"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:ssm:\${AWS::Region}:\${AWS::AccountId}:parameter/hermes/\${FleetId}/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DecryptFleetParameters",
+                  "Effect": "Allow",
+                  "Action": [
+                    "kms:Decrypt"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ssm.\${AWS::Region}.amazonaws.com"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Sid": "SsmAgent",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:DescribeAssociation",
+                    "ssm:DescribeDocument",
+                    "ssm:GetDeployablePatchSnapshotForInstance",
+                    "ssm:GetDocument",
+                    "ssm:GetManifest",
+                    "ssm:ListAssociations",
+                    "ssm:ListInstanceAssociations",
+                    "ssm:PutComplianceItems",
+                    "ssm:PutConfigurePackageResult",
+                    "ssm:PutInventory",
+                    "ssm:UpdateAssociationStatus",
+                    "ssm:UpdateInstanceAssociationStatus",
+                    "ssm:UpdateInstanceInformation"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "SsmMessages",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssmmessages:CreateControlChannel",
+                    "ssmmessages:CreateDataChannel",
+                    "ssmmessages:OpenControlChannel",
+                    "ssmmessages:OpenDataChannel"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "Ec2Messages",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2messages:AcknowledgeMessage",
+                    "ec2messages:DeleteMessage",
+                    "ec2messages:FailMessage",
+                    "ec2messages:GetEndpoint",
+                    "ec2messages:GetMessages",
+                    "ec2messages:SendReply"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "FleetRows",
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:Query"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "AgentsTable",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "EventsTable",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "FleetConfigPrefix",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "\${Bucket.Arn}/config/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "ReadArtifacts",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "\${Bucket.Arn}/artifacts/*"
+                    },
+                    {
+                      "Fn::Sub": "\${Bucket.Arn}/hermes/*"
+                    },
+                    {
+                      "Fn::Sub": "\${Bucket.Arn}/browser/*"
+                    },
+                    {
+                      "Fn::Sub": "\${Bucket.Arn}/manifest.json"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "ListFleetPrefixes",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "Bucket",
+                        "Arn"
+                      ]
+                    }
+                  ],
+                  "Condition": {
+                    "StringLike": {
+                      "s3:prefix": [
+                        "config/*",
+                        "artifacts/*",
+                        "hermes/*",
+                        "browser/*",
+                        "manifest.json"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Sid": "Bedrock",
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream"
+                  ],
+                  "Resource": {
+                    "Ref": "BedrockModelArns"
+                  }
+                },
+                {
+                  "Sid": "BedrockCatalog",
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:ListFoundationModels",
+                    "bedrock:ListInferenceProfiles"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "AgentInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "\${AWS::StackName}-agent"
+        },
+        "Roles": [
+          {
+            "Ref": "AgentRole"
+          }
+        ]
+      }
+    },
+    "Bucket": {
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "BucketName": {
+          "Fn::Sub": "\${AWS::StackName}-\${AWS::AccountId}-\${AWS::Region}"
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-noncurrent-artifacts",
+              "Status": "Enabled",
+              "Prefix": "artifacts/",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 7,
+                "NewerNoncurrentVersions": 1
+              }
+            },
+            {
+              "Id": "expire-noncurrent-and-markers",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30,
+                "NewerNoncurrentVersions": 3
+              },
+              "ExpiredObjectDeleteMarker": true,
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "BucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Bucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Bucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "\${Bucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "DenyOutsideVpcEndpointAndAccount",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Bucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "\${Bucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:SourceVpce": {
+                    "Ref": "S3Endpoint"
+                  }
+                },
+                "StringNotEqualsIfExists": {
+                  "aws:PrincipalAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AgentsTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "TableName": {
+          "Fn::Sub": "\${AWS::StackName}-agents"
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "name",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "name",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true
+        },
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "EventsTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "TableName": {
+          "Fn::Sub": "\${AWS::StackName}-events"
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "name",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "timestamp",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "name",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "timestamp",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "SnapshotRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "\${AWS::StackName}-dlm"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "dlm.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "SnapshotPolicy": {
+      "Type": "AWS::DLM::LifecyclePolicy",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "\${AWS::StackName} daily data-volume snapshots"
+        },
+        "State": "ENABLED",
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "SnapshotRole",
+            "Arn"
+          ]
+        },
+        "PolicyDetails": {
+          "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+          "ResourceTypes": [
+            "VOLUME"
+          ],
+          "TargetTags": [
+            {
+              "Key": "hermetic:role",
+              "Value": "data"
+            },
+            {
+              "Key": "hermetic:fleet_id",
+              "Value": {
+                "Ref": "FleetId"
+              }
+            }
+          ],
+          "Schedules": [
+            {
+              "Name": "daily",
+              "CreateRule": {
+                "Interval": 24,
+                "IntervalUnit": "HOURS",
+                "Times": [
+                  "05:00"
+                ]
+              },
+              "RetainRule": {
+                "Count": 7
+              },
+              "CopyTags": true
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "PrivateSubnet0": {
+      "Type": "AWS::EC2::Subnet",
+      "Condition": "IsNat",
+      "DependsOn": "Ipv6Cidr",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.42.128.0/20",
+        "Ipv6CidrBlock": {
+          "Fn::Select": [
+            2,
+            {
+              "Fn::Cidr": [
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Fn::GetAtt": [
+                        "Vpc",
+                        "Ipv6CidrBlocks"
+                      ]
+                    }
+                  ]
+                },
+                8,
+                "64"
+              ]
+            }
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": false,
+        "AssignIpv6AddressOnCreation": true,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-private-0"
+            }
+          }
+        ]
+      }
+    },
+    "PrivateSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Condition": "IsNat",
+      "DependsOn": "Ipv6Cidr",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.42.144.0/20",
+        "Ipv6CidrBlock": {
+          "Fn::Select": [
+            3,
+            {
+              "Fn::Cidr": [
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Fn::GetAtt": [
+                        "Vpc",
+                        "Ipv6CidrBlocks"
+                      ]
+                    }
+                  ]
+                },
+                8,
+                "64"
+              ]
+            }
+          ]
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": false,
+        "AssignIpv6AddressOnCreation": true,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-private-1"
+            }
+          }
+        ]
+      }
+    },
+    "PrivateRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Condition": "IsNat",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-private"
+            }
+          }
+        ]
+      }
+    },
+    "PrivateDefaultRoute": {
+      "Type": "AWS::EC2::Route",
+      "Condition": "IsNat",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "InstanceId": {
+          "Ref": "NatInstance"
+        }
+      }
+    },
+    "EgressOnlyInternetGateway": {
+      "Type": "AWS::EC2::EgressOnlyInternetGateway",
+      "Condition": "IsNat",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        }
+      }
+    },
+    "PrivateDefaultRouteV6": {
+      "Type": "AWS::EC2::Route",
+      "Condition": "IsNat",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable"
+        },
+        "DestinationIpv6CidrBlock": "::/0",
+        "EgressOnlyInternetGatewayId": {
+          "Ref": "EgressOnlyInternetGateway"
+        }
+      }
+    },
+    "PrivateSubnet0RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Condition": "IsNat",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateSubnet0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable"
+        }
+      }
+    },
+    "PrivateSubnet1RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Condition": "IsNat",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTable"
+        }
+      }
+    },
+    "NatSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Condition": "IsNat",
+      "Properties": {
+        "GroupDescription": "fck-nat: accepts only traffic originating inside the VPC",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "10.42.0.0/16",
+            "Description": "VPC egress via NAT"
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0",
+            "Description": "outbound open"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-nat"
+            }
+          }
+        ]
+      }
+    },
+    "NatRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "IsNat",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "\${AWS::StackName}-nat"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "fck-nat",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:AttachNetworkInterface",
+                    "ec2:ModifyNetworkInterfaceAttribute",
+                    "ec2:AssociateAddress",
+                    "ec2:DisassociateAddress",
+                    "ec2:DescribeNetworkInterfaces",
+                    "ec2:DescribeAddresses",
+                    "ec2:DescribeSubnets"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          }
+        ]
+      }
+    },
+    "NatInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Condition": "IsNat",
+      "Properties": {
+        "InstanceProfileName": {
+          "Fn::Sub": "\${AWS::StackName}-nat"
+        },
+        "Roles": [
+          {
+            "Ref": "NatRole"
+          }
+        ]
+      }
+    },
+    "NatInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Condition": "IsNat",
+      "Properties": {
+        "InstanceType": "t4g.nano",
+        "ImageId": {
+          "Ref": "FckNatAmiId"
+        },
+        "IamInstanceProfile": {
+          "Ref": "NatInstanceProfile"
+        },
+        "SubnetId": {
+          "Ref": "PublicSubnet0"
+        },
+        "SecurityGroupIds": [
+          {
+            "Ref": "NatSecurityGroup"
+          }
+        ],
+        "SourceDestCheck": false,
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-nat"
+            }
+          }
+        ]
+      }
+    },
+    "NatEip": {
+      "Type": "AWS::EC2::EIP",
+      "Condition": "IsNat",
+      "DependsOn": "InternetGatewayAttachment",
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "hermetic:fleet_id",
+            "Value": {
+              "Ref": "FleetId"
+            }
+          },
+          {
+            "Key": "hermetic:version",
+            "Value": {
+              "Ref": "HermeticVersion"
+            }
+          },
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "\${AWS::StackName}-nat"
+            }
+          }
+        ]
+      }
+    },
+    "NatEipAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Condition": "IsNat",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatEip",
+            "AllocationId"
+          ]
+        },
+        "InstanceId": {
+          "Ref": "NatInstance"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "VpcId": {
+      "Description": "hermetic VPC",
+      "Value": {
+        "Ref": "Vpc"
+      }
+    },
+    "SubnetIds": {
+      "Description": "Subnets agents launch into",
+      "Value": {
+        "Fn::If": [
+          "IsNat",
+          {
+            "Fn::Join": [
+              ",",
+              [
+                {
+                  "Ref": "PrivateSubnet0"
+                },
+                {
+                  "Ref": "PrivateSubnet1"
+                }
+              ]
+            ]
+          },
+          {
+            "Fn::Join": [
+              ",",
+              [
+                {
+                  "Ref": "PublicSubnet0"
+                },
+                {
+                  "Ref": "PublicSubnet1"
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "SecurityGroupId": {
+      "Description": "Sealed agent security group",
+      "Value": {
+        "Ref": "AgentSecurityGroup"
+      }
+    },
+    "InstanceProfileArn": {
+      "Description": "Shared agent instance profile",
+      "Value": {
+        "Fn::GetAtt": [
+          "AgentInstanceProfile",
+          "Arn"
+        ]
+      }
+    },
+    "RoleArn": {
+      "Description": "Shared agent role",
+      "Value": {
+        "Fn::GetAtt": [
+          "AgentRole",
+          "Arn"
+        ]
+      }
+    },
+    "BucketName": {
+      "Description": "hermeticd artifacts and rendered config",
+      "Value": {
+        "Ref": "Bucket"
+      }
+    },
+    "AgentsTable": {
+      "Description": "agents table",
+      "Value": {
+        "Ref": "AgentsTable"
+      }
+    },
+    "EventsTable": {
+      "Description": "events table",
+      "Value": {
+        "Ref": "EventsTable"
+      }
+    },
+    "Network": {
+      "Description": "Fleet network mode",
+      "Value": {
+        "Ref": "Network"
+      }
+    },
+    "NatEgressIp": {
+      "Description": "Stable egress address of the NAT instance",
+      "Condition": "IsNat",
+      "Value": {
+        "Ref": "NatEip"
+      }
+    }
+  }
+}"
+`;

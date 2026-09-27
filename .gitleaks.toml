@@ -1,0 +1,35 @@
+# Config for the `gitleaks` CI job (.github/workflows/ci.yml). Extends
+# gitleaks' own default ruleset rather than replacing it.
+#
+# The only local addition is an allowlist for this repo's own fixture
+# secrets. Every value a test plants — a Tailscale key, an OpenRouter-shaped
+# key, an AWS-shaped key id, a PEM header, a JWT — carries one of these
+# markers inside the value itself, which is what `packages/core/test/
+# secrets-leak.test.ts` already checks against: that test fails the suite on
+# any of these values (or a bare `tskey-…`) appearing anywhere nothing marked
+# it as fixture data. A gitleaks match is excused only when the matched text
+# itself carries one of these words, never by file path — a real secret
+# pasted into a fixture file would still fail.
+#
+# Below the markers, a short list of exact test values from before the
+# markers were the rule, each still in history: an empty `NOUS_API_KEY=` line,
+# the fixture fleet's avatar seed key, the redaction tests' made-up token and
+# Bitwarden access token, and the account guard's fake AWS key id. Each is
+# anchored to the whole value, so nothing else slips through with it.
+title = "hermetic gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "this repo's own FIXTURE/EXAMPLE/LEAKED sentinel values, never a real credential"
+regexes = [
+  '''(?i)fixture''',
+  '''(?i)\bexample\b''',
+  '''(?i)\bleaked\b''',
+  '''^NOUS_API_KEY=$''',
+  '''^fxtr0001/[a-z0-9-]+/default$''',
+  '''^Xk7Qp2LmRt9VbNc4ZfWyJh6Ds1Ag8Ue5Ko3Ii0Pq$''',
+  '''^0\.4b1c2d3e-1111-2222-3333-444455556666\.YWJjZGVmZ2hpamts-bW5vcHFy_c3R1dnd4eXo=$''',
+  '''^AKIAENVOVERRIDE0+$''',
+]

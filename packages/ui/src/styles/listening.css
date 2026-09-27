@@ -1,0 +1,308 @@
+/* Approved listening palette, separate from operational status colors. */
+:root {
+  --listen: #90bbe6;
+  --listen-fill: #90bbe6;
+  --listen-secondary: #a3acd9;
+  --listen-ink: #0e1716;
+}
+[data-theme="light"] {
+  --listen: #356a9b;
+  --listen-secondary: #697bb1;
+}
+/* Listening additions only; the surrounding UI uses production styles. */
+.listening-toggle.btn {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 114px;
+  height: 34px;
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+  color: var(--text-muted);
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    background 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease;
+}
+.listening-toggle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--listen) 12%, transparent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: -1;
+}
+.listening-toggle[aria-checked="true"] {
+  border-color: var(--listen);
+  color: var(--listen);
+}
+.listening-toggle[aria-checked="true"]::before {
+  transform: scaleX(1);
+}
+.listening-toggle:hover:not(:disabled) {
+  border-color: var(--fg2);
+}
+.listening-toggle[aria-checked="true"]:hover:not(:disabled) {
+  border-color: var(--listen);
+}
+.listening-toggle-thumb {
+  position: absolute;
+  left: 3px;
+  top: calc(50% - 13px);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: var(--line2);
+  color: var(--fg2);
+  transition:
+    transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 240ms ease,
+    color 240ms ease;
+}
+.listening-toggle[aria-checked="true"] .listening-toggle-thumb {
+  transform: translateX(80px);
+  background: var(--listen-fill);
+  color: var(--listen-ink);
+}
+.listening-toggle-label {
+  position: absolute;
+  left: 31px;
+  right: 3px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.listening-toggle[aria-checked="true"] .listening-toggle-label {
+  transform: translateX(-28px);
+}
+.listening-mute {
+  opacity: 0;
+  stroke-dasharray: 29;
+  stroke-dashoffset: 29;
+  transition:
+    opacity 200ms ease,
+    stroke-dashoffset 240ms ease;
+}
+.listening-mute[data-muted="true"] {
+  opacity: 1;
+  stroke-dashoffset: 0;
+}
+.listening-toggle[aria-checked="true"] .listening-wave {
+  transform-origin: center;
+  animation: listening-signal-on 480ms ease-out;
+}
+@keyframes listening-signal-on {
+  0% {
+    transform: scaleY(0.35);
+  }
+  45% {
+    transform: scaleY(1.12);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+.listening-connection {
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+}
+.listening-connection > .mono {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.listening-connection[data-listening="true"] > .mono {
+  color: var(--listen);
+}
+.listening-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -18px -20px 0;
+  padding: 9px 20px;
+  min-height: 34px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--line);
+  font: 700 10px var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  transition:
+    background 240ms ease,
+    color 240ms ease;
+}
+.listening-band-detail {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.card.off[data-listening="true"] {
+  opacity: 1;
+}
+.card.off[data-listening="true"] > .card-top,
+.card.off[data-listening="true"] > .cell-status,
+.card.off[data-listening="true"] > .card-foot {
+  opacity: 0.55;
+}
+.listening-indicator {
+  color: var(--listen);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.tbody-row[data-listening="true"] {
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--listen) 55%, transparent);
+  background: color-mix(in srgb, var(--listen) 4%, var(--bg));
+}
+.listening-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.listening-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  grid-column: 1 / -1;
+  padding-top: 12px;
+}
+.listening-toolbar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--listen);
+}
+.listening-toolbar-help {
+  color: var(--text-muted);
+  margin-left: -4px;
+}
+/* Add one control column to agent rows, retaining the production volume rows. */
+.listening-table .trow:not(.vol-row) {
+  grid-template-columns: 114px minmax(240px, 1.2fr) 200px 110px 100px 90px 130px 82px 82px minmax(
+      230px,
+      1fr
+    ) 100px 84px;
+}
+.listening-drawer-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-top: 12px;
+}
+.listening-manager-tools {
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.listening-manager-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.listening-manager-row:hover {
+  background: var(--bg2);
+}
+.listening-manager-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--listen);
+  margin: 0;
+}
+.listening-manager-row strong {
+  font-size: 16px;
+  font-weight: 800;
+}
+.listening-manager-row .cell-status {
+  font-size: 10px;
+}
+
+.card[data-chat-agent] .card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.listening-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .listening-toggle.btn,
+  .listening-toggle::before,
+  .listening-toggle-thumb,
+  .listening-toggle-label,
+  .listening-mute,
+  .listening-band {
+    transition: none;
+  }
+  .listening-toggle[aria-checked] .listening-wave {
+    animation: none;
+  }
+}
+
+.listening-toggle:focus-visible,
+.listening-manager-row input:focus-visible {
+  outline-color: var(--listen);
+}
+/* Final treatment: C’s blue gradient, layered with B’s fine 7px dot pattern. */
+.listening-band[data-listening="true"] {
+  background: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--listen) 33%, var(--bg)),
+    color-mix(in srgb, var(--listen-secondary) 18%, var(--bg))
+  );
+  color: var(--listen);
+  border-color: color-mix(in srgb, var(--listen) 40%, var(--line));
+}
+.card[data-listening="true"] {
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--listen) 11%, transparent) 0.65px,
+      transparent 0.85px
+    )
+    0 0 / 7px 7px,
+    radial-gradient(
+      ellipse at 15% 0,
+      color-mix(in srgb, var(--listen) 13%, transparent),
+      transparent 80%
+    )
+    0 0 / 100% 100%,
+    var(--bg);
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--listen) 35%, transparent);
+}
+
+.listening-manager-actions .btn {
+  height: 48px;
+}
+.listening-manager-error {
+  padding: 16px 28px;
+  color: var(--bad);
+  font-size: 12px;
+}
+.listening-manager-empty {
+  padding: 24px 28px;
+  color: var(--text-muted);
+}
+.tbody-row.selected[data-listening="true"] {
+  background: color-mix(in srgb, var(--listen) 9%, var(--sel));
+}

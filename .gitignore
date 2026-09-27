@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+*.db.corrupt-*
+.DS_Store
+
+# Hutch's generated devkit projection and Electrobun's build output. `.hutch/`
+# is `hutch electrobun prepare`'s work, regenerated from the pins and never
+# edited by hand; `build/`, `artifacts/` and `dist/` are what a build leaves
+# behind.
+packages/app/.hutch/
+packages/app/build/
+packages/app/artifacts/
+packages/app/.cottontail-tmp/
+packages/app/dist/
+
+# Optional agent toolchain (`bun run agent-setup`). Everything graft and rtk
+# write into the repo is per-checkout: graft's graph cache, its hook and
+# statusline shims (which embed the install path of the graft package), its
+# skill, the MCP registrations, and the Claude Code settings that wire the
+# hooks in. Personal agent instructions stay local too.
+/graft/
+/.claude/helpers/
+/.claude/skills/graft/
+/.claude/settings.local.json
+/.mcp.json
+/opencode.json
+/CLAUDE.md
+/CLAUDE.local.md
+
+# graft writes this ripgrep override (re-admits graft/ to search); local only.
+/.ignore

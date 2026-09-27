@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    // `tests/rpc-refusal.test.ts` reads both halves of the desktop bridge — that
+    // is what the root `tests/` tree is for — so the root program contains
+    // `packages/ui/src/api/transport-rpc.ts` and has to resolve the same
+    // `electrobun/view` that package does. The map points at the devkit `hutch
+    // electrobun prepare` projects into `packages/app/.hutch/`, rather than
+    // extending the devkit's own `tsconfig.json`, which carries a `baseUrl` that
+    // TypeScript 7 removed (TS5102).
+    "paths": { "electrobun/view": ["./packages/app/.hutch/devkit/api/browser/index.ts"] }
+  },
+  "include": ["tests/**/*.ts", "scripts/**/*.ts"]
+}

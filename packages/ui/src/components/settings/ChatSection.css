@@ -1,0 +1,47 @@
+.chat-appearance-heading {
+  margin: 24px 0 8px;
+  font-size: 16px;
+}
+.chat-avatar-options {
+  min-width: 0;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.chat-avatar-options > legend {
+  margin-bottom: 12px;
+  font-weight: 700;
+}
+.chat-avatar-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.chat-avatar-option {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line2);
+  cursor: pointer;
+  text-align: center;
+}
+.chat-avatar-option[data-selected="true"] {
+  border-color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--fg);
+}
+.chat-avatar-option:focus-within {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+.chat-avatar-option > input {
+  align-self: flex-start;
+  accent-color: var(--fg);
+}
+.chat-avatar-preview {
+  display: block;
+  line-height: 0;
+}
