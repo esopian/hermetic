@@ -635,7 +635,14 @@ export function conversationKeyOf(n: { kind: string; ref?: string | null }): str
 
 /** One card in the centre: a single row, or a run of rows about one conversation. */
 export interface NotificationGroup<T> {
-  /** Stable across renders: the conversation key, or the lone row's id. */
+  /**
+   * Unique within one fold and stable across renders: the conversation key and
+   * the id of the run's oldest row, or the lone row's id. The conversation key
+   * alone is not unique — a run that another conversation interrupts resumes as
+   * a second card about the same conversation — and React keys the cards on it.
+   * The *oldest* row, because new rows arrive on top of a run and must not
+   * remount the card they join.
+   */
   key: string;
   /** Every row the card stands for, newest first. */
   rows: T[];
@@ -669,11 +676,17 @@ export function groupNotifications<T extends NotificationLike & { id: string; at
     if (key !== null && key === runKey && last) {
       last.rows.push(row);
       last.count += 1;
+      last.key = `${key}@${row.id}`;
       if (Date.parse(row.at) > Date.parse(last.latest.at)) last.latest = row;
       continue;
     }
     runKey = key;
-    groups.push({ key: key ?? row.id, rows: [row], latest: row, count: 1 });
+    groups.push({
+      key: key === null ? row.id : `${key}@${row.id}`,
+      rows: [row],
+      latest: row,
+      count: 1,
+    });
   }
   return groups;
 }

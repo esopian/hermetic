@@ -81,11 +81,19 @@ describe("groupNotifications", () => {
       row({ id: "x", ref: "atlas/default" }),
       row({ id: "c" }),
     ]);
+    // Two cards about one conversation, so the key carries the run's oldest row
+    // as well: React keys the cards on it, and the conversation alone repeats.
     expect(groups.map((g) => [g.key, g.count])).toEqual([
-      ["chat.message:veronica/default", 2],
-      ["chat.message:atlas/default", 1],
-      ["chat.message:veronica/default", 1],
+      ["chat.message:veronica/default@b", 2],
+      ["chat.message:atlas/default@x", 1],
+      ["chat.message:veronica/default@c", 1],
     ]);
+  });
+
+  test("a run's key does not move when a newer row joins it", () => {
+    const before = groupNotifications([row({ id: "b" }), row({ id: "c" })]);
+    const after = groupNotifications([row({ id: "a" }), row({ id: "b" }), row({ id: "c" })]);
+    expect(after[0]?.key).toBe(before[0]?.key);
   });
 
   test("rows about no conversation are never folded together", () => {
