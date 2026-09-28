@@ -47,6 +47,23 @@ jobs:
             exit 1
           fi
 
+      # A release is cut from master (CONTRIBUTING.md "Cutting a release"). A
+      # tag pushed from any other branch — by hand, or from a stale checkout —
+      # would otherwise publish whatever that branch holds. Asked of the API
+      # rather than of git so the shallow checkout above can stay shallow:
+      # "identical" or "behind" means the tagged commit is master or an
+      # ancestor of it; "ahead" or "diverged" means it is not on master.
+      - name: Assert the tagged commit is on master
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/master...${GITHUB_SHA}" --jq .status)
+          if [ "${status}" != "identical" ] && [ "${status}" != "behind" ]; then
+            echo "tag ${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not on master (compare: ${status})" >&2
+            exit 1
+          fi
+
       # `bun run check` ends in lint:cfn and lint:sh, which run cfn-lint and
       # shellcheck through `uvx` (pinned in scripts/lint-cfn.ts and
       # scripts/lint-sh.ts) — the same install ci.yml's lint jobs make.

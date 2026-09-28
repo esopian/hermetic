@@ -206,6 +206,7 @@ bun run app:build:canary           # the canary channel app — verification, ne
 bun run app:build:stable           # cd packages/app && hutch run build:stable
 bun run build:host                 # hermetic for this platform only, into dist/
 bun run build:all                  # every host target into dist/<target>/
+bun run release [patch|minor|major|x.y.z]  # scripts/release.ts: bump, tag, push, follow release.yml
 bun run prepare                    # git config core.hooksPath .githooks (bun install runs it)
 bun run dev                        # the app, real mode
 bun run cli -- <args>              # the CLI from source
@@ -329,9 +330,11 @@ To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` h
 
 ## Cutting a release
 
+`bun run release` does steps 1–4 below: it refuses unless you are on a clean `master` in sync with `origin` and the tag is free locally and remotely, runs `bun run check`, bumps the version (`patch` by default; `minor`, `major` or an exact `x.y.z`), commits `chore: release v<version>`, asks before pushing, pushes the commit and tag in one `git push --atomic`, follows `release.yml` with `gh run watch`, and checks the published assets. `--dry-run` shows the plan and changes nothing; `--skip-check`, `--yes` and `--no-watch` skip the local check, the prompt and the watch. It needs `gh` authenticated unless `--no-watch` is given. The manual procedure, which the script follows:
+
 1. Bump `version` in the root `package.json`. Commit it on `master`.
 2. Tag the commit `v<version>` (the `v` prefix is required — `.github/workflows/release.yml` checks it against `package.json`) and push the tag: `git push origin v<version>`.
-3. Pushing the tag starts `release.yml` on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version, runs `bun run check`, then `bun run app:build` (the stable channel), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
+3. Pushing the tag starts `release.yml` on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version and points at a commit on `master`, runs `bun run check`, then `bun run app:build` (the stable channel), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
 4. Verify: the release has three assets — `macos-arm64-Hermetic.dmg`, `stable-macos-arm64-Hermetic.app.tar.zst`, `stable-macos-arm64-update.json` — and, from the second release on, a fourth, `stable-macos-arm64-<prevhash>.patch`. `update.json` names the archive and the version. An install from an older tag should find the new release through Check for Updates and apply it (full archive if there is no patch to it yet, the patch otherwise); this needs the repository to be public, because the updater fetches `releases/latest/download/` without credentials.
 5. If the workflow fails partway, the tag is not undone — tags are never moved. Delete the draft release if `gh release create` left one (a failure before that step leaves none), fix whatever broke, bump the version again and cut a new tag; do not re-push the same tag.
 
