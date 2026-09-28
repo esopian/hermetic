@@ -1,0 +1,42 @@
+---
+slug: docs/start/install
+title: Install
+description: Install the Hermetic desktop app and the hermetic CLI on a Mac.
+sidebar:
+  order: 1
+---
+
+hermetic ships as a macOS desktop app. The `hermetic` CLI is bundled inside it. {/* design.md §3.6; README.md "Install" */}
+
+## Requirements
+
+- A Mac with Apple silicon. There is no Intel or Linux build. {/* design.md §3.6 (macos-arm64 artifacts only); README.md "Install" */}
+- For a real fleet: an AWS account and a Tailscale tailnet. [Your first fleet](/docs/start/first-fleet/) lists exactly what each needs. {/* README.md "Prerequisites" */}
+
+## Install the app
+
+1. Download `macos-arm64-Hermetic.dmg` from the [latest release](https://github.com/esopian/hermetic/releases/latest).
+2. Open it and drag `Hermetic.app` into `/Applications`.
+3. Clear the quarantine flag once:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Hermetic.app
+   ```
+
+The build is unsigned. It has only an ad-hoc signature, so macOS quarantines it on first open and offers only "Move to Trash" until the flag is cleared. {/* design.md §3.6; README.md "Install" */}
+
+## Install the CLI
+
+In the app's menu, choose **Install Command Line Tool…**. It writes a shim at `/usr/local/bin/hermetic` that points at the binary inside the app, so the CLI stays at the same version as the app. {/* design.md §3.6; README.md "Install" */}
+
+Check it:
+
+```sh
+hermetic --version
+```
+
+## Updates
+
+The app checks for a new release on launch and every six hours. It downloads a patch when you are one release behind and the full archive otherwise, and applies it on the next restart. {/* README.md "Install"; design.md §3.6 */}
+
+The update check is unauthenticated, so it only works once the `esopian/hermetic` repository is public. While it is private, update by downloading the newer DMG. {/* design.md §3.6 */}

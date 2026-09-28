@@ -623,3 +623,72 @@ describe("the CI test matrix", () => {
     expect(TEST_SHARDS["non-cli"].paths).toContain("packages/core");
   });
 });
+
+/**
+ * A workflow's own `inputs` (workflow_call/workflow_dispatch) are caller-
+ * supplied strings, same category as anything else external. Building a
+ * `run:` script's *text* by interpolating one with `${{ inputs.x }}` hands the
+ * shell whatever the caller passed — site.yml instead threads `inputs.ref`
+ * through a step's `env:` (`HERMETIC_RELEASE_TAG`, checked below) and reads
+ * everything else back from the checkout it made (`git rev-parse HEAD`), never
+ * from the input string itself. `with:` fields are a different mechanism (the
+ * runner hands the action an input, not shell text) and are not what this
+ * checks.
+ */
+function inputInjectionProblems(node: unknown, found: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) inputInjectionProblems(item, found);
+    return found;
+  }
+  if (isRecord(node)) {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "run" && typeof value === "string" && /\$\{\{\s*inputs\./.test(value)) {
+        found.push(value.trim().split("\n")[0] ?? value);
+      } else {
+        inputInjectionProblems(value, found);
+      }
+    }
+  }
+  return found;
+}
+
+describe("site.yml", () => {
+  const path = join(GITHUB, "workflows", "site.yml");
+  const text = readFileSync(path, "utf8");
+  const doc = parse(text);
+
+  test("is callable both as a reusable workflow and by hand, both requiring ref", () => {
+    const on = doc["on"];
+    expect(isRecord(on)).toBe(true);
+    for (const trigger of ["workflow_call", "workflow_dispatch"]) {
+      const spec = isRecord(on) ? on[trigger] : undefined;
+      expect(isRecord(spec), `on.${trigger}`).toBe(true);
+      const inputs = isRecord(spec) ? spec["inputs"] : undefined;
+      expect(isRecord(inputs), `on.${trigger}.inputs`).toBe(true);
+      const ref = isRecord(inputs) ? inputs["ref"] : undefined;
+      expect(isRecord(ref) && ref["required"] === true, `on.${trigger}.inputs.ref.required`).toBe(true);
+    }
+  });
+
+  test("the deploy job is gated behind the site-production environment", () => {
+    const jobs = doc["jobs"];
+    const deploy = isRecord(jobs) ? jobs["deploy"] : undefined;
+    expect(isRecord(deploy) && deploy["environment"]).toBe("site-production");
+  });
+
+  test("no run: step builds its shell text from ${{ inputs.* }} directly", () => {
+    expect(inputInjectionProblems(doc)).toEqual([]);
+  });
+
+  test("a run: step that does interpolate an input is caught", () => {
+    const fixture = parse('jobs:\n  a:\n    steps:\n      - run: echo "${{ inputs.ref }}"\n');
+    expect(inputInjectionProblems(fixture)).toEqual(['echo "${{ inputs.ref }}"']);
+  });
+
+  test("threading the same input through env: is not flagged", () => {
+    const fixture = parse(
+      'jobs:\n  a:\n    steps:\n      - run: echo "$REF"\n        env:\n          REF: ${{ inputs.ref }}\n',
+    );
+    expect(inputInjectionProblems(fixture)).toEqual([]);
+  });
+});

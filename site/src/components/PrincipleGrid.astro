@@ -1,0 +1,24 @@
+---
+import SectionHead from "./SectionHead.astro";
+import StatusSquare from "./StatusSquare.astro";
+---
+<section class="s" id="principles">
+  <SectionHead num="§01" kicker="Principles" title="Why each agent gets a sealed box">
+    {/* design.md §1 (outbound for search and browser tools; volumes outlive instances) */}
+    <p>An agent can run shell commands and keeps what it learns. Only you should be able to reach it, and replacing its server should not wipe its memory.</p>
+  </SectionHead>
+  <div class="grid">
+    {/* design.md §1 "Sealed inbound, open outbound", §7.2 (Tailscale Serve with real certificates), §4.7 (`tailscale serve --https`) */}
+    <div class="p"><div class="top"><span class="ix">01</span><StatusSquare kind="acc" /></div><h3>Nothing listens on the internet</h3><p>Agents can search and browse outward. Inbound, each one is only on your tailnet, with its dashboard at <code>https://&lt;name&gt;.&lt;tailnet&gt;.ts.net</code>.</p></div>
+    {/* design.md §9 (`agent recreate`: new instance, same volume), §6.7 (volume kept by default), §9.1 (`agent create --volume`) */}
+    <div class="p"><div class="top"><span class="ix">02</span><StatusSquare kind="ok" /></div><h3>Rebuild the box, keep the volume</h3><p><code>recreate</code> swaps the instance and reattaches the same volume. Destroy an agent and its volume stays behind, ready to start a new agent from.</p></div>
+    {/* design.md §3.2 rule 3 "Plan, then apply", §9 (`plan destroy`/`recreate`/`rollout`/`foundation` → `apply`) */}
+    <div class="p"><div class="top"><span class="ix">03</span><StatusSquare kind="warn" /></div><h3>Plan, then apply</h3><p>Destroy, recreate, rollouts and foundation changes print a plan first. Nothing happens until you apply it.</p></div>
+    {/* design.md §1 "One home, one account, frozen", §4.7 Account safety */}
+    <div class="p"><div class="top"><span class="ix">04</span><StatusSquare color="var(--fg)" /></div><h3>Locked to one AWS account</h3><p><code>init</code> records the account, and every command checks it against STS before touching AWS. A wrong <code>AWS_PROFILE</code> stops with an error.</p></div>
+    {/* design.md §1 "Light" and "Imperative operations, declarative foundation", §5 (stack, agents/events tables, bucket), §2 (stock Ubuntu ARM + hermeticd) */}
+    <div class="p"><div class="top"><span class="ix">05</span><StatusSquare color="var(--fg2)" /></div><h3>No Terraform, no control plane</h3><p>One CloudFormation stack, two DynamoDB tables and an S3 bucket. Boxes run stock Ubuntu ARM plus <code>hermeticd</code>.</p></div>
+    {/* design.md §9.2 Chat (quick jump on Command-K; the composer's destination) */}
+    <div class="p"><div class="top"><span class="ix">06</span><StatusSquare kind="bad" /></div><h3>Chat from the dashboard</h3><p>Talk to any agent from the app. ⌘K jumps to a conversation, and the composer always shows where a message will go.</p></div>
+  </div>
+</section>

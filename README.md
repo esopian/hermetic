@@ -119,6 +119,7 @@ bun run build:all        # cross-compiled CLI binaries for every target, into di
 - [`docs/ui-brief.md`](docs/ui-brief.md) — visual/style brief for the dashboard.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev loop, commit conventions, how to add a command.
 - [`AGENTS.md`](AGENTS.md) — rules and conventions for coding agents working in this repo.
+- [`site/`](site/) — marketing + docs site (own toolchain, see `site/README.md`).
 
 ## Safety model
 

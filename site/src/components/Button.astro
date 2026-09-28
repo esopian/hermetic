@@ -1,0 +1,11 @@
+---
+/* The brief's two button styles: primary (filled) and secondary (outline), optionally small. */
+interface Props {
+  href: string;
+  variant: "p" | "s";
+  small?: boolean;
+}
+
+const { href, variant, small = false } = Astro.props;
+---
+<a class:list={["btn", `btn-${variant}`, { "btn-sm": small }]} href={href}><slot /></a>

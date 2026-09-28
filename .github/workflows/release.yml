@@ -95,3 +95,17 @@ jobs:
           # job in every other workflow keeps the read-only default.
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" packages/app/artifacts/* --generate-notes
+
+  # Deploys the marketing/docs site's landing page and download links against
+  # the release that `publish` just created. A failed site deploy does not
+  # un-publish the release — the release is the product, the site follows it
+  # — so this is its own job rather than a step of `publish`; a docs-only
+  # re-deploy later goes through `gh workflow run site.yml -f ref=<tag>`
+  # instead of cutting a new release.
+  site:
+    name: site
+    needs: publish
+    uses: ./.github/workflows/site.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit

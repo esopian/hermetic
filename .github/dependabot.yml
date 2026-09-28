@@ -20,3 +20,14 @@ updates:
     directory: /.github/actions/setup
     schedule:
       interval: weekly
+  # site/ is a separate toolchain (see AGENTS.md "Layout"): its own bun.lock,
+  # never installed by the root `bun install`, and never part of the workspace
+  # the root `bun install --frozen-lockfile` parity concern above is about. Its
+  # dependencies are pure build tooling (Astro, Starlight, Wrangler) with no
+  # runtime footprint in the shipped product, so a Dependabot-generated bump PR
+  # here carries none of that risk — it is read like any other diff and site's
+  # own `bun run check` proves it still builds.
+  - package-ecosystem: bun
+    directory: /site
+    schedule:
+      interval: weekly

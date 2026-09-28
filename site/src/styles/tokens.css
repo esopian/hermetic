@@ -1,0 +1,29 @@
+/*
+ * The dark token set from docs/ui-brief.md ("Look", the `dark :` line), copied verbatim.
+ * tests/site-tokens.test.ts (repo root) fails if the two drift: change them together.
+ * The site is dark only; there is no light palette and no theme toggle.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #0e0e0d;
+  --bg2: #161614;
+  --bg3: #1f1f1c;
+  --fg: #f1efe9;
+  --fg2: #a8a59c;
+  --fg3: #6b6963;
+  --line: #2c2b27;
+  --line2: #3d3b35;
+  --acc: #ff5a1f;
+  --acc-fg: #0e0e0d;
+  --ok: #37c27f;
+  --warn: #e8b03a;
+  --bad: #ef4d3f;
+  --sel: #22211e;
+}
+
+/* Self-hosted faces (@fontsource), the same families packages/ui ships. */
+:root {
+  --sans: "Archivo Variable", "Archivo", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --max: 1320px;
+}

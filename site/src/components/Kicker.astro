@@ -1,0 +1,10 @@
+---
+/* The small uppercase label above headings and values. */
+interface Props {
+  as?: "div" | "span";
+  style?: string;
+}
+
+const { as: Tag = "div", style } = Astro.props;
+---
+<Tag class="kicker" style={style}><slot /></Tag>

@@ -1,0 +1,16 @@
+---
+/* The numbered two-column head every §-section opens with. The body paragraph is the slot. */
+import Kicker from "./Kicker.astro";
+
+interface Props {
+  num: string;
+  kicker: string;
+  title: string;
+}
+
+const { num, kicker, title } = Astro.props;
+---
+<div class="s-head">
+  <div class="l"><div class="num">{num}</div><Kicker style="margin-top:6px">{kicker}</Kicker></div>
+  <div class="r"><h2>{title}</h2><slot /></div>
+</div>
