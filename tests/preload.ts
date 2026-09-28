@@ -44,7 +44,7 @@
  *
  * `tests/test-isolation.test.ts` is the gate that fails if this stops running.
  */
-import { afterAll } from "bun:test";
+import { afterAll, afterEach } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -120,3 +120,19 @@ process.on("exit", cleanup);
 for (const key of ["HERMETIC_FLEET", "HERMETIC_FIXTURE", "AWS_PROFILE"]) {
   delete process.env[key];
 }
+
+/**
+ * The UI harness's per-test reset (`packages/ui/test/setup.ts`), after every
+ * test of every file.
+ *
+ * A hook registered at the top level of an imported module attaches only to the
+ * test file that was loading when the module was evaluated, and `setup.ts` is
+ * evaluated once per run — so as an `afterEach` of its own, its reset ran for
+ * the first DOM file and no other. Hooks in this preload run for every file.
+ * It is looked up on `globalThis` rather than imported so that core's, the
+ * app's and agentd's runs never load the UI's modules; until a UI test has
+ * loaded `setup.ts` there is nothing to reset and this does nothing.
+ */
+afterEach(() => {
+  (globalThis as { __hermeticUiReset?: () => void }).__hermeticUiReset?.();
+});

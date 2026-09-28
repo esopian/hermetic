@@ -31,13 +31,17 @@
  * file in one process, so a container left mounted would still be in
  * `document.body` for the next file's `screen` queries.
  */
-import { afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { setTransport } from "../src/api/transport.ts";
+import { invalidateFetchCache } from "../src/lib/fetch-cache.ts";
 import { clearPageVisible } from "../src/lib/visibility.ts";
 import { resetDoctorStore } from "../src/state/doctor-store.ts";
 
-const g = globalThis as { __hermeticDom?: boolean; IS_REACT_ACT_ENVIRONMENT?: boolean };
+const g = globalThis as {
+  __hermeticDom?: boolean;
+  __hermeticUiReset?: () => void;
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+};
 
 /**
  * The globals happy-dom would replace that are *not* DOM: bun's own HTTP and
@@ -173,9 +177,9 @@ setTransport({
  *
  * Each suite that hides the page also puts it back in its own `afterEach`,
  * because a visible page is what every other file was written against. That is
- * belt and braces rather than the only thing holding it up: the `afterEach`
- * registered at the bottom of this module does run for every file of the run,
- * not only for the first one to import it, so the flag would be reset anyway.
+ * belt and braces rather than the only thing holding it up: the reset at the
+ * bottom of this module runs after every test of every file (through the root
+ * preload, see there), so the flag would be reset anyway.
  * Both, because the leak this whole comment is about cost two days to find, and
  * a suite that states its own precondition is also the one that survives being
  * read on its own.
@@ -194,7 +198,7 @@ Object.defineProperty(document, "visibilityState", {
  * The head's pushed answer is dropped first. `isVisible()` prefers it over
  * `document` (`src/lib/visibility.ts`), so a suite that asks for a hidden page
  * inside a test that has already built a real transport would otherwise still
- * be answered "visible" — the `afterEach` below clears it between tests, which
+ * be answered "visible" — the per-test reset below clears it between tests, which
  * is too late to help the test doing the asking.
  */
 export function setPageHidden(hidden: boolean): void {
@@ -287,10 +291,25 @@ export const REDUCED_MOTION_DEFAULT = REDUCED_DEFAULT;
  * The page's doctor run (`src/state/doctor-store.ts`) is module state for the
  * same reason, and any file that mounts the env strip or Settings can leave one
  * behind; forgotten here, so no suite opens on another's checklist.
+ *
+ * The shared fetch cache (`src/lib/fetch-cache.ts`) is module state too, and it
+ * answers a read from what an earlier test's fleet returned for as long as the
+ * TTL allows. `volumes-settle.flow` took its "before" count from a volume
+ * inventory `destroy-plan.flow` had cached — a different fixture fleet — and
+ * failed on every CI run, where that file happens to run first. Emptied here so
+ * every test reads its own fleet.
+ *
+ * Registered on `globalThis` for `tests/preload.ts` to call, not as an
+ * `afterEach` here. This module is evaluated once per run, and bun attaches a
+ * hook registered at a module's top level to the test file that was loading
+ * when it ran — the first file to import `setup.ts`. As an `afterEach` here,
+ * every reset below ran for that one file and never for the rest of the run.
+ * A hook in the preload runs after every test of every file.
  */
-afterEach(() => {
+g.__hermeticUiReset = () => {
   clearPageVisible();
   resetDoctorStore();
+  invalidateFetchCache();
   pageHidden = false;
   reducedMotion = REDUCED_DEFAULT;
-});
+};
