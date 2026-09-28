@@ -87,7 +87,16 @@ async function remount(previous: { unmount(): void }, node: ReactElement): Promi
   await act(async () => {
     await Promise.resolve();
   });
-  render(node);
+  // A cache hit (`retain` returning an already-settled sweep) still attaches a
+  // `.then` that fires as a microtask right after mount, redundantly replaying
+  // the same value into `setCaps`/`setLoading`. `render` only act-wraps the
+  // synchronous mount; without this drain that microtask lands after render's
+  // own act() has already closed, outside of one entirely — a real update, just
+  // one the test needs to wait out rather than one that reveals a bug.
+  await act(async () => {
+    render(node);
+    await Promise.resolve();
+  });
 }
 
 const answerFor = (fleet: string): Status => (fleet === "one" ? "supported" : "refused");

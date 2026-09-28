@@ -1,4 +1,13 @@
-import { cleanup, fireEvent, flipPageHidden, render, screen, setPageHidden, waitFor } from "./dom.ts";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  flipPageHidden,
+  render,
+  screen,
+  setPageHidden,
+  waitFor,
+} from "./dom.ts";
 import { afterEach, expect, test } from "bun:test";
 import type { AgentView } from "../src/api/index.ts";
 import { ListeningProvider } from "../src/state/listening-state.tsx";
@@ -128,8 +137,16 @@ function flapper(returnReadMinAgeMs: number) {
 }
 
 const flip = async (next: boolean, ms: number) => {
-  flipPageHidden(next);
-  await wait(ms);
+  // `flipPageHidden` dispatches a raw `visibilitychange` event straight at
+  // `document`, outside anything React-aware. When the transition wakes
+  // `onReturnVisible`'s listener, it fires `refresh()`, whose `setInstances`/
+  // `setError`/`setLoading` land once `fetchListening` resolves — a real state
+  // update, just one the test has to own wrapping rather than one `fireEvent`
+  // (which only instruments element dispatch, not `document`) catches for it.
+  await act(async () => {
+    flipPageHidden(next);
+    await wait(ms);
+  });
 };
 
 test("a flapping page reads the listening set once, at mount", async () => {

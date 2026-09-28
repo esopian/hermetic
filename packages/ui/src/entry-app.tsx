@@ -24,7 +24,7 @@
  * exists only behind `views://` (`api/transport-rpc.ts`).
  */
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { installRpcTransport, sendPageReady } from "./api/transport-rpc.ts";
 import { Portal } from "./Portal.tsx";
 import { FleetProvider } from "./state/state.tsx";
@@ -48,13 +48,14 @@ import "./styles/create.css";
 import "./styles/shell.css";
 import "./styles/settings.css";
 
-async function boot(): Promise<void> {
+async function boot(): Promise<Root> {
   await installRpcTransport();
 
   const el = document.getElementById("root");
   if (!el) throw new Error("no #root in index.html");
 
-  createRoot(el).render(
+  const root = createRoot(el);
+  root.render(
     <StrictMode>
       <FleetProvider>
         <Portal />
@@ -63,11 +64,19 @@ async function boot(): Promise<void> {
   );
 
   sendPageReady();
+  return root;
 }
 
-void boot().catch((error: unknown) => {
+/**
+ * The mounted root, or null when the boot failed. Nothing in the page reads it;
+ * it is exported for `test/entry-app.test.ts`, which mounts the real portal and
+ * has to unmount it again — bun runs every test file in one process, and a
+ * portal left mounted keeps polling into whatever file runs next.
+ */
+export const booted: Promise<Root | null> = boot().catch((error: unknown) => {
   // The one console call in the UI that is not a mistake: this is the failure
   // that leaves a blank window, and the webview's console is forwarded to the
   // main process log, which is where it will be looked for.
   console.error("the portal failed to start", error);
+  return null;
 });

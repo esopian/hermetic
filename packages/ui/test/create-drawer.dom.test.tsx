@@ -9,7 +9,7 @@
  * preset states its three machine fields, and that Customize's reset moves
  * exactly the field it names and nothing else.
  */
-import { cleanup, fireEvent, render, screen, userEvent, waitFor, within } from "./dom.ts";
+import { act, cleanup, fireEvent, render, screen, userEvent, waitFor, within } from "./dom.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Meta, VolumeView } from "../src/api/index.ts";
 import { CreateDrawer } from "../src/components/CreateDrawer.tsx";
@@ -102,6 +102,22 @@ function preset(label: string): HTMLButtonElement {
   return within(screen.getByRole("group", { name: "Machine preset" })).getByRole("button", {
     name: new RegExp(`^${label}`),
   }) as HTMLButtonElement;
+}
+
+/**
+ * `usePresets` re-reads on every mount regardless of what a test cares about
+ * (`presets-store.ts`), and a handful of tests below never route
+ * `presets.get` at all. Left unawaited, that read's settling — a rejection,
+ * here — can land mid-test, in the gap between two other awaits, and update
+ * `CreateDrawer` outside whatever `act()` scope RTL opened for the one that
+ * was running. Called right after `render`, before anything else touches the
+ * drawer, it drains that read deterministically instead of leaving it to race
+ * a later `waitFor`.
+ */
+async function flushPending(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 describe("CreateDrawer · provider profile", () => {
@@ -220,9 +236,10 @@ describe("CreateDrawer · provider profile", () => {
 describe("CreateDrawer · no ready profile", () => {
   const none = profilesState({ list: [] });
 
-  test("offers the setup detour instead of a picker, and Create is refused", () => {
+  test("offers the setup detour instead of a picker, and Create is refused", async () => {
     server = fakeServer({});
     render(drawer({ profiles: none }));
+    await flushPending();
 
     expect(screen.getByRole("button", { name: "Set up a provider →" })).toBeTruthy();
     expect(screen.queryByText("Provider profile")).toBeNull();
@@ -575,6 +592,7 @@ describe("CreateDrawer · a draft whose profile no longer holds", () => {
       touched: ["root_gib"],
     });
     render(drawer({ meta: FLEET_META }));
+    await flushPending();
 
     // A draft that chose something opens Customize, so the choice is visible.
     expect(screen.getByRole("button", { name: /Customize/ }).getAttribute("aria-expanded")).toBe(
@@ -609,10 +627,11 @@ describe("CreateDrawer · a draft whose profile no longer holds", () => {
     await waitFor(() => expect(server?.to("providers.models")).toHaveLength(1));
   });
 
-  test("a profile that has been deleted is dropped, and Create is refused", () => {
+  test("a profile that has been deleted is dropped, and Create is refused", async () => {
     server = fakeServer({ "providers.models": CATALOG_REPLY });
     draft("gh0st000");
     render(drawer());
+    await flushPending();
 
     // Everything else typed survives; only the dead selection does not.
     expect((screen.getByPlaceholderText("e.g. corvid-2") as HTMLInputElement).value).toBe("corvid-2");
@@ -625,11 +644,12 @@ describe("CreateDrawer · a draft whose profile no longer holds", () => {
     expect(server.to("providers.models")).toHaveLength(0);
   });
 
-  test("a profile that is still listed but no longer ready is dropped too", () => {
+  test("a profile that is still listed but no longer ready is dropped too", async () => {
     server = fakeServer({ "providers.models": CATALOG_REPLY });
     // `nous-lab` is in the list and holds a placeholder key: present, unusable.
     draft("n0us1ab0");
     render(drawer());
+    await flushPending();
 
     expect(chosenProfile()).toBeNull();
     expect((screen.getByRole("button", { name: "Create agent →" }) as HTMLButtonElement).disabled).toBe(
@@ -637,10 +657,11 @@ describe("CreateDrawer · a draft whose profile no longer holds", () => {
     );
   });
 
-  test("a draft restored onto a fleet with nothing ready left gets the setup state, not a create", () => {
+  test("a draft restored onto a fleet with nothing ready left gets the setup state, not a create", async () => {
     server = fakeServer({});
     draft("an7hr0p1");
     render(drawer({ profiles: profilesState({ list: [] }) }));
+    await flushPending();
 
     expect(screen.getByRole("button", { name: "Set up a provider →" })).toBeTruthy();
     expect((screen.getByRole("button", { name: "Create agent →" }) as HTMLButtonElement).disabled).toBe(
@@ -897,12 +918,13 @@ describe("CreateDrawer · the loadout", () => {
     expect(preset("Heavy").getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("a custom preset naming a size this build does not know is offered but disabled", () => {
+  test("a custom preset naming a size this build does not know is offered but disabled", async () => {
     resetPresetsStore(
       presetsView({ loadout: ["standard", "odd", null, null], default: "standard", custom: [ODD] }),
     );
     server = accept();
     render(drawer({ meta: FLEET_META }));
+    await flushPending();
     expect(preset("odd").disabled).toBe(true);
     expect(preset("odd").textContent).toContain("unknown size");
   });

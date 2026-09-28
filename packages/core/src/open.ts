@@ -35,6 +35,7 @@ import {
   BUILD_VERSIONS,
 } from "./hermetic.ts";
 import type { HermesMirrorFn } from "./release/hermes-mirror.ts";
+import type { BrowserMirrorFn } from "./release/browser-mirror.ts";
 import { createAwsBackend } from "./aws/index.ts";
 import { resolveIdentity } from "./aws/identity.ts";
 import { describeFoundation } from "./aws/probe.ts";
@@ -150,6 +151,12 @@ export interface OpenOptions {
    * leaves it unset and gets the real mirror.
    */
   hermesMirror?: HermesMirrorFn;
+  /**
+   * Overrides §7.3's browser mirror, for the same reason: the real one downloads
+   * ~190 MB of Chrome for Testing from cdn.playwright.dev, which no suite may do
+   * (§11). Production leaves it unset and gets the real mirror.
+   */
+  browserMirror?: BrowserMirrorFn;
   /** Overrides `HERMETIC_HOME` (default `~/.hermetic`). */
   home?: string;
   /** Path of the compiled `hermeticd` this build ships (§3.6). */
@@ -426,6 +433,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     ...opts.preflight,
     git: opts.git,
     ...(opts.hermesMirror === undefined ? {} : { hermesMirror: opts.hermesMirror }),
+    ...(opts.browserMirror === undefined ? {} : { browserMirror: opts.browserMirror }),
     fixture: false,
     // Real mode is the only place there is a real box to wait for, so it is the
     // only place `create` watches for hermeticd's first report (`handoff.ts`).
@@ -871,6 +879,7 @@ export async function openForInit(opts: OpenOptions = {}): Promise<InitSession> 
       ...opts.preflight,
       git: opts.git,
       ...(opts.hermesMirror === undefined ? {} : { hermesMirror: opts.hermesMirror }),
+      ...(opts.browserMirror === undefined ? {} : { browserMirror: opts.browserMirror }),
       fixture: false,
       resolveHermeticd: hermeticdResolver(opts),
       localBuild: localBuildResolver(opts),
@@ -901,6 +910,7 @@ export async function openForInit(opts: OpenOptions = {}): Promise<InitSession> 
     ...opts.preflight,
     git: opts.git,
     ...(opts.hermesMirror === undefined ? {} : { hermesMirror: opts.hermesMirror }),
+    ...(opts.browserMirror === undefined ? {} : { browserMirror: opts.browserMirror }),
     fixture: false,
   });
 
