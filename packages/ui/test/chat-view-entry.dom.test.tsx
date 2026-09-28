@@ -353,6 +353,13 @@ describe("persistent entry frames", () => {
     key(input, "Escape");
     expect(screen.getByRole("dialog", { name: "Underlying modal" })).toBeDefined();
     expect(document.activeElement).toBe(field);
+    // Opening quick jump activated the provider, and the session and history
+    // reads that followed its roster read can still be resolving when the last
+    // assertion passes. They land inside `act` here rather than after the test,
+    // where React would warn that an update to ChatProvider was not wrapped.
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 0));
+    });
   });
 });
 

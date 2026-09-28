@@ -176,14 +176,17 @@ test("a room with nothing pending is hidden under `Needs you`", async () => {
   expect(screen.getByText("Pun Corner")).toBeTruthy();
 
   const needs = screen.getByRole("button", { name: "Needs you" });
-  needs.click();
+  // `fireEvent.click`, not a raw `.click()`: React's delegated handler still
+  // fires either way, but only `fireEvent` wraps the dispatch (and the state
+  // update it causes) in `act()`.
+  fireEvent.click(needs);
   await screen.findByText("No rooms match this filter.");
   expect(screen.queryByText("Pun Corner")).toBeNull();
 });
 
 test("a room that is waiting on you survives `Needs you`", async () => {
   botRail({ swarms: swarms({ rooms: [room({ needs_action: true })] } as never) });
-  screen.getByRole("button", { name: "Needs you" }).click();
+  fireEvent.click(screen.getByRole("button", { name: "Needs you" }));
   await screen.findByText("Pun Corner");
 });
 

@@ -100,6 +100,13 @@ if (!g.__hermeticDom) {
       configurable: true,
     });
   }
+
+  // happy-dom leaves `document.compatMode` undefined, which KaTeX reads as
+  // quirks mode and warns about on its first render. The page itself has a
+  // doctype, so standards mode is what the portal really runs in.
+  if (document.compatMode === undefined) {
+    Object.defineProperty(document, "compatMode", { value: "CSS1Compat", configurable: true });
+  }
 }
 
 // React 19 refuses to run `act()` without this, and Testing Library wraps every

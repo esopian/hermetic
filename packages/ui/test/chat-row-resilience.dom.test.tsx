@@ -18,7 +18,7 @@
  * for any reason at all costs its own row and nothing else.
  */
 import { cleanup, render, screen } from "./dom.ts";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import { Block } from "../src/chat/components/blocks/index.tsx";
 import { RowBoundary } from "../src/chat/components/RowBoundary.tsx";
@@ -68,12 +68,41 @@ describe("a block missing a field its schema promises", () => {
   });
 });
 
+/**
+ * What the throwing renders below write to `console.error`, captured.
+ *
+ * A caught render error is logged twice — React reports it, and `RowBoundary`
+ * records it for the tab's console — and both come with a stack. Those are
+ * the expected output of every test here that throws on purpose, so they are
+ * kept out of the suite's output and asserted on instead.
+ */
+function captureConsoleError(): { readonly logged: string[] } {
+  const state = { logged: [] as string[] };
+  const native = console.error;
+  beforeEach(() => {
+    state.logged = [];
+    console.error = (...args: unknown[]) => {
+      state.logged.push(args.map(String).join(" "));
+    };
+  });
+  afterEach(() => {
+    console.error = native;
+  });
+  return {
+    get logged() {
+      return state.logged;
+    },
+  };
+}
+
 /** A renderer that fails for a reason nobody anticipated. */
 function Boom(): never {
   throw new TypeError("undefined is not an object (evaluating 'text.split')");
 }
 
 describe("RowBoundary", () => {
+  const errors = captureConsoleError();
+
   test("a row that throws costs its own row and no other", () => {
     render(
       <>
@@ -91,6 +120,7 @@ describe("RowBoundary", () => {
     expect(screen.getByText("first turn")).toBeDefined();
     expect(screen.getByText("third turn")).toBeDefined();
     expect(screen.getByText("This message could not be rendered.")).toBeDefined();
+    expect(errors.logged.some((line) => line.startsWith("chat row failed to render"))).toBe(true);
   });
 
   test("a latched row recovers when its content changes", () => {
@@ -111,6 +141,8 @@ describe("RowBoundary", () => {
 });
 
 describe("the thread keeps its other turns", () => {
+  const errors = captureConsoleError();
+
   function message(id: string, blocks: unknown[]): ChatMessageView {
     return {
       id,
@@ -161,5 +193,6 @@ describe("the thread keeps its other turns", () => {
     expect(container.textContent).toContain("the turn above");
     expect(container.textContent).toContain("the turn below");
     expect(container.querySelectorAll("[data-row-failed]")).toHaveLength(1);
+    expect(errors.logged.some((line) => line.startsWith("chat row failed to render"))).toBe(true);
   });
 });
