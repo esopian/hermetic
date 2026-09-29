@@ -17,7 +17,7 @@
     "test:dynamodb-local": "HERMETIC_DYNAMODB_LOCAL=${HERMETIC_DYNAMODB_LOCAL:-http://127.0.0.1:8000} bun test tests/integration/dynamodb-local.test.ts",
     "typecheck": "bun scripts/typecheck.ts",
     "format": "biome format --write .",
-    "lint:biome": "biome check .",
+    "lint:biome": "bun scripts/lint-biome.ts",
     "lint": "bun scripts/lint.ts",
     "lint:cfn": "bun scripts/lint-cfn.ts",
     "lint:sh": "bun scripts/lint-sh.ts",

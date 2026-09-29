@@ -297,7 +297,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     ),
   } as unknown as RpcHandle;
   const Electroview = class {
-    constructor(_options: { rpc?: RpcHandle }) {}
+    constructor(readonly options: { rpc?: RpcHandle }) {}
     static defineRPC(defineOptions: {
       maxRequestTime?: number;
       handlers: { requests?: RequestTable; messages?: RpcMessageHandlers };

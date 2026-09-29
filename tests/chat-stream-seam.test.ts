@@ -291,7 +291,7 @@ function realHead(options: { chatOwner?: ChatOwner } = {}) {
     ),
   } as unknown as RpcHandle;
   const Electroview = class {
-    constructor(_options: { rpc?: RpcHandle }) {}
+    constructor(readonly options: { rpc?: RpcHandle }) {}
     static defineRPC(defineOptions: {
       maxRequestTime?: number;
       handlers: { requests?: RequestTable; messages?: RpcMessageHandlers };
