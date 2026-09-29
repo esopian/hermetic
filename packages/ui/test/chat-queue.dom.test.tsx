@@ -115,6 +115,17 @@ function setup() {
       act(async () => {
         await new Promise((done) => setTimeout(done, 30));
       }),
+    // `waitFor`, but inside one `act()` for the whole wait: `waitFor` flushes a
+    // single tick and then lets go, so a timer the store scheduled for the tick
+    // after (the reconnect backoff's) lands outside anything `act`-aware.
+    until: (check: () => boolean, timeoutMs = 4000) =>
+      act(async () => {
+        const deadline = Date.now() + timeoutMs;
+        while (!check()) {
+          if (Date.now() > deadline) throw new Error(`not true within ${timeoutMs}ms`);
+          await new Promise((done) => setTimeout(done, 5));
+        }
+      }),
     say: async (text: string) => {
       type(text);
       enter();
@@ -211,15 +222,17 @@ describe("the send queue", () => {
     // The socket died: `end(false, null)` — no error to show, `sending` false,
     // and the transcript being read again behind a band. It looks idle and it
     // is not, and a queued message must not land in the middle of it.
+    // `reconnecting` is `reconnect`'s first line, set synchronously inside
+    // `end`'s own `act()`, so it is read directly rather than waited for.
     await h.end(false);
-    await waitFor(() => expect(h.current.reconnecting).toBe(true));
+    expect(h.current.reconnecting).toBe(true);
     await h.settle();
     expect(h.sent).toEqual(["first"]);
     expect(h.rows()).toHaveLength(1);
 
     // Still parked once the re-read has finished, because nothing since has
     // said to carry on.
-    await waitFor(() => expect(h.current.reconnecting).toBe(false), { timeout: 4000 });
+    await h.until(() => h.current.reconnecting === false);
     await h.settle();
     expect(h.sent).toEqual(["first"]);
     expect(h.rows()).toHaveLength(1);

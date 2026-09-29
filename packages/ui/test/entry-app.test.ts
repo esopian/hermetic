@@ -19,6 +19,7 @@
 // needs a document even though it never renders one (`setup.ts`).
 import "./setup.ts";
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
+import type { Root } from "react-dom/client";
 import type { RpcHandle } from "../src/api/transport-rpc.ts";
 import { electrobunRequest } from "./electrobun-request.ts";
 import { installedTransport, setTransport, transport } from "../src/api/transport.ts";
@@ -144,7 +145,22 @@ function removeRecordedListeners(): void {
  */
 let previous: ReturnType<typeof installedTransport> = null;
 
+/**
+ * The act environment, off for this file only. `setup.ts` turns it on because
+ * Testing Library wraps every render in `act()`; this file renders through the
+ * real entry instead, which no `act()` can wrap, so with the flag on every
+ * state update the mounted portal made logged React's "not wrapped in act"
+ * warning.
+ */
+const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+let previousAct: boolean | undefined;
+
+/** The entry's root, so `afterAll` can unmount it (`booted` in `entry-app.tsx`). */
+let root: Root | null = null;
+
 beforeAll(() => {
+  previousAct = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = false;
   // Before the import below, so the boot's own subscriptions are the ones
   // recorded.
   recordListeners(document);
@@ -158,13 +174,17 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  // Unmounted first, while the transport it polls through is still installed:
+  // a portal left mounted keeps its pollers running into every later file.
+  root?.unmount();
   setTransport(previous);
   removeRecordedListeners();
   document.body.innerHTML = "";
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = previousAct;
 });
 
 test("installs the transport before it mounts, then says the page is ready", async () => {
-  await import("../src/entry-app.tsx");
+  const entry = await import("../src/entry-app.tsx");
   // `boot()` is started, not awaited, by the entry — it is a module, not a
   // function anybody calls — so the assertions wait for its microtasks.
   for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -182,4 +202,6 @@ test("installs the transport before it mounts, then says the page is ready", asy
   // this file exists for: a render that ran before the install would have hit a
   // `transport()` that throws, in the one build with nothing to fall back to.
   expect(asked.length).toBeGreaterThan(0);
+  root = await entry.booted;
+  expect(root).not.toBeNull();
 });

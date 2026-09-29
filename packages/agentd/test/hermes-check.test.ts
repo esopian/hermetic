@@ -15,6 +15,7 @@ import { MANIFEST_PATH } from "../src/manifest.ts";
 import { run } from "../src/main.ts";
 import { FakeHost } from "./fake-host.ts";
 import { makeManifest } from "./fixtures.ts";
+import { captureOutput } from "./quiet.ts";
 
 const MANAGED = "/etc/hermes/config.yaml";
 const USER = "/data/hermes/.hermes/config.yaml";
@@ -512,6 +513,14 @@ describe("verify-hermes", () => {
    * what points at the fix (`agent set`, `secrets push`) rather than at a bug.
    */
   describe("as a stage", () => {
+    /**
+     * The stage prints one verdict per check to stderr, for the box's journal.
+     * Captured rather than let through, so the suite does not print a column of
+     * `hermeticd: FAIL` lines for checks meant to fail — and so the tests below
+     * can assert on what was printed.
+     */
+    const output = captureOutput();
+
     test("a misconfigured agent fails with HERMES_MISCONFIGURED, naming the checks", async () => {
       host.seed(MANIFEST_PATH, JSON.stringify(makeManifest({ provider: "nous" })));
 
@@ -554,6 +563,7 @@ describe("verify-hermes", () => {
       // `cdp_override` fails — the agent's own `.env` names BROWSER_CDP_URL —
       // and the boot survives it, which is the whole of `advisory`.
       expect(await run(["stage", "verify-hermes"], host)).toBe(0);
+      expect(output.stderr).toContain("hermeticd: WARN cdp_override:");
     });
 
     test("a non-advisory failure on a browser agent still fails the stage", async () => {
@@ -566,6 +576,7 @@ describe("verify-hermes", () => {
       expect(error.code).toBe("HERMES_MISCONFIGURED");
       // Only the verdicts are named; the advisory finding was printed.
       expect(String(error.detail["failed"])).not.toContain("cdp_override");
+      expect(output.stderr).toContain("hermeticd: FAIL provider:");
     });
 
     test("a box with no manifest at all is still a refused manifest", async () => {

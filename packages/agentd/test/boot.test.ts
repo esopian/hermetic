@@ -40,6 +40,11 @@ import {
   releaseFileAt,
   makeUserDataJson,
 } from "./fixtures.ts";
+import { captureOutput } from "./quiet.ts";
+
+// The commands these tests drive write their progress and log lines to the
+// process's own streams; kept out of the run's output (`quiet.ts`).
+captureOutput();
 
 const enc = (text: string): Uint8Array => new TextEncoder().encode(text);
 /** A tailnet-key-shaped FIXTURE sentinel — never a real credential. */

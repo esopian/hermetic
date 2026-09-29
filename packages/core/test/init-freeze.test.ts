@@ -34,6 +34,7 @@ import { BUILD_VERSIONS } from "../src/hermetic.ts";
 import type { LocalConfig } from "../src/schema/index.ts";
 import { isFleetId } from "../src/fleet/fleet-id.ts";
 import {
+  OFFLINE_BROWSER_MIRROR,
   OFFLINE_HERMES_MIRROR,
   OK_TAILSCALE,
   drain,
@@ -105,6 +106,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     const code = await codeOf(() =>
       drain(session.hermetic.init({ profile: "totally-made-up", account_id_typed: "123456789012" })),
@@ -127,6 +129,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     expect(await codeOf(() => session.hermetic.agents.list())).toBe("NOT_INITIALIZED");
     expect(await codeOf(() => session.hermetic.doctor())).toBe("NOT_INITIALIZED");
@@ -142,6 +145,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     // Wired by `openForInit` to the real shared-ini loader, so this reads the
     // machine's own `~/.aws/config` rather than refusing.
@@ -160,6 +164,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     expect(session.corruptedTo).toContain("hermetic.db.corrupt-");
     session.close();
@@ -177,6 +182,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     expect(session.existingConfig).toEqual(FIXTURE_CONFIG);
     session.close();
@@ -199,6 +205,7 @@ describe("the pre-init session", () => {
       home,
       preflight: { localTailscale: OK_TAILSCALE },
       hermesMirror: OFFLINE_HERMES_MIRROR,
+      browserMirror: OFFLINE_BROWSER_MIRROR,
     });
     expect(session.existingConfig).toBeNull();
     expect(session.corruptedTo).toBeNull();
@@ -992,6 +999,7 @@ describe("the retarget guard on the real bind() path", () => {
         home,
         preflight: { localTailscale: OK_TAILSCALE },
         hermesMirror: OFFLINE_HERMES_MIRROR,
+        browserMirror: OFFLINE_BROWSER_MIRROR,
       });
       expect(session.existingConfig).toEqual(elsewhere);
 
@@ -1030,6 +1038,7 @@ describe("the retarget guard on the real bind() path", () => {
         home,
         preflight: { localTailscale: OK_TAILSCALE },
         hermesMirror: OFFLINE_HERMES_MIRROR,
+        browserMirror: OFFLINE_BROWSER_MIRROR,
       });
       const bound = session.bind({
         profile: TEST_PROFILE,
@@ -1078,6 +1087,7 @@ describe("the retarget guard on the real bind() path", () => {
         home,
         preflight: { localTailscale: OK_TAILSCALE },
         hermesMirror: OFFLINE_HERMES_MIRROR,
+        browserMirror: OFFLINE_BROWSER_MIRROR,
       });
       expect(session.existingConfig).toBeNull();
       expect(readdirSync(home)).toEqual([]);
