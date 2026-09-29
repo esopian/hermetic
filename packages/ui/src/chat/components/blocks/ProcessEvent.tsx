@@ -355,20 +355,17 @@ function Delegation({ event, at }: { event: ProcessEventView; at: string | null 
   );
 }
 
-/** MCP reload, watch disabled, and any other `[IMPORTANT: …]`: one muted line. */
+/** MCP reload and watch disabled: one muted line. */
 function Notice({ event, at }: { event: ProcessEventView; at: string | null }) {
   const text = firstLine(event.message) || firstLine(event.raw);
   return (
-    <>
-      <div className="ch-ev-line">
-        <span className="k">{eventKind(event)}</span>
-        <span className="st mute">
-          <RedactedText text={text} />
-        </span>
-        <Stamp at={at} />
-      </div>
-      {event.event === "other_important" ? <Raw raw={event.raw} label="raw" /> : null}
-    </>
+    <div className="ch-ev-line">
+      <span className="k">{eventKind(event)}</span>
+      <span className="st mute">
+        <RedactedText text={text} />
+      </span>
+      <Stamp at={at} />
+    </div>
   );
 }
 

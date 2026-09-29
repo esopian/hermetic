@@ -131,11 +131,6 @@ const CASES: Case[] = [
     },
   ],
   [
-    "other IMPORTANT",
-    "[IMPORTANT: The session was compacted.]",
-    { event: "other_important", outcome: "info", message: "The session was compacted." },
-  ],
-  [
     "single delegation completed",
     `${singleHead("completed")}Found three renderers.`,
     {
@@ -250,6 +245,7 @@ describe("parseProcessNotice", () => {
       "a cron job's first row",
       "[IMPORTANT: You are running as a scheduled cron job. There is no user present.]\n\nSummarise [today]",
     ],
+    ["a one-line note the operator typed", "[IMPORTANT: deploy friday]"],
     ["a multi-line bracket", "[IMPORTANT: first line\nsecond line]"],
     ["an inner bracket", "[IMPORTANT: see [this] first]"],
     ["an MCP lookalike across lines", "[IMPORTANT: MCP servers have been reloaded.]\nand then [more]"],

@@ -70,31 +70,6 @@ const WATCH_DISABLED = /^\[IMPORTANT: (Watch patterns disabled for process (\S+)
 /** `gateway/run.py` and `cli.py` append the same text after `/reload-mcp`. */
 const MCP_RELOAD = /^\[IMPORTANT: (MCP servers have been reloaded\.[^\]\n]*)\]$/;
 
-/**
- * Any other one-line bracketed notice (`format_process_notification`'s generic
- * `[IMPORTANT: {message}]`). Kept as text, never dropped, never "You".
- *
- * One line with no inner bracket, because upstream also opens operator-driven
- * rows with `[IMPORTANT:` — a skill invocation carries the operator's request
- * after the hint, a cron job's first row carries its prompt — and those must
- * stay the user's.
- */
-const OTHER_IMPORTANT = /^\[IMPORTANT:\s*([^[\]\n]*)\]$/;
-
-/**
- * `[IMPORTANT: …` hints upstream prepends to a row the operator (or their cron
- * job) is behind (`agent/skill_commands.py`, `agent/skill_bundles.py`,
- * `cron/scheduler.py`, `gateway/run.py`). Never a background event, even on the
- * rare row where the hint is the whole text.
- */
-const OPERATOR_HINTS = [
-  "The user has invoked",
-  "The user launched",
-  "You are running as a scheduled cron job",
-  "The following skill(s) were listed",
-  'The "',
-];
-
 const DELEGATION_SINGLE = /^\[ASYNC DELEGATION COMPLETE — ([^\]\n]+)\]\n/;
 const DELEGATION_BATCH = /^\[ASYNC DELEGATION BATCH COMPLETE — ([^\]\n]+)\]\n/;
 
@@ -356,10 +331,10 @@ export function parseProcessNotice(text: string): ProcessEventBlock | null {
   }
   const reload = MCP_RELOAD.exec(normalized);
   if (reload) return { ...blank(raw, "mcp_reload", "info"), message: reload[1] ?? null };
-  const other = OTHER_IMPORTANT.exec(normalized);
-  const message = other?.[1]?.trim() ?? "";
-  if (!other || OPERATOR_HINTS.some((hint) => message.startsWith(hint))) return null;
-  return { ...blank(raw, "other_important", "info"), message };
+  // Anything else stays the user's. Upstream opens operator-driven rows with
+  // `[IMPORTANT:` too (a skill invocation, a cron job's first row), and a
+  // person can type the prefix; only a shape Hermes is known to emit is an event.
+  return null;
 }
 
 /* ── truncated previews ───────────────────────────────────────────────────── */
@@ -448,12 +423,12 @@ export function processNoticePreview(text: string): string | null {
   const head = PREVIEW_HEAD.exec(flat);
   if (head) return previewHead(text, head[1] ?? "", head[2] ?? "");
   const inner = flat.replace(/^\[IMPORTANT:\s*/, "").replace(/\]$/, "");
-  // A skill or cron hint opens a row the operator is behind; its preview is theirs.
-  if (OPERATOR_HINTS.some((hint) => inner.startsWith(hint))) return null;
-  const event = inner.startsWith("Watch patterns disabled")
+  const event = inner.startsWith("Watch patterns disabled for process ")
     ? "watch_disabled"
-    : inner.startsWith("MCP servers")
+    : inner.startsWith("MCP servers have been reloaded.")
       ? "mcp_reload"
-      : "other_important";
+      : null;
+  // Anything else, a skill or cron hint included, is the operator's row.
+  if (event === null) return null;
   return processEventSentence({ ...blank(text, event, "info"), message: inner });
 }

@@ -364,7 +364,7 @@ const UnknownBlock = z.object({
  * `format_process_notification`, `gateway/run.py`). Role alternation rules out
  * a system row mid-loop, so the row is stored as the user's. None of them was
  * typed by the operator; `chat/hermes/process-notice.ts` recognises them.
- * `other_important` is any other `[IMPORTANT: …]` notice, kept as raw text.
+ * Any other `[IMPORTANT: …]` row stays a plain user message.
  */
 export const ProcessEventType = z.enum([
   "completion",
@@ -372,7 +372,6 @@ export const ProcessEventType = z.enum([
   "watch_disabled",
   "delegation",
   "mcp_reload",
-  "other_important",
 ]);
 export type ProcessEventType = z.infer<typeof ProcessEventType>;
 
@@ -425,7 +424,7 @@ const ProcessEventBlock = z.object({
   output_lines: z.number().int().nonnegative().nullish(),
   /** Only when the notice states it (async delegation). Never estimated here. */
   duration_s: z.number().nonnegative().nullish(),
-  /** The inner text of a one-line notice (`watch_disabled`, `mcp_reload`, `other_important`). */
+  /** The inner text of a one-line notice (`watch_disabled`, `mcp_reload`). */
   message: z.string().nullish(),
   watch: z
     .object({
