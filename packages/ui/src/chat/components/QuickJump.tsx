@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { ChatSelection } from "../chat-state.tsx";
 import { useChat } from "../chat-state.tsx";
 import { useChatEntry } from "../chat-entry-state.tsx";
+import { searchableText } from "../process-events.ts";
 import { Dialog } from "../../components/Dialog.tsx";
 
 interface Result {
@@ -77,7 +78,8 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
       }
     if (search && !q.startsWith("@") && chat.selection)
       for (const message of chat.messages) {
-        const text = message.blocks.flatMap((b) => (b.kind === "text" ? [b.markdown] : [])).join(" ");
+        // A background event is not a message anybody wrote (`searchableText`).
+        const text = searchableText(message);
         if (text.toLowerCase().includes(search))
           rows.push({
             key: `message:${message.id}`,
