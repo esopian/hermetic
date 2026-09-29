@@ -1,0 +1,3 @@
+/download https://github.com/esopian/hermetic/releases/latest/download/macos-arm64-Hermetic.dmg 302
+/github https://github.com/esopian/hermetic 302
+/install /install.sh 302

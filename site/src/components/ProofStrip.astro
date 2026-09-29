@@ -1,0 +1,15 @@
+---
+import Kicker from "./Kicker.astro";
+---
+<section class="proof">
+  <div class="wrap">
+    {/* design.md §1 "Sealed inbound, open outbound", §7.2 (zero inbound SG rules, nftables default-deny, Tailscale the only way in) */}
+    <div class="cell"><Kicker>Inbound security group rules</Kicker><div class="big acc-t">0</div><p>The box also drops inbound traffic with nftables. The only route in is your tailnet.</p></div>
+    {/* design.md §7.2 (no key pairs, Tailscale SSH), §14 decision log "Access" */}
+    <div class="cell"><Kicker>SSH keys to manage</Kicker><div class="big">0</div><p>Shell access goes through Tailscale SSH, so there is no key file to lose.</p></div>
+    {/* design.md §1 "Zero-secret minimal path" */}
+    <div class="cell"><Kicker>Credentials to start</Kicker><div class="big">2</div><p>An AWS profile and a Tailscale OAuth client. Models come from Bedrock through the instance role.</p></div>
+    {/* design.md §1 "Instances are disposable, volumes are precious", §9 `agent recreate` (new instance, same volume) */}
+    <div class="cell"><Kicker>Volume per agent</Kicker><div class="big">1</div><p>What the agent learns lives on its own EBS volume. Replace the instance and the volume reattaches.</p></div>
+  </div>
+</section>

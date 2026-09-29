@@ -1,0 +1,42 @@
+---
+slug: docs/quick-start
+title: Quick start
+description: Install hermetic with one command and connect it to your AWS account.
+sidebar:
+  label: Quick start
+---
+
+import InstallCommand from "../../components/docs/InstallCommand.astro";
+
+You need a Mac with Apple silicon, an AWS account and a Tailscale tailnet. {/* design.md §3.6 (macos-arm64 only) */}
+
+## 1. Install
+
+<InstallCommand />
+
+The script downloads the latest release, checks it against the checksum GitHub publishes, copies `Hermetic.app` into `/Applications` and puts the `hermetic` command on your PATH. It never asks for your password. [Read the script](/install.sh) before you run it, or [install by hand](/docs/start/install/). {/* public/install.sh */}
+
+Check that the CLI is on your PATH:
+
+```sh
+hermetic --version
+```
+
+While the repository is private, pass a GitHub token so the script can see the release:
+
+<InstallCommand env="GITHUB_TOKEN=$(gh auth token)" />
+
+## 2. Connect your own fleet
+
+Before you start, have these ready:
+
+- An AWS profile in `~/.aws/config` for the account you want to use.
+- A Tailscale OAuth client, with HTTPS certificates turned on for your tailnet.
+
+Then open the app and follow the setup wizard, or run `hermetic init` in a terminal. When it finishes, create your first agent from the dashboard or with:
+
+```sh
+hermetic agent create atlas
+```
+
+[Your first fleet](/docs/start/first-fleet/) has the exact OAuth scopes and every step in detail. {/* README.md "Prerequisites", "Real AWS"; design.md §4.7, §5 */}

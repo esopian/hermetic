@@ -1,0 +1,14 @@
+---
+import { docs, repo } from "../data/links";
+import { dmgUrl, releasesUrl, sha, tag } from "../data/release";
+---
+<footer>
+  <div class="wrap cols">
+    {/* design.md §1, §7.1 (each agent its own EC2 instance in the operator's account). */}
+    <div><a class="brand" style="padding:0;border:0;font-size:18px;margin-bottom:12px;color:var(--fg)" href="/"><span class="sq"></span>Hermetic</a><p style="max-width:32em;line-height:1.7">Runs Hermes agents on their own machines in your AWS account. Pre-alpha.</p></div>
+    <div><h5>Product</h5><a href={dmgUrl}>Download</a><a href={releasesUrl}>Changelog</a></div>
+    <div><h5>Docs</h5><a href={docs.gettingStarted}>Getting started</a><a href={docs.operations}>Operations</a><a href={docs.cliReference}>CLI reference</a><a href={docs.securityModel}>Security model</a></div>
+    <div><h5>Project</h5><a href={repo.home}>GitHub</a><a href={repo.contributing}>Contributing</a><a href={repo.license}>License (MIT)</a></div>
+  </div>
+  <div class="wrap base"><span>built from <span style="color:var(--fg2)">{sha}</span> · deployed by release {tag}</span><span>MIT licensed</span></div>
+</footer>

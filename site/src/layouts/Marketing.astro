@@ -1,0 +1,29 @@
+---
+/*
+ * The landing page's document shell. Dark only: tokens.css sets color-scheme and there is no
+ * theme toggle. Fonts are self-hosted (fontsource), so the page makes no third-party request.
+ */
+import "../styles/fonts.css";
+import "../styles/tokens.css";
+import "../styles/base.css";
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<meta name="description" content={description}>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body>
+<slot />
+</body>
+</html>

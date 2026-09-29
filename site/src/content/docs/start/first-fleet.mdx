@@ -1,0 +1,92 @@
+---
+slug: docs/start/first-fleet
+title: Your first fleet
+description: Set up AWS and Tailscale, run hermetic init, and create a first agent.
+sidebar:
+  order: 2
+---
+
+A fleet is one CloudFormation foundation in one AWS account and region, plus the agents you create in it. This page takes you from an empty account to a first running agent. The [operations runbook](/docs/operate/overview/) has the detail behind each step. {/* design.md §5; docs/operations.md intro */}
+
+## Before you start
+
+You need four things in place before `init` will succeed.
+
+**An AWS profile.** Add one to `~/.aws/config` for the account you want to use. SSO, assume-role and static credentials all work. hermetic reads the profile you pick and ignores `AWS_PROFILE` and `AWS_ACCESS_KEY_ID`; it warns if either is set. {/* docs/operations.md "Prerequisites"; design.md §4.7 step 1 */} The profile needs permission to create a CloudFormation stack, DynamoDB tables, an S3 bucket, and EC2 and SSM resources. {/* docs/operations.md "Prerequisites" (the exact policy is marked unverified there) */}
+
+**A tag owner in your tailnet policy.** Paste this one line into your Tailscale policy file first, because the OAuth client form only offers tags that already have an owner: {/* design.md §4.7 step 5, §5.2 "What stays manual" */}
+
+```json
+"tagOwners": { "tag:hermetic": ["autogroup:admin"] }
+```
+
+That is the only policy edit you make by hand. hermetic writes its own `ssh` and `acls` entries later. {/* design.md §5.2 */}
+
+**A Tailscale OAuth client.** Create it in the Tailscale admin console; there is no API for this. Give it these scopes: {/* design.md §5 "Not in CloudFormation" */}
+
+| Scope | Restricted to | What hermetic uses it for |
+| --- | --- | --- |
+| `auth_keys` write | `tag:hermetic` | Minting each agent's join key |
+| `devices:core` read and write | `tag:hermetic` | Checking device drift in `doctor`, removing an old device on `recreate` and `destroy` |
+| `policy_file` | whole tailnet | Keeping hermetic's own entries in your policy file current |
+
+Tailscale cannot restrict `policy_file` to a tag. If you would rather not grant it, leave it off and paste the entries yourself; `hermetic policy` prints them. {/* design.md §5.2 "The trade-off" */} Copy the client secret when Tailscale shows it; it is shown once. {/* docs/operations.md "Rotate the Tailscale OAuth client" */}
+
+**HTTPS certificates on the tailnet.** Turn on MagicDNS and HTTPS Certificates in the admin console's DNS settings. Every agent serves its dashboard over HTTPS on its tailnet name, and `init --create` refuses without it. Agent hostnames will appear in public Certificate Transparency logs. {/* docs/operations.md "Prerequisites"; design.md §7.2 */}
+
+## Run init
+
+Open the app. A home that has never been initialized opens the init wizard: pick a profile, check the connection, create or attach to the foundation, and watch it run. {/* design.md §4.7; docs/operations.md "hermetic init walkthrough" */}
+
+Or use the CLI:
+
+```sh
+hermetic init            # attach if this account already has a foundation, else create one
+hermetic init --create   # create, and fail if one exists
+hermetic init --attach   # attach, and fail if none exists
+```
+
+{/* design.md §4.7 step 5 */}
+
+`init` resolves your identity through STS and shows you the twelve-digit account id. On the CLI you type it back; in the app you tick a box confirming it is the account you mean, and the core checks it again either way. From then on this home is frozen to that account, and every command re-checks STS before it touches AWS. {/* design.md §4.7 step 3, §1 "One home, one account, frozen"; docs/operations.md "hermetic init walkthrough" */}
+
+When it creates a foundation, `init`:
+
+- creates a CloudFormation stack named `hermetic-<fleet_id>` with a dedicated VPC, a security group with no inbound rules, one IAM role for the fleet's agents, a versioned S3 bucket and two DynamoDB tables; {/* design.md §5 "Stack contents" */}
+- stores the Tailscale OAuth secret in SSM Parameter Store; {/* design.md §5 "Not in CloudFormation" */}
+- writes hermetic's entries into your tailnet policy between `// hermetic:managed` markers, as its last step, if the client has `policy_file`. Pass `--skip-policy` if you deploy the policy from git. {/* design.md §5.2 "The surface"; docs/operations.md "The tailnet policy" */}
+
+Then check the result:
+
+```sh
+hermetic doctor
+```
+
+`doctor` compares the agents table, EC2's view of managed instances and Tailscale's device list, and reports the account and fleet guard. {/* design.md §9 doctor; docs/operations.md "What to verify with doctor" */}
+
+## Create an agent
+
+```sh
+hermetic agent create atlas
+```
+
+With no flags you get a `medium` agent (`t4g.2xlarge`, 8 vCPU, 32 GiB) with a 100 GiB data volume, using the fleet's default provider profile. {/* design.md §10 */} It takes about eight minutes. Follow it with `hermetic agent status atlas` or the dashboard's progress drawer. {/* design.md §12 "Golden AMI" (~8 minute first boot); docs/operations.md "Creating the first agent" */}
+
+If a create fails, the agent is left half-made on purpose. Run the same command again to finish it, or `hermetic agent destroy atlas --yes` to clear it. `--rollback-on-failure` undoes what the run itself created instead. {/* docs/operations.md "Creating the first agent"; design.md §6.2 */}
+
+## Reach it
+
+```sh
+hermetic ssh atlas          # Tailscale SSH, no key pair
+hermetic logs atlas -f      # stream the agent's logs
+```
+
+{/* design.md §7.2 (Tailscale SSH, no key pairs), §9; docs/operations.md "Day to day" */}
+
+The agent's dashboard is served at `https://<fleet_id>-<name>.<tailnet>.ts.net` to anyone your tailnet policy lets reach `tag:hermetic` on port 443. It has no login of its own. Read the [security model](/docs/concepts/security-model/) before you widen that ACL. {/* design.md §6.1 cloud name, §6.4 "Dashboard access", §5.2 */}
+
+## Next
+
+- [Day to day: `ssh`, `logs`, `rerun`](/docs/operate/day-to-day-ssh-logs-rerun/) and [bootstrap failures](/docs/operate/day-to-day-ssh-logs-rerun/#bootstrap-failed-on-a-stage).
+- [Stop, start, recreate and destroy](/docs/operate/stop-start-recreate-destroy-semantics/).
+- [Teardown](/docs/operate/teardown/), when you are done with the fleet.

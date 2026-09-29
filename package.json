@@ -41,7 +41,10 @@
     "dev:hmr": "bun scripts/dev-hmr.ts real",
     "dev:fixture:hmr": "bun scripts/dev-hmr.ts fixture",
     "dev:wizard:hmr": "bun scripts/dev-hmr.ts wizard",
-    "cli": "bun packages/cli/src/main.ts"
+    "cli": "bun packages/cli/src/main.ts",
+    "site:dev": "cd site && bun run dev",
+    "site:build": "cd site && bun run build",
+    "site:check": "cd site && bun run check"
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "^3.1124.0",
