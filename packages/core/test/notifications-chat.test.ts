@@ -27,11 +27,13 @@ import type { ChatDeps } from "../src/chat/chat.ts";
 import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
 import {
   CHAT_ERROR_PREFIX,
+  CHAT_EVENT_PREFIX,
   CHAT_MESSAGE_PREFIX,
   MemoryNotificationStore,
   chatSeenSubject,
   notificationsList,
   notifyChatError,
+  notifyProcessEvent,
   observeChatActivity,
   resolveChatErrors,
 } from "../src/chat/notifications.ts";
@@ -47,7 +49,14 @@ import { mapSwarm } from "../src/chat/hermes/hermes-chat.ts";
 import { PROFILES_LIST_RESULT, SESSION_LIST_POPULATED } from "./fixtures/hermes-frames.ts";
 import type { BoxAddress, HermesChatClient } from "../src/chat/hermes/hermes-chat.ts";
 import type { StackInfo } from "../src/backend/types.ts";
-import type { Agent, ChatFrame, Notification, Session, Swarm } from "../src/schema/index.ts";
+import type {
+  Agent,
+  ChatFrame,
+  Notification,
+  ProcessEventBlock,
+  Session,
+  Swarm,
+} from "../src/schema/index.ts";
 
 const FLEET = FIXTURE_CONFIG.fleet_id;
 const AT = "2026-09-17T09:00:00.000Z";
@@ -1237,5 +1246,101 @@ describe("the turn fence's lease", () => {
     expect(frames.some((f) => f.type === "done")).toBe(true);
     // Declined, so the next roster read still gets to classify.
     expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(AT);
+  });
+});
+
+describe("chat.message: a background-process event", () => {
+  const WHERE_EVENT = { instance: "atlas", bot: "default" };
+
+  function processEvent(over: Partial<ProcessEventBlock> = {}): ProcessEventBlock {
+    return {
+      kind: "process_event",
+      event: "completion",
+      outcome: "ok",
+      process_id: "proc_a1",
+      status: "completed normally",
+      exit_code: 0,
+      command: "bun run build",
+      raw: "[IMPORTANT: …]",
+      ...over,
+    };
+  }
+
+  test("a routine event never raises a row", () => {
+    const store = new MemoryNotificationStore();
+    const routine: ProcessEventBlock[] = [
+      processEvent(),
+      processEvent({ outcome: "terminated", status: "terminated by Hermes" }),
+      processEvent({
+        event: "watch_match",
+        outcome: "info",
+        watch: { pattern: "ready", suppressed: 0 },
+      }),
+      processEvent({ event: "mcp_reload", outcome: "info", message: "MCP servers reloaded" }),
+    ];
+    for (const block of routine) {
+      expect(notifyProcessEvent(depsFor(store), WHERE_EVENT, block, "m-1")).toBe(false);
+    }
+    expect(rows(store)).toEqual([]);
+  });
+
+  test("a failure raises one row worded by the shared sentence, however often it is polled", () => {
+    const store = new MemoryNotificationStore();
+    const failed = processEvent({
+      outcome: "failed",
+      status: "exited",
+      exit_code: 1,
+      command: "bun test packages/ui",
+    });
+    for (let poll = 0; poll < 3; poll++) {
+      notifyProcessEvent(depsFor(store), WHERE_EVENT, failed, "m-1");
+    }
+    const [row, ...rest] = rows(store);
+    expect(rest).toEqual([]);
+    expect(row?.title).toBe("■ bun test packages/ui exited 1");
+    expect(row?.class).toBe("bad");
+    expect(row?.ref).toBe("atlas/default");
+    expect(row?.key).toBe(`${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:proc_a1`);
+  });
+
+  test("a DM reply raises an info row, and a different process is a different row", () => {
+    const store = new MemoryNotificationStore();
+    const reply = (id: string) =>
+      processEvent({
+        process_id: id,
+        command: "python bot_mode_dm.py",
+        dm: { to_profile: "lead-qa", reply: "looks fine\nship it", warnings: [] },
+      });
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, reply("proc_1"), "m-1");
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, reply("proc_2"), "m-2");
+    const titles = rows(store).map((r) => r.title);
+    expect(titles).toEqual(["↩ lead-qa: looks fine", "↩ lead-qa: looks fine"]);
+    expect(rows(store).map((r) => r.class)).toEqual(["info", "info"]);
+  });
+
+  test("a notice with no process id is keyed on the message that carried it", () => {
+    const store = new MemoryNotificationStore();
+    const lost = processEvent({ process_id: null, outcome: "failed", status: "lost" });
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, lost, "m-9");
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, lost, "m-9");
+    expect(rows(store).map((r) => r.key)).toEqual([`${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:m-9`]);
+  });
+
+  test("a long DM reply is cut to a one-line title", () => {
+    const store = new MemoryNotificationStore();
+    const long = processEvent({ dm: { to_profile: "lead-qa", reply: "x".repeat(400), warnings: [] } });
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, long, "m-1");
+    const title = rows(store)[0]?.title ?? "";
+    expect(title.length).toBeLessThanOrEqual(140);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
+  test("an unwritable inbox is not a failure", () => {
+    const store = new MemoryNotificationStore();
+    store.insert = () => {
+      throw new Error("disk full");
+    };
+    const failed = processEvent({ outcome: "failed", status: "exited", exit_code: 2 });
+    expect(notifyProcessEvent(depsFor(store), WHERE_EVENT, failed, "m-1")).toBe(false);
   });
 });

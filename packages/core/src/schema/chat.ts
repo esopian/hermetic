@@ -22,6 +22,14 @@
 import { z } from "zod";
 import { Iso } from "./common.ts";
 
+export {
+  PROCESS_COMMAND_MAX,
+  isRoutineProcessEvent,
+  processEventSentence,
+  shortCommand,
+} from "../shared/process-event.ts";
+export type { ProcessEventLike } from "../shared/process-event.ts";
+
 /* ── addressing ───────────────────────────────────────────────────────────── */
 
 /**
@@ -347,6 +355,119 @@ const UnknownBlock = z.object({
   payload: z.unknown(),
 });
 
+/**
+ * Which of Hermes' injected notices a `process_event` block was parsed from.
+ *
+ * Hermes wakes a bot by appending a `user`-role row to its session when a
+ * background process finishes, a watch pattern matches, an async subagent
+ * returns, or the MCP servers reload (`tools/process_registry.py`
+ * `format_process_notification`, `gateway/run.py`). Role alternation rules out
+ * a system row mid-loop, so the row is stored as the user's. None of them was
+ * typed by the operator; `chat/hermes/process-notice.ts` recognises them.
+ * `other_important` is any other `[IMPORTANT: …]` notice, kept as raw text.
+ */
+export const ProcessEventType = z.enum([
+  "completion",
+  "watch_match",
+  "watch_disabled",
+  "delegation",
+  "mcp_reload",
+  "other_important",
+]);
+export type ProcessEventType = z.infer<typeof ProcessEventType>;
+
+/**
+ * The one classification every head colours and filters by, decided in core so
+ * the thread, the rail, the CLI and the inbox cannot disagree: `ok` (exited 0,
+ * every subagent succeeded), `failed` (non-zero exit, failed to start, lost, a
+ * subagent that did not succeed), `terminated` (killed by Hermes or SIGTERM),
+ * `info` (watch matches and one-line notices).
+ */
+export const ProcessOutcome = z.enum(["ok", "failed", "terminated", "info"]);
+export type ProcessOutcome = z.infer<typeof ProcessOutcome>;
+
+const ProcessDelegationTask = z.object({
+  /** 1-based, as upstream prints it (`TASK 2/3`). */
+  index: z.number().int().positive(),
+  goal: z.string().nullish(),
+  status: z.string(),
+  ok: z.boolean(),
+  summary: z.string().nullish(),
+  duration_s: z.number().nonnegative().nullish(),
+  api_calls: z.number().int().nonnegative().nullish(),
+});
+
+/**
+ * A Hermes background-process notice, parsed out of the `user`-role row it was
+ * injected as. The message carrying it has role `system` and this one block.
+ *
+ * Every field but `event`, `outcome` and `raw` is nullable: the notice is text
+ * written for a model, and a field the parser could not read is left empty
+ * rather than guessed. `raw` is the row's text verbatim, redacted by the same
+ * boundary as every other block, so a head can always fall back to it.
+ */
+const ProcessEventBlock = z.object({
+  kind: z.literal("process_event"),
+  event: ProcessEventType,
+  outcome: ProcessOutcome,
+  /** Hermes' process session id (`proc_…`), matching the `terminal` tool call that started it. */
+  process_id: z.string().nullish(),
+  /** Upstream's status phrase verbatim: `completed normally`, `exited`, `terminated by Hermes`, … */
+  status: z.string().nullish(),
+  exit_code: z.number().int().nullish(),
+  /** `SIGTERM` when upstream appended `, SIGTERM` to the exit code. */
+  signal: z.string().nullish(),
+  /** The full command line, unshortened. */
+  command: z.string().nullish(),
+  /** The output the notice carried (upstream already keeps only a tail), or the matched lines of a watch match. */
+  output_tail: z.string().nullish(),
+  /** Lines in `output_tail`. */
+  output_lines: z.number().int().nonnegative().nullish(),
+  /** Only when the notice states it (async delegation). Never estimated here. */
+  duration_s: z.number().nonnegative().nullish(),
+  /** The inner text of a one-line notice (`watch_disabled`, `mcp_reload`, `other_important`). */
+  message: z.string().nullish(),
+  watch: z
+    .object({
+      pattern: z.string(),
+      /** Earlier matches upstream suppressed by rate limit; 0 when it said nothing. */
+      suppressed: z.number().int().nonnegative(),
+    })
+    .nullish(),
+  delegation: z
+    .object({
+      id: z.string(),
+      batch: z.boolean(),
+      /** The single-task status line's status; null for a batch. */
+      status: z.string().nullish(),
+      total: z.number().int().nonnegative(),
+      succeeded: z.number().int().nonnegative(),
+      api_calls: z.number().int().nonnegative().nullish(),
+      /** The batch's per-task results, or the one task of a single delegation. */
+      tasks: z.array(ProcessDelegationTask),
+      /** The batch-level error when it failed with no per-task results. */
+      error: z.string().nullish(),
+    })
+    .nullish(),
+  /**
+   * Set when the command was a bot-to-bot DM delivery (`bot_mode_dm.py
+   * --run-delivery … hermes -p <profile> chat …`): the output is the other
+   * bot's reply, not a log.
+   */
+  dm: z
+    .object({
+      /** The profile (bot) the DM went to, and so the bot that replied. */
+      to_profile: z.string().min(1),
+      /** The output minus leading tool-warning lines. */
+      reply: z.string(),
+      /** The leading tool-warning lines stripped from the reply, trimmed. */
+      warnings: z.array(z.string()),
+    })
+    .nullish(),
+  raw: z.string(),
+});
+export type ProcessEventBlock = z.infer<typeof ProcessEventBlock>;
+
 export const ChatBlock = z.discriminatedUnion("kind", [
   TextBlock,
   ActivityBlock,
@@ -357,6 +478,7 @@ export const ChatBlock = z.discriminatedUnion("kind", [
   QuestionBlock,
   SourcesBlock,
   HermeticBlock,
+  ProcessEventBlock,
   UnknownBlock,
 ]);
 export type ChatBlock = z.infer<typeof ChatBlock>;
@@ -371,6 +493,7 @@ export const CHAT_BLOCK_KINDS = [
   "question",
   "sources",
   "hermetic",
+  "process_event",
   "unknown",
 ] as const;
 

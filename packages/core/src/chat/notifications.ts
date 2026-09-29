@@ -25,6 +25,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { hiddenByListening } from "../shared/notifications.ts";
+import { isRoutineProcessEvent, processEventSentence } from "../shared/process-event.ts";
 import {
   NotificationsAckInput,
   NotificationsListInput,
@@ -46,6 +47,7 @@ import type {
   NotificationsAckResult,
   NotificationsListResult,
   NotificationsMuteResult,
+  ProcessEventBlock,
   VolumeView,
 } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
@@ -775,6 +777,85 @@ export function observeChatActivity(deps: NotificationDeps, bots: readonly ChatA
       // The inbox is a courtesy; an unwritable one never fails a roster read.
       // Swallowed per bot, so the next bot is still read.
     }
+  }
+}
+
+/** The `key` family for a background-process event worth telling the operator about. */
+export const CHAT_EVENT_PREFIX = "chat.event:";
+
+/** The longest title an event row writes; a DM reply's first line can be a paragraph. */
+const CHAT_EVENT_TITLE_MAX = 140;
+
+/**
+ * A background-process event (§9.2) that deserves a row: a failed command, a
+ * subagent result, or a DM reply from another bot.
+ *
+ * Hermes injects these as `user`-role rows, and core turns them into
+ * `process_event` blocks on a `system` message (`chat/hermes/process-notice.ts`).
+ * They are never an operator message, so nothing in the roster-driven
+ * `observeChatActivity` may treat one as somebody typing, and a routine event
+ * — a clean exit, a termination, a watch match, a notice — never raises a row
+ * at all (`isRoutineProcessEvent`): the thread shows those, the inbox does not.
+ *
+ * The row is keyed on the process id (the delegation id, else `fallbackId`, the
+ * message's own id, for a notice that carries neither), so a history read that
+ * sees the same row on every poll writes it once. The store's dedupe is
+ * "same key, still unresolved", which means reading the thread (`read_at`)
+ * closes it and the same event is not raised again afterwards.
+ *
+ * This is the one place a row is worded from a message, and the `block` it
+ * takes must already be past `redactDeep` — the history read is. The title is
+ * one line, truncated, and never the output.
+ *
+ * Returns whether a row was requested, so a caller can count. A store that
+ * throws is swallowed, as everywhere else in this file.
+ *
+ * TODO(evan): nothing calls this yet, because core has no read of a thread
+ * no head is watching. `chat-observe.ts` only reads watched conversations and
+ * by §4.9 writes no inbox row (the roster diff is `chat.message`'s one
+ * source), and the roster itself carries no rows — only the box's
+ * `last_active`, which is the newest row of any kind, notice or not, so it
+ * cannot skip one. Wiring this needs either a per-bot durable read on the
+ * roster poll or a §4.9 change letting observation raise rows; both are design
+ * decisions, not plumbing. In practice a notice wakes the bot, which replies,
+ * so the roster's "has a new message" is usually about that reply.
+ */
+export function notifyProcessEvent(
+  deps: NotificationDeps,
+  where: { instance: string; bot: string },
+  block: ProcessEventBlock,
+  fallbackId: string,
+): boolean {
+  if (isRoutineProcessEvent(block)) return false;
+  try {
+    const fleet = deps.fleet();
+    const ref = chatActionRef(where.instance, where.bot);
+    const identity = block.process_id ?? block.delegation?.id ?? fallbackId;
+    const sentence = processEventSentence(block);
+    deps.store.insert({
+      source: "chat",
+      kind: "chat.message",
+      // A failure is a problem; a DM reply is news. Neither is `needs_action`:
+      // nothing is waiting on an answer from a person.
+      class: block.outcome === "failed" ? "bad" : "info",
+      title:
+        sentence.length > CHAT_EVENT_TITLE_MAX
+          ? `${sentence.slice(0, CHAT_EVENT_TITLE_MAX - 1).trimEnd()}…`
+          : sentence,
+      detail: `${where.bot} on ${where.instance}`,
+      agent: where.instance,
+      fleet,
+      ref,
+      key: `${CHAT_EVENT_PREFIX}${chatKeyScope(fleet, where.instance, where.bot)}:${identity}`,
+      actions: [
+        { label: "Open chat", target: "chat", ref },
+        { label: `Open ${where.instance}`, target: "agent", ref: where.instance },
+      ],
+    });
+    return true;
+  } catch {
+    // The inbox is a courtesy; an unwritable one never fails a history read.
+    return false;
   }
 }
 

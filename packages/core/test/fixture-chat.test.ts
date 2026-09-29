@@ -71,12 +71,12 @@ const ALL_SWARMS: Swarm[] = await Promise.all(FIXTURE_CHAT_INSTANCES.map((i) => 
 
 describe("the catalogue is covered", () => {
   /**
-   * Derived, not transcribed. If `schema/chat.ts` grows a tenth block kind this
+   * Derived, not transcribed. If `schema/chat.ts` grows another block kind this
    * test fails until the fixture carries one, which is the only mechanism that
    * makes "the renderer's tests are driven from the fixture" a true statement
    * rather than an intention.
    */
-  test("every one of the nine block kinds appears", () => {
+  test("every block kind appears", () => {
     const seen = new Set(ALL_BLOCKS.map((b) => b.kind));
     expect([...seen].sort()).toEqual([...CHAT_BLOCK_KINDS].sort());
   });

@@ -9,6 +9,7 @@ import { checkAbort } from "../../abort.ts";
 import type { BoxAddress, HermesChatOptions } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
 import { arr, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
+import { processNoticePreview } from "./process-notice.ts";
 import type { Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
 
 /** What `createChatSessions` needs, and nothing more. */
@@ -71,7 +72,10 @@ export function mapSessions(box: BoxAddress, bot: string, raw: unknown): Session
       // Sent on every row of a real `session.list`, and truncated by the box
       // rather than here — the capture's longest is 60 characters ending in an
       // ellipsis, which is upstream's own cut, not this adapter's.
-      preview: str(row?.preview) ?? str(row?.snippet),
+      // A session whose first user row is a background-process notice would
+      // otherwise preview as `[IMPORTANT: Background process …` — upstream
+      // builds the preview from that row — so it reads as the event instead.
+      preview: eventPreview(str(row?.preview) ?? str(row?.snippet)),
       /**
        * `started_at` is the one a real box sends, as a **float of Unix seconds**
        * — not `updated_at`, not `last_message_at`, not `mtime`, and not a
@@ -169,4 +173,13 @@ const UPSTREAM_ORIGINS: Record<string, SessionOrigin> = {
 function sessionOrigin(raw: string | null): SessionOrigin {
   if (raw === null) return "cli";
   return UPSTREAM_ORIGINS[raw.toLowerCase()] ?? "cli";
+}
+
+/**
+ * A preview as the rail shows it: an injected notice (`process-notice.ts`)
+ * becomes its one-line sentence, anything else passes through untouched.
+ */
+export function eventPreview(preview: string | null): string | null {
+  if (preview === null) return null;
+  return processNoticePreview(preview) ?? preview;
 }
