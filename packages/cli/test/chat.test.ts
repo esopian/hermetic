@@ -18,7 +18,15 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Bot, ChatFrame, ChatMessage, ChatObserveEvent, Session, Swarm } from "@hermetic/core";
+import type {
+  Bot,
+  ChatFrame,
+  ChatMessage,
+  ChatObserveEvent,
+  ProcessEventBlock,
+  Session,
+  Swarm,
+} from "@hermetic/core";
 import {
   blockLines,
   botRow,
@@ -205,6 +213,105 @@ describe.concurrent("the transcript", () => {
   test("a message from another bot names it, because in a room the speaker is not the session's", () => {
     const from = message({ author: { instance: "granite", bot: "ops-writer" } });
     expect(messageLines(from, NOW)[0]).toBe("3h ago  bot ops-writer@granite");
+  });
+
+  describe("background-process events", () => {
+    function event(block: Partial<ProcessEventBlock>, over: Partial<ChatMessage> = {}): ChatMessage {
+      return message({
+        role: "system",
+        blocks: [
+          {
+            kind: "process_event",
+            event: "completion",
+            outcome: "ok",
+            raw: "[IMPORTANT: …]",
+            ...block,
+          },
+        ],
+        ...over,
+      });
+    }
+
+    test("a clean exit is an event row, never the operator or the bot", () => {
+      const lines = messageLines(
+        event({
+          process_id: "proc_a1",
+          status: "completed normally",
+          exit_code: 0,
+          command: "bun run build",
+        }),
+        NOW,
+      );
+      expect(lines).toEqual(["3h ago  event ■ process completed normally  exit 0  bun run build"]);
+    });
+
+    test("a failure prints the last line of its output under the summary, and the duration only when known", () => {
+      const lines = messageLines(
+        event({
+          outcome: "failed",
+          status: "exited",
+          exit_code: 1,
+          command: "bun test packages/ui",
+          output_tail: "3 pass\n1 fail\n\nRan 4 tests.\n",
+          duration_s: 42,
+        }),
+        NOW,
+      );
+      expect(lines).toEqual([
+        "3h ago  event ■ process exited  exit 1  bun test packages/ui  duration 42s",
+        "  Ran 4 tests.",
+      ]);
+    });
+
+    test("a DM reply names both bots and prints the reply indented", () => {
+      const lines = messageLines(
+        event({
+          outcome: "ok",
+          process_id: "proc_dm",
+          exit_code: 0,
+          command: "python bot_mode_dm.py",
+          dm: { to_profile: "lead-qa", reply: "looks fine\nship it", warnings: [] },
+        }),
+        NOW,
+        "atlas/ops",
+      );
+      expect(lines).toEqual([
+        "3h ago  event ■ dm-reply  lead-qa → atlas/ops  proc_dm  exit 0",
+        "  looks fine",
+        "  ship it",
+      ]);
+    });
+
+    test("a watch match and a subagent batch say what they are", () => {
+      expect(
+        messageLines(
+          event({
+            event: "watch_match",
+            outcome: "info",
+            command: "tail -f log",
+            watch: { pattern: "ERROR", suppressed: 0 },
+          }),
+          NOW,
+        )[0],
+      ).toBe('3h ago  event ■ watch matched "ERROR"  tail -f log');
+      expect(
+        messageLines(
+          event({
+            event: "delegation",
+            outcome: "failed",
+            delegation: {
+              id: "d1",
+              batch: true,
+              total: 3,
+              succeeded: 2,
+              tasks: [],
+              error: "task 3 timed out",
+            },
+          }),
+          NOW,
+        ),
+      ).toEqual(["3h ago  event ■ subagents 2 of 3 finished", "  task 3 timed out"]);
+    });
   });
 
   test("a turn that stopped early says so, and an error is printed under it", () => {
