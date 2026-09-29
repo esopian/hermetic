@@ -22,8 +22,9 @@ permissions:
 #
 # `bun run ci` on a laptop is check + build, i.e. typecheck -> test ->
 # lint:biome -> lint -> lint:cfn -> lint:sh -> build (lint:biome is `biome
-# check`, format and lint in one pass; tests/boundaries.test.ts runs inside
-# test). Here each of those runs as its own job so a failure names itself in the
+# check`, format and lint in one pass, failing on any diagnostic down to
+# `info`, scripts/lint-biome.ts; tests/boundaries.test.ts runs inside test).
+# Here each of those runs as its own job so a failure names itself in the
 # checks list and the slow ones (test, build) do not queue behind the fast ones.
 # The scripts are the same, so green here still means green locally and vice
 # versa.

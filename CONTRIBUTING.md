@@ -190,7 +190,7 @@ bun run test:watch                 # the same, re-running on change
 bun run test:dynamodb-local        # tests/integration/dynamodb-local.test.ts against HERMETIC_DYNAMODB_LOCAL (default 127.0.0.1:8000)
 bun run typecheck                  # scripts/typecheck.ts across every package (needs the devkit)
 bun run format                     # biome format --write . (fix)
-bun run lint:biome                 # biome check . — format + lint, report only (biome.jsonc)
+bun run lint:biome                 # biome check . — format + lint, report only; any diagnostic fails
 bun run lint                       # scripts/lint.ts's mechanical rules
 bun run lint:cfn                   # cfn-lint over the rendered foundation template (needs uv, or CFN_LINT=…)
 bun run lint:sh                    # shellcheck over packages/agentd/stages/*.sh (needs uv)
@@ -265,7 +265,9 @@ chosen to match the code as it already was (2-space indent, double quotes, semic
 commas, 104 columns), so adopting it moved as few lines as it could. `bun run lint:biome` is the
 linter half — Biome's recommended set plus unused imports/variables and `noExplicitAny`, with each
 disabled rule carrying its reason as a comment in `biome.jsonc`. `packages/ui` keeps its `any`
-exemption as a Biome override.
+exemption as a Biome override. `scripts/lint-biome.ts` fails on every diagnostic, `info` included:
+plain `biome check` exits 0 on infos, which let them pass `check`, CI and the release script
+unnoticed. A rule the repo does not want is turned off in `biome.jsonc`, not left to print.
 
 `bun install` points `core.hooksPath` at `.githooks` (the root `prepare` script), which installs a
 pre-commit hook covering the *staged* files only — a couple of seconds, not the whole suite. It
