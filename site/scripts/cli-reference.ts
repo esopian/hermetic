@@ -201,7 +201,7 @@ async function main(): Promise<void> {
     .split("\n")
     .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null)
-    .map((m) => `| ${m[1]} | ${(m[2] ?? "").replace(/\|/g, "\\|")} |`);
+    .map((m) => `| ${m[1]} | ${(m[2] ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`);
   if (rows.length === 0) throw new Error("could not parse `hermetic help exit-codes`");
   const exitCodes = [
     front(
