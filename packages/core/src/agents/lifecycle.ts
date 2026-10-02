@@ -71,6 +71,13 @@ export interface LifecycleDeps {
    * then recreating must not boot the replacement onto the *old* binding.
    */
   applyPending: (agent: Agent) => Promise<Agent>;
+  /**
+   * §6.7: drop what this machine keeps locally about a released name — called
+   * by the release (`lifecycle/release-name.ts`) that ends every destroy, and
+   * by a create that releases a legacy `destroyed` row. Optional: a release is
+   * complete without it, and a failure is reported rather than raised.
+   */
+  purgeLocal?: ((fleetId: string, name: string) => Promise<void>) | undefined;
 }
 
 export function createLifecycle(deps: LifecycleDeps) {

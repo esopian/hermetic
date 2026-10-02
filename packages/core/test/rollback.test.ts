@@ -119,6 +119,7 @@ function depsOf(w: Fake): RollbackDeps {
           availability_zone: "us-west-2a",
           created_at: null,
           agent: tag.agent,
+          former_agent: null,
           managed: true,
           role_data: tag.role_data,
           tags: {},

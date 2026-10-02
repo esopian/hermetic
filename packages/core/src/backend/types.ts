@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentEvent,
+  AgentTombstone,
   DirectoryEntry,
   DirectoryStatus,
   FleetId,
@@ -53,8 +54,16 @@ export interface AgentStore {
   update(name: string, expectedVersion: number, patch: AgentPatch): Promise<Agent>;
   /** Full `Scan` — the read path of §4.5, no local mirror. */
   scan(): Promise<Agent[]>;
-  /** Only ever used to unwind a failed `create`; a live agent is marked `destroyed`. */
-  delete(name: string): Promise<void>;
+  /**
+   * Remove the row. Two callers: the unwind of a failed `create`, which
+   * deletes unconditionally because the row is its own half-written claim,
+   * and the release at the end of `destroy` (§6.7), which passes
+   * `expectedVersion` so the `DeleteItem` is conditional on the row being the
+   * one it just read — a concurrent writer that moved it makes this throw
+   * `CONFLICT` rather than delete somebody else's account of the agent. A row
+   * already gone is not an error either way. Events are never deleted.
+   */
+  delete(name: string, opts?: { expectedVersion: number }): Promise<void>;
   /**
    * Names the most recent `scan` could not parse, when the store tracks them.
    * `scan` skips a half-written or foreign row rather than failing the whole
@@ -67,6 +76,21 @@ export interface EventStore {
   append(event: AgentEvent): Promise<void>;
   /** Newest first. Events are never deleted (§6.6). */
   query(name: string, limit?: number): Promise<AgentEvent[]>;
+  /**
+   * The audit record a destroy leaves behind once the agent row is gone
+   * (§6.7): one item under the reserved `_destroyed` partition of the events
+   * table, range-keyed `<destroyed_at>#<name>` (`tombstoneSortKey`). Written
+   * before the row is deleted, so a crash between the two leaves a tombstone
+   * and a `destroying` row — which the next destroy finds and finishes — never
+   * a freed name with no record. Idempotent for the same key.
+   */
+  appendTombstone(tombstone: AgentTombstone): Promise<void>;
+  /**
+   * Every tombstone, newest first — one `Query` on the reserved partition, no
+   * `Scan`. `name` narrows to one agent's incarnations (a filter, still one
+   * query); `limit` caps the count after filtering.
+   */
+  queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]>;
 }
 
 /**
@@ -405,6 +429,8 @@ export interface ManagedVolumeRef {
   volume_id: string;
   size_gib: number;
   agent: string | null;
+  /** The `hermetic:former_agent=<name>` tag a destroy leaves on a kept volume (§6.7), or null. */
+  former_agent: string | null;
   state: string;
 }
 
@@ -517,6 +543,12 @@ export interface VolumeDetail extends VolumeStatus {
   created_at: string | null;
   /** The `agent=<name>` tag, or null when the volume carries none. */
   agent: string | null;
+  /**
+   * The `hermetic:former_agent=<name>` tag, or null. A destroy that keeps the
+   * volume moves the name here from `agent` (§6.7): the volume is nobody's
+   * now, adoptable only by an explicit `--volume`, and this says whose it was.
+   */
+  former_agent: string | null;
   /** Carries `hermetic:managed=true`: hermetic made this one. */
   managed: boolean;
   /** Carries `hermetic:role=data`: the label that settles an ambiguous pair. */
@@ -733,11 +765,18 @@ export interface ComputeApi {
    * back the ownership tags while deleting that would be a rollback that left
    * the account worse than it found it. Absent leaves the tag alone; `null`
    * removes it.
+   *
+   * `formerAgent` is the `hermetic:former_agent` tag (§6.7, §9.1): a destroy
+   * that keeps the volume moves the name from `agent` to it, so the disk still
+   * says whose memory it holds without `findVolumeByTag` ever finding it under
+   * that name again — the one hold on a destroyed name that would otherwise
+   * survive. A string sets it, `null` removes it, absent leaves it alone; the
+   * adopt path removes it when it gives the volume a new owner.
    */
   retagVolume(
     volumeId: string,
     agent: string | null,
-    opts?: { roleData?: boolean; name?: string | null },
+    opts?: { roleData?: boolean; name?: string | null; formerAgent?: string | null },
   ): Promise<void>;
   /** Snapshots carrying one tag, e.g. the DLM policy's `hermetic:role=data` (§7.1). */
   listSnapshots(tag: TagSelector): Promise<SnapshotRef[]>;
@@ -1191,6 +1230,7 @@ export const MUTATING_METHODS: readonly string[] = [
   "store.agents.update",
   "store.agents.delete",
   "store.events.append",
+  "store.events.appendTombstone",
   "store.fleet.put",
   "store.fleet.updateFleet",
   "store.fleet.replaceFleet",

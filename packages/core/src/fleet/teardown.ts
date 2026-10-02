@@ -605,12 +605,25 @@ export function createTeardown(deps: TeardownDeps) {
        * parameters too. Built from the scan above rather than a second one.
        */
       const scope = await readFleetScope(backend, fleet.fleet_id);
+      /**
+       * §6.7: a destroy now deletes the row, so a destroyed agent's name
+       * survives only in its tombstone. Read under the same missing-table rule
+       * as the scan: a table already gone has no names to give, and says so in
+       * the note below rather than failing the teardown.
+       */
+      const tombstoned =
+        scope.sole && !fleetRows.table_gone
+          ? await backend.store.events.queryTombstones().catch((e: unknown) => {
+              if (isMissingTable(e)) return [];
+              throw e;
+            })
+          : [];
       const legacy = scope.sole
         ? legacyParamPrefixes(
-            // Every row, destroyed included: a destroyed row is kept for ever
-            // (§4.3) and its name is the only record that `/hermes/<name>/` was
-            // this fleet's. `plans.ts` enumerates from exactly the same list.
-            fleetRows.agents.map((a) => a.name),
+            // Every row, legacy destroyed ones included, plus every tombstone:
+            // between them they are the only record that `/hermes/<name>/` was
+            // this fleet's. `plans.ts` must enumerate from exactly the same list.
+            [...fleetRows.agents.map((a) => a.name), ...tombstoned.map((t) => t.name)],
             scope,
           )
         : { prefixes: [] as string[], skipped: [] as string[] };

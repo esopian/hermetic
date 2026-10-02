@@ -71,7 +71,6 @@ export function FleetTriage({
   fleetId,
   selected,
   volumes,
-  showDestroyed,
   agents,
   onSelect,
   onCreateOnVolume,
@@ -84,7 +83,6 @@ export function FleetTriage({
   selected: string | null;
   /** The inventory, so this layout stops being the one that hides the tombstones. */
   volumes: VolumeView[];
-  showDestroyed: boolean;
   /** Every visible agent, so a volume whose row is already on screen is not drawn twice. */
   agents: AgentView[];
   onSelect: (name: string) => void;
@@ -92,7 +90,7 @@ export function FleetTriage({
   onSeeVolumes: () => void;
 }) {
   const now = Date.now();
-  const board = boardVolumes(volumes, agents, showDestroyed);
+  const board = boardVolumes(volumes, agents);
   return (
     <div className="body-scroll">
       {groups.map((g) => (

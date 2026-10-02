@@ -155,6 +155,31 @@ export interface ArchiveResult {
   pruned: { remote: string[]; local: string[] };
 }
 
+/** How many per-name event queries the archive runs at once. */
+const ARCHIVE_QUERY_CONCURRENCY = 8;
+
+/**
+ * `Promise.all` with a ceiling, preserving input order. The same shape as
+ * `fleet/network.ts`'s private copy, which predates this second caller.
+ */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 function json(value: unknown): Uint8Array {
   return new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -166,16 +191,28 @@ export function createArchive(deps: ArchiveDeps) {
   /**
    * The JSON half, built once and written to both halves of the archive. It is
    * assembled in memory rather than streamed because it is small — a fleet's
-   * rows, its last two hundred events per agent, and two lists of names — and
+   * rows, its tombstones, its last two hundred events per agent, and two lists of names — and
    * because the local and the remote copy must be the same bytes.
    */
   async function documents(target: ArchiveTarget): Promise<Record<string, Uint8Array>> {
     const fleet = await backend.store.fleet.get();
     const agents = await backend.store.agents.scan();
+    /**
+     * §6.7: a destroy deletes the row, so a destroyed agent is no longer in
+     * `agents` — its tombstone is its record, and its events are still there
+     * under its name. Both go in, as destroyed rows' did when rows were kept.
+     */
+    const destroyed = await backend.store.events.queryTombstones();
+    const names = [...new Set([...agents.map((a) => a.name), ...destroyed.map((t) => t.name)])];
+    // One query per name, a few at a time: a fleet with a long history of
+    // destroyed names must not turn the archive into a serial walk of them.
+    const logs = await mapLimit(names, ARCHIVE_QUERY_CONCURRENCY, (name) =>
+      backend.store.events.query(name, ARCHIVE_EVENT_LIMIT),
+    );
     const events: Record<string, AgentEvent[]> = {};
-    for (const agent of agents) {
-      events[agent.name] = await backend.store.events.query(agent.name, ARCHIVE_EVENT_LIMIT);
-    }
+    names.forEach((name, i) => {
+      events[name] = logs[i] ?? [];
+    });
     /**
      * Names only (§8.3). `secrets.list` returns paths, never values, and this is
      * the only call in the archive that goes near SSM at all — the archive
@@ -196,6 +233,7 @@ export function createArchive(deps: ArchiveDeps) {
       "fleet.json": json(fleet),
       "agents.json": json(agents),
       "events.json": json(events),
+      "destroyed.json": json(destroyed),
       "ssm-paths.json": json(ssmPaths),
       "s3-listing.json": json(listing),
       "archived-at.json": json({

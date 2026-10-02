@@ -71,6 +71,7 @@ import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
+import { createLocalAgentPurge } from "./local/purge-agent.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
 /**
@@ -206,10 +207,20 @@ export function createHermetic(deps: HermeticDeps) {
     ttlMs: LOCK_TTL_MS,
   });
 
+  // Shared with the roster read below and, for the purge, with §6.7's release.
+  const localSessions = deps.localSessions ?? new MemoryLocalChatSessions();
+  const chatFence = deps.chatFence ?? new MemoryChatFenceStore();
+
   const { create, destroy, stop, start, recreate } = createLifecycle({
     ctx,
     volumeClaims,
     applyPending,
+    purgeLocal: createLocalAgentPurge({
+      notifications: notificationDeps.store,
+      instanceListening,
+      localSessions,
+      chatFence,
+    }),
     tsKeyPath: (name) => tsKeyPath(fleetId(), name),
     providerKeyPath: (name) => providerKeyPath(fleetId(), name),
     agentSlotPath: (name, slot) => agentParamPath(fleetId(), name, slot),
@@ -367,7 +378,7 @@ export function createHermetic(deps: HermeticDeps) {
 
   // ─── reads (`reads.ts`) ────────────────────────────────────────────────────
 
-  const { list, get, history, configShow, runsList, teardownsList } = createReads({
+  const { list, get, history, destroyed, configShow, runsList, teardownsList } = createReads({
     ctx,
     settingsForView,
     configStore: deps.configStore,
@@ -430,8 +441,8 @@ export function createHermetic(deps: HermeticDeps) {
     // raises `chat.error`. Core owns the row and its wording; no head is involved.
     notifications: notificationDeps,
     now: nowIso,
-    localSessions: deps.localSessions ?? new MemoryLocalChatSessions(),
-    chatFence: deps.chatFence ?? new MemoryChatFenceStore(),
+    localSessions,
+    chatFence,
   });
   const desktop = createDesktop({ guardFleet, getAgent, hermes: hermesChat });
 
@@ -508,6 +519,8 @@ export function createHermetic(deps: HermeticDeps) {
       recreate,
       destroy,
       history,
+      /** §6.7: the tombstones a destroy leaves, plus legacy `destroyed` rows. */
+      destroyed,
       rerun,
       reboot,
       probe: probes.probe,

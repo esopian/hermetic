@@ -4,8 +4,15 @@
  * every shape a real Tailscale answer has.
  */
 import { describe, expect, test } from "bun:test";
-import type { AgentEvent, AgentView, ProbeReport } from "@hermetic/core";
-import { formatDisk, renderHistory, renderProbe, renderPs, renderStatus } from "../src/table.ts";
+import type { AgentEvent, AgentTombstone, AgentView, ProbeReport } from "@hermetic/core";
+import {
+  formatDisk,
+  renderDestroyed,
+  renderHistory,
+  renderProbe,
+  renderPs,
+  renderStatus,
+} from "../src/table.ts";
 
 function agent(overrides: Partial<AgentView> = {}): AgentView {
   return {
@@ -377,5 +384,55 @@ describe("a failed stage's log tail in `agent history`", () => {
   test("one line reads as one line", () => {
     const rendered = renderHistory([event({ log_tail: "the only thing it said" })]);
     expect(rendered).toContain("log tail (1 line) ---");
+  });
+});
+
+describe("agent destroyed · the tombstone table", () => {
+  const NOW = Date.parse("2026-09-29T12:00:00.000Z");
+  const tombstone = (over: Partial<AgentTombstone> = {}): AgentTombstone => ({
+    name: "granite",
+    fleet_id: "fxtr0001",
+    created_at: "2026-09-01T09:00:00.000Z",
+    created_by: "arn:aws:iam::123456789012:user/ops",
+    destroyed_at: "2026-09-29T09:00:00.000Z",
+    destroyed_by: "arn:aws:iam::123456789012:user/ops",
+    size: "small",
+    region: "us-west-2",
+    provider: "anthropic",
+    profile_id: "ant00001",
+    instance_id: "i-0abc",
+    volume_id: "vol-0abc",
+    volume_kept: false,
+    hermes_version: "0.21.1",
+    legacy: false,
+    ...over,
+  });
+
+  test("nothing destroyed says so", () => {
+    expect(renderDestroyed([], NOW)).toBe("no destroyed agents");
+  });
+
+  test("a row carries the age and the instant, who, when created, and the volume's fate", () => {
+    const [head, row] = renderDestroyed([tombstone()], NOW).split("\n");
+    expect(head).toMatch(/^NAME\s+DESTROYED\s+BY\s+CREATED\s+VOLUME$/);
+    expect(row).toContain("granite");
+    expect(row).toContain("3h ago · 2026-09-29T09:00:00.000Z");
+    expect(row).toContain("2026-09-01T09:00:00.000Z");
+    expect(row).toContain("vol-0abc deleted");
+    expect(row).not.toContain("legacy");
+  });
+
+  test("a kept volume, no volume, and a legacy record each read as themselves", () => {
+    const lines = renderDestroyed(
+      [
+        tombstone({ volume_kept: true }),
+        tombstone({ name: "oriole", volume_id: null }),
+        tombstone({ name: "cinder", legacy: true }),
+      ],
+      NOW,
+    ).split("\n");
+    expect(lines[1]).toContain("vol-0abc kept");
+    expect(lines[2]).toMatch(/oriole.*\s-\s*$/);
+    expect(lines[3]).toMatch(/legacy$/);
   });
 });

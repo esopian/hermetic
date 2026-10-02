@@ -60,6 +60,7 @@ export type RequestName =
   | "agents.reboot"
   | "agents.recreate"
   | "agents.history"
+  | "agents.destroyed"
   | "agents.rerun"
   | "agents.probe"
   | "agents.desktop"

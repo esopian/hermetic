@@ -4,6 +4,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  QueryCommand,
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -286,6 +287,9 @@ function wire(): void {
       },
     );
   ddb.on(ScanCommand).callsFake(() => ({ Items: [...world.items.values()] }));
+  // `create` asks the events table for the name's newest tombstone before it
+  // stamps `created_at` (§6.7); this world has never destroyed anything.
+  ddb.on(QueryCommand).resolves({ Items: [] });
 
   // ── SSM ─────────────────────────────────────────────────────────────────
   ssm.on(GetParameterCommand).callsFake((input: { Name: string }) => {

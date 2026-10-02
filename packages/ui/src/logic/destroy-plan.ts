@@ -6,7 +6,7 @@
  * part that was missing is that the ceremony has to be about one set of inputs.
  * Typing the agent's name used to arm the button on its own, so a plan request
  * that failed — or one still in flight, or the stale one still on screen while
- * a re-plan ran after the delete-volume box was ticked — left a live Destroy
+ * a re-plan ran after the keep-volume choice changed — left a live Destroy
  * over steps nobody had actually reviewed.
  *
  * The fix is to key every plan on the inputs it was made for and to refuse to
@@ -23,7 +23,7 @@ export interface DestroyInputs {
   /** `fleetIdOf(meta)`, or null before this home is bound to one. */
   fleetId: string | null;
   name: string;
-  deleteVolume: boolean;
+  keepVolume: boolean;
 }
 
 /**
@@ -32,7 +32,7 @@ export interface DestroyInputs {
  * collide with `a` + `b-c`.
  */
 export function destroyInputsKey(inputs: DestroyInputs): string {
-  return [inputs.fleetId ?? "unbound", inputs.name, inputs.deleteVolume ? "1" : "0"].join(" ");
+  return [inputs.fleetId ?? "unbound", inputs.name, inputs.keepVolume ? "1" : "0"].join(" ");
 }
 
 /**

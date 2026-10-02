@@ -446,13 +446,14 @@ export function offlineUnit(status: string): string {
 }
 
 /**
- * What a destroyed row still has, in place of the actions it cannot run. The
- * data volume is kept unless `destroy --delete-volume` took it (§6.6).
+ * What a legacy destroyed row still has, in place of the actions it cannot
+ * run. Only a row written before destroys deleted the row (§6.7) reaches here;
+ * a null `volume_id` is the volume that destroy deleted.
  */
 export function destroyedSummary(volumeId: string | null | undefined): string {
   return volumeId
-    ? `destroyed · record kept · data volume ${volumeId} retained`
-    : "destroyed · record kept · data volume deleted";
+    ? `destroyed · legacy record · data volume ${volumeId} retained`
+    : "destroyed · legacy record · data volume deleted";
 }
 
 export function statusColor(status: string): string {
@@ -891,7 +892,7 @@ export function fmtDateTime(iso: string): string {
 
 export function agentCost(a: AgentView): { monthly: string; hourly: string } {
   const spec = sizeSpec(a.size);
-  // `destroy --delete-volume` nulls `volume_id` but leaves `volume_gib` on the
+  // A destroy that deleted the volume nulls `volume_id` but leaves `volume_gib` on the
   // row as a record of what was there, so billing off the size alone would keep
   // charging for a volume AWS no longer has.
   const storage = a.volume_id ? a.volume_gib * GP3_USD_PER_GIB_MONTH : 0;

@@ -72,7 +72,6 @@ describe("agents.list / get", () => {
       "kestrel",
       "lumen",
       "marrow",
-      "oriole",
     ]);
     const byName = new Map(rows.map((r) => [r.name, r]));
     expect(byName.get("atlas")!.display_status).toBe("ready");
@@ -85,20 +84,13 @@ describe("agents.list / get", () => {
     );
     expect(byName.get("juniper")!.display_status).toBe("stopped");
     expect(byName.get("marrow")!.display_status).toBe("stopped");
-    // The tombstone: kept forever (§6.6), with its data volume and nothing else.
-    expect(byName.get("oriole")!.display_status).toBe("destroyed");
-    expect(byName.get("oriole")!.instance_id).toBeNull();
-    expect(byName.get("oriole")!.volume_id).not.toBeNull();
-    expect(byName.get("oriole")!.resources.ssm_paths).toEqual([]);
+    // `oriole` is destroyed, so it has no row (§6.7): it is a tombstone, read
+    // through `agents.destroyed` (`destroyed-read.test.ts`), never listed.
     // A stale heartbeat derives `unreachable` without anything storing it.
     expect(byName.get("lumen")!.status).toBe("ready");
     expect(byName.get("lumen")!.display_status).toBe("unreachable");
-    // Every live agent carries metrics for the UI's CPU/Mem/Disk bars; a
-    // destroyed one has none, because `destroy` nulls them.
-    for (const row of rows) {
-      if (row.display_status === "destroyed") expect(row.metrics).toBeNull();
-      else expect(row.metrics).not.toBeNull();
-    }
+    // Every listed agent carries metrics for the UI's CPU/Mem/Disk bars.
+    for (const row of rows) expect(row.metrics).not.toBeNull();
     // One region, and one agent still on an older hermes.
     expect(new Set(rows.map((r) => r.region))).toEqual(new Set([FIXTURE_CONFIG.region]));
     expect(rows.some((r) => r.hermes_version === "0.13.8")).toBe(true);
@@ -1284,7 +1276,11 @@ describe("tailnet device cleanup", () => {
     const atlas = backend.agents.get("atlas")!;
     backend.instances.delete(atlas.instance_id!);
 
-    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    // Kept: the double's volume stays attached to the vanished instance, and
+    // the tailnet step is what this test is about, not the detach wait.
+    const events = await drain(
+      hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
+    );
     const tailnet = events.filter((e) => e.phase === "tailnet");
     expect(tailnet).toHaveLength(1);
     expect(tailnet[0]!.message).toBe(
@@ -1293,7 +1289,7 @@ describe("tailnet device cleanup", () => {
     expect(tailnet[0]!.level).toBe("warn");
     expect(hostnames(backend)).toContain("fxtr0001-atlas.hermetic.ts.net");
     // Still a completed destroy: the tailnet is not what makes it one.
-    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 
   /** The fleet whose OAuth client was never re-scoped: one warning, then on. */
@@ -1358,7 +1354,7 @@ describe("tailnet device cleanup", () => {
     expect(tailnet).toHaveLength(1);
     expect(tailnet[0]!.level).toBe("warn");
     expect(tailnet[0]!.message).toContain("tailnet devices not checked");
-    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 });
 
@@ -1633,7 +1629,15 @@ describe("upgrade", () => {
   });
 
   test("--all touches every non-destroyed agent", async () => {
-    const { hermetic } = seeded();
+    const { backend, hermetic } = seeded();
+    // A legacy `destroyed` row, the shape a pre-tombstone destroy left (§6.7):
+    // the fixture seeds none, so this test makes the one it is about.
+    backend.agents.set("cinder", {
+      ...structuredClone(backend.agents.get("juniper")!),
+      name: "cinder",
+      status: "destroyed",
+      instance_id: null,
+    });
     const events = await drain(hermetic.upgrade({ all: true, hermes: "0.16.0" }));
     const rows = (await hermetic.agents.list()).filter((r) => r.status !== "destroyed");
     expect(rows.every((r) => r.hermes_version === "0.16.0")).toBe(true);
@@ -1641,7 +1645,7 @@ describe("upgrade", () => {
       expect(events.some((e) => e.phase === `${row.name}:done`)).toBe(true);
     }
     // The destroyed row is left exactly as it was — nothing to upgrade.
-    const gone = (await hermetic.agents.list()).find((r) => r.status === "destroyed")!;
+    const gone = (await backend.store.agents.get("cinder"))!;
     expect(gone.hermes_version).not.toBe("0.16.0");
     expect(events.some((e) => e.phase === `${gone.name}:done`)).toBe(false);
   });
@@ -1835,7 +1839,8 @@ describe("an op consumed to its end records no failure", () => {
 
       const history = await backend.store.events.query(name);
       expect(history.filter((e) => e.action === "failed")).toEqual([]);
-      expect((await backend.store.agents.get(name))!.lock ?? null).toBeNull();
+      // `?.`: a finished destroy has released the row, lock and all (§6.7).
+      expect((await backend.store.agents.get(name))?.lock ?? null).toBeNull();
     });
   }
 

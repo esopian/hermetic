@@ -59,11 +59,12 @@ export type PlanStep = z.infer<typeof PlanStep>;
 
 /**
  * Options the plan was produced *with*, carried as data. `apply` used to recover
- * `--delete-volume` by string-matching a step description, which made a plan's
+ * the volume decision by string-matching a step description, which made a plan's
  * prose load-bearing; this makes the decision explicit and typed.
  */
 export const PlanOptions = z.object({
-  delete_volume: z.boolean().optional(),
+  /** `plan.destroy --keep-volume`: leave the data volume behind, released from the name (§6.7). */
+  keep_volume: z.boolean().optional(),
   /** The four `teardown` flags (§9), carried so `apply` need not re-derive them. */
   purge: z.boolean().optional(),
   delete_snapshots: z.boolean().optional(),
@@ -91,7 +92,7 @@ export const PlanOptions = z.object({
   volume_id: z.string().nullable().optional(),
   /**
    * `plan.rollout`: which agents the plan was made for, and how many at a time.
-   * Carried as data for the reason `delete_volume` is — `apply` must execute the
+   * Carried as data for the reason `keep_volume` is — `apply` must execute the
    * plan the operator read, not re-derive a wider one from today's defaults. A
    * plan made for one agent must never converge twelve.
    */
@@ -99,7 +100,7 @@ export const PlanOptions = z.object({
   rollout_concurrency: z.number().int().min(1).max(8).optional(),
   /**
    * `plan.network`: the mode the fleet is being moved *to*, carried as data for
-   * the reason `delete_volume` is. `apply` must execute the change the operator
+   * the reason `keep_volume` is. `apply` must execute the change the operator
    * read — a plan reviewed as "public → nat" cannot be allowed to re-derive its
    * own target from whatever the fleet happens to be when it runs.
    */

@@ -73,6 +73,13 @@ export interface CreateLedger {
     roleData: boolean;
     /** The `Name` tag as it was, so a restore does not delete the operator's. */
     name: string | null;
+    /**
+     * The `hermetic:former_agent` tag as it was (§6.7). A volume a destroy kept
+     * carries its old name there rather than in `agent`, and the restore must
+     * put it back *there*: restoring it as `agent=<name>` would hand the disk
+     * to the next plain `create` of that name. Absent leaves the tag alone.
+     */
+    formerAgent?: string | null;
   } | null;
 }
 
@@ -440,7 +447,7 @@ export async function* rollbackCreate(
    * §1 forbids.
    */
   if (ledger.retag) {
-    const { volumeId, agent, roleData, name: nameTag } = ledger.retag;
+    const { volumeId, agent, roleData, name: nameTag, formerAgent } = ledger.retag;
     const lost = await confirmOwnership();
     if (lost !== null) {
       yield ownershipLost("volume tag restore", lost);
@@ -456,9 +463,15 @@ export async function* rollbackCreate(
           "warn",
         );
       } else {
-        await deps.compute.retagVolume(volumeId, agent, { roleData, name: nameTag });
+        await deps.compute.retagVolume(volumeId, agent, {
+          roleData,
+          name: nameTag,
+          ...(formerAgent === undefined ? {} : { formerAgent }),
+        });
         yield say(
-          `restored volume ${volumeId} to agent=${agent ?? "(none)"}, the tag it carried before this create adopted it`,
+          formerAgent
+            ? `restored volume ${volumeId} to former_agent=${formerAgent}, the tag it carried before this create adopted it`
+            : `restored volume ${volumeId} to agent=${agent ?? "(none)"}, the tag it carried before this create adopted it`,
           "warn",
         );
         undone.push("volume_tag");

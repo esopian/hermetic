@@ -46,6 +46,7 @@ import type {
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
+  FORMER_AGENT_TAG,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
   ROLE_DATA,
@@ -324,6 +325,9 @@ export class Ec2Compute implements ComputeApi {
    *   holds an agent's memory is not a decision code gets to make.
    */
   async findVolumeByTag(name: string): Promise<VolumeRef | null> {
+    // `agent=<name>` only. A kept volume a destroy released carries
+    // `hermetic:former_agent=<name>` instead (§6.7), and must stay invisible
+    // here so a later `create` of the same name starts fresh.
     const out = await this.ec2.send(
       new DescribeVolumesCommand({
         Filters: [
@@ -508,7 +512,8 @@ export class Ec2Compute implements ComputeApi {
            * The instance only. Tagging `volume` here would stamp `agent=<name>`
            * and `hermetic:managed=true` onto the *root* volume as well, and
            * `findVolumeByTag` would then be free to return it — a resume would
-           * attach the root disk and `destroy --delete-volume` could delete it.
+           * attach the root disk and `destroy`, which deletes the data volume by
+           * default (§6.7), could delete it.
            * The data volume is tagged at `CreateVolume`, where it is the only
            * thing being tagged.
            */
@@ -675,8 +680,9 @@ export class Ec2Compute implements ComputeApi {
 
   /**
    * §6.7: the same describe, refusing a disk whose tags name another agent,
-   * another fleet, or a root device. `destroy --delete-volume` deletes the id
-   * the agent row carries, and that row is writable by the box.
+   * another fleet, or a root device. `destroy` deletes the id the agent row
+   * carries by default — `--keep-volume` instead releases it under
+   * `hermetic:former_agent` (§6.7) — and that row is writable by the box.
    */
   async describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<VolumeStatus | null> {
     const found = await this.rawVolume(volumeId);
@@ -853,6 +859,7 @@ export class Ec2Compute implements ComputeApi {
           volume_id: volume.VolumeId,
           size_gib: volume.Size ?? 0,
           agent: (volume.Tags ?? []).find((t) => t.Key === AGENT_TAG)?.Value ?? null,
+          former_agent: (volume.Tags ?? []).find((t) => t.Key === FORMER_AGENT_TAG)?.Value ?? null,
           state: volume.State ?? "unknown",
         });
       }
@@ -906,6 +913,7 @@ export class Ec2Compute implements ComputeApi {
             availability_zone: volume.AvailabilityZone ?? null,
             created_at: volume.CreateTime ? volume.CreateTime.toISOString() : null,
             agent: tags[AGENT_TAG] ?? null,
+            former_agent: tags[FORMER_AGENT_TAG] ?? null,
             managed: tags[MANAGED_TAG] === MANAGED_TAG_VALUE,
             role_data: tags[ROLE_TAG] === ROLE_DATA,
             tags,
@@ -929,12 +937,14 @@ export class Ec2Compute implements ComputeApi {
    * `agent create --volume <id>` under a name the volume was not tagged with.
    * Both tags in one call: the `agent` tag is what `findVolumeByTag` reads, and
    * `role=data` is what keeps the pair unambiguous if the old name is ever
-   * reused.
+   * reused. `formerAgent` is the `hermetic:former_agent` tag a destroy that
+   * keeps the volume moves the name to (§6.7): set, removed (`null`), or left
+   * alone (absent), like `name`.
    */
   async retagVolume(
     volumeId: string,
     agent: string | null,
-    opts: { roleData?: boolean; name?: string | null } = {},
+    opts: { roleData?: boolean; name?: string | null; formerAgent?: string | null } = {},
   ): Promise<void> {
     const roleData = opts.roleData ?? true;
     /**
@@ -958,6 +968,8 @@ export class Ec2Compute implements ComputeApi {
     else set[AGENT_TAG] = agent;
     if (nameTag === null) remove.push("Name");
     else if (nameTag !== undefined) set["Name"] = nameTag;
+    if (opts.formerAgent === null) remove.push(FORMER_AGENT_TAG);
+    else if (opts.formerAgent !== undefined) set[FORMER_AGENT_TAG] = opts.formerAgent;
     if (roleData) set[ROLE_TAG] = ROLE_DATA;
     else remove.push(ROLE_TAG);
     try {

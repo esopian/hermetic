@@ -323,13 +323,13 @@ describe("apply", () => {
     );
   });
 
-  test("reads delete_volume from the plan's typed options, not its prose", async () => {
+  test("reads keep_volume from the plan's typed options, not its prose", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     // The flag, beside the row the plan was computed against (`apply` refuses a
     // plan whose agent has moved since).
-    expect(plan.options).toMatchObject({ delete_volume: true });
+    expect(plan.options).toMatchObject({ keep_volume: false });
 
     // Rewriting every human-readable step must not change what apply does.
     const disguised = {

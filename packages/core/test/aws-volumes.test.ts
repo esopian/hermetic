@@ -78,6 +78,9 @@ describe("findVolumeByTag", () => {
       // return (§5).
       "tag:hermetic:fleet_id",
     ]);
+    // §6.7: selection is on `agent=` alone; `hermetic:former_agent` is never a
+    // way to find a volume by name.
+    expect(query!.Filters.map((f) => f.Name)).not.toContain("tag:hermetic:former_agent");
   });
 
   test("labels an adopted volume so the next lookup and the DLM policy see it", async () => {
@@ -232,6 +235,40 @@ describe("retagVolume", () => {
 
     const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
     expect(removed!.Tags.map((t) => t.Key).sort()).toEqual(["agent", "hermetic:role"]);
+  });
+
+  /** §6.7: the release moves the name from `agent` to `hermetic:former_agent`. */
+  test("a release removes the agent tag and sets former_agent, keeping role and Name", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", null, { formerAgent: "atlas" });
+
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags).toContainEqual({ Key: "hermetic:former_agent", Value: "atlas" });
+    expect(set!.Tags).toContainEqual(DATA_TAG);
+    expect(set!.Tags.map((t) => t.Key)).not.toContain("agent");
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
+    // The display Name is not touched: absent `name` leaves it alone.
+    expect(removed!.Tags.map((t) => t.Key)).toEqual(["agent"]);
+  });
+
+  test("an adoption with formerAgent null removes the former_agent tag", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", "bravo", { formerAgent: null });
+
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags).toContainEqual({ Key: "agent", Value: "bravo" });
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
+    expect(removed!.Tags.map((t) => t.Key)).toEqual(["hermetic:former_agent"]);
+  });
+
+  test("an absent formerAgent leaves the tag alone", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", "bravo");
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags.map((t) => t.Key)).not.toContain("hermetic:former_agent");
+    expect(callCount(ec2, DeleteTagsCommand)).toBe(0);
   });
 
   test("a volume that carried no Name before has none put back", async () => {

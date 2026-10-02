@@ -136,9 +136,7 @@ describe("destroy refuses a resource the row does not own", () => {
     await poison(backend, "granite", { volume_id: foreign });
     backend.resetMutations();
 
-    const code = await codeOf(
-      drain(hermetic.agents.destroy({ name: "granite", yes: true, delete_volume: true })),
-    );
+    const code = await codeOf(drain(hermetic.agents.destroy({ name: "granite", yes: true })));
 
     expect(code).toBe("RESOURCE_NOT_OWNED");
     expect(backend.volumes.has(foreign)).toBe(true);
@@ -163,9 +161,7 @@ describe("destroy refuses a resource the row does not own", () => {
     });
     await poison(backend, "granite", { volume_id: root });
 
-    const code = await codeOf(
-      drain(hermetic.agents.destroy({ name: "granite", yes: true, delete_volume: true })),
-    );
+    const code = await codeOf(drain(hermetic.agents.destroy({ name: "granite", yes: true })));
 
     expect(code).toBe("RESOURCE_NOT_OWNED");
     expect(backend.volumes.has(root)).toBe(true);
@@ -175,8 +171,8 @@ describe("destroy refuses a resource the row does not own", () => {
   test("an untampered row still destroys", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("corvid"))!.resources.volume_id!;
-    await drain(hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true }));
-    expect((await backend.store.agents.get("corvid"))!.status).toBe("destroyed");
+    await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
+    expect(await backend.store.agents.get("corvid")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(false);
   });
 });

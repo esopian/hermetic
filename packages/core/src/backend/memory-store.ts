@@ -3,8 +3,8 @@
  * `memory.ts` (AGENTS.md rule 5). Reads and writes the backend's own maps and
  * records every mutation through it, exactly as the in-class literal did.
  */
-import type { Agent, AgentEvent, FleetItem, FleetSettings } from "../schema/index.ts";
-import { FLEET_KEY } from "../schema/index.ts";
+import type { Agent, AgentEvent, AgentTombstone, FleetItem, FleetSettings } from "../schema/index.ts";
+import { FLEET_KEY, tombstoneSortKey } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import type {
   AgentPatch,
@@ -77,8 +77,18 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
        * `doctor` reports it.
        */
       unparseable: (): string[] => [...b.unparseableRows],
-      delete: async (name: string): Promise<void> => {
+      /** As the real store: conditional on `expectedVersion` when given, a no-op when gone. */
+      delete: async (name: string, opts?: { expectedVersion: number }): Promise<void> => {
         b.record("store.agents.delete");
+        const current = b.agents.get(name);
+        if (!current) return;
+        if (opts !== undefined && current.version !== opts.expectedVersion) {
+          throw new HermeticError(
+            "CONFLICT",
+            `agent ${name} changed underneath this operation (expected version ${opts.expectedVersion}, found ${current.version}); the record was not deleted`,
+            { name, expected: opts.expectedVersion, actual: current.version },
+          );
+        }
         b.agents.delete(name);
       },
     },
@@ -92,6 +102,20 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
           .filter((e) => e.name === name)
           .sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0));
         return structuredClone(limit === undefined ? rows : rows.slice(0, limit));
+      },
+      appendTombstone: async (tombstone: AgentTombstone): Promise<void> => {
+        b.record("store.events.appendTombstone");
+        b.tombstones.set(
+          tombstoneSortKey(tombstone.destroyed_at, tombstone.name),
+          structuredClone({ ...tombstone, legacy: false }),
+        );
+      },
+      queryTombstones: async (opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> => {
+        const rows = [...b.tombstones.entries()]
+          .sort(([a], [c]) => (a < c ? 1 : a > c ? -1 : 0))
+          .map(([, t]) => t)
+          .filter((t) => opts?.name === undefined || t.name === opts.name);
+        return structuredClone(opts?.limit === undefined ? rows : rows.slice(0, opts.limit));
       },
     },
     fleet: {

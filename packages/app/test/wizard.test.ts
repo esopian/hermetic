@@ -343,7 +343,7 @@ describe("step 3: init itself", () => {
     expect(meta.config?.region).toBe("eu-west-1");
 
     // Same context, same handlers, no restart.
-    expect(((await dispatch(ctx, "agents.list", {})) as unknown[]).length).toBe(12);
+    expect(((await dispatch(ctx, "agents.list", {})) as unknown[]).length).toBe(11);
 
     // And the poller the uninitialized head had no fleet for is running.
     expect(state.poller).not.toBeNull();
