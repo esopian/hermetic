@@ -4,7 +4,15 @@
  * agent gets. Final file content, no templating — see `render.ts`.
  */
 import type { AptSource, SecretsMode } from "../schema/index.ts";
-import { APT_LOCK_TIMEOUT_SECONDS, HERMES_DASHBOARD_PORT, HERMES_PROXY_PORT } from "../schema/index.ts";
+import {
+  APT_LOCK_TIMEOUT_SECONDS,
+  HERMES_ACCOUNT,
+  HERMES_AGENT_VENV,
+  HERMES_DASHBOARD_PORT,
+  HERMES_LAZY_TARGET,
+  HERMES_PROXY_PORT,
+  HERMES_USER_PREFIX,
+} from "../schema/index.ts";
 import { BROWSER_PACKAGES } from "./render-browser.ts";
 import type { RenderInput } from "./render.ts";
 
@@ -352,6 +360,53 @@ export function sudoersGrant(): string {
     "# instance is (§7.1). The account is already root-equivalent via the docker group.",
     'Defaults:hermes env_keep += "DEBIAN_FRONTEND"',
     "hermes ALL=(ALL:ALL) NOPASSWD: ALL",
+    "",
+  ].join("\n");
+}
+
+/** Where `agentProfile` lands: sourced by `/etc/profile` for every login shell. */
+export const AGENT_PROFILE_PATH = "/etc/profile.d/hermetic-agent.sh";
+
+/**
+ * The `hermes` account's install locations, for every login shell it gets.
+ *
+ * Two kinds of shell need them and neither inherits the Hermes units'
+ * environment the same way. Hermes's terminal tool runs commands under
+ * `bash -l -c`, from whichever unit is serving the conversation, and it strips
+ * `VIRTUAL_ENV` from what it passes down (`local_env_policy.py:184`) — so the
+ * agent's own venv has to be re-established *after* that, which is what a
+ * profile script is for. And an operator's `sudo -iu hermes` gets no unit
+ * environment at all, so without the lazy-install lines a `hermes` command run
+ * by hand would try to install into the root-owned venv and fail.
+ *
+ * `HERMES_AGENT_VENV` goes first on `PATH`, ahead of the Hermes venv the
+ * gateway unit puts on it: `python3`, `pip` and `uv pip` then all mean the
+ * agent's own, writable environment, in a gateway shell and a dashboard shell
+ * alike — which also ends the split where one served Hermes's 3.11 and the
+ * other Ubuntu's externally-managed 3.12. The skeleton `~/.profile` runs after
+ * this and prepends `~/.local/bin`, so `npm install -g`, `uv tool install` and
+ * `pip install --user` binaries win over both. Only when the venv exists, so a
+ * box whose venv could not be built still gets a working `PATH`.
+ */
+export function agentProfile(): string {
+  const bin = `${HERMES_AGENT_VENV}/bin`;
+  return [
+    "# Rendered by hermetic. Final file, no templating.",
+    "# The hermes account's own install locations, for every login shell it gets:",
+    "# Hermes's terminal tool (bash -l) and an operator's `sudo -iu hermes`.",
+    `if [ "$(id -un 2>/dev/null)" = "${HERMES_ACCOUNT}" ]; then`,
+    "  export HERMES_DISABLE_LAZY_INSTALLS=1",
+    `  export HERMES_LAZY_INSTALL_TARGET=${HERMES_LAZY_TARGET}`,
+    `  export NPM_CONFIG_PREFIX=${HERMES_USER_PREFIX}`,
+    `  if [ -x ${bin}/python ]; then`,
+    `    export VIRTUAL_ENV=${HERMES_AGENT_VENV}`,
+    '    case ":$PATH:" in',
+    `      *":${bin}:"*) ;;`,
+    `      *) PATH="${bin}:$PATH" ;;`,
+    "    esac",
+    "    export PATH",
+    "  fi",
+    "fi",
     "",
   ].join("\n");
 }

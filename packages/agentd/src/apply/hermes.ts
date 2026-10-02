@@ -58,6 +58,16 @@ const HERMES_VENV_DIR = `${HERMES_INSTALL_DIR}/venv`;
  */
 const HERMES_REF_MARKER = `${HERMES_INSTALL_DIR}/.hermetic-ref`;
 /**
+ * The editable-install spec — extras included — that the venv was last built
+ * with. The ref marker alone cannot answer "is the dependency set right": a
+ * provider switch, or a hermeticd that installs an extra the previous one did
+ * not, leaves the ref and the version exactly where they were while the venv
+ * is missing a package. A box whose spec differs takes the full install path
+ * again; on an unchanged ref the fetch and checkout are no-ops and the
+ * `uv pip install` adds what is missing.
+ */
+const HERMES_EXTRAS_MARKER = `${HERMES_INSTALL_DIR}/.hermetic-extras`;
+/**
  * Which Hermes units `ensureHermes` stops before it begins rewriting the venv
  * is recorded as a *restart obligation* (`apply-pending.ts`), written before
  * the first `systemctl stop` and discharged only once the units phase has
@@ -118,6 +128,19 @@ const UV_INSTALL_SCRIPT =
   "env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh";
 
 /**
+ * Extras every box installs, whatever its provider.
+ *
+ * `messaging` is the gateway's platform adapters — Slack, Telegram, Discord —
+ * which upstream's `all` deliberately leaves out. On-demand installs could
+ * fetch them (`HERMES_LAZY_INSTALL_TARGET`, `render-units.ts`), but a
+ * messaging platform is the one feature that has to be there *before* the
+ * gateway starts: installed at build time, a token saved on the dashboard's
+ * Channels page connects on the next restart, with nothing fetched from PyPI
+ * at the moment an operator is waiting on it.
+ */
+export const BASE_EXTRAS: readonly string[] = ["all", "messaging"];
+
+/**
  * Which upstream extra carries a provider's SDK. `all` pulls in `web`, which
  * `hermes serve` needs, but deliberately does *not* pull in provider extras.
  * The OpenAI-compatible providers need none: Hermes reaches them over the
@@ -135,10 +158,11 @@ export const PROVIDER_EXTRAS: Readonly<Record<Provider, string | null>> = {
   vercel: null,
 };
 
-/** `-e "/usr/local/lib/hermes-agent[all,bedrock]"` — pip's extras syntax for a path. */
-function editableSpec(provider: Provider): string {
+/** `-e "/usr/local/lib/hermes-agent[all,messaging,bedrock]"` — pip's extras syntax for a path. */
+export function editableSpec(provider: Provider): string {
   const extra = PROVIDER_EXTRAS[provider];
-  return `${HERMES_INSTALL_DIR}[${extra === null ? "all" : `all,${extra}`}]`;
+  const extras = extra === null ? BASE_EXTRAS : [...BASE_EXTRAS, extra];
+  return `${HERMES_INSTALL_DIR}[${extras.join(",")}]`;
 }
 
 /**
@@ -194,18 +218,30 @@ export async function ensureHermes(
   const { host } = opts;
   const { hermes_ref: ref, hermes_version: version } = manifest;
 
+  const spec = editableSpec(manifest.provider);
   const marker = parseRefMarker(await host.readFile(HERMES_REF_MARKER));
   const haveBin = (await host.stat(HERMES_BIN)) !== null;
+  let pinned = false;
   if (marker?.ref === ref && haveBin) {
     const reported = await host.exec([HERMES_BIN, "--version"]);
-    if (reported.code === 0 && reportsHermesVersion(reported.stdout, version)) {
+    pinned = reported.code === 0 && reportsHermesVersion(reported.stdout, version);
+  }
+  if (pinned) {
+    if ((await host.readFile(HERMES_EXTRAS_MARKER))?.trim() === spec) {
       emit(opEvent("packages", 0.3, `hermes ${version} (${ref}) already pinned`, host.now()));
       return false;
     }
+    emit(
+      opEvent(
+        "packages",
+        0.3,
+        `hermes ${version} (${ref}) is missing extras; reinstalling ${spec}`,
+        host.now(),
+      ),
+    );
+  } else {
+    emit(opEvent("packages", 0.3, `installing hermes ${version} from ${ref}`, host.now()));
   }
-
-  const spec = editableSpec(manifest.provider);
-  emit(opEvent("packages", 0.3, `installing hermes ${version} from ${ref}`, host.now()));
 
   if (!dry) {
     // 0. Every Hermes unit runs out of the venv and the checkout this is about
@@ -378,6 +414,7 @@ export async function ensureHermes(
     // `git log` on the box names a commit upstream never made. A direct clone
     // writes one line, and so did every hermeticd before this.
     await host.writeFile(HERMES_REF_MARKER, formatRefMarker(ref, bundle?.upstreamSha ?? null), "0644");
+    await host.writeFile(HERMES_EXTRAS_MARKER, `${spec}\n`, "0644");
   }
 
   result.installed.push(`hermes-agent@${ref}`);

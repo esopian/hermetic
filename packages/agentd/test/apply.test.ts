@@ -265,6 +265,13 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
      */
     expect(installs[homeAt]).toBe(`install -d -m 0750 -o hermes -g hermes ${HERMES_ACCOUNT_HOME}`);
     expect(installs[rootAt]).toBe(`runuser -u hermes -- install -d -m 0750 ${HERMES_HOME}`);
+    // The account's own install prefix, `bin/` included so the skeleton
+    // `~/.profile` puts it on `PATH` from the first login shell. As the account.
+    expect(installs).toContain("runuser -u hermes -- install -d -m 0755 /data/hermes/.local/bin");
+    // Upstream's on-demand install target, made by the account like the rest.
+    expect(installs).toContain(
+      "runuser -u hermes -- install -d -m 0755 /data/hermes/.hermes/lazy-packages",
+    );
 
     expect(
       ranInOrder(host, [new RegExp(`^install -d .* ${HERMES_ACCOUNT_HOME}$`), /^systemctl restart /]),
@@ -786,7 +793,14 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
     expect(env?.mode).toBe("0600");
     expect(env?.content).toContain("ANTHROPIC_API_KEY=sk-fixture");
     expect(SECRETS_ENV_PATH.startsWith("/run/")).toBe(true);
-    expect([...host.files.keys()].some((p) => p.startsWith("/data"))).toBe(false);
+    // The data volume does carry files now — the agent's own venv — but none
+    // of them holds a secret.
+    expect(
+      [...host.files].some(
+        ([p, f]) =>
+          p.startsWith("/data") && (f.content.includes("sk-fixture") || f.content.includes("0.token")),
+      ),
+    ).toBe(false);
     expect(result.changed).toContain(SECRETS_ENV_PATH);
 
     // The token reaches bws through the environment, never through argv.
@@ -1149,7 +1163,7 @@ describe("hermes from the pinned upstream ref", () => {
       "/bin/sh -c curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh",
       "git clone --depth 1 --branch v2026.8.31 https://github.com/NousResearch/hermes-agent.git /usr/local/lib/hermes-agent",
       "uv venv --python 3.11 /usr/local/lib/hermes-agent/venv",
-      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,bedrock]",
+      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "ln -sfn /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/bin/hermes",
       "/usr/local/bin/hermes --version",
       // The checkout stays root's and the units run as `hermes`, which since
@@ -1201,13 +1215,13 @@ describe("hermes from the pinned upstream ref", () => {
   test("an OpenAI-compatible provider gets `[all]` and no provider extra", async () => {
     await apply(makeManifest({ provider: "openrouter" }), { host, providerKey: "FIXTURE" });
     const install = host.commands.find((c) => c.startsWith("uv pip install")) ?? "";
-    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all]");
+    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all,messaging]");
   });
 
   test("anthropic gets its own extra alongside `all`", async () => {
     await apply(makeManifest({ provider: "anthropic" }), { host, providerKey: "FIXTURE" });
     const install = host.commands.find((c) => c.startsWith("uv pip install")) ?? "";
-    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all,anthropic]");
+    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all,messaging,anthropic]");
   });
 
   test("an already-pinned checkout re-clones nothing and rewrites nothing", async () => {
@@ -1235,6 +1249,34 @@ describe("hermes from the pinned upstream ref", () => {
     expect(result.changed).toEqual([]);
   });
 
+  test("a pinned checkout built without the messaging extra reinstalls it", async () => {
+    // A box installed by a hermeticd that predates `messaging`: the ref and the
+    // version match, but nothing records which extras the venv carries.
+    const manifest = makeManifest();
+    await apply(manifest, { host });
+    await host.remove("/usr/local/lib/hermes-agent/.hermetic-extras");
+
+    host.commands.length = 0;
+    const result = await apply(manifest, { host });
+
+    const install = host.commands.find((c) => c.startsWith("uv pip install")) ?? "";
+    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all,messaging,bedrock]");
+    expect(host.files.get("/usr/local/lib/hermes-agent/.hermetic-extras")?.content).toBe(
+      "/usr/local/lib/hermes-agent[all,messaging,bedrock]\n",
+    );
+    expect(result.installed).toEqual(["hermes-agent@v2026.8.31"]);
+  });
+
+  test("a provider switch on a pinned checkout installs the new provider's extra", async () => {
+    await apply(makeManifest({ provider: "openrouter" }), { host, providerKey: "FIXTURE" });
+
+    host.commands.length = 0;
+    await apply(makeManifest({ provider: "anthropic" }), { host, providerKey: "FIXTURE" });
+
+    const install = host.commands.find((c) => c.startsWith("uv pip install")) ?? "";
+    expect(install).toEndWith("-e /usr/local/lib/hermes-agent[all,messaging,anthropic]");
+  });
+
   test("a ref that does not report the pinned version fails the apply", async () => {
     // The tag exists and checks out; its pyproject just says something else.
     host.hermesVersionByRef.set("v2026.7.1", "0.20.0");
@@ -1260,7 +1302,7 @@ describe("hermes from the pinned upstream ref", () => {
       "git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
       "git -C /usr/local/lib/hermes-agent checkout --detach FETCH_HEAD",
       // The venv survives the upgrade; only the editable install re-runs.
-      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,bedrock]",
+      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "ln -sfn /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/bin/hermes",
       "/usr/local/bin/hermes --version",
       "git config --system --get-all safe.directory",
@@ -1337,7 +1379,7 @@ describe("hermes from the pinned upstream ref", () => {
       "systemctl stop hermes-gateway.service",
       "git -C /usr/local/lib/hermes-agent fetch --depth 1 https://github.com/NousResearch/hermes-agent.git v2026.9.9",
       "git -C /usr/local/lib/hermes-agent checkout --detach FETCH_HEAD",
-      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,bedrock]",
+      "uv pip install --python /usr/local/lib/hermes-agent/venv/bin/python -e /usr/local/lib/hermes-agent[all,messaging,bedrock]",
       "git config --system --get-all safe.directory",
       "git -C /usr/local/lib/hermes-agent rev-parse --is-shallow-repository",
       "git -C /usr/local/lib/hermes-agent rev-parse HEAD",
@@ -1964,7 +2006,7 @@ describe("the hermes web ui and the node that builds it", () => {
     expect(nodeCommands()).toEqual([
       `curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 -o /usr/local/lib/nodejs/${TARBALL} ${DIST}/${TARBALL}`,
       `curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 -o /usr/local/lib/nodejs/SHASUMS256.txt ${DIST}/SHASUMS256.txt`,
-      `timeout 300 tar -xJf /usr/local/lib/nodejs/${TARBALL} -C /usr/local/lib/nodejs`,
+      `timeout 300 tar --no-same-owner -xJf /usr/local/lib/nodejs/${TARBALL} -C /usr/local/lib/nodejs`,
       `ln -sfn ${NODE_DIR}/bin/node /usr/local/bin/node`,
       `ln -sfn ${NODE_DIR}/bin/npm /usr/local/bin/npm`,
       `ln -sfn ${NODE_DIR}/bin/npx /usr/local/bin/npx`,
@@ -1993,7 +2035,7 @@ describe("the hermes web ui and the node that builds it", () => {
     expect(nodeCommands()).toEqual([
       `curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 -o /usr/local/lib/nodejs/${TARBALL} ${DIST}/${TARBALL}`,
       `curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 -o /usr/local/lib/nodejs/SHASUMS256.txt ${DIST}/SHASUMS256.txt`,
-      `timeout 300 tar -xJf /usr/local/lib/nodejs/${TARBALL} -C /usr/local/lib/nodejs`,
+      `timeout 300 tar --no-same-owner -xJf /usr/local/lib/nodejs/${TARBALL} -C /usr/local/lib/nodejs`,
       `ln -sfn ${NODE_DIR}/bin/node /usr/local/bin/node`,
       `ln -sfn ${NODE_DIR}/bin/npm /usr/local/bin/npm`,
       `ln -sfn ${NODE_DIR}/bin/npx /usr/local/bin/npx`,
@@ -2765,7 +2807,10 @@ describe("the pinned Chrome a browser agent runs", () => {
 
     await apply(makeManifest(), { host, getObject: host.getObject });
 
-    expectNotRan(host, /install -d .*\/data\/hermes\/browser/);
+    // A string test, not an unanchored `.*` regex over every recorded command.
+    expect(
+      host.commands.some((c) => c.includes("install -d ") && c.endsWith(" /data/hermes/browser")),
+    ).toBe(false);
   });
 
   /**
@@ -2932,5 +2977,60 @@ describe("the superseded single-instance browser units", () => {
     }
     expect(events.filter((e) => e.message.startsWith("removing "))).toEqual([]);
     expectNotRan(host, /^systemctl disable/);
+  });
+});
+
+/**
+ * The agent's own Python (`HERMES_AGENT_VENV`): Ubuntu's python3 is
+ * externally-managed with no pip and the Hermes venv is root's, so without
+ * this a `pip install` has nowhere to go.
+ */
+describe("the agent's own install trees", () => {
+  let host: FakeHost;
+
+  beforeEach(() => {
+    host = new FakeHost();
+    resetAptIndexState();
+  });
+
+  test("the venv is built once, as the account, with the account's HOME", async () => {
+    const envs: Record<string, string>[] = [];
+    host.execFaults.push((argv, opts) => {
+      if (argv.includes("venv") && argv.includes("/data/hermes/.venv"))
+        envs.push({ ...(opts?.env ?? {}) });
+      return null;
+    });
+    await apply(makeManifest(), { host });
+
+    expect(
+      host.commands.filter((c) => c.includes("uv venv ") && c.endsWith(" /data/hermes/.venv")),
+    ).toEqual([
+      "runuser -u hermes -- uv venv --no-config --seed --python /usr/bin/python3 /data/hermes/.venv",
+    ]);
+    // `runuser` keeps root's HOME, and uv's cache would land in /root.
+    expect(envs).toEqual([{ HOME: "/data/hermes" }]);
+
+    host.commands.length = 0;
+    await apply(makeManifest(), { host });
+    expect(host.commands.some((c) => c.includes("uv venv ") && c.endsWith(" /data/hermes/.venv"))).toBe(
+      false,
+    );
+  });
+
+  test("a venv uv could not build warns and leaves the apply standing", async () => {
+    host.when(/uv venv --no-config --seed /, { code: 2, stderr: "error: Failed to fetch pip" });
+    const { emit, events } = collector();
+
+    await apply(makeManifest(), { host, emit });
+
+    const warn = events.find((e) => e.level === "warn" && e.message.includes("/data/hermes/.venv"));
+    expect(warn?.message).toContain("Failed to fetch pip");
+  });
+
+  test("the ownership pass also heals the account's install trees", async () => {
+    await apply(makeManifest(), { host });
+    const chowns = host.commandsMatching(/^chown -R -h hermes:hermes /);
+    expect(chowns).toContain("chown -R -h hermes:hermes /data/hermes/.local");
+    expect(chowns).toContain("chown -R -h hermes:hermes /data/hermes/.hermes");
   });
 });
