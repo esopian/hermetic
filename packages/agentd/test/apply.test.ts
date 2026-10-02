@@ -2807,7 +2807,10 @@ describe("the pinned Chrome a browser agent runs", () => {
 
     await apply(makeManifest(), { host, getObject: host.getObject });
 
-    expectNotRan(host, /install -d .*\/data\/hermes\/browser/);
+    // A string test, not an unanchored `.*` regex over every recorded command.
+    expect(
+      host.commands.some((c) => c.includes("install -d ") && c.endsWith(" /data/hermes/browser")),
+    ).toBe(false);
   });
 
   /**
@@ -2999,7 +3002,9 @@ describe("the agent's own install trees", () => {
     });
     await apply(makeManifest(), { host });
 
-    expect(host.commandsMatching(/uv venv .*\/data\/hermes\/\.venv/)).toEqual([
+    expect(
+      host.commands.filter((c) => c.includes("uv venv ") && c.endsWith(" /data/hermes/.venv")),
+    ).toEqual([
       "runuser -u hermes -- uv venv --no-config --seed --python /usr/bin/python3 /data/hermes/.venv",
     ]);
     // `runuser` keeps root's HOME, and uv's cache would land in /root.
@@ -3007,11 +3012,13 @@ describe("the agent's own install trees", () => {
 
     host.commands.length = 0;
     await apply(makeManifest(), { host });
-    expectNotRan(host, /uv venv .*\/data\/hermes\/\.venv/);
+    expect(host.commands.some((c) => c.includes("uv venv ") && c.endsWith(" /data/hermes/.venv"))).toBe(
+      false,
+    );
   });
 
   test("a venv uv could not build warns and leaves the apply standing", async () => {
-    host.when(/uv venv .*--seed/, { code: 2, stderr: "error: Failed to fetch pip" });
+    host.when(/uv venv --no-config --seed /, { code: 2, stderr: "error: Failed to fetch pip" });
     const { emit, events } = collector();
 
     await apply(makeManifest(), { host, emit });
