@@ -46,7 +46,8 @@ export function useDestroyFlow({
   const [planState, setPlanState] = useState<DestroyPlanState>({ status: "idle" });
   /** Bumped to re-read a plan for unchanged inputs: the retry after a failed read. */
   const [replan, setReplan] = useState(0);
-  const [deleteVolume, setDeleteVolume] = useState(false);
+  /** §6.7: a destroy deletes the data volume unless the operator keeps it. */
+  const [keepVolume, setKeepVolume] = useState(false);
   const [typed, setTyped] = useState("");
 
   /**
@@ -64,10 +65,10 @@ export function useDestroyFlow({
       setPlanState({ status: "idle" });
       return;
     }
-    const inputs = destroyInputsKey({ fleetId, name, deleteVolume });
+    const inputs = destroyInputsKey({ fleetId, name, keepVolume });
     let alive = true;
     setPlanState({ status: "planning", inputs });
-    planDestroy(name, deleteVolume)
+    planDestroy(name, keepVolume)
       .then((p) => {
         if (alive) setPlanState({ status: "planned", inputs, plan: p });
       })
@@ -83,20 +84,20 @@ export function useDestroyFlow({
     return () => {
       alive = false;
     };
-  }, [confirmOpen, fleetId, name, deleteVolume, replan]);
+  }, [confirmOpen, fleetId, name, keepVolume, replan]);
 
   /**
    * The typed name is a confirmation *of the plan on screen*, so it does not
-   * survive the plan it confirmed. Without this, ticking "delete data volume"
+   * survive the plan it confirmed. Without this, choosing "keep volume"
    * with the name already typed would leave the button armed across the gap
    * where the replacement plan is still being read.
    */
   useEffect(() => {
     setTyped("");
-  }, [fleetId, name, deleteVolume, confirmOpen]);
+  }, [fleetId, name, keepVolume, confirmOpen]);
 
   /** The inputs this render is about, and the plan (if any) that belongs to them. */
-  const destroyKey = destroyInputsKey({ fleetId, name, deleteVolume });
+  const destroyKey = destroyInputsKey({ fleetId, name, keepVolume });
   const plan = shownPlan(planState, destroyKey);
   const planError = shownPlanError(planState, destroyKey);
   const armed = armedPlan(planState, destroyKey, confirmMatches(typed, name), busy);
@@ -147,8 +148,8 @@ export function useDestroyFlow({
     plan,
     planError,
     armed,
-    deleteVolume,
-    setDeleteVolume,
+    keepVolume,
+    setKeepVolume,
     typed,
     setTyped,
     retryPlan,

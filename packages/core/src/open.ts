@@ -681,7 +681,7 @@ function notInitializedBackend(): Backend {
     identity: group("identity", ["callerIdentity", "accountAlias", "orgId"]),
     store: {
       agents: group("store.agents", ["get", "putIfAbsent", "update", "scan", "delete"]),
-      events: group("store.events", ["append", "query"]),
+      events: group("store.events", ["append", "query", "appendTombstone", "queryTombstones"]),
       fleet: group("store.fleet", [
         "get",
         "put",

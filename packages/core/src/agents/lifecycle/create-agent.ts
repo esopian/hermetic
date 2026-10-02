@@ -42,6 +42,7 @@ import { sharedSecretPath } from "../../backend/constants.ts";
 import type { OpOptions } from "../../hermetic.ts";
 import type { LifecycleDeps } from "../lifecycle.ts";
 import { createVolumeAdoption } from "./adopt-volume.ts";
+import { createReleaseName, strictlyAfter, type ReleaseResult } from "./release-name.ts";
 import { createRecordedInstance } from "./recorded-instance.ts";
 import type { ReleaseLookup } from "./release.ts";
 
@@ -74,6 +75,80 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
   const { currentRelease, userDataFor } = release;
   const { resolveAdopted, reconfirmAdopted } = createVolumeAdoption({ backend, volumeClaims });
   const { recordedInstance } = createRecordedInstance(deps.ctx);
+  const { releaseName, predecessorFloor } = createReleaseName({
+    ctx: deps.ctx,
+    purgeLocal: deps.purgeLocal,
+  });
+
+  /**
+   * §6.7: a `destroyed` row is a legacy one — destroys before tombstones kept
+   * the row, and with it the name, forever. A create of that name releases it
+   * exactly as today's destroy ends (tombstone written, row deleted, a kept
+   * volume retagged `former_agent`) and then claims the name afresh. It takes
+   * the row's lock like any other write, so a second operator releasing or
+   * creating the same name at the same moment is refused, not raced.
+   *
+   * `null` means the row was already gone when the lock was taken: another
+   * operator's release (a destroy, or a create over the same legacy row) got
+   * there first, so the name is free and the caller goes on to claim it.
+   */
+  async function releaseLegacyRow(
+    existing: Agent,
+    owner: string,
+    who: string,
+    signal: AbortSignal | undefined,
+  ): Promise<ReleaseResult | null> {
+    if (lockHeldByOther(existing, owner)) {
+      throw new HermeticError(
+        "NAME_TAKEN",
+        `agent ${existing.name} is being released right now by ${existing.lock?.owner ?? "another operator"}`,
+        {
+          name: existing.name,
+          owner: existing.lock?.owner ?? null,
+          expires: existing.lock?.expires ?? null,
+        },
+      );
+    }
+    let locked: Agent;
+    try {
+      locked = await acquireLock(existing, owner);
+    } catch (e) {
+      /**
+       * The row went between the read and the lock: somebody else released
+       * it, and nothing holds the name any more. Not contention — the fresh
+       * claim that follows is what decides who gets the name, and it loses
+       * safely to whoever might already have claimed it.
+       */
+      if (hasCode(e, "NOT_FOUND")) return null;
+      /**
+       * The row moved between the read and the lock: another operator is
+       * releasing or re-creating this name right now. That is contention for
+       * the name, which is what `NAME_TAKEN` with the lock details says — a
+       * bare CONFLICT would read as a fault.
+       */
+      if (!hasCode(e, "CONFLICT")) throw e;
+      const latest = await backend.store.agents.get(existing.name).catch(() => null);
+      throw new HermeticError(
+        "NAME_TAKEN",
+        `agent ${existing.name} changed while this create was releasing it; another operator is working on the name`,
+        {
+          name: existing.name,
+          owner: latest?.lock?.owner ?? null,
+          expires: latest?.lock?.expires ?? null,
+        },
+      );
+    }
+    try {
+      return await releaseName(locked, {
+        volumeKept: (locked.resources.volume_id ?? locked.volume_id ?? null) !== null,
+        actor: who,
+        signal,
+      });
+    } catch (e) {
+      await unwind(existing.name, "create", owner, e);
+      throw e;
+    }
+  }
 
   /**
    * The four SSM calls and two path rules `profile-binding.ts` needs, gathered
@@ -135,18 +210,19 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     await assertFleetUnlocked(name);
     await assertSealed("create an agent");
 
+    const who = await actor();
+    const owner = `${who}#${randomUUID()}`;
     /**
      * §6.2 step 6, the `--volume` branch: resolve and validate the volume the
      * operator named *before* the row is claimed, so a bad id costs nothing —
      * no name taken, no SSM slot, no key minted. Every refusal here is a case
      * where attaching would be a guess about whose memory this is (§1).
      */
-    const adopted =
+    let adopted =
       parsed.volume_id === undefined
         ? null
         : await resolveAdopted(parsed.volume_id, name, fleet.fleet_id);
 
-    const owner = `${await actor()}#${randomUUID()}`;
     /**
      * §4.6: the fleet's shared settings are where a create's defaults come from —
      * one read, from the item `guardFleet` already returned, and `settings.defaults`
@@ -233,7 +309,52 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     const drift = releaseDrift(release, { version: hermeticdVersion, build: localBuild() });
     if (drift) yield say("validate", 0.02, drift, nowIso(), "warn");
 
-    const fresh: Agent = {
+    /**
+     * §6.7: a legacy `destroyed` row on the name is released before the claim.
+     * The release cannot be undone, so it comes after every refusal a create
+     * can make without a row — a bad `--volume`, an unusable profile, a fleet
+     * that cannot run a browser, no release to boot — and costs nothing when
+     * one of them was going to stop this create anyway.
+     *
+     * It moves a kept volume from `agent=<name>` to `former_agent=<name>`, so
+     * a `--volume` resolved above is resolved once more afterwards: the
+     * adoption decides its retag from the disk's tags as they are now.
+     */
+    const legacy = await backend.store.agents.get(name);
+    /** The predecessor's `destroyed_at`, which this life must start after. */
+    let floor: string | null = null;
+    if (legacy?.status === "destroyed") {
+      await assertProfileUsable(bindingPorts, profile);
+      const released = await releaseLegacyRow(legacy, owner, who, opts.signal);
+      if (released) {
+        floor = released.tombstone.destroyed_at;
+        yield say(
+          "claim",
+          0.03,
+          `released ${name}, destroyed before tombstones existed${
+            released.volume === "released"
+              ? `; its volume ${released.tombstone.volume_id} is tagged former_agent=${name}`
+              : ""
+          }`,
+          nowIso(),
+          "warn",
+        );
+      }
+      if (adopted) adopted = await resolveAdopted(adopted.volume_id, name, fleet.fleet_id);
+    }
+    // No release of our own to date from — no legacy row, or somebody else
+    // released it first: the newest tombstone for the name is the predecessor.
+    if (floor === null) floor = await predecessorFloor(name);
+
+    /**
+     * The new incarnation is born now, after any legacy release above, and
+     * strictly after the predecessor's `destroyed_at` — the two bound
+     * `history --since/--until` (§6.7), which are inclusive, and a shared
+     * boundary instant would blend two lives into one window. `at0` stays the
+     * validate event's.
+     */
+    const bornAt = strictlyAfter(nowIso(), floor);
+    let fresh: Agent = {
       name,
       status: "creating",
       version: 0,
@@ -298,8 +419,8 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       health: null,
       metrics: null,
       created_by: await actor(),
-      created_at: at0,
-      updated_at: at0,
+      created_at: bornAt,
+      updated_at: bornAt,
     };
 
     /**
@@ -311,9 +432,25 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * - a row still in `creating`/`error` → resume it, unless another operator's
      *   unexpired lock says they are already doing so.
      */
-    type Claim = { kind: "claimed" } | { kind: "resume"; agent: Agent } | { kind: "complete" };
+    type Claim =
+      | { kind: "claimed" }
+      | { kind: "resume"; agent: Agent }
+      | { kind: "complete" }
+      | { kind: "released"; floor: string | null };
 
     async function classify(existing: Agent): Promise<Claim> {
+      /**
+       * A legacy `destroyed` row appearing only now — after the release above
+       * found none, so between that read and the claim — is released the same
+       * way, and the claim is made again.
+       */
+      if (existing.status === "destroyed") {
+        const released = await releaseLegacyRow(existing, owner, who, opts.signal);
+        return {
+          kind: "released",
+          floor: released ? released.tombstone.destroyed_at : await predecessorFloor(name),
+        };
+      }
       if (existing.status !== "creating" && existing.status !== "error") {
         throw new HermeticError("NAME_TAKEN", `agent ${name} already exists`, {
           name,
@@ -336,11 +473,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       return { kind: "resume", agent: existing };
     }
 
-    let claim: Claim;
-    const before = await backend.store.agents.get(name);
-    if (before) {
-      claim = await classify(before);
-    } else {
+    async function claimFresh(): Promise<Claim> {
       /**
        * §8.3: the profile may not be bound to if the fleet has turned it off or
        * emptied its slot — but only where a *new* agent is being made. There is
@@ -353,13 +486,29 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        * that actually decides anything.
        */
       await assertProfileUsable(bindingPorts, profile);
-      if (await backend.store.agents.putIfAbsent(fresh)) {
-        claim = { kind: "claimed" };
-      } else {
-        // Someone claimed the name between the read and the put — that is the
-        // race the conditional put exists to lose safely.
-        claim = await classify(await getAgent(name));
-      }
+      if (await backend.store.agents.putIfAbsent(fresh)) return { kind: "claimed" };
+      // Someone claimed the name between the read and the put — that is the
+      // race the conditional put exists to lose safely.
+      return await classify(await getAgent(name));
+    }
+
+    const before = await backend.store.agents.get(name);
+    let claim: Claim = before ? await classify(before) : await claimFresh();
+    // A legacy row released just now: the name is free, so claim it — once.
+    // As after the release above: the disk's tags have moved, and this life
+    // starts after the one just released.
+    if (claim.kind === "released") {
+      if (adopted) adopted = await resolveAdopted(adopted.volume_id, name, fleet.fleet_id);
+      const reborn = strictlyAfter(nowIso(), claim.floor);
+      fresh = { ...fresh, created_at: reborn, updated_at: reborn };
+      claim = await claimFresh();
+    }
+    if (claim.kind === "released") {
+      throw new HermeticError(
+        "CONFLICT",
+        `the name ${name} was released and then taken again by a destroyed record; re-run the create`,
+        { name },
+      );
     }
 
     if (claim.kind === "complete") {
@@ -624,19 +773,35 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
             agent: adopted.agent,
             roleData: adopted.role_data,
             name: adopted.tags["Name"] ?? null,
+            formerAgent: adopted.former_agent,
           };
+          /**
+           * A volume a destroy kept carries `former_agent=<old name>` (§6.7).
+           * Adoption gives it a current owner, so the past one goes: a disk
+           * tagged with both would read as two agents' memory at once.
+           */
           await backend.compute.retagVolume(adopted.volume_id, name, {
             name: `${cloudName(fleet.fleet_id, name)}-data`,
+            ...(adopted.former_agent === null ? {} : { formerAgent: null }),
           });
+          /**
+           * What the disk said before, in its own words: a volume a destroy
+           * released carries its old name as `former_agent`, not `agent`, and
+           * "agent=(none)" would hide whose memory this is.
+           */
+          const was =
+            adopted.agent === null && adopted.former_agent !== null
+              ? `former_agent=${adopted.former_agent}`
+              : `agent=${adopted.agent ?? "(none)"}`;
           await appendEvent(
             name,
             "volume",
-            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); tag agent=${adopted.agent ?? "(none)"} rewritten to agent=${name}`,
+            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); tag ${was} rewritten to agent=${name}`,
           );
           yield say(
             "volume",
             0.55,
-            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); its agent tag was ${adopted.agent ?? "(none)"} and is now ${name}`,
+            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); it was tagged ${was} and is now agent=${name}`,
             nowIso(),
             "warn",
           );
@@ -653,21 +818,48 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
            * the *next* plain `create bravo` would find it by tag and silently
            * attach somebody else's memory (§1).
            *
-           * Whose it was is a fact the store still holds rather than a guess: a
-           * destroyed row is kept forever (§4.3) and goes on naming its volume,
-           * so the row that still names this disk is the name to give it back to.
-           * When *no* row names it, nothing is recorded — the tag was already
-           * like that when this run arrived (an operator's own label, say), and
-           * stripping it would be a rollback undoing something it never did.
+           * Whose it was is a fact the store still holds rather than a guess
+           * (§6.7). The first attempt cleared the volume's `former_agent` tag,
+           * but the destroy that kept the disk left a tombstone naming it
+           * (`volume_kept`), so the newest such tombstone is the name to give
+           * back — as `former_agent`, never as `agent`, so no later plain
+           * `create` of that name adopts it by accident. A tag still present
+           * says the same thing first-hand. A legacy `destroyed` row (from
+           * before tombstones) that still names the disk is the older form of
+           * the same record, and its volume kept `agent=<name>`, which is what
+           * is put back. When nothing names it, nothing is recorded — the tag
+           * was already like that when this run arrived (an operator's own
+           * label, say), and stripping it would be a rollback undoing
+           * something it never did.
            */
           if (ledger.claimed) {
-            const previous = (await backend.store.agents.scan()).find(
-              (a) => a.name !== name && (a.resources.volume_id ?? a.volume_id) === adopted.volume_id,
-            );
-            if (previous) {
+            const formerAgent =
+              adopted.former_agent ??
+              (await backend.store.events.queryTombstones()).find(
+                (t) => t.volume_kept && t.volume_id === adopted.volume_id,
+              )?.name ??
+              null;
+            const legacyOwner =
+              formerAgent === null
+                ? (await backend.store.agents.scan()).find(
+                    (a) =>
+                      a.name !== name &&
+                      a.status === "destroyed" &&
+                      (a.resources.volume_id ?? a.volume_id) === adopted.volume_id,
+                  )
+                : undefined;
+            if (formerAgent !== null) {
               ledger.retag = {
                 volumeId: adopted.volume_id,
-                agent: previous.name,
+                agent: null,
+                roleData: adopted.role_data,
+                name: adopted.tags["Name"] ?? null,
+                formerAgent,
+              };
+            } else if (legacyOwner) {
+              ledger.retag = {
+                volumeId: adopted.volume_id,
+                agent: legacyOwner.name,
                 roleData: adopted.role_data,
                 name: adopted.tags["Name"] ?? null,
               };

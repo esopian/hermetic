@@ -1,5 +1,5 @@
 import type { AttributeValue, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import type { ScanCommandOutput } from "@aws-sdk/lib-dynamodb";
+import type { QueryCommandOutput, ScanCommandOutput } from "@aws-sdk/lib-dynamodb";
 import {
   DeleteCommand,
   DynamoDBDocumentClient,
@@ -10,14 +10,18 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import type { Agent, AgentEvent, FleetItem, FleetSettings } from "../schema/index.ts";
+import type { Agent, AgentEvent, AgentTombstone, FleetItem, FleetSettings } from "../schema/index.ts";
 import {
   Agent as AgentSchema,
   AgentEvent as AgentEventSchema,
+  DESTROYED_KEY,
   FLEET_KEY,
   FleetItem as FleetItemSchema,
+  TombstoneItem as TombstoneItemSchema,
   VOLUME_CLAIM_PREFIX,
+  fromTombstoneItem,
   isReservedRowKey,
+  toTombstoneItem,
   volumeClaimKey,
   volumeIdOfClaimKey,
 } from "../schema/index.ts";
@@ -315,11 +319,46 @@ class DynamoAgentStore implements AgentStore {
     return rows;
   }
 
-  async delete(name: string): Promise<void> {
+  /**
+   * Unconditional for the unwind of a failed `create`; conditional on the
+   * version for the release at the end of `destroy` (§6.7). The conditional
+   * form reads the refused item back in the same round trip, as `update`
+   * does, to tell a row a concurrent writer moved (`CONFLICT`) from a row
+   * already gone (a no-op: the release it wanted has happened).
+   */
+  async delete(name: string, opts?: { expectedVersion: number }): Promise<void> {
     if (isReservedRowKey(name)) {
       throw new HermeticError("UNSUPPORTED", `${name} is a reserved row, not an agent`, { name });
     }
-    await this.doc.send(new DeleteCommand({ TableName: await this.table.get(), Key: { name } }));
+    if (opts === undefined) {
+      await this.doc.send(new DeleteCommand({ TableName: await this.table.get(), Key: { name } }));
+      return;
+    }
+    const expectedVersion = opts.expectedVersion;
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: await this.table.get(),
+          Key: { name },
+          ConditionExpression: "attribute_exists(#name) AND #version = :expected",
+          ExpressionAttributeNames: { "#name": "name", "#version": "version" },
+          ExpressionAttributeValues: { ":expected": expectedVersion },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+        }),
+      );
+    } catch (e) {
+      if (isAwsError(e, "ConditionalCheckFailedException")) {
+        const item = refusedItem(e);
+        if (!item) return;
+        const actual = typeof item["version"] === "number" ? item["version"] : null;
+        throw new HermeticError(
+          "CONFLICT",
+          `agent ${name} changed underneath this operation (expected version ${expectedVersion}, found ${actual ?? "?"}); the record was not deleted`,
+          { name, expected: expectedVersion, actual },
+        );
+      }
+      throw asHermeticError(e, `could not delete agent ${name}`);
+    }
   }
 }
 
@@ -356,6 +395,63 @@ class DynamoEventStore implements EventStore {
       for (const item of out.Items ?? []) rows.push(AgentEventSchema.parse(item));
       start = out.LastEvaluatedKey as Record<string, unknown> | undefined;
       if (limit !== undefined && rows.length >= limit) return rows.slice(0, limit);
+    } while (start);
+    return rows;
+  }
+
+  /**
+   * One item under the reserved `_destroyed` partition (§6.7). A plain put:
+   * the range key is `<destroyed_at>#<name>`, so a retry of the same write
+   * lands on the same key and replaces it with identical content.
+   */
+  async appendTombstone(tombstone: AgentTombstone): Promise<void> {
+    try {
+      await this.doc.send(
+        new PutCommand({ TableName: await this.table.get(), Item: { ...toTombstoneItem(tombstone) } }),
+      );
+    } catch (e) {
+      throw asHermeticError(e, `could not record the destroy of ${tombstone.name}`);
+    }
+  }
+
+  /**
+   * Newest first: one `Query` on the reserved partition, walked backwards.
+   * `name` is a `FilterExpression`, so DynamoDB's `Limit` counts items before
+   * the filter — which is why the limit is honoured here, after it, rather
+   * than handed to the query.
+   */
+  async queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> {
+    const rows: AgentTombstone[] = [];
+    const limit = opts?.limit;
+    let start: Record<string, unknown> | undefined;
+    do {
+      let out: QueryCommandOutput;
+      try {
+        out = await this.doc.send(
+          new QueryCommand({
+            TableName: await this.table.get(),
+            KeyConditionExpression: "#name = :pk",
+            ExpressionAttributeNames: {
+              "#name": "name",
+              ...(opts?.name === undefined ? {} : { "#agent": "agent" }),
+            },
+            ExpressionAttributeValues: {
+              ":pk": DESTROYED_KEY,
+              ...(opts?.name === undefined ? {} : { ":agent": opts.name }),
+            },
+            ...(opts?.name === undefined ? {} : { FilterExpression: "#agent = :agent" }),
+            ScanIndexForward: false,
+            ...(start ? { ExclusiveStartKey: start } : {}),
+          }),
+        );
+      } catch (e) {
+        throw readError(e, "could not read the destroyed-agent records");
+      }
+      for (const item of out.Items ?? []) {
+        rows.push(fromTombstoneItem(TombstoneItemSchema.parse(item)));
+        if (limit !== undefined && rows.length >= limit) return rows;
+      }
+      start = out.LastEvaluatedKey as Record<string, unknown> | undefined;
     } while (start);
     return rows;
   }

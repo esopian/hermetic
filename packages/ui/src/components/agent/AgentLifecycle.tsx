@@ -112,9 +112,12 @@ export function AgentLifecycle({
   destroy: ReturnType<typeof useDestroyFlow>;
 }) {
   const name = agent.name;
-  // `destroyed` is terminal in core (§4.3): every lifecycle call on this row
-  // would come back INVALID_TRANSITION, so the page explains the record and
-  // offers no buttons at all rather than buttons that only fail.
+  // A `destroyed` row is a legacy record from before destroy released the name:
+  // destroy now deletes the row and writes a tombstone, so this row only exists
+  // on fleets that destroyed agents before that change. It is hidden from the
+  // fleet list; every lifecycle call on it would come back INVALID_TRANSITION,
+  // so the page explains the record and how to release the name rather than
+  // offering buttons that only fail.
   const actions: DrawerActions = drawerActions(agent.display_status);
   const [rebuildAsk, setRebuildAsk] = useState(false);
 
@@ -124,15 +127,16 @@ export function AgentLifecycle({
         <div className="dr-say">
           <div className="kicker">Lifecycle</div>
           <p>
-            <b>{name} is destroyed.</b> Destroyed is terminal: nothing can start, rebuild or remove it
-            again. The record is kept so its history stays readable under Logs.
+            <b>{name} is a legacy destroyed record</b> from before names were released. It stays hidden
+            from the fleet. Destroying it again releases the name: a tombstone is written, the record is
+            removed, and it is listed under the Destroyed lens.
           </p>
         </div>
         <div className="dr-gone mono">{destroyedSummary(agent.volume_id)}</div>
         {agent.volume_id ? (
           <div className="hint">
-            The data volume survived. A new agent created from it (Volumes, or + New agent) gets this
-            agent's memory back.
+            The data volume survived. Releasing the name frees the volume from it; a new agent created
+            from the volume (Volumes, or + New agent with --volume) gets this agent's memory back.
           </div>
         ) : null}
       </div>
@@ -343,8 +347,9 @@ export function AgentLifecycle({
             <div>
               <b className="dr-danger-title">Destroy {name}</b>
               <p>
-                Terminates the instance and removes it from the tailnet. This cannot be undone. The data
-                volume is kept unless you choose to delete it, and the agent's record stays.
+                Terminates the instance, removes it from the tailnet and deletes the data volume unless
+                you choose to keep it. This cannot be undone. The name is freed; the record and history
+                stay under Destroyed.
               </p>
             </div>
             <button
@@ -352,7 +357,7 @@ export function AgentLifecycle({
               className="btn btn-danger"
               aria-expanded={confirmOpen}
               onClick={() => setConfirmOpen(!confirmOpen)}
-              title="Terminate this instance and keep the row as a record; the data volume is kept unless you ask otherwise"
+              title="Terminate this instance and free the name; the data volume is deleted unless you keep it"
             >
               Destroy {name}…
             </button>
@@ -363,8 +368,8 @@ export function AgentLifecycle({
               plan={destroy.plan}
               planError={destroy.planError}
               armed={destroy.armed}
-              deleteVolume={destroy.deleteVolume}
-              setDeleteVolume={destroy.setDeleteVolume}
+              keepVolume={destroy.keepVolume}
+              setKeepVolume={destroy.setKeepVolume}
               typed={destroy.typed}
               setTyped={destroy.setTyped}
               retryPlan={destroy.retryPlan}

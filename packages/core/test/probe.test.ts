@@ -777,9 +777,25 @@ describe("agents.probe over a backend", () => {
     expect(report.verdict.hints.join("\n")).not.toContain("secrets push _fleet");
   });
 
-  /** No instance on the row at all — `skip`, which is not the same as `fail`. */
+  /**
+   * No instance on the row at all — `skip`, which is not the same as `fail`.
+   * A legacy row (§6.7): a destroy now deletes the row, so the fixture seeds
+   * none and the test makes the pre-tombstone shape it is about.
+   */
   test("a destroyed row skips the instance and hermeticd layers", async () => {
-    const { hermetic } = seeded();
+    const { backend, hermetic } = seeded();
+    const juniper = structuredClone(backend.agents.get("juniper")!);
+    backend.agents.set("oriole", {
+      ...juniper,
+      name: "oriole",
+      status: "destroyed",
+      instance_id: null,
+      resources: { volume_id: juniper.resources.volume_id, ssm_paths: [] },
+      tailscale_ip: null,
+      tailscale_dns_name: null,
+      metrics: null,
+      last_heartbeat: null,
+    });
     const report = await hermetic.agents.probe("oriole");
     expect(report.instance.outcome).toBe("skip");
     expect(report.instance.detail).toBe("the row has no instance");

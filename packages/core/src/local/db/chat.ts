@@ -65,6 +65,13 @@ export class SqliteLocalChatSessions implements LocalChatSessions {
     for (const row of rows) found.add(row.session);
     return found;
   }
+
+  forgetInstance(fleet: string | null, instance: string): void {
+    this.db.run(`DELETE FROM chat_local_sessions WHERE fleet = ? AND instance = ?`, [
+      fleet ?? "",
+      instance,
+    ]);
+  }
 }
 
 /**
@@ -119,6 +126,13 @@ export class SqliteChatFenceStore implements ChatFenceStore {
       `DELETE FROM chat_turn_fence WHERE fleet = ? AND instance = ? AND bot = ? AND owner = ?`,
       [fleet ?? "", instance, bot, owner],
     );
+  }
+
+  forgetInstance(fleet: string | null, instance: string): void {
+    this.db.run(`DELETE FROM chat_turn_fence WHERE fleet = ? AND instance = ?`, [
+      fleet ?? "",
+      instance,
+    ]);
   }
 }
 

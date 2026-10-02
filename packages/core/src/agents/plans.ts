@@ -26,7 +26,7 @@ import type {
 } from "../schema/index.ts";
 import { validateName } from "../shared/naming.ts";
 import type { ExpectedResources } from "./plan-expectations.ts";
-import { HermeticError } from "../errors.ts";
+import { HermeticError, isMissingTable } from "../errors.ts";
 import { legacyParamPrefixes, listLegacyParams, readFleetScope } from "../fleet/legacy-params.ts";
 import { POLICY_RETAINED_NOTICE } from "../fleet/policy.ts";
 import type { CoreContext } from "../context.ts";
@@ -76,7 +76,27 @@ export function createPlans(deps: PlanDeps) {
     await guardAccount();
     const agent = await getAgent(input.name);
     const volumeId = agent.resources.volume_id ?? agent.volume_id;
-    const steps = [
+    /**
+     * §6.7: the release is the last step, and it is what frees the name — a
+     * tombstone replaces the row. A legacy `destroyed` row (destroyed before
+     * tombstones existed) has nothing left but that release, and its volume,
+     * if it kept one, is released from the name rather than deleted.
+     */
+    const legacy = agent.status === "destroyed";
+    const keepVolume = legacy || input.keep_volume === true;
+    const volumeStep = keepVolume
+      ? {
+          id: "volume",
+          description: `keep data volume ${volumeId ?? "(none)"} (released from the name, tagged former_agent)`,
+          destructive: false,
+        }
+      : { id: "volume", description: `delete data volume ${volumeId ?? "(none)"}`, destructive: true };
+    const releaseStep = {
+      id: "release",
+      description: "write tombstone, delete the agent record; name becomes reusable",
+      destructive: true,
+    };
+    const liveSteps = [
       {
         id: "terminate",
         description: `terminate instance ${agent.resources.instance_id ?? agent.instance_id ?? "(none)"}`,
@@ -103,16 +123,17 @@ export function createPlans(deps: PlanDeps) {
         description: `delete S3 objects under ${configPrefix(agent.name)}`,
         destructive: true,
       },
-      input.delete_volume
-        ? { id: "volume", description: `delete data volume ${volumeId ?? "(none)"}`, destructive: true }
-        : { id: "volume", description: `keep data volume ${volumeId ?? "(none)"}`, destructive: false },
-      { id: "record", description: "mark the agent record destroyed", destructive: false },
+      volumeStep,
+      releaseStep,
     ];
+    const steps = legacy ? [volumeStep, releaseStep] : liveSteps;
     const warnings: string[] = [];
-    if (input.delete_volume) {
-      warnings.push("the data volume holds this agent's memory, episode log and skill library");
+    if (!keepVolume && volumeId) {
+      warnings.push(
+        "the data volume holds this agent's memory, episode log and skill library; pass --keep-volume to keep it",
+      );
     }
-    if (agent.status === "destroyed") warnings.push(`${agent.name} is already destroyed`);
+    if (legacy) warnings.push("record predates tombstones; will be released");
     warnings.push("events are never deleted; this agent's history survives");
     return {
       kind: "destroy",
@@ -123,7 +144,7 @@ export function createPlans(deps: PlanDeps) {
        * still the row this plan describes (`PlanOptions.agent_version`).
        */
       options: {
-        delete_volume: input.delete_volume === true,
+        keep_volume: input.keep_volume === true,
         agent_version: agent.version,
         instance_id: agent.resources.instance_id ?? agent.instance_id ?? null,
         volume_id: volumeId ?? null,
@@ -314,16 +335,29 @@ export function createPlans(deps: PlanDeps) {
      * recursive.
      */
     const scope = await readFleetScope(backend, config.fleet_id);
+    /**
+     * §6.7: a destroy now deletes the row, so a name destroyed since survives
+     * only in its tombstone. Read exactly as `teardown.ts` reads it — only for
+     * a sole fleet, and a table already gone has no names to give — so the
+     * plan and the apply enumerate from the same list.
+     */
+    const tombstoned =
+      scope.sole && !scanned.table_gone
+        ? await backend.store.events.queryTombstones().catch((e: unknown) => {
+            if (isMissingTable(e)) return [];
+            throw e;
+          })
+        : [];
     const legacy = scope.sole
       ? legacyParamPrefixes(
           /**
-           * Every row, destroyed included — `scanned.agents`, not the `agents`
-           * the refusal check uses, which filters them out. A destroyed row is
-           * kept for ever (§4.3) and its name is the only record that
-           * `/hermes/<name>/` was this fleet's, so filtering it here would make
+           * Every row, legacy destroyed ones included — `scanned.agents`, not
+           * the `agents` the refusal check uses, which filters them out — plus
+           * every tombstone. Between them they are the only record that
+           * `/hermes/<name>/` was this fleet's, so leaving either out would make
            * the plan promise a smaller set than `teardown` deletes.
            */
-          scanned.agents.map((a) => a.name),
+          [...scanned.agents.map((a) => a.name), ...tombstoned.map((t) => t.name)],
           scope,
         )
       : { prefixes: [] as string[], skipped: [] as string[] };

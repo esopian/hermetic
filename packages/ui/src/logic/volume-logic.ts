@@ -63,22 +63,15 @@ export const TOMBSTONE_CAP = 4;
  *
  * - only `no_agent`: an ambiguous volume might be an agent's memory, but a
  *   tombstone says *which* agent, and hermetic does not know;
- * - never one whose agent row is currently on screen: when the `destroyed`
- *   toggle is on, the destroyed agent's own card carries its volume, and a
- *   tombstone beside it would be the same thing rendered twice;
+ * - never one a live agent on screen owns: that agent's own card carries its
+ *   volume, and a tombstone beside it would be the same thing rendered twice.
+ *   A destroy deletes the row (§6.7), so a destroyed agent's kept volume has no
+ *   card of its own and is always drawn here;
  * - newest-free first, so the volume most likely to still matter is the one
  *   that survives the cap.
  */
-export function tombstones(
-  volumes: readonly VolumeView[],
-  agents: readonly AgentView[],
-  showDestroyed: boolean,
-): VolumeView[] {
-  const onScreen = new Set(
-    showDestroyed
-      ? agents.map((a) => a.name)
-      : agents.filter((a) => a.display_status !== "destroyed").map((a) => a.name),
-  );
+export function tombstones(volumes: readonly VolumeView[], agents: readonly AgentView[]): VolumeView[] {
+  const onScreen = new Set(agents.filter((a) => a.display_status !== "destroyed").map((a) => a.name));
   return volumes
     .filter((v) => v.group === "no_agent")
     .filter((v) => v.agent === null || !onScreen.has(v.agent))
@@ -111,9 +104,8 @@ export interface BoardVolumes {
 export function boardVolumes(
   volumes: readonly VolumeView[],
   agents: readonly AgentView[],
-  showDestroyed: boolean,
 ): BoardVolumes {
-  const all = tombstones(volumes, agents, showDestroyed);
+  const all = tombstones(volumes, agents);
   const shown = all.slice(0, TOMBSTONE_CAP);
   const rest = all.slice(TOMBSTONE_CAP);
   return {
@@ -178,9 +170,12 @@ export function freeFor(v: VolumeView, fmt: (ms: number) => string): string {
 }
 
 /**
- * The next free agent name for a volume whose tag names one that is taken.
- * §4.3 keeps a destroyed agent's row forever, so `cinder`'s memory comes back
- * as `cinder-2` — offered, not imposed: the field stays editable.
+ * The next free agent name for a volume, from the agent its tag names.
+ * A destroy releases the name (row deleted, tombstone kept; §6.7), so a volume
+ * whose former owner was destroyed gets its own name back: `cinder`'s memory
+ * comes back as `cinder`. The `-2` suffix applies only when the tag names an
+ * agent that is still alive, or a legacy pre-release `destroyed` row that
+ * still holds the name — offered, not imposed: the field stays editable.
  */
 export function suggestedName(tag: string | null, taken: ReadonlySet<string>): string {
   if (tag === null) return "";
@@ -228,6 +223,10 @@ export function settledPhase(status: string): SettledPhase | null {
  * read, which is no change: the inventory is being read for the first time anyway.
  * Mid-flight rows keep their last settled phase, so the rest after an op is
  * compared against the rest before it rather than against the op.
+ *
+ * A name that leaves the fleet altogether is a change too: a destroy ends by
+ * deleting the row (§6.7), so the last thing the stream shows of it is its
+ * absence, and its volume was just deleted or released.
  */
 export function settleVolumes(
   prev: ReadonlyMap<string, SettledPhase> | null,
@@ -240,6 +239,12 @@ export function settleVolumes(
     if (phase === null || next.get(a.name) === phase) continue;
     next.set(a.name, phase);
     if (prev !== null) changed = true;
+  }
+  const present = new Set(agents.map((a) => a.name));
+  for (const name of [...next.keys()]) {
+    if (present.has(name)) continue;
+    next.delete(name);
+    changed = true;
   }
   return { next, changed };
 }

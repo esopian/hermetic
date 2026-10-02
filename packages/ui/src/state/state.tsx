@@ -405,6 +405,21 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           next.delete(name);
           return next;
         });
+        /**
+         * §6.7: a finished destroy deletes the row, and the name is free for a
+         * new agent. The drawer that followed the destroy closes with the row
+         * (`shouldDeselect`), so nothing is left to clear its op id or its
+         * `NEW` tag — and a successor under the same name must not open onto
+         * the old agent's finished destroy. The op's own watcher is not
+         * stopped here; it ends itself on `done` and re-reads the fleet.
+         */
+        clearFresh(name);
+        setOpsByAgent((prev) => {
+          if (!(name in prev)) return prev;
+          const next = { ...prev };
+          delete next[name];
+          return next;
+        });
       },
       onPoll: (at) => {
         setLastPollAt(at);

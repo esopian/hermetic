@@ -35,7 +35,7 @@ export const CREATE_PHASES = [
  * a phase core emits that is missing here lands *after* `done`, which is how
  * `tailnet` came to be a raw key at the bottom of a destroy rail.
  */
-export const DESTROY_PHASES = ["instance", "tailnet", "secrets", "config", "volume", "done"];
+export const DESTROY_PHASES = ["instance", "tailnet", "secrets", "config", "volume", "release", "done"];
 export const RECREATE_PHASES = ["plan", "instance", "tailnet", "secrets", "done"];
 export const STOP_PHASES = ["instance", "done"];
 export const START_PHASES = ["instance", "done"];
@@ -85,10 +85,11 @@ const DESTROY_LABELS: Record<string, string> = {
   tailnet: "Remove the node from the tailnet",
   secrets: "Delete the agent's SSM parameters",
   config: "Remove config objects from the bucket",
-  // Keep first, because keeping is the default: core deletes only when
-  // `--delete-volume` was asked for, and a step that led with "delete" would
-  // misdescribe the path almost every destroy takes (§6.6 — volumes are precious).
-  volume: "Keep the data volume, or delete it if asked",
+  // Delete first, because deleting is the default (§6.7): core keeps the
+  // volume, released from the name, only when `--keep-volume` was asked for.
+  volume: "Delete the data volume, or release it if kept",
+  // §6.7: the row goes last, after its tombstone is written, so the name is free.
+  release: "Write the tombstone and free the name",
   done: "Destroyed",
 };
 

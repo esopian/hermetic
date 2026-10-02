@@ -32,6 +32,7 @@ import type {
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
+  FORMER_AGENT_TAG,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
   ROLE_DATA,
@@ -344,6 +345,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           volume_id: v.volume_id,
           size_gib: v.size_gib,
           agent: v.agent,
+          former_agent: v.former_agent ?? null,
           state: v.state,
         }))
         .sort((a, b) => (a.volume_id < b.volume_id ? -1 : 1)),
@@ -378,6 +380,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           const fleetTag = v.fleet_id === undefined ? b.boundFleetId() : v.fleet_id;
           if (managed && fleetTag !== null) tags[FLEET_ID_TAG] = fleetTag;
           if (v.name_tag) tags["Name"] = v.name_tag;
+          if (v.former_agent) tags[FORMER_AGENT_TAG] = v.former_agent;
           return {
             volume_id: v.volume_id,
             size_gib: v.size_gib,
@@ -385,6 +388,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
             availability_zone: v.az ?? b.launchAzId,
             created_at: v.created_at ?? null,
             agent: v.agent,
+            former_agent: v.former_agent ?? null,
             managed,
             role_data: v.role === "data",
             tags,
@@ -396,7 +400,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
     retagVolume: async (
       volumeId: string,
       agent: string | null,
-      opts: { roleData?: boolean; name?: string | null } = {},
+      opts: { roleData?: boolean; name?: string | null; formerAgent?: string | null } = {},
     ): Promise<void> => {
       const roleData = opts.roleData ?? true;
       const vol = b.volumes.get(volumeId);
@@ -414,6 +418,8 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
         role: roleData ? "data" : null,
         fleet_id: b.boundFleetId(),
         ...(opts.name === undefined ? {} : { name_tag: opts.name }),
+        // Same three states for `hermetic:former_agent` (§6.7).
+        ...(opts.formerAgent === undefined ? {} : { former_agent: opts.formerAgent }),
       });
     },
     /**

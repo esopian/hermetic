@@ -69,10 +69,10 @@ export type Rng = () => number;
  *   fleet_id   the fleet's identity, never its alias — §4.6 makes the alias
  *              display-only, and renaming a fleet must not repaint every
  *              avatar in it.
- *   instance   the agent name, which §4.3 pins forever: a destroyed agent keeps
- *              its row, so a reclaimed volume comes back as `cinder-2` and
- *              correctly gets its own avatar rather than inheriting a dead
- *              agent's.
+ *   instance   the agent name. A destroy releases it (§6.7), so a later agent
+ *              under the same name shares its predecessor's avatar; the name
+ *              is the identity an operator addresses, and a dead agent has no
+ *              rail entry left to be confused with.
  *   bot        the profile name under `$HERMES_HOME/profiles/`. Pass `""` for
  *              an instance-level avatar, so a box and its default bot are
  *              deliberately *not* the same picture — they are different rows in

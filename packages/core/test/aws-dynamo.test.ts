@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -11,7 +12,8 @@ import {
 import { mockClient } from "aws-sdk-client-mock";
 import { createDynamoStores } from "../src/aws/dynamo.ts";
 import { guardClient } from "../src/aws/client.ts";
-import { FLEET_KEY } from "../src/schema/index.ts";
+import { DESTROYED_KEY, FLEET_KEY } from "../src/schema/index.ts";
+import type { AgentTombstone } from "../src/schema/index.ts";
 import type { Agent } from "../src/schema/index.ts";
 import { HermeticError } from "../src/errors.ts";
 import { inputsOf } from "./aws-harness.ts";
@@ -984,5 +986,133 @@ describe("a row that does not parse", () => {
     const store = stores().agents;
     expect(await store.scan()).toEqual([]);
     expect(store.unparseable!()).toEqual(["(unnamed row)"]);
+  });
+});
+
+/** §6.7: the release deletes the row, conditional on the version it read. */
+describe("the release's delete", () => {
+  test("with an expected version the delete is conditional on it", async () => {
+    ddb.on(DeleteCommand).resolves({});
+    await stores().agents.delete("atlas", { expectedVersion: 7 });
+    const [input] = inputsOf<{
+      ConditionExpression: string;
+      ExpressionAttributeNames: Record<string, string>;
+      ExpressionAttributeValues: Record<string, unknown>;
+      ReturnValuesOnConditionCheckFailure: string;
+    }>(ddb, DeleteCommand);
+    expect(input!.ConditionExpression).toBe("attribute_exists(#name) AND #version = :expected");
+    expect(input!.ExpressionAttributeValues).toEqual({ ":expected": 7 });
+    expect(input!.ReturnValuesOnConditionCheckFailure).toBe("ALL_OLD");
+    expect(unusedAliases(input!)).toEqual([]);
+  });
+
+  test("a moved version is CONFLICT", async () => {
+    ddb.on(DeleteCommand).rejects(conditionalFailure({ name: "atlas", version: 9 }));
+    let error: HermeticError | null = null;
+    try {
+      await stores().agents.delete("atlas", { expectedVersion: 7 });
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error!.code).toBe("CONFLICT");
+    expect(error!.details).toMatchObject({ expected: 7, actual: 9 });
+  });
+
+  test("a row already gone is not an error", async () => {
+    ddb.on(DeleteCommand).rejects(conditionalFailure());
+    await stores().agents.delete("atlas", { expectedVersion: 7 });
+  });
+
+  test("without an expected version the unwind's delete stays unconditional", async () => {
+    ddb.on(DeleteCommand).resolves({});
+    await stores().agents.delete("atlas");
+    const [input] = inputsOf<{ ConditionExpression?: string }>(ddb, DeleteCommand);
+    expect(input!.ConditionExpression).toBeUndefined();
+  });
+});
+
+describe("tombstones", () => {
+  const tombstone = (name: string, destroyed_at: string): AgentTombstone => ({
+    name,
+    fleet_id: "fxtr0001",
+    created_at: "2026-09-01T12:00:00.000Z",
+    created_by: "arn:aws:iam::123456789012:user/e",
+    destroyed_at,
+    destroyed_by: "arn:aws:iam::123456789012:user/e",
+    size: "medium",
+    region: "us-west-2",
+    provider: "bedrock",
+    profile_id: null,
+    instance_id: "i-1",
+    volume_id: "vol-1",
+    volume_kept: false,
+    hermes_version: "0.15.0",
+    legacy: false,
+  });
+  const item = (name: string, at: string) => {
+    const { name: _n, legacy: _l, ...rest } = tombstone(name, at);
+    return { ...rest, name: DESTROYED_KEY, timestamp: `${at}#${name}`, agent: name };
+  };
+
+  test("append writes the reserved partition, range-keyed by time then name", async () => {
+    ddb.on(PutCommand).resolves({});
+    await stores().events.appendTombstone(tombstone("atlas", "2026-09-02T00:00:00.000Z"));
+    const [input] = inputsOf<{ Item: Record<string, unknown>; TableName: string }>(ddb, PutCommand);
+    expect(input!.TableName).toBe("hermetic-events");
+    expect(input!.Item["name"]).toBe(DESTROYED_KEY);
+    expect(input!.Item["timestamp"]).toBe("2026-09-02T00:00:00.000Z#atlas");
+    expect(input!.Item["agent"]).toBe("atlas");
+    expect("legacy" in input!.Item).toBe(false);
+  });
+
+  test("query reads the one partition newest first, paginated, filtered by name", async () => {
+    ddb
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [item("atlas", "2026-09-03T00:00:00.000Z")],
+        LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "x" },
+      })
+      .resolvesOnce({ Items: [item("atlas", "2026-09-02T00:00:00.000Z")] });
+    const rows = await stores().events.queryTombstones({ name: "atlas" });
+    expect(rows.map((r) => r.destroyed_at)).toEqual([
+      "2026-09-03T00:00:00.000Z",
+      "2026-09-02T00:00:00.000Z",
+    ]);
+    expect(rows[0]!.name).toBe("atlas");
+    expect(rows[0]!.legacy).toBe(false);
+
+    const inputs = inputsOf<{
+      KeyConditionExpression: string;
+      FilterExpression: string;
+      ScanIndexForward: boolean;
+      ExpressionAttributeNames: Record<string, string>;
+      ExpressionAttributeValues: Record<string, unknown>;
+      Limit?: number;
+      ExclusiveStartKey?: unknown;
+    }>(ddb, QueryCommand);
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]!.KeyConditionExpression).toBe("#name = :pk");
+    expect(inputs[0]!.FilterExpression).toBe("#agent = :agent");
+    expect(inputs[0]!.ExpressionAttributeValues).toEqual({ ":pk": DESTROYED_KEY, ":agent": "atlas" });
+    expect(inputs[0]!.ScanIndexForward).toBe(false);
+    // The limit is honoured after the filter, so it is never handed to DynamoDB.
+    expect(inputs[0]!.Limit).toBeUndefined();
+    expect(inputs[1]!.ExclusiveStartKey).toEqual({ name: DESTROYED_KEY, timestamp: "x" });
+  });
+
+  test("an unfiltered query declares no filter aliases, and the limit stops the walk", async () => {
+    ddb.on(QueryCommand).resolves({
+      Items: [item("atlas", "2026-09-03T00:00:00.000Z"), item("ember", "2026-09-02T00:00:00.000Z")],
+      LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "x" },
+    });
+    const rows = await stores().events.queryTombstones({ limit: 1 });
+    expect(rows.map((r) => r.name)).toEqual(["atlas"]);
+    const inputs = inputsOf<{
+      FilterExpression?: string;
+      ExpressionAttributeNames: Record<string, string>;
+    }>(ddb, QueryCommand);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.FilterExpression).toBeUndefined();
+    expect(inputs[0]!.ExpressionAttributeNames).toEqual({ "#name": "name" });
   });
 });

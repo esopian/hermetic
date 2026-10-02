@@ -1,5 +1,5 @@
 /**
- * `hermetic agent …` (§9). Eleven commands, eleven core methods, one Zod schema
+ * `hermetic agent …` (§9). One command per core method, one Zod schema
  * each — imported from the registry so the parity test and the runtime agree.
  */
 import type { Command } from "commander";
@@ -10,6 +10,7 @@ import { defined, toInt, validate } from "../validate.ts";
 import { err, out, outJson } from "../io.ts";
 import {
   renderDesktop,
+  renderDestroyed,
   renderHistory,
   renderLooseVolumes,
   renderProbe,
@@ -27,6 +28,7 @@ import {
   DestroyAgentInput,
   HistoryInput,
   ListAgentsInput,
+  ListDestroyedInput,
   PlanDestroyInput,
   PlanRecreateInput,
   RecreateAgentInput,
@@ -168,6 +170,7 @@ const rebootSchema = declare("agents.reboot", "agent reboot", AgentRefInput);
 const recreateSchema = declare("agents.recreate", "agent recreate", RecreateAgentInput);
 const destroySchema = declare("agents.destroy", "agent destroy", DestroyAgentInput);
 const historySchema = declare("agents.history", "agent history", HistoryInput);
+const destroyedSchema = declare("agents.destroyed", "agent destroyed", ListDestroyedInput);
 const rerunSchema = declare("agents.rerun", "agent rerun", RerunInput);
 /** Name-only and read-only, so the same object `agent status` validates (§9). */
 const probeSchema = declare("agents.probe", "agent probe", AgentRefInput);
@@ -263,6 +266,10 @@ export function register(program: Command): void {
     globals(new Cmd("ps"))
       .description("fleet table: status, health, heartbeat age, versions, lock")
       .option("--status <status>", "only agents in this display status")
+      .addHelpText(
+        "after",
+        "\nA destroyed agent has no row here: it is reviewed with `hermetic agent destroyed`.\n",
+      )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(listSchema, defined({ status: opts["status"] }));
@@ -543,20 +550,28 @@ export function register(program: Command): void {
     destructive(new Cmd("destroy"))
       .description("terminate the instance and delete this agent's resources")
       .argument("<name>", "agent name")
-      .option("--delete-volume", "delete the data volume too — irreversible")
+      .option("--keep-volume", "keep the data volume, released from the name")
+      .addHelpText(
+        "after",
+        "\nBy default destroy deletes the data volume along with the instance; only the\n" +
+          "agent's history survives (`hermetic agent destroyed`). --keep-volume leaves\n" +
+          "the volume behind, released from the name (tagged hermetic:former_agent), so a\n" +
+          "later create of the same name starts fresh; adopt it on purpose with\n" +
+          "`hermetic agent create <name> --volume vol-…`.\n",
+      )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
-        const deleteVolume = opts["deleteVolume"] === true;
+        const keepVolume = opts["keepVolume"] === true;
         assertConfirmable(ctx, `destroy ${name}?`);
         // Validate first, then plan, then confirm: an operator with no way to
         // answer must not make core do work it will refuse anyway.
         const input = validate(destroySchema, {
           name,
           yes: true,
-          ...(deleteVolume ? { delete_volume: true } : {}),
+          ...(keepVolume ? { keep_volume: true } : {}),
         });
         const plan = await ctx.hermetic.plan.destroy(
-          validate(PlanDestroyInput, defined({ name, delete_volume: deleteVolume || undefined })),
+          validate(PlanDestroyInput, defined({ name, keep_volume: keepVolume || undefined })),
         );
         await confirmPlan(ctx, plan, `destroy ${input.name}?`);
         await renderOp(ctx.hermetic.agents.destroy(input, { signal: ctx.signal }), {
@@ -571,15 +586,45 @@ export function register(program: Command): void {
       .description("the append-only event log for one agent")
       .argument("<name>", "agent name")
       .option("--limit <n>", "most recent N events")
+      .option("--since <iso>", "only events at or after this instant (ISO 8601)")
+      .option("--until <iso>", "only events at or before this instant (ISO 8601)")
+      .addHelpText(
+        "after",
+        "\nA reused name's log holds every incarnation back to back. Pass a tombstone's\n" +
+          "created_at and destroyed_at (`hermetic agent destroyed <name> --json`) as\n" +
+          "--since/--until to read one life alone.\n",
+      )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
           historySchema,
-          defined({ name, limit: toInt(opts["limit"] as string | undefined) }),
+          defined({
+            name,
+            limit: toInt(opts["limit"] as string | undefined),
+            since: opts["since"],
+            until: opts["until"],
+          }),
         );
         const events = await ctx.hermetic.agents.history(input);
         if (ctx.flags.json) await outJson(events);
         else await out(`${renderHistory(events)}\n`);
+      }),
+  );
+
+  agent.addCommand(
+    globals(new Cmd("destroyed"))
+      .description("destroyed agents, newest first: when, by whom, and what became of the volume")
+      .argument("[name]", "only this name's incarnations")
+      .option("--limit <n>", "most recent N records")
+      .action(async (name: string | undefined, opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const input = validate(
+          destroyedSchema,
+          defined({ name, limit: toInt(opts["limit"] as string | undefined) }),
+        );
+        const tombstones = await ctx.hermetic.agents.destroyed(input);
+        if (ctx.flags.json) await outJson(tombstones);
+        else await out(`${renderDestroyed(tombstones)}\n`);
       }),
   );
 

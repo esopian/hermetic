@@ -312,7 +312,12 @@ describe("§4.7: a mutation names the fleet it is for", () => {
       target: state.target,
     })) as { op: { id: string } };
     expect((await ops.wait(op.id))?.status).toBe("ok");
-    expect((await agent(ctx, "ember")).status).toBe("destroyed");
+    // §6.7: a finished destroy deletes the row and leaves a tombstone.
+    expect(await refusal(agent(ctx, "ember"))).toMatchObject({ code: "NOT_FOUND" });
+    const gone = (await dispatch(ctx, "agents.destroyed", { name: "ember" })) as Array<{
+      name: string;
+    }>;
+    expect(gone.map((t) => t.name)).toEqual(["ember"]);
   }, 30_000);
 
   /**

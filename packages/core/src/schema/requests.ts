@@ -199,7 +199,14 @@ export type SetAgentInput = z.infer<typeof SetAgentInput>;
 export const DestroyAgentInput = z.object({
   name: AgentName,
   yes: z.boolean(),
-  delete_volume: z.boolean().optional(),
+  /**
+   * §6.7: destroy deletes the data volume by default, because a destroyed
+   * agent releases everything but its history. `keep_volume` leaves the disk
+   * behind, released from the name — retagged `former_agent=<name>` so a later
+   * `create` of the same name cannot adopt it by accident, adoptable on purpose
+   * with `agent create <x> --volume vol-…` (§9.1).
+   */
+  keep_volume: z.boolean().optional(),
 });
 export type DestroyAgentInput = z.infer<typeof DestroyAgentInput>;
 
@@ -706,6 +713,14 @@ export const HistoryInput = z.object({
    */
   name: SecretsTargetName,
   limit: z.number().int().min(1).max(1000).optional(),
+  /**
+   * One incarnation's window (§6.7). Events are keyed by name alone and are
+   * never deleted, so once a destroyed name is reused its log holds two lives
+   * back to back. A tombstone's `created_at`/`destroyed_at` bound the old one;
+   * pass them as `since`/`until` (inclusive) to read only that life.
+   */
+  since: Iso.optional(),
+  until: Iso.optional(),
 });
 export type HistoryInput = z.infer<typeof HistoryInput>;
 
@@ -1071,7 +1086,8 @@ export type PlanRolloutInput = z.infer<typeof PlanRolloutInput>;
 
 export const PlanDestroyInput = z.object({
   name: AgentName,
-  delete_volume: z.boolean().optional(),
+  /** See `DestroyAgentInput.keep_volume`. */
+  keep_volume: z.boolean().optional(),
 });
 export type PlanDestroyInput = z.infer<typeof PlanDestroyInput>;
 
