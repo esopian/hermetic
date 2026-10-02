@@ -1,6 +1,8 @@
 /**
  * How a background-process event reads in one line (§9.2), shared so the
- * thread, the rail, the CLI and the inbox word it identically.
+ * thread, the rail and the CLI word it identically. The inbox does not use the
+ * sentence: a notification is worded from structured fields only
+ * (`notifyProcessEvent`), never from a command or a reply.
  *
  * The block itself is parsed in core (`chat/hermes/process-notice.ts`) and
  * typed by `ProcessEventBlock` in `schema/chat.ts`. This module cannot import
@@ -79,8 +81,8 @@ function firstLine(text: string): string {
 }
 
 /**
- * The event as one sentence, for the rail preview, an inbox row's title and
- * anywhere else there is room for one line: `↩ lead-qa: <reply>` for a DM
+ * The event as one sentence, for the rail preview and anywhere else there is
+ * room for one line: `↩ lead-qa: <reply>` for a DM
  * reply, `■ <command> exited 1` for a failure, `<command> completed` for a
  * clean exit. It never reads as the operator speaking.
  */

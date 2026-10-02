@@ -52,6 +52,7 @@ import type { StackInfo } from "../src/backend/types.ts";
 import type {
   Agent,
   ChatFrame,
+  ChatMessage,
   Notification,
   ProcessEventBlock,
   Session,
@@ -1249,22 +1250,22 @@ describe("the turn fence's lease", () => {
   });
 });
 
+function processEvent(over: Partial<ProcessEventBlock> = {}): ProcessEventBlock {
+  return {
+    kind: "process_event",
+    event: "completion",
+    outcome: "ok",
+    process_id: "proc_a1",
+    status: "completed normally",
+    exit_code: 0,
+    command: "bun run build",
+    raw: "[IMPORTANT: …]",
+    ...over,
+  };
+}
+
 describe("chat.message: a background-process event", () => {
   const WHERE_EVENT = { instance: "atlas", bot: "default" };
-
-  function processEvent(over: Partial<ProcessEventBlock> = {}): ProcessEventBlock {
-    return {
-      kind: "process_event",
-      event: "completion",
-      outcome: "ok",
-      process_id: "proc_a1",
-      status: "completed normally",
-      exit_code: 0,
-      command: "bun run build",
-      raw: "[IMPORTANT: …]",
-      ...over,
-    };
-  }
 
   test("a routine event never raises a row", () => {
     const store = new MemoryNotificationStore();
@@ -1284,26 +1285,27 @@ describe("chat.message: a background-process event", () => {
     expect(rows(store)).toEqual([]);
   });
 
-  test("a failure raises one row worded by the shared sentence, however often it is polled", () => {
+  test("a failure raises one row worded from structured fields, however often it is polled", () => {
     const store = new MemoryNotificationStore();
     const failed = processEvent({
       outcome: "failed",
       status: "exited",
       exit_code: 1,
       command: "bun test packages/ui",
+      output_tail: "FAIL secret-looking output",
     });
     for (let poll = 0; poll < 3; poll++) {
       notifyProcessEvent(depsFor(store), WHERE_EVENT, failed, "m-1");
     }
     const [row, ...rest] = rows(store);
     expect(rest).toEqual([]);
-    expect(row?.title).toBe("■ bun test packages/ui exited 1");
+    expect(row?.title).toBe("A background command failed on default on atlas (exit 1)");
     expect(row?.class).toBe("bad");
     expect(row?.ref).toBe("atlas/default");
     expect(row?.key).toBe(`${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:proc_a1`);
   });
 
-  test("a DM reply raises an info row, and a different process is a different row", () => {
+  test("a DM reply names who replied, never what they said", () => {
     const store = new MemoryNotificationStore();
     const reply = (id: string) =>
       processEvent({
@@ -1311,11 +1313,52 @@ describe("chat.message: a background-process event", () => {
         command: "python bot_mode_dm.py",
         dm: { to_profile: "lead-qa", reply: "looks fine\nship it", warnings: [] },
       });
-    notifyProcessEvent(depsFor(store), WHERE_EVENT, reply("proc_1"), "m-1");
-    notifyProcessEvent(depsFor(store), WHERE_EVENT, reply("proc_2"), "m-2");
+    const where = { ...WHERE_EVENT, title: "Bot Chat" };
+    notifyProcessEvent(depsFor(store), where, reply("proc_1"), "m-1");
+    notifyProcessEvent(depsFor(store), where, reply("proc_2"), "m-2");
     const titles = rows(store).map((r) => r.title);
-    expect(titles).toEqual(["↩ lead-qa: looks fine", "↩ lead-qa: looks fine"]);
+    expect(titles).toEqual([
+      "lead-qa replied to Bot Chat on atlas",
+      "lead-qa replied to Bot Chat on atlas",
+    ]);
+    expect(rows(store).map((r) => r.detail)).toEqual(["default", "default"]);
     expect(rows(store).map((r) => r.class)).toEqual(["info", "info"]);
+  });
+
+  test("subagents and the other failure statuses read from fixed labels", () => {
+    const store = new MemoryNotificationStore();
+    const delegation = (outcome: "ok" | "failed", id: string) =>
+      processEvent({
+        event: "delegation",
+        outcome,
+        process_id: null,
+        delegation: { id, batch: true, total: 2, succeeded: 1, tasks: [] },
+      });
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, delegation("ok", "d-1"), "m-1");
+    notifyProcessEvent(depsFor(store), WHERE_EVENT, delegation("failed", "d-2"), "m-2");
+    notifyProcessEvent(
+      depsFor(store),
+      WHERE_EVENT,
+      processEvent({ process_id: "p-3", outcome: "failed", status: "failed to start", exit_code: -1 }),
+      "m-3",
+    );
+    notifyProcessEvent(
+      depsFor(store),
+      WHERE_EVENT,
+      processEvent({
+        process_id: "p-4",
+        outcome: "failed",
+        status: "marked lost because the process backend disappeared",
+        exit_code: null,
+      }),
+      "m-4",
+    );
+    expect(rows(store).map((r) => r.title)).toEqual([
+      "Subagents finished for default on atlas",
+      "Subagents finished for default on atlas with failures",
+      "A background command failed to start on default on atlas",
+      "A background command was lost on default on atlas",
+    ]);
   });
 
   test("a notice with no process id is keyed on the message that carried it", () => {
@@ -1326,10 +1369,10 @@ describe("chat.message: a background-process event", () => {
     expect(rows(store).map((r) => r.key)).toEqual([`${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:m-9`]);
   });
 
-  test("a long DM reply is cut to a one-line title", () => {
+  test("a long bot title is cut to a one-line title", () => {
     const store = new MemoryNotificationStore();
-    const long = processEvent({ dm: { to_profile: "lead-qa", reply: "x".repeat(400), warnings: [] } });
-    notifyProcessEvent(depsFor(store), WHERE_EVENT, long, "m-1");
+    const failed = processEvent({ outcome: "failed", status: "exited", exit_code: 1 });
+    notifyProcessEvent(depsFor(store), { ...WHERE_EVENT, title: "x".repeat(400) }, failed, "m-1");
     const title = rows(store)[0]?.title ?? "";
     expect(title.length).toBeLessThanOrEqual(140);
     expect(title.endsWith("…")).toBe(true);
@@ -1342,5 +1385,150 @@ describe("chat.message: a background-process event", () => {
     };
     const failed = processEvent({ outcome: "failed", status: "exited", exit_code: 2 });
     expect(notifyProcessEvent(depsFor(store), WHERE_EVENT, failed, "m-1")).toBe(false);
+  });
+});
+
+describe("chat.event: a roster movement is classified by one history read", () => {
+  /** Between `AT` and `LATER`: inside the window a moved bot's read looks at. */
+  const DURING = "2026-09-17T09:20:00.000Z";
+
+  function row(id: string, at: string, over: Partial<ChatMessage> = {}): ChatMessage {
+    return {
+      id,
+      session: SESSION,
+      role: "bot",
+      at,
+      blocks: [{ kind: "text", markdown: "the answer" }],
+      ...over,
+    };
+  }
+
+  function eventRow(id: string, at: string, over: Partial<ProcessEventBlock> = {}): ChatMessage {
+    return row(id, at, { role: "system", blocks: [processEvent(over)] });
+  }
+
+  /** A roster that reports `state.at`, a history that answers `state.transcript`, and a call log. */
+  function classifying(state: { at: string; transcript: ChatMessage[] | (() => ChatMessage[]) }): {
+    client: Partial<HermesChatClient>;
+    reads: number[];
+  } {
+    const reads: number[] = [];
+    return {
+      reads,
+      client: {
+        swarm: (box) =>
+          Promise.resolve(
+            swarm(box.instance, { bots: [bot({ instance: box.instance, last_message_at: state.at })] }),
+          ),
+        history: (_box, _bot, opts) => {
+          reads.push(opts?.limit ?? -1);
+          const t = state.transcript;
+          return Promise.resolve(typeof t === "function" ? t() : t);
+        },
+      },
+    };
+  }
+
+  test("a first sighting reads no history at all", async () => {
+    const store = new MemoryNotificationStore();
+    const { client, reads } = classifying({ at: AT, transcript: [eventRow("e1", AT)] });
+    await harness(client, store).swarms({ instance: "atlas" });
+    expect(reads).toEqual([]);
+    expect(rows(store)).toEqual([]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(AT);
+  });
+
+  test("a movement that is only a routine event raises nothing and still moves the watermark", async () => {
+    const store = new MemoryNotificationStore();
+    const state = { at: AT, transcript: [row("r0", AT), eventRow("e1", LATER)] };
+    const { client, reads } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    expect(reads).toHaveLength(1);
+    expect(rows(store)).toEqual([]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+  });
+
+  test("a failed command raises its own row, worded without its command, and only once", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        eventRow("e1", LATER, {
+          outcome: "failed",
+          status: "exited",
+          exit_code: 2,
+          command: "deploy --token FIXTURE",
+          output_tail: "boom",
+        }),
+      ],
+    };
+    const { client, reads } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    await chat.swarms({ instance: "atlas" });
+    const found = rows(store);
+    expect(found.map((r) => r.key)).toEqual([`${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:proc_a1`]);
+    expect(found[0]?.title).toBe("A background command failed on Bot Chat on atlas (exit 2)");
+    expect(found[0]?.title).not.toContain("deploy");
+    expect(found[0]?.title).not.toContain("boom");
+    // The second poll saw no movement, so it read nothing.
+    expect(reads).toHaveLength(1);
+  });
+
+  test("a DM reply beside the bot's own reply raises both rows", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        eventRow("e1", DURING, {
+          process_id: "proc_dm",
+          dm: { to_profile: "lead-qa", reply: "ship it", warnings: [] },
+        }),
+        row("r1", LATER),
+      ],
+    };
+    const { client } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    const keys = rows(store)
+      .map((r) => r.key ?? "")
+      .sort();
+    expect(keys).toEqual([
+      `${CHAT_EVENT_PREFIX}${FLEET}:atlas/default:proc_dm`,
+      `${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`,
+    ]);
+    expect(rows(store).find((r) => r.key?.startsWith(CHAT_EVENT_PREFIX))?.title).toBe(
+      "lead-qa replied to Bot Chat on atlas",
+    );
+  });
+
+  test("a history read that fails falls back to the generic row, and the roster still answers", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: (): ChatMessage[] => {
+        throw new Error("no route to host");
+      },
+    };
+    const { client, reads } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    const result = await chat.swarms({ instance: "atlas" });
+    expect(reads).toHaveLength(1);
+    expect(result.swarms.map((s) => s.reachable)).toEqual([true]);
+    expect(rows(store).map((r) => r.key)).toEqual([
+      `${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`,
+    ]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
   });
 });
