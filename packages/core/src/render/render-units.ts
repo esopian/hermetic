@@ -8,9 +8,11 @@ import {
   HERMES_DASHBOARD_PORT,
   HERMES_DASHBOARD_UNIT,
   HERMES_HOME,
+  HERMES_LAZY_TARGET,
   HERMES_NOFILE_LIMIT,
   HERMES_REVISION_ENV,
   HERMES_TUI_DIR,
+  HERMES_USER_PREFIX,
   HERMES_WEB_DIST_DIR,
   PROVIDERS,
   browserIdentities,
@@ -129,27 +131,37 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
      */
     "Environment=DEBIAN_FRONTEND=noninteractive",
     /**
-     * The venv is root's and the process is `hermes`, so a lazy install is a
-     * permission error rather than a feature.
+     * On-demand installs, redirected out of the venv — upstream's own container
+     * recipe, both lines of it (`Dockerfile:430` and `:443`).
      *
      * Upstream installs a handful of optional backends at first use —
      * `tools/lazy_deps.py`'s `LAZY_DEPS` table covers search, TTS/STT, wake
-     * word, OTLP and two providers, all deliberately outside the `[all]` extra
-     * so they resolve on demand. Against hermetic's topology that first use is
-     * an EACCES in the middle of a tool call; with this variable it is
-     * upstream's own clean "feature unavailable" instead
-     * (`lazy_deps.py:606-607`). The official image has the same topology and
-     * sets the same variable (`Dockerfile:393`).
+     * word, OTLP, memory providers — plus plugin dependencies, all deliberately
+     * outside `[all]` so they resolve on demand. The venv is root's and the
+     * process is `hermes`, so an install *into the venv* would be an EACCES in
+     * the middle of a tool call. The disable flag forbids exactly that, and
+     * only that: with a target named, `_allow_lazy_installs` allows installs
+     * into the target (`lazy_deps.py:325-337`), which `uv pip install --target`
+     * fills under a constraints file pinning every core distribution, and which
+     * Hermes appends to the end of `sys.path` at startup so core always wins.
      *
-     * Without `HERMES_LAZY_INSTALL_TARGET`, and that is the decision, not an
-     * omission: `_allow_lazy_installs` returns `_lazy_install_target() is not
-     * None` when the disable flag is set (`lazy_deps.py:334-335`), so naming a
-     * target would *re-enable* installs into it. Upstream sets it because its
-     * image has a durable writable volume to redirect into and wants the
-     * backends; hermetic wants the box's Python closure to be what the pinned
-     * `hermes_ref` resolved and nothing else.
+     * The target is the account's (`HERMES_LAZY_TARGET`, under `$HERMES_HOME`),
+     * so it survives a recreate. Upstream stamps it with the interpreter's ABI
+     * and empties it itself when that moves; a bumped pin in `LAZY_DEPS` is
+     * reinstalled on next use. The cost, accepted: a box's Python closure is
+     * the pinned `hermes_ref` *plus* whatever its features asked for, fetched
+     * from PyPI at the time.
      */
     "Environment=HERMES_DISABLE_LAZY_INSTALLS=1",
+    "Environment=HERMES_LAZY_INSTALL_TARGET=" + HERMES_LAZY_TARGET,
+    /**
+     * `npm install -g` into the account's own prefix rather than Node's, which
+     * is root's (`HERMES_USER_PREFIX`). On both units because an agent's shell
+     * is a child of whichever one is serving the conversation — the dashboard
+     * for its own chat, the gateway for Slack and the other platforms. A plain
+     * `sudo` scrubs it, so a root install still goes where root's would.
+     */
+    "Environment=NPM_CONFIG_PREFIX=" + HERMES_USER_PREFIX,
     // The ceiling Hermes raises its own soft limit toward; `runtime.nofile_soft_limit`
     // in the seeded config is the number it asks for, and the two are the same
     // number on purpose.
