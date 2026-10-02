@@ -502,6 +502,16 @@ export function ProcessEventRow({
   );
 }
 
+/** How many process ids a burst names before it counts the rest. */
+const BURST_IDS_SHOWN = 3;
+
+/** `proc_1c0f, proc_5a7d, proc_9e4b +2`: the line stays one line; the title has them all. */
+function burstIds(ids: readonly string[]): string {
+  const shown = ids.slice(0, BURST_IDS_SHOWN).map(shortProcessId).join(", ");
+  const rest = ids.length - BURST_IDS_SHOWN;
+  return rest > 0 ? `${shown} +${rest}` : shown;
+}
+
 /**
  * Two or more routine events with nothing said between them, as one line:
  * `4 events · 3 completed · 1 watch match · proc_51c0, … · 00:26:04–00:26:40`.
@@ -530,8 +540,8 @@ export function ProcessBurst({ entries }: { entries: readonly EventEntry[] }) {
               </span>
             ))}
             {ids.length > 0 ? (
-              <span className="dim" title={ids.join(", ")}>
-                {`· ${ids.map(shortProcessId).join(", ")}`}
+              <span className="dim ids" title={ids.join(", ")}>
+                {`· ${burstIds(ids)}`}
               </span>
             ) : null}
             <span className="t">{range}</span>

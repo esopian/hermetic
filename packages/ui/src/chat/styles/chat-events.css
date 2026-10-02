@@ -214,6 +214,25 @@
 .ch-ev-burst[open] > summary .ch-ev-line::before {
   content: "▾";
 }
+/* A burst's line never wraps: the id list is what gives way, cut with an
+   ellipsis (the full list is on its title), so the time range stays on the
+   right of the same line rather than dropping under it. */
+.ch-ev-burst > summary .ch-ev-line {
+  flex-wrap: nowrap;
+}
+.ch-ev-burst > summary .ch-ev-line > * {
+  flex: none;
+}
+.ch-ev-burst > summary .ch-ev-line .ids {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-ev-burst > summary .ch-ev-line .t {
+  white-space: nowrap;
+}
 .ch-ev-inner {
   margin-top: 4px;
   padding-left: 12px;

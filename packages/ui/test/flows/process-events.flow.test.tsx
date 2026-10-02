@@ -148,3 +148,25 @@ test("failures only hides routine rows and compact brings them back", async () =
   expect(failedRow()).not.toBeNull();
   expect(dmCard()).not.toBeNull();
 });
+
+test("the burst line names three process ids and counts the rest", async () => {
+  await openKestrel();
+  const ids = burst()!.querySelector<HTMLElement>("summary .ids")!;
+  const all = ids.title.split(", ");
+  expect(all.length).toBeGreaterThan(3);
+  expect(ids.textContent).toMatch(new RegExp(`\\+${all.length - 3}$`));
+  expect(ids.textContent!.split(",")).toHaveLength(3);
+});
+
+test("the rail previews a bot whose newest row is an event as its sentence", async () => {
+  await openKestrel();
+  const rows = [...document.querySelectorAll<HTMLElement>(".ch-conv-main")];
+  const kestrel = rows.find(
+    (row) => row.querySelector(".ch-conv-name")?.textContent === FIXTURE.sseAgent,
+  );
+  const preview = kestrel?.querySelector(".ch-conv-prev")?.textContent ?? "";
+  // The transcript ends on the subagent batch, so the row quotes its sentence.
+  expect(preview).toMatch(/^subagents \d+ of \d+ finished/);
+  expect(preview).not.toContain("[IMPORTANT");
+  expect(preview).not.toContain("[ASYNC DELEGATION");
+});

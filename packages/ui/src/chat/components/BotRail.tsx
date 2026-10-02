@@ -262,7 +262,9 @@ export function BotRail({
                             </b>
                           </span>
                           <span className="ch-conv-prev">
-                            <RedactedText text={bot.preview ?? bot.description ?? bot.name} />
+                            {/* `||`, not `??`: a box can send an empty description, and an empty
+                                string would leave the row blank under the name. */}
+                            <RedactedText text={bot.preview || bot.description || bot.name} />
                           </span>
                         </span>
                         <span className="ch-conv-right">
