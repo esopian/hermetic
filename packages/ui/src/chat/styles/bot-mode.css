@@ -372,11 +372,17 @@
   color: var(--text-muted);
   padding: 0 20px;
 }
+/* Flex, not the shared grid: a header here carries a varying set of parts (the
+   fold twisty, the offline reason, a folded bucket's badge), and a fixed column
+   count wraps the extra one onto a line of its own. */
 .bm-rail .ch-bucket {
+  display: flex;
   gap: 9px;
 }
 .bm-rail .ch-bucket .ch-time {
   margin-left: auto;
+  flex: none;
+  white-space: nowrap;
 }
 /* A closed capability gate. No new palette: the existing note colours, plus the
    warn rail the rest of the shell uses for "this is not settled". */
@@ -406,6 +412,7 @@
   padding-left: 10px;
 }
 .bm-rail .bm-offline-reason {
+  flex: 1 1 0;
   min-width: 0;
   font: 10px / 1 var(--mono);
   color: var(--text-muted);
@@ -415,4 +422,158 @@
 }
 .bm-rail .ch-bucket .bm-offline-reason + .ch-time {
   margin-left: 0;
+}
+/* A foldable bucket header is a button; the offline one stays a label. */
+.bm-rail button.ch-bucket:disabled {
+  cursor: default;
+}
+.bm-rail .ch-bucket .ch-unread {
+  margin-left: 0;
+}
+/* The pin sits over the row's timestamp and only shows on hover or focus, so an
+   idle rail reads exactly as it did. A pinned row says so by where it sits. */
+.bm-row {
+  position: relative;
+}
+.bm-pin {
+  all: unset;
+  box-sizing: border-box;
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg3);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+}
+.bm-row:hover .bm-pin,
+.bm-pin:focus-visible {
+  opacity: 1;
+}
+.bm-pin:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg3) 80%, transparent);
+}
+.bm-pin[aria-pressed="true"] {
+  color: var(--acc);
+}
+.bm-pin:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+/* The timestamp gives way to the pin, rather than the two overlapping. */
+.bm-row:hover .ch-conv-right .ch-time,
+.bm-row:focus-within .ch-conv-right .ch-time {
+  visibility: hidden;
+}
+.bm-pin-where {
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+/* ── rail layout: headings, indent, pinned, a tight top ─────────────────────
+   An instance header is a heading over bots, not one of them: flush left, no
+   face, uppercase, on a band. Bot rows indent so their avatars start under the
+   instance name, which is what makes the nesting readable at a glance. */
+.bm-rail .ch-bucket.bm-inst {
+  height: 30px;
+  margin-top: 0;
+  padding: 0 12px 0 10px;
+  gap: 6px;
+  background: var(--bg2);
+  border-top: 1px solid var(--line2);
+  border-bottom: 1px solid var(--line);
+}
+.bm-rail .bm-inst .tw {
+  flex: none;
+  width: 10px;
+  text-align: center;
+  font-size: 9px;
+  color: var(--fg2);
+}
+/* The name gives way last: the offline reason shrinks first, and its full text
+   is on hover. */
+.bm-rail .bm-inst .kicker {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 800 11px / 1 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.bm-rail .bm-inst.offline .kicker {
+  color: var(--text-muted);
+}
+[data-skin="soft"] .bm-rail .bm-row > .ch-conv {
+  padding-left: 26px;
+}
+
+/* Pinned is its own block: an accent-tinted panel with an accent heading, and a
+   heavier rule under it before the first instance. */
+.bm-pinned {
+  --bm-pin-bg: color-mix(in srgb, var(--acc) 7%, var(--bg));
+  background: var(--bm-pin-bg);
+  border-bottom: 2px solid var(--line2);
+}
+.bm-rail .ch-group.bm-pinned-head {
+  height: 30px;
+  margin-top: 0;
+  padding: 0 12px 0 10px;
+  background: var(--bm-pin-bg);
+  border: 0;
+}
+.bm-rail .bm-pinned-head .kicker {
+  font: 800 11px / 1 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--acc);
+}
+
+/* The chrome above the list: tabs, search, filters, each as short as it can be
+   and still be a target. */
+[data-skin="soft"] .bm-rail .ch-filters button {
+  height: 30px;
+}
+[data-skin="soft"] .bm-rail .ch-rail-top {
+  padding: 8px 10px;
+  gap: 6px;
+}
+[data-skin="soft"] .bm-rail .ch-search,
+[data-skin="soft"] .bm-rail .ch-newchat {
+  height: 30px;
+}
+[data-skin="soft"] .bm-rail .ch-newchat {
+  width: 30px;
+}
+.bm-inst-activity {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc);
+  visibility: hidden;
+}
+.bm-inst-activity[data-avatar-activity="thinking"],
+.bm-inst-activity[data-avatar-activity="streaming"] {
+  visibility: visible;
+  animation: bm-inst-pulse 1.2s ease-in-out infinite;
+}
+@keyframes bm-inst-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bm-inst-activity[data-avatar-activity] {
+    animation: none;
+  }
 }
