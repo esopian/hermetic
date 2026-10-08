@@ -151,7 +151,7 @@ export function testHermetic(deps: HermeticDeps) {
     // production (`attach.ts`). A test that has to wait even one of those is a
     // test that times out, so the poll is a tick here; the tests that are
     // *about* the waiting drive it directly.
-    attach: { pollMs: 1, progressMs: 0 },
+    attach: { pollMs: 1, progressMs: 0, tailnetOfflineMs: 0 },
     // §3.6's build-drift warning is off unless a test asks for it: the real
     // resolver walks this repository's sources, which no test should do by
     // accident, and every existing assertion about a create's events predates it.
@@ -193,7 +193,11 @@ export function testHermetic(deps: HermeticDeps) {
  */
 export function testContext(backend: Backend, overrides: Partial<CoreContext> = {}): CoreContext {
   const config = overrides.config === undefined ? FIXTURE_CONFIG : overrides.config;
-  const runtime = createAgentRuntime({ backend, config, attach: { pollMs: 1, progressMs: 0 } });
+  const runtime = createAgentRuntime({
+    backend,
+    config,
+    attach: { pollMs: 1, progressMs: 0, tailnetOfflineMs: 0 },
+  });
   return {
     ...runtime,
     scanAgents: runtime.scanAgentsAllowingMissingTable,

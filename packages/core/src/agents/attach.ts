@@ -112,6 +112,12 @@ export interface AttachDeps {
   /** Injected by tests so a poll loop is not a real five seconds. */
   pollMs?: number | undefined;
   progressMs?: number | undefined;
+  /**
+   * `destroy`'s bounded wait for its tailnet devices to read offline
+   * (`TAILNET_OFFLINE_WAIT_MS`, `fleet/tailnet-devices.ts`). Carried here
+   * because it runs on this same poll and clock; tests set it to zero.
+   */
+  tailnetOfflineMs?: number | undefined;
   now?: () => number;
   /** The jitter's source. Injected so a test can assert an exact delay. */
   random?: () => number;

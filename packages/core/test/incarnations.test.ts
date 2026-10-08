@@ -36,6 +36,7 @@ import { drain, testHermetic } from "./helpers.ts";
 const F = "fleetaaa";
 const T1 = "2026-01-01T00:00:00.000Z";
 const T2 = "2026-02-01T00:00:00.000Z";
+const T3 = "2026-03-01T00:00:00.000Z";
 const RECENT = new Date().toISOString();
 
 interface Stores {
@@ -92,11 +93,51 @@ function hasState(s: Stores, name: string): boolean[] {
   ];
 }
 
+/**
+ * The purge `hermetic.ts` hands the reconciler: the release's, less its
+ * incarnation step, so it never drops the claim the reconciler just won.
+ */
+function reconcilePurge(s: Stores) {
+  return createLocalAgentPurge({ ...s, incarnations: undefined });
+}
+
+/** Set `name`'s record outright, whatever it held. */
+function record(s: Stores, name: string, at: string): void {
+  if (!s.incarnations.claim(F, name, s.incarnations.get(F, name), at)) {
+    throw new Error(`could not record ${name}`);
+  }
+}
+
+/**
+ * The real purge, counting the names it was asked for, and holding the purge
+ * of `hold` until `release()` — so a test can park one reconcile mid-scan while
+ * another runs to completion.
+ */
+function purgeSpy(s: Stores, hold?: string) {
+  const purgeLocal = reconcilePurge(s);
+  const calls: string[] = [];
+  const held = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  return {
+    calls,
+    started: started.promise,
+    release: () => held.resolve(),
+    purge: async (fleet: string, name: string) => {
+      calls.push(name);
+      if (name === hold) {
+        started.resolve();
+        await held.promise;
+      }
+      await purgeLocal(fleet, name);
+    },
+  };
+}
+
 function reconcilerFor(s: Stores, fleet: string | null = F) {
   return createIncarnationReconciler({
     store: s.incarnations,
     fleet: () => fleet,
-    purge: createLocalAgentPurge(s),
+    purge: reconcilePurge(s),
   });
 }
 
@@ -106,8 +147,8 @@ for (const kind of ["memory", "sqlite"] as const) {
       const s = build(kind);
       seed(s, "alpha");
       seed(s, "beta");
-      s.incarnations.set(F, "alpha", T1);
-      s.incarnations.set(F, "beta", T1);
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
 
       await reconcilerFor(s)(
         [
@@ -136,7 +177,7 @@ for (const kind of ["memory", "sqlite"] as const) {
      */
     test("a delayed scan carrying an older created_at neither purges nor records", async () => {
       const s = build(kind);
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       const reconcile = reconcilerFor(s);
       await reconcile([{ name: "alpha", created_at: T2 }], { complete: true });
       // The operator sets up the successor box after the newer scan.
@@ -160,7 +201,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       const s = build(kind);
       seed(s, "alpha");
       const forged = "3000-01-01T00:00:00.000Z";
-      s.incarnations.set(F, "alpha", forged);
+      record(s, "alpha", forged);
 
       await reconcilerFor(s)([{ name: "alpha", created_at: T2 }], { complete: true });
 
@@ -172,7 +213,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     test("the same created_at purges nothing", async () => {
       const s = build(kind);
       seed(s, "alpha");
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await reconcilerFor(s)([{ name: "alpha", created_at: T1 }], { complete: false });
       expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
       s.close();
@@ -190,7 +231,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     test("a recorded name absent from a complete scan is purged and forgotten", async () => {
       const s = build(kind);
       seed(s, "alpha");
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await reconcilerFor(s)([], { complete: true });
       expect(hasState(s, "alpha")).toEqual([false, false, false, false]);
       expect(s.incarnations.list(F).has("alpha")).toBe(false);
@@ -201,12 +242,12 @@ for (const kind of ["memory", "sqlite"] as const) {
       const s = build(kind);
       seed(s, "alpha");
       seed(s, "beta");
-      s.incarnations.set(F, "alpha", T1);
-      s.incarnations.set(F, "beta", T1);
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
       const reconcile = createIncarnationReconciler({
         store: s.incarnations,
         fleet: () => F,
-        purge: createLocalAgentPurge(s),
+        purge: reconcilePurge(s),
         unparseable: () => ["alpha"],
       });
 
@@ -240,12 +281,12 @@ for (const kind of ["memory", "sqlite"] as const) {
       const s = build(kind);
       seed(s, "alpha");
       seed(s, "beta");
-      s.incarnations.set(F, "alpha", T1);
-      s.incarnations.set(F, "beta", T1);
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
       await createIncarnationReconciler({
         store: s.incarnations,
         fleet: () => F,
-        purge: createLocalAgentPurge(s),
+        purge: reconcilePurge(s),
         unparseable: () => {
           throw new Error("probe broke");
         },
@@ -259,11 +300,11 @@ for (const kind of ["memory", "sqlite"] as const) {
       const s = build(kind);
       seed(s, "alpha");
       seed(s, "beta");
-      s.incarnations.set(F, "alpha", T1);
-      s.incarnations.set(F, "beta", T1);
-      s.incarnations.set(F, "gamma", T1);
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
+      record(s, "gamma", T1);
       let skipped = ["beta"];
-      const purgeLocal = createLocalAgentPurge(s);
+      const purgeLocal = reconcilePurge(s);
       const reconcile = createIncarnationReconciler({
         store: s.incarnations,
         fleet: () => F,
@@ -292,7 +333,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     test("a single-row read never treats an unlisted name as released", async () => {
       const s = build(kind);
       seed(s, "alpha");
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await reconcilerFor(s)([{ name: "beta", created_at: T1 }], { complete: false });
       expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
       s.close();
@@ -301,7 +342,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     test("a legacy destroyed row counts as absent", async () => {
       const s = build(kind);
       seed(s, "alpha");
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await reconcilerFor(s)([{ name: "alpha", created_at: T1, status: "destroyed" }], {
         complete: true,
       });
@@ -312,7 +353,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     test("no frozen fleet, no reconciliation; a failing purge still records", async () => {
       const s = build(kind);
       seed(s, "alpha");
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await reconcilerFor(s, null)([{ name: "alpha", created_at: T2 }], { complete: true });
       expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
 
@@ -328,9 +369,159 @@ for (const kind of ["memory", "sqlite"] as const) {
       s.close();
     });
 
+    test("claim and forgetIf write only over the value the caller read", () => {
+      const s = build(kind);
+      const store = s.incarnations;
+      expect(store.claim(F, "alpha", undefined, T1)).toBe(true);
+      expect(store.claim(F, "alpha", undefined, T2)).toBe(false);
+      expect(store.claim(F, "alpha", T2, T3)).toBe(false);
+      expect(store.get(F, "alpha")).toBe(T1);
+      expect(store.claim(F, "alpha", T1, T2)).toBe(true);
+      expect(store.get(F, "alpha")).toBe(T2);
+      expect(store.forgetIf(F, "alpha", T1)).toBe(false);
+      expect(store.get(F, "alpha")).toBe(T2);
+      expect(store.forgetIf(F, "alpha", T2)).toBe(true);
+      expect(store.get(F, "alpha")).toBeUndefined();
+      expect(store.forgetIf(F, "alpha", T2)).toBe(false);
+      s.close();
+    });
+
+    /**
+     * Two reconciles overlapping on one store (two reads in one process, or the
+     * CLI and the app on one file). Both read alpha's record as T1. The older
+     * scan sees the predecessor (T2) and parks on an earlier row's purge; the
+     * newer one sees the successor (T3), records it, and the operator sets the
+     * successor up. When the older scan resumes, its decision about alpha rests
+     * on a record that has moved on: it must neither purge the successor's
+     * state nor move the record back to T2.
+     */
+    test("an older scan finishing last neither purges the successor nor records the predecessor", async () => {
+      const s = build(kind);
+      seed(s, "alpha");
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
+      const older = purgeSpy(s, "beta");
+      const newer = purgeSpy(s);
+      const reconcileOlder = createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: older.purge,
+      });
+      const reconcileNewer = createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: newer.purge,
+      });
+
+      const olderDone = reconcileOlder(
+        [
+          { name: "beta", created_at: T2 },
+          { name: "alpha", created_at: T2 },
+        ],
+        { complete: false },
+      );
+      await older.started;
+      await reconcileNewer([{ name: "alpha", created_at: T3 }], { complete: false });
+      expect(s.incarnations.get(F, "alpha")).toBe(T3);
+      seed(s, "alpha");
+      older.release();
+      await olderDone;
+
+      expect(older.calls).toEqual(["beta"]);
+      expect(newer.calls).toEqual(["alpha"]);
+      expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+      expect(s.incarnations.get(F, "alpha")).toBe(T3);
+      expect(s.incarnations.get(F, "beta")).toBe(T2);
+      s.close();
+    });
+
+    /**
+     * The other order: both scans read alpha's record as T1 and park on an
+     * earlier row; the older one resumes first and claims the predecessor, so
+     * the newer one, deciding from the stale T1, loses its claim. It must
+     * re-read and still record the successor, not leave the record on T2.
+     */
+    test("a newer scan that loses its claim to an older one still records itself", async () => {
+      const s = build(kind);
+      seed(s, "alpha");
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
+      record(s, "gamma", T1);
+      const older = purgeSpy(s, "beta");
+      const newer = purgeSpy(s, "gamma");
+      const olderDone = createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: older.purge,
+      })(
+        [
+          { name: "beta", created_at: T2 },
+          { name: "alpha", created_at: T2 },
+        ],
+        { complete: false },
+      );
+      await older.started;
+      const newerDone = createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: newer.purge,
+      })(
+        [
+          { name: "gamma", created_at: T2 },
+          { name: "alpha", created_at: T3 },
+        ],
+        { complete: false },
+      );
+      await newer.started;
+      older.release();
+      await olderDone;
+      expect(s.incarnations.get(F, "alpha")).toBe(T2);
+      newer.release();
+      await newerDone;
+
+      expect(s.incarnations.get(F, "alpha")).toBe(T3);
+      expect(older.calls).toEqual(["beta", "alpha"]);
+      expect(newer.calls).toEqual(["gamma", "alpha"]);
+      s.close();
+    });
+
+    /**
+     * A complete scan that no longer sees alpha (released) parks on an earlier
+     * purge; meanwhile a newer read finds alpha re-taken and records the
+     * successor. The absence the older scan saw is out of date: it must not
+     * forget the successor's record or purge its state.
+     */
+    test("an absence from an older complete scan does not release a successor recorded meanwhile", async () => {
+      const s = build(kind);
+      seed(s, "alpha");
+      record(s, "alpha", T1);
+      record(s, "beta", T1);
+      const older = purgeSpy(s, "beta");
+      const newer = purgeSpy(s);
+      const olderDone = createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: older.purge,
+      })([{ name: "beta", created_at: T2 }], { complete: true });
+      await older.started;
+      await createIncarnationReconciler({
+        store: s.incarnations,
+        fleet: () => F,
+        purge: newer.purge,
+      })([{ name: "alpha", created_at: T3 }], { complete: false });
+      seed(s, "alpha");
+      older.release();
+      await olderDone;
+
+      expect(older.calls).toEqual(["beta"]);
+      expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+      expect(s.incarnations.get(F, "alpha")).toBe(T3);
+      s.close();
+    });
+
     test("the release's own purge forgets the record, so the next agent is a first sighting", async () => {
       const s = build(kind);
-      s.incarnations.set(F, "alpha", T1);
+      record(s, "alpha", T1);
       await createLocalAgentPurge(s)(F, "alpha");
       expect(s.incarnations.list(F).has("alpha")).toBe(false);
       s.close();
@@ -385,7 +576,15 @@ describe("another laptop's release reaches this laptop's local state", () => {
     expect(b.instanceListening.list(fleet)).toEqual(["atlas"]);
     expect(b.notifications.seenStatus(fleet, "chat:ember/bot")).toBeNull();
     expect(b.notifications.seenStatus(fleet, "chat:atlas/bot")).toBe("x");
-    expect(b.incarnations.list(fleet).get("ember")).toBe(successor);
+    // Recorded by the same list that purged: the reconciler's purge must not
+    // forget the claim it just won (`hermetic.ts` builds it without the store).
+    expect(b.incarnations.get(fleet, "ember")).toBe(successor);
+
+    // The operator sets up the successor; the next list leaves it alone.
+    b.instanceListening.set(fleet, "ember", true);
+    await b.hermetic.agents.list();
+    expect(b.instanceListening.list(fleet)).toEqual(["atlas", "ember"]);
+    expect(b.incarnations.get(fleet, "ember")).toBe(successor);
   });
 
   test("the name released and not re-taken: B purges on its next list", async () => {

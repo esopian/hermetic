@@ -56,7 +56,7 @@ export function createDestroy(deps: DestroyDeps) {
     unwind,
   } = deps.ctx;
 
-  const { removeTailnetDevices } = createTailnetCleanup(deps.ctx);
+  const { removeTailnetDevices, waitTailnetOffline } = createTailnetCleanup(deps.ctx);
   const { releaseName, existingTombstone, volumeHold } = createReleaseName({
     ctx: deps.ctx,
     purgeLocal: deps.purgeLocal,
@@ -385,9 +385,9 @@ export function createDestroy(deps: DestroyDeps) {
        * volume to come free. The box just asked to terminate is usually still
        * online at this point, so an online device is passed over silently
        * (`online: "defer"`): the sweep runs again once every instance is
-       * `terminated`, below, and that pass deletes whatever still holds the
-       * name. An agent created under this name later then gets the name,
-       * instead of `<name>-2`.
+       * `terminated` and its node has had time to read offline, below, and
+       * that pass deletes what has gone. An agent created under this name
+       * later then gets the name, instead of `<name>-2`.
        */
       checkAbort(opts.signal, "tailnet");
       /**
@@ -519,22 +519,21 @@ export function createDestroy(deps: DestroyDeps) {
        * The second tailnet pass (§6.5, §6.7). The first ran while the boxes
        * were still going down, when their nodes were usually still online;
        * every instance tagged for the name — the row's and every stray — is
-       * `terminated` now, confirmed above. A matching device that still reads
-       * online is therefore a node whose box is gone, and the flag is only
-       * Tailscale's lag in noticing (a node can show online for minutes after
-       * its machine stopped). So this pass deletes such a match even online
-       * (`online: "delete"`): left, it would hold the name, and the next node
-       * to join as this agent would be admitted as `<name>-2`.
+       * `terminated` now, confirmed above. Tailscale lags in noticing that (a
+       * node can read online for a minute or more after its machine
+       * stopped), so the pass first waits, bounded, for the matched devices
+       * to read offline (`waitTailnetOffline`), then sweeps in the default
+       * mode: what went offline is deleted, so the next node to join as this
+       * agent gets the name rather than `<name>-2`.
        *
-       * Only on the fleet-scoped hostname arm, `tag:hermetic` plus
-       * `cloudName(fleet id, name)`, which only a box this fleet launched for
-       * this name joins as — and every such box is terminated, while the lock
-       * is ours (`keepLock` just above) so no later incarnation has launched.
-       * That is not a guess about a live machine (§1). The other arm, the
-       * FQDN in the row's `tailscale_dns_name`, is written by the box itself
-       * and could name another agent's or another fleet's live node: a device
-       * matched by it alone is still deleted when offline, but while online
-       * it is named in a `warn` and left. Idempotent: a device the first pass
+       * What is still online at the deadline is named in a `warn` and left.
+       * A terminated instance does not prove the device is its node: hostname
+       * plus `tag:hermetic` is also what an orphaned live box whose instance
+       * lost its agent tags joins as, and the row's `tailscale_dns_name` is
+       * written by the box itself, so either arm can point at a machine that
+       * is running. Deleting that on a match alone is a guess about a live
+       * machine (§1). The release still goes on: a node hermetic cannot stop
+       * must not hold the name hostage. Idempotent: a device the first pass
        * removed is simply not listed again.
        *
        * Skipped when the first pass could not finish (`null`): an OAuth client
@@ -546,6 +545,15 @@ export function createDestroy(deps: DestroyDeps) {
       checkAbort(opts.signal, "tailnet");
       await keepLock();
       if (firstSweep !== null) {
+        yield* waitTailnetOffline(
+          agent.name,
+          fleet.fleet_id,
+          agent.tailscale_dns_name ?? null,
+          "tailnet",
+          0.91,
+          opts,
+          { ...attachDeps(), heartbeat: keepLock },
+        );
         yield* removeTailnetDevices(
           agent.name,
           fleet.fleet_id,
@@ -553,7 +561,6 @@ export function createDestroy(deps: DestroyDeps) {
           "tailnet",
           0.92,
           opts,
-          { online: "delete" },
         );
       }
 

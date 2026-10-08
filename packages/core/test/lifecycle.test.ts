@@ -1265,21 +1265,46 @@ describe("tailnet device cleanup", () => {
   });
 
   /**
-   * §6.7: the pass after the termination wait deletes a matching device even
-   * when it still reads online. Every instance tagged for the name is
-   * `terminated` by then, so the flag is Tailscale's lag, and the device left
-   * there would push the next node of the name onto `<name>-2`. The first
-   * pass, run while the box is still going down, passes over it silently, so
-   * the delete is said once. The match is no looser: other agents' devices,
-   * online ones included, are untouched.
+   * A destroy against the default three-minute tailnet wait, on a tailnet that
+   * lags: every `listDevices` moves the fixture's clock ten seconds, and from
+   * the `offlineAfter`-th list on, the devices named in `going` read offline.
+   * The instance is already gone, so the double's terminate never flips them
+   * itself — only the lag does.
    */
-  test("destroy's second pass deletes a matching device that still reads online", async () => {
-    const { backend, hermetic } = seeded();
-    // The box is already gone as far as EC2 is concerned, and the device
-    // still says online.
+  function lagging(going: string[], offlineAfter: number) {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const hermetic = testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      attach: { pollMs: 1, progressMs: 0 },
+    });
     const atlas = backend.agents.get("atlas")!;
     backend.instances.delete(atlas.instance_id!);
+    const list = backend.tailscale.listDevices;
+    let lists = 0;
+    backend.tailscale.listDevices = async () => {
+      lists += 1;
+      backend.advance(10_000);
+      if (lists >= offlineAfter) {
+        backend.tailscaleDevices = backend.tailscaleDevices!.map((d) =>
+          going.includes(d.name) ? { ...d, online: false } : d,
+        );
+      }
+      return list();
+    };
+    return { backend, hermetic, lists: () => lists };
+  }
+
+  /**
+   * §6.7: Tailscale notices a stopped node late, so after the termination wait
+   * the destroy polls until the device reads offline and only then sweeps —
+   * deleting it, so the next node of the name is not pushed onto `<name>-2`.
+   * Other agents' devices, online ones included, are untouched.
+   */
+  test("destroy waits for a lagging device to go offline, then deletes it", async () => {
     const device = "fxtr0001-atlas.hermetic.ts.net";
+    // One list for the first pass, three more online, offline on the fifth.
+    const { backend, hermetic, lists } = lagging([device], 5);
     expect(backend.tailscaleDevices!.find((d) => d.name === device)!.online).toBe(true);
     const others = hostnames(backend).filter((h) => h !== device);
     expect(others.length).toBeGreaterThan(0);
@@ -1290,23 +1315,53 @@ describe("tailnet device cleanup", () => {
       hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
     );
     const tailnet = events.filter((e) => e.phase === "tailnet");
-    expect(tailnet.map((e) => e.message)).toEqual([`removed tailnet device ${device}`]);
+    expect(tailnet.map((e) => e.message)).toEqual([
+      `waiting up to 3m for ${device} to go offline`,
+      `removed tailnet device ${device}`,
+    ]);
     expect(tailnet.every((e) => (e.level ?? "info") === "info")).toBe(true);
+    expect(lists()).toBe(6);
     expect(hostnames(backend)).not.toContain(device);
     expect(hostnames(backend)).toEqual(others);
     expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 
   /**
+   * A matching device still online when the wait runs out is a machine that is
+   * running, and a hostname-plus-tag match is not proof it is the box this
+   * destroy terminated — an orphaned node whose instance lost its tags looks
+   * the same. It is named and left; the name is released anyway.
+   */
+  test("a device still online at the deadline is warned about, not deleted", async () => {
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    const { backend, hermetic, lists } = lagging([], Infinity);
+
+    const events = await drain(
+      hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
+    );
+    const tailnet = events.filter((e) => e.phase === "tailnet");
+    expect(tailnet.map((e) => [e.level ?? "info", e.message])).toEqual([
+      ["info", `waiting up to 3m for ${device} to go offline`],
+      ["warn", `${device} is still online; not deleting a live node`],
+    ]);
+    // It polled for the whole budget: 180 s at 10 s a list, plus both sweeps.
+    expect(lists()).toBeGreaterThan(18);
+    expect(hostnames(backend)).toContain(device);
+    expect(backend.mutations).not.toContain("tailscale.deleteDevice");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    expect(events.at(-1)!.phase).toBe("done");
+  });
+
+  /**
    * The row's `tailscale_dns_name` is written by the box it describes. A
    * compromised or stale box pointing it at another agent's live node must
-   * not get that node deleted: the second pass deletes an online device only
-   * on the fleet-scoped hostname arm, and names the FQDN-only match instead.
+   * not get that node deleted: the destroy waits for it like any match, and
+   * when it is still online at the deadline names it instead. The agent's own
+   * device, which does go offline during the wait, is deleted as usual.
    */
   test("a forged tailscale_dns_name cannot get another agent's online node deleted", async () => {
-    const { backend, hermetic } = seeded();
-    const atlas = backend.agents.get("atlas")!;
-    backend.instances.delete(atlas.instance_id!);
+    const own = "fxtr0001-atlas.hermetic.ts.net";
+    const { backend, hermetic, lists } = lagging([own], 3);
     const victim = "fxtr0001-bravo.hermetic.ts.net";
     backend.tailscaleDevices = [
       ...backend.tailscaleDevices!.filter((d) => d.name !== victim),
@@ -1326,12 +1381,49 @@ describe("tailnet device cleanup", () => {
     );
 
     expect(hostnames(backend)).toContain(victim);
-    expect(hostnames(backend)).not.toContain("fxtr0001-atlas.hermetic.ts.net");
-    const warned = events.filter((e) => e.phase === "tailnet" && e.level === "warn");
-    expect(warned.map((e) => e.message)).toEqual([
-      `${victim} is still online; not deleting a live node`,
+    expect(hostnames(backend)).not.toContain(own);
+    const tailnet = events.filter((e) => e.phase === "tailnet");
+    expect(tailnet.map((e) => [e.level ?? "info", e.message])).toEqual([
+      ["info", `waiting up to 3m for ${own}, ${victim} to go offline`],
+      ["info", `removed tailnet device ${own}`],
+      ["warn", `${victim} is still online; not deleting a live node`],
     ]);
+    // The victim kept the wait going to the deadline after `own` went.
+    expect(lists()).toBeGreaterThan(18);
     expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+
+  /**
+   * §3.2 rule 2: the tailnet wait is up to three minutes, so the operator's
+   * abort has to end it at once — not after the budget, and not by carrying on
+   * into the sweep and the release. The device is left and the name is not
+   * released.
+   */
+  test("an abort during the tailnet wait stops the destroy before the release", async () => {
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    const { backend, hermetic, lists } = lagging([], Infinity);
+    const controller = new AbortController();
+
+    let code: string | null = null;
+    let phase: unknown = null;
+    try {
+      for await (const e of hermetic.agents.destroy(
+        { name: "atlas", yes: true, keep_volume: true },
+        { signal: controller.signal },
+      )) {
+        if (e.message.startsWith("waiting up to")) controller.abort();
+      }
+    } catch (e) {
+      code = (e as HermeticError).code;
+      phase = (e as HermeticError).details?.["phase"];
+    }
+    expect(code).toBe("ABORTED");
+    expect(phase).toBe("tailnet");
+    // The first sweep's list and the wait's first: nothing listed after the abort.
+    expect(lists()).toBe(2);
+    expect(hostnames(backend)).toContain(device);
+    expect(backend.mutations).not.toContain("tailscale.deleteDevice");
+    expect(await backend.store.agents.get("atlas")).not.toBeNull();
   });
 
   /**

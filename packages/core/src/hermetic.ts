@@ -212,23 +212,29 @@ export function createHermetic(deps: HermeticDeps) {
   const localSessions = deps.localSessions ?? new MemoryLocalChatSessions();
   const chatFence = deps.chatFence ?? new MemoryChatFenceStore();
   const incarnations = deps.incarnations ?? new MemoryIncarnationStore();
-  const purgeLocalAgent = createLocalAgentPurge({
+  const purgeDeps = {
     notifications: notificationDeps.store,
     instanceListening,
     localSessions,
     chatFence,
-    incarnations,
-  });
+  };
+  const purgeLocalAgent = createLocalAgentPurge({ ...purgeDeps, incarnations });
   /**
    * §6.7: the other half of the purge. The release purges this laptop's state
    * for the name it frees; a laptop that did not run it purges when a read
    * hands it a row with a different `created_at` than the one it recorded
    * (`local/incarnations.ts`). Called by the fleet list and by chat's row reads.
+   *
+   * Its purge leaves the incarnation record alone. The reconciler claims the
+   * new `created_at` *before* purging, and owns the record through
+   * compare-and-set alone; the release's purge forgetting it unconditionally
+   * would drop that claim the moment it was won, leaving the name unrecorded
+   * for a concurrent scan to adopt its own, possibly older, value.
    */
   const reconcileIncarnations = createIncarnationReconciler({
     store: incarnations,
     fleet: () => deps.config?.fleet_id ?? null,
-    purge: purgeLocalAgent,
+    purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
   });

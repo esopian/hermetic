@@ -22,7 +22,9 @@
  *   only stops the badge counting a box that no longer exists;
  * - the `agent:<name>` mute;
  * - the name's recorded incarnation (`incarnations.ts`), so the next agent to
- *   take the name is a first sighting here rather than a second purge.
+ *   take the name is a first sighting here rather than a second purge. Only
+ *   when built with `incarnations`: the release's purge is, the reconciler's
+ *   is not, since it records the successor itself before purging (`hermetic.ts`).
  *
  * The mute is the one entry with no fleet in its key (`notification_mutes`
  * is keyed on the target alone), so releasing `alpha` in one fleet also lifts

@@ -204,9 +204,11 @@ export interface HermeticDeps {
   mirrorDir?: string;
   /**
    * How often the unbounded data-volume attach polls, and how often it says so
-   * (`attach.ts`). Tests shrink both; nothing else sets them.
+   * (`attach.ts`), and how long `destroy` waits for its tailnet devices to read
+   * offline (`TAILNET_OFFLINE_WAIT_MS`). Tests shrink all three; nothing else
+   * sets them.
    */
-  attach?: { pollMs?: number; progressMs?: number };
+  attach?: { pollMs?: number; progressMs?: number; tailnetOfflineMs?: number };
   /**
    * `agents.probe`'s laptop-side HTTP client and per-layer timeout (§9). The
    * `fetch` exists for the same reason the Tailscale preflight's probes are
