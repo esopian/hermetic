@@ -10,6 +10,7 @@ import type {
 } from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
+import { isProcessEventMessage, previewText } from "./process-events.ts";
 import type { ConversationActivity, TurnActivity } from "./chat-activity.ts";
 
 /** The first transcript recovery is immediate; later attempts back off to eight seconds. */
@@ -441,15 +442,13 @@ export interface ChatArrival {
  */
 function replyArrival(record: Conversation, live: ChatMessageView | null): ChatArrival | null {
   if (record.target.session !== null) return null;
-  const recorded = [...record.messages].reverse().find((m) => m.role !== "user" && !isLocal(m));
+  // A background event that landed after the reply is not the reply this turn drove.
+  const recorded = [...record.messages]
+    .reverse()
+    .find((m) => m.role !== "user" && !isLocal(m) && !isProcessEventMessage(m));
   const source = recorded ?? live;
   if (!source) return null;
-  const preview = previewOf(
-    source.blocks
-      .map((block) => (block.kind === "text" ? block.markdown : ""))
-      .filter((text) => text.length > 0)
-      .join("\n"),
-  );
+  const preview = previewOf(previewText(source));
   if (!preview) return null;
   return {
     instance: record.target.instance,
@@ -648,7 +647,10 @@ export function useConversations(
         if (record.live) {
           const since = Date.parse(record.live.at);
           const recorded = result.messages.some(
-            (m) => m.id === record.live?.id || (m.role !== "user" && Date.parse(m.at) >= since),
+            // A background event is not the bot's reply, so it cannot be what recorded it.
+            (m) =>
+              m.id === record.live?.id ||
+              (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
           );
           if (!record.dropped || recorded) {
             record.live = null;

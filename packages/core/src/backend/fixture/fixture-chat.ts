@@ -62,6 +62,7 @@ import {
   usage,
 } from "./fixture-chat-catalog.ts";
 import { FIXTURE_CHAT_SESSIONS, at, specFor, swarmFor } from "./fixture-chat-roster.ts";
+import { processEventSentence } from "../../shared/process-event.ts";
 
 // The tables and the activity store keep their homes in the split modules; this
 // stays the one door every head and test opens.
@@ -358,7 +359,26 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
     },
 
     swarm(box: BoxAddress, _opts?: HermesChatOptions): Promise<Swarm> {
-      return Promise.resolve(swarmFor(box));
+      const swarm = swarmFor(box);
+      /**
+       * A real roster previews a bot whose newest row is a background-process
+       * notice as the event's sentence (`eventPreview`, `hermes-chat-sessions.ts`),
+       * never as the raw `[IMPORTANT: …`. The roster table cannot import the
+       * event transcript (that module imports the table), so the preview is
+       * derived here, from the same canned rows `history` answers with.
+       */
+      return Promise.resolve({
+        ...swarm,
+        bots: swarm.bots.map((bot) => {
+          if (bot.preview != null) return bot;
+          const id = canonicalOf(box.instance, bot.name);
+          const last = id === undefined ? undefined : FIXTURE_CHAT_TRANSCRIPTS[id]?.at(-1);
+          const block = last?.blocks.find((b) => b.kind === "process_event");
+          return block?.kind === "process_event"
+            ? { ...bot, preview: processEventSentence(block) }
+            : bot;
+        }),
+      });
     },
 
     sessions(box: BoxAddress, bot: string, _opts?: HermesChatOptions): Promise<Session[]> {

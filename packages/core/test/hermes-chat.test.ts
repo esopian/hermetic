@@ -14,6 +14,7 @@
  * died with the dashboard process, a gateway with no warm slot) are the ones an
  * operator meets.
  */
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
   createHermesChat,
@@ -1837,6 +1838,34 @@ describe("hermes-chat · sessions", () => {
   });
 });
 
+describe("hermes-chat · a notice in a preview", () => {
+  test("a session and a bot whose preview opens with a notice read as the event", () => {
+    // Upstream's own cut: 60 characters, newlines flattened, `...` appended.
+    const cut = "[IMPORTANT: Background process proc_3be1c0a4d2e1 completed n...";
+    const [session] = mapSessions(BOX, "default", {
+      sessions: [{ session_id: "s1", title: "Bot Chat", preview: cut }],
+    });
+    expect(session?.preview).toBe("proc_3be1c0a4d2e1 completed");
+    const swarm = mapSwarm(
+      BOX,
+      {
+        profiles: [
+          { name: "default", is_default: true, canonical_session: { id: "s1", preview: cut } },
+        ],
+      },
+      null,
+      null,
+      null,
+    );
+    expect(swarm.bots[0]?.preview).toBe("proc_3be1c0a4d2e1 completed");
+    // Anything else passes through untouched.
+    const [plain] = mapSessions(BOX, "default", {
+      sessions: [{ session_id: "s2", title: "t", preview: "why is it down?" }],
+    });
+    expect(plain?.preview).toBe("why is it down?");
+  });
+});
+
 describe("hermes-chat · history", () => {
   test("maps roles, parts and usage, and keeps an unrecognised part whole", () => {
     const messages = mapHistory(BOX, SESSION_ID, {
@@ -2029,6 +2058,44 @@ describe("hermes-chat · history", () => {
       messages: [{ role: "user", row_id: "rw-4211", content: "why is it down?" }],
     });
     expect(message?.id).toBe(`${SESSION_ID}:rw-4211`);
+  });
+
+  test("a background-process notice is a system event, not the operator, and keeps its id", () => {
+    const notice =
+      "[IMPORTANT: Background process proc_77aa19b3c5f0 exited (exit code 1).\nCommand: bun test packages/ui\nOutput:\n611 pass\n1 fail]";
+    const stamped = "2026-09-29T00:24:30.000Z";
+    const [minted, durable, spoken] = mapHistory(BOX, SESSION_ID, {
+      messages: [
+        { role: "user", content: notice, at: stamped },
+        { role: "user", id: 4211, content: notice, at: stamped },
+        // Quoting a notice is still the operator talking.
+        { role: "user", content: `what does this mean? ${notice}`, at: stamped },
+      ],
+    });
+    expect(minted?.role).toBe("system");
+    expect(minted?.author).toBeNull();
+    expect(minted?.blocks).toHaveLength(1);
+    expect(minted?.blocks[0]).toMatchObject({
+      kind: "process_event",
+      event: "completion",
+      outcome: "failed",
+      process_id: "proc_77aa19b3c5f0",
+      exit_code: 1,
+      output_tail: "611 pass\n1 fail",
+      raw: notice,
+    });
+    // The id is the one this row had before notices were recognised: the same
+    // hash of session, role, author, words and stamp that `rowId` has always
+    // taken — role still `user`, as the box stored it — so an observation's
+    // cursor does not see an old notice as a new message.
+    const digest = createHash("sha256")
+      .update([SESSION_ID, "user", "", notice, stamped].join("\u0000"))
+      .digest("hex");
+    expect(minted?.id).toBe(`${SESSION_ID}:h${digest.slice(0, 16)}`);
+    expect(durable?.id).toBe(`${SESSION_ID}:4211`);
+    expect(durable?.role).toBe("system");
+    expect(spoken?.role).toBe("user");
+    expect(spoken?.blocks[0]?.kind).toBe("text");
   });
 
   test("an id the box did not give survives the window sliding under it", () => {

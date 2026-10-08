@@ -132,6 +132,11 @@ export function Message({
   /** The turn is still arriving, so the last prose block gets a caret. */
   streaming = false,
   activity = streaming ? "streaming" : "idle",
+  /**
+   * What this turn answers, when it directly follows a background event
+   * (`threadItems`): Hermes woke the bot with that event, so this is its reply.
+   */
+  inReply = null,
 }: {
   row: MessageRow<ChatMessageView> & { ids?: readonly string[] };
   fleetId: string;
@@ -142,6 +147,7 @@ export function Message({
   now: number;
   streaming?: boolean;
   activity?: TurnActivity;
+  inReply?: string | null;
 }) {
   const { message, continuation } = row;
   // Every source id this article stands for. A `#message=` link names the row
@@ -251,6 +257,11 @@ export function Message({
         />
       )}
       <div>
+        {inReply ? (
+          <div className="ch-inreply">
+            <RedactedText text={`↳ responding to ${inReply}`} />
+          </div>
+        ) : null}
         <div className="ch-msg-head">
           <span className="ch-msg-who">{who}</span>
           <span className="ch-msg-meta">{meta}</span>
