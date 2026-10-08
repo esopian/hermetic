@@ -205,6 +205,7 @@ describe("listVolumesByAgentTag", () => {
             VolumeId: "vol-2",
             Size: 50,
             State: "in-use",
+            CreateTime: new Date("2026-09-01T12:00:00.000Z"),
             Tags: [
               DATA_TAG,
               { Key: "agent", Value: "atlas" },
@@ -215,8 +216,23 @@ describe("listVolumesByAgentTag", () => {
       });
 
     expect(await compute().listVolumesByAgentTag("atlas")).toEqual([
-      { volume_id: "vol-1", size_gib: 100, agent: "atlas", former_agent: null, state: "available" },
-      { volume_id: "vol-2", size_gib: 50, agent: "atlas", former_agent: "atlas", state: "in-use" },
+      {
+        volume_id: "vol-1",
+        size_gib: 100,
+        agent: "atlas",
+        former_agent: null,
+        state: "available",
+        created_at: null,
+      },
+      // EC2's `CreateTime`, which the release's sweep compares to its run's start.
+      {
+        volume_id: "vol-2",
+        size_gib: 50,
+        agent: "atlas",
+        former_agent: "atlas",
+        state: "in-use",
+        created_at: "2026-09-01T12:00:00.000Z",
+      },
     ]);
 
     const inputs = inputsOf<Filters>(ec2, DescribeVolumesCommand);
@@ -327,6 +343,23 @@ describe("retagVolume", () => {
       "CreateTagsCommand",
       "DeleteTagsCommand",
     ]);
+  });
+
+  /**
+   * §6.7: the release's `DeleteTags` names the value it expects, so EC2 removes
+   * `agent` only while it still says `<name>`. A disk another agent adopted
+   * between the release's read and this write keeps its new owner's tag.
+   */
+  test("expectedAgent makes removing the agent tag conditional on its value", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", null, { formerAgent: "atlas", expectedAgent: "atlas" });
+
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string; Value?: string }> }>(
+      ec2,
+      DeleteTagsCommand,
+    );
+    expect(removed!.Tags).toEqual([{ Key: "agent", Value: "atlas" }]);
   });
 
   test("an adoption with formerAgent null removes the former_agent tag", async () => {

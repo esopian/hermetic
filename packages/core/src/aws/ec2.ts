@@ -38,6 +38,7 @@ import type {
   NetworkInterfaceRef,
   VolumeDetail,
   OwnedVolumeStatus,
+  RetagVolumeOptions,
   RunInstanceSpec,
   SnapshotRef,
   TagSelector,
@@ -891,6 +892,7 @@ export class Ec2Compute implements ComputeApi {
           agent: (volume.Tags ?? []).find((t) => t.Key === AGENT_TAG)?.Value ?? null,
           former_agent: (volume.Tags ?? []).find((t) => t.Key === FORMER_AGENT_TAG)?.Value ?? null,
           state: volume.State ?? "unknown",
+          created_at: volume.CreateTime ? volume.CreateTime.toISOString() : null,
         });
       }
       token = out.NextToken;
@@ -969,12 +971,13 @@ export class Ec2Compute implements ComputeApi {
    * `role=data` is what keeps the pair unambiguous if the old name is ever
    * reused. `formerAgent` is the `hermetic:former_agent` tag a destroy that
    * keeps the volume moves the name to (§6.7): set, removed (`null`), or left
-   * alone (absent), like `name`.
+   * alone (absent), like `name`. `expectedAgent` makes removing `agent`
+   * conditional on its value (`ComputeApi.retagVolume`).
    */
   async retagVolume(
     volumeId: string,
     agent: string | null,
-    opts: { roleData?: boolean; name?: string | null; formerAgent?: string | null } = {},
+    opts: RetagVolumeOptions = {},
   ): Promise<void> {
     const roleData = opts.roleData ?? true;
     /**
@@ -1007,21 +1010,33 @@ export class Ec2Compute implements ComputeApi {
       [MANAGED_TAG]: MANAGED_TAG_VALUE,
       [FLEET_ID_TAG]: this.fleetId(),
     };
-    const remove: string[] = [];
-    if (agent === null) remove.push(AGENT_TAG);
-    else set[AGENT_TAG] = agent;
-    if (nameTag === null) remove.push("Name");
+    /**
+     * Each removal is a bare key, which `DeleteTags` deletes whatever its value
+     * — except `agent` under `expectedAgent`, which carries the value and so
+     * is deleted only while the volume still says that agent. The release's
+     * sweep lists a disk and writes it a moment later (§6.7), and in between
+     * another agent's adoption may have retagged it `agent=<other>`; an
+     * unconditional delete would strip the new owner's tag and leave its live
+     * row naming a disk `findVolumeByTag` no longer finds.
+     */
+    const remove: Array<{ Key: string; Value?: string }> = [];
+    if (agent === null) {
+      remove.push(
+        opts.expectedAgent === undefined
+          ? { Key: AGENT_TAG }
+          : { Key: AGENT_TAG, Value: opts.expectedAgent },
+      );
+    } else set[AGENT_TAG] = agent;
+    if (nameTag === null) remove.push({ Key: "Name" });
     else if (nameTag !== undefined) set["Name"] = nameTag;
-    if (opts.formerAgent === null) remove.push(FORMER_AGENT_TAG);
+    if (opts.formerAgent === null) remove.push({ Key: FORMER_AGENT_TAG });
     else if (opts.formerAgent !== undefined) set[FORMER_AGENT_TAG] = opts.formerAgent;
     if (roleData) set[ROLE_TAG] = ROLE_DATA;
-    else remove.push(ROLE_TAG);
+    else remove.push({ Key: ROLE_TAG });
     try {
       await this.ec2.send(new CreateTagsCommand({ Resources: [volumeId], Tags: tagList(set) }));
       if (remove.length > 0) {
-        await this.ec2.send(
-          new DeleteTagsCommand({ Resources: [volumeId], Tags: remove.map((Key) => ({ Key })) }),
-        );
+        await this.ec2.send(new DeleteTagsCommand({ Resources: [volumeId], Tags: remove }));
       }
     } catch (e) {
       throw asHermeticError(e, `could not retag volume ${volumeId} for ${agent ?? "no agent"}`);

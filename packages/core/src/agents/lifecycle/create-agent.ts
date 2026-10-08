@@ -103,6 +103,8 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     who: string,
     signal: AbortSignal | undefined,
   ): Promise<ReleaseResult | null> {
+    /** Before the lock: the release's sweep leaves out any disk made after it. */
+    const runStartedAt = nowIso();
     if (lockHeldByOther(existing, owner)) {
       throw new HermeticError(
         "NAME_TAKEN",
@@ -147,6 +149,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       return await releaseName(locked, {
         volumeKept: (locked.resources.volume_id ?? locked.volume_id ?? null) !== null,
         actor: who,
+        runStartedAt,
         signal,
       });
     } catch (e) {
@@ -159,7 +162,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
    * What a create says, one warn each, about a legacy row it released — above
    * the claim or in `classify`, when the row appeared only after the first
    * read: the release itself, then every other disk the release found still
-   * tagged for the name and moved off it (`sweepTagged`) — so
+   * tagged for the name and moved off it (`taggedExtras`) — so
    * `findVolumeByTag` finds none of them and this life starts on a fresh disk,
    * as after any release (§6.7). A legacy row held its name forever, so no
    * disk of it was ever left tagged for a later `create` to adopt; `--volume`

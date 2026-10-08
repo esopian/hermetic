@@ -13,9 +13,11 @@
  *
  * Crash ordering, which is the whole design:
  *
- * 1. the volume is retagged (idempotent: the same tags again), and so is
- *    every other disk still tagged `agent=<name>` (`sweepTagged`; idempotent
- *    too: one already moved no longer matches),
+ * 1. the row is read again and must still be this run's — the same
+ *    incarnation, under this run's live lock (`assertStillHeld`) — and only
+ *    then is the volume retagged (idempotent: the same tags again), and so is
+ *    every other disk still tagged `agent=<name>` that predates the run
+ *    (`taggedExtras`; idempotent too: one already moved no longer matches),
  * 2. the `release` event is appended under the agent's name,
  * 3. the tombstone is written,
  * 4. the row is deleted, conditional on the version and `created_at` this
@@ -32,7 +34,8 @@
 import type { Agent, AgentEvent, AgentTombstone } from "../../schema/index.ts";
 import type { CoreContext } from "../../context.ts";
 import { checkAbort } from "../../abort.ts";
-import { type HermeticError, isHermeticError } from "../../errors.ts";
+import { HermeticError, isHermeticError } from "../../errors.ts";
+import { isLockLive } from "../state.ts";
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
@@ -63,6 +66,15 @@ export interface ReleaseNameOptions {
    * when the row is a legacy `destroyed` one somebody else destroyed earlier.
    */
   actor: string;
+  /**
+   * When the run doing the release began — read off the clock before it took
+   * the row's lock. A disk EC2 created later than this is not swept
+   * (`taggedExtras`): nothing of this incarnation could have made it while
+   * this run held the name, so it can only be a later incarnation's, made
+   * after this run's lock lapsed and somebody else released and re-created
+   * the name.
+   */
+  runStartedAt: string;
   /**
    * Checked once, before the first write. Past that point the release runs to
    * the end: stopping between the tombstone and the delete is the crash case
@@ -96,7 +108,7 @@ export interface ReleaseResult {
   volume: "released" | "gone" | "foreign" | "none";
   /**
    * Every *other* disk this run found still tagged `agent=<name>` and moved
-   * off the name (`sweepTagged`), never deleted: ids and the state each was
+   * off the name (`taggedExtras`), never deleted: ids and the state each was
    * in. Empty on a retry that finds them already moved. The ids are also in
    * the `release` event's `detail`, when this run is the one that writes it.
    */
@@ -239,10 +251,12 @@ export function createReleaseName(deps: ReleaseNameDeps) {
    * - `owned`: this agent's data disk, and nothing on it says a release
    *   promised to keep it;
    * - `released`: it carries `hermetic:former_agent=<name>` — a destroy that
-   *   kept it already started moving it off the name. `retagVolume` sets that
-   *   tag *before* it removes `agent`, so this covers both a release that
-   *   finished (managed, this fleet, no `agent` tag) and one interrupted
-   *   between its two calls (`agent=<name>` still there too). The intent to
+   *   kept it already started moving it off the name. The destroy writes
+   *   that tag before it terminates anything (`destroy-agent.ts`), and
+   *   `retagVolume` sets it again *before* it removes `agent`, so this covers
+   *   a release that finished (managed, this fleet, no `agent` tag) and a
+   *   destroy interrupted anywhere before that (`agent=<name>` still there
+   *   too). The intent to
    *   keep is durable on the volume itself, before any tombstone records it,
    *   so every caller reads this as "keep": a retry finishes the retag, and a
    *   destroy that did not ask for `--keep-volume` still never deletes it.
@@ -251,7 +265,7 @@ export function createReleaseName(deps: ReleaseNameDeps) {
    *   be destroyed, so a live row never names such a disk.) A row pointed at
    *   an earlier incarnation's kept disk reads this way too; whatever disk
    *   still carries `agent=<name>` instead is the release's sweep to move off
-   *   the name (`sweepTagged`), so the decoy cannot leave it behind for the
+   *   the name (`taggedExtras`), so the decoy cannot leave it behind for the
    *   next `create` to adopt;
    * - `gone`: EC2 has no such volume any more, or it is being deleted;
    * - `foreign`: somebody else's disk now, with the refusal that says so.
@@ -281,32 +295,84 @@ export function createReleaseName(deps: ReleaseNameDeps) {
 
   /**
    * §6.7: every disk besides `except` (the row's own) that is managed, in this
-   * fleet and still tagged `agent=<name>` is moved off the name exactly as a
-   * kept volume is — `agent` removed, `former_agent=<name>` set — and reported.
-   * A released name must hold no disk, or the next `create` of it adopts one
-   * by tag (`findVolumeByTag`). Such a disk is a duplicate `doctor` reports, a
-   * launch whose volume id never reached the row, or the real disk of a row
-   * the box pointed elsewhere (or at nothing) — the row never named it, so
-   * nothing proves it is this incarnation's to lose, and it is never deleted.
+   * fleet and still tagged `agent=<name>` — the ones the release then moves
+   * off the name exactly as a kept volume is, `agent` removed and
+   * `former_agent=<name>` set, and reports. A released name must hold no
+   * disk, or the next `create` of it adopts one by tag (`findVolumeByTag`).
+   * Such a disk is a duplicate `doctor` reports, a launch whose volume id
+   * never reached the row, or the real disk of a row the box pointed elsewhere
+   * (or at nothing) — the row never named it, so nothing proves it is this
+   * incarnation's to lose, and it is never deleted.
    *
    * Its state is not consulted. Every instance tagged for the name is
    * terminated before a destroy's release, and a legacy row's long before, so
-   * one still `in-use` is attached to some other box; tags are all this
-   * changes, which detaches nothing, while leaving `agent=<name>` on it would
-   * hand it to the next `create` of the name. Moving it is idempotent: one
-   * already moved no longer matches, so a retry sweeps only what is left.
+   * one still `in-use` is attached to some other box; tags are all the
+   * release changes, which detaches nothing, while leaving `agent=<name>` on
+   * it would hand it to the next `create` of the name. Moving it is
+   * idempotent: one already moved no longer matches, so a retry sweeps only
+   * what is left.
+   *
+   * Its age is. A disk EC2 created after `since` — the run's start — is left
+   * out: this run held the name from then on, so no launch of this
+   * incarnation made it, and the only way to one is a release that stalled
+   * past its lock while somebody else released the name and created it
+   * again. That disk is the successor's live memory. `assertStillHeld` refuses
+   * such a stalled run before it writes anything; this is the same fence on
+   * the disk itself, for a stall that falls between the two. The comparison
+   * is EC2's clock against this laptop's: a laptop running behind would leave
+   * out a duplicate made in the last moments before the run, the rare and
+   * recoverable side (the next destroy of the name sweeps it), never the
+   * other way round.
    */
-  async function sweepTagged(
+  async function taggedExtras(
     name: string,
     except: string | null,
+    since: string,
   ): Promise<Array<{ volume_id: string; state: string }>> {
-    const extras = (await backend.compute.listVolumesByAgentTag(name)).filter(
-      (v) => v.volume_id !== except && v.agent === name,
+    const sinceMs = Date.parse(since);
+    return (await backend.compute.listVolumesByAgentTag(name))
+      .filter((v) => v.volume_id !== except && v.agent === name)
+      .filter((v) => v.created_at === null || !(Date.parse(v.created_at) > sinceMs))
+      .map((v) => ({ volume_id: v.volume_id, state: v.state }));
+  }
+
+  /**
+   * Whether the row is still this run's to release, read fresh immediately
+   * before the first tag write: the same incarnation (`created_at`), under a
+   * lock this run owns and that has not expired. Anything else throws
+   * `CONFLICT` having changed nothing — the same refusal `assertUnmoved`
+   * makes for a plan the world moved under.
+   *
+   * The conditional delete at the end already refuses to remove a later
+   * incarnation's row, but by then the tags are written: a release that
+   * stalled past its lock while somebody else released the name and created
+   * it again would move the successor's disk off the name before its delete
+   * failed. Asking first closes that. What is left is a stall *between* this
+   * read and the writes, which `taggedExtras`'s age check and the
+   * value-conditional tag removal (`expectedAgent`) still cover.
+   */
+  async function assertStillHeld(agent: Agent): Promise<void> {
+    const fresh = await backend.store.agents.get(agent.name);
+    const owner = agent.lock?.owner ?? null;
+    const held =
+      fresh !== null &&
+      owner !== null &&
+      fresh.created_at === agent.created_at &&
+      fresh.lock?.owner === owner &&
+      isLockLive(fresh.lock, undefined, Date.parse(nowIso()));
+    if (held) return;
+    throw new HermeticError(
+      "CONFLICT",
+      `${agent.name} is no longer held by this release (its lock lapsed, or the name moved on); nothing was released — run the destroy again`,
+      {
+        name: agent.name,
+        created_at: agent.created_at,
+        owner,
+        found_created_at: fresh?.created_at ?? null,
+        found_owner: fresh?.lock?.owner ?? null,
+        found_expires: fresh?.lock?.expires ?? null,
+      },
     );
-    for (const v of extras) {
-      await backend.compute.retagVolume(v.volume_id, null, { formerAgent: name });
-    }
-    return extras.map((v) => ({ volume_id: v.volume_id, state: v.state }));
   }
 
   async function releaseName(agent: Agent, opts: ReleaseNameOptions): Promise<ReleaseResult> {
@@ -315,20 +381,32 @@ export function createReleaseName(deps: ReleaseNameDeps) {
     checkAbort(opts.signal, "release");
 
     // (a) Move a kept volume off the name — this agent's disk, or one a
-    // previous, interrupted release already started moving (`released`),
-    // which is retagged again to the same effect. `role=data` stays so the
-    // disk is still recognisably an agent's memory; its display `Name` is
-    // left alone.
+    // previous, interrupted release (or this destroy's own pre-terminate
+    // write, `destroy-agent.ts`) already started moving (`released`), which
+    // is retagged again to the same effect. `role=data` stays so the disk is
+    // still recognisably an agent's memory; its display `Name` is left alone.
     //
-    // Then every other disk still tagged for the name, kept or not, moved
-    // off it the same way and never deleted (`sweepTagged`).
+    // Then every other disk still tagged for the name that predates this run,
+    // kept or not, moved off it the same way and never deleted
+    // (`taggedExtras`).
+    //
+    // Reads first, then the row checked again, then the writes: nothing is
+    // retagged unless the row is still this run's (`assertStillHeld`). Each
+    // write removes `agent` only while it still says `<name>`
+    // (`expectedAgent`), so a disk another agent adopted after the read keeps
+    // its new owner.
     const held = opts.volumeKept && volumeId ? await volumeHold(agent.name, volumeId) : null;
     const hold = held?.kind ?? "none";
     const volume = hold === "owned" || hold === "released" ? "retag" : hold;
+    const swept = await taggedExtras(agent.name, volumeId, opts.runStartedAt);
+    await assertStillHeld(agent);
+    const moveOff = { formerAgent: agent.name, expectedAgent: agent.name };
     if (volume === "retag" && volumeId) {
-      await backend.compute.retagVolume(volumeId, null, { formerAgent: agent.name });
+      await backend.compute.retagVolume(volumeId, null, moveOff);
     }
-    const swept = await sweepTagged(agent.name, volumeId);
+    for (const v of swept) {
+      await backend.compute.retagVolume(v.volume_id, null, moveOff);
+    }
 
     // (b) The record of this incarnation. The `release` event is appended
     // under the name before the row goes — events are never deleted, so this

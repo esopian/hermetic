@@ -51,10 +51,25 @@ export function createTailnetCleanup(deps: TailnetDeps) {
    * The generator's return value is the devices it left holding the name —
    * each one's FQDN — once it has looked at every match, or `null` when it
    * could not finish looking (no list, no scope, a failed delete; each of
-   * those has already said so in a `warn`). `deferOnline` is for a caller
-   * that sweeps twice: a node still online is skipped without a word and
-   * returned, because the caller will look again once the box is
-   * `terminated` and report what is left then (`destroy-agent.ts`).
+   * those has already said so in a `warn`).
+   *
+   * `online` says what becomes of a match that still reads online:
+   *
+   * - absent: named in a `warn` and left alone (`recreate`'s one pass);
+   * - `"defer"`: skipped without a word and returned, for a caller that
+   *   sweeps twice and will look again once its boxes are `terminated`
+   *   (`destroy-agent.ts`'s first pass);
+   * - `"delete"`: deleted like any other match, for that second look — the
+   *   caller has confirmed every instance tagged for the name `terminated`,
+   *   so the flag is Tailscale's lag, not a live machine. Only a match on
+   *   the fleet-scoped hostname, though: that name is set by cloud-init on a
+   *   box this fleet launched for this agent, and every such box is gone.
+   *   A match on the reported FQDN alone is not deleted while online — the
+   *   row's `tailscale_dns_name` is written by the box it describes
+   *   (`ownership.ts`), so a compromised or stale one can name another
+   *   agent's, or another fleet's, live node; it is named in a `warn` and
+   *   left, as when `online` is absent. Offline matches on either arm are
+   *   deleted in every mode.
    */
   async function* removeTailnetDevices(
     name: string,
@@ -69,7 +84,7 @@ export function createTailnetCleanup(deps: TailnetDeps) {
     phase: string,
     progress: number,
     opts: OpOptions = {},
-    sweep: { deferOnline?: boolean } = {},
+    sweep: { online?: "defer" | "delete" } = {},
   ): AsyncGenerator<OpEvent, string[] | null, undefined> {
     /** The reported FQDN, minus the DNS root dot Tailscale includes. */
     const reported = dnsName === null ? null : dnsName.replace(/\.$/, "");
@@ -139,12 +154,20 @@ export function createTailnetCleanup(deps: TailnetDeps) {
     for (const device of mine) {
       checkAbort(opts.signal, phase);
       const fqdn = device.name || device.hostname;
-      if (device.online) {
+      /**
+       * `"delete"` mode deletes an online device only on the canonical
+       * hostname arm: one matched by the box-written FQDN alone may be
+       * somebody else's live node (see the doc comment above).
+       */
+      const onlineDeletable = sweep.online === "delete" && device.hostname === canonical;
+      if (device.online && !onlineDeletable) {
         remaining.push(fqdn);
-        if (sweep.deferOnline) continue;
-        // This runs only after the instance was terminated, so a node still up is
-        // one we did not launch or did not manage to kill. Either way it is a live
-        // machine, and hermetic does not delete those on a guess (§1).
+        if (sweep.online === "defer") continue;
+        // This runs only after the instance was terminated, so a node still up
+        // is one we did not launch or did not manage to kill — or, in
+        // `"delete"` mode, one only the box-written FQDN ties to this row.
+        // Either way it may be a live machine, and hermetic does not delete
+        // those on a guess (§1).
         yield evt(
           phase,
           progress,

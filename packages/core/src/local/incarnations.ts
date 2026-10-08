@@ -10,10 +10,13 @@
  * that hands a head a live row:
  *
  * - the same `created_at`: the same box, nothing to do;
- * - a different `created_at`: the name was released and taken again since this
+ * - a later `created_at`: the name was released and taken again since this
  *   laptop last looked. The old box's watermarks, opt-ins, fence and sessions
  *   are purged with the same `purgeLocalAgent` the release itself runs, and the
  *   new incarnation is recorded;
+ * - an earlier `created_at` than the recorded one: a read that was delayed past
+ *   a newer one (two scans in flight). Ignored — it neither purges nor records,
+ *   so the reconciliation never moves backward to the predecessor;
  * - no record at all: the first time this laptop sees the name. It is recorded
  *   and nothing is purged. That includes every name on the first read after the
  *   upgrade that introduced this table: the state already on disk was gathered
@@ -105,6 +108,28 @@ export interface ReconcileOptions {
   complete: boolean;
 }
 
+/**
+ * Whether instant `a` is strictly before `b`. Parsed rather than compared as
+ * strings, so `…:00Z` and `…:00.000Z` order correctly; an unparseable value is
+ * never "older", so it falls through to the plain different-incarnation rule.
+ */
+function isOlder(a: string, b: string): boolean {
+  return Date.parse(a) < Date.parse(b);
+}
+
+/**
+ * How far past this laptop's clock a recorded `created_at` may sit and still be
+ * a genuine incarnation: the same 60 seconds `release-name.ts` allows a
+ * tombstone for a laptop trailing the one that wrote it. Kept local rather than
+ * imported, so this purely local module does not reach into the AWS-side
+ * lifecycle code.
+ */
+const FUTURE_SKEW_MS = 60_000;
+
+function inFuture(createdAt: string): boolean {
+  return Date.parse(createdAt) > Date.now() + FUTURE_SKEW_MS;
+}
+
 export function createIncarnationReconciler(deps: IncarnationReconcilerDeps) {
   /**
    * Never throws: like `observeHealth`, this is bookkeeping a read does on the
@@ -154,6 +179,22 @@ export function createIncarnationReconciler(deps: IncarnationReconcilerDeps) {
       live.add(row.name);
       const prior = recorded.get(row.name);
       if (prior === row.created_at) continue;
+      /**
+       * Monotonic: a row older than the one recorded is a delayed read — a scan
+       * that began before the successor was created and finished after a newer
+       * scan recorded it. Acting on it would purge the successor's freshly
+       * configured local state and record the predecessor again, and the next
+       * poll would purge once more. A name's `created_at` only moves forward
+       * (§6.7), so an older one is stale, never a release; it is ignored.
+       *
+       * Only while the recorded value is believable. A row's `created_at` is
+       * written by the box, so one dated in the future was forged or skewed,
+       * and trusting it as the high-water mark would make every real successor
+       * read as "older" for good, carrying the dead box's local state forward
+       * forever. Past `FUTURE_SKEW_MS` beyond now, the comparison is
+       * abandoned and the plain different-incarnation rule applies.
+       */
+      if (prior !== undefined && isOlder(row.created_at, prior) && !inFuture(prior)) continue;
       if (prior !== undefined) await purge(row.name);
       try {
         deps.store.set(fleet, row.name, row.created_at);

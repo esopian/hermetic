@@ -1222,3 +1222,153 @@ describe("far-future instants a box can write", () => {
     expect(again.created_at > genuine!.destroyed_at).toBe(true);
   });
 });
+
+/**
+ * §6.7: `--keep-volume` is written onto the disk before anything is
+ * terminated. A run that dies between the terminate and the release's retag
+ * has left no tombstone, so the tag is the only record of the choice — and a
+ * retry typed without the flag must still keep the disk.
+ */
+describe("the keep intent is durable before the terminate", () => {
+  test("a keep destroy that dies after the terminate: a plain retry keeps the disk", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const kept = volumeOf(row);
+
+    const sweep = backend.secrets.deleteByPrefix;
+    let crashed = false;
+    backend.secrets.deleteByPrefix = async (prefix) => {
+      if (!crashed) {
+        crashed = true;
+        throw new HermeticError("INTERNAL", "the laptop lost its network", {});
+      }
+      return sweep(prefix);
+    };
+    await expect(
+      drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true })),
+    ).rejects.toThrow(HermeticError);
+    expect(backend.instances.get(instanceOf(row))!.state).not.toBe("running");
+    expect(await backend.store.events.queryTombstones({ name: "atlas" })).toHaveLength(0);
+    // `agent` stays until the release: the disk is still this agent's.
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: "atlas", former_agent: "atlas" });
+
+    backend.resetMutations();
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone).toMatchObject({ volume_id: kept, volume_kept: true });
+  });
+});
+
+/**
+ * §6.7: the release reads which disks hold the name, then writes. Whatever
+ * moves in between is somebody else's, and the writes must not take it.
+ */
+describe("the release's tag writes", () => {
+  test("a disk another agent adopted between the read and the write keeps its new owner", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const own = volumeOf(row);
+    addTaggedDisk(backend, row, "vol-dup");
+
+    // Right after the release lists the disks — and after it resolved the
+    // row's own — another agent's adoption retags both to `bravo`.
+    const list = backend.compute.listVolumesByAgentTag;
+    backend.compute.listVolumesByAgentTag = async (name) => {
+      const listed = await list(name);
+      for (const id of [own, "vol-dup"]) {
+        backend.volumes.set(id, { ...backend.volumes.get(id)!, agent: "bravo" });
+      }
+      return listed;
+    };
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }));
+
+    expect(backend.volumes.get(own)!.agent).toBe("bravo");
+    expect(backend.volumes.get("vol-dup")!.agent).toBe("bravo");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+
+  test("a disk created after the run began is a successor's and is not swept", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    addTaggedDisk(backend, row, "vol-dup");
+
+    // A disk tagged for the name that EC2 made after this destroy started:
+    // only a later incarnation, created once this run's lock had lapsed, can
+    // own one.
+    const list = backend.compute.listVolumesByAgentTag;
+    backend.compute.listVolumesByAgentTag = async (name) => {
+      backend.advance(1_000);
+      backend.volumes.set("vol-successor", {
+        ...backend.volumes.get("vol-dup")!,
+        volume_id: "vol-successor",
+        created_at: backend.now().toISOString(),
+      });
+      return list(name);
+    };
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(backend.volumes.get("vol-successor")!.agent).toBe("atlas");
+    expect(backend.volumes.get("vol-successor")!.former_agent ?? null).toBeNull();
+    expect(sweptWarnings(events, "vol-successor")).toHaveLength(0);
+    // The older duplicate is still this name's to move off it.
+    expect(backend.volumes.get("vol-dup")).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(sweptWarnings(events, "vol-dup")).toHaveLength(1);
+  });
+
+  /**
+   * A release that stalled past its lock: by the time it would write, the row
+   * is no longer this run's. It refuses with `CONFLICT` before any tag moves.
+   */
+  const moved: Array<[string, (a: Agent, now: Date) => Agent]> = [
+    [
+      "its lock lapsed",
+      (a, now) => ({
+        ...a,
+        lock: { owner: a.lock!.owner, expires: new Date(now.getTime() - 1).toISOString() },
+      }),
+    ],
+    [
+      "another operator holds the lock",
+      (a) => ({ ...a, lock: { owner: "someone-else#1", expires: "2999-01-01T00:00:00.000Z" } }),
+    ],
+    [
+      "a later incarnation holds the name",
+      (a) => ({
+        ...a,
+        created_at: new Date(Date.parse(a.created_at) + HOUR).toISOString(),
+        status: "ready",
+        lock: null,
+      }),
+    ],
+  ];
+  for (const [label, move] of moved) {
+    test(`the row is checked again before the first tag write: ${label}`, async () => {
+      const { backend, hermetic, row } = await created("atlas");
+      const own = volumeOf(row);
+      addTaggedDisk(backend, row, "vol-dup");
+
+      const list = backend.compute.listVolumesByAgentTag;
+      backend.compute.listVolumesByAgentTag = async (name) => {
+        const listed = await list(name);
+        backend.agents.set("atlas", move(backend.agents.get("atlas")!, backend.now()));
+        backend.resetMutations();
+        return listed;
+      };
+      let error: unknown = null;
+      try {
+        await drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }));
+      } catch (e) {
+        error = e;
+      }
+
+      expect((error as HermeticError).code).toBe("CONFLICT");
+      expect(backend.mutations).not.toContain("compute.retagVolume");
+      expect(backend.volumes.get(own)!.agent).toBe("atlas");
+      expect(backend.volumes.get("vol-dup")).toMatchObject({ agent: "atlas" });
+      expect(backend.volumes.get("vol-dup")!.former_agent ?? null).toBeNull();
+      expect(await backend.store.events.queryTombstones({ name: "atlas" })).toHaveLength(0);
+      expect(await backend.store.agents.get("atlas")).not.toBeNull();
+    });
+  }
+});

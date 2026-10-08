@@ -1265,33 +1265,72 @@ describe("tailnet device cleanup", () => {
   });
 
   /**
-   * This runs only after the instance was terminated, so a device still up is
-   * one hermetic did not launch or did not manage to kill. It is named, and
-   * left alone.
+   * §6.7: the pass after the termination wait deletes a matching device even
+   * when it still reads online. Every instance tagged for the name is
+   * `terminated` by then, so the flag is Tailscale's lag, and the device left
+   * there would push the next node of the name onto `<name>-2`. The first
+   * pass, run while the box is still going down, passes over it silently, so
+   * the delete is said once. The match is no looser: other agents' devices,
+   * online ones included, are untouched.
    */
-  test("an online device is named and left alone", async () => {
+  test("destroy's second pass deletes a matching device that still reads online", async () => {
     const { backend, hermetic } = seeded();
-    // The box is already gone as far as EC2 is concerned, so nothing this
-    // destroy does can take the node down — and the device still says online.
+    // The box is already gone as far as EC2 is concerned, and the device
+    // still says online.
     const atlas = backend.agents.get("atlas")!;
     backend.instances.delete(atlas.instance_id!);
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    expect(backend.tailscaleDevices!.find((d) => d.name === device)!.online).toBe(true);
+    const others = hostnames(backend).filter((h) => h !== device);
+    expect(others.length).toBeGreaterThan(0);
 
     // Kept: the double's volume stays attached to the vanished instance, and
     // the tailnet step is what this test is about, not the detach wait.
     const events = await drain(
       hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
     );
-    // Said once, by the pass after the termination wait, and it says the
-    // device keeps the name — the first pass, run while boxes are still going
-    // down, passes over an online node silently.
     const tailnet = events.filter((e) => e.phase === "tailnet");
-    expect(tailnet).toHaveLength(1);
-    expect(tailnet[0]!.message).toBe(
-      "fxtr0001-atlas.hermetic.ts.net is still online; not deleting a live node — it keeps the name atlas on the tailnet until it is deleted in the admin console",
+    expect(tailnet.map((e) => e.message)).toEqual([`removed tailnet device ${device}`]);
+    expect(tailnet.every((e) => (e.level ?? "info") === "info")).toBe(true);
+    expect(hostnames(backend)).not.toContain(device);
+    expect(hostnames(backend)).toEqual(others);
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+
+  /**
+   * The row's `tailscale_dns_name` is written by the box it describes. A
+   * compromised or stale box pointing it at another agent's live node must
+   * not get that node deleted: the second pass deletes an online device only
+   * on the fleet-scoped hostname arm, and names the FQDN-only match instead.
+   */
+  test("a forged tailscale_dns_name cannot get another agent's online node deleted", async () => {
+    const { backend, hermetic } = seeded();
+    const atlas = backend.agents.get("atlas")!;
+    backend.instances.delete(atlas.instance_id!);
+    const victim = "fxtr0001-bravo.hermetic.ts.net";
+    backend.tailscaleDevices = [
+      ...backend.tailscaleDevices!.filter((d) => d.name !== victim),
+      {
+        id: "nodeFIXTUREvictim",
+        name: victim,
+        hostname: "fxtr0001-bravo",
+        addresses: ["100.64.88.8"],
+        online: true,
+        tags: ["tag:hermetic"],
+      },
+    ];
+    backend.agents.set("atlas", { ...backend.agents.get("atlas")!, tailscale_dns_name: `${victim}.` });
+
+    const events = await drain(
+      hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
     );
-    expect(tailnet[0]!.level).toBe("warn");
-    expect(hostnames(backend)).toContain("fxtr0001-atlas.hermetic.ts.net");
-    // Still a completed destroy: the tailnet is not what makes it one.
+
+    expect(hostnames(backend)).toContain(victim);
+    expect(hostnames(backend)).not.toContain("fxtr0001-atlas.hermetic.ts.net");
+    const warned = events.filter((e) => e.phase === "tailnet" && e.level === "warn");
+    expect(warned.map((e) => e.message)).toEqual([
+      `${victim} is still online; not deleting a live node`,
+    ]);
     expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 

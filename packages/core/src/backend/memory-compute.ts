@@ -27,6 +27,7 @@ import type {
   TagSelector,
   VolumeRef,
   OwnedVolumeStatus,
+  RetagVolumeOptions,
   VolumeStatus,
 } from "./types.ts";
 
@@ -371,6 +372,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           agent: v.agent,
           former_agent: v.former_agent ?? null,
           state: v.state,
+          created_at: v.created_at ?? null,
         }))
         .sort((a, b) => (a.volume_id < b.volume_id ? -1 : 1)),
     /**
@@ -394,6 +396,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           agent: v.agent,
           former_agent: v.former_agent ?? null,
           state: v.state,
+          created_at: v.created_at ?? null,
         }))
         .sort((a, b) => (a.volume_id < b.volume_id ? -1 : 1)),
     /**
@@ -447,7 +450,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
     retagVolume: async (
       volumeId: string,
       agent: string | null,
-      opts: { roleData?: boolean; name?: string | null; formerAgent?: string | null } = {},
+      opts: RetagVolumeOptions = {},
     ): Promise<void> => {
       const roleData = opts.roleData ?? true;
       const vol = b.volumes.get(volumeId);
@@ -459,9 +462,16 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
       // "not role=data" is "no role tag" — which is what a restore puts back.
       // An absent `opts.name` leaves the display `Name` alone; `null` clears it,
       // which is what a rollback of an adopted volume asks for.
+      //
+      // `expectedAgent` mirrors `DeleteTags` with a `Value`: with `agent: null`
+      // the tag is removed only while it still reads that value, and a
+      // mismatch leaves it — everything else in the call still lands, as the
+      // `CreateTags` before it does on EC2.
+      const keepsAgent =
+        agent === null && opts.expectedAgent !== undefined && vol.agent !== opts.expectedAgent;
       b.volumes.set(volumeId, {
         ...vol,
-        agent,
+        agent: keepsAgent ? vol.agent : agent,
         role: roleData ? "data" : null,
         fleet_id: b.boundFleetId(),
         ...(opts.name === undefined ? {} : { name_tag: opts.name }),

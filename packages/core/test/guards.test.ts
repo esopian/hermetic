@@ -358,6 +358,69 @@ describe("apply", () => {
     await drain(hermetic.apply({ plan, yes: true }));
     expect((await backend.store.agents.get("atlas"))!.status).toBe("bootstrapping");
   });
+
+  /**
+   * §6.7: a name can be reused, so a plan that does not say which incarnation
+   * it described cannot be checked against the row — a reused null-id row would
+   * pass. Such a plan predates the field and is refused before anything runs.
+   */
+  test("a recreate plan without created_at is refused as PLAN_STALE", async () => {
+    const { backend, hermetic } = seeded();
+    const plan = await hermetic.plan.recreate({ name: "atlas" });
+    const { created_at: _dropped, ...options } = plan.options;
+    backend.resetMutations();
+
+    const error = await errorOf(() => drain(hermetic.apply({ plan: { ...plan, options }, yes: true })));
+    expect(error.code).toBe("PLAN_STALE");
+    expect(error.message).toContain("hermetic plan recreate atlas");
+    expect(backend.mutations).not.toContain("compute.terminate");
+  });
+
+  /**
+   * An earlier destroy that kept the volume sets `former_agent=<name>` before
+   * anything else, and the retry keeps it whatever its flag says; the preview
+   * must say so rather than promise a delete.
+   */
+  test("a destroy plan keeps a volume already tagged former_agent", async () => {
+    const { backend, hermetic } = seeded();
+    const volumeId = (await backend.store.agents.get("atlas"))!.resources.volume_id!;
+    backend.volumes.get(volumeId)!.former_agent = "atlas";
+
+    const plan = await hermetic.plan.destroy({ name: "atlas" });
+    const step = plan.steps.find((s) => s.id === "volume")!;
+    expect(step.description).toContain("keep data volume");
+    expect(step.destructive).toBe(false);
+    expect(plan.warnings.join(" ")).not.toContain("--keep-volume");
+
+    await drain(hermetic.apply({ plan, yes: true }));
+    expect(backend.volumes.has(volumeId)).toBe(true);
+  });
+
+  /**
+   * `destroy` judges a released disk by its managed and fleet tags too, and
+   * refuses one that is somebody else's; the preview must not call it kept.
+   */
+  test("a destroy plan does not call a former_agent volume of another fleet kept", async () => {
+    const { backend, hermetic } = seeded();
+    const volumeId = (await backend.store.agents.get("atlas"))!.resources.volume_id!;
+    const vol = backend.volumes.get(volumeId)!;
+    // Released from the name (no `agent` tag) but tagged for some other fleet.
+    vol.former_agent = "atlas";
+    vol.agent = null;
+    vol.fleet_id = "11111111-1111-4111-8111-111111111111";
+
+    const plan = await hermetic.plan.destroy({ name: "atlas" });
+    const step = plan.steps.find((s) => s.id === "volume")!;
+    expect(step.description).toContain("delete data volume");
+  });
+
+  test("a destroy plan still says delete for an ordinary volume", async () => {
+    const { hermetic } = seeded();
+    const plan = await hermetic.plan.destroy({ name: "atlas" });
+    const step = plan.steps.find((s) => s.id === "volume")!;
+    expect(step.description).toContain("delete data volume");
+    expect(step.destructive).toBe(true);
+  });
 });
 
 /** §4.7: `logs` reads the fleet, so it guards like everything else that does. */

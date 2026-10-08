@@ -128,6 +128,47 @@ for (const kind of ["memory", "sqlite"] as const) {
       s.close();
     });
 
+    /**
+     * Two scans in flight: the older one began before the successor existed and
+     * is delivered after a newer scan recorded the successor. Its row carries
+     * the predecessor's earlier `created_at`; acting on it would purge the
+     * successor's freshly configured state and record the predecessor again.
+     */
+    test("a delayed scan carrying an older created_at neither purges nor records", async () => {
+      const s = build(kind);
+      s.incarnations.set(F, "alpha", T1);
+      const reconcile = reconcilerFor(s);
+      await reconcile([{ name: "alpha", created_at: T2 }], { complete: true });
+      // The operator sets up the successor box after the newer scan.
+      seed(s, "alpha");
+
+      await reconcile([{ name: "alpha", created_at: T1 }], { complete: true });
+
+      expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+      expect(s.incarnations.list(F)).toEqual(new Map([["alpha", T2]]));
+      // And the next, current poll finds nothing to do either.
+      await reconcile([{ name: "alpha", created_at: T2 }], { complete: true });
+      expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+      s.close();
+    });
+
+    /**
+     * `created_at` is box-writable. A far-future value, once recorded, must not
+     * become a ceiling no real successor can pass.
+     */
+    test("a recorded created_at in the future does not shield a real successor", async () => {
+      const s = build(kind);
+      seed(s, "alpha");
+      const forged = "3000-01-01T00:00:00.000Z";
+      s.incarnations.set(F, "alpha", forged);
+
+      await reconcilerFor(s)([{ name: "alpha", created_at: T2 }], { complete: true });
+
+      expect(hasState(s, "alpha")).toEqual([false, false, false, false]);
+      expect(s.incarnations.list(F)).toEqual(new Map([["alpha", T2]]));
+      s.close();
+    });
+
     test("the same created_at purges nothing", async () => {
       const s = build(kind);
       seed(s, "alpha");
@@ -328,20 +369,23 @@ describe("another laptop's release reaches this laptop's local state", () => {
     }
     const old = await backend.store.agents.get("ember");
     if (!old) throw new Error("fixture has no ember");
-    return { backend, a, b, old };
+    // A name's `created_at` only moves forward, and the reconciler relies on
+    // it: a successor is a later instant than the box it replaced.
+    const later = (ms: number) => new Date(Date.parse(old.created_at) + ms).toISOString();
+    return { backend, a, b, old, successor: later(1000), third: later(2000) };
   }
 
   test("the name re-taken with a new created_at: B purges on its next list", async () => {
-    const { backend, a, b, old } = await setUp();
+    const { backend, a, b, old, successor } = await setUp();
     await drain(a.hermetic.agents.destroy({ name: "ember", yes: true }));
-    await backend.store.agents.putIfAbsent({ ...old, created_at: T2, version: 1 });
+    await backend.store.agents.putIfAbsent({ ...old, created_at: successor, version: 1 });
 
     await b.hermetic.agents.list();
 
     expect(b.instanceListening.list(fleet)).toEqual(["atlas"]);
     expect(b.notifications.seenStatus(fleet, "chat:ember/bot")).toBeNull();
     expect(b.notifications.seenStatus(fleet, "chat:atlas/bot")).toBe("x");
-    expect(b.incarnations.list(fleet).get("ember")).toBe(T2);
+    expect(b.incarnations.list(fleet).get("ember")).toBe(successor);
   });
 
   test("the name released and not re-taken: B purges on its next list", async () => {
@@ -353,9 +397,9 @@ describe("another laptop's release reaches this laptop's local state", () => {
   });
 
   test("a chat roster read reconciles too, without a list first", async () => {
-    const { backend, a, b, old } = await setUp();
+    const { backend, a, b, old, successor, third } = await setUp();
     await drain(a.hermetic.agents.destroy({ name: "ember", yes: true }));
-    await backend.store.agents.putIfAbsent({ ...old, created_at: T2, version: 1 });
+    await backend.store.agents.putIfAbsent({ ...old, created_at: successor, version: 1 });
 
     // Both doors chat reads rows through: one instance (`getAgent`), and all
     // of them (the scan).
@@ -365,7 +409,7 @@ describe("another laptop's release reaches this laptop's local state", () => {
 
     b.instanceListening.set(fleet, "ember", true);
     await backend.store.agents.delete("ember");
-    await backend.store.agents.putIfAbsent({ ...old, created_at: T1, version: 1 });
+    await backend.store.agents.putIfAbsent({ ...old, created_at: third, version: 1 });
     await b.hermetic.chat.swarms({});
     expect(b.instanceListening.list(fleet)).toEqual(["atlas"]);
   });

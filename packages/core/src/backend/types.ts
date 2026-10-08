@@ -435,6 +435,20 @@ export interface ManagedVolumeRef {
   /** The `hermetic:former_agent=<name>` tag a destroy leaves on a kept volume (§6.7), or null. */
   former_agent: string | null;
   state: string;
+  /**
+   * EC2's `CreateTime`, ISO-8601, or null when the answer carries none. The
+   * release's sweep (§6.7) reads it to leave alone a disk created after its
+   * own run began: that one can only be a later incarnation's.
+   */
+  created_at: string | null;
+}
+
+/** `ComputeApi.retagVolume`'s options; see there. */
+export interface RetagVolumeOptions {
+  roleData?: boolean;
+  name?: string | null;
+  formerAgent?: string | null;
+  expectedAgent?: string;
 }
 
 /** One EBS snapshot, as the DLM policy of §7.1 produces them. */
@@ -805,12 +819,14 @@ export interface ComputeApi {
    * that name again — the one hold on a destroyed name that would otherwise
    * survive. A string sets it, `null` removes it, absent leaves it alone; the
    * adopt path removes it when it gives the volume a new owner.
+   *
+   * `expectedAgent`, with `agent: null`, makes the removal conditional: the
+   * `agent` tag goes only while it still reads that value (EC2's `DeleteTags`
+   * with a `Value` deletes nothing on a mismatch). A release moving a disk off
+   * `<name>` passes `<name>`, so a disk another agent's adoption retagged
+   * between the release's read and this write keeps its new owner's tag.
    */
-  retagVolume(
-    volumeId: string,
-    agent: string | null,
-    opts?: { roleData?: boolean; name?: string | null; formerAgent?: string | null },
-  ): Promise<void>;
+  retagVolume(volumeId: string, agent: string | null, opts?: RetagVolumeOptions): Promise<void>;
   /** Snapshots carrying one tag, e.g. the DLM policy's `hermetic:role=data` (§7.1). */
   listSnapshots(tag: TagSelector): Promise<SnapshotRef[]>;
   deleteSnapshot(snapshotId: string): Promise<void>;
