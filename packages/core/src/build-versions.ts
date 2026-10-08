@@ -8,14 +8,14 @@
  */
 export const BUILD_VERSIONS = {
   hermeticd: "0.5.1",
-  hermes: "0.21.3",
+  hermes: "0.21.5",
   /**
    * The upstream git tag that *is* `hermes: "0.21.3"` — Hermes Agent ships no
    * PyPI release, so the box clones this ref and then asserts the checkout
    * reports the version above. Upstream tags by date, so bumping one means
    * looking the other up; they cannot be derived from each other.
    */
-  hermes_ref: "v2026.9.14",
+  hermes_ref: "v2026.9.24",
   /**
    * The Chrome for Testing build every `browser: true` agent runs, headed, on
    * its X display (§7.3). Playwright's CDN publishes it per architecture;

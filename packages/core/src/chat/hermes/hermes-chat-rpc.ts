@@ -434,6 +434,44 @@ type Step =
   | { kind: "timeout" };
 
 /**
+ * How long a capability advertisement may take before the turn goes on without
+ * it. It is one in-memory flag on the gateway, so anything slower is a socket
+ * that is about to fail its next request anyway.
+ */
+const CAPABILITIES_DEADLINE_MS = 5_000;
+
+/**
+ * Tell the gateway this socket answers server→client requests — approvals,
+ * clarifications, sudo and secret prompts — so it sends them here.
+ *
+ * From Hermes `v2026.9.21` the gateway delivers a prompt only to a client on
+ * the session that has sent `client.capabilities {server_requests: true}`; with
+ * none attached it withdraws an approval at once ("the attached client cannot
+ * answer approval requests") and resolves a clarify to nothing
+ * (`tui_gateway/server_requests.py:117-122`). This socket does answer them:
+ * `readRpc` surfaces each one as a `hermetic.server_request` event and the
+ * operator replies through `request.answer`.
+ *
+ * Only for a socket a turn is read from — the one that submits the prompt and
+ * the one a dropped turn reconnects on. A socket that cannot surface a prompt
+ * must not claim it can, or a prompt sent to it alone waits out its whole
+ * deadline instead of failing fast.
+ *
+ * Best effort. An older gateway answers `-32601` (method not found) and behaves
+ * as it always did; any other refusal leaves prompts failing fast, which is no
+ * worse than not asking. Only the caller's own abort is passed through.
+ */
+export async function advertiseServerRequests(rpc: Rpc, signal?: AbortSignal): Promise<void> {
+  try {
+    await rpc.request("client.capabilities", { server_requests: true }, CAPABILITIES_DEADLINE_MS, {
+      signal,
+    });
+  } catch (e) {
+    if (signal?.aborted) throw e;
+  }
+}
+
+/**
  * One event, or the reason there was not one.
  *
  * Three things can end a wait and they mean three different things to the

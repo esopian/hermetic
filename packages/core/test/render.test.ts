@@ -796,19 +796,47 @@ describe("the packages Hermes actually needs", () => {
   });
 
   /**
-   * The venv is root's and both Hermes processes run as `hermes`, so an install
-   * at first use is an EACCES mid-tool-call rather than a feature. The variable
-   * turns it into upstream's own "feature unavailable" (`lazy_deps.py:317-325`),
-   * and it goes on *both* units because either process can reach a lazy backend.
-   *
-   * No `HERMES_LAZY_INSTALL_TARGET`: naming one re-enables installs into it
-   * (`lazy_deps.py:322-324`).
+   * Upstream's container recipe, both halves (`Dockerfile:430`, `:443`): the
+   * disable flag keeps on-demand installs out of the root-owned venv, and the
+   * target sends them to a directory the account owns on the data volume,
+   * which re-enables them there (`lazy_deps.py:325-337`). On *both* units,
+   * because either process can reach a lazy backend.
    */
-  test("lazy installs are off on both Hermes units, with nowhere to redirect to", () => {
+  test("on-demand installs are redirected to the account's target on both Hermes units", () => {
     for (const path of ["/etc/systemd/system/hermes-dashboard.service", "hermetic.conf"]) {
       const file = rendered.manifest.files.find((f) => f.path.endsWith(path))!.content;
       expect(file).toContain("Environment=HERMES_DISABLE_LAZY_INSTALLS=1");
-      expect(file).not.toContain("HERMES_LAZY_INSTALL_TARGET");
+      expect(file).toContain(
+        "Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages",
+      );
+    }
+  });
+
+  /**
+   * Hermes's terminal tool strips `VIRTUAL_ENV` from what it hands a login
+   * shell, and an operator's `sudo -iu hermes` gets no unit environment at all,
+   * so the account's install locations are re-established by a profile script.
+   */
+  test("every hermes login shell gets the agent's venv first and the install targets", () => {
+    const profile = rendered.manifest.files.find((f) => f.path === "/etc/profile.d/hermetic-agent.sh");
+    expect(profile?.mode).toBe("0644");
+    const content = profile?.content ?? "";
+    expect(content).toContain('if [ "$(id -un 2>/dev/null)" = "hermes" ]; then');
+    expect(content).toContain("export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages");
+    expect(content).toContain("export NPM_CONFIG_PREFIX=/data/hermes/.local");
+    expect(content).toContain("export VIRTUAL_ENV=/data/hermes/.venv");
+    expect(content).toContain('PATH="/data/hermes/.venv/bin:$PATH"');
+  });
+
+  /**
+   * Node is root's, so npm's default global prefix is a directory `hermes`
+   * cannot write. Both units point it at the account's own prefix, because an
+   * agent's shell is a child of whichever process serves the conversation.
+   */
+  test("npm installs globally into the account's own prefix on both Hermes units", () => {
+    for (const path of ["/etc/systemd/system/hermes-dashboard.service", "hermetic.conf"]) {
+      const file = rendered.manifest.files.find((f) => f.path.endsWith(path))!.content;
+      expect(file).toContain("Environment=NPM_CONFIG_PREFIX=/data/hermes/.local");
     }
   });
 });
