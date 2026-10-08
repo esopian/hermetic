@@ -84,6 +84,7 @@ import {
 import { REQUEST_NAMES } from "../../../app/src/rpc/schema.ts";
 import { fleetTarget, setFleetTarget } from "../../src/api/index.ts";
 import { installedTransport, setTransport } from "../../src/api/transport.ts";
+import { invalidateFetchCache } from "../../src/lib/fetch-cache.ts";
 import {
   createRpcTransport,
   type ElectroviewLike,
@@ -328,6 +329,11 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
   const priorTransport = installedTransport();
   const priorTarget = fleetTarget();
   setTransport(createRpcTransport({ Electroview }));
+  // `lib/fetch-cache.ts` is module state too, and it keeps an answer for ten
+  // seconds. Left alone, this harness's first `volumes.list` is the previous
+  // harness's fleet — a fleet that flow may have destroyed agents in — and no
+  // request ever reaches this head. Cleared here and again on teardown.
+  invalidateFetchCache();
 
   // The first scan, so the snapshot the page subscribes to has the fleet in it.
   await poller.poll();
@@ -359,6 +365,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     async restore() {
       setTransport(priorTransport);
       setFleetTarget(priorTarget);
+      invalidateFetchCache();
       // Both, for the same reason `poll` reads `state.poller`: after a switch
       // they are different objects, and the one `#install` created was
       // `start()`ed, so leaving it running leaks a real interval into the next
