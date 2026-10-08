@@ -287,6 +287,10 @@ unnoticed.
 
 Conventional commits, imperative mood, subject ≤50 chars: `fix: refuse create when SG has inbound rules`, `feat(cli): add agent recreate`. Body explains why, not what, when the diff isn't self-explanatory.
 
+## Pull requests
+
+The repo squash-merges, so a PR's title becomes the commit subject on `master` and follows the rules above. The body follows `.github/pull_request_template.md`, which GitHub pre-fills: a review guide (TL;DR, how it works, review stops, acceptance tests, rollout) whose test table lists only checks that were actually run. In Claude Code, `/create-pr` (`.claude/skills/create-pr/`) fills it from the branch and opens the PR; agents open every PR through it.
+
 ## Adding a CLI command or RPC handler
 
 Every command/handler wraps exactly one core method — see "Parity contract" in `AGENTS.md` for the full six-step recipe (schema → core method → `PUBLIC_METHODS` → CLI command via `declare()` → RPC handler via `declareRpc()` → `bun test tests/parity.test.ts`). A handler lives under `packages/app/src/handlers/` and is wired into `HANDLERS` in `packages/app/src/handlers/dispatch.ts`; `declareRpc` is in `packages/app/src/declare.ts`, and `RPC_DECLARATIONS` in `packages/app/src/rpc/registry.ts` is what the parity test reads. Machinery requests that wrap no core method (meta, ops, the wizard's pre-init helpers) declare themselves as machinery instead and show up in `MACHINERY_RPC`.
