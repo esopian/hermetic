@@ -19,7 +19,7 @@ import {
 import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
 import { approvalBlock, mapUsage, questionBlock, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
-import type { Rpc } from "./hermes-chat-rpc.ts";
+import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
@@ -191,6 +191,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
     let pump: TurnPump | null = null;
     const key = turnKey(box, bot);
     try {
+      // Before the session exists, so the gateway already counts this socket
+      // as one that answers prompts when the turn's first approval arrives.
+      await advertiseServerRequests(rpc, opts.signal);
       let session: string;
       let stored = opts.session ?? null;
       if (opts.session) {

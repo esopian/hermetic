@@ -311,7 +311,11 @@ describe("hermes-chat · turn continuation", () => {
     // It dialled again, attached before it read, and asked from the last event
     // it had actually applied.
     expect(h.sockets).toHaveLength(2);
-    expect(h.sockets[1]?.methods()).toEqual(["session.resume", "session.events.since"]);
+    expect(h.sockets[1]?.methods()).toEqual([
+      "client.capabilities",
+      "session.resume",
+      "session.events.since",
+    ]);
     expect(sinceCalls(h.sockets[1])[0]?.last_seen).toBe(42);
     // The answer reads as one uninterrupted sentence, with nothing said twice.
     expect(deltas(frames)).toEqual(["one ", "two ", "three "]);
@@ -485,7 +489,7 @@ describe("hermes-chat · turn continuation", () => {
     for await (const frame of chat.send(BOX, "d", "again")) second.push(ChatFrame.parse(frame));
     expect(h.sockets).toHaveLength(2);
     // The verdict is remembered: the second turn spends no request learning it.
-    expect(h.sockets[1]?.methods()).toEqual(["session.create", "prompt.submit"]);
+    expect(h.sockets[1]?.methods()).toEqual(["client.capabilities", "session.create", "prompt.submit"]);
     expect(second.at(-1)?.type).toBe("done");
   });
 
