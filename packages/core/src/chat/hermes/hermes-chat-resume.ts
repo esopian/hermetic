@@ -26,7 +26,7 @@ import {
   OBSERVE_RECONNECT_MAX_MS,
 } from "../chat-observe.ts";
 import { HermeticError } from "../../errors.ts";
-import { nextEvent, type Rpc } from "./hermes-chat-rpc.ts";
+import { advertiseServerRequests, nextEvent, type Rpc } from "./hermes-chat-rpc.ts";
 import { CHAT_ERROR_CODES, CHAT_RECONNECT_BLOCK_KEY, type BoxAddress } from "./hermes-chat-types.ts";
 import { num, rec, str } from "./hermes-chat-wire.ts";
 import type { ChatBlock } from "../../schema/index.ts";
@@ -395,6 +395,9 @@ export function createTurnResume(deps: TurnResumeDeps) {
           return;
         }
         handshake = fresh;
+        // The turn's prompts follow it onto the new socket only if this one
+        // says it can answer them (`advertiseServerRequests`).
+        await advertiseServerRequests(fresh, signal);
         const resumed = rec(
           await fresh.request(
             "session.resume",
