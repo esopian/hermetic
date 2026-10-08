@@ -196,10 +196,15 @@ export async function ensureNode(
       );
     }
 
+    // `--no-same-owner` because nodejs.org's tarball records its builder's
+    // uid/gid (1001), and root's `tar` restores archived owners by default — so
+    // without it Node's `bin/` and global `node_modules` belong to whichever
+    // account the box later hands uid 1001, not to root.
     await must(host, [
       "timeout",
       NODE_UNPACK_TIMEOUT_S,
       "tar",
+      "--no-same-owner",
       "-xJf",
       tarball,
       "-C",

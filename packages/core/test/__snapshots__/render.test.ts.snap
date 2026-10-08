@@ -2,8 +2,8 @@
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "36809c72d71a5103",
-  "key": "config/atlas/36809c72d71a5103.tgz",
+  "config_hash": "3a0b459447424bd4",
+  "key": "config/atlas/3a0b459447424bd4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -43,7 +43,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "36809c72d71a5103",
+    "config_hash": "3a0b459447424bd4",
     "files": [
       {
         "content": 
@@ -213,6 +213,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -242,6 +244,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -343,6 +347,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -653,8 +680,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "73f9788e1a9bc644",
-  "key": "config/atlas/73f9788e1a9bc644.tgz",
+  "config_hash": "22e30e6ccd801bef",
+  "key": "config/atlas/22e30e6ccd801bef.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -699,7 +726,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "73f9788e1a9bc644",
+    "config_hash": "22e30e6ccd801bef",
     "files": [
       {
         "content": 
@@ -869,6 +896,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -898,6 +927,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -999,6 +1030,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -1311,8 +1365,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "b9e82e77b443d060",
-  "key": "config/atlas/b9e82e77b443d060.tgz",
+  "config_hash": "4864bd868e3ce777",
+  "key": "config/atlas/4864bd868e3ce777.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -1352,7 +1406,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b9e82e77b443d060",
+    "config_hash": "4864bd868e3ce777",
     "files": [
       {
         "content": 
@@ -1522,6 +1576,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -1549,6 +1605,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -1648,6 +1706,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -1959,8 +2040,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "aea4c9d175ede62e",
-  "key": "config/atlas/aea4c9d175ede62e.tgz",
+  "config_hash": "5caf3c1ec24061dc",
+  "key": "config/atlas/5caf3c1ec24061dc.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2005,7 +2086,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "aea4c9d175ede62e",
+    "config_hash": "5caf3c1ec24061dc",
     "files": [
       {
         "content": 
@@ -2175,6 +2256,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -2202,6 +2285,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -2301,6 +2386,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -2614,8 +2722,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "8f0248d1cac47999",
-  "key": "config/atlas/8f0248d1cac47999.tgz",
+  "config_hash": "a843304167a469a6",
+  "key": "config/atlas/a843304167a469a6.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2655,7 +2763,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8f0248d1cac47999",
+    "config_hash": "a843304167a469a6",
     "files": [
       {
         "content": 
@@ -2825,6 +2933,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -2852,6 +2962,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -2951,6 +3063,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -3262,8 +3397,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "ac1eaa2042892e58",
-  "key": "config/atlas/ac1eaa2042892e58.tgz",
+  "config_hash": "ec6f18a5464e87ca",
+  "key": "config/atlas/ec6f18a5464e87ca.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -3308,7 +3443,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ac1eaa2042892e58",
+    "config_hash": "ec6f18a5464e87ca",
     "files": [
       {
         "content": 
@@ -3478,6 +3613,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -3505,6 +3642,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -3604,6 +3743,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -3917,8 +4079,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
 {
-  "config_hash": "49fe4c2a3fcafae9",
-  "key": "config/atlas/49fe4c2a3fcafae9.tgz",
+  "config_hash": "5c98b2f98f4c30f8",
+  "key": "config/atlas/5c98b2f98f4c30f8.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -3958,7 +4120,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "49fe4c2a3fcafae9",
+    "config_hash": "5c98b2f98f4c30f8",
     "files": [
       {
         "content": 
@@ -4130,6 +4292,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -4157,6 +4321,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -4256,6 +4422,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -4567,8 +4756,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "664e1667a397677e",
-  "key": "config/atlas/664e1667a397677e.tgz",
+  "config_hash": "0fa7ccc61a900558",
+  "key": "config/atlas/0fa7ccc61a900558.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4613,7 +4802,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "664e1667a397677e",
+    "config_hash": "0fa7ccc61a900558",
     "files": [
       {
         "content": 
@@ -4785,6 +4974,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -4812,6 +5003,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -4911,6 +5104,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -5224,8 +5440,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
 {
-  "config_hash": "1a688ea9cf10cf35",
-  "key": "config/atlas/1a688ea9cf10cf35.tgz",
+  "config_hash": "33b6fb3c662e5eb0",
+  "key": "config/atlas/33b6fb3c662e5eb0.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -5265,7 +5481,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "1a688ea9cf10cf35",
+    "config_hash": "33b6fb3c662e5eb0",
     "files": [
       {
         "content": 
@@ -5435,6 +5651,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -5462,6 +5680,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -5561,6 +5781,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -5872,8 +6115,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "8a81b8e34abb6717",
-  "key": "config/atlas/8a81b8e34abb6717.tgz",
+  "config_hash": "3563e60b72692c5b",
+  "key": "config/atlas/3563e60b72692c5b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -5918,7 +6161,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8a81b8e34abb6717",
+    "config_hash": "3563e60b72692c5b",
     "files": [
       {
         "content": 
@@ -6088,6 +6331,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -6115,6 +6360,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -6214,6 +6461,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -6527,8 +6797,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
 {
-  "config_hash": "3f5bc12b1df30131",
-  "key": "config/atlas/3f5bc12b1df30131.tgz",
+  "config_hash": "05bd173af82f7879",
+  "key": "config/atlas/05bd173af82f7879.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6568,7 +6838,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "3f5bc12b1df30131",
+    "config_hash": "05bd173af82f7879",
     "files": [
       {
         "content": 
@@ -6738,6 +7008,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -6765,6 +7037,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -6864,6 +7138,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -7175,8 +7472,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "35d64a283c9a8e51",
-  "key": "config/atlas/35d64a283c9a8e51.tgz",
+  "config_hash": "259408293b73bca7",
+  "key": "config/atlas/259408293b73bca7.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -7221,7 +7518,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "35d64a283c9a8e51",
+    "config_hash": "259408293b73bca7",
     "files": [
       {
         "content": 
@@ -7391,6 +7688,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -7418,6 +7717,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -7517,6 +7818,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -7830,8 +8154,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "98b4b89091a8e045",
-  "key": "config/atlas/98b4b89091a8e045.tgz",
+  "config_hash": "26f4b3eb7f0f7c56",
+  "key": "config/atlas/26f4b3eb7f0f7c56.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -7871,7 +8195,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "98b4b89091a8e045",
+    "config_hash": "26f4b3eb7f0f7c56",
     "files": [
       {
         "content": 
@@ -8041,6 +8365,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -8070,6 +8396,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -8171,6 +8499,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -8481,8 +8832,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "d446a48d5db102ae",
-  "key": "config/atlas/d446a48d5db102ae.tgz",
+  "config_hash": "477f8e7fc0fe4ed6",
+  "key": "config/atlas/477f8e7fc0fe4ed6.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8527,7 +8878,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "d446a48d5db102ae",
+    "config_hash": "477f8e7fc0fe4ed6",
     "files": [
       {
         "content": 
@@ -8697,6 +9048,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -8726,6 +9079,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -8827,6 +9182,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -9139,8 +9517,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "77a85187a412f085",
-  "key": "config/atlas/77a85187a412f085.tgz",
+  "config_hash": "af366ae145d36d9b",
+  "key": "config/atlas/af366ae145d36d9b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -9180,7 +9558,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "77a85187a412f085",
+    "config_hash": "af366ae145d36d9b",
     "files": [
       {
         "content": 
@@ -9350,6 +9728,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -9377,6 +9757,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -9476,6 +9858,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -9787,8 +10192,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "60a0469696c512e9",
-  "key": "config/atlas/60a0469696c512e9.tgz",
+  "config_hash": "56df74d1b962974b",
+  "key": "config/atlas/56df74d1b962974b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -9833,7 +10238,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "60a0469696c512e9",
+    "config_hash": "56df74d1b962974b",
     "files": [
       {
         "content": 
@@ -10003,6 +10408,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -10030,6 +10437,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -10129,6 +10538,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -10442,8 +10874,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "56ef7a732c96446b",
-  "key": "config/atlas/56ef7a732c96446b.tgz",
+  "config_hash": "23b060bc65b6bd53",
+  "key": "config/atlas/23b060bc65b6bd53.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10483,7 +10915,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "56ef7a732c96446b",
+    "config_hash": "23b060bc65b6bd53",
     "files": [
       {
         "content": 
@@ -10653,6 +11085,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -10680,6 +11114,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -10779,6 +11215,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -11090,8 +11549,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "0d91fe99a726a440",
-  "key": "config/atlas/0d91fe99a726a440.tgz",
+  "config_hash": "b405109791bed3dd",
+  "key": "config/atlas/b405109791bed3dd.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -11136,7 +11595,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0d91fe99a726a440",
+    "config_hash": "b405109791bed3dd",
     "files": [
       {
         "content": 
@@ -11306,6 +11765,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -11333,6 +11794,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -11432,6 +11895,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -11745,8 +12231,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
 {
-  "config_hash": "98120a64aa99dd4b",
-  "key": "config/atlas/98120a64aa99dd4b.tgz",
+  "config_hash": "5234e8f0176994a1",
+  "key": "config/atlas/5234e8f0176994a1.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -11786,7 +12272,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "98120a64aa99dd4b",
+    "config_hash": "5234e8f0176994a1",
     "files": [
       {
         "content": 
@@ -11958,6 +12444,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -11985,6 +12473,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -12084,6 +12574,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -12395,8 +12908,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "86732cc8c2869656",
-  "key": "config/atlas/86732cc8c2869656.tgz",
+  "config_hash": "bddf8fa582c91166",
+  "key": "config/atlas/bddf8fa582c91166.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -12441,7 +12954,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "86732cc8c2869656",
+    "config_hash": "bddf8fa582c91166",
     "files": [
       {
         "content": 
@@ -12613,6 +13126,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -12640,6 +13155,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -12739,6 +13256,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -13052,8 +13592,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
 {
-  "config_hash": "fde783d6acfd99f2",
-  "key": "config/atlas/fde783d6acfd99f2.tgz",
+  "config_hash": "b9d7b58e53644e86",
+  "key": "config/atlas/b9d7b58e53644e86.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13093,7 +13633,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "fde783d6acfd99f2",
+    "config_hash": "b9d7b58e53644e86",
     "files": [
       {
         "content": 
@@ -13263,6 +13803,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -13290,6 +13832,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -13389,6 +13933,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -13700,8 +14267,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "9e0d57eb8f44c565",
-  "key": "config/atlas/9e0d57eb8f44c565.tgz",
+  "config_hash": "b6a38a87fa0c7d34",
+  "key": "config/atlas/b6a38a87fa0c7d34.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13746,7 +14313,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "9e0d57eb8f44c565",
+    "config_hash": "b6a38a87fa0c7d34",
     "files": [
       {
         "content": 
@@ -13916,6 +14483,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -13943,6 +14512,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -14042,6 +14613,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -14355,8 +14949,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
 {
-  "config_hash": "08924c51afdada3e",
-  "key": "config/atlas/08924c51afdada3e.tgz",
+  "config_hash": "86e022cf88f4b89e",
+  "key": "config/atlas/86e022cf88f4b89e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -14396,7 +14990,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "08924c51afdada3e",
+    "config_hash": "86e022cf88f4b89e",
     "files": [
       {
         "content": 
@@ -14566,6 +15160,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -14593,6 +15189,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -14692,6 +15290,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -15003,8 +15624,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "c9e035fc19dcc0e6",
-  "key": "config/atlas/c9e035fc19dcc0e6.tgz",
+  "config_hash": "962d6b7efd29f889",
+  "key": "config/atlas/962d6b7efd29f889.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15049,7 +15670,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c9e035fc19dcc0e6",
+    "config_hash": "962d6b7efd29f889",
     "files": [
       {
         "content": 
@@ -15219,6 +15840,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -15246,6 +15869,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -15345,6 +15970,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -15658,8 +16306,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "d73ecc2bcdc5944b",
-  "key": "config/atlas/d73ecc2bcdc5944b.tgz",
+  "config_hash": "c0a4ed5083916d2e",
+  "key": "config/atlas/c0a4ed5083916d2e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15699,7 +16347,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "d73ecc2bcdc5944b",
+    "config_hash": "c0a4ed5083916d2e",
     "files": [
       {
         "content": 
@@ -15869,6 +16517,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -15898,6 +16548,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -15999,6 +16651,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -16309,8 +16984,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "0bfdf16a8cbc12ec",
-  "key": "config/atlas/0bfdf16a8cbc12ec.tgz",
+  "config_hash": "78edc63969ea5dbf",
+  "key": "config/atlas/78edc63969ea5dbf.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -16355,7 +17030,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0bfdf16a8cbc12ec",
+    "config_hash": "78edc63969ea5dbf",
     "files": [
       {
         "content": 
@@ -16525,6 +17200,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -16554,6 +17231,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -16655,6 +17334,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -16967,8 +17669,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "eb9fa38d8a0fc732",
-  "key": "config/atlas/eb9fa38d8a0fc732.tgz",
+  "config_hash": "ac54d831e95b711b",
+  "key": "config/atlas/ac54d831e95b711b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17008,7 +17710,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "eb9fa38d8a0fc732",
+    "config_hash": "ac54d831e95b711b",
     "files": [
       {
         "content": 
@@ -17178,6 +17880,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -17205,6 +17909,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -17304,6 +18010,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -17615,8 +18344,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "6f8f8cfc94cea1c1",
-  "key": "config/atlas/6f8f8cfc94cea1c1.tgz",
+  "config_hash": "f68471b437fc6383",
+  "key": "config/atlas/f68471b437fc6383.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17661,7 +18390,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "6f8f8cfc94cea1c1",
+    "config_hash": "f68471b437fc6383",
     "files": [
       {
         "content": 
@@ -17831,6 +18560,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -17858,6 +18589,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -17957,6 +18690,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -18270,8 +19026,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "395efc15d65a6430",
-  "key": "config/atlas/395efc15d65a6430.tgz",
+  "config_hash": "9cfd95ff0f77cb22",
+  "key": "config/atlas/9cfd95ff0f77cb22.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -18311,7 +19067,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "395efc15d65a6430",
+    "config_hash": "9cfd95ff0f77cb22",
     "files": [
       {
         "content": 
@@ -18481,6 +19237,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -18508,6 +19266,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -18607,6 +19367,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -18918,8 +19701,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "8ef8005646bb689b",
-  "key": "config/atlas/8ef8005646bb689b.tgz",
+  "config_hash": "a394d9c84f0454d4",
+  "key": "config/atlas/a394d9c84f0454d4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -18964,7 +19747,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8ef8005646bb689b",
+    "config_hash": "a394d9c84f0454d4",
     "files": [
       {
         "content": 
@@ -19134,6 +19917,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -19161,6 +19946,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -19260,6 +20047,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -19573,8 +20383,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
 {
-  "config_hash": "efcf6d02965ae4cf",
-  "key": "config/atlas/efcf6d02965ae4cf.tgz",
+  "config_hash": "390fb6ffdf86024a",
+  "key": "config/atlas/390fb6ffdf86024a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19614,7 +20424,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "efcf6d02965ae4cf",
+    "config_hash": "390fb6ffdf86024a",
     "files": [
       {
         "content": 
@@ -19786,6 +20596,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -19813,6 +20625,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -19912,6 +20726,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -20223,8 +21060,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "a76bb24ebac5b8c4",
-  "key": "config/atlas/a76bb24ebac5b8c4.tgz",
+  "config_hash": "695b9103af355213",
+  "key": "config/atlas/695b9103af355213.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -20269,7 +21106,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "a76bb24ebac5b8c4",
+    "config_hash": "695b9103af355213",
     "files": [
       {
         "content": 
@@ -20441,6 +21278,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -20468,6 +21307,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -20567,6 +21408,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -20880,8 +21744,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
 {
-  "config_hash": "c06a259bac9589f3",
-  "key": "config/atlas/c06a259bac9589f3.tgz",
+  "config_hash": "19218ad5b4bfca15",
+  "key": "config/atlas/19218ad5b4bfca15.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -20921,7 +21785,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c06a259bac9589f3",
+    "config_hash": "19218ad5b4bfca15",
     "files": [
       {
         "content": 
@@ -21091,6 +21955,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -21118,6 +21984,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -21217,6 +22085,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -21528,8 +22419,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "58c3326cf9d5e44b",
-  "key": "config/atlas/58c3326cf9d5e44b.tgz",
+  "config_hash": "ec821a15b6e3e8d6",
+  "key": "config/atlas/ec821a15b6e3e8d6.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21574,7 +22465,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "58c3326cf9d5e44b",
+    "config_hash": "ec821a15b6e3e8d6",
     "files": [
       {
         "content": 
@@ -21744,6 +22635,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -21771,6 +22664,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -21870,6 +22765,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -22183,8 +23101,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
 {
-  "config_hash": "8f53d7dfe5d62f11",
-  "key": "config/atlas/8f53d7dfe5d62f11.tgz",
+  "config_hash": "07032baeb742dd6d",
+  "key": "config/atlas/07032baeb742dd6d.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -22224,7 +23142,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8f53d7dfe5d62f11",
+    "config_hash": "07032baeb742dd6d",
     "files": [
       {
         "content": 
@@ -22394,6 +23312,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -22421,6 +23341,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -22520,6 +23442,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 
@@ -22831,8 +23776,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "f430270d7ab1ca65",
-  "key": "config/atlas/f430270d7ab1ca65.tgz",
+  "config_hash": "40c114278b1a6b33",
+  "key": "config/atlas/40c114278b1a6b33.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -22877,7 +23822,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "f430270d7ab1ca65",
+    "config_hash": "40c114278b1a6b33",
     "files": [
       {
         "content": 
@@ -23047,6 +23992,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -23074,6 +24021,8 @@ EnvironmentFile=-/etc/hermes/revision.env
 SupplementaryGroups=docker
 Environment=DEBIAN_FRONTEND=noninteractive
 Environment=HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+Environment=NPM_CONFIG_PREFIX=/data/hermes/.local
 LimitNOFILE=4096
 Environment=DISPLAY=:99
 Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermetic/chrome/153.0.8010.12/chrome-linux-arm64/chrome
@@ -23173,6 +24122,29 @@ DPkg::Options { "--force-confdef"; "--force-confold"; };
 ,
         "mode": "0644",
         "path": "/etc/apt/apt.conf.d/91hermetic-dpkg",
+      },
+      {
+        "content": 
+"# Rendered by hermetic. Final file, no templating.
+# The hermes account's own install locations, for every login shell it gets:
+# Hermes's terminal tool (bash -l) and an operator's \`sudo -iu hermes\`.
+if [ "$(id -un 2>/dev/null)" = "hermes" ]; then
+  export HERMES_DISABLE_LAZY_INSTALLS=1
+  export HERMES_LAZY_INSTALL_TARGET=/data/hermes/.hermes/lazy-packages
+  export NPM_CONFIG_PREFIX=/data/hermes/.local
+  if [ -x /data/hermes/.venv/bin/python ]; then
+    export VIRTUAL_ENV=/data/hermes/.venv
+    case ":$PATH:" in
+      *":/data/hermes/.venv/bin:"*) ;;
+      *) PATH="/data/hermes/.venv/bin:$PATH" ;;
+    esac
+    export PATH
+  fi
+fi
+"
+,
+        "mode": "0644",
+        "path": "/etc/profile.d/hermetic-agent.sh",
       },
       {
         "content": 

@@ -2,7 +2,9 @@
 
 Hermetic integrates the Hermes version pinned by its release. This contract note records the source-qualified behavior used by the Bot Mode implementation; it is not a report of live fleet validation or a claim of complete Desktop parity.
 
-The implementation baseline is Hermes `v2026.9.14`, commit `345cd2b057a452236de401d3534b8502a7465e8d`.
+The implementation baseline was Hermes `v2026.9.14`, commit `345cd2b057a452236de401d3534b8502a7465e8d`; the pin is now `v2026.9.24` (0.21.5, commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`), audited against every contract below. Source line references that predate the bump cite `v2026.9.14` unless they say otherwise — at `v2026.9.24` the `hosted_rooms.py` conflict check is at 964 (was 946), the event-log function at 1141 (was 1123), its `ORDER BY`/`latest_seq` read at 1163-1175 (was 1145-1157), and the cron `GET` route at `cron.py:233` (was 211).
+
+One contract is new at the bump. From `v2026.9.21` the gateway delivers server→client requests — approvals, clarifications, sudo and secret prompts — only to a client on the session that has sent `client.capabilities {server_requests: true}`; with none attached it withdraws an approval at once and resolves a clarify to nothing (`tui_gateway/server_requests.py:117-122`). Hermetic sends it first on every socket a turn is read from — the one that submits the prompt and the one a dropped turn reconnects on (`advertiseServerRequests`) — and on no other, since a socket that claims the capability without surfacing prompts would make a prompt sent to it alone wait out its deadline. An older gateway answers `-32601` and behaves as before.
 
 ## Conversations and scope
 

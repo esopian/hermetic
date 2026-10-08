@@ -308,6 +308,31 @@ function blocks(frames: ChatFrame[]): ChatBlock[] {
 
 /* ── the recorded turn ────────────────────────────────────────────────────── */
 
+describe("hermes-chat · prompt capability", () => {
+  /**
+   * From Hermes `v2026.9.21` the gateway sends approvals and clarifications
+   * only to a client that has said it answers them, and withdraws them at once
+   * otherwise. The turn socket says so first, before the session exists.
+   */
+  test("the turn socket advertises server requests before it creates the session", async () => {
+    const h = harness(turnScript(RECORDED_TURN));
+    await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    const sent = h.sockets[0]?.sent ?? [];
+    expect(sent[0]).toMatchObject({ method: "client.capabilities", params: { server_requests: true } });
+    expect(sent[1]?.method).toBe("session.create");
+  });
+
+  test("a gateway that predates the method still runs the turn", async () => {
+    const h = harness({
+      ...turnScript(RECORDED_TURN),
+      errors: { "client.capabilities": { code: -32601, message: "Method not found" } },
+    });
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    expect(frames.some((f) => f.type === "error")).toBe(false);
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+});
+
 describe("hermes-chat · the recorded turn", () => {
   test("replays the probed turn as the frame sequence a head renders", async () => {
     const h = harness(turnScript(RECORDED_TURN));
@@ -2170,6 +2195,8 @@ describe("hermes-chat · durable addressing", () => {
     await turn.next();
     await turn.next();
     expect(h.sockets[0]?.sent.map(({ method, params }) => ({ method, params }))).toEqual([
+      // The turn socket answers prompts, so it says so before anything else.
+      { method: "client.capabilities", params: { server_requests: true } },
       {
         method: "session.resume",
         params: {
@@ -2205,7 +2232,7 @@ describe("hermes-chat · durable addressing", () => {
     const turn = adapter.send(BOX, "research", "hello")[Symbol.asyncIterator]();
     await turn.next();
     await turn.next();
-    expect(h.sockets[0]?.sent[0]?.params).toEqual({ profile: "research" });
+    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research" });
     expect(await adapter.abort(BOX, "research")).toBe(true);
     expect(h.sockets[1]?.sent[0]?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
     await turn.return?.();
@@ -2300,6 +2327,7 @@ describe("semantic live activity and requests", () => {
       frames.find((frame) => frame.type === "block" && frame.block.kind === "question"),
     ).toMatchObject({ seq: 3 });
     expect(h.sockets[0]?.sent.map((call) => call.method)).toEqual([
+      "client.capabilities",
       "session.create",
       "session.events.since",
       "prompt.submit",

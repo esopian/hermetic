@@ -11,6 +11,9 @@ import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
   HERMES_HOME,
+  HERMES_USER_PREFIX,
+  HERMES_LAZY_TARGET,
+  HERMES_AGENT_VENV,
   HERMES_LEGACY_DASHBOARD_UNIT,
 } from "@hermetic/core/shared";
 import { installAccountDir } from "../account-dirs.ts";
@@ -185,6 +188,25 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
     HERMES_ACCOUNT_HOME,
   ]);
   await installAccountDir(host, HERMES_HOME, "0750");
+  /**
+   * The account's own install prefix (`HERMES_USER_PREFIX`), with its `bin/`
+   * present from the first boot: the skeleton `~/.profile` only puts
+   * `~/.local/bin` on `PATH` when the directory already exists at login, so an
+   * agent's first `npm install -g` would otherwise land somewhere its next
+   * shell cannot see. As the account, for the same symlink reason as above.
+   */
+  // The prefix itself first, so its own mode and its not-a-symlink check are
+  // this function's rather than whatever `install -d` would give a parent;
+  // 0700 because that is what the per-user installers that share it expect.
+  await installAccountDir(host, HERMES_USER_PREFIX, "0700");
+  await installAccountDir(host, HERMES_USER_PREFIX + "/bin", "0755");
+  /**
+   * Where upstream's on-demand installs go (`HERMES_LAZY_INSTALL_TARGET` on
+   * both units). Hermes would make it on first use, but pre-creating it as the
+   * account is what upstream's image does at every boot (`stage2-hook.sh`),
+   * and it means the first install never races a directory root created.
+   */
+  await installAccountDir(host, HERMES_LAZY_TARGET, "0755");
 }
 
 /**
@@ -248,10 +270,16 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
  * already-enabled unit looks like nothing to do, and the caller uses this to
  * restart it anyway.
  *
- * Only ever run when the unit is absent, and never with `--force`. A Hermes
- * upgrade therefore does not regenerate the unit — deliberate, and listed under
- * the plan's Risks: regenerating it on every apply would hand upstream the
- * ability to change a running fleet's supervision on a version bump alone.
+ * Only ever run when the unit is absent, and never with `--force`, so
+ * hermeticd itself never regenerates the unit on a Hermes upgrade — deliberate,
+ * and listed under the plan's Risks: regenerating it on every apply would hand
+ * upstream the ability to change a running fleet's supervision on a version
+ * bump alone. Upstream can still do it from the box: since `v2026.9.21` the
+ * dashboard's start/restart buttons run `sudo -n hermes gateway …`, and that
+ * path calls `refresh_systemd_unit_if_needed(system=True)`, which rewrites a
+ * unit an older Hermes generated (one without `ExecStop=…systemd_stop_mark`).
+ * The result is upstream's own unit for the pinned ref, and hermetic's drop-in
+ * survives it, but "installed once" describes hermeticd, not the file.
  *
  * Returns whether *this* apply installed it. Throws `GATEWAY_UNIT_MISSING` if
  * the unit is not at the expected path — either because a previous apply's
@@ -544,10 +572,21 @@ export async function requireKnownUnit(
  * every real apply: a recursive chown over the agent's memory is a sub-second
  * walk, and it is what makes the box heal from any root that touched the tree,
  * not only the one call hermeticd knows about. Symlinks are not followed.
+ *
+ * The same goes for the account's two install trees, `~/.local` and `~/.venv`
+ * (`HERMES_USER_PREFIX`, `HERMES_AGENT_VENV`): the agent has full sudo, and one
+ * `sudo -E npm install -g` or `sudo pip install` leaves root-owned files in a
+ * tree its next unprivileged install has to write. Each only when present — a
+ * box whose venv could not be built yet is not a failed apply.
  */
 export async function ensureHermesHomeOwnership(host: Host, dry: boolean): Promise<void> {
   if (dry) return;
-  await must(host, ["chown", "-R", "-h", `${HERMES_USER}:${HERMES_USER}`, HERMES_HOME]);
+  const owner = `${HERMES_USER}:${HERMES_USER}`;
+  await must(host, ["chown", "-R", "-h", owner, HERMES_HOME]);
+  for (const tree of [HERMES_USER_PREFIX, HERMES_AGENT_VENV]) {
+    if ((await host.lstat(tree)) === null) continue;
+    await must(host, ["chown", "-R", "-h", owner, tree]);
+  }
 }
 
 /** The owner and group a rendered file asks for; unset means root. */

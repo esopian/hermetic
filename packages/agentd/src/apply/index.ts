@@ -50,6 +50,7 @@ import {
   removeLegacyDashboardUnit,
   requireKnownUnit,
 } from "./accounts.ts";
+import { ensureAgentVenv } from "./agent-python.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
@@ -223,6 +224,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   emit(opEvent("units", 0.38, `checking ${HERMES_GATEWAY_UNIT}`, at()));
   const gatewayInstalled = await ensureGatewayUnit(host, dry);
   await ensureHermesHomeOwnership(host, dry);
+  // After the account exists and after `ensureHermes`, which is what puts `uv`
+  // on the box.
+  await ensureAgentVenv(host, emit, dry);
 
   // ─── 3. files ──────────────────────────────────────────────────────────────
   emit(opEvent("files", 0.4, `checking ${manifest.files.length} rendered file(s)`, at()));

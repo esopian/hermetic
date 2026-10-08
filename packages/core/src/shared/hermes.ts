@@ -43,6 +43,42 @@ export const HERMES_ACCOUNT_HOME = "/data/hermes";
  */
 export const HERMES_HOME = HERMES_ACCOUNT_HOME + "/.hermes";
 /**
+ * The `hermes` account's own install prefix: `npm install -g` lands here
+ * (`NPM_CONFIG_PREFIX` on both Hermes units), and so do the per-user installers
+ * agents reach for — `pip --user`, `uv tool`, the Cursor CLI.
+ *
+ * It exists so the agent can install its own tooling without root. Node itself
+ * is root's (`/usr/local/lib/nodejs/…`), so npm's default global prefix is a
+ * directory `hermes` cannot write, and the agent's way round that was `sudo -E
+ * npm install -g` plus hand-made symlinks into `/usr/local/bin`. `bin/` under
+ * this prefix is on the agent's `PATH` without anything rendering it: Hermes's
+ * terminal tool runs a login shell, and the account's skeleton `~/.profile`
+ * prepends `$HOME/.local/bin` when the directory exists, which is why hermeticd
+ * creates it (`ensureHermesAccount`).
+ */
+export const HERMES_USER_PREFIX = HERMES_ACCOUNT_HOME + "/.local";
+/**
+ * Where upstream's on-demand ("lazy") installs land: the optional backends a
+ * feature pulls in the first time it is used, and plugin dependencies. Set as
+ * `HERMES_LAZY_INSTALL_TARGET` on both Hermes units, exactly as upstream's own
+ * image does (`Dockerfile:443`, `/opt/data/lazy-packages`): the venv stays
+ * root's and sealed, and Hermes adds this directory to the *end* of its
+ * `sys.path` at startup (`lazy_deps.activate_durable_lazy_target`), so a core
+ * package always wins a name collision. Under `$HERMES_HOME`, so it survives a
+ * recreate; upstream stamps it with the interpreter's ABI and empties it itself
+ * when that changes.
+ */
+export const HERMES_LAZY_TARGET = HERMES_HOME + "/lazy-packages";
+/**
+ * The agent's own Python environment, seeded with pip, and first on its
+ * shell's `PATH` (`/etc/profile.d/hermetic-agent.sh`). The model upstream's
+ * NixOS container mode uses (`nix/nixosModules.nix`, `~/.venv`): Ubuntu's
+ * `/usr/bin/python3` is PEP 668 externally-managed and ships no pip, and the
+ * Hermes venv is root's, so without it `pip install` has nowhere to go. On the
+ * data volume so what the agent installed survives a recreate.
+ */
+export const HERMES_AGENT_VENV = HERMES_ACCOUNT_HOME + "/.venv";
+/**
  * The agent's own config: the seeded half, and whatever it has changed since.
  * Written once by a post-step and then not hermetic's business.
  */
