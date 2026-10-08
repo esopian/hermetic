@@ -72,6 +72,7 @@ import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
 /**
@@ -210,17 +211,33 @@ export function createHermetic(deps: HermeticDeps) {
   // Shared with the roster read below and, for the purge, with §6.7's release.
   const localSessions = deps.localSessions ?? new MemoryLocalChatSessions();
   const chatFence = deps.chatFence ?? new MemoryChatFenceStore();
+  const incarnations = deps.incarnations ?? new MemoryIncarnationStore();
+  const purgeLocalAgent = createLocalAgentPurge({
+    notifications: notificationDeps.store,
+    instanceListening,
+    localSessions,
+    chatFence,
+    incarnations,
+  });
+  /**
+   * §6.7: the other half of the purge. The release purges this laptop's state
+   * for the name it frees; a laptop that did not run it purges when a read
+   * hands it a row with a different `created_at` than the one it recorded
+   * (`local/incarnations.ts`). Called by the fleet list and by chat's row reads.
+   */
+  const reconcileIncarnations = createIncarnationReconciler({
+    store: incarnations,
+    fleet: () => deps.config?.fleet_id ?? null,
+    purge: purgeLocalAgent,
+    // A row the scan skipped as unparseable is not a released name (§6.7).
+    unparseable: () => backend.store.agents.unparseable?.() ?? [],
+  });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({
     ctx,
     volumeClaims,
     applyPending,
-    purgeLocal: createLocalAgentPurge({
-      notifications: notificationDeps.store,
-      instanceListening,
-      localSessions,
-      chatFence,
-    }),
+    purgeLocal: purgeLocalAgent,
     tsKeyPath: (name) => tsKeyPath(fleetId(), name),
     providerKeyPath: (name) => providerKeyPath(fleetId(), name),
     agentSlotPath: (name, slot) => agentParamPath(fleetId(), name, slot),
@@ -381,6 +398,7 @@ export function createHermetic(deps: HermeticDeps) {
   const { list, get, history, destroyed, configShow, runsList, teardownsList } = createReads({
     ctx,
     settingsForView,
+    reconcileIncarnations,
     configStore: deps.configStore,
     runs: deps.runs,
     teardowns: deps.teardowns,
@@ -434,8 +452,18 @@ export function createHermetic(deps: HermeticDeps) {
     instanceListening,
     fleet: () => deps.config?.fleet_id ?? null,
     guardFleet,
-    getAgent,
-    listAgents: () => backend.store.agents.scan(),
+    // Chat reads rows without the fleet list, and its sessions, fence and
+    // opt-ins are most of what a reused name would carry over (§6.7).
+    getAgent: async (name) => {
+      const agent = await getAgent(name);
+      await reconcileIncarnations([agent], { complete: false });
+      return agent;
+    },
+    listAgents: async () => {
+      const rows = await backend.store.agents.scan();
+      await reconcileIncarnations(rows, { complete: true });
+      return rows;
+    },
     hermes: hermesChat,
     // §4.9: the roster read raises `chat.message`, a failed turn
     // raises `chat.error`. Core owns the row and its wording; no head is involved.

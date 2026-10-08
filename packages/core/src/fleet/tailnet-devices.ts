@@ -47,6 +47,14 @@ export function createTailnetCleanup(deps: TailnetDeps) {
    * `progress` and `opts` are arguments rather than closure state because the two
    * callers place this at different points in their own progress bar, and both
    * are abort-aware (§3.2 rule 2).
+   *
+   * The generator's return value is the devices it left holding the name —
+   * each one's FQDN — once it has looked at every match, or `null` when it
+   * could not finish looking (no list, no scope, a failed delete; each of
+   * those has already said so in a `warn`). `deferOnline` is for a caller
+   * that sweeps twice: a node still online is skipped without a word and
+   * returned, because the caller will look again once the box is
+   * `terminated` and report what is left then (`destroy-agent.ts`).
    */
   async function* removeTailnetDevices(
     name: string,
@@ -61,7 +69,8 @@ export function createTailnetCleanup(deps: TailnetDeps) {
     phase: string,
     progress: number,
     opts: OpOptions = {},
-  ): AsyncIterable<OpEvent> {
+    sweep: { deferOnline?: boolean } = {},
+  ): AsyncGenerator<OpEvent, string[] | null, undefined> {
     /** The reported FQDN, minus the DNS root dot Tailscale includes. */
     const reported = dnsName === null ? null : dnsName.replace(/\.$/, "");
     /** The one sentence for "hermetic is not allowed to do this", said once. */
@@ -81,11 +90,11 @@ export function createTailnetCleanup(deps: TailnetDeps) {
       devices = await backend.tailscale.listDevices();
     } catch (e) {
       yield evt(phase, progress, `tailnet devices not checked: ${why(e)}`, nowIso(), "warn");
-      return;
+      return null;
     }
     if (devices === null) {
       yield unscoped();
-      return;
+      return null;
     }
 
     /**
@@ -126,10 +135,13 @@ export function createTailnetCleanup(deps: TailnetDeps) {
         d.tags.includes(TAILSCALE_TAG) &&
         (d.hostname === canonical || (reported !== null && d.name === reported)),
     );
+    const remaining: string[] = [];
     for (const device of mine) {
       checkAbort(opts.signal, phase);
       const fqdn = device.name || device.hostname;
       if (device.online) {
+        remaining.push(fqdn);
+        if (sweep.deferOnline) continue;
         // This runs only after the instance was terminated, so a node still up is
         // one we did not launch or did not manage to kill. Either way it is a live
         // machine, and hermetic does not delete those on a guess (§1).
@@ -155,17 +167,18 @@ export function createTailnetCleanup(deps: TailnetDeps) {
           nowIso(),
           "warn",
         );
-        return;
+        return null;
       }
       if (outcome === "forbidden") {
         yield unscoped();
-        return;
+        return null;
       }
       // `not_found` is the state we wanted: somebody already deleted it.
       if (outcome === "deleted") {
         yield evt(phase, progress, `removed tailnet device ${fqdn}`, nowIso());
       }
     }
+    return remaining;
   }
 
   return { removeTailnetDevices };

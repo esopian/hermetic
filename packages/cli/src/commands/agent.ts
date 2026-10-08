@@ -591,8 +591,8 @@ export function register(program: Command): void {
       .addHelpText(
         "after",
         "\nA reused name's log holds every incarnation back to back. Pass a tombstone's\n" +
-          "created_at and destroyed_at (`hermetic agent destroyed <name> --json`) as\n" +
-          "--since/--until to read one life alone.\n",
+          "created_at and released_at (destroyed_at when it has none; `hermetic agent\n" +
+          "destroyed <name> --json`) as --since/--until to read one life alone.\n",
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

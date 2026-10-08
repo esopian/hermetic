@@ -282,7 +282,7 @@ export interface LastTeardown {
 export type AgentEvent = BridgeResult<"agents.history">[number];
 /** One destroyed incarnation (§6.7): the audit record that outlives the agent's row. */
 export type AgentTombstone = BridgeResult<"agents.destroyed">[number];
-/** `agents.history`'s window: one incarnation's `created_at`/`destroyed_at`, inclusive. */
+/** `agents.history`'s window: one incarnation's `created_at`/`released_at ?? destroyed_at`, inclusive. */
 export interface HistoryWindow {
   since?: string;
   until?: string;

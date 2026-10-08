@@ -77,16 +77,35 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
        * `doctor` reports it.
        */
       unparseable: (): string[] => [...b.unparseableRows],
-      /** As the real store: conditional on `expectedVersion` when given, a no-op when gone. */
-      delete: async (name: string, opts?: { expectedVersion: number }): Promise<void> => {
+      /**
+       * As the real store: conditional on `expectedVersion` and
+       * `expectedCreatedAt` when given — one incarnation at one version — and
+       * a no-op when gone.
+       */
+      delete: async (
+        name: string,
+        opts?: { expectedVersion: number; expectedCreatedAt: string },
+      ): Promise<void> => {
         b.record("store.agents.delete");
         const current = b.agents.get(name);
         if (!current) return;
-        if (opts !== undefined && current.version !== opts.expectedVersion) {
+        if (
+          opts !== undefined &&
+          (current.version !== opts.expectedVersion || current.created_at !== opts.expectedCreatedAt)
+        ) {
+          const replaced = current.created_at !== opts.expectedCreatedAt;
           throw new HermeticError(
             "CONFLICT",
-            `agent ${name} changed underneath this operation (expected version ${opts.expectedVersion}, found ${current.version}); the record was not deleted`,
-            { name, expected: opts.expectedVersion, actual: current.version },
+            replaced
+              ? `agent ${name} is a different incarnation now (created ${current.created_at}, expected ${opts.expectedCreatedAt}); the record was not deleted`
+              : `agent ${name} changed underneath this operation (expected version ${opts.expectedVersion}, found ${current.version}); the record was not deleted`,
+            {
+              name,
+              expected: opts.expectedVersion,
+              actual: current.version,
+              expected_created_at: opts.expectedCreatedAt,
+              actual_created_at: current.created_at,
+            },
           );
         }
         b.agents.delete(name);

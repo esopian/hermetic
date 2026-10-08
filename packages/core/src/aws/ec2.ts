@@ -37,6 +37,7 @@ import type {
   ManagedVolumeRef,
   NetworkInterfaceRef,
   VolumeDetail,
+  OwnedVolumeStatus,
   RunInstanceSpec,
   SnapshotRef,
   TagSelector,
@@ -442,8 +443,14 @@ export class Ec2Compute implements ComputeApi {
    * Every live managed instance tagged for this agent, paged out in full. AWS
    * does not enforce one box per agent tag, so a list is the only honest
    * answer: the caller picks which one is the agent's, and sees the rest.
+   * `shuttingDown` adds the boxes on their way out (see `ComputeApi`).
    */
-  async listInstancesByTag(name: string): Promise<InstanceRef[]> {
+  async listInstancesByTag(
+    name: string,
+    opts: { shuttingDown?: boolean } = {},
+  ): Promise<InstanceRef[]> {
+    const states = ["pending", "running", "stopping", "stopped"];
+    if (opts.shuttingDown) states.push("shutting-down");
     const results: InstanceRef[] = [];
     let token: string | undefined;
     do {
@@ -453,7 +460,7 @@ export class Ec2Compute implements ComputeApi {
             { Name: `tag:${AGENT_TAG}`, Values: [name] },
             { Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] },
             this.fleetFilter(),
-            { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+            { Name: "instance-state-name", Values: states },
           ],
           ...(token ? { NextToken: token } : {}),
         }),
@@ -684,11 +691,12 @@ export class Ec2Compute implements ComputeApi {
    * carries by default — `--keep-volume` instead releases it under
    * `hermetic:former_agent` (§6.7) — and that row is writable by the box.
    */
-  async describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<VolumeStatus | null> {
+  async describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<OwnedVolumeStatus | null> {
     const found = await this.rawVolume(volumeId);
     if (found === null) return null;
-    assertResourceOwned("volume", volumeId, owner, tagMap(found.Tags), OWNED_VOLUME_ROLE);
-    return volumeStatus(found);
+    const tags = tagMap(found.Tags);
+    assertResourceOwned("volume", volumeId, owner, tags, OWNED_VOLUME_ROLE);
+    return { ...volumeStatus(found), former_agent: tags[FORMER_AGENT_TAG] ?? null };
   }
 
   /** `DescribeVolumes` for one id, with EC2's "never heard of it" read as gone. */
@@ -843,12 +851,34 @@ export class Ec2Compute implements ComputeApi {
    * is the only handle it has: the row that recorded the id is long gone.
    */
   async listManagedVolumes(): Promise<ManagedVolumeRef[]> {
+    return this.describeManagedVolumes([]);
+  }
+
+  /**
+   * `findVolumeByTag`'s query — `agent=<name>`, managed, this fleet, no role
+   * filter — paged to the end, and nothing else: no `role=data` label on a
+   * lone match, no `CONFLICT` on several. Read-only by construction, because
+   * the release that calls it (§6.7) is cleaning up exactly the duplicates
+   * `findVolumeByTag` refuses to choose between.
+   */
+  async listVolumesByAgentTag(name: string): Promise<ManagedVolumeRef[]> {
+    return this.describeManagedVolumes([{ Name: `tag:${AGENT_TAG}`, Values: [name] }]);
+  }
+
+  /** Every managed volume in this fleet matching `extra` too, paged, none going away. */
+  private async describeManagedVolumes(
+    extra: Array<{ Name: string; Values: string[] }>,
+  ): Promise<ManagedVolumeRef[]> {
     const results: ManagedVolumeRef[] = [];
     let token: string | undefined;
     do {
       const out = await this.ec2.send(
         new DescribeVolumesCommand({
-          Filters: [{ Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] }, this.fleetFilter()],
+          Filters: [
+            ...extra,
+            { Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] },
+            this.fleetFilter(),
+          ],
           ...(token ? { NextToken: token } : {}),
         }),
       );
@@ -958,6 +988,20 @@ export class Ec2Compute implements ComputeApi {
      * no "set these tags and remove those" verb, so putting a volume back the
      * way `rollback.ts` found it — no agent tag, or no `role=data` — needs a
      * `DeleteTags` beside the `CreateTags`.
+     *
+     * The order is load-bearing: the `CreateTags` goes first. A release that
+     * keeps the volume sets `former_agent=<name>` there and removes `agent` in
+     * the `DeleteTags`, so a crash between the two leaves a volume carrying
+     * both — which `release-name.ts` reads as "kept", never as "this agent's
+     * disk to delete". The other order would leave a window in which the
+     * volume says nothing about the promise to keep it.
+     *
+     * The order does not make that pair unambiguous on its own: an adoption
+     * of a released disk (`create --volume`) sets `agent=<name>` here and
+     * removes `former_agent` in the `DeleteTags`, so a crash between its two
+     * calls leaves the same pair. The adopt path's resume tells them apart
+     * and finishes its own rewrite (`create-agent.ts`), so no row survives
+     * naming a disk an adoption left half-retagged.
      */
     const set: Record<string, string> = {
       [MANAGED_TAG]: MANAGED_TAG_VALUE,

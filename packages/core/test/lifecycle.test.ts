@@ -1281,15 +1281,71 @@ describe("tailnet device cleanup", () => {
     const events = await drain(
       hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
     );
+    // Said once, by the pass after the termination wait, and it says the
+    // device keeps the name — the first pass, run while boxes are still going
+    // down, passes over an online node silently.
     const tailnet = events.filter((e) => e.phase === "tailnet");
     expect(tailnet).toHaveLength(1);
     expect(tailnet[0]!.message).toBe(
-      "fxtr0001-atlas.hermetic.ts.net is still online; not deleting a live node",
+      "fxtr0001-atlas.hermetic.ts.net is still online; not deleting a live node — it keeps the name atlas on the tailnet until it is deleted in the admin console",
     );
     expect(tailnet[0]!.level).toBe("warn");
     expect(hostnames(backend)).toContain("fxtr0001-atlas.hermetic.ts.net");
     // Still a completed destroy: the tailnet is not what makes it one.
     expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+
+  /**
+   * §6.7: real EC2 accepts the terminate and keeps the box `shutting-down` for
+   * a while, and its node stays online on the tailnet until it is really gone.
+   * The sweep right after the terminate request cannot delete it; the one
+   * after the termination wait can, so the name is free for the next create.
+   */
+  test("destroy removes a device that only goes offline once the box is terminated", async () => {
+    const { backend, hermetic } = seeded();
+    const atlas = backend.agents.get("atlas")!;
+    const instanceId = atlas.instance_id!;
+    const volumeId = atlas.volume_id!;
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    expect(backend.tailscaleDevices!.find((d) => d.name === device)!.online).toBe(true);
+
+    backend.compute.terminate = async (id: string) => {
+      const inst = backend.instances.get(id)!;
+      backend.instances.set(id, { ...inst, state: "shutting-down", public_ip: null });
+      const vol = backend.volumes.get(volumeId)!;
+      backend.volumes.set(volumeId, { ...vol, state: "available", attached_to: null });
+    };
+    const describe = backend.compute.describeInstance;
+    backend.compute.describeInstance = async (id: string) => {
+      const inst = backend.instances.get(id);
+      if (id === instanceId && inst?.state === "shutting-down") {
+        backend.instances.set(id, { ...inst, state: "terminated" });
+        backend.tailscaleDevices = backend.tailscaleDevices!.map((d) =>
+          d.name === device ? { ...d, online: false } : d,
+        );
+      }
+      return describe(id);
+    };
+
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(hostnames(backend)).not.toContain(device);
+    const tailnet = events.filter((e) => e.phase === "tailnet");
+    expect(tailnet.map((e) => e.message)).toEqual([`removed tailnet device ${device}`]);
+    expect(tailnet.every((e) => (e.level ?? "info") === "info")).toBe(true);
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+
+  /** Without `devices:core` a destroy says so once, not once per pass. */
+  test("destroy with no devices:core scope warns once across both passes", async () => {
+    const { backend, hermetic } = seeded();
+    backend.tailscaleDevices = null;
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    const tailnet = events.filter((e) => e.phase === "tailnet");
+    expect(tailnet).toHaveLength(1);
+    expect(tailnet[0]!.level).toBe("warn");
+    expect(tailnet[0]!.message).toContain("devices:core");
+    expect(events.at(-1)!.phase).toBe("done");
   });
 
   /** The fleet whose OAuth client was never re-scoped: one warning, then on. */

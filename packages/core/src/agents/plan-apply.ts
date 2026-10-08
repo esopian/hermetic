@@ -108,6 +108,21 @@ export function createApply(deps: ApplyDeps) {
             { kind: plan.kind, target: plan.target },
           );
         }
+        /**
+         * §6.7 also made a destroyed name free to claim again, so a plan has to
+         * say which incarnation of the name it showed: a plan read for a
+         * `creating` row with no instance and no volume yet would otherwise
+         * pass against a later, unrelated `creating` row whose ids are just as
+         * null. `plans.ts` always writes `created_at`; its absence can only
+         * mean an older plan, and an older plan cannot be checked.
+         */
+        if (plan.options.created_at === undefined) {
+          throw new HermeticError(
+            "PLAN_STALE",
+            `this destroy plan predates the current build of hermetic and does not say which incarnation of ${plan.target} it describes (a destroyed name can now be reused); run \`hermetic plan destroy ${plan.target}\` again`,
+            { kind: plan.kind, target: plan.target },
+          );
+        }
         yield* destroy(
           {
             name: validateName(plan.target),

@@ -175,6 +175,77 @@ describe("findVolumeByTag", () => {
   });
 });
 
+/**
+ * §6.7: a release asks which disks still carry `agent=<name>` and moves each
+ * off the name. It must see every one, decide nothing, and write nothing —
+ * the shapes `findVolumeByTag` labels or refuses are the ones it cleans up.
+ */
+describe("listVolumesByAgentTag", () => {
+  type Filters = { Filters?: Array<{ Name?: string; Values?: string[] }>; NextToken?: string };
+
+  test("filters on agent, managed and fleet only, pages to the end, and tags nothing", async () => {
+    ec2
+      .on(DescribeVolumesCommand)
+      .resolvesOnce({
+        Volumes: [
+          // A lone untagged match: `findVolumeByTag` would label it role=data.
+          {
+            VolumeId: "vol-1",
+            Size: 100,
+            State: "available",
+            Tags: [{ Key: "agent", Value: "atlas" }],
+          },
+          { VolumeId: "vol-going", Size: 100, State: "deleting", Tags: [DATA_TAG] },
+        ],
+        NextToken: "page2",
+      })
+      .resolvesOnce({
+        Volumes: [
+          {
+            VolumeId: "vol-2",
+            Size: 50,
+            State: "in-use",
+            Tags: [
+              DATA_TAG,
+              { Key: "agent", Value: "atlas" },
+              { Key: "hermetic:former_agent", Value: "atlas" },
+            ],
+          },
+        ],
+      });
+
+    expect(await compute().listVolumesByAgentTag("atlas")).toEqual([
+      { volume_id: "vol-1", size_gib: 100, agent: "atlas", former_agent: null, state: "available" },
+      { volume_id: "vol-2", size_gib: 50, agent: "atlas", former_agent: "atlas", state: "in-use" },
+    ]);
+
+    const inputs = inputsOf<Filters>(ec2, DescribeVolumesCommand);
+    expect(inputs).toHaveLength(2);
+    for (const input of inputs) {
+      expect(input.Filters).toEqual([
+        { Name: "tag:agent", Values: ["atlas"] },
+        { Name: "tag:hermetic:managed", Values: ["true"] },
+        { Name: "tag:hermetic:fleet_id", Values: [TEST_FLEET_ID] },
+      ]);
+    }
+    expect(inputs[0]!.NextToken).toBeUndefined();
+    expect(inputs[1]!.NextToken).toBe("page2");
+    expect(callCount(ec2, CreateTagsCommand)).toBe(0);
+    expect(callCount(ec2, DeleteTagsCommand)).toBe(0);
+  });
+
+  test("several role=data matches are listed, not refused", async () => {
+    ec2.on(DescribeVolumesCommand).resolves({
+      Volumes: [
+        { VolumeId: "vol-a", Size: 100, State: "available", Tags: [DATA_TAG] },
+        { VolumeId: "vol-b", Size: 100, State: "available", Tags: [DATA_TAG] },
+      ],
+    });
+    const listed = await compute().listVolumesByAgentTag("atlas");
+    expect(listed.map((v) => v.volume_id)).toEqual(["vol-a", "vol-b"]);
+  });
+});
+
 describe("createVolume", () => {
   test("tags the new volume as the data disk", async () => {
     ec2.on(CreateVolumeCommand).resolves({ VolumeId: "vol-new", Size: 100, State: "creating" });
@@ -250,6 +321,12 @@ describe("retagVolume", () => {
     const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
     // The display Name is not touched: absent `name` leaves it alone.
     expect(removed!.Tags.map((t) => t.Key)).toEqual(["agent"]);
+    // The promise to keep lands before the name comes off: a crash between the
+    // two calls leaves `former_agent` set, which a retry reads as "keep".
+    expect(ec2.calls().map((c) => c.args[0].constructor.name)).toEqual([
+      "CreateTagsCommand",
+      "DeleteTagsCommand",
+    ]);
   });
 
   test("an adoption with formerAgent null removes the former_agent tag", async () => {

@@ -31,6 +31,8 @@ import {
 } from "./chat/notifications.ts";
 import type { CoreContext } from "./context.ts";
 import type { ConfigStore, RunStore, TeardownStore } from "./hermetic-deps.ts";
+import type { ReconcileIncarnations } from "./local/incarnations.ts";
+import { legacyDestruction } from "./agents/lifecycle/release-name.ts";
 
 export interface ReadsDeps {
   ctx: CoreContext;
@@ -39,6 +41,8 @@ export interface ReadsDeps {
   configStore?: ConfigStore | undefined;
   runs?: RunStore | undefined;
   teardowns?: TeardownStore | undefined;
+  /** `local/incarnations.ts`: purge a reused name's stale local state (§6.7). Never throws. */
+  reconcileIncarnations?: ReconcileIncarnations | undefined;
 }
 
 export function createReads(deps: ReadsDeps) {
@@ -58,6 +62,9 @@ export function createReads(deps: ReadsDeps) {
     // one from before tombstones existed. It is history, not fleet — it lives
     // in `agents.destroyed` with the rest of the dead, never in `ps`.
     const rows = (await backend.store.agents.scan()).filter((a) => a.status !== "destroyed");
+    // Before `observeHealth`: a reused name's old watermark must be gone before
+    // the new box's status is diffed against it (§6.7, `local/incarnations.ts`).
+    await deps.reconcileIncarnations?.(rows, { complete: true });
     const settings = await settingsForView();
     const views = rows.map((a) => view(a, settings)).sort((a, b) => (a.name < b.name ? -1 : 1));
     /**
@@ -149,23 +156,21 @@ export function createReads(deps: ReadsDeps) {
 
   /**
    * A pre-tombstone `destroyed` row read as the record a destroy writes now.
-   * The row never said who destroyed it, so the newest event that moved it to
-   * `destroyed` does; its timestamp is the moment, falling back on the row's
-   * own `updated_at` (the destroy was its last write) when no event survives.
-   * Nothing on the row says whether the volume was kept, so a `volume_id` it
-   * still names is read as kept — the old destroy cleared the field when it
-   * deleted the disk.
+   * When and by whom it was destroyed come from the name's history
+   * (`legacyDestruction`, shared with the release, so the tombstone a later
+   * release writes tells the same story). Nothing on the row says whether the
+   * volume was kept, so a `volume_id` it still names is read as kept — the old
+   * destroy cleared the field when it deleted the disk.
    */
   async function legacyTombstone(a: Agent, fleetId: string): Promise<AgentTombstone> {
-    const events = await backend.store.events.query(a.name);
-    const last = events.find((e) => e.to_status === "destroyed");
+    const destruction = legacyDestruction(a, await backend.store.events.query(a.name));
     return {
       name: a.name,
       fleet_id: fleetId,
       created_at: a.created_at,
       created_by: a.created_by,
-      destroyed_at: last?.timestamp ?? a.updated_at,
-      destroyed_by: last?.actor ?? "unknown",
+      destroyed_at: destruction.at,
+      destroyed_by: destruction.by,
       size: a.size,
       region: a.region,
       provider: a.provider,

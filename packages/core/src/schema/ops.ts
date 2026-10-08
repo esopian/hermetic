@@ -91,6 +91,16 @@ export const PlanOptions = z.object({
   instance_id: z.string().nullable().optional(),
   volume_id: z.string().nullable().optional(),
   /**
+   * `plan.destroy`/`plan.recreate`: the row's `created_at`, which is what makes
+   * it *this* incarnation of the name. The ids cannot say that on their own:
+   * since §6.7 a destroy frees the name, so a plan read for a `creating` row
+   * with no instance and no volume yet would otherwise match a later, unrelated
+   * `creating` row of the same name, whose ids are just as null. `apply`
+   * refuses with `PLAN_STALE` when the row's `created_at` differs, and refuses
+   * a destroy plan that does not carry one at all — an older build wrote it.
+   */
+  created_at: z.string().optional(),
+  /**
    * `plan.rollout`: which agents the plan was made for, and how many at a time.
    * Carried as data for the reason `keep_volume` is — `apply` must execute the
    * plan the operator read, not re-derive a wider one from today's defaults. A

@@ -1,8 +1,9 @@
 /**
  * `agents.destroy` (§6.6, §6.7): terminate the instance, sweep the tailnet, the
  * SSM prefix and the config prefix, delete the data volume (unless
- * `keep_volume`), wait for the instance to be `terminated`, and release the
- * name — tombstone written, agent row deleted (`lifecycle/release-name.ts`).
+ * `keep_volume`), wait for every instance to be `terminated`, sweep the
+ * tailnet once more, and release the name — tombstone written, agent row
+ * deleted (`lifecycle/release-name.ts`).
  * Afterwards only the per-name events and the tombstone hold the name, and a
  * `create` of it starts a brand-new agent.
  *
@@ -20,8 +21,8 @@
 import { randomUUID } from "node:crypto";
 import { DestroyAgentInput as DestroyAgentInputSchema } from "../schema/index.ts";
 import type { DestroyAgentInput, OpEvent } from "../schema/index.ts";
-import { HermeticError, hasCode } from "../errors.ts";
-import { assertOwnedInstance, assertOwnedVolume } from "./ownership.ts";
+import { HermeticError } from "../errors.ts";
+import { assertOwnedInstance } from "./ownership.ts";
 import { assertUnmoved, type ExpectedResources } from "./plan-expectations.ts";
 import { waitInstanceTerminated, waitVolumeReleased } from "./attach.ts";
 import { createReleaseName, type ReleaseResult } from "./lifecycle/release-name.ts";
@@ -56,7 +57,7 @@ export function createDestroy(deps: DestroyDeps) {
   } = deps.ctx;
 
   const { removeTailnetDevices } = createTailnetCleanup(deps.ctx);
-  const { releaseName, existingTombstone } = createReleaseName({
+  const { releaseName, existingTombstone, volumeHold } = createReleaseName({
     ctx: deps.ctx,
     purgeLocal: deps.purgeLocal,
   });
@@ -78,6 +79,15 @@ export function createDestroy(deps: DestroyDeps) {
         "release",
         0.95,
         `data volume ${volumeId} now belongs to someone else; left untouched`,
+        nowIso(),
+        "warn",
+      );
+    }
+    for (const v of result.swept) {
+      yield evt(
+        "release",
+        0.96,
+        `volume ${v.volume_id} (${v.state}) was still tagged agent=${name} but is not the row's; kept, not deleted, and released from the name (tagged former_agent=${name}); adopt it with agent create <name> --volume ${v.volume_id}`,
         nowIso(),
         "warn",
       );
@@ -195,6 +205,19 @@ export function createDestroy(deps: DestroyDeps) {
        * agent since) is left alone rather than wedging the retry and holding
        * the name.
        *
+       * The volume itself is the other, stronger witness. A release that keeps
+       * it sets `hermetic:former_agent=<name>` first and only then removes
+       * `agent` (`retagVolume`), and both happen before any tombstone is
+       * written. A destroy interrupted anywhere in there leaves no tombstone,
+       * but a volume carrying `former_agent=<name>` — with or without `agent`
+       * still on it. That tag is a promise to keep the disk, made by an
+       * operator who asked for it, so this run keeps it too, whatever its own
+       * flag said, and the release finishes the retag (`volumeHold`).
+       *
+       * Any other disk still tagged `agent=<name>` — the real one, if the box
+       * pointed its row at an earlier incarnation's kept disk or at none — is
+       * the release's to move off the name, never to delete (`sweepTagged`).
+       *
        * Everything else runs again, every step idempotent: the events table is
        * writable by the boxes (the instance role may put any item in it), so a
        * tombstone is not proof that the box is gone. A compromised box that
@@ -202,14 +225,18 @@ export function createDestroy(deps: DestroyDeps) {
        * stripped of its secrets before the name is released.
        */
       const prior = await existingTombstone(agent);
-      const keepVolume = !!parsed.keep_volume || (prior?.volume_kept ?? false);
+      let keepVolume = !!parsed.keep_volume || (prior?.volume_kept ?? false);
       const live = instanceId ? await assertOwnedInstance(backend.compute, owned, instanceId) : null;
       let volumeNotOwned = false;
-      if (!keepVolume && volumeId) {
-        try {
-          await assertOwnedVolume(backend.compute, owned, volumeId);
-        } catch (e) {
-          if (!prior || !hasCode(e, "RESOURCE_NOT_OWNED")) throw e;
+      /** An earlier, interrupted release already tagged the disk to be kept. */
+      let keptByEarlierRelease = false;
+      const hold = volumeId ? await volumeHold(agent.name, volumeId) : null;
+      if (!keepVolume && hold !== null) {
+        if (hold.kind === "released") {
+          keepVolume = true;
+          keptByEarlierRelease = true;
+        } else if (hold.kind === "foreign") {
+          if (!prior) throw hold.refusal;
           volumeNotOwned = true;
         }
       }
@@ -274,17 +301,35 @@ export function createDestroy(deps: DestroyDeps) {
        * No per-stray ownership describe: unlike the row's ids, which the box
        * can write, this list comes from EC2 filtered on exactly the tags an
        * ownership check reads (`agent`, `hermetic:managed`, the fleet id), so a
-       * second describe would ask the same question twice. It lists only
-       * `pending`/`running`/`stopping`/`stopped` boxes: a stray already
-       * `shutting-down` when a crashed destroy is retried is not waited on.
-       * That gap is accepted — its hermeticd's writes are all conditional on
-       * the row existing, and one that lands first moves the version, so the
-       * conditional delete refuses with CONFLICT and the next retry heals it.
+       * second describe would ask the same question twice.
+       *
+       * It lists `shutting-down` boxes too (`shuttingDown`), and waits on them
+       * below like the rest. A stray already on its way out when a crashed
+       * destroy is retried still runs its hermeticd until it is `terminated`,
+       * and that heartbeat is conditional on the row *existing* only — it does
+       * not move the row's `version` (`packages/agentd/src/aws.ts`). Nothing
+       * the release does would notice it: a heartbeat landing after the delete
+       * is refused, but one landing on a same-name row a later `create` has
+       * written by then would put the dead box's health into the new agent.
+       * Only waiting for `terminated` closes that, so a dying stray is never
+       * skipped. It is not terminated again: it is already going.
        */
       const strays: string[] = [];
-      for (const stray of await backend.compute.listInstancesByTag(agent.name)) {
+      for (const stray of await backend.compute.listInstancesByTag(agent.name, {
+        shuttingDown: true,
+      })) {
         if (stray.instance_id === instanceId) continue;
         strays.push(stray.instance_id);
+        if (stray.state === "shutting-down") {
+          yield evt(
+            "instance",
+            0.22,
+            `instance ${stray.instance_id} is also tagged for ${agent.name} and already shutting down; waiting for it`,
+            nowIso(),
+            "warn",
+          );
+          continue;
+        }
         await backend.compute.terminate(stray.instance_id);
         yield evt(
           "instance",
@@ -296,10 +341,15 @@ export function createDestroy(deps: DestroyDeps) {
       }
 
       /**
-       * The terminate above has been accepted, which is all this needs — the
-       * device is the node's, not the volume's, so it is cleaned up here rather
-       * than after the (possibly long) wait for the volume to come free. An agent
-       * created under this name later then gets the name, instead of `<name>-2`.
+       * The terminate above has been accepted, which is enough to start — the
+       * device is the node's, not the volume's, so a corpse already offline is
+       * cleaned up here rather than after the (possibly long) wait for the
+       * volume to come free. The box just asked to terminate is usually still
+       * online at this point, so an online device is passed over silently
+       * (`deferOnline`): the sweep runs again once every instance is
+       * `terminated`, below, and that pass is the one that reports what still
+       * holds the name. An agent created under this name later then gets the
+       * name, instead of `<name>-2`.
        */
       checkAbort(opts.signal, "tailnet");
       /**
@@ -311,13 +361,14 @@ export function createDestroy(deps: DestroyDeps) {
        * deleting things.
        */
       await keepLock();
-      yield* removeTailnetDevices(
+      const firstSweep = yield* removeTailnetDevices(
         agent.name,
         fleet.fleet_id,
         agent.tailscale_dns_name ?? null,
         "tailnet",
         0.3,
         opts,
+        { deferOnline: true },
       );
 
       checkAbort(opts.signal, "secrets");
@@ -327,8 +378,22 @@ export function createDestroy(deps: DestroyDeps) {
 
       checkAbort(opts.signal, "config");
       await keepLock();
-      const removedObjects = await backend.artifacts.deleteByPrefix(configPrefix(agent.name));
-      yield evt("config", 0.6, `removed ${removedObjects.length} config object(s)`, nowIso());
+      /**
+       * §6.7: every version, not just the current one. The bucket is
+       * versioned and its lifecycle rule keeps the newest noncurrent versions
+       * of a key indefinitely, so `deleteByPrefix` would only lay delete
+       * markers over this agent's rendered config — which still carries its
+       * settings — and leave it readable by version long after the name was
+       * released. `purgeByPrefix` removes the versions and the markers, so a
+       * later agent of this name starts with nothing under `config/<name>/`.
+       */
+      const removedObjects = await backend.artifacts.purgeByPrefix(configPrefix(agent.name));
+      yield evt(
+        "config",
+        0.6,
+        `removed ${removedObjects} config object version(s) and delete marker(s)`,
+        nowIso(),
+      );
 
       /**
        * §6.7: the data volume goes with the agent by default — a destroyed
@@ -338,7 +403,15 @@ export function createDestroy(deps: DestroyDeps) {
        */
       checkAbort(opts.signal, "volume");
       await keepLock();
-      if (keepVolume) {
+      if (keptByEarlierRelease) {
+        yield evt(
+          "volume",
+          0.8,
+          `data volume ${volumeId} already carries former_agent=${agent.name}: an earlier destroy that kept it was interrupted; keeping it, not deleting it, and finishing its release below`,
+          nowIso(),
+          "warn",
+        );
+      } else if (keepVolume) {
         yield evt(
           "volume",
           0.8,
@@ -402,6 +475,46 @@ export function createDestroy(deps: DestroyDeps) {
           phase: "instance",
           progress: { waiting: 0.85, done: 0.9 },
         });
+      }
+
+      /**
+       * The second tailnet pass (§6.5, §6.7). The first ran while the boxes
+       * were still going down, when their nodes were usually still online and
+       * so not deletable; every instance tagged for the name is `terminated`
+       * now, so a node that has dropped off since goes here. Idempotent: a
+       * device the first pass removed is simply not listed again. A node that
+       * still reads online is left alone — hermetic does not delete a live
+       * machine on a guess (§1) — but it holds the name, so it is named in a
+       * `warn`: until it is deleted in the admin console, the next node to
+       * join as this agent is admitted as `<name>-2`.
+       *
+       * Skipped when the first pass could not finish (`null`): an OAuth client
+       * without `devices:core`, a refused delete or an unreachable API has
+       * already said so in one `warn`, and asking again would only say it
+       * twice — one warning is the useful number.
+       */
+      checkAbort(opts.signal, "tailnet");
+      await keepLock();
+      const stillHeld =
+        firstSweep === null
+          ? null
+          : yield* removeTailnetDevices(
+              agent.name,
+              fleet.fleet_id,
+              agent.tailscale_dns_name ?? null,
+              "tailnet",
+              0.92,
+              opts,
+              { deferOnline: true },
+            );
+      if (stillHeld !== null && stillHeld.length > 0) {
+        yield evt(
+          "tailnet",
+          0.92,
+          `${stillHeld.join(", ")} is still online; not deleting a live node — it keeps the name ${agent.name} on the tailnet until it is deleted in the admin console`,
+          nowIso(),
+          "warn",
+        );
       }
 
       /**

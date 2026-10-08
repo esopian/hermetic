@@ -20,6 +20,16 @@ export const DESTROYED_KEY = "_destroyed";
  * A tombstone's range key: the moment of destruction first, so the partition
  * sorts chronologically and a reverse query is newest-first, then the name,
  * so two agents destroyed in the same millisecond do not overwrite each other.
+ *
+ * It is `destroyed_at`, never `released_at`, even for a legacy row released
+ * long after its destroy. One name's incarnations are strictly sequential, and
+ * a legacy row is always its name's newest incarnation until it is released —
+ * nothing else can hold the name meanwhile — so destruction order and release
+ * order agree per name, and the newest tombstone for a name is still the
+ * predecessor (`predecessorFloor`, which passes over a future-dated forgery).
+ * The original time is also stable across retries (it is derived from the
+ * name's history, which a release does not change), so an interrupted legacy
+ * release rewrites the same key rather than adding one.
  */
 export function tombstoneSortKey(destroyedAt: string, name: string): string {
   return `${destroyedAt}#${name}`;
@@ -60,6 +70,20 @@ export const AgentTombstone = z.object({
   volume_id: z.string().nullable(),
   volume_kept: z.boolean(),
   hermes_version: z.string().nullable(),
+  /**
+   * When and by whom the name was released, when that was not the destroy
+   * itself. Absent on a tombstone a destroy writes today — the destroy *is*
+   * the release, so `destroyed_at`/`destroyed_by` say both. Present when a
+   * legacy `destroyed` row was released by a later destroy or create of its
+   * name: `destroyed_at`/`destroyed_by` then keep the original destroy's time
+   * and actor (from the name's history, as `agents.destroyed` read them before
+   * the release; capped at the release time), and these record the release —
+   * the moment of its `release` event. An incarnation's record therefore ends
+   * at `released_at ?? destroyed_at`: that is the `until` that still includes
+   * the `release` event, and the instant a new incarnation must be born after.
+   */
+  released_at: Iso.optional(),
+  released_by: z.string().optional(),
   /**
    * `true` when this record was synthesised from a pre-tombstone `destroyed`
    * row rather than read from the `_destroyed` partition. Display only.

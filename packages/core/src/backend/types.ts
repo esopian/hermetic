@@ -58,12 +58,15 @@ export interface AgentStore {
    * Remove the row. Two callers: the unwind of a failed `create`, which
    * deletes unconditionally because the row is its own half-written claim,
    * and the release at the end of `destroy` (§6.7), which passes
-   * `expectedVersion` so the `DeleteItem` is conditional on the row being the
-   * one it just read — a concurrent writer that moved it makes this throw
-   * `CONFLICT` rather than delete somebody else's account of the agent. A row
-   * already gone is not an error either way. Events are never deleted.
+   * `expectedVersion` and `expectedCreatedAt` so the `DeleteItem` is
+   * conditional on the row being the one it just read — a concurrent writer
+   * that moved it makes this throw `CONFLICT` rather than delete somebody
+   * else's account of the agent. The version alone is not enough: a later
+   * incarnation of the same name can reach the same version, and `created_at`
+   * (written once, at birth) is what tells the two apart. A row already gone
+   * is not an error either way. Events are never deleted.
    */
-  delete(name: string, opts?: { expectedVersion: number }): Promise<void>;
+  delete(name: string, opts?: { expectedVersion: number; expectedCreatedAt: string }): Promise<void>;
   /**
    * Names the most recent `scan` could not parse, when the store tracks them.
    * `scan` skips a half-written or foreign row rather than failing the whole
@@ -531,6 +534,11 @@ export interface VolumeStatus extends VolumeRef {
   attachments: VolumeAttachment[];
 }
 
+/** `describeOwnedVolume`'s answer: the status, plus the `hermetic:former_agent` tag or null. */
+export interface OwnedVolumeStatus extends VolumeStatus {
+  former_agent: string | null;
+}
+
 /**
  * A volume with everything the §9 volume surface needs to place it: its tags,
  * its AZ, its age and its attachments. `VolumeStatus` deliberately stays the
@@ -600,8 +608,14 @@ export interface ComputeApi {
    * callers that want just one — there is deliberately no first-match
    * convenience beside it, because a lookup that silently drops the second
    * box is the trap this method exists to close.
+   *
+   * `shuttingDown: true` adds instances already `shutting-down`. Only
+   * `destroy`'s stray sweep asks for them: a box on its way out still runs its
+   * hermeticd, which heartbeats into the agent row, so the release must wait
+   * for it to be `terminated` too. Every other caller wants the boxes that can
+   * still be adopted, attached or started, and a dying one is none of those.
    */
-  listInstancesByTag(name: string): Promise<InstanceRef[]>;
+  listInstancesByTag(name: string, opts?: { shuttingDown?: boolean }): Promise<InstanceRef[]>;
   /**
    * Launch only. The data volume is attached separately (`attachVolume`) so
    * create can write the instance id onto the agent row between the two AWS
@@ -670,8 +684,16 @@ export interface ComputeApi {
    * instance's root disk and is refused too. A volume carrying no role tag at
    * all predates the tag and is still the agent's data disk, exactly as
    * `findVolumeByTag` treats it.
+   *
+   * The answer carries the volume's `hermetic:former_agent` tag, and so does a
+   * refusal's `details.found`: a destroy that keeps the volume writes that tag
+   * *before* it removes `agent` (`retagVolume`), so a volume carrying
+   * `former_agent=<name>` is one a release of `<name>` already promised to
+   * keep — whether or not it got as far as removing the `agent` tag (§6.7,
+   * `release-name.ts`). An adoption interrupted between its two calls leaves
+   * the same pair, which the adopt path's resume finishes (`create-agent.ts`).
    */
-  describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<VolumeStatus | null>;
+  describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<OwnedVolumeStatus | null>;
   /**
    * The raw `AttachVolume`. Deliberately dumb: it does not wait, does not
    * retry, and does not decide whether attaching is a good idea — `attachAgentVolume`
@@ -713,6 +735,17 @@ export interface ComputeApi {
    * that named it and nothing else can find it afterwards (§6.6).
    */
   listManagedVolumes(): Promise<ManagedVolumeRef[]>;
+  /**
+   * Every volume this fleet manages that carries `agent=<name>`, any role, in
+   * any state but going away — the same query `findVolumeByTag` makes, with
+   * none of its decisions: it never tags anything and never refuses on several
+   * matches. Releasing a name (§6.7) asks it which disks still hold the name
+   * besides the one the row names, and moves each off it; `findVolumeByTag`
+   * would label a lone untagged match `role=data` on the way past and throw
+   * `CONFLICT` on two, which is exactly the shape the release is there to
+   * clean up.
+   */
+  listVolumesByAgentTag(name: string): Promise<ManagedVolumeRef[]>;
   /**
    * The legacy sweep of the v3 foundation migration (§6.6): every managed
    * instance and volume in the account carrying *no* `hermetic:fleet_id` tag.

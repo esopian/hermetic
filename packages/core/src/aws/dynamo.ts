@@ -321,12 +321,21 @@ class DynamoAgentStore implements AgentStore {
 
   /**
    * Unconditional for the unwind of a failed `create`; conditional on the
-   * version for the release at the end of `destroy` (§6.7). The conditional
-   * form reads the refused item back in the same round trip, as `update`
-   * does, to tell a row a concurrent writer moved (`CONFLICT`) from a row
-   * already gone (a no-op: the release it wanted has happened).
+   * version *and* the `created_at` for the release at the end of `destroy`
+   * (§6.7). The version alone is not an identity: a later incarnation of the
+   * same name starts again from a low version, so a release that stalled past
+   * its lock could otherwise delete a newer agent that happens to sit at the
+   * version it read. `created_at` is set once when a row is born and never
+   * written again, so the pair names one incarnation at one moment. The
+   * conditional form reads the refused item back in the same round trip, as
+   * `update` does, to tell a row a concurrent writer moved or replaced
+   * (`CONFLICT`) from a row already gone (a no-op: the release it wanted has
+   * happened).
    */
-  async delete(name: string, opts?: { expectedVersion: number }): Promise<void> {
+  async delete(
+    name: string,
+    opts?: { expectedVersion: number; expectedCreatedAt: string },
+  ): Promise<void> {
     if (isReservedRowKey(name)) {
       throw new HermeticError("UNSUPPORTED", `${name} is a reserved row, not an agent`, { name });
     }
@@ -334,15 +343,20 @@ class DynamoAgentStore implements AgentStore {
       await this.doc.send(new DeleteCommand({ TableName: await this.table.get(), Key: { name } }));
       return;
     }
-    const expectedVersion = opts.expectedVersion;
+    const { expectedVersion, expectedCreatedAt } = opts;
     try {
       await this.doc.send(
         new DeleteCommand({
           TableName: await this.table.get(),
           Key: { name },
-          ConditionExpression: "attribute_exists(#name) AND #version = :expected",
-          ExpressionAttributeNames: { "#name": "name", "#version": "version" },
-          ExpressionAttributeValues: { ":expected": expectedVersion },
+          ConditionExpression:
+            "attribute_exists(#name) AND #version = :expected AND #created_at = :created_at",
+          ExpressionAttributeNames: {
+            "#name": "name",
+            "#version": "version",
+            "#created_at": "created_at",
+          },
+          ExpressionAttributeValues: { ":expected": expectedVersion, ":created_at": expectedCreatedAt },
           ReturnValuesOnConditionCheckFailure: "ALL_OLD",
         }),
       );
@@ -351,10 +365,20 @@ class DynamoAgentStore implements AgentStore {
         const item = refusedItem(e);
         if (!item) return;
         const actual = typeof item["version"] === "number" ? item["version"] : null;
+        const actualCreatedAt = typeof item["created_at"] === "string" ? item["created_at"] : null;
+        const replaced = actualCreatedAt !== expectedCreatedAt;
         throw new HermeticError(
           "CONFLICT",
-          `agent ${name} changed underneath this operation (expected version ${expectedVersion}, found ${actual ?? "?"}); the record was not deleted`,
-          { name, expected: expectedVersion, actual },
+          replaced
+            ? `agent ${name} is a different incarnation now (created ${actualCreatedAt ?? "?"}, expected ${expectedCreatedAt}); the record was not deleted`
+            : `agent ${name} changed underneath this operation (expected version ${expectedVersion}, found ${actual ?? "?"}); the record was not deleted`,
+          {
+            name,
+            expected: expectedVersion,
+            actual,
+            expected_created_at: expectedCreatedAt,
+            actual_created_at: actualCreatedAt,
+          },
         );
       }
       throw asHermeticError(e, `could not delete agent ${name}`);
@@ -419,6 +443,17 @@ class DynamoEventStore implements EventStore {
    * `name` is a `FilterExpression`, so DynamoDB's `Limit` counts items before
    * the filter — which is why the limit is honoured here, after it, rather
    * than handed to the query.
+   *
+   * An item that does not parse as a `TombstoneItem` is skipped, not thrown:
+   * the events table is writable by the boxes, and one malformed item under
+   * `_destroyed` must not take down the destroyed view, the archive, a plan or
+   * a create for every other name. The limit counts parsed tombstones, so
+   * `limit: 1` returns the newest *readable* one. A malformed newest item
+   * reads as absent, which for `predecessorFloor` only means the floor comes
+   * from the tombstone before it, the same answer a future-dated (forged) one
+   * gets. The skip
+   * is silent: `agents.destroyed` returns a bare list, and a count would change
+   * that result's shape in every head (§9).
    */
   async queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> {
     const rows: AgentTombstone[] = [];
@@ -448,7 +483,9 @@ class DynamoEventStore implements EventStore {
         throw readError(e, "could not read the destroyed-agent records");
       }
       for (const item of out.Items ?? []) {
-        rows.push(fromTombstoneItem(TombstoneItemSchema.parse(item)));
+        const parsed = TombstoneItemSchema.safeParse(item);
+        if (!parsed.success) continue;
+        rows.push(fromTombstoneItem(parsed.data));
         if (limit !== undefined && rows.length >= limit) return rows;
       }
       start = out.LastEvaluatedKey as Record<string, unknown> | undefined;

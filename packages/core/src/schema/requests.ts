@@ -716,8 +716,9 @@ export const HistoryInput = z.object({
   /**
    * One incarnation's window (§6.7). Events are keyed by name alone and are
    * never deleted, so once a destroyed name is reused its log holds two lives
-   * back to back. A tombstone's `created_at`/`destroyed_at` bound the old one;
-   * pass them as `since`/`until` (inclusive) to read only that life.
+   * back to back. A tombstone's `created_at` and `released_at ?? destroyed_at`
+   * bound the old one; pass them as `since`/`until` (inclusive) to read only
+   * that life.
    */
   since: Iso.optional(),
   until: Iso.optional(),

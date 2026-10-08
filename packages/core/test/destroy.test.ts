@@ -55,6 +55,11 @@ describe("agents.destroy", () => {
     expect(backend.instances.get(before.resources.instance_id!)!.state).toBe("terminated");
     expect(await backend.secrets.list("/hermes/fxtr0001/atlas/")).toEqual([]);
     expect([...backend.objects.keys()].filter((k) => k.startsWith("config/atlas/"))).toEqual([]);
+    // Every version, not a delete marker over the current one: the bucket is
+    // versioned and keeps noncurrent versions, so only the version-aware door
+    // frees the old config (§6.7).
+    expect(backend.mutations).toContain("artifacts.purgeByPrefix");
+    expect(backend.mutations).not.toContain("artifacts.deleteByPrefix");
   });
 
   test("deletes the data volume by default", async () => {
@@ -164,8 +169,8 @@ describe("destroy keeps its lock alive between steps", () => {
       await at("tailnet");
       return listDevices();
     };
-    const objects = backend.artifacts.deleteByPrefix;
-    backend.artifacts.deleteByPrefix = async (prefix: string) => {
+    const objects = backend.artifacts.purgeByPrefix;
+    backend.artifacts.purgeByPrefix = async (prefix: string) => {
       await at("config");
       return objects(prefix);
     };
@@ -238,7 +243,7 @@ describe("a destroy that failed partway can be run again", () => {
     // it again, and the SSM/S3 prefixes are already empty.
     expect(backend.mutations).not.toContain("compute.terminate");
     expect(backend.mutations).not.toContain("secrets.deleteByPrefix");
-    expect(backend.mutations).not.toContain("artifacts.deleteByPrefix");
+    expect(backend.mutations).not.toContain("artifacts.purgeByPrefix");
     expect(events.find((e) => e.phase === "instance")?.message).toContain(
       `instance ${instanceId} is already terminated`,
     );
@@ -936,6 +941,112 @@ describe("plan.destroy / apply", () => {
     }
     expect(code).toBe("PLAN_STALE");
     expect(backend.mutations).not.toContain("compute.runInstance");
+  });
+
+  /**
+   * §6.7 frees a destroyed name, so the ids are not an identity: a `creating`
+   * row has no instance and no volume yet, and neither does the next, unrelated
+   * `creating` row that claims the same name once the first is gone. Only the
+   * row's `created_at` tells the two incarnations apart.
+   */
+  function incarnate(backend: MemoryBackend, name: string, createdAt: string): void {
+    const row = backend.agents.get(name)!;
+    const { instance_id: _i, volume_id: _v, ...resources } = row.resources;
+    backend.agents.set(name, {
+      ...row,
+      status: "creating",
+      instance_id: null,
+      volume_id: null,
+      resources,
+      lock: null,
+      version: 1,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+
+  test("a destroy plan for an earlier incarnation of the name is refused", async () => {
+    const { backend, hermetic } = seeded();
+    incarnate(backend, "granite", "2026-01-01T00:00:00.000Z");
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+    expect(plan.options.created_at).toBe("2026-01-01T00:00:00.000Z");
+    expect(plan.options.instance_id).toBeNull();
+    expect(plan.options.volume_id).toBeNull();
+
+    // Destroyed and claimed again in between: same name, same null ids, a
+    // different agent that nobody reviewed a plan for.
+    incarnate(backend, "granite", "2026-02-01T00:00:00.000Z");
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("created at 2026-01-01T00:00:00.000Z");
+    expect(error?.message).toContain("2026-02-01T00:00:00.000Z");
+    expect(error?.details?.["observed_created_at"]).toBe("2026-02-01T00:00:00.000Z");
+    // Refused by the plan check, before the lock: the row was never written.
+    expect(error?.message).not.toContain("nothing was destroyed");
+    expect(backend.mutations).not.toContain("store.agents.update");
+    const after = (await backend.store.agents.get("granite"))!;
+    expect(after.created_at).toBe("2026-02-01T00:00:00.000Z");
+    expect(after.status).toBe("creating");
+    expect(backend.mutations).not.toContain("store.agents.delete");
+  });
+
+  test("a new incarnation that lands between the plan check and the lock is refused", async () => {
+    const { backend, hermetic } = seeded();
+    incarnate(backend, "granite", "2026-01-01T00:00:00.000Z");
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+
+    // The same gap the instance race above uses: the name is released and
+    // claimed again as this destroy is taking its lock.
+    const update = backend.store.agents.update;
+    let raced = false;
+    backend.store.agents.update = async (name, version, patch) => {
+      if (raced || name !== "granite" || !patch.lock) return update(name, version, patch);
+      raced = true;
+      incarnate(backend, "granite", "2026-02-01T00:00:00.000Z");
+      return update(name, 1, patch);
+    };
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("nothing was destroyed");
+    expect(error?.message).toContain("2026-02-01T00:00:00.000Z");
+    const after = (await backend.store.agents.get("granite"))!;
+    expect(after.created_at).toBe("2026-02-01T00:00:00.000Z");
+    expect(after.status).toBe("creating");
+    expect(after.lock).toBeNull();
+    expect(backend.mutations).not.toContain("store.agents.delete");
+  });
+
+  test("a destroy plan that does not say created_at is refused as stale, deleting nothing", async () => {
+    const { backend, hermetic } = seeded();
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+    const { created_at: _dropped, ...older } = plan.options;
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan: { ...plan, options: older }, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("predates the current build");
+    expect(error?.message).toContain("hermetic plan destroy granite");
+    expect(backend.mutations).not.toContain("compute.terminate");
+    expect(await backend.store.agents.get("granite")).not.toBeNull();
   });
 
   /**

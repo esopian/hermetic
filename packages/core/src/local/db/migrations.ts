@@ -7,7 +7,7 @@ import { PREF_DEFAULT_FLEET } from "./config.ts";
  * migration *names* recorded in `schema_migrations` (see `MIGRATIONS`), because
  * two branches can and do reach the same number by different routes.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 13;
 
 /**
  * A migration this branch may assume ran when a bare *number* is all the ledger
@@ -493,6 +493,26 @@ const MIGRATIONS: Migration[] = [
          owner      TEXT NOT NULL,
          expires_at TEXT NOT NULL,
          PRIMARY KEY (fleet, instance, bot)
+       )`,
+    ],
+  },
+  {
+    /**
+     * Which incarnation of each agent name the rows above describe
+     * (`local/incarnations.ts`, §6.7). A destroy releases the name and only the
+     * laptop that ran it purges its own local state; every other laptop finds
+     * out by seeing a different `created_at` on the live row, and this is where
+     * it remembers the one it saw last. Created empty on purpose: an existing
+     * home's state is adopted on its first read, never purged by the upgrade.
+     */
+    name: "agent-incarnations",
+    version: 13,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS agent_incarnations (
+         fleet      TEXT NOT NULL,
+         name       TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         PRIMARY KEY (fleet, name)
        )`,
     ],
   },

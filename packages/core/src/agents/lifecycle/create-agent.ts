@@ -42,7 +42,12 @@ import { sharedSecretPath } from "../../backend/constants.ts";
 import type { OpOptions } from "../../hermetic.ts";
 import type { LifecycleDeps } from "../lifecycle.ts";
 import { createVolumeAdoption } from "./adopt-volume.ts";
-import { createReleaseName, strictlyAfter, type ReleaseResult } from "./release-name.ts";
+import {
+  createReleaseName,
+  incarnationEnd,
+  strictlyAfter,
+  type ReleaseResult,
+} from "./release-name.ts";
 import { createRecordedInstance } from "./recorded-instance.ts";
 import type { ReleaseLookup } from "./release.ts";
 
@@ -148,6 +153,30 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       await unwind(existing.name, "create", owner, e);
       throw e;
     }
+  }
+
+  /**
+   * What a create says, one warn each, about a legacy row it released — above
+   * the claim or in `classify`, when the row appeared only after the first
+   * read: the release itself, then every other disk the release found still
+   * tagged for the name and moved off it (`sweepTagged`) — so
+   * `findVolumeByTag` finds none of them and this life starts on a fresh disk,
+   * as after any release (§6.7). A legacy row held its name forever, so no
+   * disk of it was ever left tagged for a later `create` to adopt; `--volume`
+   * still can. Nothing when the row was already gone (`null`).
+   */
+  function releaseNotices(name: string, released: ReleaseResult | null): string[] {
+    if (released === null) return [];
+    const kept = released.volume === "released";
+    return [
+      `released ${name}, destroyed before tombstones existed${
+        kept ? `; its volume ${released.tombstone.volume_id} is tagged former_agent=${name}` : ""
+      }`,
+      ...released.swept.map(
+        (v) =>
+          `volume ${v.volume_id} was still tagged agent=${name}; kept, not deleted, and tagged former_agent=${name} — adopt it with --volume ${v.volume_id}`,
+      ),
+    ];
   }
 
   /**
@@ -321,25 +350,13 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * adoption decides its retag from the disk's tags as they are now.
      */
     const legacy = await backend.store.agents.get(name);
-    /** The predecessor's `destroyed_at`, which this life must start after. */
+    /** The predecessor's `incarnationEnd`, which this life must start after. */
     let floor: string | null = null;
     if (legacy?.status === "destroyed") {
       await assertProfileUsable(bindingPorts, profile);
       const released = await releaseLegacyRow(legacy, owner, who, opts.signal);
-      if (released) {
-        floor = released.tombstone.destroyed_at;
-        yield say(
-          "claim",
-          0.03,
-          `released ${name}, destroyed before tombstones existed${
-            released.volume === "released"
-              ? `; its volume ${released.tombstone.volume_id} is tagged former_agent=${name}`
-              : ""
-          }`,
-          nowIso(),
-          "warn",
-        );
-      }
+      if (released) floor = incarnationEnd(released.tombstone);
+      for (const m of releaseNotices(name, released)) yield say("claim", 0.03, m, nowIso(), "warn");
       if (adopted) adopted = await resolveAdopted(adopted.volume_id, name, fleet.fleet_id);
     }
     // No release of our own to date from — no legacy row, or somebody else
@@ -348,7 +365,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
 
     /**
      * The new incarnation is born now, after any legacy release above, and
-     * strictly after the predecessor's `destroyed_at` — the two bound
+     * strictly after the predecessor's `incarnationEnd` — the two bound
      * `history --since/--until` (§6.7), which are inclusive, and a shared
      * boundary instant would blend two lives into one window. `at0` stays the
      * validate event's.
@@ -436,19 +453,21 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       | { kind: "claimed" }
       | { kind: "resume"; agent: Agent }
       | { kind: "complete" }
-      | { kind: "released"; floor: string | null };
+      | { kind: "released"; floor: string | null; released: ReleaseResult | null };
 
     async function classify(existing: Agent): Promise<Claim> {
       /**
        * A legacy `destroyed` row appearing only now — after the release above
        * found none, so between that read and the claim — is released the same
-       * way, and the claim is made again.
+       * way, and the claim is made again. The release rides back on the claim
+       * so its warnings are yielded as they are above.
        */
       if (existing.status === "destroyed") {
         const released = await releaseLegacyRow(existing, owner, who, opts.signal);
         return {
           kind: "released",
-          floor: released ? released.tombstone.destroyed_at : await predecessorFloor(name),
+          floor: released ? incarnationEnd(released.tombstone) : await predecessorFloor(name),
+          released,
         };
       }
       if (existing.status !== "creating" && existing.status !== "error") {
@@ -498,12 +517,16 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     // As after the release above: the disk's tags have moved, and this life
     // starts after the one just released.
     if (claim.kind === "released") {
+      for (const m of releaseNotices(name, claim.released))
+        yield say("claim", 0.03, m, nowIso(), "warn");
       if (adopted) adopted = await resolveAdopted(adopted.volume_id, name, fleet.fleet_id);
       const reborn = strictlyAfter(nowIso(), claim.floor);
       fresh = { ...fresh, created_at: reborn, updated_at: reborn };
       claim = await claimFresh();
     }
     if (claim.kind === "released") {
+      for (const m of releaseNotices(name, claim.released))
+        yield say("claim", 0.03, m, nowIso(), "warn");
       throw new HermeticError(
         "CONFLICT",
         `the name ${name} was released and then taken again by a destroyed record; re-run the create`,
@@ -865,12 +888,33 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
               };
             }
           }
-          await appendEvent(name, "volume", `adopted ${adopted.volume_id} (${adopted.size_gib} GiB)`);
+          /**
+           * `agent=<name>` *and* `former_agent` still on the disk: the first
+           * attempt's rewrite (`retagVolume`, one `CreateTags` then one
+           * `DeleteTags`) died between its two calls. The adoption is not
+           * finished until the past owner's tag goes — left there, the pair
+           * reads like a release of `<name>` that was interrupted the same way
+           * (`volumeHold`), and a later plain `destroy` of this agent would
+           * keep a disk it should delete. Finished now, after the ledger entry
+           * above, which already names the tag to put back on a rollback.
+           */
+          const cleared = adopted.former_agent;
+          if (cleared !== null) {
+            await backend.compute.retagVolume(adopted.volume_id, name, { formerAgent: null });
+          }
+          const finished =
+            cleared === null ? "" : `; cleared former_agent=${cleared} left by an interrupted adoption`;
+          await appendEvent(
+            name,
+            "volume",
+            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB)${finished}`,
+          );
           yield say(
             "volume",
             0.55,
-            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); no volume created`,
+            `adopted ${adopted.volume_id} (${adopted.size_gib} GiB); no volume created${finished}`,
             nowIso(),
+            cleared === null ? undefined : "warn",
           );
         }
       } else {

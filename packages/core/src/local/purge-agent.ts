@@ -20,7 +20,9 @@
  * - open `notifications` about the agent: *resolved*, not deleted. They are
  *   history, and the inbox's own retention removes them in time; resolving
  *   only stops the badge counting a box that no longer exists;
- * - the `agent:<name>` mute.
+ * - the `agent:<name>` mute;
+ * - the name's recorded incarnation (`incarnations.ts`), so the next agent to
+ *   take the name is a first sighting here rather than a second purge.
  *
  * The mute is the one entry with no fleet in its key (`notification_mutes`
  * is keyed on the target alone), so releasing `alpha` in one fleet also lifts
@@ -39,12 +41,15 @@ import type { ChatFenceStore } from "../chat/chat-fence.ts";
 import type { InstanceListeningStore } from "../chat/instance-listening.ts";
 import { chatSeenSubject, type NotificationStore } from "../chat/notifications.ts";
 import { agentMuteTarget } from "../schema/index.ts";
+import type { IncarnationStore } from "./incarnations.ts";
 
 export interface LocalAgentPurgeDeps {
   notifications: NotificationStore;
   instanceListening: InstanceListeningStore;
   localSessions: LocalChatSessions;
   chatFence: ChatFenceStore;
+  /** Absent in a caller that keeps no incarnation record (tests of the purge alone). */
+  incarnations?: IncarnationStore | undefined;
 }
 
 export function createLocalAgentPurge(deps: LocalAgentPurgeDeps) {
@@ -59,6 +64,7 @@ export function createLocalAgentPurge(deps: LocalAgentPurgeDeps) {
       () => deps.localSessions.forgetInstance(fleetId, name),
       () => deps.notifications.resolveAgent(fleetId, name),
       () => deps.notifications.unmute(agentMuteTarget(name)),
+      () => deps.incarnations?.forget(fleetId, name),
     ];
     const failures: unknown[] = [];
     for (const step of steps) {

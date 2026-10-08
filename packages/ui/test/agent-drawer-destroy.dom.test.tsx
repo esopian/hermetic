@@ -84,6 +84,7 @@ function planFor(keepVolume: boolean): Plan {
       agent_version: 1,
       instance_id: "i-1",
       volume_id: "vol-1",
+      created_at: "2026-01-01T00:00:00.000Z",
     },
     steps: [
       { id: "instance", description: "terminate i-1", destructive: true },

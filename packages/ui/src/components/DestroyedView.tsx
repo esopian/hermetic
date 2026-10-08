@@ -252,16 +252,18 @@ export function DestroyedView({
 
 /**
  * The chosen incarnation: its facts, and its own history — windowed to
- * `created_at`..`destroyed_at`, so a name that was reused shows this life's
- * events and not its successor's.
+ * `created_at`..`released_at ?? destroyed_at` (the end of its record, which
+ * includes the `release` event of a legacy row released after its destroy),
+ * so a name that was reused shows this life's events and not its successor's.
  */
 function DestroyedDetail({ t, onClose }: { t: AgentTombstone; onClose: () => void }) {
   const [events, setEvents] = useState<AgentEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ticket = useRef(0);
+  const until = t.released_at ?? t.destroyed_at;
   useEffect(() => {
     const mine = ++ticket.current;
-    history(t.name, DESTROYED_HISTORY_LIMIT, { since: t.created_at, until: t.destroyed_at })
+    history(t.name, DESTROYED_HISTORY_LIMIT, { since: t.created_at, until })
       .then((list) => {
         if (ticket.current === mine) setEvents(list);
       })
@@ -271,7 +273,7 @@ function DestroyedDetail({ t, onClose }: { t: AgentTombstone; onClose: () => voi
     return () => {
       ticket.current++;
     };
-  }, [t.name, t.created_at, t.destroyed_at]);
+  }, [t.name, t.created_at, until]);
 
   return (
     <aside className="destroyed-detail" aria-label={`${t.name} · destroyed`}>

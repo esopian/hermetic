@@ -120,7 +120,7 @@ export function createPlans(deps: PlanDeps) {
       },
       {
         id: "config",
-        description: `delete S3 objects under ${configPrefix(agent.name)}`,
+        description: `delete S3 objects and every version of them under ${configPrefix(agent.name)}`,
         destructive: true,
       },
       volumeStep,
@@ -148,6 +148,8 @@ export function createPlans(deps: PlanDeps) {
         agent_version: agent.version,
         instance_id: agent.resources.instance_id ?? agent.instance_id ?? null,
         volume_id: volumeId ?? null,
+        // Which incarnation of the name this is (`PlanOptions.created_at`).
+        created_at: agent.created_at,
       },
       steps,
       warnings,
@@ -172,6 +174,7 @@ export function createPlans(deps: PlanDeps) {
         agent_version: agent.version,
         instance_id: agent.resources.instance_id ?? agent.instance_id ?? null,
         volume_id: volumeId ?? null,
+        created_at: agent.created_at,
       },
       steps: [
         {
@@ -502,6 +505,12 @@ export function createPlans(deps: PlanDeps) {
    * the row's version says; if either has moved, the refusal can say which,
    * which is the whole point of refusing.
    *
+   * Beside the ids, the row's `created_at` — the incarnation. Since §6.7 frees a
+   * destroyed name, ids alone cannot tell a plan for one `creating` row (no
+   * instance, no volume yet) from a later, unrelated `creating` row of the same
+   * name whose ids are just as null; `created_at` can, and unlike the version
+   * nothing but a new incarnation moves it.
+   *
    * The version is still *carried*, and is still required: a plan without one
    * predates this build, so nothing in it can be checked at all. That refusal is
    * the same answer `policy.apply` gives a plan with no ETag.
@@ -525,6 +534,11 @@ export function createPlans(deps: PlanDeps) {
     const instanceId = agent.resources.instance_id ?? agent.instance_id ?? null;
     const volumeId = agent.resources.volume_id ?? agent.volume_id ?? null;
     const moved: string[] = [];
+    if (plan.options.created_at !== undefined && plan.options.created_at !== agent.created_at) {
+      moved.push(
+        `the plan was made for the ${agent.name} created at ${plan.options.created_at} and the row now is one created at ${agent.created_at}`,
+      );
+    }
     if (plan.options.instance_id !== undefined && plan.options.instance_id !== instanceId) {
       moved.push(
         `the plan named instance ${plan.options.instance_id ?? "(none)"} and the row now names ${instanceId ?? "(none)"}`,
@@ -539,6 +553,7 @@ export function createPlans(deps: PlanDeps) {
       return {
         ...(plan.options.instance_id === undefined ? {} : { instance_id: plan.options.instance_id }),
         ...(plan.options.volume_id === undefined ? {} : { volume_id: plan.options.volume_id }),
+        ...(plan.options.created_at === undefined ? {} : { created_at: plan.options.created_at }),
         agent_version: plan.options.agent_version,
       };
     }
@@ -555,6 +570,8 @@ export function createPlans(deps: PlanDeps) {
         observed_instance_id: instanceId,
         planned_volume_id: plan.options.volume_id ?? null,
         observed_volume_id: volumeId,
+        planned_created_at: plan.options.created_at ?? null,
+        observed_created_at: agent.created_at,
       },
     );
   }

@@ -989,28 +989,41 @@ describe("a row that does not parse", () => {
   });
 });
 
-/** §6.7: the release deletes the row, conditional on the version it read. */
+/**
+ * §6.7: the release deletes the row, conditional on the version it read and on
+ * the incarnation (`created_at`) it read it from.
+ */
 describe("the release's delete", () => {
-  test("with an expected version the delete is conditional on it", async () => {
+  const BORN = "2026-01-01T00:00:00.000Z";
+  const expected = { expectedVersion: 7, expectedCreatedAt: BORN };
+
+  test("the delete is conditional on the expected version and created_at", async () => {
     ddb.on(DeleteCommand).resolves({});
-    await stores().agents.delete("atlas", { expectedVersion: 7 });
+    await stores().agents.delete("atlas", expected);
     const [input] = inputsOf<{
       ConditionExpression: string;
       ExpressionAttributeNames: Record<string, string>;
       ExpressionAttributeValues: Record<string, unknown>;
       ReturnValuesOnConditionCheckFailure: string;
     }>(ddb, DeleteCommand);
-    expect(input!.ConditionExpression).toBe("attribute_exists(#name) AND #version = :expected");
-    expect(input!.ExpressionAttributeValues).toEqual({ ":expected": 7 });
+    expect(input!.ConditionExpression).toBe(
+      "attribute_exists(#name) AND #version = :expected AND #created_at = :created_at",
+    );
+    expect(input!.ExpressionAttributeNames).toEqual({
+      "#name": "name",
+      "#version": "version",
+      "#created_at": "created_at",
+    });
+    expect(input!.ExpressionAttributeValues).toEqual({ ":expected": 7, ":created_at": BORN });
     expect(input!.ReturnValuesOnConditionCheckFailure).toBe("ALL_OLD");
     expect(unusedAliases(input!)).toEqual([]);
   });
 
   test("a moved version is CONFLICT", async () => {
-    ddb.on(DeleteCommand).rejects(conditionalFailure({ name: "atlas", version: 9 }));
+    ddb.on(DeleteCommand).rejects(conditionalFailure({ name: "atlas", version: 9, created_at: BORN }));
     let error: HermeticError | null = null;
     try {
-      await stores().agents.delete("atlas", { expectedVersion: 7 });
+      await stores().agents.delete("atlas", expected);
     } catch (e) {
       error = e as HermeticError;
     }
@@ -1018,9 +1031,33 @@ describe("the release's delete", () => {
     expect(error!.details).toMatchObject({ expected: 7, actual: 9 });
   });
 
+  /**
+   * A release that stalled past its lock, while somebody destroyed the agent
+   * and created a new one of the same name that reached the same version: the
+   * refusal says so, rather than deleting the newer agent.
+   */
+  test("a later incarnation at the same version is CONFLICT", async () => {
+    const reborn = "2026-02-01T00:00:00.000Z";
+    ddb
+      .on(DeleteCommand)
+      .rejects(conditionalFailure({ name: "atlas", version: 7, created_at: reborn }));
+    let error: HermeticError | null = null;
+    try {
+      await stores().agents.delete("atlas", expected);
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error!.code).toBe("CONFLICT");
+    expect(error!.message).toContain("different incarnation");
+    expect(error!.details).toMatchObject({
+      expected_created_at: BORN,
+      actual_created_at: reborn,
+    });
+  });
+
   test("a row already gone is not an error", async () => {
     ddb.on(DeleteCommand).rejects(conditionalFailure());
-    await stores().agents.delete("atlas", { expectedVersion: 7 });
+    await stores().agents.delete("atlas", expected);
   });
 
   test("without an expected version the unwind's delete stays unconditional", async () => {
@@ -1114,5 +1151,31 @@ describe("tombstones", () => {
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.FilterExpression).toBeUndefined();
     expect(inputs[0]!.ExpressionAttributeNames).toEqual({ "#name": "name" });
+  });
+
+  /**
+   * The events table is writable by the boxes, so the `_destroyed` partition
+   * can hold an item nobody's tombstone writer produced. One such item must
+   * not fail the destroyed view for every other name.
+   */
+  test("an item that does not parse is skipped, and the limit counts what parsed", async () => {
+    const malformed = { ...item("atlas", "2026-09-04T00:00:00.000Z"), volume_kept: "yes", size: 7 };
+    ddb.on(QueryCommand).resolves({
+      Items: [
+        malformed,
+        { name: DESTROYED_KEY, timestamp: "garbage" },
+        item("ember", "2026-09-03T00:00:00.000Z"),
+        item("atlas", "2026-09-02T00:00:00.000Z"),
+      ],
+    });
+    const all = await stores().events.queryTombstones();
+    expect(all.map((r) => `${r.name}@${r.destroyed_at}`)).toEqual([
+      "ember@2026-09-03T00:00:00.000Z",
+      "atlas@2026-09-02T00:00:00.000Z",
+    ]);
+    // A malformed newest item reads as absent: `limit: 1` is the newest
+    // *readable* tombstone, not nothing.
+    const newest = await stores().events.queryTombstones({ limit: 1 });
+    expect(newest.map((r) => r.name)).toEqual(["ember"]);
   });
 });

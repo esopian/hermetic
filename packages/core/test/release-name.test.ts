@@ -275,6 +275,52 @@ describe("stray instances tagged for the name", () => {
     expect(await backend.store.agents.get("atlas")).toBeNull();
     expect(await backend.compute.listInstancesByTag("atlas")).toEqual([]);
   });
+
+  /**
+   * A stray already `shutting-down` — a crashed destroy's retry, say — still
+   * runs its hermeticd, whose heartbeat does not move the row's version. It is
+   * waited on like any other, so nothing on it is running when the name goes.
+   */
+  test("a stray already shutting down is waited on before the row goes", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const own = instanceOf(row);
+    const stray = "i-stray0003";
+    backend.instances.set(stray, {
+      ...backend.instances.get(own)!,
+      instance_id: stray,
+      state: "shutting-down",
+      public_ip: null,
+    });
+
+    const describe = backend.compute.describeInstance;
+    let strayPolls = 0;
+    backend.compute.describeInstance = async (id: string) => {
+      const inst = backend.instances.get(id);
+      if (id === stray && inst?.state === "shutting-down") {
+        strayPolls += 1;
+        if (strayPolls >= 2) backend.instances.set(id, { ...inst, state: "terminated" });
+      }
+      return describe(id);
+    };
+    const del = backend.store.agents.delete;
+    const strayAtDelete: string[] = [];
+    backend.store.agents.delete = async (name, opts) => {
+      strayAtDelete.push(backend.instances.get(stray)!.state);
+      return del(name, opts);
+    };
+
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(strayAtDelete).toEqual(["terminated"]);
+    expect(strayPolls).toBeGreaterThanOrEqual(2);
+    expect(
+      events.some(
+        (e) =>
+          e.message.includes(`instance ${stray} is also tagged`) && e.message.includes("shutting down"),
+      ),
+    ).toBe(true);
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
 });
 
 describe("a legacy destroyed row", () => {
@@ -346,6 +392,91 @@ describe("a legacy destroyed row", () => {
     const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
     const again = (await backend.store.agents.get("atlas"))!;
     expect(again.created_at > tombstone!.destroyed_at).toBe(true);
+  });
+
+  test("the tombstone keeps the original destroy's time and actor, and records the release apart", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    // The old destroy, as its history recorded it: another operator, a day ago.
+    const destroyedAt = new Date(Date.parse(row.created_at) + 60_000).toISOString();
+    await backend.store.events.append({
+      name: "atlas",
+      timestamp: destroyedAt,
+      actor: "former-operator",
+      action: "destroy",
+      from_status: "destroying",
+      to_status: "destroyed",
+      detail: "destroyed",
+    });
+    backend.advance(24 * HOUR);
+    const [before] = await hermetic.agents.destroyed({ name: "atlas" });
+    expect(before).toMatchObject({
+      legacy: true,
+      destroyed_at: destroyedAt,
+      destroyed_by: "former-operator",
+    });
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const release = (await backend.store.events.query("atlas")).find((e) => e.action === "release")!;
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone).toMatchObject({
+      legacy: false,
+      destroyed_at: destroyedAt,
+      destroyed_by: "former-operator",
+      released_at: backend.now().toISOString(),
+      released_by: release.actor,
+    });
+    expect(release.timestamp).toBe(tombstone!.released_at!);
+    expect(release.actor).not.toBe("former-operator");
+    // `agents.destroyed` tells the same story before and after the release.
+    const [after] = await hermetic.agents.destroyed({ name: "atlas" });
+    expect(after).toMatchObject({
+      destroyed_at: before!.destroyed_at,
+      destroyed_by: before!.destroyed_by,
+    });
+    // The record ends at the release: that window still holds the release event.
+    const life = await hermetic.agents.history({
+      name: "atlas",
+      since: tombstone!.created_at,
+      until: tombstone!.released_at!,
+    });
+    expect(life.map((e) => e.action)).toContain("release");
+
+    // The next life starts after the release, not merely after the old destroy.
+    await drain(hermetic.agents.create({ name: "atlas" }));
+    const again = (await backend.store.agents.get("atlas"))!;
+    expect(again.created_at > tombstone!.released_at!).toBe(true);
+  });
+
+  test("a create that releases an old legacy row is born after the release, not the destroy", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    await backend.store.events.append({
+      name: "atlas",
+      timestamp: new Date(Date.parse(row.created_at) + 60_000).toISOString(),
+      actor: "former-operator",
+      action: "destroy",
+      from_status: "destroying",
+      to_status: "destroyed",
+      detail: "destroyed",
+    });
+    backend.advance(24 * HOUR);
+
+    // The clock is frozen: release and birth read the same instant.
+    await drain(hermetic.agents.create({ name: "atlas" }));
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    const again = (await backend.store.agents.get("atlas"))!;
+    expect(tombstone!.destroyed_by).toBe("former-operator");
+    expect(again.created_at > tombstone!.released_at!).toBe(true);
+  });
+
+  test("a destroy that is itself the release carries no released_at", async () => {
+    const { backend, hermetic } = await created("atlas");
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone!.released_at).toBeUndefined();
+    expect(tombstone!.released_by).toBeUndefined();
   });
 
   test("a legacy row that appears after the first read is released, and --volume re-resolved", async () => {
@@ -491,6 +622,128 @@ describe("crash ordering", () => {
   });
 });
 
+/**
+ * The row is deleted only if it is the same incarnation at the same version.
+ * A release that stalled past its lock while the name was destroyed and
+ * created again must not delete the newcomer, even at the same version.
+ */
+describe("the release's conditional delete", () => {
+  test("a later incarnation of the name at the same version is not deleted", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const reborn = new Date(Date.parse(row.created_at) + HOUR).toISOString();
+
+    // Between this run's tombstone and its delete, somebody else's release and
+    // create put a new `atlas` in the table — at the very version this run read.
+    const appendTombstone = backend.store.events.appendTombstone;
+    backend.store.events.appendTombstone = async (t) => {
+      await appendTombstone(t);
+      const current = backend.agents.get("atlas")!;
+      backend.agents.set("atlas", { ...current, created_at: reborn, status: "ready", lock: null });
+    };
+
+    let error: unknown = null;
+    try {
+      await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    } catch (e) {
+      error = e;
+    }
+    expect((error as HermeticError).code).toBe("CONFLICT");
+    const survivor = (await backend.store.agents.get("atlas"))!;
+    expect(survivor).not.toBeNull();
+    expect(survivor.created_at).toBe(reborn);
+  });
+});
+
+/**
+ * §6.7: a destroy that keeps the volume sets `former_agent` first and removes
+ * `agent` second (`retagVolume`), both before any tombstone exists. A crash
+ * anywhere in there must leave a disk the next destroy keeps — whatever that
+ * destroy's own flag says — and a name the next destroy can release.
+ */
+describe("an interrupted keep-volume retag", () => {
+  async function crashInRetag(afterDeleteTags: boolean) {
+    const fleet = await created("atlas");
+    const { backend, hermetic } = fleet;
+    const retag = backend.compute.retagVolume;
+    backend.compute.retagVolume = async (id, agent, opts) => {
+      if (agent === null && opts?.formerAgent) {
+        if (afterDeleteTags) {
+          await retag(id, agent, opts);
+        } else {
+          // `CreateTags` landed, `DeleteTags` never did.
+          backend.volumes.set(id, { ...backend.volumes.get(id)!, former_agent: opts.formerAgent });
+        }
+        throw new HermeticError("INTERNAL", "the laptop lost its network", {});
+      }
+      return retag(id, agent, opts);
+    };
+    await expect(
+      drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true })),
+    ).rejects.toThrow(HermeticError);
+    backend.compute.retagVolume = retag;
+    expect(await backend.store.events.queryTombstones({ name: "atlas" })).toHaveLength(0);
+    return fleet;
+  }
+
+  test("between setting former_agent and removing agent: a plain retry keeps the disk", async () => {
+    const { backend, hermetic, row } = await crashInRetag(false);
+    const kept = volumeOf(row);
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: "atlas", former_agent: "atlas" });
+
+    backend.resetMutations();
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone).toMatchObject({ volume_id: kept, volume_kept: true });
+    const note = events.find((e) => e.phase === "volume")!;
+    expect(note.message).toContain("already carries former_agent=atlas");
+    expect(note.level).toBe("warn");
+  });
+
+  test("after removing agent: a plain retry keeps the disk and releases the name", async () => {
+    const { backend, hermetic, row } = await crashInRetag(true);
+    const kept = volumeOf(row);
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: null, former_agent: "atlas" });
+
+    backend.resetMutations();
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone).toMatchObject({ volume_id: kept, volume_kept: true });
+  });
+
+  /** Another agent's released disk is not this name's to claim. */
+  test("a disk released from another name is foreign, not released", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const volumeId = volumeOf(row);
+    backend.volumes.set(volumeId, {
+      ...backend.volumes.get(volumeId)!,
+      agent: null,
+      former_agent: "bravo",
+    });
+
+    // A plain destroy refuses before it touches anything.
+    await expect(drain(hermetic.agents.destroy({ name: "atlas", yes: true }))).rejects.toThrow(
+      "is not atlas's",
+    );
+    expect(backend.volumes.get(volumeId)).toMatchObject({ agent: null, former_agent: "bravo" });
+
+    // A keeping one releases the name and leaves bravo's disk saying bravo.
+    const events = await drain(
+      hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
+    );
+    expect(backend.volumes.get(volumeId)).toMatchObject({ agent: null, former_agent: "bravo" });
+    expect(events.some((e) => e.message.includes("belongs to someone else"))).toBe(true);
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+  });
+});
+
 describe("a retry after the tombstone", () => {
   test("re-runs every step, and leaves a disk that is somebody else's now alone", async () => {
     const { backend, hermetic, row } = await created("atlas");
@@ -578,6 +831,8 @@ describe("a retry after the tombstone", () => {
 
   test("a future-dated tombstone is not adopted: a fresh one is written beside it", async () => {
     const { backend, hermetic, row } = await created("atlas");
+    // Past the birth instant, so this run's own key is plainly `now`.
+    backend.advance(HOUR);
     const future = new Date(backend.now().getTime() + HOUR).toISOString();
     await backend.store.events.appendTombstone(forgedTombstone(backend, row, { destroyed_at: future }));
 
@@ -602,6 +857,275 @@ describe("a retry after the tombstone", () => {
   });
 });
 
+/**
+ * §6.7: a retry's tombstone lands on the key of the one it found. The key is
+ * `destroyed_at`; nothing else a prior says — it may be the box's forgery —
+ * may move it, or rewrite who released a legacy row.
+ */
+describe("a retry keeps the tombstone it found", () => {
+  test("a prior whose released_at differs from destroyed_at does not move the key", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const destroyedAt = backend.now().toISOString();
+    const releasedAt = new Date(backend.now().getTime() + 60_000).toISOString();
+    await backend.store.events.appendTombstone(
+      forgedTombstone(backend, row, { destroyed_at: destroyedAt, released_at: releasedAt }),
+    );
+    backend.advance(HOUR);
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const tombstones = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstones).toHaveLength(1);
+    expect(tombstones[0]!.destroyed_at).toBe(destroyedAt);
+    expect(tombstones[0]!.released_at).toBeUndefined();
+  });
+
+  test("a legacy row's retry keeps released_at and released_by from the first run", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    const destroyedAt = new Date(Date.parse(row.created_at) + 60_000).toISOString();
+    const releasedAt = new Date(Date.parse(row.created_at) + 120_000).toISOString();
+    await backend.store.events.appendTombstone(
+      forgedTombstone(backend, row, {
+        destroyed_at: destroyedAt,
+        released_at: releasedAt,
+        released_by: "first-operator",
+      }),
+    );
+    backend.advance(HOUR);
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const tombstones = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstones).toHaveLength(1);
+    expect(tombstones[0]).toMatchObject({
+      destroyed_at: destroyedAt,
+      released_at: releasedAt,
+      released_by: "first-operator",
+    });
+  });
+
+  test("a legacy prior released before it was destroyed keeps its key", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    const destroyedAt = new Date(Date.parse(row.created_at) + 120_000).toISOString();
+    const releasedAt = new Date(Date.parse(row.created_at) + 60_000).toISOString();
+    await backend.store.events.appendTombstone(
+      forgedTombstone(backend, row, { destroyed_at: destroyedAt, released_at: releasedAt }),
+    );
+    backend.advance(HOUR);
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const tombstones = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstones).toHaveLength(1);
+    // The release is lifted to the destroy rather than the key lowered to it.
+    expect(tombstones[0]).toMatchObject({ destroyed_at: destroyedAt, released_at: destroyedAt });
+  });
+});
+
+/**
+ * A second managed disk tagged `agent=<name>` beside the row's own: a launch
+ * whose volume id never reached the row, or the duplicate `doctor` reports.
+ */
+function addTaggedDisk(backend: MemoryBackend, row: Agent, volumeId: string): void {
+  backend.volumes.set(volumeId, {
+    ...backend.volumes.get(volumeOf(row))!,
+    volume_id: volumeId,
+    agent: row.name,
+    role: "data",
+    attached_to: null,
+    state: "available",
+  });
+}
+
+/** The warn a release yields for a disk it swept off the name. */
+function sweptWarnings(
+  events: Array<{ message: string; level?: string | undefined }>,
+  volumeId: string,
+) {
+  return events.filter(
+    (e) =>
+      e.level === "warn" &&
+      e.message.includes(`volume ${volumeId} `) &&
+      e.message.includes("was still tagged agent="),
+  );
+}
+
+/**
+ * §6.7: a release leaves no disk tagged `agent=<name>`. Every one besides the
+ * row's own is moved off the name to `former_agent=<name>` and reported —
+ * never deleted, because the row never named it — so the next plain `create`
+ * cannot adopt it by tag.
+ */
+describe("other disks still tagged for the name", () => {
+  test("a crash after a keep retag beside a duplicate: the retry releases the name, both disks kept", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const own = volumeOf(row);
+    addTaggedDisk(backend, row, "vol-dup");
+
+    const append = backend.store.events.appendTombstone;
+    let crashed = false;
+    backend.store.events.appendTombstone = async (t) => {
+      if (!crashed) {
+        crashed = true;
+        throw new HermeticError("INTERNAL", "the laptop lost its network", {});
+      }
+      return append(t);
+    };
+    await expect(
+      drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true })),
+    ).rejects.toThrow(HermeticError);
+    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroying");
+
+    backend.resetMutations();
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    for (const id of [own, "vol-dup"]) {
+      expect(backend.volumes.get(id)).toMatchObject({ agent: null, former_agent: "atlas" });
+    }
+    expect(await backend.compute.findVolumeByTag("atlas")).toBeNull();
+    const tombstones = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstones).toHaveLength(1);
+    expect(tombstones[0]).toMatchObject({ volume_id: own, volume_kept: true });
+  });
+
+  for (const keep_volume of [false, true]) {
+    test(`a row pointed at an earlier released disk: destroy${keep_volume ? " --keep-volume" : ""} moves the real one off the name`, async () => {
+      const { backend, hermetic, row } = await created("atlas");
+      const real = volumeOf(row);
+      const old = "vol-released-earlier";
+      backend.volumes.set(old, {
+        ...backend.volumes.get(real)!,
+        volume_id: old,
+        agent: null,
+        former_agent: "atlas",
+        attached_to: null,
+        state: "available",
+      });
+      const current = backend.agents.get("atlas")!;
+      backend.agents.set("atlas", {
+        ...current,
+        volume_id: old,
+        resources: { ...current.resources, volume_id: old },
+      });
+
+      backend.resetMutations();
+      const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume }));
+
+      expect(await backend.store.agents.get("atlas")).toBeNull();
+      expect(backend.mutations).not.toContain("compute.deleteVolume");
+      expect(backend.volumes.get(real)).toMatchObject({ agent: null, former_agent: "atlas" });
+      expect(backend.volumes.get(old)).toMatchObject({ agent: null, former_agent: "atlas" });
+      expect(sweptWarnings(events, real)).toHaveLength(1);
+      expect(sweptWarnings(events, old)).toHaveLength(0);
+      expect(await backend.compute.findVolumeByTag("atlas")).toBeNull();
+    });
+  }
+
+  test("a row naming no volume while a disk carries the name: the disk is moved off it, not deleted", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const real = volumeOf(row);
+    const current = backend.agents.get("atlas")!;
+    const { volume_id: _dropped, ...resources } = current.resources;
+    backend.agents.set("atlas", { ...current, volume_id: null, resources });
+
+    backend.resetMutations();
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    expect(await backend.store.agents.get("atlas")).toBeNull();
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    expect(backend.volumes.get(real)).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(sweptWarnings(events, real)).toHaveLength(1);
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone).toMatchObject({ volume_id: null, volume_kept: false });
+  });
+
+  test("a create over a legacy row moves a stray tagged disk off the name and starts fresh", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    addTaggedDisk(backend, row, "vol-dup");
+    backend.advance(HOUR);
+
+    const events = await drain(hermetic.agents.create({ name: "atlas" }));
+
+    expect(backend.volumes.get("vol-dup")).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(sweptWarnings(events, "vol-dup")).toHaveLength(1);
+    const again = (await backend.store.agents.get("atlas"))!;
+    expect([volumeOf(row), "vol-dup"]).not.toContain(volumeOf(again));
+  });
+});
+
+/**
+ * §6.7: a tombstone's key is its `destroyed_at`. Under a frozen clock every
+ * reading is the same instant, so each life of a name must still land on a
+ * key of its own — or a destroy overwrites its predecessor's tombstone.
+ */
+describe("tombstone keys under a frozen clock", () => {
+  test("three lives of one name leave three tombstones and three release events", async () => {
+    const { backend, hermetic } = await created("atlas");
+    // No `advance` anywhere.
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    for (let i = 0; i < 2; i++) {
+      await drain(hermetic.agents.create({ name: "atlas" }));
+      await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    }
+
+    const tombstones = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstones).toHaveLength(3);
+    expect(new Set(tombstones.map((t) => t.destroyed_at)).size).toBe(3);
+    expect(new Set(tombstones.map((t) => t.created_at)).size).toBe(3);
+    for (const t of tombstones) expect(t.destroyed_at > t.created_at).toBe(true);
+    const releases = (await backend.store.events.query("atlas")).filter((e) => e.action === "release");
+    expect(releases).toHaveLength(3);
+    expect(new Set(releases.map((e) => e.timestamp)).size).toBe(3);
+  });
+});
+
+/**
+ * §6.7: adopting a released disk sets `agent=<name>` and then removes
+ * `former_agent` — two calls. A crash between them leaves the shape an
+ * interrupted release also leaves; the resumed create must finish the
+ * adoption, or a later plain destroy would keep a disk it should delete.
+ */
+describe("an adoption interrupted between its two tag calls", () => {
+  test("the resumed create clears former_agent, and a plain destroy then deletes the disk", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    const kept = volumeOf(row);
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }));
+    backend.advance(HOUR);
+
+    const retag = backend.compute.retagVolume;
+    let crashed = false;
+    backend.compute.retagVolume = async (id, agent, opts) => {
+      if (!crashed && agent === "bravo") {
+        crashed = true;
+        // `CreateTags` landed (agent=bravo), `DeleteTags` (former_agent) never did.
+        backend.volumes.set(id, { ...backend.volumes.get(id)!, agent: "bravo", role: "data" });
+        throw new HermeticError("INTERNAL", "the laptop lost its network", {});
+      }
+      return retag(id, agent, opts);
+    };
+    await expect(drain(hermetic.agents.create({ name: "bravo", volume_id: kept }))).rejects.toThrow(
+      HermeticError,
+    );
+    backend.compute.retagVolume = retag;
+    expect(backend.volumes.get(kept)).toMatchObject({ agent: "bravo", former_agent: "atlas" });
+
+    const events = await drain(hermetic.agents.create({ name: "bravo", volume_id: kept }));
+    expect(backend.volumes.get(kept)!.agent).toBe("bravo");
+    expect(backend.volumes.get(kept)!.former_agent ?? null).toBeNull();
+    expect(events.some((e) => e.message.includes("cleared former_agent=atlas"))).toBe(true);
+
+    backend.resetMutations();
+    await drain(hermetic.agents.destroy({ name: "bravo", yes: true }));
+    expect(backend.mutations).toContain("compute.deleteVolume");
+    expect(backend.volumes.has(kept)).toBe(false);
+  });
+});
+
 describe("findVolumeByTag", () => {
   test("a volume tagged only former_agent=<name> is not found for <name>", async () => {
     const { backend, row } = await created("atlas");
@@ -610,5 +1134,91 @@ describe("findVolumeByTag", () => {
 
     await backend.compute.retagVolume(volumeId, null, { formerAgent: "atlas" });
     expect(await backend.compute.findVolumeByTag("atlas")).toBeNull();
+  });
+});
+
+/**
+ * §6.7: the release names every disk it swept off the name — in the warnings
+ * of whichever path released it, and durably on the `release` event, the only
+ * record of the move besides the tags themselves.
+ */
+describe("swept disks are reported", () => {
+  test("a legacy row that appears after the first read still reports its swept disk", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    makeLegacy(backend, row);
+    addTaggedDisk(backend, row, "vol-dup");
+    // The first read of the name misses the row, so the release happens in
+    // `classify` rather than above the claim.
+    const get = backend.store.agents.get;
+    let reads = 0;
+    backend.store.agents.get = async (name: string) => {
+      reads += 1;
+      if (name === "atlas" && reads === 1) return null;
+      return get(name);
+    };
+    backend.advance(HOUR);
+
+    const events = await drain(hermetic.agents.create({ name: "atlas" }));
+
+    expect(backend.volumes.get("vol-dup")).toMatchObject({ agent: null, former_agent: "atlas" });
+    expect(sweptWarnings(events, "vol-dup")).toHaveLength(1);
+    expect(events.some((e) => e.level === "warn" && e.message.startsWith("released atlas"))).toBe(true);
+  });
+
+  test("the release event lists the disks the sweep moved", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    addTaggedDisk(backend, row, "vol-dup");
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const [release] = (await backend.store.events.query("atlas")).filter((e) => e.action === "release");
+    expect(release!.detail).toContain("vol-dup");
+    expect(release!.detail).toContain("former_agent=atlas");
+  });
+
+  test("a release that swept nothing says so plainly", async () => {
+    const { backend, hermetic } = await created("atlas");
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    const [release] = (await backend.store.events.query("atlas")).filter((e) => e.action === "release");
+    expect(release!.detail).toBe("name released; tombstone written");
+  });
+});
+
+/**
+ * The row's `created_at` and the events table are both writable by the box, so
+ * a far-future instant in either must neither key a tombstone there nor take
+ * the name's floor away.
+ */
+describe("far-future instants a box can write", () => {
+  test("a row whose created_at is in the year 3000 is keyed at now", async () => {
+    const { backend, hermetic } = await created("atlas");
+    backend.advance(HOUR);
+    backend.agents.set("atlas", {
+      ...backend.agents.get("atlas")!,
+      created_at: "3000-01-01T00:00:00.000Z",
+    });
+
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+
+    const [tombstone] = await backend.store.events.queryTombstones({ name: "atlas" });
+    expect(tombstone!.created_at).toBe("3000-01-01T00:00:00.000Z");
+    expect(tombstone!.destroyed_at).toBe(backend.now().toISOString());
+  });
+
+  test("a planted future tombstone does not take the floor from the genuine one before it", async () => {
+    const { backend, hermetic, row } = await created("atlas");
+    // No `advance`: under a frozen clock the next life is born only because of
+    // the floor, one millisecond past the last life's end.
+    await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    const [genuine] = await backend.store.events.queryTombstones({ name: "atlas" });
+    const future = new Date(backend.now().getTime() + 24 * HOUR).toISOString();
+    await backend.store.events.appendTombstone(
+      forgedTombstone(backend, row, { created_at: future, destroyed_at: future }),
+    );
+
+    await drain(hermetic.agents.create({ name: "atlas" }));
+
+    const again = (await backend.store.agents.get("atlas"))!;
+    expect(again.created_at > genuine!.destroyed_at).toBe(true);
   });
 });
