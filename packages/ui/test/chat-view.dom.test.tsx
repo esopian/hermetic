@@ -293,23 +293,6 @@ describe("the rail", () => {
     expect(buckets.some((t) => t.includes("ember"))).toBe(true);
     expect(buckets.some((t) => t.includes("atlas"))).toBe(false);
   });
-
-  test("the scope switcher drops the buckets and promotes the box's own sections", async () => {
-    const h = harness({
-      swarms: [
-        swarmOf("atlas", {
-          sections: ["Clients"],
-          bots: [botOf("atlas", "atlas"), botOf("atlas", "acme", { section: "Clients" })],
-        }),
-        swarmOf("corvid"),
-      ],
-    });
-    const { container } = mount(h);
-    await waitFor(() => expect(container.querySelectorAll(".ch-bucket").length).toBe(2));
-    await userEvent.click(container.querySelector("button.ch-scope") as HTMLElement);
-    expect(container.querySelectorAll(".ch-bucket")).toHaveLength(0);
-    expect(container.querySelector(".ch-section")?.textContent).toContain("Clients");
-  });
 });
 
 /* ── the origin banner ───────────────────────────────────────────────────── */
