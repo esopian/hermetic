@@ -75,26 +75,29 @@ const OTHER_FLEET = {
  * real route does the same, and the whole point of the guard is that the plan
  * on screen is a function of the inputs, so a fixed plan would test nothing.
  */
-function planFor(deleteVolume: boolean): Plan {
+function planFor(keepVolume: boolean): Plan {
   return {
     kind: "destroy",
     target: "lumen",
     options: {
-      delete_volume: deleteVolume,
+      keep_volume: keepVolume,
       agent_version: 1,
       instance_id: "i-1",
       volume_id: "vol-1",
+      created_at: "2026-01-01T00:00:00.000Z",
     },
     steps: [
       { id: "instance", description: "terminate i-1", destructive: true },
       {
         id: "volume",
-        description: deleteVolume ? "delete data volume vol-1" : "keep data volume vol-1",
-        destructive: deleteVolume,
+        description: keepVolume
+          ? "keep data volume vol-1, released from the name"
+          : "delete data volume vol-1",
+        destructive: !keepVolume,
       },
-      { id: "row", description: "keep the row as a record", destructive: false },
+      { id: "row", description: "delete the row; the tombstone keeps the record", destructive: false },
     ],
-    warnings: ["the data volume is kept"],
+    warnings: ["the data volume is deleted by default"],
   } as unknown as Plan;
 }
 
@@ -106,7 +109,7 @@ function routes(over: Record<string, unknown> = {}) {
     "agents.history": [],
     "ops.list": { ops: [] },
     "agents.probe": { error: { code: "NOT_ASKED", message: "no probe here" } },
-    "plan.destroy": (call: TransportCall) => planFor(call.params.delete_volume === true),
+    "plan.destroy": (call: TransportCall) => planFor(call.params.keep_volume === true),
     apply: { op_id: "op-77" },
     ...over,
   };
@@ -202,7 +205,7 @@ describe("AgentDrawer · destroy", () => {
     await openConfirm(user);
 
     expect(server.to("plan.destroy").length).toBe(1);
-    expect(screen.getByText(/the data volume is kept/)).toBeTruthy();
+    expect(screen.getByText(/the data volume is deleted by default/)).toBeTruthy();
   });
 
   test("the wrong name leaves the button dead; the right one arms it", async () => {
@@ -252,22 +255,22 @@ describe("AgentDrawer · destroy", () => {
     expect(FakeStream.last("ops.subscribe").params).toMatchObject({ op_id: "op-77" });
   });
 
-  test("the volume choice is what puts `delete_volume` on both the plan and the call", async () => {
+  test("the volume choice is what puts `keep_volume` on both the plan and the call", async () => {
     server = fakeServer(routes());
     const user = userEvent.setup();
     render(<Host />);
     await openConfirm(user);
 
-    expect(server.to("plan.destroy")[0]?.params).toMatchObject({ delete_volume: false });
+    expect(server.to("plan.destroy")[0]?.params).toMatchObject({ keep_volume: false });
 
-    await user.click(screen.getByRole("radio", { name: /Delete data volume/ }));
+    await user.click(screen.getByRole("radio", { name: /Keep volume/ }));
     // Re-planned, because the plan the operator is confirming has changed.
     await waitFor(() =>
-      expect(server?.to("plan.destroy")[1]?.params).toMatchObject({ delete_volume: true }),
+      expect(server?.to("plan.destroy")[1]?.params).toMatchObject({ keep_volume: true }),
     );
 
     // The replacement plan has to be on screen before the button will arm.
-    await screen.findByText(/delete data volume vol-1/);
+    await screen.findByText(/keep data volume vol-1/);
     await user.type(screen.getByLabelText("Type the agent name to confirm"), "lumen");
     await user.click(screen.getByRole("button", { name: "Destroy" }));
     await waitFor(() => expect(server?.to("apply").length).toBe(1));
@@ -309,7 +312,8 @@ describe("AgentDrawer · destroy", () => {
     expect(screen.getByText("Remove the node from the tailnet")).toBeTruthy();
     expect(screen.getByText("Delete the agent's SSM parameters")).toBeTruthy();
     expect(screen.getByText("Remove config objects from the bucket")).toBeTruthy();
-    expect(screen.getByText("Keep the data volume, or delete it if asked")).toBeTruthy();
+    expect(screen.getByText("Delete the data volume, or release it if kept")).toBeTruthy();
+    expect(screen.getByText("Write the tombstone and free the name")).toBeTruthy();
     expect(screen.getByText("Destroyed")).toBeTruthy();
 
     // Create's wording, and the raw key, are both gone.
@@ -347,7 +351,7 @@ describe("AgentDrawer · destroy", () => {
           if (hold) await hold;
           return fails
             ? errorBody("OFFLINE", "the plan could not be read")
-            : planFor(call.params.delete_volume === true);
+            : planFor(call.params.keep_volume === true);
         },
       }),
     );
@@ -365,13 +369,13 @@ describe("AgentDrawer · destroy", () => {
     //    something — the inputs never moved, so the confirmation still stands.
     fails = false;
     await user.click(screen.getByRole("button", { name: "Retry plan" }));
-    await screen.findByText(/keep data volume vol-1/);
+    await screen.findByText(/delete data volume vol-1/);
     await waitFor(() => expect(button().disabled).toBe(false));
 
-    // 3. Ticking the volume box invalidates that plan: the confirmation is
+    // 3. Changing the volume choice invalidates that plan: the confirmation is
     //    cleared and the button stays dead while the replacement is in flight.
     holdPlan();
-    await user.click(screen.getByRole("radio", { name: /Delete data volume/ }));
+    await user.click(screen.getByRole("radio", { name: /Keep volume/ }));
     expect((screen.getByLabelText("Type the agent name to confirm") as HTMLInputElement).value).toBe(
       "",
     );
@@ -380,7 +384,7 @@ describe("AgentDrawer · destroy", () => {
     await act(async () => {
       release();
     });
-    await screen.findByText(/delete data volume vol-1/);
+    await screen.findByText(/keep data volume vol-1/);
     await waitFor(() => expect(button().disabled).toBe(false));
 
     // 4. Switching the fleet under the panel does the same: same agent name,

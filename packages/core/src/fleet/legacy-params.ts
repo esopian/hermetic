@@ -165,9 +165,11 @@ export async function readFleetScope(
  * The pre-v3 prefixes this fleet owns: one per agent name in its own table,
  * plus the two fixed fleet-level layouts.
  *
- * `agents` must be every row the fleet's table holds, destroyed ones included —
- * `destroy` sweeps an agent's slots, but a half-finished one leaves them, and
- * they are exactly what `--purge` exists to find.
+ * `agents` must be every name the fleet has held: every row its table holds,
+ * legacy `destroyed` ones included, plus every tombstone's name (§6.7) — a
+ * destroy now deletes the row, so the tombstone is the only record left of a
+ * name. `destroy` sweeps an agent's slots, but a half-finished one leaves
+ * them, and they are exactly what `--purge` exists to find.
  *
  * An agent whose name happens to equal a fleet id the directory lists is
  * skipped: `/hermes/<that>/` is ambiguous with that fleet's own scoped root,

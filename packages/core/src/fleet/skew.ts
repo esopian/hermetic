@@ -30,9 +30,9 @@ import { SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
 /**
  * Statuses that take no part in a skew count.
  *
- * `destroyed` is a tombstone — the row outlives the box by design (§4.3) and
- * counting it would keep a fleet permanently "3 agents affected" after the
- * three were deleted. `creating` is the other end of the same argument: the box
+ * `destroyed` is a legacy row — a destroy now deletes the row (§6.7), but a
+ * pre-tombstone one still sits in the table — and counting it would keep a
+ * fleet permanently "3 agents affected" after the three were deleted. `creating` is the other end of the same argument: the box
  * does not exist yet, has reported no version, and is by definition being built
  * by *this* build, so it can be neither behind nor drifted.
  *

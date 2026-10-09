@@ -80,7 +80,6 @@ export function FleetBoard({
   tailnet,
   fleetId,
   volumes,
-  showDestroyed,
   onSelect,
   onCreateOnVolume,
   onSeeVolumes,
@@ -91,14 +90,13 @@ export function FleetBoard({
   fleetId?: string | null;
   /** The inventory, so a card can say what its volume is actually doing. */
   volumes: VolumeView[];
-  showDestroyed: boolean;
   onSelect: (name: string) => void;
   onCreateOnVolume: (v: VolumeView) => void;
   onSeeVolumes: () => void;
 }) {
   const listening = useListeningIfAvailable();
   const now = Date.now();
-  const board = boardVolumes(volumes, agents, showDestroyed);
+  const board = boardVolumes(volumes, agents);
   return (
     <div className="board">
       {agents.map((a) => {

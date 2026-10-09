@@ -105,3 +105,56 @@
   padding: 0 28px;
   font-size: 16px;
 }
+
+/* ── Destroyed lens (§6.7) ──────────────────────────────────────────────── */
+
+/* The table beside its read-only detail panel; the panel is not an overlay. */
+.destroyed-lens {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.destroyed-table {
+  min-width: 1100px;
+}
+.destroyed-table .trow {
+  grid-template-columns: minmax(220px, 1.2fr) 150px minmax(160px, 1fr) 260px minmax(240px, 1fr) 80px;
+}
+.destroyed-table .tbody-row {
+  color: var(--fg2);
+}
+.destroyed-by {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.destroyed-sub {
+  color: var(--fg3);
+}
+.destroyed-kept {
+  color: var(--text-accent, var(--acc));
+  font-weight: 700;
+}
+.destroyed-detail {
+  width: 520px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-left: 3px solid var(--fg);
+  padding: 20px 24px;
+  background: var(--bg);
+}
+.destroyed-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.destroyed-detail-head h2 {
+  margin: 4px 0 0;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.destroyed-detail .logpane {
+  margin-top: 10px;
+}

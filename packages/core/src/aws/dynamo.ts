@@ -1,5 +1,5 @@
 import type { AttributeValue, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import type { ScanCommandOutput } from "@aws-sdk/lib-dynamodb";
+import type { QueryCommandOutput, ScanCommandOutput } from "@aws-sdk/lib-dynamodb";
 import {
   DeleteCommand,
   DynamoDBDocumentClient,
@@ -10,14 +10,20 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import type { Agent, AgentEvent, FleetItem, FleetSettings } from "../schema/index.ts";
+import type { Agent, AgentEvent, AgentTombstone, FleetItem, FleetSettings } from "../schema/index.ts";
 import {
   Agent as AgentSchema,
   AgentEvent as AgentEventSchema,
+  DESTROYED_KEY,
   FLEET_KEY,
   FleetItem as FleetItemSchema,
+  TombstoneItem as TombstoneItemSchema,
   VOLUME_CLAIM_PREFIX,
+  fromTombstoneItem,
   isReservedRowKey,
+  toTombstoneItem,
+  tombstoneNamePrefix,
+  tombstonesNewestFirst,
   volumeClaimKey,
   volumeIdOfClaimKey,
 } from "../schema/index.ts";
@@ -315,11 +321,70 @@ class DynamoAgentStore implements AgentStore {
     return rows;
   }
 
-  async delete(name: string): Promise<void> {
+  /**
+   * Unconditional for the unwind of a failed `create`; conditional on the
+   * version *and* the `created_at` for the release at the end of `destroy`
+   * (§6.7). The version alone is not an identity: a later incarnation of the
+   * same name starts again from a low version, so a release that stalled past
+   * its lock could otherwise delete a newer agent that happens to sit at the
+   * version it read. `created_at` is set once when a row is born and never
+   * written again, so the pair names one incarnation at one moment. The
+   * conditional form reads the refused item back in the same round trip, as
+   * `update` does, to tell a row a concurrent writer moved or replaced
+   * (`CONFLICT`) from a row already gone (a no-op: the release it wanted has
+   * happened).
+   */
+  async delete(
+    name: string,
+    opts?: { expectedVersion: number; expectedCreatedAt: string },
+  ): Promise<void> {
     if (isReservedRowKey(name)) {
       throw new HermeticError("UNSUPPORTED", `${name} is a reserved row, not an agent`, { name });
     }
-    await this.doc.send(new DeleteCommand({ TableName: await this.table.get(), Key: { name } }));
+    if (opts === undefined) {
+      await this.doc.send(new DeleteCommand({ TableName: await this.table.get(), Key: { name } }));
+      return;
+    }
+    const { expectedVersion, expectedCreatedAt } = opts;
+    try {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: await this.table.get(),
+          Key: { name },
+          ConditionExpression:
+            "attribute_exists(#name) AND #version = :expected AND #created_at = :created_at",
+          ExpressionAttributeNames: {
+            "#name": "name",
+            "#version": "version",
+            "#created_at": "created_at",
+          },
+          ExpressionAttributeValues: { ":expected": expectedVersion, ":created_at": expectedCreatedAt },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+        }),
+      );
+    } catch (e) {
+      if (isAwsError(e, "ConditionalCheckFailedException")) {
+        const item = refusedItem(e);
+        if (!item) return;
+        const actual = typeof item["version"] === "number" ? item["version"] : null;
+        const actualCreatedAt = typeof item["created_at"] === "string" ? item["created_at"] : null;
+        const replaced = actualCreatedAt !== expectedCreatedAt;
+        throw new HermeticError(
+          "CONFLICT",
+          replaced
+            ? `agent ${name} is a different incarnation now (created ${actualCreatedAt ?? "?"}, expected ${expectedCreatedAt}); the record was not deleted`
+            : `agent ${name} changed underneath this operation (expected version ${expectedVersion}, found ${actual ?? "?"}); the record was not deleted`,
+          {
+            name,
+            expected: expectedVersion,
+            actual,
+            expected_created_at: expectedCreatedAt,
+            actual_created_at: actualCreatedAt,
+          },
+        );
+      }
+      throw asHermeticError(e, `could not delete agent ${name}`);
+    }
   }
 }
 
@@ -358,6 +423,95 @@ class DynamoEventStore implements EventStore {
       if (limit !== undefined && rows.length >= limit) return rows.slice(0, limit);
     } while (start);
     return rows;
+  }
+
+  /**
+   * One item under the reserved `_destroyed` partition (§6.7). A plain put:
+   * the range key is `<name>#<destroyed_at>`, so a retry of the same write
+   * lands on the same key and replaces it with identical content.
+   */
+  async appendTombstone(tombstone: AgentTombstone): Promise<void> {
+    try {
+      await this.doc.send(
+        new PutCommand({ TableName: await this.table.get(), Item: { ...toTombstoneItem(tombstone) } }),
+      );
+    } catch (e) {
+      throw asHermeticError(e, `could not record the destroy of ${tombstone.name}`);
+    }
+  }
+
+  /**
+   * Newest first, two ways (§4.2). The range key is `<name>#<destroyed_at>`
+   * (`tombstoneSortKey`), so:
+   *
+   * - With `name`, a key condition — `begins_with` on the name's prefix,
+   *   separator included — selects that name's items and nothing else, and a
+   *   reverse query returns them newest first. No filter: DynamoDB reads only
+   *   the matching items, and its `Limit` is handed the remaining budget page
+   *   by page, so `limit: 1` costs one item, not the partition.
+   * - Without `name`, the partition sorts by name, not time, so every page is
+   *   read, the result sorted by `destroyed_at` (`tombstonesNewestFirst`), and
+   *   the limit applied to the sorted list — never to the walk, which would
+   *   return the alphabetically last names rather than the newest.
+   *
+   * An item that does not parse as a `TombstoneItem` is skipped, not thrown:
+   * the events table is writable by the boxes, and one malformed item under
+   * `_destroyed` must not take down the destroyed view, the archive, a plan or
+   * a create for every other name. That includes an item whose range key is
+   * not the one its own `agent` and `destroyed_at` derive (`TombstoneItem`),
+   * so a forgery keyed into one name's range cannot pose as another's. The
+   * limit counts parsed tombstones — a skipped item spends DynamoDB's `Limit`
+   * on its page but not the caller's, and the walk goes on while a page
+   * remains — so `limit: 1` returns the newest *readable* one. A malformed
+   * newest item reads as absent, which for `predecessorFloor` only means the
+   * floor comes from the tombstone before it, the same answer a future-dated
+   * (forged) one gets. The skip is silent: `agents.destroyed` returns a bare
+   * list, and a count would change that result's shape in every head (§9).
+   */
+  async queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> {
+    const name = opts?.name;
+    const limit = opts?.limit;
+    const rows: AgentTombstone[] = [];
+    let start: Record<string, unknown> | undefined;
+    do {
+      let out: QueryCommandOutput;
+      try {
+        out = await this.doc.send(
+          new QueryCommand({
+            TableName: await this.table.get(),
+            ...(name === undefined
+              ? {
+                  KeyConditionExpression: "#name = :pk",
+                  ExpressionAttributeNames: { "#name": "name" },
+                  ExpressionAttributeValues: { ":pk": DESTROYED_KEY },
+                }
+              : {
+                  KeyConditionExpression: "#name = :pk AND begins_with(#ts, :prefix)",
+                  ExpressionAttributeNames: { "#name": "name", "#ts": "timestamp" },
+                  ExpressionAttributeValues: {
+                    ":pk": DESTROYED_KEY,
+                    ":prefix": tombstoneNamePrefix(name),
+                  },
+                  ...(limit === undefined ? {} : { Limit: limit - rows.length }),
+                }),
+            ScanIndexForward: false,
+            ...(start ? { ExclusiveStartKey: start } : {}),
+          }),
+        );
+      } catch (e) {
+        throw readError(e, "could not read the destroyed-agent records");
+      }
+      for (const item of out.Items ?? []) {
+        const parsed = TombstoneItemSchema.safeParse(item);
+        if (!parsed.success) continue;
+        rows.push(fromTombstoneItem(parsed.data));
+        if (name !== undefined && limit !== undefined && rows.length >= limit) return rows;
+      }
+      start = out.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (start);
+    if (name !== undefined) return rows;
+    rows.sort(tombstonesNewestFirst);
+    return limit === undefined ? rows : rows.slice(0, limit);
   }
 }
 

@@ -117,6 +117,8 @@ export interface LocalChatSessions {
   ): void;
   /** Which of these session ids this laptop opened. Never more than it knows. */
   mine(fleet: string | null, sessions: readonly string[]): Set<string>;
+  /** Drop every session this laptop recorded against `instance` in `fleet` (§6.7). */
+  forgetInstance(fleet: string | null, instance: string): void;
 }
 
 /**
@@ -127,6 +129,8 @@ export interface LocalChatSessions {
  */
 export class MemoryLocalChatSessions implements LocalChatSessions {
   private readonly rows = new Map<string, string>();
+  /** Which instance each key was recorded against, for `forgetInstance`. */
+  private readonly instances = new Map<string, string>();
 
   private key(fleet: string | null, session: string): string {
     return `${fleet ?? "-"}\u0000${session}`;
@@ -137,7 +141,18 @@ export class MemoryLocalChatSessions implements LocalChatSessions {
     where: { instance: string; bot: string; session: string },
     at: string,
   ): void {
-    this.rows.set(this.key(fleet, where.session), at);
+    const key = this.key(fleet, where.session);
+    this.rows.set(key, at);
+    this.instances.set(key, where.instance);
+  }
+
+  forgetInstance(fleet: string | null, instance: string): void {
+    const head = this.key(fleet, "");
+    for (const [key, owner] of [...this.instances]) {
+      if (owner !== instance || !key.startsWith(head)) continue;
+      this.rows.delete(key);
+      this.instances.delete(key);
+    }
   }
 
   mine(fleet: string | null, sessions: readonly string[]): Set<string> {

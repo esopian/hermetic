@@ -31,8 +31,10 @@ export function createVolumeAdoption(deps: { backend: Backend; volumeClaims: Vol
    * - still owned by a live agent row → `CONFLICT`; that agent's `recreate` is
    *   the command that wants it back.
    *
-   * A `destroyed` row owning it is not a refusal: the row is kept forever (§4.3)
-   * and its volume is exactly the memory this create exists to read again.
+   * A `destroyed` row owning it is not a refusal: that is a legacy row (a
+   * destroy now deletes the row and leaves the kept volume tagged
+   * `former_agent`, §6.7), and its volume is exactly the memory this create
+   * exists to read again.
    */
   async function resolveAdopted(
     volumeId: string,

@@ -31,6 +31,7 @@ import type { NotificationStore } from "./chat/notifications.ts";
 import type { LocalChatSessions } from "./chat/chat.ts";
 import type { ChatFenceStore } from "./chat/chat-fence.ts";
 import type { InstanceListeningStore } from "./chat/instance-listening.ts";
+import type { IncarnationStore } from "./local/incarnations.ts";
 import type { PresetStore } from "./local/create-presets.ts";
 
 export interface OpOptions {
@@ -157,6 +158,12 @@ export interface HermeticDeps {
   chatFence?: ChatFenceStore;
   instanceListening?: InstanceListeningStore;
   /**
+   * Which incarnation of each agent name this laptop's local state describes
+   * (`local/incarnations.ts`, §6.7). Local, beside the tables it guards. Absent
+   * means an in-process record, which reconciles within one process's life.
+   */
+  incarnations?: IncarnationStore;
+  /**
    * §4.6's create presets: one `prefs` row on this laptop. Absent — tests, a
    * home-less instance — an in-process store stands in, which reads as the
    * built-ins until something is set.
@@ -197,9 +204,11 @@ export interface HermeticDeps {
   mirrorDir?: string;
   /**
    * How often the unbounded data-volume attach polls, and how often it says so
-   * (`attach.ts`). Tests shrink both; nothing else sets them.
+   * (`attach.ts`), and how long `destroy` and `recreate` wait for the agent's
+   * tailnet devices to read offline (`TAILNET_OFFLINE_WAIT_MS`). Tests shrink all three; nothing else
+   * sets them.
    */
-  attach?: { pollMs?: number; progressMs?: number };
+  attach?: { pollMs?: number; progressMs?: number; tailnetOfflineMs?: number };
   /**
    * `agents.probe`'s laptop-side HTTP client and per-layer timeout (§9). The
    * `fetch` exists for the same reason the Tailscale preflight's probes are

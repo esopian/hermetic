@@ -71,6 +71,13 @@ export interface ChatFenceStore {
   renew(fleet: string | null, instance: string, bot: string, owner: string, expiresAt: string): boolean;
   /** Drops the claim only if `owner` still holds it. */
   clear(fleet: string | null, instance: string, bot: string, owner: string): void;
+  /**
+   * Drops every claim on `instance`'s bots, whoever holds it. Not `clear`: a
+   * released name has no live turn left to be owed a fence, and a claim the
+   * next agent of that name inherited would defer its first roster reads for up
+   * to a TTL (§6.7).
+   */
+  forgetInstance(fleet: string | null, instance: string): void;
 }
 
 /**
@@ -146,6 +153,13 @@ export class MemoryChatFenceStore implements ChatFenceStore {
   clear(fleet: string | null, instance: string, bot: string, owner: string): void {
     const key = keyOf(fleet, instance, bot);
     if (this.rows.get(key)?.owner === owner) this.rows.delete(key);
+  }
+
+  forgetInstance(fleet: string | null, instance: string): void {
+    for (const key of [...this.rows.keys()]) {
+      const [f, i] = JSON.parse(key) as [string | null, string, string];
+      if (f === fleet && i === instance) this.rows.delete(key);
+    }
   }
 }
 

@@ -20,8 +20,14 @@ const HEARTBEAT_EXPECTED: readonly AgentStatus[] = ["bootstrapping", "ready", "d
  *   error → bootstrapping         (`agent rerun`, or a recreate)
  *   ready ⇄ degraded
  *   ready → stopping → stopped → (start) → bootstrapping
- *   any   → destroying → destroyed
+ *   any   → destroying → (row deleted; name released, §6.7)
  *   any   → error
+ *
+ * `destroyed` is legacy only. Destroy used to end on it and keep the row
+ * forever; it now ends by deleting the row (`lifecycle/release-name.ts`), so
+ * the status survives only on rows destroyed before tombstones existed and on
+ * old events' `to_status`. Those rows are released the first time a destroy or
+ * a create touches them — never moved out of `destroyed` by a transition.
  */
 export const TRANSITIONS: Readonly<Record<AgentStatus, readonly AgentStatus[]>> = {
   creating: ["bootstrapping", "destroying", "error"],
@@ -34,7 +40,8 @@ export const TRANSITIONS: Readonly<Record<AgentStatus, readonly AgentStatus[]>> 
   // `start` boots a fresh instance, which re-runs bootstrap.
   stopped: ["bootstrapping", "destroying", "error"],
   destroying: ["destroyed", "error"],
-  // Terminal. Events survive; the row is never resurrected.
+  // Terminal, and legacy only: nothing writes it now (§6.7). A legacy row is
+  // released — deleted — rather than moved anywhere.
   destroyed: [],
   // `error` is recoverable by `agent rerun` or recreate (→ bootstrapping), or
   // by giving up (→ destroying).

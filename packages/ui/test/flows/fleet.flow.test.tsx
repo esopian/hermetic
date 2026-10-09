@@ -3,7 +3,7 @@
  *
  * **What the original asserted** (`tests/e2e/fleet.e2e.ts`): that the fleet
  * table renders every seeded agent under the twelve documented columns and
- * hides the destroyed `oriole` until the toolbar asks for it; that the account
+ * never the destroyed `oriole`, whose record is on the Destroyed lens; that the account
  * header — which is also the fleet switcher — is on every hash route carrying
  * the frozen account, region and alias; and that stopping an agent through its
  * drawer rewrites that agent's row in a page nobody reloaded, carried there by
@@ -124,11 +124,13 @@ describe("the fleet, over a real head", () => {
       ).toBeDefined();
     }
 
-    // `oriole` is destroyed, and the dashboard hides it until the toolbar asks.
+    // `oriole` is destroyed: a destroy deletes the row (§6.7), so it is on no
+    // layout, and its record is on the Destroyed lens instead.
     expect(within(table).queryAllByRole("row", { name: /^oriole/ }).length).toBe(0);
     await user.click(screen.getByRole("button", { name: /destroyed$/ }));
+    const audit = await screen.findByRole("table", { name: "Destroyed agents" });
     await waitFor(() => {
-      expect(screen.getByRole("row", { name: "oriole · destroyed" })).toBeDefined();
+      expect(within(audit).getByRole("row", { name: /^oriole · destroyed / })).toBeDefined();
     });
   });
 

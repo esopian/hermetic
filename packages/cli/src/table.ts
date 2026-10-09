@@ -4,6 +4,7 @@
  */
 import type {
   AgentEvent,
+  AgentTombstone,
   AgentView,
   DesktopAttach,
   ProbeLayer,
@@ -424,6 +425,40 @@ export function renderHistory(events: readonly AgentEvent[]): string {
     );
   }
   return blocks.length === 0 ? table : `${table}\n${blocks.join("\n")}`;
+}
+
+/** `3h ago · 2026-09-29T10:00:00.000Z`: the age for scanning, the instant for grepping. */
+function whenCell(at: string, now: number): string {
+  const ms = now - Date.parse(at);
+  return Number.isFinite(ms) ? `${formatAge(Math.max(0, ms))} ago · ${at}` : at;
+}
+
+/** What became of the data volume: kept (released from the name) or deleted. */
+function tombstoneVolume(t: AgentTombstone): string {
+  if (t.volume_id === null) return "-";
+  return `${t.volume_id} ${t.volume_kept ? "kept" : "deleted"}`;
+}
+
+/**
+ * §9 `agent destroyed`: one row per incarnation, newest first as core returns
+ * them. A destroyed agent has no row in `agent ps`; this is where it is
+ * reviewed. `legacy` marks a record synthesised from a pre-tombstone
+ * `destroyed` row.
+ */
+export function renderDestroyed(
+  tombstones: readonly AgentTombstone[],
+  now: number = Date.now(),
+): string {
+  if (tombstones.length === 0) return "no destroyed agents";
+  const rows = tombstones.map((t) => [
+    t.name,
+    whenCell(t.destroyed_at, now),
+    t.destroyed_by,
+    t.created_at,
+    tombstoneVolume(t),
+    t.legacy ? "legacy" : "",
+  ]);
+  return renderTable(rows, ["NAME", "DESTROYED", "BY", "CREATED", "VOLUME", ""]);
 }
 
 /**

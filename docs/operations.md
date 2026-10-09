@@ -179,9 +179,15 @@ A bump also has to reach the fleet bucket, because a box does not clone github.c
 | `agent stop <name>` | EC2 `StopInstances`; heartbeat stops, status → `stopped` | kept (attached, not billed for compute) |
 | `agent start <name>` | EC2 `StartInstances` on the existing instance; public IP changes (not an Elastic IP — nothing depends on it, Tailscale's address is what matters) | kept |
 | `agent recreate <name> --yes` | Terminates the instance, keeps the volume, re-runs the create sequence against the same volume — a from-scratch box, same data. Clears the row's `bootstrap` and `command` (a fresh bootstrap, not a resumed one) and sets `hermeticd_version` from the fleet manifest's current pointer | kept, reattached |
-| `agent destroy <name> --yes [--delete-volume]` | Terminates the instance, deletes SSM parameters and S3 config, marks the row `destroyed`. Events are never deleted. | **kept by default** — pass `--delete-volume` to actually remove it |
+| `agent destroy <name> --yes [--keep-volume]` | Terminates the instance, deletes its tailnet devices, SSM parameters and S3 config, deletes the data volume, waits for the instance to reach `terminated`, then releases the name: a tombstone is written and the agent row is deleted. Events are never deleted. The name is reusable at once, and a `create` of it is a brand-new agent. | **deleted by default** — pass `--keep-volume` to keep it. A kept volume is released from the name (`agent=<name>` becomes `hermetic:former_agent=<name>`), so a later `create` of the same name starts on a fresh disk; hand the old one over on purpose with `agent create <name> --volume vol-…` |
 
-`recreate` and `destroy` both refuse without `--yes` (`CONFIRMATION_REQUIRED`) and both go through `plan.recreate`/`plan.destroy` first if you want to see the steps before committing — `hermetic plan` prints what a destructive command would do without doing it.
+`recreate` and `destroy` both refuse without `--yes` (`CONFIRMATION_REQUIRED`) and both go through `plan.recreate`/`plan.destroy` first if you want to see the steps before committing — `hermetic plan` prints what a destructive command would do without doing it. `plan destroy` takes the same `--keep-volume`, and its volume step reads `delete` or `keep` accordingly.
+
+Destroy waits for the instance to be `terminated` before it releases the name, and the wait has no time limit; a slow EC2 termination shows as the `instance` phase sitting there, with the agent's lock renewed, and finishes when EC2 does. A destroy that died partway is finished by running it again.
+
+### Reviewing destroyed agents
+
+A destroyed agent has no row, so it is absent from `agent ps` and the dashboard's Agents lens. `hermetic agent destroyed [name] [--limit <n>] [--json]` lists what was destroyed, newest first: when, by whom, how long it lived, and whether its volume was kept or deleted (with the id). The dashboard's **Destroyed** lens, beside Agents and Volumes, shows the same table; a row opens a read-only panel with that incarnation's history. When a name has been reused, `hermetic agent history <name>` shows every incarnation back to back — pass a tombstone's `created_at` and `destroyed_at` (`agent destroyed <name> --json`) as `--since`/`--until` to read one life alone. Agents destroyed before tombstones existed appear as `legacy` entries; running `agent destroy <name>` (or `agent create <name>`) on one releases it, and its volume, if it still names one, is kept and released from the name, never deleted. A kept volume shows in `hermetic volume ls` under `no_agent`, *retained by* the former agent's name.
 
 ## Teardown
 
@@ -189,7 +195,7 @@ Deletes the whole CloudFormation foundation (VPC, subnets, security group, IAM r
 
 ### Prerequisite: destroy every agent first
 
-Teardown's first phase, `agents_check`, throws `AGENTS_EXIST` if any agent row is not `destroyed`. Run `hermetic agent destroy <name> --yes [--delete-volume]` for each agent (or accept the default of keeping their EBS volumes) before touching teardown at all — there is no flag that skips this check.
+Teardown's first phase, `agents_check`, throws `AGENTS_EXIST` if any agent row is left (a legacy `destroyed` row does not count). Run `hermetic agent destroy <name> --yes` for each agent — it deletes the agent's EBS volume unless you pass `--keep-volume`, and a kept one is what `--delete-volumes` below sweeps — before touching teardown at all; there is no flag that skips this check.
 
 ### See the plan first
 
@@ -211,7 +217,7 @@ hermetic teardown --yes [--confirm-account-id <12 digits>] \
 | `--yes` | required | gates the destructive command at all (`assertConfirmable`); does **not** by itself stand in for the account-id confirmation below |
 | `--no-purge` | purge on | skip deleting the SSM parameters under `/hermetic/` and `/hermes/` |
 | `--delete-snapshots` | off | also delete DLM snapshots tagged `hermetic:role=data` |
-| `--delete-volumes` | off | also delete leftover EBS volumes tagged `hermetic:managed=true` — **destroys any agent memory/skills left on them**, since they normally survive `agent destroy` |
+| `--delete-volumes` | off | also delete leftover EBS volumes tagged `hermetic:managed=true` — **destroys any agent memory/skills left on them**, i.e. the volumes of agents destroyed with `--keep-volume` (and of any destroyed before delete became the default) |
 | `--no-reset-local` | reset on | keep this home's frozen `config` row instead of clearing it back to uninitialized; the local run log is archived either way |
 | `--confirm-account-id <digits>` | none | supplies the typed-confirmation value non-interactively; without it, an interactive terminal prompts for the twelve digits, and a non-interactive one fails `CONFIRMATION_REQUIRED` |
 

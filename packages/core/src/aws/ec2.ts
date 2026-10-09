@@ -37,6 +37,8 @@ import type {
   ManagedVolumeRef,
   NetworkInterfaceRef,
   VolumeDetail,
+  OwnedVolumeStatus,
+  RetagVolumeOptions,
   RunInstanceSpec,
   SnapshotRef,
   TagSelector,
@@ -46,6 +48,7 @@ import type {
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
+  FORMER_AGENT_TAG,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
   ROLE_DATA,
@@ -324,6 +327,9 @@ export class Ec2Compute implements ComputeApi {
    *   holds an agent's memory is not a decision code gets to make.
    */
   async findVolumeByTag(name: string): Promise<VolumeRef | null> {
+    // `agent=<name>` only. A kept volume a destroy released carries
+    // `hermetic:former_agent=<name>` instead (§6.7), and must stay invisible
+    // here so a later `create` of the same name starts fresh.
     const out = await this.ec2.send(
       new DescribeVolumesCommand({
         Filters: [
@@ -438,8 +444,14 @@ export class Ec2Compute implements ComputeApi {
    * Every live managed instance tagged for this agent, paged out in full. AWS
    * does not enforce one box per agent tag, so a list is the only honest
    * answer: the caller picks which one is the agent's, and sees the rest.
+   * `shuttingDown` adds the boxes on their way out (see `ComputeApi`).
    */
-  async listInstancesByTag(name: string): Promise<InstanceRef[]> {
+  async listInstancesByTag(
+    name: string,
+    opts: { shuttingDown?: boolean } = {},
+  ): Promise<InstanceRef[]> {
+    const states = ["pending", "running", "stopping", "stopped"];
+    if (opts.shuttingDown) states.push("shutting-down");
     const results: InstanceRef[] = [];
     let token: string | undefined;
     do {
@@ -449,7 +461,7 @@ export class Ec2Compute implements ComputeApi {
             { Name: `tag:${AGENT_TAG}`, Values: [name] },
             { Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] },
             this.fleetFilter(),
-            { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+            { Name: "instance-state-name", Values: states },
           ],
           ...(token ? { NextToken: token } : {}),
         }),
@@ -508,7 +520,8 @@ export class Ec2Compute implements ComputeApi {
            * The instance only. Tagging `volume` here would stamp `agent=<name>`
            * and `hermetic:managed=true` onto the *root* volume as well, and
            * `findVolumeByTag` would then be free to return it — a resume would
-           * attach the root disk and `destroy --delete-volume` could delete it.
+           * attach the root disk and `destroy`, which deletes the data volume by
+           * default (§6.7), could delete it.
            * The data volume is tagged at `CreateVolume`, where it is the only
            * thing being tagged.
            */
@@ -675,14 +688,16 @@ export class Ec2Compute implements ComputeApi {
 
   /**
    * §6.7: the same describe, refusing a disk whose tags name another agent,
-   * another fleet, or a root device. `destroy --delete-volume` deletes the id
-   * the agent row carries, and that row is writable by the box.
+   * another fleet, or a root device. `destroy` deletes the id the agent row
+   * carries by default — `--keep-volume` instead releases it under
+   * `hermetic:former_agent` (§6.7) — and that row is writable by the box.
    */
-  async describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<VolumeStatus | null> {
+  async describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<OwnedVolumeStatus | null> {
     const found = await this.rawVolume(volumeId);
     if (found === null) return null;
-    assertResourceOwned("volume", volumeId, owner, tagMap(found.Tags), OWNED_VOLUME_ROLE);
-    return volumeStatus(found);
+    const tags = tagMap(found.Tags);
+    assertResourceOwned("volume", volumeId, owner, tags, OWNED_VOLUME_ROLE);
+    return { ...volumeStatus(found), former_agent: tags[FORMER_AGENT_TAG] ?? null };
   }
 
   /** `DescribeVolumes` for one id, with EC2's "never heard of it" read as gone. */
@@ -837,12 +852,34 @@ export class Ec2Compute implements ComputeApi {
    * is the only handle it has: the row that recorded the id is long gone.
    */
   async listManagedVolumes(): Promise<ManagedVolumeRef[]> {
+    return this.describeManagedVolumes([]);
+  }
+
+  /**
+   * `findVolumeByTag`'s query — `agent=<name>`, managed, this fleet, no role
+   * filter — paged to the end, and nothing else: no `role=data` label on a
+   * lone match, no `CONFLICT` on several. Read-only by construction, because
+   * the release that calls it (§6.7) is cleaning up exactly the duplicates
+   * `findVolumeByTag` refuses to choose between.
+   */
+  async listVolumesByAgentTag(name: string): Promise<ManagedVolumeRef[]> {
+    return this.describeManagedVolumes([{ Name: `tag:${AGENT_TAG}`, Values: [name] }]);
+  }
+
+  /** Every managed volume in this fleet matching `extra` too, paged, none going away. */
+  private async describeManagedVolumes(
+    extra: Array<{ Name: string; Values: string[] }>,
+  ): Promise<ManagedVolumeRef[]> {
     const results: ManagedVolumeRef[] = [];
     let token: string | undefined;
     do {
       const out = await this.ec2.send(
         new DescribeVolumesCommand({
-          Filters: [{ Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] }, this.fleetFilter()],
+          Filters: [
+            ...extra,
+            { Name: `tag:${MANAGED_TAG}`, Values: [MANAGED_TAG_VALUE] },
+            this.fleetFilter(),
+          ],
           ...(token ? { NextToken: token } : {}),
         }),
       );
@@ -853,7 +890,9 @@ export class Ec2Compute implements ComputeApi {
           volume_id: volume.VolumeId,
           size_gib: volume.Size ?? 0,
           agent: (volume.Tags ?? []).find((t) => t.Key === AGENT_TAG)?.Value ?? null,
+          former_agent: (volume.Tags ?? []).find((t) => t.Key === FORMER_AGENT_TAG)?.Value ?? null,
           state: volume.State ?? "unknown",
+          created_at: volume.CreateTime ? volume.CreateTime.toISOString() : null,
         });
       }
       token = out.NextToken;
@@ -906,6 +945,7 @@ export class Ec2Compute implements ComputeApi {
             availability_zone: volume.AvailabilityZone ?? null,
             created_at: volume.CreateTime ? volume.CreateTime.toISOString() : null,
             agent: tags[AGENT_TAG] ?? null,
+            former_agent: tags[FORMER_AGENT_TAG] ?? null,
             managed: tags[MANAGED_TAG] === MANAGED_TAG_VALUE,
             role_data: tags[ROLE_TAG] === ROLE_DATA,
             tags,
@@ -929,12 +969,15 @@ export class Ec2Compute implements ComputeApi {
    * `agent create --volume <id>` under a name the volume was not tagged with.
    * Both tags in one call: the `agent` tag is what `findVolumeByTag` reads, and
    * `role=data` is what keeps the pair unambiguous if the old name is ever
-   * reused.
+   * reused. `formerAgent` is the `hermetic:former_agent` tag a destroy that
+   * keeps the volume moves the name to (§6.7): set, removed (`null`), or left
+   * alone (absent), like `name`. `expectedAgent` makes removing `agent`
+   * conditional on its value (`ComputeApi.retagVolume`).
    */
   async retagVolume(
     volumeId: string,
     agent: string | null,
-    opts: { roleData?: boolean; name?: string | null } = {},
+    opts: RetagVolumeOptions = {},
   ): Promise<void> {
     const roleData = opts.roleData ?? true;
     /**
@@ -948,24 +991,52 @@ export class Ec2Compute implements ComputeApi {
      * no "set these tags and remove those" verb, so putting a volume back the
      * way `rollback.ts` found it — no agent tag, or no `role=data` — needs a
      * `DeleteTags` beside the `CreateTags`.
+     *
+     * The order is load-bearing: the `CreateTags` goes first. A release that
+     * keeps the volume sets `former_agent=<name>` there and removes `agent` in
+     * the `DeleteTags`, so a crash between the two leaves a volume carrying
+     * both — which `release-name.ts` reads as "kept", never as "this agent's
+     * disk to delete". The other order would leave a window in which the
+     * volume says nothing about the promise to keep it.
+     *
+     * The order does not make that pair unambiguous on its own: an adoption
+     * of a released disk (`create --volume`) sets `agent=<name>` here and
+     * removes `former_agent` in the `DeleteTags`, so a crash between its two
+     * calls leaves the same pair. The adopt path's resume tells them apart
+     * and finishes its own rewrite (`create-agent.ts`), so no row survives
+     * naming a disk an adoption left half-retagged.
      */
     const set: Record<string, string> = {
       [MANAGED_TAG]: MANAGED_TAG_VALUE,
       [FLEET_ID_TAG]: this.fleetId(),
     };
-    const remove: string[] = [];
-    if (agent === null) remove.push(AGENT_TAG);
-    else set[AGENT_TAG] = agent;
-    if (nameTag === null) remove.push("Name");
+    /**
+     * Each removal is a bare key, which `DeleteTags` deletes whatever its value
+     * — except `agent` under `expectedAgent`, which carries the value and so
+     * is deleted only while the volume still says that agent. The release's
+     * sweep lists a disk and writes it a moment later (§6.7), and in between
+     * another agent's adoption may have retagged it `agent=<other>`; an
+     * unconditional delete would strip the new owner's tag and leave its live
+     * row naming a disk `findVolumeByTag` no longer finds.
+     */
+    const remove: Array<{ Key: string; Value?: string }> = [];
+    if (agent === null) {
+      remove.push(
+        opts.expectedAgent === undefined
+          ? { Key: AGENT_TAG }
+          : { Key: AGENT_TAG, Value: opts.expectedAgent },
+      );
+    } else set[AGENT_TAG] = agent;
+    if (nameTag === null) remove.push({ Key: "Name" });
     else if (nameTag !== undefined) set["Name"] = nameTag;
+    if (opts.formerAgent === null) remove.push({ Key: FORMER_AGENT_TAG });
+    else if (opts.formerAgent !== undefined) set[FORMER_AGENT_TAG] = opts.formerAgent;
     if (roleData) set[ROLE_TAG] = ROLE_DATA;
-    else remove.push(ROLE_TAG);
+    else remove.push({ Key: ROLE_TAG });
     try {
       await this.ec2.send(new CreateTagsCommand({ Resources: [volumeId], Tags: tagList(set) }));
       if (remove.length > 0) {
-        await this.ec2.send(
-          new DeleteTagsCommand({ Resources: [volumeId], Tags: remove.map((Key) => ({ Key })) }),
-        );
+        await this.ec2.send(new DeleteTagsCommand({ Resources: [volumeId], Tags: remove }));
       }
     } catch (e) {
       throw asHermeticError(e, `could not retag volume ${volumeId} for ${agent ?? "no agent"}`);

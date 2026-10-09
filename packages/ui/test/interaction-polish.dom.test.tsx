@@ -59,7 +59,6 @@ for (const layout of ["board", "triage"] as const) {
       latest: "1.2.0",
       tailnet: "acme.ts.net",
       volumes: [],
-      showDestroyed: false,
       onSelect: () => {
         selected++;
       },

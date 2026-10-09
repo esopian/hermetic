@@ -118,8 +118,8 @@ describe("labelsForOp", () => {
     expect(labels["tailnet"]).toBe("Remove the node from the tailnet");
     expect(labels["secrets"]).toContain("Delete");
     expect(labels["config"]).toContain("Remove");
-    // Both paths of §6.6's default: kept unless `--delete-volume` was asked for.
-    expect(labels["volume"]).toMatch(/^Keep the data volume/);
+    // Both paths of §6.7's default: deleted unless `--keep-volume` was asked for.
+    expect(labels["volume"]).toMatch(/^Delete the data volume/);
     expect(labels["done"]).toBe("Destroyed");
   });
 
