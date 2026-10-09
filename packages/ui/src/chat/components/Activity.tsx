@@ -4,8 +4,11 @@ import type { TurnActivity } from "../chat-activity.ts";
 import type { ChatBlockOf, ChatBlockView } from "../../api/index.ts";
 import { fmtMs, formatPayload, unknownName } from "../chat-logic.ts";
 import { toolSummary } from "../chat-turns.ts";
+import { backgroundProcessId, processDomId } from "../process-events.ts";
+import type { BlockLike } from "../chat-logic.ts";
 import { CodePane } from "./Card.tsx";
 import { RedactedText } from "./RedactedText.tsx";
+import { JumpLink, useProcessEvents } from "./blocks/ProcessEvent.tsx";
 import { ToolBlock } from "./blocks/Tool.tsx";
 
 export function isActivity(block: ChatBlockView): boolean {
@@ -207,9 +210,15 @@ function Step({ block, streaming }: { block: ChatBlockView; streaming: boolean }
   const setOpen = (next: boolean) => setChoice(next);
   const target = block.kind === "tool" ? toolSummary(block) : "";
   const duration = "duration_ms" in block ? fmtMs(block.duration_ms) : "";
+  // A call that started a background process links down to the event that
+  // reported it, when that event is drawn in the loaded transcript. The step is
+  // the anchor the event's "started ↑" comes back to either way.
+  const { anchors } = useProcessEvents();
+  const pid = backgroundProcessId(block as unknown as BlockLike);
   return (
     <details
       className="ch-activity-step"
+      id={pid ? processDomId("start", pid) : undefined}
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
@@ -226,6 +235,11 @@ function Step({ block, streaming }: { block: ChatBlockView; streaming: boolean }
           </span>
         ) : null}
         <span>{[state.word, duration].filter(Boolean).join(" \u00B7 ")}</span>
+        {pid && anchors.has(pid) ? (
+          <JumpLink end="event" processId={pid}>
+            result ↓
+          </JumpLink>
+        ) : null}
       </summary>
       <div className="ch-activity-detail">{detail(block)}</div>
     </details>

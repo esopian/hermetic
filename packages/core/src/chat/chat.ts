@@ -65,7 +65,8 @@ import type {
 import type { StackInfo } from "../backend/types.ts";
 import { redactDeep, redactMessage } from "./chat-redact.ts";
 import { observeChatActivity } from "./notifications.ts";
-import type { NotificationDeps } from "./notifications.ts";
+import type { ChatActivity, NotificationDeps } from "./notifications.ts";
+import { CHAT_CLASSIFY_LIMIT, classifyChatActivity } from "./chat-activity.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
 import { MemoryChatFenceStore, chatFenced } from "./chat-fence.ts";
 import type { ChatFenceStore } from "./chat-fence.ts";
@@ -412,13 +413,14 @@ export function createChat(deps: ChatDeps) {
       parsed.instance === undefined
         ? (await listAgents()).filter((agent) => worthAsking(agent) && instances.includes(agent.name))
         : [await getAgent(parsed.instance)];
+    const boxOf = (agent: Agent): BoxAddress => ({
+      instance: agent.name,
+      baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
+      fleet_id: fleet.fleet_id,
+    });
     const settled = await Promise.allSettled(
       rows.map(async (agent): Promise<Swarm> => {
-        const box: BoxAddress = {
-          instance: agent.name,
-          baseUrl: agentDashboardUrl(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
-          fleet_id: fleet.fleet_id,
-        };
+        const box = boxOf(agent);
         return await watched(agent.name, opts, async (request) => {
           requireListening(fleet.fleet_id, agent.name);
           return await hermes.swarm(box, request);
@@ -445,35 +447,59 @@ export function createChat(deps: ChatDeps) {
      * a laptop that merely could not ask.
      */
     if (deps.notifications) {
-      const at = nowMs();
-      observeChatActivity(
-        deps.notifications,
-        answered
-          .flatMap((swarm) =>
-            swarm.bots.map((bot) => ({
+      const notifications = deps.notifications;
+      const unfenced = (bot: ChatActivity): boolean =>
+        !chatFenced(fenceStore, fleet.fleet_id, bot, nowMs());
+      const roster = answered
+        .flatMap((swarm) =>
+          swarm.bots.map(
+            (bot): ChatActivity => ({
               instance: swarm.instance,
               bot: bot.name,
               title: bot.title ?? null,
               last_message_at: bot.last_message_at ?? null,
               needs_action: bot.needs_action,
-            })),
-          )
-          /**
-           * A bot with a turn in flight is *deferred*, not classified.
-           *
-           * The turn has already moved the box's coordinate and has not yet had
-           * the chance to record where to, so anything this read concluded
-           * about it would be a conclusion about a half-finished sentence.
-           * Dropping the bot from the list leaves its stored watermark exactly
-           * where it was — which is the whole point, because the next read
-           * after the fence lifts then classifies whatever happened, including
-           * a message somebody else sent while the turn ran.
-           *
-           * The fence is shared by every process using this laptop's database,
-           * so a turn the CLI is taking defers the portal's poll too.
-           */
-          .filter((bot) => !chatFenced(fenceStore, fleet.fleet_id, bot, at)),
-      );
+            }),
+          ),
+        )
+        /**
+         * A bot with a turn in flight is *deferred*, not classified.
+         *
+         * The turn has already moved the box's coordinate and has not yet had
+         * the chance to record where to, so anything this read concluded
+         * about it would be a conclusion about a half-finished sentence.
+         * Dropping the bot from the list leaves its stored watermark exactly
+         * where it was — which is the whole point, because the next read
+         * after the fence lifts then classifies whatever happened, including
+         * a message somebody else sent while the turn ran.
+         *
+         * The fence is shared by every process using this laptop's database,
+         * so a turn the CLI is taking defers the portal's poll too.
+         */
+        .filter(unfenced);
+      /**
+       * A bot that moved gets one durable read of its newest rows, so a
+       * background-process event can raise its own row and an event-only
+       * movement raises no "has a new message" (`chat-activity.ts`). The read
+       * is a transcript read — it takes no warm backend slot — and is
+       * redacted here, the door, before the classifier sees a word of it.
+       */
+      const classified = await classifyChatActivity(notifications, roster, (bot) => {
+        const agent = rows.find((row) => row.name === bot.instance);
+        if (agent === undefined) return Promise.resolve([]);
+        const box = boxOf(agent);
+        return watched(bot.instance, opts, async (request) => {
+          requireListening(fleet.fleet_id, bot.instance);
+          const messages = await hermes.history(box, bot.bot, {
+            signal: request.signal,
+            limit: CHAT_CLASSIFY_LIMIT,
+          });
+          return messages.map(redactMessage);
+        });
+      });
+      // The fence is checked again: a turn may have started while the
+      // classifier was reading, and its bot is deferred like any other.
+      observeChatActivity(notifications, classified.filter(unfenced));
     }
     return { swarms: answered };
   }

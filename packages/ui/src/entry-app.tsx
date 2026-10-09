@@ -39,6 +39,8 @@ import "./styles/polish.css";
 import "./chat/styles/chat.css";
 import "./chat/styles/chat-soft.css";
 import "./chat/styles/chat-activity-status.css";
+// Background-process event rows, the burst fold and the DM reply card.
+import "./chat/styles/chat-events.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.
 import "./chat/styles/chat-markdown.css";
 import "./chat/styles/bot-mode.css";

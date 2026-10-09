@@ -103,10 +103,11 @@ function Conv({
           one — `Bot` has no preview field, and inventing one would mean a
           history read per bot on every rail paint, which is thirteen boxes'
           worth of fan-out for one line of grey text. The bot's own description
-          is what there is, and it is at least always true.
+          is what there is, and it is at least always true. `||` rather than
+          `??`, because a box can send an empty string for either.
         */}
         <span className="ch-conv-prev">
-          {bot.preview ?? bot.description ?? botLabel(bot.instance, bot.name, bot.title)}
+          {bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)}
         </span>
       </span>
       <span className="ch-conv-right">

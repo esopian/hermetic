@@ -316,6 +316,7 @@ describe("the block-kind fallthrough", () => {
       "question",
       "sources",
       "hermetic",
+      "process_event",
       "unknown",
     ];
     for (const kind of kinds) expect(blockKind({ kind })).toBe(kind as never);

@@ -19,9 +19,10 @@ import {
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import { mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
+import { parseProcessNotice } from "./process-notice.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
-import type { BotRef, ChatBlock, ChatMessage } from "../../schema/index.ts";
+import type { BotRef, ChatBlock, ChatMessage, ProcessEventBlock } from "../../schema/index.ts";
 
 /** What `createChatHistory` needs, and nothing more. */
 export interface ChatHistoryDeps {
@@ -145,6 +146,12 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     const stamped = isoOrNull(row.at ?? row.timestamp ?? row.created_at);
     const at: string = stamped ?? carried ?? HISTORY_EPOCH;
     carried = at;
+    const role = messageRole(str(row.role));
+    // A background-process notice Hermes injected as the user's row: the
+    // operator never typed it, so it is a system event, not "You". Only the
+    // role and blocks change — the id below is computed from the row exactly
+    // as before, so a transcript read either side of this change agrees.
+    const notice = role === "user" ? processNoticeOf(row) : null;
     out.push({
       id:
         str(row.id) ??
@@ -155,10 +162,10 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
             ? `${session}:${rowRef}`
             : rowId(session, row, stamped)),
       session,
-      role: messageRole(str(row.role)),
+      role: notice ? "system" : role,
       author: authorRef(box, row.author ?? row.from),
       at,
-      blocks: durableHistoryBlocks(row, calls, completed),
+      blocks: notice ? [notice] : durableHistoryBlocks(row, calls, completed),
       usage: mapUsage(rec(row.usage)),
       error: str(row.error),
       incomplete: row.incomplete === true ? true : null,
@@ -235,6 +242,22 @@ function canonical(value: unknown): string {
     }
     return sorted;
   });
+}
+
+/**
+ * The `process_event` block for a row whose whole text is one of Hermes'
+ * injected notices, or null. Upstream stores the notice as plain string
+ * content; a single text part is accepted too, so a build that wraps content
+ * in parts does not bring "You" back.
+ */
+export function processNoticeOf(row: Record<string, unknown>): ProcessEventBlock | null {
+  const content = row.display_content ?? row.content ?? row.text;
+  if (typeof content === "string") return parseProcessNotice(content);
+  const parts = arr(content);
+  if (parts.length !== 1) return null;
+  const only = parts[0];
+  const text = typeof only === "string" ? only : (str(rec(only)?.text) ?? str(rec(only)?.content));
+  return text ? parseProcessNotice(text) : null;
 }
 
 function messageRole(raw: string | null): ChatMessage["role"] {

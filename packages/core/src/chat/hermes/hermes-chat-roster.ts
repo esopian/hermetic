@@ -13,7 +13,7 @@ import {
   type HermesChatOptions,
 } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
-import { mapSessions } from "./hermes-chat-sessions.ts";
+import { eventPreview, mapSessions } from "./hermes-chat-sessions.ts";
 import { arr, describe, isHermeticCode, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
 import type { Bot, BotRef, Room, Swarm } from "../../schema/index.ts";
 
@@ -365,11 +365,15 @@ function spoke(session: Record<string, unknown>): boolean {
  * canonical session at all — an older Hermes, where it is the only preview
  * there is. A canonical session that is present and empty previews as nothing,
  * which is what the thread itself says.
+ *
+ * A preview that opens with a background-process notice reads as the event
+ * (`eventPreview`), never as the raw `[IMPORTANT: …` Hermes stored as the
+ * user's row.
  */
 function botPreview(row: Record<string, unknown> | null): string | null {
   const canonical = rec(row?.canonical_session);
-  if (canonical) return str(canonical.preview) || null;
-  return str(rec(row?.last_session)?.preview);
+  if (canonical) return eventPreview(str(canonical.preview));
+  return eventPreview(str(rec(row?.last_session)?.preview));
 }
 
 function unreachable(box: BoxAddress, reason: string): Swarm {

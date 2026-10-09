@@ -25,6 +25,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { hiddenByListening } from "../shared/notifications.ts";
+import { isRoutineProcessEvent } from "../shared/process-event.ts";
 import {
   NotificationsAckInput,
   NotificationsListInput,
@@ -46,6 +47,7 @@ import type {
   NotificationsAckResult,
   NotificationsListResult,
   NotificationsMuteResult,
+  ProcessEventBlock,
   VolumeView,
 } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
@@ -595,17 +597,19 @@ export function profileRevisionAdvisories(
  * focused (`notification-logic.ts`), which is a fact no process on this side of
  * the browser knows.
  *
- * ### Nothing here reads a message
+ * ### Nothing here is worded from a message
  *
  * Neither title nor detail is ever built from message text. A `chat.message`
  * row says which bot on which box spoke and when; a `chat.error` row carries a
  * code and the failure's own message, which `chat.ts` has already masked
- * (§9.2). Even that is belt-and-braces — the roster read these rows are derived
- * from went through `redactDeep` before it reached this module — but the rule
- * is worth stating as a rule rather than as a property of today's call sites: a
- * notification is written to a local database and read back long after the
- * conversation it is about, and it is the last place a secret should be able to
- * come to rest.
+ * (§9.2); a `chat.event:` row (`notifyProcessEvent`) does receive a parsed
+ * background-process block, already past `redactDeep`, but words itself only
+ * from the block's structured fields — which bot a DM went to, an exit code, a
+ * subagent count — and never from the command, its output or a reply. Even the
+ * redaction is belt-and-braces, but the rule is worth stating as a rule rather
+ * than as a property of today's call sites: a notification is written to a
+ * local database and read back long after the conversation it is about, and it
+ * is the last place a secret should be able to come to rest.
  */
 
 /** The `key` family for a reply that arrived on its own. */
@@ -668,7 +672,7 @@ export function chatSeenSubject(instance: string, bot: string): string {
 const CHAT_SEEN_SILENT = "-";
 
 /** Whether `a` is later than `b`, by time and not by spelling. */
-function laterThan(a: string, b: string): boolean {
+export function laterThan(a: string, b: string): boolean {
   const ta = Date.parse(a);
   const tb = Date.parse(b);
   /**
@@ -690,6 +694,61 @@ export interface ChatActivity {
   last_message_at?: string | null;
   /** The box says this bot is waiting on a person. */
   needs_action?: boolean;
+  /**
+   * Record the movement without raising the generic row.
+   *
+   * Set by the roster read's classifier (`chat-activity.ts`) when every row
+   * the bot gained since the watermark is a background-process event, each one
+   * routine or already raised as its own `chat.event:` row. "Has a new
+   * message" would then be about nothing anybody said, so the watermark
+   * advances and nothing is inserted. Absent or false is today's behaviour.
+   */
+  quiet?: boolean;
+}
+
+/**
+ * What a roster read means for one bot's watermark, decided from the stored
+ * watermark and the bot's `last_message_at` alone.
+ *
+ * - `record`: nothing to say, but store `value` — a first sighting (where the
+ *   bot is up to, or the silent marker for a bot that has never spoken).
+ * - `still`: nothing to say and nothing to store.
+ * - `moved`: the bot said something since `since`, up to `at`. `since` is null
+ *   when the bot had only ever been seen silent, so every row it has is new.
+ *
+ * Pure, so `observeChatActivity` and the classifier in `chat-activity.ts` agree
+ * on what "moved" means rather than each spelling it out.
+ */
+export type ChatMovement =
+  | { kind: "record"; value: string }
+  | { kind: "still" }
+  | { kind: "moved"; at: string; since: string | null };
+
+export function chatMovement(previous: string | null, at: string | null | undefined): ChatMovement {
+  if (at == null || at === "") {
+    // Seen, and said nothing. Recorded, so that the first thing it does say
+    // is a transition rather than a first sighting.
+    return previous === null ? { kind: "record", value: CHAT_SEEN_SILENT } : { kind: "still" };
+  }
+  // First sighting of a bot that has already spoken: record where it is up to
+  // and say nothing about a conversation that predates this laptop.
+  if (previous === null) return { kind: "record", value: at };
+  if (previous === CHAT_SEEN_SILENT) return { kind: "moved", at, since: null };
+  return laterThan(at, previous) ? { kind: "moved", at, since: previous } : { kind: "still" };
+}
+
+/**
+ * `chatMovement` for one bot of one roster read, against the stored watermark.
+ * Null when the store cannot be read: the classifier then leaves the bot to
+ * `observeChatActivity`, which fails the same way and says nothing.
+ */
+export function chatMovementOf(deps: NotificationDeps, bot: ChatActivity): ChatMovement | null {
+  try {
+    const previous = deps.store.seenStatus(deps.fleet(), chatSeenSubject(bot.instance, bot.bot));
+    return chatMovement(previous, bot.last_message_at);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -736,21 +795,15 @@ export function observeChatActivity(deps: NotificationDeps, bots: readonly ChatA
      */
     try {
       const subject = chatSeenSubject(bot.instance, bot.bot);
-      const previous = deps.store.seenStatus(fleet, subject);
-      const at = bot.last_message_at;
-      if (at == null || at === "") {
-        // Seen, and said nothing. Recorded, so that the first thing it does say
-        // is a transition rather than a first sighting.
-        if (previous === null) deps.store.setSeenStatus(fleet, subject, CHAT_SEEN_SILENT);
-        continue;
-      }
-      if (previous === null) {
-        // First sighting of a bot that has already spoken: record where it is
-        // up to and say nothing about a conversation that predates this laptop.
+      const move = chatMovement(deps.store.seenStatus(fleet, subject), bot.last_message_at);
+      if (move.kind === "record") deps.store.setSeenStatus(fleet, subject, move.value);
+      if (move.kind !== "moved") continue;
+      const at = move.at;
+      if (bot.quiet === true) {
+        // Every new row was a background-process event, already classified.
         deps.store.setSeenStatus(fleet, subject, at);
         continue;
       }
-      if (previous !== CHAT_SEEN_SILENT && !laterThan(at, previous)) continue;
       // Raise the row *before* moving the watermark. The other order loses a
       // message outright when the insert fails: the watermark says the operator
       // has been told, and nothing will ever tell them.
@@ -791,6 +844,113 @@ export function observeChatActivity(deps: NotificationDeps, bots: readonly ChatA
       // The inbox is a courtesy; an unwritable one never fails a roster read.
       // Swallowed per bot, so the next bot is still read.
     }
+  }
+}
+
+/** The `key` family for a background-process event worth telling the operator about. */
+export const CHAT_EVENT_PREFIX = "chat.event:";
+
+/** The longest title an event row writes; a bot title or profile name can be long. */
+const CHAT_EVENT_TITLE_MAX = 140;
+
+/**
+ * How a failed command's status reads in a row title. Upstream's status phrase
+ * comes from a fixed vocabulary (`process-notice.ts`), so mapping it to a fixed
+ * label words nothing from the notice's free text.
+ */
+function failedCommandPhrase(block: ProcessEventBlock): string {
+  if (block.status === "failed to start") return "failed to start";
+  if (block.status?.startsWith("marked lost") === true || block.status === "lost") return "was lost";
+  return "failed";
+}
+
+/**
+ * The one-line title of a `chat.event:` row, from structured fields only: the
+ * profile a DM went to, an exit code, whether a subagent failed. Never the
+ * command, its output or the reply — those are message text (see "Nothing here
+ * is worded from a message" above).
+ */
+function processEventTitle(
+  where: { instance: string; bot: string; title?: string | null },
+  block: ProcessEventBlock,
+): string {
+  const name = `${where.title ?? where.bot} on ${where.instance}`;
+  if (block.dm) return `${block.dm.to_profile} replied to ${name}`;
+  if (block.event === "delegation") {
+    return `Subagents finished for ${name}${block.outcome === "failed" ? " with failures" : ""}`;
+  }
+  const phrase = failedCommandPhrase(block);
+  const exit = phrase === "failed" && block.exit_code != null ? ` (exit ${block.exit_code})` : "";
+  return `A background command ${phrase} on ${name}${exit}`;
+}
+
+/**
+ * A background-process event (§9.2) that deserves a row: a failed command, a
+ * subagent result, or a DM reply from another bot.
+ *
+ * Hermes injects these as `user`-role rows, and core turns them into
+ * `process_event` blocks on a `system` message (`chat/hermes/process-notice.ts`).
+ * They are never an operator message, so nothing may treat one as somebody
+ * typing, and a routine event — a clean exit, a termination, a watch match, a
+ * notice — never raises a row at all (`isRoutineProcessEvent`): the thread
+ * shows those, the inbox does not.
+ *
+ * The caller is the roster read's classifier (`chat-activity.ts`): when a
+ * bot's `last_message_at` moves, it reads the newest rows of that bot's
+ * conversation once, redacted, and hands each event block it finds here.
+ *
+ * The row is keyed on the process id (the delegation id, else `fallbackId`, the
+ * message's own id, for a notice that carries neither), so a history read that
+ * sees the same row on every poll writes it once. The store's dedupe is
+ * "same key, still unresolved".
+ *
+ * The title and detail are worded from structured fields only
+ * (`processEventTitle`): which bot and box, which profile replied, an exit
+ * code, whether a subagent failed. The block must still already be past
+ * `redactDeep` — the history read is — but nothing from its command, output or
+ * reply reaches the row.
+ *
+ * Returns whether a row was requested, so a caller can tell a routine event or
+ * a failed write from a recorded one. A store that throws is swallowed, as
+ * everywhere else in this file.
+ */
+export function notifyProcessEvent(
+  deps: NotificationDeps,
+  where: { instance: string; bot: string; title?: string | null },
+  block: ProcessEventBlock,
+  fallbackId: string,
+): boolean {
+  if (isRoutineProcessEvent(block)) return false;
+  try {
+    const fleet = deps.fleet();
+    const ref = chatActionRef(where.instance, where.bot);
+    const identity = block.process_id ?? block.delegation?.id ?? fallbackId;
+    const title = processEventTitle(where, block);
+    deps.store.insert({
+      source: "chat",
+      kind: "chat.message",
+      // A failure is a problem; a DM reply is news. Neither is `needs_action`:
+      // nothing is waiting on an answer from a person.
+      class: block.outcome === "failed" ? "bad" : "info",
+      title:
+        title.length > CHAT_EVENT_TITLE_MAX
+          ? `${title.slice(0, CHAT_EVENT_TITLE_MAX - 1).trimEnd()}…`
+          : title,
+      // The profile behind the display name, as on a `chat.message` row.
+      detail: where.title && where.title !== where.bot ? where.bot : null,
+      agent: where.instance,
+      fleet,
+      ref,
+      key: `${CHAT_EVENT_PREFIX}${chatKeyScope(fleet, where.instance, where.bot)}:${identity}`,
+      actions: [
+        { label: "Open chat", target: "chat", ref },
+        { label: `Open ${where.instance}`, target: "agent", ref: where.instance },
+      ],
+    });
+    return true;
+  } catch {
+    // The inbox is a courtesy; an unwritable one never fails a roster read.
+    return false;
   }
 }
 

@@ -412,11 +412,61 @@ export function redactBlock(block: ChatBlock): ChatBlock {
       // A ref is an agent or op name and cannot hold a secret, but it costs
       // nothing to run and this switch is the place a future ref shape lands.
       return { ...block, ref: redactText(block.ref) };
+    case "process_event":
+      return redactProcessEvent(block);
     case "unknown":
       // The whole point of the fallthrough block: hermetic does not know what
       // is in `payload`, which is the strongest possible reason to walk it.
       return { ...block, payload: redactDeep(block.payload) };
   }
+}
+
+/** `redactText` over a nullable field, leaving null and undefined as they were. */
+function redactOptional<T extends string | null | undefined>(text: T): T {
+  return (typeof text === "string" ? redactText(text) : text) as T;
+}
+
+/**
+ * A background-process event carries the box's own words in most of its
+ * fields: a command line can hold a token on its argv, the output tail is
+ * whatever the process printed, a DM reply and a subagent summary are another
+ * model's prose. Every string is masked — the ids and status phrases too, since
+ * they are parsed out of the same text and cost nothing to run — and `raw`
+ * above all, because it is the whole notice and the fallback a head renders.
+ */
+function redactProcessEvent(block: Extract<ChatBlock, { kind: "process_event" }>): ChatBlock {
+  return {
+    ...block,
+    process_id: redactOptional(block.process_id),
+    status: redactOptional(block.status),
+    signal: redactOptional(block.signal),
+    command: redactOptional(block.command),
+    output_tail: redactOptional(block.output_tail),
+    message: redactOptional(block.message),
+    watch: block.watch ? { ...block.watch, pattern: redactText(block.watch.pattern) } : block.watch,
+    delegation: block.delegation
+      ? {
+          ...block.delegation,
+          id: redactText(block.delegation.id),
+          status: redactOptional(block.delegation.status),
+          error: redactOptional(block.delegation.error),
+          tasks: block.delegation.tasks.map((task) => ({
+            ...task,
+            goal: redactOptional(task.goal),
+            status: redactText(task.status),
+            summary: redactOptional(task.summary),
+          })),
+        }
+      : block.delegation,
+    dm: block.dm
+      ? {
+          to_profile: redactText(block.dm.to_profile),
+          reply: redactText(block.dm.reply),
+          warnings: block.dm.warnings.map(redactText),
+        }
+      : block.dm,
+    raw: redactText(block.raw),
+  };
 }
 
 export function redactMessage(message: ChatMessage): ChatMessage {
