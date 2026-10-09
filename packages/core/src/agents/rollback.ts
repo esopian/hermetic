@@ -96,7 +96,12 @@ export interface RollbackDeps {
     | "retagVolume"
   >;
   secrets: Pick<SecretsApi, "deleteByPrefix">;
-  artifacts: Pick<ArtifactsApi, "deleteByPrefix">;
+  /**
+   * `purgeByPrefix`, never `deleteByPrefix`: the bucket is versioned, so a
+   * plain delete would leave the rendered config readable by version (see
+   * the config step below).
+   */
+  artifacts: Pick<ArtifactsApi, "purgeByPrefix">;
   /**
    * `get` is not there to find work: it is the ownership check below, which
    * is the only thing standing between a stale run and another operator's
@@ -508,9 +513,19 @@ export async function* rollbackCreate(
       yield ownershipLost("config delete", lostConfig);
       return lostOutcome();
     }
+    /**
+     * Every version, as a destroy does (§6.7, `destroy-agent.ts`). The bucket
+     * is versioned and its lifecycle rule keeps the newest noncurrent versions
+     * of a key indefinitely, so `deleteByPrefix` would only lay delete markers
+     * over the config this run rendered — which carries the agent's settings —
+     * and a rollback frees the name exactly as a destroy does: the next agent
+     * of this name must start with nothing under `config/<name>/`, current or
+     * not. The count is versions and markers removed, not keys, and the
+     * message says so in the words a destroy uses.
+     */
     try {
-      const objects = await deps.artifacts.deleteByPrefix(deps.configPrefix(name));
-      yield say(`removed ${objects.length} config object(s)`, "warn");
+      const removed = await deps.artifacts.purgeByPrefix(deps.configPrefix(name));
+      yield say(`removed ${removed} config object version(s) and delete marker(s)`, "warn");
       undone.push("config");
     } catch (e) {
       yield stepFailed("config", e);

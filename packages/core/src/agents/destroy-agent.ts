@@ -24,8 +24,9 @@ import type { DestroyAgentInput, OpEvent } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import { assertOwnedInstance } from "./ownership.ts";
 import { assertUnmoved, type ExpectedResources } from "./plan-expectations.ts";
-import { waitInstanceTerminated, waitVolumeReleased } from "./attach.ts";
+import { waitVolumeReleased } from "./attach.ts";
 import { createReleaseName, type ReleaseResult } from "./lifecycle/release-name.ts";
+import { createRetireNodes } from "./lifecycle/retire-nodes.ts";
 import { abandoned, checkAbort } from "../abort.ts";
 import { evt } from "../events.ts";
 import { createTailnetCleanup } from "../fleet/tailnet-devices.ts";
@@ -56,7 +57,8 @@ export function createDestroy(deps: DestroyDeps) {
     unwind,
   } = deps.ctx;
 
-  const { removeTailnetDevices, waitTailnetOffline } = createTailnetCleanup(deps.ctx);
+  const { removeTailnetDevices } = createTailnetCleanup(deps.ctx);
+  const { retireNodes } = createRetireNodes(deps.ctx);
   const { releaseName, existingTombstone, volumeHold } = createReleaseName({
     ctx: deps.ctx,
     purgeLocal: deps.purgeLocal,
@@ -504,65 +506,39 @@ export function createDestroy(deps: DestroyDeps) {
        * record. Waiting for `terminated` (however long; the lock is renewed
        * while we do) means nothing on the box is running when the name goes,
        * and needs no agentd change.
+       *
+       * Then the second tailnet pass (§6.5, §6.7). The first ran while the
+       * boxes were still going down, when their nodes were usually still
+       * online; every instance tagged for the name — the row's and every
+       * stray — is `terminated` once the wait above returns. Tailscale lags in
+       * noticing that, so the pass first waits, bounded, for the matched
+       * devices to read offline, then sweeps in the default mode: what went
+       * offline is deleted, so the next node to join as this agent gets the
+       * name rather than `<name>-2`; what is still online at the deadline is
+       * named in a `warn` and left, and the release still goes on. Why an
+       * online match is never deleted, and why the wait is bounded, is
+       * `retire-nodes.ts`'s — the same sequence `recreate` runs before it
+       * launches. Idempotent: a device the first pass removed is simply not
+       * listed again.
+       *
+       * The tailnet half is skipped when the first pass could not finish
+       * (`null`): an OAuth client without `devices:core`, a refused delete or
+       * an unreachable API has already said so in one `warn`, and asking
+       * again would only say it twice — one warning is the useful number.
+       * Never a refusal: the release below runs either way.
        */
-      for (const id of [...(instanceId ? [instanceId] : []), ...strays]) {
-        checkAbort(opts.signal, "instance");
-        yield* waitInstanceTerminated(attachDeps(), id, {
-          ...(opts.signal ? { signal: opts.signal } : {}),
+      yield* retireNodes(
+        {
+          name: agent.name,
+          fleetId: fleet.fleet_id,
+          dnsName: () => agent.tailscale_dns_name ?? null,
+          instanceIds: [...(instanceId ? [instanceId] : []), ...strays],
           heartbeat: keepLock,
-          phase: "instance",
-          progress: { waiting: 0.85, done: 0.9 },
-        });
-      }
-
-      /**
-       * The second tailnet pass (§6.5, §6.7). The first ran while the boxes
-       * were still going down, when their nodes were usually still online;
-       * every instance tagged for the name — the row's and every stray — is
-       * `terminated` now, confirmed above. Tailscale lags in noticing that (a
-       * node can read online for a minute or more after its machine
-       * stopped), so the pass first waits, bounded, for the matched devices
-       * to read offline (`waitTailnetOffline`), then sweeps in the default
-       * mode: what went offline is deleted, so the next node to join as this
-       * agent gets the name rather than `<name>-2`.
-       *
-       * What is still online at the deadline is named in a `warn` and left.
-       * A terminated instance does not prove the device is its node: hostname
-       * plus `tag:hermetic` is also what an orphaned live box whose instance
-       * lost its agent tags joins as, and the row's `tailscale_dns_name` is
-       * written by the box itself, so either arm can point at a machine that
-       * is running. Deleting that on a match alone is a guess about a live
-       * machine (§1). The release still goes on: a node hermetic cannot stop
-       * must not hold the name hostage. Idempotent: a device the first pass
-       * removed is simply not listed again.
-       *
-       * Skipped when the first pass could not finish (`null`): an OAuth client
-       * without `devices:core`, a refused delete or an unreachable API has
-       * already said so in one `warn`, and asking again would only say it
-       * twice — one warning is the useful number. Never a refusal: the
-       * release below runs either way.
-       */
-      checkAbort(opts.signal, "tailnet");
-      await keepLock();
-      if (firstSweep !== null) {
-        yield* waitTailnetOffline(
-          agent.name,
-          fleet.fleet_id,
-          agent.tailscale_dns_name ?? null,
-          "tailnet",
-          0.91,
-          opts,
-          { ...attachDeps(), heartbeat: keepLock },
-        );
-        yield* removeTailnetDevices(
-          agent.name,
-          fleet.fleet_id,
-          agent.tailscale_dns_name ?? null,
-          "tailnet",
-          0.92,
-          opts,
-        );
-      }
+          tailnet: firstSweep !== null,
+          progress: { terminated: { waiting: 0.85, done: 0.9 }, offline: 0.91, sweep: 0.92 },
+        },
+        opts,
+      );
 
       /**
        * §6.7: tombstone written, row deleted — the name is free. The

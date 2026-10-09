@@ -1255,7 +1255,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
      * seeder is synchronous, and the stored shape is exactly what that method
      * would have put there.
      */
-    backend.tombstones.set(tombstoneSortKey(destroyed_at, name), {
+    backend.tombstones.set(tombstoneSortKey(name, destroyed_at), {
       name,
       fleet_id: fleetId,
       created_at,

@@ -22,6 +22,8 @@ import {
   fromTombstoneItem,
   isReservedRowKey,
   toTombstoneItem,
+  tombstoneNamePrefix,
+  tombstonesNewestFirst,
   volumeClaimKey,
   volumeIdOfClaimKey,
 } from "../schema/index.ts";
@@ -425,7 +427,7 @@ class DynamoEventStore implements EventStore {
 
   /**
    * One item under the reserved `_destroyed` partition (§6.7). A plain put:
-   * the range key is `<destroyed_at>#<name>`, so a retry of the same write
+   * the range key is `<name>#<destroyed_at>`, so a retry of the same write
    * lands on the same key and replaces it with identical content.
    */
   async appendTombstone(tombstone: AgentTombstone): Promise<void> {
@@ -439,25 +441,37 @@ class DynamoEventStore implements EventStore {
   }
 
   /**
-   * Newest first: one `Query` on the reserved partition, walked backwards.
-   * `name` is a `FilterExpression`, so DynamoDB's `Limit` counts items before
-   * the filter — which is why the limit is honoured here, after it, rather
-   * than handed to the query.
+   * Newest first, two ways (§4.2). The range key is `<name>#<destroyed_at>`
+   * (`tombstoneSortKey`), so:
+   *
+   * - With `name`, a key condition — `begins_with` on the name's prefix,
+   *   separator included — selects that name's items and nothing else, and a
+   *   reverse query returns them newest first. No filter: DynamoDB reads only
+   *   the matching items, and its `Limit` is handed the remaining budget page
+   *   by page, so `limit: 1` costs one item, not the partition.
+   * - Without `name`, the partition sorts by name, not time, so every page is
+   *   read, the result sorted by `destroyed_at` (`tombstonesNewestFirst`), and
+   *   the limit applied to the sorted list — never to the walk, which would
+   *   return the alphabetically last names rather than the newest.
    *
    * An item that does not parse as a `TombstoneItem` is skipped, not thrown:
    * the events table is writable by the boxes, and one malformed item under
    * `_destroyed` must not take down the destroyed view, the archive, a plan or
-   * a create for every other name. The limit counts parsed tombstones, so
-   * `limit: 1` returns the newest *readable* one. A malformed newest item
-   * reads as absent, which for `predecessorFloor` only means the floor comes
-   * from the tombstone before it, the same answer a future-dated (forged) one
-   * gets. The skip
-   * is silent: `agents.destroyed` returns a bare list, and a count would change
-   * that result's shape in every head (§9).
+   * a create for every other name. That includes an item whose range key is
+   * not the one its own `agent` and `destroyed_at` derive (`TombstoneItem`),
+   * so a forgery keyed into one name's range cannot pose as another's. The
+   * limit counts parsed tombstones — a skipped item spends DynamoDB's `Limit`
+   * on its page but not the caller's, and the walk goes on while a page
+   * remains — so `limit: 1` returns the newest *readable* one. A malformed
+   * newest item reads as absent, which for `predecessorFloor` only means the
+   * floor comes from the tombstone before it, the same answer a future-dated
+   * (forged) one gets. The skip is silent: `agents.destroyed` returns a bare
+   * list, and a count would change that result's shape in every head (§9).
    */
   async queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> {
-    const rows: AgentTombstone[] = [];
+    const name = opts?.name;
     const limit = opts?.limit;
+    const rows: AgentTombstone[] = [];
     let start: Record<string, unknown> | undefined;
     do {
       let out: QueryCommandOutput;
@@ -465,16 +479,21 @@ class DynamoEventStore implements EventStore {
         out = await this.doc.send(
           new QueryCommand({
             TableName: await this.table.get(),
-            KeyConditionExpression: "#name = :pk",
-            ExpressionAttributeNames: {
-              "#name": "name",
-              ...(opts?.name === undefined ? {} : { "#agent": "agent" }),
-            },
-            ExpressionAttributeValues: {
-              ":pk": DESTROYED_KEY,
-              ...(opts?.name === undefined ? {} : { ":agent": opts.name }),
-            },
-            ...(opts?.name === undefined ? {} : { FilterExpression: "#agent = :agent" }),
+            ...(name === undefined
+              ? {
+                  KeyConditionExpression: "#name = :pk",
+                  ExpressionAttributeNames: { "#name": "name" },
+                  ExpressionAttributeValues: { ":pk": DESTROYED_KEY },
+                }
+              : {
+                  KeyConditionExpression: "#name = :pk AND begins_with(#ts, :prefix)",
+                  ExpressionAttributeNames: { "#name": "name", "#ts": "timestamp" },
+                  ExpressionAttributeValues: {
+                    ":pk": DESTROYED_KEY,
+                    ":prefix": tombstoneNamePrefix(name),
+                  },
+                  ...(limit === undefined ? {} : { Limit: limit - rows.length }),
+                }),
             ScanIndexForward: false,
             ...(start ? { ExclusiveStartKey: start } : {}),
           }),
@@ -486,11 +505,13 @@ class DynamoEventStore implements EventStore {
         const parsed = TombstoneItemSchema.safeParse(item);
         if (!parsed.success) continue;
         rows.push(fromTombstoneItem(parsed.data));
-        if (limit !== undefined && rows.length >= limit) return rows;
+        if (name !== undefined && limit !== undefined && rows.length >= limit) return rows;
       }
       start = out.LastEvaluatedKey as Record<string, unknown> | undefined;
     } while (start);
-    return rows;
+    if (name !== undefined) return rows;
+    rows.sort(tombstonesNewestFirst);
+    return limit === undefined ? rows : rows.slice(0, limit);
   }
 }
 

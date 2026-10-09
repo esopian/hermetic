@@ -3,8 +3,10 @@
  * agent left behind (§6.5, §6.7).
  *
  * It is its own module because it has two callers that are not each other —
- * `destroy` (`destroy-agent.ts`) and `recreate` (`lifecycle.ts`) — and because
- * it needs four things from the SDK closure where those two need thirty. Naming
+ * `destroy` (`destroy-agent.ts`) and `recreate` (`lifecycle/recreate-agent.ts`),
+ * both through the wait-then-sweep sequence in `lifecycle/retire-nodes.ts`, and
+ * `destroy` once more directly for its first pass — and because it needs four
+ * things from the SDK closure where those two need thirty. Naming
  * that small list here is what keeps the sweep reviewable on its own: nothing
  * in this file can reach the agent row, the lock or the store.
  *
@@ -26,11 +28,12 @@ import type { CoreContext } from "../context.ts";
 export type TailnetDeps = Pick<CoreContext, "backend" | "nowIso">;
 
 /**
- * How long `destroy` waits, after every instance for the name is `terminated`,
- * for the agent's devices to read offline before it sweeps (`waitTailnetOffline`).
- * Tailscale notices a node has stopped some time after its machine did — a
- * minute or two is usual — and three minutes covers that without holding a
- * destroy open for a node that is not coming down. `HermeticDeps.attach`
+ * How long `destroy` and `recreate` wait, after every instance for the name is
+ * `terminated`, for the agent's devices to read offline before they sweep
+ * (`waitTailnetOffline`, `retire-nodes.ts`). Tailscale notices a node has
+ * stopped some time after its machine did — a minute or two is usual — and
+ * three minutes covers that without holding an operation open for a node that
+ * is not coming down. `HermeticDeps.attach`
  * overrides it; tests set it to zero.
  */
 export const TAILNET_OFFLINE_WAIT_MS = 180_000;
@@ -75,8 +78,8 @@ export type TailnetWait = Pick<AttachDeps, "pollMs" | "now" | "tailnetOfflineMs"
  * that still ties it to this row. Recreating a legacy agent therefore
  * cleans up after itself exactly as a current one does.
  *
- * One function for the sweep and for `destroy`'s wait before it, so the
- * devices the wait watches are exactly the ones the sweep then acts on.
+ * One function for the sweep and for the wait before it, so the devices the
+ * wait watches are exactly the ones the sweep then acts on.
  */
 function matchDevices(
   devices: TailscaleDevice[],
@@ -144,7 +147,7 @@ export function createTailnetCleanup(deps: TailnetDeps) {
    * still online:
    *
    * - absent: named in a `warn` and left alone (`recreate`'s one pass, and
-   *   `destroy`'s second);
+   *   `destroy`'s second — both after `waitTailnetOffline`, `retire-nodes.ts`);
    * - `"defer"`: skipped without a word and returned, for a caller that
    *   sweeps twice and will look again once its boxes are `terminated`
    *   (`destroy-agent.ts`'s first pass).
@@ -199,8 +202,8 @@ export function createTailnetCleanup(deps: TailnetDeps) {
       if (device.online) {
         remaining.push(fqdn);
         if (sweep.online === "defer") continue;
-        // This runs only after the instance was terminated (and, in `destroy`,
-        // after waiting for the flag to catch up), so a node still up is one we
+        // This runs only after every instance was terminated and the wait for
+        // the flag to catch up (`retire-nodes.ts`), so a node still up is one we
         // did not launch, did not manage to kill, or only a hostname or a
         // box-written FQDN ties to this row. Any of those may be a live
         // machine, and hermetic does not delete those on a guess (§1).
@@ -242,15 +245,18 @@ export function createTailnetCleanup(deps: TailnetDeps) {
 
   /**
    * Wait, for a bounded time, until none of the agent's devices reads online
-   * — `destroy`'s pause between confirming every instance `terminated` and
-   * its second sweep (§6.7).
+   * — the pause between confirming every instance `terminated` and the sweep
+   * that follows, in `destroy` before it releases the name (§6.7) and in
+   * `recreate` before it launches the replacement (§6.5); both run it through
+   * `retire-nodes.ts`.
    *
    * WHY wait at all: the sweep never deletes an online device (see
    * `removeTailnetDevices`), and Tailscale lags in noticing a node has
    * stopped — a node can read online for a minute or more after its machine
    * is gone. Sweeping straight after the terminate would leave the very
-   * corpse this cleanup exists for holding the name, and the next agent of
-   * that name would join as `<name>-2`. Waiting for the flag lets the sweep
+   * corpse this cleanup exists for holding the name, and the next node of
+   * that name — a recreate's replacement, or a later agent — would join as
+   * `<name>-2`. Waiting for the flag lets the sweep
    * delete it on evidence rather than on a guess.
    *
    * WHY bounded, and why the caller proceeds at the deadline: a device still
@@ -258,7 +264,7 @@ export function createTailnetCleanup(deps: TailnetDeps) {
    * it is a machine that is running, ours or not. Waiting longer cannot make
    * it safe to delete, and refusing would hold the name hostage to a node
    * hermetic cannot stop; so the wait ends, the sweep names it in a `warn`,
-   * and the release goes on.
+   * and the release or the launch goes on.
    *
    * Never fatal and never a second warning: a list that fails, or a client
    * without `devices:core` (`null`), ends the wait silently, and the sweep

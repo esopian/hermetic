@@ -1467,6 +1467,165 @@ describe("tailnet device cleanup", () => {
     expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 
+  /**
+   * A recreate on a real account: EC2 accepts the terminate and keeps the old
+   * box `shutting-down` until the `describes`-th describe of it after the
+   * terminate, and its node reads online on the tailnet until `offlineAfter`
+   * device lists after that (each list moving the clock ten seconds, so the
+   * three-minute wait can run out). `log` records, in order, every terminate,
+   * every describe of the old instance with the state it answered, every
+   * device delete, the auth-key mint and the launch.
+   */
+  function lingering(describes: number, offlineAfter: number) {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const hermetic = testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      attach: { pollMs: 1, progressMs: 0 },
+    });
+    const old = backend.agents.get("atlas")!.instance_id!;
+    const log: string[] = [];
+    const terminate = backend.compute.terminate;
+    backend.compute.terminate = async (id: string) => {
+      log.push(`terminate ${id}`);
+      const inst = backend.instances.get(id)!;
+      backend.instances.set(id, { ...inst, state: "shutting-down" });
+    };
+    let asked = 0;
+    let terminated = false;
+    const describe = backend.compute.describeInstance;
+    backend.compute.describeInstance = async (id: string) => {
+      if (id === old && backend.instances.get(id)?.state === "shutting-down") {
+        asked += 1;
+        if (asked >= describes) {
+          // EC2 finishes the terminate — the double's own terminate does that,
+          // volume detach included — but the node's flag lags behind it.
+          const devices = backend.tailscaleDevices!.map((d) => ({ ...d }));
+          await terminate(id);
+          backend.tailscaleDevices = devices;
+          terminated = true;
+        }
+      }
+      const ref = await describe(id);
+      if (id === old) log.push(`describe ${id} ${ref?.state ?? "gone"}`);
+      return ref;
+    };
+    const list = backend.tailscale.listDevices;
+    let lists = 0;
+    backend.tailscale.listDevices = async () => {
+      backend.advance(10_000);
+      if (terminated) {
+        lists += 1;
+        if (lists >= offlineAfter) {
+          backend.tailscaleDevices = backend.tailscaleDevices!.map((d) =>
+            d.hostname === "fxtr0001-atlas" ? { ...d, online: false } : d,
+          );
+        }
+      }
+      return list();
+    };
+    const deleteDevice = backend.tailscale.deleteDevice;
+    backend.tailscale.deleteDevice = async (id: string) => {
+      log.push(`deleteDevice ${id}`);
+      return deleteDevice(id);
+    };
+    const mint = backend.tailscale.mintAuthKey;
+    backend.tailscale.mintAuthKey = async (name: string) => {
+      log.push("mintAuthKey");
+      return mint(name);
+    };
+    const run = backend.compute.runInstance;
+    backend.compute.runInstance = async (spec) => {
+      log.push("runInstance");
+      return run(spec);
+    };
+    return { backend, hermetic, old, log };
+  }
+
+  /**
+   * §6.5: the replacement may only join once the box it replaces is gone.
+   * Launched beside a `shutting-down` predecessor, its node meets the old one
+   * still online and is pushed onto `<name>-2` — so the launch waits for the
+   * describe that says `terminated`.
+   */
+  test("recreate waits for the old instance to terminate before launching", async () => {
+    const { backend, hermetic, old, log } = lingering(3, 1);
+
+    const events = await drain(hermetic.agents.recreate({ name: "atlas", yes: true }));
+
+    const terminateAt = log.indexOf(`terminate ${old}`);
+    const lingeringAt = log.indexOf(`describe ${old} shutting-down`);
+    const terminatedAt = log.indexOf(`describe ${old} terminated`);
+    const launchAt = log.indexOf("runInstance");
+    expect(terminateAt).toBeGreaterThan(-1);
+    expect(lingeringAt).toBeGreaterThan(terminateAt);
+    expect(terminatedAt).toBeGreaterThan(lingeringAt);
+    expect(launchAt).toBeGreaterThan(terminatedAt);
+    expect(log.indexOf("mintAuthKey")).toBeGreaterThan(terminatedAt);
+    // The old box shows up in the stray listing while it shuts down; it is the
+    // one already being waited on, not a stray.
+    expect(events.some((e) => e.message.includes("still tagged for atlas"))).toBe(false);
+    expect(log.filter((l) => l.startsWith("terminate "))).toEqual([`terminate ${old}`]);
+    expect(
+      events.some(
+        (e) => e.phase === "instance" && e.message.startsWith(`instance ${old} terminated after`),
+      ),
+    ).toBe(true);
+    const after = (await backend.store.agents.get("atlas"))!;
+    expect(after.status).toBe("bootstrapping");
+    expect(after.instance_id).not.toBe(old);
+  });
+
+  /**
+   * The node reads online for a while after its machine is `terminated`. The
+   * recreate waits for the flag rather than sweeping past it, deletes the
+   * device, and only then mints and launches — so the replacement gets the name.
+   */
+  test("recreate deletes a lagging device once it goes offline, before launching", async () => {
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    const { backend, hermetic, log } = lingering(1, 3);
+    const id = backend.tailscaleDevices!.find((d) => d.name === device)!.id;
+
+    const events = await drain(hermetic.agents.recreate({ name: "atlas", yes: true }));
+
+    const tailnet = events.filter((e) => e.phase === "tailnet");
+    expect(tailnet.map((e) => [e.level ?? "info", e.message])).toEqual([
+      ["info", `waiting up to 3m for ${device} to go offline`],
+      ["info", `removed tailnet device ${device}`],
+    ]);
+    const deleteAt = log.indexOf(`deleteDevice ${id}`);
+    expect(deleteAt).toBeGreaterThan(-1);
+    expect(deleteAt).toBeLessThan(log.indexOf("mintAuthKey"));
+    expect(deleteAt).toBeLessThan(log.indexOf("runInstance"));
+    expect(hostnames(backend)).not.toContain(device);
+    // Progress never runs backwards across the new waits.
+    const progress = events.map((e) => e.progress);
+    expect(progress).toEqual([...progress].sort((a, b) => a - b));
+  });
+
+  /**
+   * A device still online when the wait runs out is a running machine as far
+   * as anyone can tell, and is not deleted on a guess (§1). It is named once,
+   * and the replacement is launched anyway: a node hermetic cannot stop must
+   * not hold the recreate hostage.
+   */
+  test("recreate warns once about a device still online at the deadline, and launches", async () => {
+    const device = "fxtr0001-atlas.hermetic.ts.net";
+    const { backend, hermetic, log } = lingering(1, Infinity);
+
+    const events = await drain(hermetic.agents.recreate({ name: "atlas", yes: true }));
+
+    const warns = events.filter((e) => e.level === "warn");
+    expect(warns.map((e) => [e.phase, e.message])).toEqual([
+      ["tailnet", `${device} is still online; not deleting a live node`],
+    ]);
+    expect(log.some((l) => l.startsWith("deleteDevice"))).toBe(false);
+    expect(log.filter((l) => l === "runInstance")).toHaveLength(1);
+    expect(hostnames(backend)).toContain(device);
+    expect(events.at(-1)!.phase).toBe("done");
+    expect((await backend.store.agents.get("atlas"))!.status).toBe("bootstrapping");
+  });
+
   /** Without `devices:core` a destroy says so once, not once per pass. */
   test("destroy with no devices:core scope warns once across both passes", async () => {
     const { backend, hermetic } = seeded();

@@ -82,16 +82,19 @@ export interface EventStore {
   /**
    * The audit record a destroy leaves behind once the agent row is gone
    * (§6.7): one item under the reserved `_destroyed` partition of the events
-   * table, range-keyed `<destroyed_at>#<name>` (`tombstoneSortKey`). Written
+   * table, range-keyed `<name>#<destroyed_at>` (`tombstoneSortKey`). Written
    * before the row is deleted, so a crash between the two leaves a tombstone
    * and a `destroying` row — which the next destroy finds and finishes — never
    * a freed name with no record. Idempotent for the same key.
    */
   appendTombstone(tombstone: AgentTombstone): Promise<void>;
   /**
-   * Every tombstone, newest first — one `Query` on the reserved partition, no
-   * `Scan`. `name` narrows to one agent's incarnations (a filter, still one
-   * query); `limit` caps the count after filtering.
+   * Every tombstone, newest by `destroyed_at` first — a `Query` on the
+   * reserved partition, never a `Scan`. `name` narrows to one agent's
+   * incarnations through the range key's name prefix (a key condition, not a
+   * filter), and `limit` caps that name's list as it is read. Without `name`
+   * the whole partition is read and sorted by time before `limit` applies,
+   * since the range key orders it by name.
    */
   queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]>;
 }
@@ -623,11 +626,12 @@ export interface ComputeApi {
    * convenience beside it, because a lookup that silently drops the second
    * box is the trap this method exists to close.
    *
-   * `shuttingDown: true` adds instances already `shutting-down`. Only
-   * `destroy`'s stray sweep asks for them: a box on its way out still runs its
-   * hermeticd, which heartbeats into the agent row, so the release must wait
-   * for it to be `terminated` too. Every other caller wants the boxes that can
-   * still be adopted, attached or started, and a dying one is none of those.
+   * `shuttingDown: true` adds instances already `shutting-down`. Only the
+   * stray sweeps of `destroy` and `recreate` ask for them: a box on its way out
+   * still runs its hermeticd, which heartbeats into the agent row, and its
+   * tailnet node still holds the agent's name, so both must wait for it to be
+   * `terminated` too. Every other caller wants the boxes that can still be
+   * adopted, attached or started, and a dying one is none of those.
    */
   listInstancesByTag(name: string, opts?: { shuttingDown?: boolean }): Promise<InstanceRef[]>;
   /**

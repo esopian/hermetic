@@ -4,7 +4,12 @@
  * records every mutation through it, exactly as the in-class literal did.
  */
 import type { Agent, AgentEvent, AgentTombstone, FleetItem, FleetSettings } from "../schema/index.ts";
-import { FLEET_KEY, tombstoneSortKey } from "../schema/index.ts";
+import {
+  FLEET_KEY,
+  tombstoneNamePrefix,
+  tombstoneSortKey,
+  tombstonesNewestFirst,
+} from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import type {
   AgentPatch,
@@ -125,15 +130,25 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
       appendTombstone: async (tombstone: AgentTombstone): Promise<void> => {
         b.record("store.events.appendTombstone");
         b.tombstones.set(
-          tombstoneSortKey(tombstone.destroyed_at, tombstone.name),
+          tombstoneSortKey(tombstone.name, tombstone.destroyed_at),
           structuredClone({ ...tombstone, legacy: false }),
         );
       },
+      /**
+       * The real store's two reads (`DynamoEventStore.queryTombstones`): with
+       * a name, the keys under its prefix — separator included, exactly the
+       * `begins_with` key condition — in reverse key order; without one, the
+       * whole partition sorted by `destroyed_at`, and only then limited.
+       */
       queryTombstones: async (opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> => {
-        const rows = [...b.tombstones.entries()]
-          .sort(([a], [c]) => (a < c ? 1 : a > c ? -1 : 0))
-          .map(([, t]) => t)
-          .filter((t) => opts?.name === undefined || t.name === opts.name);
+        const name = opts?.name;
+        const rows =
+          name === undefined
+            ? [...b.tombstones.values()].sort(tombstonesNewestFirst)
+            : [...b.tombstones.entries()]
+                .filter(([key]) => key.startsWith(tombstoneNamePrefix(name)))
+                .sort(([a], [c]) => (a < c ? 1 : a > c ? -1 : 0))
+                .map(([, t]) => t);
         return structuredClone(opts?.limit === undefined ? rows : rows.slice(0, opts.limit));
       },
     },

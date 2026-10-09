@@ -204,8 +204,8 @@ export interface HermeticDeps {
   mirrorDir?: string;
   /**
    * How often the unbounded data-volume attach polls, and how often it says so
-   * (`attach.ts`), and how long `destroy` waits for its tailnet devices to read
-   * offline (`TAILNET_OFFLINE_WAIT_MS`). Tests shrink all three; nothing else
+   * (`attach.ts`), and how long `destroy` and `recreate` wait for the agent's
+   * tailnet devices to read offline (`TAILNET_OFFLINE_WAIT_MS`). Tests shrink all three; nothing else
    * sets them.
    */
   attach?: { pollMs?: number; progressMs?: number; tailnetOfflineMs?: number };

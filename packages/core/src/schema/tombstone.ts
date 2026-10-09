@@ -8,18 +8,33 @@ import { AgentName } from "./requests.ts";
  * A destroyed agent no longer has a row: `agents.destroy` ends by deleting it
  * so the name is free again (§6.7). What survives is this record, written
  * under one reserved partition rather than under the agent's own name, so a
- * single `Query` lists every agent the fleet has ever destroyed, newest first,
- * without a `Scan`. The leading underscore is what keeps it out of the way:
- * `validateName` refuses any name that starts with `_` (§6.1), so no agent's
- * event log can ever share this partition, and `agents.history` — which admits
- * `_fleet` and nothing else with that prefix — can never read it as history.
+ * single `Query` lists every agent the fleet has ever destroyed without a
+ * `Scan`, and a `begins_with` key condition narrows it to one name's
+ * incarnations (`tombstoneSortKey`). The leading underscore is what keeps it
+ * out of the way: `validateName` refuses any name that starts with `_`
+ * (§6.1), so no agent's event log can ever share this partition, and
+ * `agents.history` — which admits `_fleet` and nothing else with that prefix
+ * — can never read it as history.
  */
 export const DESTROYED_KEY = "_destroyed";
 
 /**
- * A tombstone's range key: the moment of destruction first, so the partition
- * sorts chronologically and a reverse query is newest-first, then the name,
- * so two agents destroyed in the same millisecond do not overwrite each other.
+ * A tombstone's range key: the name first, then the moment of destruction.
+ *
+ * Name first so the reads that matter most — a release or create asking for
+ * one name's predecessors (`existingTombstone`, `predecessorFloor`), the
+ * destroyed view narrowed to one name — are a key condition,
+ * `begins_with(timestamp, tombstoneNamePrefix(name))`, and touch only that
+ * name's items rather than filtering the whole partition. Within a name the
+ * ISO time sorts chronologically, so a reverse query is that name's newest
+ * incarnation first. Two agents destroyed in the same millisecond still land
+ * on different keys, because their names differ.
+ *
+ * The price is that the partition as a whole sorts by name, not by time: the
+ * unfiltered read (`agents.destroyed` with no name, the archive, a plan) walks
+ * every page and sorts by `destroyed_at` itself (`tombstonesNewestFirst`)
+ * before it applies a limit. That list is the fleet's whole destroy history,
+ * read by humans, so it is small enough to read whole.
  *
  * It is `destroyed_at`, never `released_at`, even for a legacy row released
  * long after its destroy. One name's incarnations are strictly sequential, and
@@ -31,8 +46,29 @@ export const DESTROYED_KEY = "_destroyed";
  * name's history, which a release does not change), so an interrupted legacy
  * release rewrites the same key rather than adding one.
  */
-export function tombstoneSortKey(destroyedAt: string, name: string): string {
-  return `${destroyedAt}#${name}`;
+export function tombstoneSortKey(name: string, destroyedAt: string): string {
+  return `${tombstoneNamePrefix(name)}${destroyedAt}`;
+}
+
+/**
+ * The range-key prefix every one of `name`'s tombstones shares, separator
+ * included. The trailing `#` is load-bearing: `validateName` admits only
+ * lowercase alphanumerics and hyphens (`AGENT_NAME_RE`, §6.1), so `#` can never
+ * occur inside a name, and `ab#` therefore cannot be a prefix of `abc#…`.
+ * Without it, a per-name read of `ab` would return `abc`'s incarnations too.
+ */
+export function tombstoneNamePrefix(name: string): string {
+  return `${name}#`;
+}
+
+/**
+ * The order every unfiltered tombstone read returns: newest `destroyed_at`
+ * first, ties broken by name so the order does not depend on the store. ISO
+ * strings in the one format `Iso` admits compare correctly as strings.
+ */
+export function tombstonesNewestFirst(a: AgentTombstone, b: AgentTombstone): number {
+  if (a.destroyed_at !== b.destroyed_at) return a.destroyed_at < b.destroyed_at ? 1 : -1;
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
 /**
@@ -97,12 +133,25 @@ export type AgentTombstone = z.infer<typeof AgentTombstone>;
  * table needs. `name` is the partition (`_destroyed`), `timestamp` the range
  * key (`tombstoneSortKey`); the agent's own name moves to `agent`. Only the
  * stores read or write this shape — everything above them sees `AgentTombstone`.
+ *
+ * The range key must be exactly the one `toTombstoneItem` derives from the
+ * item's own `agent` and `destroyed_at`. The events table is writable by the
+ * boxes, and a per-name read selects by the key while callers trust the
+ * `agent` attribute: an item keyed under `ab#…` that claimed `agent: "abc"`
+ * would otherwise surface in `ab`'s read as one of `abc`'s incarnations, and
+ * one keyed under another time would sort where its `destroyed_at` does not
+ * say. Such an item fails the parse, and every read skips what does not parse.
  */
-export const TombstoneItem = AgentTombstone.omit({ name: true, legacy: true }).extend({
-  name: z.literal(DESTROYED_KEY),
-  timestamp: z.string(),
-  agent: AgentName,
-});
+export const TombstoneItem = AgentTombstone.omit({ name: true, legacy: true })
+  .extend({
+    name: z.literal(DESTROYED_KEY),
+    timestamp: z.string(),
+    agent: AgentName,
+  })
+  .refine((item) => item.timestamp === tombstoneSortKey(item.agent, item.destroyed_at), {
+    message: "range key does not match the tombstone's agent and destroyed_at",
+    path: ["timestamp"],
+  });
 export type TombstoneItem = z.infer<typeof TombstoneItem>;
 
 export function toTombstoneItem(t: AgentTombstone): TombstoneItem {
@@ -110,7 +159,7 @@ export function toTombstoneItem(t: AgentTombstone): TombstoneItem {
   return {
     ...rest,
     name: DESTROYED_KEY,
-    timestamp: tombstoneSortKey(t.destroyed_at, name),
+    timestamp: tombstoneSortKey(name, t.destroyed_at),
     agent: name,
   };
 }

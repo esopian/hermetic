@@ -89,6 +89,28 @@ describe("agents.destroyed", () => {
     expect(one[0]!.destroyed_at).toBe(stamps[0]!);
   });
 
+  /**
+   * The store itself, beneath `agents.destroyed`'s own merge and sort: the
+   * range key orders the partition by name, so an unfiltered read that
+   * limited before sorting would return the alphabetically last names.
+   */
+  test("the store's unfiltered read sorts across names before it limits", async () => {
+    const backend = new MemoryBackend();
+    await backend.store.events.appendTombstone(tombstone("zephyr", "2026-09-01T00:00:00.000Z"));
+    await backend.store.events.appendTombstone(tombstone("atlas", "2026-09-04T00:00:00.000Z"));
+    await backend.store.events.appendTombstone(tombstone("ember", "2026-09-05T00:00:00.000Z"));
+    const rows = await backend.store.events.queryTombstones({ limit: 2 });
+    expect(rows.map((t) => t.name)).toEqual(["ember", "atlas"]);
+  });
+
+  test("a name does not see the tombstones of a longer name it prefixes", async () => {
+    const backend = new MemoryBackend();
+    await backend.store.events.appendTombstone(tombstone("abc", "2026-09-03T00:00:00.000Z"));
+    await backend.store.events.appendTombstone(tombstone("ab", "2026-09-02T00:00:00.000Z"));
+    const ab = await backend.store.events.queryTombstones({ name: "ab" });
+    expect(ab.map((t) => t.name)).toEqual(["ab"]);
+  });
+
   test("synthesises a legacy destroyed row as a tombstone with legacy: true", async () => {
     const { backend, hermetic } = seeded();
     legacyRow(backend, "cinder", "vol-legacy");

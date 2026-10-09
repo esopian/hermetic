@@ -113,8 +113,8 @@ export interface AttachDeps {
   pollMs?: number | undefined;
   progressMs?: number | undefined;
   /**
-   * `destroy`'s bounded wait for its tailnet devices to read offline
-   * (`TAILNET_OFFLINE_WAIT_MS`, `fleet/tailnet-devices.ts`). Carried here
+   * `destroy`'s and `recreate`'s bounded wait for the agent's tailnet devices
+   * to read offline (`TAILNET_OFFLINE_WAIT_MS`, `fleet/tailnet-devices.ts`). Carried here
    * because it runs on this same poll and clock; tests set it to zero.
    */
   tailnetOfflineMs?: number | undefined;
@@ -611,6 +611,10 @@ export async function* waitVolumeReleased(
  * keeps writing its facts onto the agent row while the instance is
  * `shutting-down`, and the release deletes that row. Waiting for `terminated`
  * is what guarantees nothing on the box is still running when the row goes.
+ * `recreate` needs it before it launches the replacement (§6.5): the old
+ * box's tailnet node reads online until the machine is gone, and a
+ * replacement joining beside it is pushed onto `<name>-2`. Both reach it
+ * through `lifecycle/retire-nodes.ts`.
  *
  * Any other state is waited on rather than refused. `TerminateInstances` has
  * already been accepted by the time this is called, and `DescribeInstances` is

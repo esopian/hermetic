@@ -1088,21 +1088,30 @@ describe("tombstones", () => {
   });
   const item = (name: string, at: string) => {
     const { name: _n, legacy: _l, ...rest } = tombstone(name, at);
-    return { ...rest, name: DESTROYED_KEY, timestamp: `${at}#${name}`, agent: name };
+    return { ...rest, name: DESTROYED_KEY, timestamp: `${name}#${at}`, agent: name };
+  };
+  type TombstoneQuery = {
+    KeyConditionExpression: string;
+    FilterExpression?: string;
+    ScanIndexForward: boolean;
+    ExpressionAttributeNames: Record<string, string>;
+    ExpressionAttributeValues: Record<string, unknown>;
+    Limit?: number;
+    ExclusiveStartKey?: unknown;
   };
 
-  test("append writes the reserved partition, range-keyed by time then name", async () => {
+  test("append writes the reserved partition, range-keyed by name then time", async () => {
     ddb.on(PutCommand).resolves({});
     await stores().events.appendTombstone(tombstone("atlas", "2026-09-02T00:00:00.000Z"));
     const [input] = inputsOf<{ Item: Record<string, unknown>; TableName: string }>(ddb, PutCommand);
     expect(input!.TableName).toBe("hermetic-events");
     expect(input!.Item["name"]).toBe(DESTROYED_KEY);
-    expect(input!.Item["timestamp"]).toBe("2026-09-02T00:00:00.000Z#atlas");
+    expect(input!.Item["timestamp"]).toBe("atlas#2026-09-02T00:00:00.000Z");
     expect(input!.Item["agent"]).toBe("atlas");
     expect("legacy" in input!.Item).toBe(false);
   });
 
-  test("query reads the one partition newest first, paginated, filtered by name", async () => {
+  test("a per-name read is a begins_with key condition, newest first, paginated, no filter", async () => {
     ddb
       .on(QueryCommand)
       .resolvesOnce({
@@ -1118,39 +1127,92 @@ describe("tombstones", () => {
     expect(rows[0]!.name).toBe("atlas");
     expect(rows[0]!.legacy).toBe(false);
 
-    const inputs = inputsOf<{
-      KeyConditionExpression: string;
-      FilterExpression: string;
-      ScanIndexForward: boolean;
-      ExpressionAttributeNames: Record<string, string>;
-      ExpressionAttributeValues: Record<string, unknown>;
-      Limit?: number;
-      ExclusiveStartKey?: unknown;
-    }>(ddb, QueryCommand);
+    const inputs = inputsOf<TombstoneQuery>(ddb, QueryCommand);
     expect(inputs).toHaveLength(2);
-    expect(inputs[0]!.KeyConditionExpression).toBe("#name = :pk");
-    expect(inputs[0]!.FilterExpression).toBe("#agent = :agent");
-    expect(inputs[0]!.ExpressionAttributeValues).toEqual({ ":pk": DESTROYED_KEY, ":agent": "atlas" });
+    expect(inputs[0]!.KeyConditionExpression).toBe("#name = :pk AND begins_with(#ts, :prefix)");
+    expect(inputs[0]!.ExpressionAttributeNames).toEqual({ "#name": "name", "#ts": "timestamp" });
+    // The separator is part of the prefix: `atlas#`, never bare `atlas`.
+    expect(inputs[0]!.ExpressionAttributeValues).toEqual({ ":pk": DESTROYED_KEY, ":prefix": "atlas#" });
+    expect(inputs[0]!.FilterExpression).toBeUndefined();
     expect(inputs[0]!.ScanIndexForward).toBe(false);
-    // The limit is honoured after the filter, so it is never handed to DynamoDB.
     expect(inputs[0]!.Limit).toBeUndefined();
     expect(inputs[1]!.ExclusiveStartKey).toEqual({ name: DESTROYED_KEY, timestamp: "x" });
   });
 
-  test("an unfiltered query declares no filter aliases, and the limit stops the walk", async () => {
-    ddb.on(QueryCommand).resolves({
-      Items: [item("atlas", "2026-09-03T00:00:00.000Z"), item("ember", "2026-09-02T00:00:00.000Z")],
-      LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "x" },
-    });
-    const rows = await stores().events.queryTombstones({ limit: 1 });
-    expect(rows.map((r) => r.name)).toEqual(["atlas"]);
-    const inputs = inputsOf<{
-      FilterExpression?: string;
-      ExpressionAttributeNames: Record<string, string>;
-    }>(ddb, QueryCommand);
-    expect(inputs).toHaveLength(1);
+  test("a per-name limit is handed to DynamoDB as the remaining budget and stops the walk", async () => {
+    ddb
+      .on(QueryCommand)
+      .resolvesOnce({
+        // A skipped item spends DynamoDB's Limit but not the caller's.
+        Items: [{ name: DESTROYED_KEY, timestamp: "atlas#garbage" }],
+        LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "y" },
+      })
+      .resolvesOnce({
+        Items: [item("atlas", "2026-09-03T00:00:00.000Z")],
+        LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "x" },
+      });
+    const rows = await stores().events.queryTombstones({ name: "atlas", limit: 1 });
+    expect(rows.map((r) => r.destroyed_at)).toEqual(["2026-09-03T00:00:00.000Z"]);
+    const inputs = inputsOf<TombstoneQuery>(ddb, QueryCommand);
+    expect(inputs.map((i) => i.Limit)).toEqual([1, 1]);
+  });
+
+  test("an unfiltered read walks every page, sorts newest first across names, then limits", async () => {
+    // DynamoDB returns the partition in range-key order, which is by name.
+    ddb
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [item("zephyr", "2026-09-01T00:00:00.000Z"), item("ember", "2026-09-05T00:00:00.000Z")],
+        LastEvaluatedKey: { name: DESTROYED_KEY, timestamp: "x" },
+      })
+      .resolvesOnce({
+        Items: [item("ember", "2026-09-02T00:00:00.000Z"), item("atlas", "2026-09-04T00:00:00.000Z")],
+      });
+    const rows = await stores().events.queryTombstones({ limit: 2 });
+    expect(rows.map((r) => `${r.name}@${r.destroyed_at}`)).toEqual([
+      "ember@2026-09-05T00:00:00.000Z",
+      "atlas@2026-09-04T00:00:00.000Z",
+    ]);
+    const inputs = inputsOf<TombstoneQuery>(ddb, QueryCommand);
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]!.KeyConditionExpression).toBe("#name = :pk");
     expect(inputs[0]!.FilterExpression).toBeUndefined();
     expect(inputs[0]!.ExpressionAttributeNames).toEqual({ "#name": "name" });
+    expect(inputs[0]!.ExpressionAttributeValues).toEqual({ ":pk": DESTROYED_KEY });
+    // The limit applies to the sorted list, so it is never handed to the walk.
+    expect(inputs.map((i) => i.Limit)).toEqual([undefined, undefined]);
+  });
+
+  /**
+   * DynamoDB evaluates `begins_with` itself and the mock does not, so this
+   * replays the key condition the store sends against a partition holding
+   * both names. `ab`'s read must not see `abc`'s tombstone — the separator in
+   * the prefix is what keeps them apart.
+   */
+  test("a name does not see the tombstones of a longer name it prefixes", async () => {
+    const partition = [item("abc", "2026-09-03T00:00:00.000Z"), item("ab", "2026-09-02T00:00:00.000Z")];
+    ddb.on(QueryCommand).callsFake((input: TombstoneQuery) => {
+      const prefix = input.ExpressionAttributeValues[":prefix"];
+      return {
+        Items: partition.filter((i) => typeof prefix !== "string" || i.timestamp.startsWith(prefix)),
+      };
+    });
+    const rows = await stores().events.queryTombstones({ name: "ab" });
+    expect(rows.map((r) => r.name)).toEqual(["ab"]);
+  });
+
+  test("an item keyed into one name's range but naming another agent is skipped", async () => {
+    const forged = {
+      ...item("abc", "2026-09-03T00:00:00.000Z"),
+      timestamp: "ab#2026-09-03T00:00:00.000Z",
+    };
+    const retimed = {
+      ...item("ab", "2026-09-04T00:00:00.000Z"),
+      timestamp: "ab#2026-09-09T00:00:00.000Z",
+    };
+    ddb.on(QueryCommand).resolves({ Items: [retimed, forged, item("ab", "2026-09-02T00:00:00.000Z")] });
+    const rows = await stores().events.queryTombstones({ name: "ab" });
+    expect(rows.map((r) => `${r.name}@${r.destroyed_at}`)).toEqual(["ab@2026-09-02T00:00:00.000Z"]);
   });
 
   /**
