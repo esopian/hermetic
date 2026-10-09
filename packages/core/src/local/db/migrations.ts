@@ -498,6 +498,26 @@ const MIGRATIONS: Migration[] = [
   },
   {
     /**
+     * Which incarnation of each agent name the rows above describe
+     * (`local/incarnations.ts`, §6.7). A destroy releases the name and only the
+     * laptop that ran it purges its own local state; every other laptop finds
+     * out by seeing a different `created_at` on the live row, and this is where
+     * it remembers the one it saw last. Created empty on purpose: an existing
+     * home's state is adopted on its first read, never purged by the upgrade.
+     */
+    name: "agent-incarnations",
+    version: 13,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS agent_incarnations (
+         fleet      TEXT NOT NULL,
+         name       TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         PRIMARY KEY (fleet, name)
+       )`,
+    ],
+  },
+  {
+    /**
      * Inbox v2 (§4.9): the operator can take a row out of the inbox
      * (`cleared_at`, after which it is History until retention) or hide it for
      * a while (`snoozed_until`). Declared columns, so a re-run on a ledger that
@@ -505,7 +525,7 @@ const MIGRATIONS: Migration[] = [
      * they are two `prefs` rows.
      */
     name: "notifications-cleared-snoozed",
-    version: 13,
+    version: 14,
     statements: [],
     columns: [
       { table: "notifications", column: "cleared_at", type: "TEXT" },
@@ -521,7 +541,7 @@ const MIGRATIONS: Migration[] = [
      * re-cleared by the next list. Kept internal: no `Notification` field.
      */
     name: "notifications-restored",
-    version: 14,
+    version: 15,
     statements: [],
     columns: [{ table: "notifications", column: "restored_at", type: "TEXT" }],
   },

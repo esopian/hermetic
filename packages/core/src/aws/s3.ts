@@ -6,6 +6,8 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
+  type DeleteObjectsCommandOutput,
+  type ListObjectVersionsCommandOutput,
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -139,25 +141,38 @@ export class S3Artifacts implements ArtifactsApi {
    * marker under the prefix, not just a new delete marker over the current one.
    *
    * The bucket is versioned (§5), so a plain `DeleteObjects` hides an object
-   * and frees nothing — which is exactly wrong for the two callers that prune
-   * to reclaim space: the recovery archive keeps one previous version, and the
+   * and frees nothing — which is exactly wrong for the callers that prune to
+   * reclaim space: the recovery archive keeps one previous version, and the
    * release prune keeps two. Both of them "kept exactly one" while the bucket
-   * grew forever. `deleteByPrefix` stays as it is for `destroy`, whose config
-   * tarballs are meant to stay recoverable from their versions.
+   * grew forever. `destroy` purges an agent's `config/<name>/` the same way
+   * (§6.7): releasing a name must not leave its rendered config readable by
+   * version for the next agent of that name.
+   *
+   * A `DeleteObjects` call that succeeds can still fail per key: S3 answers 200
+   * with an `Errors` entry for each version it refused (`AccessDenied` on
+   * `s3:DeleteObjectVersion`, a version under object lock), and `Quiet` only
+   * suppresses the successes. Those are raised as one `HermeticError` naming
+   * every refused key, never counted as removed — a purge that reported
+   * success over versions still in the bucket would be the bug it exists to fix.
    */
   async purgeByPrefix(prefix: string): Promise<number> {
     let removed = 0;
     let keyMarker: string | undefined;
     let versionMarker: string | undefined;
     do {
-      const out = await this.s3.send(
-        new ListObjectVersionsCommand({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          ...(keyMarker ? { KeyMarker: keyMarker } : {}),
-          ...(versionMarker ? { VersionIdMarker: versionMarker } : {}),
-        }),
-      );
+      let out: ListObjectVersionsCommandOutput;
+      try {
+        out = await this.s3.send(
+          new ListObjectVersionsCommand({
+            Bucket: this.bucket,
+            Prefix: prefix,
+            ...(keyMarker ? { KeyMarker: keyMarker } : {}),
+            ...(versionMarker ? { VersionIdMarker: versionMarker } : {}),
+          }),
+        );
+      } catch (e) {
+        throw asHermeticError(e, `could not list versions under s3://${this.bucket}/${prefix}`);
+      }
       const doomed = [...(out.Versions ?? []), ...(out.DeleteMarkers ?? [])]
         .filter(
           (v): v is { Key: string; VersionId: string } =>
@@ -169,14 +184,39 @@ export class S3Artifacts implements ArtifactsApi {
         )
         .map((v) => ({ Key: v.Key, VersionId: v.VersionId }));
       for (let i = 0; i < doomed.length; i += 1000) {
-        await this.s3.send(
-          new DeleteObjectsCommand({
-            Bucket: this.bucket,
-            Delete: { Objects: doomed.slice(i, i + 1000), Quiet: true },
-          }),
-        );
+        const batch = doomed.slice(i, i + 1000);
+        let res: DeleteObjectsCommandOutput;
+        try {
+          res = await this.s3.send(
+            new DeleteObjectsCommand({
+              Bucket: this.bucket,
+              Delete: { Objects: batch, Quiet: true },
+            }),
+          );
+        } catch (e) {
+          throw asHermeticError(e, `could not delete versions under s3://${this.bucket}/${prefix}`);
+        }
+        const failed = res.Errors ?? [];
+        if (failed.length > 0) {
+          const first = failed[0];
+          throw new HermeticError(
+            "INTERNAL",
+            `could not delete ${failed.length} of ${batch.length} versions under ` +
+              `s3://${this.bucket}/${prefix}: ${first?.Key ?? "?"} ` +
+              `(${first?.Code ?? "unknown"}: ${first?.Message ?? "no message"})`,
+            {
+              aws_error: first?.Code ?? null,
+              removed: removed + batch.length - failed.length,
+              failed: failed.map((f) => ({
+                key: f.Key ?? null,
+                version_id: f.VersionId ?? null,
+                code: f.Code ?? null,
+              })),
+            },
+          );
+        }
+        removed += batch.length;
       }
-      removed += doomed.length;
       keyMarker = out.IsTruncated ? out.NextKeyMarker : undefined;
       versionMarker = out.IsTruncated ? out.NextVersionIdMarker : undefined;
     } while (keyMarker !== undefined || versionMarker !== undefined);

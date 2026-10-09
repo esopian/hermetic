@@ -185,7 +185,8 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     () =>
       draft?.name ??
       (onVolume
-        ? suggestedName(onVolume.agent, names) || randomAgentName(names)
+        ? // A released volume carries no `agent` tag, only `former_agent`, and that name is free again, so it is the right prefill.
+          suggestedName(onVolume.agent ?? onVolume.retained_by, names) || randomAgentName(names)
         : randomAgentName(names)),
   );
   const [size, setSize] = useState<SizeSpec["id"]>(seed.size);
@@ -306,15 +307,15 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   const taken = names.has(trimmed);
   const invalid = trimmed.length > 0 && !isValidName(trimmed);
   /**
-   * On the reclaim path the volume's own name is usually taken — the destroyed
-   * agent's row is kept forever (§4.3) — so the hint explains that rather than
-   * only reporting it.
+   * A taken name is a live agent's: a destroy releases the name (§6.7). On the
+   * reclaim path that means a new agent already took the volume's former name,
+   * so the hint says so rather than only reporting it.
    */
   const nameHint = !trimmed
     ? "lowercase, digits, dashes · becomes the EC2 tag, SSM path and tailnet hostname"
     : taken
-      ? onVolume && onVolume.agent === trimmed
-        ? `“${trimmed}” is kept forever as a destroyed record — pick another; the volume keeps its memory either way`
+      ? onVolume && (onVolume.agent ?? onVolume.retained_by) === trimmed
+        ? `“${trimmed}” belongs to a live agent now — pick another; the volume keeps its memory either way`
         : `“${trimmed}” already exists`
       : invalid
         ? "lowercase letters, digits and dashes · no leading dash · 1–31 chars"

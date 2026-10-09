@@ -171,6 +171,8 @@ const SURFACE: Record<PublicMethod, string> = {
   "agents.recreate": "agent recreate",
   "agents.destroy": "agent destroy",
   "agents.history": "agent history",
+  // §6.7: the tombstones a destroy leaves once the row is gone.
+  "agents.destroyed": "agent destroyed",
   "agents.rerun": "agent rerun",
   "agents.probe": "agent probe",
   // §7.4: the Serve URL and session token Hermes Desktop attaches with.

@@ -18,6 +18,7 @@ import {
   DestroyAgentInput,
   HistoryInput,
   ListAgentsInput,
+  ListDestroyedInput,
   LogsInput,
   ListVolumesInput,
   RecreateAgentInput,
@@ -47,6 +48,7 @@ export const startSchema = declareRpc("agents.start", AgentRefInput);
 export const recreateSchema = declareRpc("agents.recreate", RecreateAgentInput);
 export const destroySchema = declareRpc("agents.destroy", DestroyAgentInput);
 export const historySchema = declareRpc("agents.history", HistoryInput);
+export const destroyedSchema = declareRpc("agents.destroyed", ListDestroyedInput);
 export const rerunSchema = declareRpc("agents.rerun", RerunInput);
 export const probeSchema = declareRpc("agents.probe", AgentRefInput);
 export const desktopSchema = declareRpc("agents.desktop", AgentRefInput);
@@ -176,6 +178,14 @@ export async function destroy(ctx: HandlerContext, params: unknown): Promise<Acc
 
 export async function history(ctx: HandlerContext, params: unknown) {
   return await ctx.hermetic().agents.history(parseInput(historySchema, params));
+}
+
+/**
+ * `agents.destroyed` (§6.7): the tombstones, newest first. Read-only, like
+ * `history`, so it carries no write guard.
+ */
+export async function destroyed(ctx: HandlerContext, params: unknown) {
+  return await ctx.hermetic().agents.destroyed(parseInput(destroyedSchema, params));
 }
 
 /**
@@ -386,6 +396,7 @@ export const agentHandlers = {
   "agents.recreate": recreate,
   "agents.destroy": destroy,
   "agents.history": history,
+  "agents.destroyed": destroyed,
   "agents.rerun": rerun,
   "agents.probe": probe,
   "agents.desktop": desktop,

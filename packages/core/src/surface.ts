@@ -62,6 +62,7 @@ import {
   HistoryInput as HistoryInputSchema,
   InitInput as InitInputSchema,
   ListAgentsInput as ListAgentsInputSchema,
+  ListDestroyedInput as ListDestroyedInputSchema,
   ListVolumesInput as ListVolumesInputSchema,
   NetworkStatusInput as NetworkStatusInputSchema,
   LogsInput as LogsInputSchema,
@@ -191,6 +192,8 @@ export const PUBLIC_METHODS = [
   "agents.recreate",
   "agents.destroy",
   "agents.history",
+  // §6.7: a destroy frees the name and leaves a tombstone; this is the audit read.
+  "agents.destroyed",
   "agents.rerun",
   "agents.probe",
   "agents.desktop",
@@ -341,6 +344,7 @@ export const REQUEST_SCHEMAS = {
   "agents.recreate": RecreateAgentInputSchema,
   "agents.destroy": DestroyAgentInputSchema,
   "agents.history": HistoryInputSchema,
+  "agents.destroyed": ListDestroyedInputSchema,
   "agents.rerun": RerunInputSchema,
   // Name-only and read-only, so it validates the same object `agents.get` does.
   "agents.probe": AgentRefInputSchema,

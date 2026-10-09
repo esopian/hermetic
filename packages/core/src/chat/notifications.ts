@@ -248,6 +248,11 @@ export function observeHealth(deps: NotificationDeps, agents: readonly AgentView
        * A destroyed agent is forgotten rather than recorded: the next agent to
        * carry that name is a different box, and comparing it against the dead
        * one's last status would raise a transition nothing performed.
+       *
+       * Legacy rows only (§6.7): a destroy now deletes the row and `list` hides
+       * any pre-tombstone `destroyed` row, so this branch is the backstop for
+       * a caller that passes one in; the release itself purges the name's
+       * local state (`release-name.ts`'s `purgeLocal`).
        */
       if (current === "destroyed") {
         deps.store.forgetSeen(fleet, agent.name);
@@ -519,7 +524,7 @@ export function profileRevisionAdvisories(
 ): Advisory[] {
   const out: Advisory[] = [];
   for (const agent of agents) {
-    // A destroyed row is kept forever (§4.3) and is nobody's rollout.
+    // A legacy `destroyed` row (§6.7; a destroy now deletes the row) is nobody's rollout.
     if (agent.update_available !== true || agent.display_status === "destroyed") continue;
     const profile = agent.profile_id === undefined ? undefined : settings?.profiles?.[agent.profile_id];
     const detail =
@@ -627,14 +632,11 @@ function chatKeyScope(fleet: string | null, instance: string, bot: string): stri
  * collide with the agent name the health source files under. The table is keyed
  * by fleet, so these need no fleet scoping the way the row keys above do.
  *
- * **A destroyed box's watermarks are left behind, and that is a known cost.**
- * `observeHealth` forgets a destroyed agent by name, and the store offers no
- * way to forget a *prefix*, so `chat:<name>/<bot>` survives. If that name is
- * later reused, the new box's first message is compared against the dead box's
- * watermark and notifies, where a genuine first sighting would have been
- * silent. That is right when the volume was reattached — the conversation
- * really did continue — and wrong when it was not. Fixing it properly needs a
- * `forgetSeen` that takes a prefix, which is a change to the SQLite store.
+ * A destroyed box's watermarks are dropped with its name: the release purges
+ * `chat:<name>/` by prefix (`forgetSeenPrefix`, called from
+ * `local/purge-agent.ts`), so a later agent reusing the name starts with a
+ * genuine first sighting instead of comparing its first message against the
+ * dead box's watermark.
  */
 export function chatSeenSubject(instance: string, bot: string): string {
   return `chat:${instance}/${bot}`;

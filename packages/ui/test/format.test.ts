@@ -269,7 +269,7 @@ describe("cost strings", () => {
   });
 
   test("destroyed agent whose volume was deleted bills nothing", () => {
-    // `destroy --delete-volume` nulls `volume_id` but leaves `volume_gib`; the
+    // A destroy that deleted the volume nulls `volume_id` but leaves `volume_gib`; the
     // old code billed the leftover size for a volume that no longer exists.
     const a = agent({
       display_status: "destroyed",
@@ -769,13 +769,15 @@ describe("offlineUnit", () => {
 });
 
 describe("destroyedSummary", () => {
-  test("names the volume the row still owns (§6.6 keeps it by default)", () => {
-    expect(destroyedSummary("vol-123")).toBe("destroyed · record kept · data volume vol-123 retained");
+  test("names the volume a legacy destroyed row still owns", () => {
+    expect(destroyedSummary("vol-123")).toBe(
+      "destroyed · legacy record · data volume vol-123 retained",
+    );
   });
 
-  test("says so when --delete-volume took it", () => {
-    expect(destroyedSummary(null)).toBe("destroyed · record kept · data volume deleted");
-    expect(destroyedSummary(undefined)).toBe("destroyed · record kept · data volume deleted");
+  test("says so when the destroy deleted it", () => {
+    expect(destroyedSummary(null)).toBe("destroyed · legacy record · data volume deleted");
+    expect(destroyedSummary(undefined)).toBe("destroyed · legacy record · data volume deleted");
   });
 });
 

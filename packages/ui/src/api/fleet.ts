@@ -11,12 +11,14 @@ import { transport } from "./transport.ts";
 import type {
   Accepted,
   AgentEvent,
+  AgentTombstone,
   AgentView,
   BridgeInput,
   BridgeResult,
   CreateAgentInput,
   DesktopAttach,
   Doctor,
+  HistoryWindow,
   Meta,
   FoundationPlan,
   NetworkMode,
@@ -72,12 +74,30 @@ export function desktopAttach(name: string): Promise<DesktopAttach> {
   return transport().request<DesktopAttach>("agents.desktop", { name });
 }
 
-export function history(name: string, limit = 40): Promise<AgentEvent[]> {
-  return transport().request<AgentEvent[]>("agents.history", { name, limit });
+export function history(name: string, limit = 40, window?: HistoryWindow): Promise<AgentEvent[]> {
+  return transport().request<AgentEvent[]>("agents.history", {
+    name,
+    limit,
+    ...(window?.since ? { since: window.since } : {}),
+    ...(window?.until ? { until: window.until } : {}),
+  });
 }
 
-export function planDestroy(name: string, deleteVolume: boolean): Promise<Plan> {
-  return transport().request<Plan>("plan.destroy", { name, delete_volume: deleteVolume });
+/**
+ * `agents.destroyed` (§6.7): tombstones, newest first. Not cached — the
+ * Destroyed lens reads it on entry and after a destroy settles, and a stale
+ * answer there would hide the agent the operator just destroyed.
+ */
+export function destroyed(name?: string, limit?: number): Promise<AgentTombstone[]> {
+  return transport().request<AgentTombstone[]>("agents.destroyed", {
+    ...(name ? { name } : {}),
+    ...(limit ? { limit } : {}),
+  });
+}
+
+/** `keepVolume` is the opt-out: a destroy deletes the data volume unless asked not to (§6.7). */
+export function planDestroy(name: string, keepVolume: boolean): Promise<Plan> {
+  return transport().request<Plan>("plan.destroy", { name, keep_volume: keepVolume });
 }
 
 /* ── volumes (§9) ────────────────────────────────────────────────────────── */
@@ -572,7 +592,7 @@ export function upgrade(name: string, hermes: string): Promise<Accepted> {
 }
 
 /*
- * There is deliberately no `destroy(name, deleteVolume)` here.
+ * There is deliberately no `destroy(name, keepVolume)` here.
  *
  * `DELETE /api/agents/<name>` recomputes what to destroy from the name at the
  * moment it runs, so a portal calling it would terminate whatever the row

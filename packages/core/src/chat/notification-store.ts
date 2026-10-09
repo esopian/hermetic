@@ -195,4 +195,18 @@ export interface NotificationStore {
   seenStatus(fleet: string | null, agent: string): string | null;
   setSeenStatus(fleet: string | null, agent: string, status: string): void;
   forgetSeen(fleet: string | null, agent: string): void;
+  /**
+   * Forgets every seen subject in this fleet that begins with `prefix` — a
+   * literal prefix, not a pattern. The purge of a released name uses it for
+   * `chat:<name>/`, the per-bot watermarks `forgetSeen` cannot name without
+   * knowing the bots (§6.7).
+   */
+  forgetSeenPrefix(fleet: string | null, prefix: string): void;
+  /**
+   * Resolves every unresolved row this fleet holds about `agent`, whatever its
+   * `key`. Rows stay in the inbox as history — only the condition is closed —
+   * so the badge stops counting a box that no longer exists. A fleet-less row
+   * is not this fleet's and is left alone.
+   */
+  resolveAgent(fleet: string, agent: string): void;
 }

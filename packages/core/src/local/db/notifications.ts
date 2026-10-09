@@ -546,6 +546,26 @@ export class SqliteNotificationStore implements NotificationStore {
   forgetSeen(fleet: string | null, agent: string): void {
     this.db.run(`DELETE FROM agent_status_seen WHERE fleet = ? AND agent = ?`, [fleet ?? "", agent]);
   }
+
+  /**
+   * `substr` rather than `LIKE`: the prefix is data (`chat:<name>/`) and `_`
+   * or `%` in it must not act as a wildcard.
+   */
+  forgetSeenPrefix(fleet: string | null, prefix: string): void {
+    this.db.run(`DELETE FROM agent_status_seen WHERE fleet = ? AND substr(agent, 1, ?) = ?`, [
+      fleet ?? "",
+      prefix.length,
+      prefix,
+    ]);
+  }
+
+  resolveAgent(fleet: string, agent: string): void {
+    this.db.run(
+      `UPDATE notifications SET resolved_at = ? WHERE fleet = ? AND agent = ? AND resolved_at IS NULL`,
+      [this.now().toISOString(), fleet, agent],
+    );
+    this.sweep();
+  }
 }
 
 interface NotificationRow {

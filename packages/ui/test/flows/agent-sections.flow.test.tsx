@@ -12,8 +12,8 @@
  * Lifecycle is where every action lives. The claims are the ones an operator
  * relies on: an action that cannot run says why rather than vanishing, the
  * disruptive ones ask again before anything is sent, a started op stays on
- * screen when the operator walks to another section, and a destroyed agent is
- * offered nothing at all.
+ * screen when the operator walks to another section, and a destroyed agent —
+ * whose row a destroy deletes — opens no drawer at all.
  *
  * Each test gets its own fixture fleet (`bridge.ts`), so a stop issued here
  * never reaches another flow's `granite`.
@@ -168,9 +168,9 @@ describe("the Lifecycle section", () => {
     await waitFor(() => {
       expect(zone.querySelector(".confirm")).not.toBeNull();
     });
-    // Keep is the default, stated rather than implied.
+    // Delete is the default (§6.7), stated rather than implied.
     expect(
-      (within(zone).getByRole("radio", { name: /Keep data volume/ }) as HTMLInputElement).checked,
+      (within(zone).getByRole("radio", { name: /Delete volume/ }) as HTMLInputElement).checked,
     ).toBe(true);
 
     // Walking off to Overview drops a half-typed confirm rather than leaving it armed.
@@ -181,26 +181,17 @@ describe("the Lifecycle section", () => {
     expect(harness.calls.map((c) => c.name)).not.toContain("apply");
   });
 
-  test("a destroyed agent's Lifecycle explains the record and offers nothing", async () => {
+  test("a link to a destroyed agent opens nothing: the row is gone (§6.7)", async () => {
     harness = await flowHarness();
-    // Destroyed rows are hidden on the board, but a link still opens one — on
-    // the section it names.
+    // `oriole` was destroyed: the fixture holds its tombstone and no row, so a
+    // bookmark to its drawer lands on the fleet once the first scan says so.
     gotoHash("#agent/oriole/lifecycle");
     mountPortal();
 
-    const d = await waitFor(() => {
-      const el = screen.getByRole("dialog");
-      expect(el.querySelector(".detail-name")?.textContent).toBe("oriole");
-      return el;
-    });
-    expect(within(d).getByRole("tab", { name: "Lifecycle" }).getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    await screen.findByLabelText(new RegExp(`^${FIXTURE.readyAgent} · `));
     await waitFor(() => {
-      expect(d.textContent ?? "").toContain("oriole is destroyed.");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(window.location.hash).toBe("");
     });
-    const main = d.querySelector<HTMLElement>(".dr-main");
-    expect(main).not.toBeNull();
-    expect(within(main as HTMLElement).queryAllByRole("button")).toHaveLength(0);
   });
 });

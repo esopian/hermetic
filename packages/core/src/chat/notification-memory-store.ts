@@ -294,4 +294,21 @@ export class MemoryNotificationStore implements NotificationStore {
   forgetSeen(fleet: string | null, agent: string): void {
     this.seen.delete(this.seenKey(fleet, agent));
   }
+
+  forgetSeenPrefix(fleet: string | null, prefix: string): void {
+    const head = this.seenKey(fleet, prefix);
+    for (const key of [...this.seen.keys()]) {
+      if (key.startsWith(head)) this.seen.delete(key);
+    }
+  }
+
+  resolveAgent(fleet: string, agent: string): void {
+    const at = this.now().toISOString();
+    for (const row of this.rows) {
+      if (row.fleet_id === fleet && row.agent === agent && row.resolved_at == null) {
+        row.resolved_at = at;
+      }
+    }
+    this.sweep();
+  }
 }

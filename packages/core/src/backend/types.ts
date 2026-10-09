@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentEvent,
+  AgentTombstone,
   DirectoryEntry,
   DirectoryStatus,
   FleetId,
@@ -53,8 +54,19 @@ export interface AgentStore {
   update(name: string, expectedVersion: number, patch: AgentPatch): Promise<Agent>;
   /** Full `Scan` — the read path of §4.5, no local mirror. */
   scan(): Promise<Agent[]>;
-  /** Only ever used to unwind a failed `create`; a live agent is marked `destroyed`. */
-  delete(name: string): Promise<void>;
+  /**
+   * Remove the row. Two callers: the unwind of a failed `create`, which
+   * deletes unconditionally because the row is its own half-written claim,
+   * and the release at the end of `destroy` (§6.7), which passes
+   * `expectedVersion` and `expectedCreatedAt` so the `DeleteItem` is
+   * conditional on the row being the one it just read — a concurrent writer
+   * that moved it makes this throw `CONFLICT` rather than delete somebody
+   * else's account of the agent. The version alone is not enough: a later
+   * incarnation of the same name can reach the same version, and `created_at`
+   * (written once, at birth) is what tells the two apart. A row already gone
+   * is not an error either way. Events are never deleted.
+   */
+  delete(name: string, opts?: { expectedVersion: number; expectedCreatedAt: string }): Promise<void>;
   /**
    * Names the most recent `scan` could not parse, when the store tracks them.
    * `scan` skips a half-written or foreign row rather than failing the whole
@@ -67,6 +79,24 @@ export interface EventStore {
   append(event: AgentEvent): Promise<void>;
   /** Newest first. Events are never deleted (§6.6). */
   query(name: string, limit?: number): Promise<AgentEvent[]>;
+  /**
+   * The audit record a destroy leaves behind once the agent row is gone
+   * (§6.7): one item under the reserved `_destroyed` partition of the events
+   * table, range-keyed `<name>#<destroyed_at>` (`tombstoneSortKey`). Written
+   * before the row is deleted, so a crash between the two leaves a tombstone
+   * and a `destroying` row — which the next destroy finds and finishes — never
+   * a freed name with no record. Idempotent for the same key.
+   */
+  appendTombstone(tombstone: AgentTombstone): Promise<void>;
+  /**
+   * Every tombstone, newest by `destroyed_at` first — a `Query` on the
+   * reserved partition, never a `Scan`. `name` narrows to one agent's
+   * incarnations through the range key's name prefix (a key condition, not a
+   * filter), and `limit` caps that name's list as it is read. Without `name`
+   * the whole partition is read and sorted by time before `limit` applies,
+   * since the range key orders it by name.
+   */
+  queryTombstones(opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]>;
 }
 
 /**
@@ -405,7 +435,23 @@ export interface ManagedVolumeRef {
   volume_id: string;
   size_gib: number;
   agent: string | null;
+  /** The `hermetic:former_agent=<name>` tag a destroy leaves on a kept volume (§6.7), or null. */
+  former_agent: string | null;
   state: string;
+  /**
+   * EC2's `CreateTime`, ISO-8601, or null when the answer carries none. The
+   * release's sweep (§6.7) reads it to leave alone a disk created after its
+   * own run began: that one can only be a later incarnation's.
+   */
+  created_at: string | null;
+}
+
+/** `ComputeApi.retagVolume`'s options; see there. */
+export interface RetagVolumeOptions {
+  roleData?: boolean;
+  name?: string | null;
+  formerAgent?: string | null;
+  expectedAgent?: string;
 }
 
 /** One EBS snapshot, as the DLM policy of §7.1 produces them. */
@@ -505,6 +551,11 @@ export interface VolumeStatus extends VolumeRef {
   attachments: VolumeAttachment[];
 }
 
+/** `describeOwnedVolume`'s answer: the status, plus the `hermetic:former_agent` tag or null. */
+export interface OwnedVolumeStatus extends VolumeStatus {
+  former_agent: string | null;
+}
+
 /**
  * A volume with everything the §9 volume surface needs to place it: its tags,
  * its AZ, its age and its attachments. `VolumeStatus` deliberately stays the
@@ -517,6 +568,12 @@ export interface VolumeDetail extends VolumeStatus {
   created_at: string | null;
   /** The `agent=<name>` tag, or null when the volume carries none. */
   agent: string | null;
+  /**
+   * The `hermetic:former_agent=<name>` tag, or null. A destroy that keeps the
+   * volume moves the name here from `agent` (§6.7): the volume is nobody's
+   * now, adoptable only by an explicit `--volume`, and this says whose it was.
+   */
+  former_agent: string | null;
   /** Carries `hermetic:managed=true`: hermetic made this one. */
   managed: boolean;
   /** Carries `hermetic:role=data`: the label that settles an ambiguous pair. */
@@ -568,8 +625,15 @@ export interface ComputeApi {
    * callers that want just one — there is deliberately no first-match
    * convenience beside it, because a lookup that silently drops the second
    * box is the trap this method exists to close.
+   *
+   * `shuttingDown: true` adds instances already `shutting-down`. Only the
+   * stray sweeps of `destroy` and `recreate` ask for them: a box on its way out
+   * still runs its hermeticd, which heartbeats into the agent row, and its
+   * tailnet node still holds the agent's name, so both must wait for it to be
+   * `terminated` too. Every other caller wants the boxes that can still be
+   * adopted, attached or started, and a dying one is none of those.
    */
-  listInstancesByTag(name: string): Promise<InstanceRef[]>;
+  listInstancesByTag(name: string, opts?: { shuttingDown?: boolean }): Promise<InstanceRef[]>;
   /**
    * Launch only. The data volume is attached separately (`attachVolume`) so
    * create can write the instance id onto the agent row between the two AWS
@@ -638,8 +702,16 @@ export interface ComputeApi {
    * instance's root disk and is refused too. A volume carrying no role tag at
    * all predates the tag and is still the agent's data disk, exactly as
    * `findVolumeByTag` treats it.
+   *
+   * The answer carries the volume's `hermetic:former_agent` tag, and so does a
+   * refusal's `details.found`: a destroy that keeps the volume writes that tag
+   * *before* it removes `agent` (`retagVolume`), so a volume carrying
+   * `former_agent=<name>` is one a release of `<name>` already promised to
+   * keep — whether or not it got as far as removing the `agent` tag (§6.7,
+   * `release-name.ts`). An adoption interrupted between its two calls leaves
+   * the same pair, which the adopt path's resume finishes (`create-agent.ts`).
    */
-  describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<VolumeStatus | null>;
+  describeOwnedVolume(volumeId: string, owner: ResourceOwner): Promise<OwnedVolumeStatus | null>;
   /**
    * The raw `AttachVolume`. Deliberately dumb: it does not wait, does not
    * retry, and does not decide whether attaching is a good idea — `attachAgentVolume`
@@ -681,6 +753,17 @@ export interface ComputeApi {
    * that named it and nothing else can find it afterwards (§6.6).
    */
   listManagedVolumes(): Promise<ManagedVolumeRef[]>;
+  /**
+   * Every volume this fleet manages that carries `agent=<name>`, any role, in
+   * any state but going away — the same query `findVolumeByTag` makes, with
+   * none of its decisions: it never tags anything and never refuses on several
+   * matches. Releasing a name (§6.7) asks it which disks still hold the name
+   * besides the one the row names, and moves each off it; `findVolumeByTag`
+   * would label a lone untagged match `role=data` on the way past and throw
+   * `CONFLICT` on two, which is exactly the shape the release is there to
+   * clean up.
+   */
+  listVolumesByAgentTag(name: string): Promise<ManagedVolumeRef[]>;
   /**
    * The legacy sweep of the v3 foundation migration (§6.6): every managed
    * instance and volume in the account carrying *no* `hermetic:fleet_id` tag.
@@ -733,12 +816,21 @@ export interface ComputeApi {
    * back the ownership tags while deleting that would be a rollback that left
    * the account worse than it found it. Absent leaves the tag alone; `null`
    * removes it.
+   *
+   * `formerAgent` is the `hermetic:former_agent` tag (§6.7, §9.1): a destroy
+   * that keeps the volume moves the name from `agent` to it, so the disk still
+   * says whose memory it holds without `findVolumeByTag` ever finding it under
+   * that name again — the one hold on a destroyed name that would otherwise
+   * survive. A string sets it, `null` removes it, absent leaves it alone; the
+   * adopt path removes it when it gives the volume a new owner.
+   *
+   * `expectedAgent`, with `agent: null`, makes the removal conditional: the
+   * `agent` tag goes only while it still reads that value (EC2's `DeleteTags`
+   * with a `Value` deletes nothing on a mismatch). A release moving a disk off
+   * `<name>` passes `<name>`, so a disk another agent's adoption retagged
+   * between the release's read and this write keeps its new owner's tag.
    */
-  retagVolume(
-    volumeId: string,
-    agent: string | null,
-    opts?: { roleData?: boolean; name?: string | null },
-  ): Promise<void>;
+  retagVolume(volumeId: string, agent: string | null, opts?: RetagVolumeOptions): Promise<void>;
   /** Snapshots carrying one tag, e.g. the DLM policy's `hermetic:role=data` (§7.1). */
   listSnapshots(tag: TagSelector): Promise<SnapshotRef[]>;
   deleteSnapshot(snapshotId: string): Promise<void>;
@@ -1191,6 +1283,7 @@ export const MUTATING_METHODS: readonly string[] = [
   "store.agents.update",
   "store.agents.delete",
   "store.events.append",
+  "store.events.appendTombstone",
   "store.fleet.put",
   "store.fleet.updateFleet",
   "store.fleet.replaceFleet",

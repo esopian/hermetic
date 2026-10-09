@@ -55,6 +55,7 @@ import {
   openTeardownStore,
   openRunStore,
   SqliteChatFenceStore,
+  SqliteIncarnationStore,
   SqliteLocalChatSessions,
   SqliteInstanceListeningStore,
   SqliteNotificationStore,
@@ -337,6 +338,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       localSessions: new SqliteLocalChatSessions(local.db),
       chatFence: new SqliteChatFenceStore(local.db),
       instanceListening: new SqliteInstanceListeningStore(local.db),
+      incarnations: new SqliteIncarnationStore(local.db),
       // §4.6's create presets: a laptop preference, so the fixture database's.
       presets: new SqlitePresetStore(local.db),
       configStore: configStoreFor(local),
@@ -426,6 +428,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     /** The fence the portal and the CLI share; see `chat-fence.ts`. */
     chatFence: new SqliteChatFenceStore(local.db),
     instanceListening: new SqliteInstanceListeningStore(local.db),
+    /** §6.7: which incarnation of each name the tables above describe. */
+    incarnations: new SqliteIncarnationStore(local.db),
     /** §4.6: this laptop's create presets, one `prefs` row. */
     presets: new SqlitePresetStore(local.db),
     configStore: configStoreFor(local),
@@ -639,6 +643,7 @@ const COMPUTE_METHODS = [
   "resolveUbuntuAmi",
   "listManagedInstances",
   "listManagedVolumes",
+  "listVolumesByAgentTag",
   "listVolumes",
   "listUnscopedManaged",
   "tagFleetId",
@@ -681,7 +686,7 @@ function notInitializedBackend(): Backend {
     identity: group("identity", ["callerIdentity", "accountAlias", "orgId"]),
     store: {
       agents: group("store.agents", ["get", "putIfAbsent", "update", "scan", "delete"]),
-      events: group("store.events", ["append", "query"]),
+      events: group("store.events", ["append", "query", "appendTombstone", "queryTombstones"]),
       fleet: group("store.fleet", [
         "get",
         "put",

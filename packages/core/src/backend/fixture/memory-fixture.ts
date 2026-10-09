@@ -39,6 +39,7 @@ import {
   releaseKey,
   stackNameFor,
   tablesFor,
+  tombstoneSortKey,
 } from "../../schema/index.ts";
 import {
   FIXTURE_BUILD_NUMBER,
@@ -455,9 +456,10 @@ function seedBootstrap(
  * (`running` → `ready`, `upgrading` → `error` on a failed bootstrap stage).
  * One agent is `degraded` with a failing hermes check, one stopped on
  * `02-data-volume` and is waiting for a `rerun`, one has a stale heartbeat so
- * it derives `unreachable`, two are `stopped`, two are still on an older
- * hermes version so `upgrade` has something to do, and one is `destroyed` —
- * hidden by the dashboard until the toolbar's destroyed toggle asks for it.
+ * it derives `unreachable`, two are `stopped`, and two are still on an older
+ * hermes version so `upgrade` has something to do. The tombstone is `oriole`,
+ * destroyed with `--keep-volume`: no row, so it is in `agents.destroyed` and
+ * nowhere on the dashboard, and a kept volume released from its name (§6.7).
  *
  * Only the seeds on a current `hermeticd` report `root_disk` — one of them
  * (`lumen`) with a root filesystem full enough to explain its failing disk
@@ -924,11 +926,9 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     n += 1;
     const volume_id = `vol-fixture${String(n).padStart(11, "0")}`;
     const instance_id = `i-fixture${String(n).padStart(11, "0")}`;
-    // A destroyed agent kept nothing but its row and its data volume: `destroy`
-    // terminated the instance, deleted every SSM parameter and config object,
-    // and the tailscale device went with the box (§6.6).
-    const destroyed = seed.status === "destroyed";
-    const running = !destroyed && seed.status !== "stopped";
+    // No seed is destroyed: a destroy deletes the row (§6.7), so the fixture's
+    // destroyed agent is a tombstone (`seedFixtureTombstones`), not a seed.
+    const running = seed.status !== "stopped";
     const spec = SIZES[seed.size];
     const config_hash = `fixture${String(n).padStart(2, "0")}`.padEnd(16, "0");
     const ssm_paths = [slot(seed.name, "ts-key")];
@@ -972,63 +972,61 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
       az: backend.launchAzId,
       created_at: seed.created_at,
     });
-    if (!destroyed) {
-      backend.instances.set(instance_id, {
-        instance_id,
-        state: running ? "running" : "stopped",
-        // §5: a `nat` fleet's boxes are launched with no public address at all,
-        // so `staging` seeds none. `null` here is the same fact a real
-        // `DescribeInstances` reports for an instance in a private subnet.
-        public_ip: running && natMode ? null : running ? `203.0.113.${20 + n}` : null,
-        // The subnet this fleet launches into, so a seeded fixture starts with
-        // every agent *matching* its fleet's mode — drift has to be created by
-        // a test, not inherited from the seed (§5).
-        subnet_id: (backend.stack?.outputs["SubnetIds"] ?? "").split(",")[0] ?? null,
-        agent: seed.name,
-        fleet_id: fleetId,
-      });
-      /**
-       * The agent's own slots, filled the way a real create fills them (§8.3):
-       * the provider-key slot holds a *copy of the profile's* key, because that
-       * is what `snapshotCredential` puts there, and everything else holds the
-       * fixture's auth-key sentinel. Seeding the provider slot with the
-       * sentinel instead would make `secrets verify` report every bound agent
-       * as holding a stale copy of its profile's credential — a rotation the
-       * fixture never performed.
-       */
-      const copied = credentialRef === undefined ? null : slot(seed.name, credentialRef);
-      for (const p of ssm_paths) {
-        backend.params.set(p, p === copied ? FIXTURE_PROFILE_KEY : `${FIXTURE_TS_KEY}-${seed.name}`);
-      }
-      backend.objects.set(`config/${seed.name}/${config_hash}.tgz`, new Uint8Array([1, 2, 3]));
-      // Every seeded agent has a matching tailscale device, so `doctor` sees no
-      // tailscale_missing drift on the baseline fixture (§9). `hostname` is the
-      // OS hostname stage 00 set — the agent's own name — and `name` the FQDN
-      // the tailnet actually gave the node; for `corvid` those disagree.
+    backend.instances.set(instance_id, {
+      instance_id,
+      state: running ? "running" : "stopped",
+      // §5: a `nat` fleet's boxes are launched with no public address at all,
+      // so `staging` seeds none. `null` here is the same fact a real
+      // `DescribeInstances` reports for an instance in a private subnet.
+      public_ip: running && natMode ? null : running ? `203.0.113.${20 + n}` : null,
+      // The subnet this fleet launches into, so a seeded fixture starts with
+      // every agent *matching* its fleet's mode — drift has to be created by
+      // a test, not inherited from the seed (§5).
+      subnet_id: (backend.stack?.outputs["SubnetIds"] ?? "").split(",")[0] ?? null,
+      agent: seed.name,
+      fleet_id: fleetId,
+    });
+    /**
+     * The agent's own slots, filled the way a real create fills them (§8.3):
+     * the provider-key slot holds a *copy of the profile's* key, because that
+     * is what `snapshotCredential` puts there, and everything else holds the
+     * fixture's auth-key sentinel. Seeding the provider slot with the
+     * sentinel instead would make `secrets verify` report every bound agent
+     * as holding a stale copy of its profile's credential — a rotation the
+     * fixture never performed.
+     */
+    const copied = credentialRef === undefined ? null : slot(seed.name, credentialRef);
+    for (const p of ssm_paths) {
+      backend.params.set(p, p === copied ? FIXTURE_PROFILE_KEY : `${FIXTURE_TS_KEY}-${seed.name}`);
+    }
+    backend.objects.set(`config/${seed.name}/${config_hash}.tgz`, new Uint8Array([1, 2, 3]));
+    // Every seeded agent has a matching tailscale device, so `doctor` sees no
+    // tailscale_missing drift on the baseline fixture (§9). `hostname` is the
+    // OS hostname stage 00 set — the agent's own name — and `name` the FQDN
+    // the tailnet actually gave the node; for `corvid` those disagree.
+    backend.tailscaleDevices?.push({
+      id: `nodeFIXTURE${String(n).padStart(6, "0")}`,
+      name: dnsName,
+      hostname: cloud(seed.name),
+      addresses: [`100.64.12.${n}`],
+      online: running,
+      tags: ["tag:hermetic"],
+    });
+    /**
+     * The predecessor that pushed this node onto a suffixed name: same OS
+     * hostname, offline, still holding `<name>.<tailnet>`. It is what
+     * `agent recreate corvid` has to delete, so the fixture carries it rather
+     * than describing it.
+     */
+    if (seed.dns_host) {
       backend.tailscaleDevices?.push({
-        id: `nodeFIXTURE${String(n).padStart(6, "0")}`,
-        name: dnsName,
+        id: `nodeFIXTURESTALE${String(n).padStart(2, "0")}`,
+        name: `${cloud(seed.name)}.${backend.fleetItem?.tailnet ?? FIXTURE_TAILNET}`,
         hostname: cloud(seed.name),
-        addresses: [`100.64.12.${n}`],
-        online: running,
+        addresses: [`100.64.12.${200 + n}`],
+        online: false,
         tags: ["tag:hermetic"],
       });
-      /**
-       * The predecessor that pushed this node onto a suffixed name: same OS
-       * hostname, offline, still holding `<name>.<tailnet>`. It is what
-       * `agent recreate corvid` has to delete, so the fixture carries it rather
-       * than describing it.
-       */
-      if (seed.dns_host) {
-        backend.tailscaleDevices?.push({
-          id: `nodeFIXTURESTALE${String(n).padStart(2, "0")}`,
-          name: `${cloud(seed.name)}.${backend.fleetItem?.tailnet ?? FIXTURE_TAILNET}`,
-          hostname: cloud(seed.name),
-          addresses: [`100.64.12.${200 + n}`],
-          online: false,
-          tags: ["tag:hermetic"],
-        });
-      }
     }
 
     const agent: Agent = {
@@ -1039,7 +1037,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
       size: seed.size,
       instance_type: spec.instance_type,
       region,
-      instance_id: destroyed ? null : instance_id,
+      instance_id,
       volume_id,
       volume_gib: seed.size === "large" ? 200 : 100,
       /**
@@ -1135,35 +1133,36 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
       // render. Only a box that has heartbeated has ever said which
       // `tailscaled` it is running.
       tailscale_version: !running || seed.heartbeat_age_min === null ? null : FIXTURE_TAILSCALE_VERSION,
-      resources: destroyed
-        ? { volume_id, ssm_paths: [] }
-        : { volume_id, instance_id, ssm_paths, config_key: `config/${seed.name}/${config_hash}.tgz` },
+      resources: {
+        volume_id,
+        instance_id,
+        ssm_paths,
+        config_key: `config/${seed.name}/${config_hash}.tgz`,
+      },
       last_heartbeat:
         seed.heartbeat_age_min === null
           ? null
           : new Date(nowMs - seed.heartbeat_age_min * 60_000).toISOString(),
       health: seed.health,
-      metrics: destroyed
-        ? null
-        : {
-            cpu_pct: seed.cpu,
-            mem_pct: seed.mem,
-            disk_pct: seed.disk,
-            ...(seed.root_disk === undefined ? {} : { root_disk_pct: seed.root_disk }),
-            /**
-             * The measured free space, on the seeds that report a reading — and
-             * deliberately *not* the product of the two numbers above it. A
-             * root filesystem carries Canonical's ESP and `bls_boot` partitions
-             * plus ext4's own metadata, so the true figure always lands under
-             * the estimate: `lumen` at 96% of 8 GiB computes to ≈0.3 GiB and
-             * really has 0.25. Seeding the honest number is what lets the
-             * fixture show the difference between a reading and a guess, which
-             * is the whole reason the field exists.
-             */
-            ...(seed.root_disk === undefined || seed.root_free_mib === undefined
-              ? {}
-              : { root_free_mib: seed.root_free_mib }),
-          },
+      metrics: {
+        cpu_pct: seed.cpu,
+        mem_pct: seed.mem,
+        disk_pct: seed.disk,
+        ...(seed.root_disk === undefined ? {} : { root_disk_pct: seed.root_disk }),
+        /**
+         * The measured free space, on the seeds that report a reading — and
+         * deliberately *not* the product of the two numbers above it. A
+         * root filesystem carries Canonical's ESP and `bls_boot` partitions
+         * plus ext4's own metadata, so the true figure always lands under
+         * the estimate: `lumen` at 96% of 8 GiB computes to ≈0.3 GiB and
+         * really has 0.25. Seeding the honest number is what lets the
+         * fixture show the difference between a reading and a guess, which
+         * is the whole reason the field exists.
+         */
+        ...(seed.root_disk === undefined || seed.root_free_mib === undefined
+          ? {}
+          : { root_free_mib: seed.root_free_mib }),
+      },
       created_by: actor,
       created_at: seed.created_at,
       updated_at: new Date(nowMs - 60_000).toISOString(),
@@ -1199,17 +1198,6 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
         detail: "operator stopped the instance",
       });
     }
-    if (destroyed) {
-      backend.events.push({
-        name: seed.name,
-        timestamp: new Date(nowMs - 172_800_000).toISOString(),
-        actor,
-        action: "destroy",
-        from_status: "destroying",
-        to_status: "destroyed",
-        detail: "destroy complete; data volume kept",
-      });
-    }
     if (seed.status === "degraded") {
       backend.events.push({
         name: seed.name,
@@ -1234,6 +1222,86 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     }
   }
 
+  /**
+   * §6.7's destroyed agent, as a destroy with `--keep-volume` leaves one: no
+   * row, a tombstone under `_destroyed`, the per-name events (never deleted),
+   * and a data volume released from the name — `agent=` gone,
+   * `hermetic:former_agent=oriole` in its place, so `volume ls` shows it as
+   * `no_agent`, retained by `oriole`, and `agent create oriole` starts fresh.
+   * `main` only, like the rest of the loose-volume story. Numbered as the next
+   * seed would have been, so the volume keeps the id it had as a row.
+   */
+  if (fixtureFleetName(opts.fleet ?? "main") === "main") {
+    n += 1;
+    const name = "oriole";
+    const volume_id = `vol-fixture${String(n).padStart(11, "0")}`;
+    const created_at = "2026-07-30T09:20:00.000Z";
+    const destroyed_at = new Date(nowMs - 172_800_000).toISOString();
+    backend.volumes.set(volume_id, {
+      volume_id,
+      size_gib: 100,
+      state: "available",
+      agent: null,
+      former_agent: name,
+      role: "data",
+      fleet_id: fleetId,
+      name_tag: `${cloud(name)}-data`,
+      az: backend.launchAzId,
+      created_at,
+    });
+    /**
+     * Written straight into the partition rather than through
+     * `store.events.appendTombstone`, for the reason every row above is: the
+     * seeder is synchronous, and the stored shape is exactly what that method
+     * would have put there.
+     */
+    backend.tombstones.set(tombstoneSortKey(name, destroyed_at), {
+      name,
+      fleet_id: fleetId,
+      created_at,
+      created_by: actor,
+      destroyed_at,
+      destroyed_by: actor,
+      size: "small",
+      region,
+      provider: "bedrock",
+      profile_id: null,
+      instance_id: `i-fixture${String(n).padStart(11, "0")}`,
+      volume_id,
+      volume_kept: true,
+      hermes_version: "0.14.2",
+      legacy: false,
+    });
+    const created = Date.parse(created_at);
+    const history: Array<[string, string, Agent["status"] | null, Agent["status"] | null, number]> = [
+      ["create", "requested", null, "creating", created],
+      ["bootstrap", "instance reported bootstrapping", "creating", "bootstrapping", created + 90_000],
+      ["stage", "04-apply ok in 41.2s", null, null, created + 240_000],
+      ["ready", "all bootstrap stages ok", "bootstrapping", "ready", created + 420_000],
+      ["destroy", "destroy requested", "ready", "destroying", Date.parse(destroyed_at) - 120_000],
+      // What a destroy stores now (§6.7): no `destroyed` transition — the row
+      // goes straight from `destroying` to deleted, and this is its last line.
+      // The kept volume's retag is an op event, not a stored one. Appended
+      // before `destroyed_at` is taken (`release-name.ts`), so a
+      // `history --until <destroyed_at>` window includes it.
+      ["release", "name released; tombstone written", "destroying", null, Date.parse(destroyed_at)],
+    ];
+    for (const [action, detail, from, to, at] of history) {
+      backend.events.push({
+        name,
+        timestamp: new Date(at).toISOString(),
+        actor:
+          action === "bootstrap" || action === "stage" || action === "ready"
+            ? `hermeticd/${name}`
+            : actor,
+        action,
+        from_status: from,
+        to_status: to,
+        detail,
+      });
+    }
+  }
+
   backend.resetMutations();
   return backend;
 }
@@ -1246,10 +1314,12 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
  *
  * The seeded fleet already covers two of the five groups on its own — `attached`
  * for every running agent, `detached` for the stopped ones, and `no_agent` for
- * the destroyed agent that kept its volume. These are the three it cannot
- * produce, because each of them is a volume with no matching row:
+ * the destroyed agent that kept its volume (`oriole`, a tombstone). These are
+ * the three it cannot produce, because each of them is a volume nothing in the
+ * store explains:
  *
- * - a volume whose row is gone entirely, not merely destroyed;
+ * - a volume whose agent left no record at all — no row, no tombstone, only
+ *   its `agent=` tag;
  * - a volume hermetic did not create, unattached in the fleet's own AZ;
  * - two volumes carrying one agent tag and no `role=data` on either, which is
  *   exactly the shape `findVolumeByTag` refuses to guess about (§1).

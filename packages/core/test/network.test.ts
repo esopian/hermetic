@@ -27,7 +27,7 @@ import { drain, testHermetic } from "./helpers.ts";
 /** Milliseconds, not seconds: no test waits on a change set poll. */
 const FAST: NonNullable<HermeticDeps["foundation"]> = { changeSetPollMs: 0, heartbeatMs: 60_000 };
 
-/** The `main` fixture fleet: twelve agents, `public`. */
+/** The `main` fixture fleet: eleven agents, `public`. */
 function publicFleet(foundation: NonNullable<HermeticDeps["foundation"]> = FAST) {
   const backend = seedFixtureAgents(seedFixtureFoundation(new MemoryBackend()));
   return {

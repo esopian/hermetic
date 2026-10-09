@@ -684,6 +684,37 @@ describe("teardown --purge", () => {
   });
 
   /**
+   * §6.7: a destroy now deletes the row, so a name destroyed since leaves only
+   * its tombstone — and that is enough to put `/hermes/<name>/` in scope.
+   */
+  test("on, a tombstoned name's pre-v3 path goes too, with no row left", async () => {
+    const backend = leftovers({ account: soleLiveFleet() });
+    const row = destroyedRow("gone-two");
+    await backend.store.events.appendTombstone({
+      name: "gone-two",
+      fleet_id: backend.fleetItem?.fleet_id ?? "",
+      created_at: row.created_at,
+      created_by: row.created_by,
+      destroyed_at: "2026-09-01T00:00:00.000Z",
+      destroyed_by: "tester",
+      size: row.size,
+      region: row.region,
+      provider: row.provider,
+      profile_id: null,
+      instance_id: null,
+      volume_id: null,
+      volume_kept: false,
+      hermes_version: row.hermes_version,
+      legacy: false,
+    });
+    backend.params.set("/hermes/gone-two/ts-key", FIXTURE_TS_KEY);
+
+    const events = await drain(open(backend).teardown({ yes: true, purge: true }));
+    expect([...backend.params.keys()]).not.toContain("/hermes/gone-two/ts-key");
+    expect(events.find((e) => e.phase === "ssm")!.message).toContain("/hermes/gone-two/");
+  });
+
+  /**
    * §9: a plan is a promise, and this is the one step whose blast radius can
    * reach outside the fleet — so the set `plan.teardown` names and the set
    * `teardown` deletes are asserted to be the same string, built by the same
@@ -707,6 +738,40 @@ describe("teardown --purge", () => {
     const scopeOf = (text: string): string => text.slice(text.indexOf("under "));
     expect(scopeOf(executed)).toBe(scopeOf(planned));
     expect(planned).toContain("/hermes/gone-one/");
+  });
+
+  /** §6.7: the same promise for a name only a tombstone remembers. */
+  test("the plan's purge scope includes a tombstoned name, exactly as teardown does", async () => {
+    const backend = leftovers({ account: soleLiveFleet() });
+    const row = destroyedRow("gone-two");
+    await backend.store.events.appendTombstone({
+      name: "gone-two",
+      fleet_id: backend.fleetItem?.fleet_id ?? "",
+      created_at: row.created_at,
+      created_by: row.created_by,
+      destroyed_at: "2026-09-01T00:00:00.000Z",
+      destroyed_by: "tester",
+      size: row.size,
+      region: row.region,
+      provider: row.provider,
+      profile_id: null,
+      instance_id: null,
+      volume_id: null,
+      volume_kept: false,
+      hermes_version: row.hermes_version,
+      legacy: false,
+    });
+    backend.params.set("/hermes/gone-two/ts-key", FIXTURE_TS_KEY);
+
+    const hermetic = open(backend);
+    const plan = await hermetic.plan.teardown({ purge: true });
+    const planned = plan.steps.find((s) => s.id === "ssm")!.description;
+    expect(planned).toContain("/hermes/gone-two/");
+
+    const events = await drain(hermetic.teardown({ yes: true, purge: true }));
+    const executed = events.find((e) => e.phase === "ssm")!.message;
+    const scopeOf = (text: string): string => text.slice(text.indexOf("under "));
+    expect(scopeOf(executed)).toBe(scopeOf(planned));
   });
 
   /**
@@ -1073,7 +1138,8 @@ describe("apply(plan.teardown(...))", () => {
     const hermetic = open(backend);
     const plan = await hermetic.plan.destroy({ name: "atlas" });
     await drain(hermetic.apply({ plan, yes: true }));
-    expect((await hermetic.agents.get("atlas")).status).toBe("destroyed");
+    // §6.7: the destroy releases the name, so the row is gone.
+    expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 });
 

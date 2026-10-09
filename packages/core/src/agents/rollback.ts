@@ -73,6 +73,13 @@ export interface CreateLedger {
     roleData: boolean;
     /** The `Name` tag as it was, so a restore does not delete the operator's. */
     name: string | null;
+    /**
+     * The `hermetic:former_agent` tag as it was (§6.7). A volume a destroy kept
+     * carries its old name there rather than in `agent`, and the restore must
+     * put it back *there*: restoring it as `agent=<name>` would hand the disk
+     * to the next plain `create` of that name. Absent leaves the tag alone.
+     */
+    formerAgent?: string | null;
   } | null;
 }
 
@@ -89,7 +96,12 @@ export interface RollbackDeps {
     | "retagVolume"
   >;
   secrets: Pick<SecretsApi, "deleteByPrefix">;
-  artifacts: Pick<ArtifactsApi, "deleteByPrefix">;
+  /**
+   * `purgeByPrefix`, never `deleteByPrefix`: the bucket is versioned, so a
+   * plain delete would leave the rendered config readable by version (see
+   * the config step below).
+   */
+  artifacts: Pick<ArtifactsApi, "purgeByPrefix">;
   /**
    * `get` is not there to find work: it is the ownership check below, which
    * is the only thing standing between a stale run and another operator's
@@ -440,7 +452,7 @@ export async function* rollbackCreate(
    * §1 forbids.
    */
   if (ledger.retag) {
-    const { volumeId, agent, roleData, name: nameTag } = ledger.retag;
+    const { volumeId, agent, roleData, name: nameTag, formerAgent } = ledger.retag;
     const lost = await confirmOwnership();
     if (lost !== null) {
       yield ownershipLost("volume tag restore", lost);
@@ -456,9 +468,15 @@ export async function* rollbackCreate(
           "warn",
         );
       } else {
-        await deps.compute.retagVolume(volumeId, agent, { roleData, name: nameTag });
+        await deps.compute.retagVolume(volumeId, agent, {
+          roleData,
+          name: nameTag,
+          ...(formerAgent === undefined ? {} : { formerAgent }),
+        });
         yield say(
-          `restored volume ${volumeId} to agent=${agent ?? "(none)"}, the tag it carried before this create adopted it`,
+          formerAgent
+            ? `restored volume ${volumeId} to former_agent=${formerAgent}, the tag it carried before this create adopted it`
+            : `restored volume ${volumeId} to agent=${agent ?? "(none)"}, the tag it carried before this create adopted it`,
           "warn",
         );
         undone.push("volume_tag");
@@ -495,9 +513,19 @@ export async function* rollbackCreate(
       yield ownershipLost("config delete", lostConfig);
       return lostOutcome();
     }
+    /**
+     * Every version, as a destroy does (§6.7, `destroy-agent.ts`). The bucket
+     * is versioned and its lifecycle rule keeps the newest noncurrent versions
+     * of a key indefinitely, so `deleteByPrefix` would only lay delete markers
+     * over the config this run rendered — which carries the agent's settings —
+     * and a rollback frees the name exactly as a destroy does: the next agent
+     * of this name must start with nothing under `config/<name>/`, current or
+     * not. The count is versions and markers removed, not keys, and the
+     * message says so in the words a destroy uses.
+     */
     try {
-      const objects = await deps.artifacts.deleteByPrefix(deps.configPrefix(name));
-      yield say(`removed ${objects.length} config object(s)`, "warn");
+      const removed = await deps.artifacts.purgeByPrefix(deps.configPrefix(name));
+      yield say(`removed ${removed} config object version(s) and delete marker(s)`, "warn");
       undone.push("config");
     } catch (e) {
       yield stepFailed("config", e);

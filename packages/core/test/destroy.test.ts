@@ -32,48 +32,47 @@ describe("agents.destroy", () => {
     expect((await backend.store.agents.get("atlas"))!.status).toBe("ready");
   });
 
-  test("keeps the data volume by default", async () => {
+  test("--keep-volume keeps the data volume, released from the name", async () => {
     const { backend, hermetic } = seeded();
     const before = (await backend.store.agents.get("atlas"))!;
     const volumeId = before.resources.volume_id!;
-    expect(before.tailscale_version).toBeTruthy();
 
-    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
+    const events = await drain(
+      hermetic.agents.destroy({ name: "atlas", yes: true, keep_volume: true }),
+    );
     expect(events.at(-1)?.progress).toBe(1);
-    expect(events.find((e) => e.phase === "volume")?.message).toContain("kept");
+    expect(events.find((e) => e.phase === "volume")?.message).toContain("keeping");
 
-    const after = (await backend.store.agents.get("atlas"))!;
-    expect(after.status).toBe("destroyed");
-    expect(after.instance_id).toBeNull();
-    // Both halves of the tailnet identity, not just the address: a destroyed
-    // row that kept `tailscale_dns_name` describes a device that is now a
-    // corpse, and every head builds its links from that name (§6.5).
-    expect(after.tailscale_ip).toBeNull();
-    expect(after.tailscale_dns_name ?? null).toBeNull();
-    expect(after.tailscale_version ?? null).toBeNull();
-    expect(after.volume_id).toBe(volumeId);
+    // §6.7: the row is gone; the volume outlives it under `former_agent`.
+    expect(await backend.store.agents.get("atlas")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(true);
+    expect(backend.volumes.get(volumeId)!.agent).toBeNull();
+    expect(backend.volumes.get(volumeId)!.former_agent).toBe("atlas");
+    expect(backend.volumes.get(volumeId)!.role).toBe("data");
     expect(backend.mutations).not.toContain("compute.deleteVolume");
 
     // The instance is gone, the SSM slots are gone, the config objects are gone.
     expect(backend.instances.get(before.resources.instance_id!)!.state).toBe("terminated");
     expect(await backend.secrets.list("/hermes/fxtr0001/atlas/")).toEqual([]);
     expect([...backend.objects.keys()].filter((k) => k.startsWith("config/atlas/"))).toEqual([]);
+    // Every version, not a delete marker over the current one: the bucket is
+    // versioned and keeps noncurrent versions, so only the version-aware door
+    // frees the old config (§6.7).
+    expect(backend.mutations).toContain("artifacts.purgeByPrefix");
+    expect(backend.mutations).not.toContain("artifacts.deleteByPrefix");
   });
 
-  test("--delete-volume removes the volume", async () => {
+  test("deletes the data volume by default", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("corvid"))!.resources.volume_id!;
 
-    const events = await drain(
-      hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true }),
-    );
+    const events = await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
     expect(events.find((e) => e.phase === "volume")?.message).toContain("deleted");
     expect(events.find((e) => e.phase === "volume")?.level).toBe("warn");
 
     expect(backend.volumes.has(volumeId)).toBe(false);
     expect(backend.mutations).toContain("compute.deleteVolume");
-    expect((await backend.store.agents.get("corvid"))!.volume_id).toBeNull();
+    expect(await backend.store.agents.get("corvid")).toBeNull();
   });
 
   test("events are never deleted", async () => {
@@ -81,24 +80,30 @@ describe("agents.destroy", () => {
     const before = await backend.store.events.query("ember");
     expect(before.length).toBeGreaterThan(0);
 
-    await drain(hermetic.agents.destroy({ name: "ember", yes: true, delete_volume: true }));
+    await drain(hermetic.agents.destroy({ name: "ember", yes: true }));
 
     const after = await backend.store.events.query("ember");
     expect(after.length).toBeGreaterThan(before.length);
     for (const e of before) {
       expect(after.some((a) => a.timestamp === e.timestamp && a.action === e.action)).toBe(true);
     }
-    // The record itself survives too, marked destroyed rather than deleted.
-    expect(await backend.store.agents.get("ember")).not.toBeNull();
-    expect(backend.mutations).not.toContain("store.agents.delete");
+    expect(after.some((e) => e.action === "release")).toBe(true);
+    // The row is released (§6.7); the tombstone is what records it.
+    expect(await backend.store.agents.get("ember")).toBeNull();
+    expect((await backend.store.events.queryTombstones({ name: "ember" })).length).toBe(1);
   });
 
-  test("destroying twice is a no-op the second time", async () => {
+  test("destroying twice is NOT_FOUND the second time, and changes nothing", async () => {
     const { backend, hermetic } = seeded();
     await drain(hermetic.agents.destroy({ name: "ibis", yes: true }));
     backend.resetMutations();
-    const events = await drain(hermetic.agents.destroy({ name: "ibis", yes: true }));
-    expect(events.at(-1)?.message).toContain("already destroyed");
+    let code: string | null = null;
+    try {
+      await drain(hermetic.agents.destroy({ name: "ibis", yes: true }));
+    } catch (e) {
+      code = (e as HermeticError).code;
+    }
+    expect(code).toBe("NOT_FOUND");
     expect(backend.mutations).toEqual([]);
   });
 
@@ -117,7 +122,7 @@ describe("agents.destroy", () => {
     const { backend, hermetic } = freshFleet();
     await drain(hermetic.agents.create({ name: "atlas" }));
     await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
-    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 });
 
@@ -164,8 +169,8 @@ describe("destroy keeps its lock alive between steps", () => {
       await at("tailnet");
       return listDevices();
     };
-    const objects = backend.artifacts.deleteByPrefix;
-    backend.artifacts.deleteByPrefix = async (prefix: string) => {
+    const objects = backend.artifacts.purgeByPrefix;
+    backend.artifacts.purgeByPrefix = async (prefix: string) => {
       await at("config");
       return objects(prefix);
     };
@@ -197,9 +202,9 @@ describe("a destroy that failed partway can be run again", () => {
       );
     };
 
-    await expect(
-      drain(hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true })),
-    ).rejects.toThrow(HermeticError);
+    await expect(drain(hermetic.agents.destroy({ name: "corvid", yes: true }))).rejects.toThrow(
+      HermeticError,
+    );
 
     // The instance really is gone and the row honestly says it is part-destroyed.
     const stranded = (await backend.store.agents.get("corvid"))!;
@@ -210,12 +215,10 @@ describe("a destroy that failed partway can be run again", () => {
 
     // The retry, against a fixed world, finishes the job rather than throwing.
     backend.compute.deleteVolume = realDelete;
-    const events = await drain(
-      hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true }),
-    );
+    const events = await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
 
     expect(events.at(-1)?.progress).toBe(1);
-    expect((await backend.store.agents.get("corvid"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("corvid")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(false);
   });
 
@@ -226,18 +229,21 @@ describe("a destroy that failed partway can be run again", () => {
     backend.compute.deleteVolume = async () => {
       throw new HermeticError("INTERNAL", "refused", { aws_error: "VolumeInUse" });
     };
-    await expect(
-      drain(hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true })),
-    ).rejects.toThrow(HermeticError);
+    await expect(drain(hermetic.agents.destroy({ name: "corvid", yes: true }))).rejects.toThrow(
+      HermeticError,
+    );
 
     backend.resetMutations();
-    const events = await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
+    // Kept this time, so the stub still refusing `DeleteVolume` is not reached.
+    const events = await drain(
+      hermetic.agents.destroy({ name: "corvid", yes: true, keep_volume: true }),
+    );
 
     // Reality-checked: the instance is already terminated, so nothing terminates
     // it again, and the SSM/S3 prefixes are already empty.
     expect(backend.mutations).not.toContain("compute.terminate");
     expect(backend.mutations).not.toContain("secrets.deleteByPrefix");
-    expect(backend.mutations).not.toContain("artifacts.deleteByPrefix");
+    expect(backend.mutations).not.toContain("artifacts.purgeByPrefix");
     expect(events.find((e) => e.phase === "instance")?.message).toContain(
       `instance ${instanceId} is already terminated`,
     );
@@ -249,9 +255,9 @@ describe("a destroy that failed partway can be run again", () => {
     backend.compute.deleteVolume = async () => {
       throw new HermeticError("CONFLICT", "refused");
     };
-    await expect(
-      drain(hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true })),
-    ).rejects.toThrow(HermeticError);
+    await expect(drain(hermetic.agents.destroy({ name: "corvid", yes: true }))).rejects.toThrow(
+      HermeticError,
+    );
 
     const history = await backend.store.events.query("corvid");
     const failure = history.find((e) => e.action === "failed");
@@ -265,16 +271,16 @@ describe("a destroy that failed partway can be run again", () => {
     backend.compute.deleteVolume = async () => {
       throw new HermeticError("CONFLICT", "refused");
     };
-    await expect(
-      drain(hermetic.agents.destroy({ name: "ember", yes: true, delete_volume: true })),
-    ).rejects.toThrow(HermeticError);
+    await expect(drain(hermetic.agents.destroy({ name: "ember", yes: true }))).rejects.toThrow(
+      HermeticError,
+    );
 
-    await drain(hermetic.agents.destroy({ name: "ember", yes: true }));
+    await drain(hermetic.agents.destroy({ name: "ember", yes: true, keep_volume: true }));
 
     const history = await backend.store.events.query("ember");
     const entered = history.filter((e) => e.to_status === "destroying");
     expect(entered.length).toBe(1);
-    expect(history.some((e) => e.to_status === "destroyed")).toBe(true);
+    expect(history.some((e) => e.action === "release")).toBe(true);
   });
 
   test("a row already destroying in the store, with a stale local copy, is adopted rather than refused", async () => {
@@ -290,7 +296,7 @@ describe("a destroy that failed partway can be run again", () => {
 
     const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
     expect(events.at(-1)?.progress).toBe(1);
-    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
 
     const history = await backend.store.events.query("atlas");
     // Nothing moved when destroy re-entered `destroying`, so destroy claims no
@@ -298,7 +304,7 @@ describe("a destroy that failed partway can be run again", () => {
     // which appends nothing to the history either — hence none at all, rather
     // than one.)
     expect(history.filter((e) => e.to_status === "destroying").length).toBe(0);
-    expect(history.some((e) => e.to_status === "destroyed")).toBe(true);
+    expect(history.some((e) => e.action === "release")).toBe(true);
   });
 
   test("destroy waits for the volume to detach before deleting it", async () => {
@@ -316,6 +322,9 @@ describe("a destroy that failed partway can be run again", () => {
     backend.compute.describeVolume = async (id: string) => {
       describes += 1;
       if (describes >= 3) {
+        // The detach finishes as the instance does (§6.7's release waits on it).
+        const inst = backend.instances.get(instanceId);
+        if (inst) backend.instances.set(instanceId, { ...inst, state: "terminated" });
         return { volume_id: id, size_gib: 100, state: "available", attachments: [] };
       }
       return {
@@ -330,14 +339,12 @@ describe("a destroy that failed partway can be run again", () => {
       deletedWhile.push(`${id}@${describes}`);
     };
 
-    const events = await drain(
-      hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true }),
-    );
+    const events = await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
 
     // It did not delete until the third describe reported the volume free.
     expect(deletedWhile).toEqual([`${volumeId}@3`]);
     expect(events.some((e) => e.message.includes(`waiting for ${instanceId} to release`))).toBe(true);
-    expect((await backend.store.agents.get("corvid"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("corvid")).toBeNull();
   });
 });
 
@@ -357,23 +364,19 @@ describe("--delete-volume says what actually happened to the volume", () => {
     // earlier run of this same destroy that died after the delete.
     backend.volumes.delete(volumeId);
 
-    const events = await drain(
-      hermetic.agents.destroy({ name: "atlas", yes: true, delete_volume: true }),
-    );
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
 
     const volume = events.filter((e) => e.phase === "volume").at(-1)!;
     expect(volume.message).toContain(`data volume ${volumeId} is already gone`);
     expect(volume.message).not.toContain("deleted data volume");
-    expect((await backend.store.agents.get("atlas"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("atlas")).toBeNull();
   });
 
   test("a volume that is really there is still reported as deleted", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("atlas"))!.resources.volume_id!;
 
-    const events = await drain(
-      hermetic.agents.destroy({ name: "atlas", yes: true, delete_volume: true }),
-    );
+    const events = await drain(hermetic.agents.destroy({ name: "atlas", yes: true }));
 
     expect(events.filter((e) => e.phase === "volume").at(-1)!.message).toContain(
       `deleted data volume ${volumeId}`,
@@ -457,32 +460,38 @@ describe("a store that moved ahead of us mid-transition", () => {
     expect(history.filter((e) => e.to_status === "stopped").length).toBe(1);
   });
 
-  test("adoption applies none of this run's pending patch over the row that won", async () => {
+  test("a row that moves under the release is not deleted, and a retry finishes it", async () => {
     const { backend, hermetic } = seeded();
-    const volumeId = (await backend.store.agents.get("corvid"))!.resources.volume_id!;
 
-    // The other operator got all the way to the end: it deleted the volume and
-    // left the row saying so. Our run is about to write its own `destroyed`
-    // patch, which still names that volume — a description of a world that is
-    // gone, and the one thing adoption must never put back.
-    raceTo(backend, "destroyed", {
-      volume_id: null,
-      resources: { ssm_paths: [] },
-      lock: null,
-    });
+    // Another writer moves the row between the tombstone and the delete: the
+    // delete is conditional on the version this run read (§6.7), so it refuses.
+    const append = backend.store.events.appendTombstone;
+    let raced = false;
+    backend.store.events.appendTombstone = async (t) => {
+      await append(t);
+      if (raced) return;
+      raced = true;
+      const current = (await backend.store.agents.get("corvid"))!;
+      await backend.store.agents.update("corvid", current.version, { health: null });
+    };
+
+    let code: string | null = null;
+    try {
+      await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
+    } catch (e) {
+      code = (e as HermeticError).code;
+    }
+    expect(code).toBe("CONFLICT");
+    const stranded = (await backend.store.agents.get("corvid"))!;
+    expect(stranded.status).toBe("destroying");
+    expect(stranded.lock).toBeNull();
+    expect((await backend.store.events.queryTombstones({ name: "corvid" })).length).toBe(1);
 
     const events = await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
     expect(events.at(-1)?.progress).toBe(1);
-
-    const after = (await backend.store.agents.get("corvid"))!;
-    expect(after.status).toBe("destroyed");
-    expect(after.volume_id).toBeNull();
-    expect(after.resources.volume_id).toBeUndefined();
-    expect(volumeId).toBeDefined();
-
-    const history = await backend.store.events.query("corvid");
-    // No second `destroyed` transition: our run moved nothing.
-    expect(history.filter((e) => e.to_status === "destroyed").length).toBe(0);
+    expect(await backend.store.agents.get("corvid")).toBeNull();
+    // The retry reused the first run's tombstone rather than writing a second.
+    expect((await backend.store.events.queryTombstones({ name: "corvid" })).length).toBe(1);
   });
 
   test("adoption keeps this run holding the lock for the rest of the operation", async () => {
@@ -519,7 +528,7 @@ describe("a store that moved ahead of us mid-transition", () => {
 
     await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
 
-    expect((await backend.store.agents.get("corvid"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("corvid")).toBeNull();
   });
 
   test("an expired foreign lock is free, so the row is adoptable", async () => {
@@ -735,9 +744,11 @@ describe("plan.destroy / apply", () => {
       "secrets",
       "config",
       "volume",
-      "record",
+      "release",
     ]);
-    expect(plan.steps.find((s) => s.id === "volume")!.destructive).toBe(false);
+    // §6.7: the volume goes by default, and the release frees the name.
+    expect(plan.steps.find((s) => s.id === "volume")!.destructive).toBe(true);
+    expect(plan.steps.find((s) => s.id === "release")!.description).toContain("reusable");
     // §6.7: the tailnet sweep is destructive to a record of the operator's, and
     // the step says out loud that an under-scoped OAuth client skips it.
     const tailnet = plan.steps.find((s) => s.id === "tailnet")!;
@@ -746,22 +757,26 @@ describe("plan.destroy / apply", () => {
     expect(plan.warnings.join(" ")).toContain("events are never deleted");
   });
 
-  test("a delete_volume plan is destructive and applying it deletes the volume", async () => {
+  test("a default plan is destructive and applying it deletes the volume", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     expect(plan.steps.find((s) => s.id === "volume")!.destructive).toBe(true);
 
     await drain(hermetic.apply({ plan, yes: true }));
     expect(backend.volumes.has(volumeId)).toBe(false);
-    expect((await backend.store.agents.get("granite"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("granite")).toBeNull();
   });
 
   test("applying a keep-volume plan keeps the volume", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("heron"))!.resources.volume_id!;
-    await drain(hermetic.apply({ plan: await hermetic.plan.destroy({ name: "heron" }), yes: true }));
+    const plan = await hermetic.plan.destroy({ name: "heron", keep_volume: true });
+    expect(plan.steps.find((s) => s.id === "volume")!.destructive).toBe(false);
+    expect(plan.options.keep_volume).toBe(true);
+    await drain(hermetic.apply({ plan, yes: true }));
     expect(backend.volumes.has(volumeId)).toBe(true);
+    expect(backend.volumes.get(volumeId)!.former_agent).toBe("heron");
   });
 
   /**
@@ -773,7 +788,7 @@ describe("plan.destroy / apply", () => {
    */
   test("a destroy plan whose instance has moved since is refused, and says so", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
     const instanceId = (await backend.store.agents.get("granite"))!.resources.instance_id!;
 
@@ -800,7 +815,7 @@ describe("plan.destroy / apply", () => {
 
   test("a destroy plan whose data volume has moved since is refused, naming the volume", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const row = (await backend.store.agents.get("granite"))!;
     const planned = row.resources.volume_id!;
     // The row now names a different disk — the shape that made this check worth
@@ -831,7 +846,7 @@ describe("plan.destroy / apply", () => {
    */
   test("a version bump with the same instance and volume still applies", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
 
     // Two heartbeats' worth of flapping: the row version moves, nothing the
@@ -848,7 +863,7 @@ describe("plan.destroy / apply", () => {
 
     await drain(hermetic.apply({ plan, yes: true }));
 
-    expect((await backend.store.agents.get("granite"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("granite")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(false);
   });
 
@@ -862,7 +877,7 @@ describe("plan.destroy / apply", () => {
    */
   test("an instance that moves between the plan check and the lock is refused", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const planned = (await backend.store.agents.get("granite"))!.resources.instance_id!;
 
     // The rival lands in the gap, exactly: the write goes in as this destroy is
@@ -909,7 +924,7 @@ describe("plan.destroy / apply", () => {
     // The CLI's `agent destroy --yes` path: no document to be stale, and the
     // row's ids are whatever they are.
     await drain(hermetic.agents.destroy({ name: "granite", yes: true }));
-    expect((await backend.store.agents.get("granite"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("granite")).toBeNull();
   });
 
   test("a recreate plan whose instance has moved since is refused too", async () => {
@@ -928,10 +943,143 @@ describe("plan.destroy / apply", () => {
     expect(backend.mutations).not.toContain("compute.runInstance");
   });
 
+  /**
+   * §6.7 frees a destroyed name, so the ids are not an identity: a `creating`
+   * row has no instance and no volume yet, and neither does the next, unrelated
+   * `creating` row that claims the same name once the first is gone. Only the
+   * row's `created_at` tells the two incarnations apart.
+   */
+  function incarnate(backend: MemoryBackend, name: string, createdAt: string): void {
+    const row = backend.agents.get(name)!;
+    const { instance_id: _i, volume_id: _v, ...resources } = row.resources;
+    backend.agents.set(name, {
+      ...row,
+      status: "creating",
+      instance_id: null,
+      volume_id: null,
+      resources,
+      lock: null,
+      version: 1,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+
+  test("a destroy plan for an earlier incarnation of the name is refused", async () => {
+    const { backend, hermetic } = seeded();
+    incarnate(backend, "granite", "2026-01-01T00:00:00.000Z");
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+    expect(plan.options.created_at).toBe("2026-01-01T00:00:00.000Z");
+    expect(plan.options.instance_id).toBeNull();
+    expect(plan.options.volume_id).toBeNull();
+
+    // Destroyed and claimed again in between: same name, same null ids, a
+    // different agent that nobody reviewed a plan for.
+    incarnate(backend, "granite", "2026-02-01T00:00:00.000Z");
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("created at 2026-01-01T00:00:00.000Z");
+    expect(error?.message).toContain("2026-02-01T00:00:00.000Z");
+    expect(error?.details?.["observed_created_at"]).toBe("2026-02-01T00:00:00.000Z");
+    // Refused by the plan check, before the lock: the row was never written.
+    expect(error?.message).not.toContain("nothing was destroyed");
+    expect(backend.mutations).not.toContain("store.agents.update");
+    const after = (await backend.store.agents.get("granite"))!;
+    expect(after.created_at).toBe("2026-02-01T00:00:00.000Z");
+    expect(after.status).toBe("creating");
+    expect(backend.mutations).not.toContain("store.agents.delete");
+  });
+
+  test("a new incarnation that lands between the plan check and the lock is refused", async () => {
+    const { backend, hermetic } = seeded();
+    incarnate(backend, "granite", "2026-01-01T00:00:00.000Z");
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+
+    // The same gap the instance race above uses: the name is released and
+    // claimed again as this destroy is taking its lock.
+    const update = backend.store.agents.update;
+    let raced = false;
+    backend.store.agents.update = async (name, version, patch) => {
+      if (raced || name !== "granite" || !patch.lock) return update(name, version, patch);
+      raced = true;
+      incarnate(backend, "granite", "2026-02-01T00:00:00.000Z");
+      return update(name, 1, patch);
+    };
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("nothing was destroyed");
+    expect(error?.message).toContain("2026-02-01T00:00:00.000Z");
+    const after = (await backend.store.agents.get("granite"))!;
+    expect(after.created_at).toBe("2026-02-01T00:00:00.000Z");
+    expect(after.status).toBe("creating");
+    expect(after.lock).toBeNull();
+    expect(backend.mutations).not.toContain("store.agents.delete");
+  });
+
+  test("a destroy plan that does not say created_at is refused as stale, deleting nothing", async () => {
+    const { backend, hermetic } = seeded();
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+    const { created_at: _dropped, ...older } = plan.options;
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan: { ...plan, options: older }, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("predates the current build");
+    expect(error?.message).toContain("hermetic plan destroy granite");
+    expect(backend.mutations).not.toContain("compute.terminate");
+    expect(await backend.store.agents.get("granite")).not.toBeNull();
+  });
+
+  /**
+   * §6.7 flipped the volume default. A plan file from the build before it
+   * carries `delete_volume: false` — "keep" — which the schema now drops; read
+   * as "no keep_volume" it would delete the disk the reviewed plan kept.
+   */
+  test("a destroy plan that does not say keep_volume is refused as stale, deleting nothing", async () => {
+    const { backend, hermetic } = seeded();
+    const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
+    const plan = await hermetic.plan.destroy({ name: "granite" });
+    expect(plan.options.keep_volume).toBe(false);
+    const { keep_volume: _dropped, ...older } = plan.options;
+    backend.resetMutations();
+
+    let error: HermeticError | null = null;
+    try {
+      await drain(hermetic.apply({ plan: { ...plan, options: older }, yes: true }));
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.code).toBe("PLAN_STALE");
+    expect(error?.message).toContain("hermetic plan destroy granite");
+    expect(backend.volumes.has(volumeId)).toBe(true);
+    expect(backend.mutations).not.toContain("compute.terminate");
+    expect(backend.mutations).not.toContain("compute.deleteVolume");
+    expect(await backend.store.agents.get("granite")).not.toBeNull();
+  });
+
   test("a plan from an older build says so rather than failing obscurely", async () => {
     const { hermetic } = seeded();
     const plan = await hermetic.plan.destroy({ name: "granite" });
-    const stripped = { ...plan, options: { delete_volume: false } };
+    const stripped = { ...plan, options: { keep_volume: true } };
 
     let error: HermeticError | null = null;
     try {
@@ -1024,12 +1172,12 @@ describe("plan.destroy / apply", () => {
 
   test("an unchanged plan still applies", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
 
     await drain(hermetic.apply({ plan, yes: true }));
 
-    expect((await backend.store.agents.get("granite"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("granite")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(false);
   });
 
@@ -1044,12 +1192,12 @@ describe("plan.destroy / apply", () => {
     expect(plan.summary?.account_id).toBe(FIXTURE_CONFIG.account_id);
 
     await drain(hermetic.apply({ plan, yes: true }));
-    expect((await backend.store.agents.get("granite"))!.status).toBe("destroyed");
+    expect(await backend.store.agents.get("granite")).toBeNull();
   });
 
   test("a plan made for another fleet is refused before anything is touched", async () => {
     const { backend, hermetic } = seeded();
-    const plan = await hermetic.plan.destroy({ name: "granite", delete_volume: true });
+    const plan = await hermetic.plan.destroy({ name: "granite" });
     const volumeId = (await backend.store.agents.get("granite"))!.resources.volume_id!;
     // The same plan document, made on the other fleet this laptop holds.
     const elsewhere = {
@@ -1104,7 +1252,7 @@ describe("teardown", () => {
   test("deletes the stack once every agent is destroyed", async () => {
     const { backend, hermetic } = seeded();
     for (const name of [...backend.agents.keys()]) {
-      await drain(hermetic.agents.destroy({ name, yes: true, delete_volume: true }));
+      await drain(hermetic.agents.destroy({ name, yes: true }));
     }
     const plan = await hermetic.plan.teardown();
     expect(plan.warnings.some((w) => w.includes("still exist"))).toBe(false);

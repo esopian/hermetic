@@ -26,7 +26,12 @@ import { fleetIdOf, isInitialized } from "../api/index.ts";
 import type { VolumeView } from "../api/index.ts";
 import { DEFAULT_AGENT_TAB, agentHash, parseAgentHash } from "./agent-nav.ts";
 import type { AgentTab } from "./agent-nav.ts";
-import { FLEET_VOLUMES_HASH, LEGACY_VOLUMES_HASH, parseFleetLensHash } from "./fleet-nav.ts";
+import {
+  FLEET_VOLUMES_HASH,
+  LEGACY_VOLUMES_HASH,
+  fleetLensHash,
+  parseFleetLensHash,
+} from "./fleet-nav.ts";
 import type { FleetLens } from "./fleet-nav.ts";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { isChatHash } from "../chat/chat-routing.ts";
@@ -289,18 +294,20 @@ export function NavProvider({
     setSettingsOpen(v === "settings");
     if (v !== "settings") setProvidersNew(false);
   }, []);
-  const openVolumes = useCallback(() => {
+  /** Volumes or Destroyed: a lens that is not the agents one closes the drawer. */
+  const openOtherLens = useCallback((lens: Exclude<FleetLens, "agents">) => {
     setSettingsOpen(false);
     setChatOpen(false);
     // The drawer belongs to the agents lens; see the hash writer below.
     setSelected(null);
     setTeardownOpen(false);
-    setFleetLens("volumes");
+    setFleetLens(lens);
   }, []);
-  /** The toolbar's `N AGENTS | N VOLUMES` switch. */
+  const openVolumes = useCallback(() => openOtherLens("volumes"), [openOtherLens]);
+  /** The toolbar's `N AGENTS | N VOLUMES | DESTROYED` switch. */
   const chooseFleetLens = useCallback(
-    (lens: FleetLens) => (lens === "volumes" ? openVolumes() : setFleetLens("agents")),
-    [openVolumes],
+    (lens: FleetLens) => (lens === "agents" ? setFleetLens("agents") : openOtherLens(lens)),
+    [openOtherLens],
   );
 
   // Read through a ref: Escape reaches this from a window listener that `App`
@@ -398,8 +405,10 @@ export function NavProvider({
         window.location.hash === "#" ||
         // The drawer lives on the agents lens. Back from `#agent/<name>` to
         // `#fleet/volumes` has to close it, or the writer would push the
-        // agent's hash straight back and trap the operator on it.
-        lens === "volumes"
+        // agent's hash straight back and trap the operator on it. The
+        // destroyed lens is the same: its detail panel is its own, not the drawer.
+        lens === "volumes" ||
+        lens === "destroyed"
       ) {
         setSelected(null);
         setTeardownOpen(false);
@@ -426,9 +435,7 @@ export function NavProvider({
           : "#chat"
         : selected
           ? agentHash(selected, agentTab)
-          : fleetLens === "volumes"
-            ? FLEET_VOLUMES_HASH
-            : "";
+          : fleetLensHash(fleetLens);
     if (window.location.hash === wants) return;
     if (wants) {
       window.location.hash = wants;

@@ -26,16 +26,18 @@ import type {
 } from "../schema/index.ts";
 import { validateName } from "../shared/naming.ts";
 import type { ExpectedResources } from "./plan-expectations.ts";
-import { HermeticError } from "../errors.ts";
+import { HermeticError, isHermeticError, isMissingTable } from "../errors.ts";
 import { legacyParamPrefixes, listLegacyParams, readFleetScope } from "../fleet/legacy-params.ts";
 import { POLICY_RETAINED_NOTICE } from "../fleet/policy.ts";
 import type { CoreContext } from "../context.ts";
 import {
   AGENT_PARAM_ROOT,
+  AGENT_TAG,
   FLEET_ID_TAG,
   HERMETIC_PARAM_ROOT,
   agentParamPrefix,
   DATA_SNAPSHOT_TAG,
+  FORMER_AGENT_TAG,
   hermeticParamPrefix,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
@@ -71,12 +73,63 @@ export function createPlans(deps: PlanDeps) {
     };
   }
 
+  /**
+   * §6.7: whether `destroy` will keep this volume whatever the flag says,
+   * because it already carries `hermetic:former_agent=<name>` — the promise an
+   * earlier, interrupted destroy that kept it made before it removed `agent`
+   * (`destroy-agent.ts`, `volumeHold`). A plan that said "delete" for such a
+   * disk would misstate what the operator is approving. One describe, a read;
+   * a disk that is gone, or somebody else's (which `destroy` itself refuses),
+   * is not "already kept" and leaves the preview as the flag has it. "Somebody
+   * else's" is judged as `volumeHold` judges it: a released disk (no `agent`
+   * tag, `former_agent=<name>`) counts only when it is also managed and in this
+   * fleet.
+   */
+  async function alreadyKept(name: string, volumeId: string): Promise<boolean> {
+    const owner = { fleet_id: requireConfig().fleet_id, agent: name };
+    try {
+      return (await backend.compute.describeOwnedVolume(volumeId, owner))?.former_agent === name;
+    } catch (e) {
+      if (!isHermeticError(e) || e.code !== "RESOURCE_NOT_OWNED") throw e;
+      const found = (e.details?.["found"] ?? {}) as Record<string, string | null>;
+      return (
+        found[MANAGED_TAG] === MANAGED_TAG_VALUE &&
+        found[FLEET_ID_TAG] === owner.fleet_id &&
+        (found[AGENT_TAG] ?? null) === null &&
+        found[FORMER_AGENT_TAG] === name
+      );
+    }
+  }
+
   async function destroy(input: PlanDestroyInput): Promise<Plan> {
     validateName(input.name);
     await guardAccount();
     const agent = await getAgent(input.name);
     const volumeId = agent.resources.volume_id ?? agent.volume_id;
-    const steps = [
+    /**
+     * §6.7: the release is the last step, and it is what frees the name — a
+     * tombstone replaces the row. A legacy `destroyed` row (destroyed before
+     * tombstones existed) has nothing left but that release, and its volume,
+     * if it kept one, is released from the name rather than deleted.
+     */
+    const legacy = agent.status === "destroyed";
+    const keepVolume =
+      legacy ||
+      input.keep_volume === true ||
+      (volumeId !== undefined && volumeId !== null && (await alreadyKept(agent.name, volumeId)));
+    const volumeStep = keepVolume
+      ? {
+          id: "volume",
+          description: `keep data volume ${volumeId ?? "(none)"} (released from the name, tagged former_agent)`,
+          destructive: false,
+        }
+      : { id: "volume", description: `delete data volume ${volumeId ?? "(none)"}`, destructive: true };
+    const releaseStep = {
+      id: "release",
+      description: "write tombstone, delete the agent record; name becomes reusable",
+      destructive: true,
+    };
+    const liveSteps = [
       {
         id: "terminate",
         description: `terminate instance ${agent.resources.instance_id ?? agent.instance_id ?? "(none)"}`,
@@ -100,19 +153,20 @@ export function createPlans(deps: PlanDeps) {
       },
       {
         id: "config",
-        description: `delete S3 objects under ${configPrefix(agent.name)}`,
+        description: `delete S3 objects and every version of them under ${configPrefix(agent.name)}`,
         destructive: true,
       },
-      input.delete_volume
-        ? { id: "volume", description: `delete data volume ${volumeId ?? "(none)"}`, destructive: true }
-        : { id: "volume", description: `keep data volume ${volumeId ?? "(none)"}`, destructive: false },
-      { id: "record", description: "mark the agent record destroyed", destructive: false },
+      volumeStep,
+      releaseStep,
     ];
+    const steps = legacy ? [volumeStep, releaseStep] : liveSteps;
     const warnings: string[] = [];
-    if (input.delete_volume) {
-      warnings.push("the data volume holds this agent's memory, episode log and skill library");
+    if (!keepVolume && volumeId) {
+      warnings.push(
+        "the data volume holds this agent's memory, episode log and skill library; pass --keep-volume to keep it",
+      );
     }
-    if (agent.status === "destroyed") warnings.push(`${agent.name} is already destroyed`);
+    if (legacy) warnings.push("record predates tombstones; will be released");
     warnings.push("events are never deleted; this agent's history survives");
     return {
       kind: "destroy",
@@ -123,10 +177,12 @@ export function createPlans(deps: PlanDeps) {
        * still the row this plan describes (`PlanOptions.agent_version`).
        */
       options: {
-        delete_volume: input.delete_volume === true,
+        keep_volume: input.keep_volume === true,
         agent_version: agent.version,
         instance_id: agent.resources.instance_id ?? agent.instance_id ?? null,
         volume_id: volumeId ?? null,
+        // Which incarnation of the name this is (`PlanOptions.created_at`).
+        created_at: agent.created_at,
       },
       steps,
       warnings,
@@ -151,6 +207,7 @@ export function createPlans(deps: PlanDeps) {
         agent_version: agent.version,
         instance_id: agent.resources.instance_id ?? agent.instance_id ?? null,
         volume_id: volumeId ?? null,
+        created_at: agent.created_at,
       },
       steps: [
         {
@@ -314,16 +371,29 @@ export function createPlans(deps: PlanDeps) {
      * recursive.
      */
     const scope = await readFleetScope(backend, config.fleet_id);
+    /**
+     * §6.7: a destroy now deletes the row, so a name destroyed since survives
+     * only in its tombstone. Read exactly as `teardown.ts` reads it — only for
+     * a sole fleet, and a table already gone has no names to give — so the
+     * plan and the apply enumerate from the same list.
+     */
+    const tombstoned =
+      scope.sole && !scanned.table_gone
+        ? await backend.store.events.queryTombstones().catch((e: unknown) => {
+            if (isMissingTable(e)) return [];
+            throw e;
+          })
+        : [];
     const legacy = scope.sole
       ? legacyParamPrefixes(
           /**
-           * Every row, destroyed included — `scanned.agents`, not the `agents`
-           * the refusal check uses, which filters them out. A destroyed row is
-           * kept for ever (§4.3) and its name is the only record that
-           * `/hermes/<name>/` was this fleet's, so filtering it here would make
+           * Every row, legacy destroyed ones included — `scanned.agents`, not
+           * the `agents` the refusal check uses, which filters them out — plus
+           * every tombstone. Between them they are the only record that
+           * `/hermes/<name>/` was this fleet's, so leaving either out would make
            * the plan promise a smaller set than `teardown` deletes.
            */
-          scanned.agents.map((a) => a.name),
+          [...scanned.agents.map((a) => a.name), ...tombstoned.map((t) => t.name)],
           scope,
         )
       : { prefixes: [] as string[], skipped: [] as string[] };
@@ -468,6 +538,14 @@ export function createPlans(deps: PlanDeps) {
    * the row's version says; if either has moved, the refusal can say which,
    * which is the whole point of refusing.
    *
+   * Beside the ids, the row's `created_at` — the incarnation. Since §6.7 frees a
+   * destroyed name, ids alone cannot tell a plan for one `creating` row (no
+   * instance, no volume yet) from a later, unrelated `creating` row of the same
+   * name whose ids are just as null; `created_at` can, and unlike the version
+   * nothing but a new incarnation moves it. A plan without it is refused, as one
+   * without a version is: it predates the incarnation check, and a reused
+   * null-id row would pass it.
+   *
    * The version is still *carried*, and is still required: a plan without one
    * predates this build, so nothing in it can be checked at all. That refusal is
    * the same answer `policy.apply` gives a plan with no ETag.
@@ -487,10 +565,31 @@ export function createPlans(deps: PlanDeps) {
         { kind: plan.kind, target: plan.target },
       );
     }
+    /**
+     * §6.7 made a destroyed name free to claim again, so a destroy or recreate
+     * plan has to say which incarnation of the name it showed: a plan read for
+     * a `creating` row with no instance and no volume yet would otherwise pass
+     * against a later, unrelated `creating` row whose ids are just as null, and
+     * act on the new life. `destroy` and `recreate` here always write
+     * `created_at`; its absence can only mean an older plan, and an older plan
+     * cannot be checked.
+     */
+    if (plan.options.created_at === undefined) {
+      throw new HermeticError(
+        "PLAN_STALE",
+        `this ${plan.kind} plan predates the current build of hermetic and does not say which incarnation of ${plan.target} it describes (a destroyed name can now be reused); run \`hermetic plan ${plan.kind} ${plan.target}\` again`,
+        { kind: plan.kind, target: plan.target },
+      );
+    }
     const agent = await getAgent(validateName(plan.target));
     const instanceId = agent.resources.instance_id ?? agent.instance_id ?? null;
     const volumeId = agent.resources.volume_id ?? agent.volume_id ?? null;
     const moved: string[] = [];
+    if (plan.options.created_at !== agent.created_at) {
+      moved.push(
+        `the plan was made for the ${agent.name} created at ${plan.options.created_at} and the row now is one created at ${agent.created_at}`,
+      );
+    }
     if (plan.options.instance_id !== undefined && plan.options.instance_id !== instanceId) {
       moved.push(
         `the plan named instance ${plan.options.instance_id ?? "(none)"} and the row now names ${instanceId ?? "(none)"}`,
@@ -505,6 +604,7 @@ export function createPlans(deps: PlanDeps) {
       return {
         ...(plan.options.instance_id === undefined ? {} : { instance_id: plan.options.instance_id }),
         ...(plan.options.volume_id === undefined ? {} : { volume_id: plan.options.volume_id }),
+        created_at: plan.options.created_at,
         agent_version: plan.options.agent_version,
       };
     }
@@ -521,6 +621,8 @@ export function createPlans(deps: PlanDeps) {
         observed_instance_id: instanceId,
         planned_volume_id: plan.options.volume_id ?? null,
         observed_volume_id: volumeId,
+        planned_created_at: plan.options.created_at ?? null,
+        observed_created_at: agent.created_at,
       },
     );
   }

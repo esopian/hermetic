@@ -1,7 +1,7 @@
 /**
  * §4.8 through the CLI head, spawned as a real process like the rest of
  * `packages/cli/test`. The fixture home freezes both fixture fleets (`main`,
- * the twelve-agent one, and `staging`, two agents and one foundation version
+ * the eleven-agent one, and `staging`, two agents and one foundation version
  * behind), which is exactly the shape this feature exists for: several fleets
  * in one account, one of them the default.
  *
