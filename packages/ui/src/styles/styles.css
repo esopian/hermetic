@@ -4573,6 +4573,8 @@ button:focus-visible,
   flex-wrap: wrap;
 }
 .nt-src .tag {
+  /* The global `.tag` is a filled accent chip; this one is an outline. */
+  background: transparent;
   border: 1px solid var(--line2);
   padding: 0 4px;
   color: var(--fg2);
@@ -5172,7 +5174,7 @@ button:focus-visible,
   color: var(--fg3);
 }
 .nt-bulk {
-  gap: 8px;
+  gap: 6px;
   background: var(--fg);
   color: var(--bg);
 }
@@ -5183,14 +5185,15 @@ button:focus-visible,
   font-weight: 900;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-right: 8px;
+  margin-right: 4px;
   font-size: 13px;
+  white-space: nowrap;
 }
 .nt-bulk button:not(.nt-ck) {
   all: unset;
   cursor: pointer;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 9px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5198,6 +5201,8 @@ button:focus-visible,
   font-weight: 800;
   text-transform: uppercase;
   font-size: 11px;
+  white-space: nowrap;
+  flex: none;
 }
 .nt-bulk button:not(.nt-ck):hover {
   background: var(--acc);

@@ -23,8 +23,8 @@ import {
   filterCenter,
   flatCards,
   focusAfterRemoval,
-  inInbox,
   isUnread,
+  markReadRows,
   moveFocus,
   rangeKeys,
 } from "../../logic/inbox-logic.ts";
@@ -88,8 +88,11 @@ export function InboxDrawer({
   const current = focus !== null && keys.includes(focus) ? focus : null;
   const selected = cards.filter((c) => checked.has(c.key));
   const selectedRows = selected.flatMap((c) => c.rows);
-  const live = rows.filter((n) => inInbox(n, now));
-  const unreadLive = live.filter(isUnread);
+  // The rows a bulk verb may act on: whatever this view lists, minus History's
+  // cleared rows. Snoozed rows count in the Snoozed view, and "Mark N read"
+  // leaves resolved rows out so it agrees with the unread count (`markReadRows`).
+  const live = rows.filter((n) => !n.cleared_at);
+  const unreadLive = markReadRows(live);
   const readLive = live.filter((n) => !isUnread(n));
 
   const close = closeDrawer;
