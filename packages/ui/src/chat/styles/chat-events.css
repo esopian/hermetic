@@ -1,0 +1,355 @@
+/* Background-process events in the thread (§9.2).
+
+   An event is not somebody speaking, so it is not drawn like a message: no
+   name, no bubble, no avatar. It sits on a dashed rule in the avatar column —
+   the same 36px track and 26px inset as a `.ch-msg` in the soft skin, so the
+   rule lines up under the faces above and below it — with one mono line to its
+   right. Colour carries the status and nothing else: the square and the status
+   word are `--ok`, `--bad`, `--warn` or `--fg3`, and the rest of the line is
+   the quiet `--fg2` a timestamp would be.
+
+   Every surface here is square, like every other surface in the app. The one
+   curve on screen is still the blob avatar inside a DM reply, which is the
+   avatar's own exception (ui-brief "Look"), not a new one. */
+
+/* ── the row ─────────────────────────────────────────────────────────────── */
+
+.ch-ev {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 14px;
+  padding: 6px 26px;
+  scroll-margin: 24px;
+}
+.ch-ev:focus {
+  outline: none;
+}
+.ch-ev:focus-visible {
+  outline: 1px dashed var(--fg3);
+}
+.ch-ev-gut {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 5px;
+}
+.ch-ev-gut::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  border-left: 1px dashed var(--line2);
+}
+.ch-ev-main {
+  min-width: 0;
+}
+
+/* The status square: `Look` says a status dot is a square, 8–14px. */
+.ch-ev-sq {
+  position: relative;
+  display: block;
+  width: 9px;
+  height: 9px;
+  flex: none;
+  background: var(--fg3);
+}
+.ch-ev-sq.ok {
+  background: var(--ok);
+}
+.ch-ev-sq.bad {
+  background: var(--bad);
+}
+.ch-ev-sq.warn {
+  background: var(--warn);
+}
+
+/* ── the one line ────────────────────────────────────────────────────────── */
+
+.ch-ev-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font: 11.5px / 1.6 var(--mono);
+  color: var(--fg2);
+}
+.ch-ev-line .k {
+  font: 700 9.5px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.ch-ev-line .st.ok {
+  color: var(--ok);
+}
+.ch-ev-line .st.bad {
+  color: var(--bad);
+}
+.ch-ev-line .st.warn {
+  color: var(--warn);
+}
+.ch-ev-line .st.mute,
+.ch-ev .dim {
+  color: var(--fg3);
+}
+/* The command is cut to 58 characters in `shortCommand`; this is the backstop
+   for a narrow window, and the full string is on the element's `title`. */
+.ch-ev-line .cmd {
+  display: inline-block;
+  max-width: 58ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  padding: 0 5px;
+  background: var(--bg2);
+  color: var(--fg);
+}
+.ch-ev-line .t,
+.ch-ev-dm-head .t {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg3);
+}
+
+/* "result ↓", "started ↑", "copy": links that scroll or act, not navigate. */
+.ch-ev-jump {
+  all: unset;
+  cursor: pointer;
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+  border-bottom: 1px dotted var(--fg3);
+}
+.ch-ev-jump:hover,
+.ch-ev-jump:focus-visible {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* ── folds ───────────────────────────────────────────────────────────────── */
+
+.ch-ev-more {
+  margin-top: 4px;
+}
+.ch-ev-more > summary {
+  display: inline-flex;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+}
+.ch-ev-more > summary::-webkit-details-marker {
+  display: none;
+}
+.ch-ev-more > summary::before {
+  content: "▸";
+}
+.ch-ev-more[open] > summary::before {
+  content: "▾";
+}
+.ch-ev-more > summary:hover {
+  color: var(--fg);
+}
+.ch-ev-last {
+  color: var(--fg2);
+}
+.ch-ev-last.bad {
+  color: var(--bad);
+}
+.ch-ev-tail {
+  margin: 6px 0 2px;
+  padding: 8px 12px;
+  max-height: 260px;
+  overflow: auto;
+  border-left: 2px solid var(--line2);
+  background: var(--bg2);
+  font: 11.5px / 1.6 var(--mono);
+  color: var(--fg2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ch-ev-tail.bad {
+  border-left-color: var(--bad);
+}
+.ch-ev-tail.warn {
+  border-left-color: var(--warn);
+}
+/* The watch pattern, marked in the lines that matched it. */
+.ch-ev-tail .hl {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--fg);
+}
+.ch-ev-task b {
+  color: var(--fg);
+}
+.ch-ev-task .ok {
+  color: var(--ok);
+}
+.ch-ev-task .bad,
+.ch-ev-task.bad {
+  color: var(--bad);
+}
+.ch-ev-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+/* ── a burst: n routine events as one row ────────────────────────────────── */
+
+.ch-ev-burst > summary {
+  display: block;
+  cursor: pointer;
+  list-style: none;
+}
+.ch-ev-burst > summary::-webkit-details-marker {
+  display: none;
+}
+.ch-ev-burst > summary .ch-ev-line::before {
+  content: "▸";
+  color: var(--fg3);
+}
+.ch-ev-burst[open] > summary .ch-ev-line::before {
+  content: "▾";
+}
+/* A burst's line never wraps: the id list is what gives way, cut with an
+   ellipsis (the full list is on its title), so the time range stays on the
+   right of the same line rather than dropping under it. */
+.ch-ev-burst > summary .ch-ev-line {
+  flex-wrap: nowrap;
+}
+.ch-ev-burst > summary .ch-ev-line > * {
+  flex: none;
+}
+.ch-ev-burst > summary .ch-ev-line .ids {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-ev-burst > summary .ch-ev-line .t {
+  white-space: nowrap;
+}
+.ch-ev-inner {
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+/* A member of a burst: the burst's own gutter already carries the rule. */
+.ch-ev.sub {
+  grid-template-columns: 12px 1fr;
+  gap: 10px;
+  padding: 4px 0;
+}
+.ch-ev.sub > .ch-ev-gut::before {
+  display: none;
+}
+
+/* ── a DM reply: another bot talking ─────────────────────────────────────── */
+
+.ch-ev-dm {
+  margin: 4px 0 2px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+}
+.ch-ev-dm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  font: 10.5px var(--mono);
+  color: var(--fg2);
+}
+.ch-ev-dm-head .k {
+  font: 700 9.5px var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--acc);
+}
+.ch-ev-dm-body {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.ch-ev-dm-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.ch-ev-dm-body .ch-msg-body.ch-ev-dm-reply {
+  margin-top: 3px;
+}
+.ch-ev-dm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+}
+.ch-ev-dm-foot .ch-ev-more {
+  margin-top: 0;
+}
+.ch-ev-dm-foot .ch-ev-more[open] {
+  flex-basis: 100%;
+}
+.ch-ev-dm-foot .warnline {
+  color: var(--warn);
+}
+
+/* ── the bot turn an event woke ──────────────────────────────────────────── */
+
+.ch-inreply {
+  margin-bottom: 2px;
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+}
+
+/* ── the thread's density switch ─────────────────────────────────────────── */
+
+.ch-ev-density {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line2);
+}
+.ch-ev-density .kicker {
+  margin: 0;
+  padding: 0 7px;
+}
+.ch-ev-density button {
+  all: unset;
+  cursor: pointer;
+  height: 20px;
+  padding: 0 8px;
+  border-left: 1px solid var(--line2);
+  font: 700 10px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+.ch-ev-density button:hover,
+.ch-ev-density button:focus-visible {
+  color: var(--fg);
+}
+.ch-ev-density button[aria-pressed="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* A thread of routine events only, with "failures only" on: say so, never a blank log. */
+.ch-ev-allhidden {
+  margin: 24px 0;
+  text-align: center;
+  font: 11.5px / 1.6 var(--mono);
+  color: var(--fg3);
+}

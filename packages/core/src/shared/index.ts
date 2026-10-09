@@ -41,6 +41,15 @@ export type { FleetTarget } from "./target.ts";
 // --- Inbox listening rule (§4.6) ------------------------------------------
 export { INSTANCE_NOTIFICATION_SOURCES, hiddenByListening } from "./notifications.ts";
 
+// --- Background-process events in chat (§9.2) ----------------------------
+export {
+  PROCESS_COMMAND_MAX,
+  isRoutineProcessEvent,
+  processEventSentence,
+  shortCommand,
+} from "./process-event.ts";
+export type { ProcessEventLike } from "./process-event.ts";
+
 // --- Providers (§8.1) ----------------------------------------------------
 export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./providers.ts";
 export type { Provider, ProviderSpec } from "./providers.ts";

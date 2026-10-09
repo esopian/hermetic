@@ -496,6 +496,62 @@ function poisonedHistory(instance: string): ChatMessage[] {
       error: `upstream refused: ${s("assignment-single-quoted")}`,
       incomplete: null,
     },
+    {
+      // A background-process notice: the command line, its output, a DM reply
+      // and a subagent's summary are all the box's words, and `raw` is the whole
+      // notice again. Every one of them has to be masked, not just `raw`.
+      id: "msg-3",
+      session: SESSION,
+      role: "system",
+      author: null,
+      at: AT,
+      blocks: [
+        {
+          kind: "process_event",
+          event: "completion",
+          outcome: "failed",
+          process_id: "proc_0123456789ab",
+          status: "exited",
+          exit_code: 1,
+          signal: null,
+          command: `curl -H "Authorization: ${s("bearer-token")}" https://api.example.com`,
+          output_tail: `401 for ${s("anthropic-key")}`,
+          output_lines: 1,
+          duration_s: null,
+          message: `retrying with ${s("openai-key")}`,
+          watch: { pattern: s("stripe-key"), suppressed: 0 },
+          delegation: {
+            id: "deleg_1",
+            batch: false,
+            status: "failed",
+            total: 1,
+            succeeded: 0,
+            api_calls: 1,
+            tasks: [
+              {
+                index: 1,
+                goal: `rotate ${s("npm-token")}`,
+                status: "failed",
+                ok: false,
+                summary: `tried ${s("sendgrid-key")}`,
+                duration_s: 1,
+                api_calls: 1,
+              },
+            ],
+            error: `refused ${s("google-api-key")}`,
+          },
+          dm: {
+            to_profile: "lead-qa",
+            reply: `the key is ${s("openrouter-key")}`,
+            warnings: [`⚠ scanner saw ${s("jwt")}`],
+          },
+          raw: `[IMPORTANT: Background process proc_0123456789ab exited (exit code 1).\nCommand: env\nOutput:\n${s("aws-secret-access-key")}]`,
+        },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
   ];
 }
 

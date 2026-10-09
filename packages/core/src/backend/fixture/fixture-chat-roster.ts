@@ -234,10 +234,25 @@ const SWARMS: Readonly<Record<string, SwarmSpec>> = {
       },
     ],
   },
+  /**
+   * The background-process box: its Bot Chat is the event transcript
+   * (`fixture-chat-process-events.ts`), and `lead-qa` is the bot its DM went to.
+   */
   kestrel: {
     reachable: true,
     used: 1,
-    bots: [defaultBot("kestrel", { warm: true, last_message_at: at("08:58:41") })],
+    bots: [
+      defaultBot("kestrel", { warm: true, last_message_at: at("08:58:41") }),
+      {
+        ...QUIET,
+        name: "lead-qa",
+        title: "lead-qa",
+        description: "Checks release claims before they reach the wiki",
+        is_default: false,
+        model: "claude-sonnet-5",
+        last_message_at: null,
+      },
+    ],
   },
   /** The bootstrap that stopped on `02-data-volume`: no gateway ever started. */
   heron: {
@@ -493,10 +508,25 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     turn_count: 2,
   },
   {
-    id: "sx-kestrel-portal",
+    // kestrel's Bot Chat: the background-process transcript. Canonical, so
+    // `#chat/kestrel/default` opens it; the Bitwarden thread below is a
+    // portal thread beside it.
+    id: "sx-kestrel-events",
     instance: "kestrel",
     bot: "default",
     kind: "canonical",
+    origin: "portal",
+    origin_detail: null,
+    title: "Bot Chat",
+    last_message_at: at("00:28:02"),
+    unread: 0,
+    turn_count: 12,
+  },
+  {
+    id: "sx-kestrel-portal",
+    instance: "kestrel",
+    bot: "default",
+    kind: "thread",
     origin: "portal",
     origin_detail: null,
     title: "Bitwarden rotation",
