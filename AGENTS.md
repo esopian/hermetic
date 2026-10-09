@@ -27,6 +27,7 @@ Where to read for common tasks:
 - **Add a long operation** — a module with an explicit deps object, not another function in `hermetic.ts`. See rule 5.
 - **Bump `FOUNDATION_VERSION`** — see rule 7.
 - **Bump `chrome_ref`** — take the new Chrome for Testing zip's sha256 and byte size, edit `BUILD_VERSIONS.chrome_ref`/`chrome_sha256`/`chrome_size` (`packages/core/src/build-versions.ts`), then `hermetic artifacts push` to mirror it. A box gets the new pin when its config is rendered — `agent create` or `recreate`, not `rerun` (which only resumes an `error` agent). Same owner and cadence as `hermes_ref`; Chrome for Testing does not self-update. §7.3/§3.6.
+- **Open a PR** — `/create-pr` (`.claude/skills/create-pr/SKILL.md`), every time. See Conventions.
 - **Add a second fleet** — `hermetic init --attach --fleet <id|alias>` joins an existing foundation, `init --create` makes a new one. `hermetic fleet alias <fleet-id> <alias>` labels a fleet, `--clear` unlabels it, `fleet use <fleet-id|alias>` switches the local default. `fleet_id` is the identity; the alias is display only. §4.6/§4.8.
 
 ## Layout (Bun workspaces)
@@ -131,6 +132,7 @@ Commands, CI jobs, the formatter and hooks: `CONTRIBUTING.md`. `bun run check` b
 - Deferred-work markers carry an owner: `TODO(name):`, `FIXME(name):`, `PHASE2(name):`, `PHASE3(name):` — never bare (rule 4).
 - Secrets are never logged, echoed, or written to disk on the laptop. Test fixtures use only `FIXTURE` sentinel values; `packages/core/test/secrets-leak.test.ts` fails the suite on any fixture secret value, or any `tskey-…`, in captured output.
 - Commit messages: conventional commits, imperative, subject of 50 characters or fewer.
+- Pull requests: open every one through the `create-pr` skill (`.claude/skills/create-pr/SKILL.md`, `/create-pr`), never a bare `gh pr create`. An agent without skills follows that file by hand. The body is `.github/pull_request_template.md`, filled only with checks actually run; the title is the squash commit subject, so the commit-message rule applies.
 - Delegation and token discipline for agents that spawn subagents: `.claude/skills/orchestrator-mode/SKILL.md` §6.
 
 ## Dev
