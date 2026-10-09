@@ -7,7 +7,7 @@ import { PREF_DEFAULT_FLEET } from "./config.ts";
  * migration *names* recorded in `schema_migrations` (see `MIGRATIONS`), because
  * two branches can and do reach the same number by different routes.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 13;
 
 /**
  * A migration this branch may assume ran when a bare *number* is all the ledger
@@ -495,6 +495,35 @@ const MIGRATIONS: Migration[] = [
          PRIMARY KEY (fleet, instance, bot)
        )`,
     ],
+  },
+  {
+    /**
+     * Inbox v2 (§4.9): the operator can take a row out of the inbox
+     * (`cleared_at`, after which it is History until retention) or hide it for
+     * a while (`snoozed_until`). Declared columns, so a re-run on a ledger that
+     * lost this name adds nothing twice. The auto-clear settings need no table:
+     * they are two `prefs` rows.
+     */
+    name: "notifications-cleared-snoozed",
+    version: 13,
+    statements: [],
+    columns: [
+      { table: "notifications", column: "cleared_at", type: "TEXT" },
+      { table: "notifications", column: "snoozed_until", type: "TEXT" },
+    ],
+  },
+  {
+    /**
+     * When the operator last restored a row out of History (§4.9). The
+     * auto-clear sweep measures a read row's age from the later of `read_at`
+     * and this, and skips the resolved-on-read rule until the row is read again
+     * after the restore, so a restored row stays in the inbox instead of being
+     * re-cleared by the next list. Kept internal: no `Notification` field.
+     */
+    name: "notifications-restored",
+    version: 14,
+    statements: [],
+    columns: [{ table: "notifications", column: "restored_at", type: "TEXT" }],
   },
 ];
 

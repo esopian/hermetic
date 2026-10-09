@@ -6,9 +6,13 @@
  * winning whenever both are true. That is the whole reason `badgeTone` is a
  * pure function rather than a ternary here — a quiet bell is a claim, and the
  * claim has a test.
+ *
+ * When something needs you, the gold count is followed by a dim `+N` for the
+ * other unread rows (`bellParts`): the same inbox, said quieter, not a second
+ * colour.
  */
 import type { RefObject } from "react";
-import { badgeTone } from "../../logic/notification-logic.ts";
+import { bellParts } from "../../logic/inbox-logic.ts";
 
 export function Bell({
   unread,
@@ -23,11 +27,10 @@ export function Bell({
   onToggle: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const tone = badgeTone(unread, needsAction);
-  const count = tone === "needs_action" ? needsAction : unread;
+  const { tone, main, more } = bellParts(unread, needsAction);
   const label =
     tone === "needs_action"
-      ? `Notifications: ${needsAction} need you`
+      ? `Notifications: ${needsAction} need you · ${unread} unread`
       : tone === "unread"
         ? `Notifications: ${unread} unread`
         : "Notifications";
@@ -45,8 +48,9 @@ export function Bell({
     >
       <span aria-hidden="true">◔</span>
       {tone === "quiet" ? null : (
-        <span className={tone === "needs_action" ? "count needs-action" : "count"}>{count}</span>
+        <span className={tone === "needs_action" ? "count needs-action" : "count"}>{main}</span>
       )}
+      {more > 0 ? <span className="count sub">+{more}</span> : null}
     </button>
   );
 }

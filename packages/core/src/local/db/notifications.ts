@@ -1,17 +1,35 @@
 import type { Database } from "bun:sqlite";
-import type { Notification, NotificationMute, NotificationsListInput } from "../../schema/index.ts";
+import type {
+  Notification,
+  NotificationMute,
+  NotificationSettings,
+  NotificationView,
+  NotificationsListInput,
+} from "../../schema/index.ts";
 import {
+  AutoClearRead as AutoClearReadSchema,
+  DEFAULT_NOTIFICATION_SETTINGS,
   Notification as NotificationSchema,
   agentMuteTarget,
   sourceMuteTarget,
 } from "../../schema/index.ts";
 import {
   MemoryNotificationStore,
-  NOTIFICATION_RETENTION_DAYS,
   mintNotificationId,
   notifyOpSettled,
 } from "../../chat/notifications.ts";
-import type { NotificationInsert, NotificationStore } from "../../chat/notifications.ts";
+import type {
+  NotificationAckWrite,
+  NotificationClearWrite,
+  NotificationCounts,
+  NotificationInsert,
+  NotificationStore,
+} from "../../chat/notifications.ts";
+import {
+  DEFAULT_NOTIFICATION_VIEW,
+  autoClearCutoff,
+  retentionCutoff,
+} from "../../chat/notification-store.ts";
 import { INSTANCE_NOTIFICATION_SOURCES } from "../../shared/notifications.ts";
 import { openLocalDb, type DbFileOptions } from "./index.ts";
 
@@ -38,6 +56,38 @@ function escapeLike(literal: string): string {
 function isMuted(row: Pick<Notification, "agent" | "source">, muted: Set<string>): boolean {
   if (row.agent != null && muted.has(agentMuteTarget(row.agent))) return true;
   return muted.has(sourceMuteTarget(row.source));
+}
+
+/** The two `prefs` rows the auto-clear settings live in (§4.9). */
+export const PREF_INBOX_AUTO_CLEAR_READ = "notifications.auto_clear_read";
+export const PREF_INBOX_CLEAR_RESOLVED_ON_READ = "notifications.clear_resolved_on_read";
+
+type Clause = { where: string; params: string[] };
+
+/**
+ * A view as SQL, with `now` bound as a parameter so a snooze lapses the moment
+ * the clock passes it and nothing has to move the row. The same three
+ * predicates as `inView` in `notification-memory-store.ts`.
+ */
+function viewClause(view: NotificationView, now: string): Clause {
+  switch (view) {
+    case "inbox":
+      return {
+        where: `(cleared_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?))`,
+        params: [now],
+      };
+    case "snoozed":
+      return { where: `(cleared_at IS NULL AND snoozed_until > ?)`, params: [now] };
+    case "history":
+      return { where: `(cleared_at IS NOT NULL OR resolved_at IS NOT NULL)`, params: [] };
+    case "all":
+      return { where: `1 = 1`, params: [] };
+  }
+}
+
+/** `?, ?, ?` for a list of ids. The schema caps a batch at 500, well under SQLite's limit. */
+function placeholders(ids: readonly string[]): string {
+  return ids.map(() => "?").join(",");
 }
 
 export class SqliteNotificationStore implements NotificationStore {
@@ -78,6 +128,8 @@ export class SqliteNotificationStore implements NotificationStore {
       actions,
       read_at: row.read_at,
       resolved_at: row.resolved_at,
+      cleared_at: row.cleared_at ?? null,
+      snoozed_until: row.snoozed_until ?? null,
       muted: false,
     });
     // Same bargain as `teardowns`: a row written by another build is skipped,
@@ -124,10 +176,8 @@ export class SqliteNotificationStore implements NotificationStore {
     );
     // §4.9: retention is enforced on write, so an inbox nobody opens for a
     // year is still bounded without a sweeper anywhere.
-    const cutoff = new Date(
-      this.now().getTime() - NOTIFICATION_RETENTION_DAYS * 86_400_000,
-    ).toISOString();
-    this.db.run(`DELETE FROM notifications WHERE at < ?`, [cutoff]);
+    this.db.run(`DELETE FROM notifications WHERE at < ?`, [retentionCutoff(this.now())]);
+    this.sweep();
     const stored = this.db
       .query(`SELECT * FROM notifications WHERE id = ?`)
       .get(id) as NotificationRow | null;
@@ -150,6 +200,8 @@ export class SqliteNotificationStore implements NotificationStore {
       actions: row.actions ?? [],
       read_at: row.read_at ?? null,
       resolved_at: null,
+      cleared_at: null,
+      snoozed_until: null,
       muted: false,
     };
     return { ...written, muted: isMuted(written, muted) };
@@ -184,15 +236,106 @@ export class SqliteNotificationStore implements NotificationStore {
     };
   }
 
+  /** The fleet scope plus the named ids — what an id-addressed write may touch. */
+  private namedScope(ids: readonly string[], fleet: string | null): Clause {
+    const scope = this.scope(fleet);
+    return {
+      where: `${scope.where} AND id IN (${placeholders(ids)})`,
+      params: [...scope.params, ...ids],
+    };
+  }
+
+  /** One `UPDATE … RETURNING id`, so a batch is one statement and the count is exact. */
+  private update(sql: string, params: string[]): number {
+    return this.db.query(`${sql} RETURNING id`).all(...params).length;
+  }
+
+  private readPref(key: string): string | null {
+    try {
+      const row = this.db.query(`SELECT value FROM prefs WHERE key = ?`).get(key) as {
+        value: string;
+      } | null;
+      return row?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writePref(key: string, value: string): void {
+    this.db.run(
+      `INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [key, value],
+    );
+  }
+
+  /**
+   * A value another build wrote that this one cannot read falls back to the
+   * default, the same bargain `toNotification` makes with a row.
+   */
+  settings(): NotificationSettings {
+    const auto = AutoClearReadSchema.safeParse(this.readPref(PREF_INBOX_AUTO_CLEAR_READ));
+    const resolved = this.readPref(PREF_INBOX_CLEAR_RESOLVED_ON_READ);
+    return {
+      auto_clear_read: auto.success ? auto.data : DEFAULT_NOTIFICATION_SETTINGS.auto_clear_read,
+      clear_resolved_on_read:
+        resolved === "true"
+          ? true
+          : resolved === "false"
+            ? false
+            : DEFAULT_NOTIFICATION_SETTINGS.clear_resolved_on_read,
+    };
+  }
+
+  setSettings(patch: Partial<NotificationSettings>): NotificationSettings {
+    if (patch.auto_clear_read !== undefined) {
+      this.writePref(PREF_INBOX_AUTO_CLEAR_READ, patch.auto_clear_read);
+    }
+    if (patch.clear_resolved_on_read !== undefined) {
+      this.writePref(PREF_INBOX_CLEAR_RESOLVED_ON_READ, String(patch.clear_resolved_on_read));
+    }
+    return this.settings();
+  }
+
+  /**
+   * The auto-clear sweep (§4.9): one idempotent `UPDATE` over every fleet's
+   * rows, because the rule is this laptop's and not any one fleet's. Only read
+   * rows qualify, so a cleared row is always a read one. A restore
+   * (`restored_at`) resets the age clock, and holds off the resolved-on-read
+   * rule until the row is read again after it; without that, the next list
+   * would clear a restored row straight back into History.
+   */
+  private sweep(): void {
+    const settings = this.settings();
+    const now = this.now();
+    const rules: string[] = [];
+    const params: string[] = [now.toISOString()];
+    const cutoff = autoClearCutoff(settings.auto_clear_read, now);
+    if (cutoff !== null) {
+      rules.push(`MAX(read_at, COALESCE(restored_at, read_at)) < ?`);
+      params.push(cutoff);
+    }
+    if (settings.clear_resolved_on_read) {
+      rules.push(`(resolved_at IS NOT NULL AND (restored_at IS NULL OR read_at > restored_at))`);
+    }
+    if (rules.length === 0) return;
+    this.db.run(
+      `UPDATE notifications SET cleared_at = ?
+        WHERE cleared_at IS NULL AND read_at IS NOT NULL AND (${rules.join(" OR ")})`,
+      params,
+    );
+  }
+
   list(
     input: NotificationsListInput,
     fleet: string | null,
     instances?: readonly string[],
   ): Notification[] {
+    this.sweep();
     const muted = this.muteSet();
     const scope = this.listeningScope(fleet, instances);
-    const clauses = [scope.where];
-    const params: Array<string | number> = [...scope.params];
+    const view = viewClause(input.view ?? DEFAULT_NOTIFICATION_VIEW, this.now().toISOString());
+    const clauses = [scope.where, view.where];
+    const params: Array<string | number> = [...scope.params, ...view.params];
     if (input.unread === true) clauses.push(`read_at IS NULL`);
     if (input.since !== undefined) {
       clauses.push(`at > ?`);
@@ -211,49 +354,126 @@ export class SqliteNotificationStore implements NotificationStore {
   }
 
   /**
-   * The badge is about what still holds, which is why `resolved_at IS NULL` is
-   * in here and not in `list`: a cleared condition stays in the inbox and stops
-   * asking for attention. `read_at` is deliberately left alone — it is the
-   * operator's acknowledgement and `resolved_at` is the world's (§4.9), and a
-   * resolve that also marked a row read would lose the difference.
+   * The badge is about what still holds and is still in front of the
+   * operator, which is why `resolved_at IS NULL` is in here and not in `list`:
+   * a resolved condition stays in the inbox and stops asking for attention. A
+   * cleared or actively snoozed row has left the inbox, so it leaves the
+   * counts with it. `read_at` is deliberately left alone by a resolve — it is
+   * the operator's acknowledgement and `resolved_at` is the world's (§4.9), and
+   * a resolve that also marked a row read would lose the difference.
    */
-  counts(
-    fleet: string | null,
-    instances?: readonly string[],
-  ): { unread: number; needs_action: number } {
+  counts(fleet: string | null, instances?: readonly string[]): NotificationCounts {
     const scope = this.listeningScope(fleet, instances);
+    const now = this.now().toISOString();
+    const inbox = viewClause("inbox", now);
+    const snoozed = viewClause("snoozed", now);
+    const history = viewClause("history", now);
+    const unread = `${inbox.where} AND read_at IS NULL AND resolved_at IS NULL`;
     const row = this.db
       .query(
-        `SELECT COUNT(*) AS unread,
-                SUM(CASE WHEN class = 'needs_action' THEN 1 ELSE 0 END) AS needs_action
+        `SELECT SUM(CASE WHEN ${unread} THEN 1 ELSE 0 END) AS unread,
+                SUM(CASE WHEN ${unread} AND class = 'needs_action' THEN 1 ELSE 0 END) AS needs_action,
+                SUM(CASE WHEN ${snoozed.where} THEN 1 ELSE 0 END) AS snoozed,
+                SUM(CASE WHEN ${history.where} THEN 1 ELSE 0 END) AS history,
+                MIN(CASE WHEN ${snoozed.where} THEN snoozed_until END) AS next_snooze_at
            FROM notifications
-          WHERE ${scope.where} AND read_at IS NULL AND resolved_at IS NULL`,
+          WHERE ${scope.where}`,
       )
-      .get(...scope.params) as { unread: number; needs_action: number | null } | null;
-    return { unread: row?.unread ?? 0, needs_action: row?.needs_action ?? 0 };
+      .get(
+        ...inbox.params,
+        ...inbox.params,
+        ...snoozed.params,
+        ...history.params,
+        ...snoozed.params,
+        ...scope.params,
+      ) as {
+      unread: number | null;
+      needs_action: number | null;
+      snoozed: number | null;
+      history: number | null;
+      next_snooze_at: string | null;
+    } | null;
+    return {
+      unread: row?.unread ?? 0,
+      needs_action: row?.needs_action ?? 0,
+      snoozed: row?.snoozed ?? 0,
+      history: row?.history ?? 0,
+      next_snooze_at: row?.next_snooze_at ?? null,
+    };
   }
 
-  ack(input: { id?: string; all?: boolean }, fleet: string | null): number {
+  ack(input: NotificationAckWrite, fleet: string | null): number {
     const at = this.now().toISOString();
+    let moved: number;
     if (input.all === true) {
       const scope = this.scope(fleet);
-      this.db.run(`UPDATE notifications SET read_at = ? WHERE ${scope.where} AND read_at IS NULL`, [
-        at,
-        ...scope.params,
-      ]);
+      moved = this.update(
+        `UPDATE notifications SET read_at = ? WHERE ${scope.where} AND read_at IS NULL`,
+        [at, ...scope.params],
+      );
     } else {
-      if (input.id === undefined) return 0;
-      this.db.run(`UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL`, [
-        at,
-        input.id,
-      ]);
+      const ids = input.ids ?? (input.id === undefined ? [] : [input.id]);
+      if (ids.length === 0) return 0;
+      const named = this.namedScope(ids, fleet);
+      moved =
+        input.unread === true
+          ? this.update(
+              `UPDATE notifications SET read_at = NULL WHERE ${named.where} AND read_at IS NOT NULL`,
+              named.params,
+            )
+          : this.update(
+              `UPDATE notifications SET read_at = ? WHERE ${named.where} AND read_at IS NULL`,
+              [at, ...named.params],
+            );
     }
-    // `changes` is not portable across the two drivers this file runs under, so
-    // the count comes from the rows that now carry exactly this timestamp.
-    const row = this.db.query(`SELECT COUNT(*) AS n FROM notifications WHERE read_at = ?`).get(at) as {
-      n: number;
-    } | null;
-    return row?.n ?? 0;
+    this.sweep();
+    return moved;
+  }
+
+  clear(input: NotificationClearWrite, fleet: string | null, instances?: readonly string[]): number {
+    const at = this.now().toISOString();
+    if (input.restore === true) {
+      const ids = input.ids ?? [];
+      if (ids.length === 0) return 0;
+      const named = this.namedScope(ids, fleet);
+      return this.update(
+        `UPDATE notifications SET cleared_at = NULL, snoozed_until = NULL, restored_at = ?
+          WHERE ${named.where} AND (cleared_at IS NOT NULL OR snoozed_until IS NOT NULL)`,
+        [at, ...named.params],
+      );
+    }
+    let target: Clause;
+    if (input.ids !== undefined) {
+      const named = this.namedScope(input.ids, fleet);
+      target = { where: `${named.where} AND cleared_at IS NULL`, params: named.params };
+    } else {
+      const scope = this.listeningScope(fleet, instances);
+      const inbox = viewClause("inbox", at);
+      const which = input.read === true ? `read_at IS NOT NULL` : `resolved_at IS NOT NULL`;
+      target = {
+        where: `${scope.where} AND ${inbox.where} AND ${which}`,
+        params: [...scope.params, ...inbox.params],
+      };
+    }
+    return this.update(
+      `UPDATE notifications SET cleared_at = ?, read_at = COALESCE(read_at, ?) WHERE ${target.where}`,
+      [at, at, ...target.params],
+    );
+  }
+
+  snooze(input: { ids: readonly string[]; until: string | null }, fleet: string | null): number {
+    if (input.ids.length === 0) return 0;
+    const named = this.namedScope(input.ids, fleet);
+    return input.until === null
+      ? this.update(
+          `UPDATE notifications SET snoozed_until = NULL
+            WHERE ${named.where} AND snoozed_until IS NOT NULL`,
+          named.params,
+        )
+      : this.update(
+          `UPDATE notifications SET snoozed_until = ? WHERE ${named.where} AND cleared_at IS NULL`,
+          [input.until, ...named.params],
+        );
   }
 
   mute(target: string): void {
@@ -300,6 +520,7 @@ export class SqliteNotificationStore implements NotificationStore {
       this.now().toISOString(),
       key,
     ]);
+    this.sweep();
   }
 
   /**
@@ -342,6 +563,9 @@ interface NotificationRow {
   actions: string;
   read_at: string | null;
   resolved_at: string | null;
+  /** Absent on a database that has not run `notifications-cleared-snoozed` yet. */
+  cleared_at?: string | null;
+  snoozed_until?: string | null;
 }
 
 /**

@@ -1,7 +1,8 @@
 /**
- * The notification primitive (§4.9): the store contract, the three
- * public methods over it, and every source that writes rows — `agent.health`
- * from the fleet scan's status transitions, `operation.failed` /
+ * The notification primitive (§4.9): the public methods over the store
+ * (whose contract is `notification-store.ts`), and every source that writes
+ * rows — `agent.health` from the fleet scan's status transitions,
+ * `operation.failed` /
  * `operation.done` from a settled run, `fleet.advisory` from the four
  * conditions the fleet already computes, and `chat.message` /
  * `chat.error` from the roster read and the turn.
@@ -23,12 +24,13 @@
  * redaction stays the error's job and the row cannot be where a secret first
  * gets written down.
  */
-import { randomUUID } from "node:crypto";
-import { hiddenByListening } from "../shared/notifications.ts";
 import {
   NotificationsAckInput,
+  NotificationsClearInput,
   NotificationsListInput,
   NotificationsMuteInput,
+  NotificationsSettingsInput,
+  NotificationsSnoozeInput,
   agentMuteTarget,
   chatActionRef,
   sourceMuteTarget,
@@ -37,93 +39,33 @@ import type {
   AgentView,
   DisplayStatus,
   FleetSettings,
-  Notification,
   NotificationAction,
   NotificationClass,
-  NotificationKind,
-  NotificationMute,
   NotificationSource,
   NotificationsAckResult,
+  NotificationsClearResult,
   NotificationsListResult,
   NotificationsMuteResult,
+  NotificationsSettingsResult,
+  NotificationsSnoozeResult,
   VolumeView,
 } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
+import { DAY_MS } from "./notification-store.ts";
+import type { NotificationStore } from "./notification-store.ts";
 
-/** Rows older than this are deleted as a new one is written (§4.9). */
-export const NOTIFICATION_RETENTION_DAYS = 30;
-
-const DAY_MS = 86_400_000;
-
-/**
- * What a source hands the store. `id`, `at` and `read_at` are settable so the
- * fixture seed can write fixed rows twice and get the same inbox both times.
- */
-export interface NotificationInsert {
-  source: NotificationSource;
-  kind: NotificationKind;
-  class: NotificationClass;
-  title: string;
-  detail?: string | null;
-  agent?: string | null;
-  /** The `fleet_id` the row is about; null for a row about the laptop itself. */
-  fleet?: string | null;
-  ref?: string | null;
-  /** The condition this row reports; unique among unresolved rows. */
-  key?: string | null;
-  actions?: NotificationAction[];
-  id?: string;
-  at?: string;
-  read_at?: string | null;
-}
-
-/**
- * The local notification log. Synchronous, like the SQLite it is backed by:
- * every implementation is a local file or an array, and there is no
- * configuration in which reading the inbox is a network call.
- */
-export interface NotificationStore {
-  /**
-   * Writes a row and returns it. A row carrying a `key` that an unresolved row
-   * already holds is **not** written — the existing row is returned instead, so
-   * a condition that keeps holding keeps finding the notification it already
-   * raised. Enforces retention on the way through.
-   */
-  insert(row: NotificationInsert): Notification;
-  /** Newest first. The named fleet's rows plus the rows that name no fleet. */
-  list(
-    input: NotificationsListInput,
-    fleet: string | null,
-    instances?: readonly string[],
-  ): Notification[];
-  counts(fleet: string | null, instances?: readonly string[]): { unread: number; needs_action: number };
-  /** Marks one row, or every unread row of this fleet, read. Returns how many moved. */
-  ack(input: { id?: string; all?: boolean }, fleet: string | null): number;
-  mute(target: string): void;
-  unmute(target: string): void;
-  mutes(): NotificationMute[];
-  /**
-   * The keys of the unresolved rows this prefix owns, in this fleet's scope and
-   * with no row limit — the read `observeAdvisories` reconciles against.
-   *
-   * Ownership is the rule the key scheme already documents: `prefix` matches a
-   * key equal to it, or a key beginning `prefix` + `:`. The separator is
-   * required rather than a bare prefix match, so `fleet.advisory:loose_volume`
-   * never owns `fleet.advisory:loose_volumes`.
-   *
-   * Unbounded on purpose. A `list()` window would leave an advisory pushed past
-   * it permanently unresolvable, which is exactly the bug the read replaces —
-   * and it is bounded in practice anyway, because unresolved rows are one per
-   * held condition and the conditions are counted in tens.
-   */
-  openKeys(prefix: string, fleet: string | null): string[];
-  /** Closes the condition `key` names, so a later recurrence raises a new row. */
-  resolve(key: string): void;
-  /** The last `display_status` this laptop saw for an agent, or null. */
-  seenStatus(fleet: string | null, agent: string): string | null;
-  setSeenStatus(fleet: string | null, agent: string, status: string): void;
-  forgetSeen(fleet: string | null, agent: string): void;
-}
+export {
+  NOTIFICATION_RETENTION_DAYS,
+  mintNotificationId,
+} from "./notification-store.ts";
+export type {
+  NotificationAckWrite,
+  NotificationClearWrite,
+  NotificationCounts,
+  NotificationInsert,
+  NotificationStore,
+} from "./notification-store.ts";
+export { MemoryNotificationStore } from "./notification-memory-store.ts";
 
 export interface NotificationDeps {
   store: NotificationStore;
@@ -131,11 +73,12 @@ export interface NotificationDeps {
   fleet: () => string | null;
   /** When supplied, instance alerts are visible only for this local opt-in set. */
   instances?: () => readonly string[];
-}
-
-/** Short, random, and typed back by an operator exactly once (`inbox ack <id>`). */
-export function mintNotificationId(): string {
-  return randomUUID().replaceAll("-", "").slice(0, 12);
+  /**
+   * The clock `notifications.snooze` checks "in the future" against. Absent is
+   * the wall clock; a test that injected a clock into its store passes the
+   * same one here.
+   */
+  now?: () => Date;
 }
 
 /** The same shape `fleets.ts` validates with: a `VALIDATION` refusal, never a raw zod throw. */
@@ -153,7 +96,7 @@ function parse<T>(
 }
 
 /**
- * The three public methods (§9). Each is a read or a write of the local store
+ * The six public methods (§9). Each is a read or a write of the local store
  * and nothing else — no AWS, no account guard — which is what makes `inbox`
  * answerable on a laptop whose fleet is unreachable.
  */
@@ -163,6 +106,12 @@ export function createNotifications(deps: NotificationDeps) {
       Promise.resolve(notificationsList(deps, input)),
     ack: (input: unknown): Promise<NotificationsAckResult> =>
       Promise.resolve(notificationsAck(deps, input)),
+    clear: (input: unknown): Promise<NotificationsClearResult> =>
+      Promise.resolve(notificationsClear(deps, input)),
+    snooze: (input: unknown): Promise<NotificationsSnoozeResult> =>
+      Promise.resolve(notificationsSnooze(deps, input)),
+    settings: (input: unknown = {}): Promise<NotificationsSettingsResult> =>
+      Promise.resolve(notificationsSettings(deps, input)),
     mute: (input: unknown): Promise<NotificationsMuteResult> =>
       Promise.resolve(notificationsMute(deps, input)),
   };
@@ -175,11 +124,17 @@ export function notificationsList(
   const parsed = parse(NotificationsListInput, input, "inbox");
   const fleet = deps.fleet();
   const instances = deps.instances?.();
+  // The list first: it runs the auto-clear sweep, and the counts must be of
+  // the inbox the sweep left behind rather than the one it found.
+  const notifications = deps.store.list(parsed, fleet, instances);
   const counts = deps.store.counts(fleet, instances);
   return {
-    notifications: deps.store.list(parsed, fleet, instances),
+    notifications,
     unread: counts.unread,
     needs_action: counts.needs_action,
+    snoozed: counts.snoozed,
+    history: counts.history,
+    next_snooze_at: counts.next_snooze_at,
     mutes: deps.store.mutes(),
   };
 }
@@ -187,6 +142,47 @@ export function notificationsList(
 export function notificationsAck(deps: NotificationDeps, input: unknown): NotificationsAckResult {
   const parsed = parse(NotificationsAckInput, input, "inbox ack");
   return { acked: deps.store.ack(parsed, deps.fleet()) };
+}
+
+export function notificationsClear(deps: NotificationDeps, input: unknown): NotificationsClearResult {
+  const parsed = parse(NotificationsClearInput, input, "inbox clear");
+  return { cleared: deps.store.clear(parsed, deps.fleet(), deps.instances?.()) };
+}
+
+/**
+ * `until` is normalised to `toISOString()` before it is stored: the stores
+ * compare stamps as strings, and `…:00Z` sorts after `…:00.500Z` although it is
+ * the earlier moment.
+ */
+export function notificationsSnooze(deps: NotificationDeps, input: unknown): NotificationsSnoozeResult {
+  const parsed = parse(NotificationsSnoozeInput, input, "inbox snooze");
+  let until: string | null = null;
+  if (parsed.until !== undefined) {
+    const at = new Date(parsed.until);
+    const now = (deps.now ?? (() => new Date()))();
+    if (at.getTime() <= now.getTime()) {
+      throw new HermeticError("VALIDATION", "inbox snooze input does not validate", {
+        issues: ["until: must be in the future"],
+      });
+    }
+    until = at.toISOString();
+  }
+  return { snoozed: deps.store.snooze({ ids: parsed.ids, until }, deps.fleet()) };
+}
+
+/** An empty patch reads; anything stated replaces its field. */
+export function notificationsSettings(
+  deps: NotificationDeps,
+  input: unknown = {},
+): NotificationsSettingsResult {
+  const parsed = parse(NotificationsSettingsInput, input, "inbox settings");
+  const patch = {
+    ...(parsed.auto_clear_read === undefined ? {} : { auto_clear_read: parsed.auto_clear_read }),
+    ...(parsed.clear_resolved_on_read === undefined
+      ? {}
+      : { clear_resolved_on_read: parsed.clear_resolved_on_read }),
+  };
+  return Object.keys(patch).length === 0 ? deps.store.settings() : deps.store.setSettings(patch);
 }
 
 export function notificationsMute(deps: NotificationDeps, input: unknown): NotificationsMuteResult {
@@ -992,152 +988,5 @@ export function notifyOpSettled(
     });
   } catch {
     // Same bargain as `observeHealth`: recording is never what fails a run.
-  }
-}
-
-// --- the store a home without one gets ---------------------------------------
-
-/**
- * An inbox that lives only in this process. Tests and any `Hermetic` built
- * without a local database get one, for the reason `MemoryRunStore` exists
- * (§4.6): losing the log costs the log, never the fleet.
- */
-export class MemoryNotificationStore implements NotificationStore {
-  private readonly rows: Notification[] = [];
-  private readonly muted = new Map<string, string>();
-  private readonly seen = new Map<string, string>();
-
-  constructor(private readonly now: () => Date = () => new Date()) {}
-
-  private muteOf(row: Pick<Notification, "agent" | "source">): boolean {
-    if (row.agent != null && this.muted.has(agentMuteTarget(row.agent))) return true;
-    return this.muted.has(sourceMuteTarget(row.source));
-  }
-
-  insert(row: NotificationInsert): Notification {
-    if (row.key != null) {
-      const open = this.rows.find((r) => r.key === row.key && r.resolved_at == null);
-      if (open) return { ...open, muted: this.muteOf(open) };
-    }
-    const id = row.id ?? mintNotificationId();
-    const existing = this.rows.find((r) => r.id === id);
-    if (existing) return { ...existing, muted: this.muteOf(existing) };
-    const created: Notification = {
-      id,
-      at: row.at ?? this.now().toISOString(),
-      source: row.source,
-      kind: row.kind,
-      class: row.class,
-      title: row.title,
-      detail: row.detail ?? null,
-      agent: row.agent ?? null,
-      fleet_id: row.fleet ?? null,
-      ref: row.ref ?? null,
-      key: row.key ?? null,
-      actions: row.actions ?? [],
-      read_at: row.read_at ?? null,
-      resolved_at: null,
-      muted: false,
-    };
-    this.rows.push(created);
-    const cutoff = new Date(this.now().getTime() - NOTIFICATION_RETENTION_DAYS * DAY_MS).toISOString();
-    for (let i = this.rows.length - 1; i >= 0; i -= 1) {
-      if ((this.rows[i] as Notification).at < cutoff) this.rows.splice(i, 1);
-    }
-    return { ...created, muted: this.muteOf(created) };
-  }
-
-  private forFleet(fleet: string | null): Notification[] {
-    return this.rows.filter((r) => r.fleet_id == null || fleet === null || r.fleet_id === fleet);
-  }
-
-  list(
-    input: NotificationsListInput,
-    fleet: string | null,
-    instances?: readonly string[],
-  ): Notification[] {
-    return this.forFleet(fleet)
-      .filter((r) => !hiddenByListening(r, instances))
-      .filter((r) => (input.unread === true ? r.read_at == null : true))
-      .filter((r) => (input.since === undefined ? true : r.at > input.since))
-      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
-      .slice(0, input.limit)
-      .map((r) => ({ ...r, muted: this.muteOf(r) }));
-  }
-
-  /**
-   * The badge is about what still holds. A resolved advisory is still *in* the
-   * inbox — the list returns it, and `read_at` stays the operator's own
-   * acknowledgement (§4.9) rather than something the world sets for them —
-   * but a condition that has cleared must stop asking for attention.
-   */
-  counts(
-    fleet: string | null,
-    instances?: readonly string[],
-  ): { unread: number; needs_action: number } {
-    const unread = this.forFleet(fleet).filter(
-      (r) => r.read_at == null && r.resolved_at == null && !hiddenByListening(r, instances),
-    );
-    return {
-      unread: unread.length,
-      needs_action: unread.filter((r) => r.class === "needs_action").length,
-    };
-  }
-
-  ack(input: { id?: string; all?: boolean }, fleet: string | null): number {
-    const at = this.now().toISOString();
-    const target =
-      input.all === true
-        ? this.forFleet(fleet).filter((r) => r.read_at == null)
-        : this.rows.filter((r) => r.id === input.id && r.read_at == null);
-    for (const row of target) row.read_at = at;
-    return target.length;
-  }
-
-  mute(target: string): void {
-    if (!this.muted.has(target)) this.muted.set(target, this.now().toISOString());
-  }
-
-  unmute(target: string): void {
-    this.muted.delete(target);
-  }
-
-  mutes(): NotificationMute[] {
-    return [...this.muted.entries()]
-      .map(([target, at]) => ({ target, at }))
-      .sort((a, b) => (a.target < b.target ? -1 : 1));
-  }
-
-  openKeys(prefix: string, fleet: string | null): string[] {
-    const owned = (key: string): boolean => key === prefix || key.startsWith(`${prefix}:`);
-    const keys = new Set<string>();
-    for (const row of this.forFleet(fleet)) {
-      if (row.key == null || row.resolved_at != null) continue;
-      if (owned(row.key)) keys.add(row.key);
-    }
-    return [...keys];
-  }
-
-  resolve(key: string): void {
-    const at = this.now().toISOString();
-    for (const row of this.rows) {
-      if (row.key === key && row.resolved_at == null) row.resolved_at = at;
-    }
-  }
-
-  private seenKey(fleet: string | null, agent: string): string {
-    return `${fleet ?? ""} ${agent}`;
-  }
-
-  seenStatus(fleet: string | null, agent: string): string | null {
-    return this.seen.get(this.seenKey(fleet, agent)) ?? null;
-  }
-
-  setSeenStatus(fleet: string | null, agent: string, status: string): void {
-    this.seen.set(this.seenKey(fleet, agent), status);
-  }
-
-  forgetSeen(fleet: string | null, agent: string): void {
-    this.seen.delete(this.seenKey(fleet, agent));
   }
 }

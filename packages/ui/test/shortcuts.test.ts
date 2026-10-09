@@ -32,6 +32,7 @@ function handledKeys(source: string): Set<string> {
 
 /** The `Esc`/`Escape` spelling difference is the sheet's, for the key cap. */
 function asKeyName(s: { keys: string }): string {
+  if (s.keys === "⇧ I") return "I";
   return s.keys === "Esc" ? "Escape" : s.keys === "j / k" ? "j" : s.keys.includes("K") ? "k" : s.keys;
 }
 

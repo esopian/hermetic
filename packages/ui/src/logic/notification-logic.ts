@@ -292,8 +292,15 @@ export function isWatchingThread(
 /** How long a dismissable toast stays, and the length of its life bar. */
 export const TOAST_DWELL_MS = 4000;
 
-/** At most four at once; the oldest dismissable one is evicted to make room. */
-export const TOAST_STACK_MAX = 4;
+/**
+ * How many toasts the stack *holds*; the oldest dismissable one is evicted to
+ * make room. Only `TOAST_VISIBLE_MAX` are drawn at once — the rest wait behind
+ * a `+N more · show all` control, so a burst is counted rather than lost.
+ */
+export const TOAST_STACK_MAX = 20;
+
+/** How many toasts are drawn before the stack collapses into `+N more`. */
+export const TOAST_VISIBLE_MAX = 3;
 
 /**
  * Whether this row may interrupt. Five gates, in order: a row whose condition
@@ -652,7 +659,9 @@ export interface NotificationGroup<T> {
 }
 
 /**
- * Fold *consecutive* rows about one conversation into one card.
+ * Fold *consecutive* rows about one conversation into one card. `keyOf` widens
+ * what counts as "one thing" — the inbox also folds a run of finished
+ * operations (`coalesceKeyOf` in `inbox-logic.ts`).
  *
  * §4.9 keys a `chat.message` row on its timestamp deliberately — two heads
  * reading one roster write one row, and a row per message is what makes the
@@ -667,11 +676,12 @@ export interface NotificationGroup<T> {
  */
 export function groupNotifications<T extends NotificationLike & { id: string; at: string }>(
   list: readonly T[],
+  keyOf: (n: T) => string | null = conversationKeyOf,
 ): NotificationGroup<T>[] {
   const groups: NotificationGroup<T>[] = [];
   let runKey: string | null = null;
   for (const row of list) {
-    const key = conversationKeyOf(row);
+    const key = keyOf(row);
     const last = groups[groups.length - 1];
     if (key !== null && key === runKey && last) {
       last.rows.push(row);

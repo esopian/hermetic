@@ -66,8 +66,11 @@ import {
   NetworkStatusInput as NetworkStatusInputSchema,
   LogsInput as LogsInputSchema,
   NotificationsAckInput as NotificationsAckInputSchema,
+  NotificationsClearInput as NotificationsClearInputSchema,
   NotificationsListInput as NotificationsListInputSchema,
   NotificationsMuteInput as NotificationsMuteInputSchema,
+  NotificationsSettingsInput as NotificationsSettingsInputSchema,
+  NotificationsSnoozeInput as NotificationsSnoozeInputSchema,
   PresetsGetInput as PresetsGetInputSchema,
   PresetsSetInput as PresetsSetInputSchema,
   PlanDestroyInput as PlanDestroyInputSchema,
@@ -147,11 +150,14 @@ export const PUBLIC_METHODS = [
   "directory.status",
   "runs.list",
   "teardowns.list",
-  // §4.9: the operator's local inbox. Three methods, all of them a read
-  // or a write of the laptop's own SQLite — no AWS, so `inbox` still answers on
-  // a laptop whose fleet is unreachable.
+  // §4.9: the operator's local inbox. Every method is a read or a write of
+  // the laptop's own SQLite — no AWS, so `inbox` still answers on a laptop
+  // whose fleet is unreachable.
   "notifications.list",
   "notifications.ack",
+  "notifications.clear",
+  "notifications.snooze",
+  "notifications.settings",
   "notifications.mute",
   // §4.6: this laptop's create presets — one `prefs` row, no AWS.
   "presets.get",
@@ -276,11 +282,14 @@ export const REQUEST_SCHEMAS = {
   "directory.status": DirectoryStatusInputSchema,
   "runs.list": RunsListInputSchema,
   "teardowns.list": TeardownsListInputSchema,
-  // §4.9. The read is newest-first with an optional `since` for a
-  // poller; the two writes each name exactly one thing, and say so by refusing
-  // a request that names both.
+  // §4.9. The read is newest-first in a view, with an optional `since` for
+  // a poller; each row write names exactly one selector, and says so by
+  // refusing a request that names two. `settings` is a patch, empty to read.
   "notifications.list": NotificationsListInputSchema,
   "notifications.ack": NotificationsAckInputSchema,
+  "notifications.clear": NotificationsClearInputSchema,
+  "notifications.snooze": NotificationsSnoozeInputSchema,
+  "notifications.settings": NotificationsSettingsInputSchema,
   "notifications.mute": NotificationsMuteInputSchema,
   // §4.6. The read takes nothing (one document per laptop); the write is a
   // patch whose stated parts each replace their field, or `reset`.

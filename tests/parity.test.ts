@@ -132,6 +132,9 @@ const SURFACE: Record<PublicMethod, string> = {
   // "silence this source" address the inbox, not one notification.
   "notifications.list": "inbox",
   "notifications.ack": "inbox ack",
+  "notifications.clear": "inbox clear",
+  "notifications.snooze": "inbox snooze",
+  "notifications.settings": "inbox settings",
   "notifications.mute": "inbox mute",
   // §9: this laptop's create presets, one `prefs` row (§4.6).
   "presets.get": "presets show",

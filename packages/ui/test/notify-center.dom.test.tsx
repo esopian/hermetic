@@ -1,59 +1,27 @@
 /**
- * The notification centre, driven (§4.9).
+ * The notification centre, driven (§4.9, Inbox v2).
  *
- * `notification-logic.test.ts` owns the rules; this owns the wiring — that the
- * rows the provider was seeded with are the rows drawn, that the tabs count and
- * filter what the rules say they do, that clicking a row acknowledges it
- * through the API rather than only in the DOM, and that an inbox with nothing
- * in it says so instead of drawing an empty box.
+ * `inbox-logic.test.ts` owns the rules; this owns the wiring — that the tabs
+ * count and filter what the rules say, that every bulk verb is scoped to the
+ * tab on screen and sent as one batch, that clicking a row reads it, that undo
+ * puts back exactly what was there (and in an order core's auto-clear sweep
+ * cannot undo again), that the keys work inside the centre, and that an empty
+ * inbox says so.
  *
- * The three calls are injected (`NotifyProvider`'s `api` prop) rather than
- * stubbed on `fetch`: this is a test about the provider's state machine, and a
- * fake that records its own calls is what makes "the ack reached the server"
- * assertable.
+ * The api is a stateful fake (`inbox-fake.ts`) because the provider re-reads
+ * after every verb, and a fake that answered with the seed would resurrect a
+ * cleared row and make the test about itself.
  */
-import { cleanup, render, screen, userEvent, waitFor } from "./dom.ts";
+import { cleanup, render, screen, userEvent, waitFor, within } from "./dom.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { useRef } from "react";
 import type { NotificationView } from "../src/api/index.ts";
-import { CENTER_EMPTY, NotificationCenter } from "../src/components/notify/Center.tsx";
+import { NotificationCenter } from "../src/components/notify/Center.tsx";
 import { NotifyProvider } from "../src/state/notify-state.tsx";
 import type { NotifyApi } from "../src/state/notify-state.tsx";
+import { fakeInbox, notification } from "./inbox-fake.ts";
 
 afterEach(cleanup);
-
-/**
- * `kind` is the one field typed wider than the record: core's
- * `NotificationKind` is exactly the four Phase 1–3 kinds, and `chat.*` joins it
- * with the phase that raises it (Phase 10 for `chat.approval`). `class`, on the
- * other hand, already carries `needs_action` today — so the centre has to
- * count, filter and draw that class *before* any shipping kind produces one,
- * and the row proving it can only name the kind that will. Widening `kind` here
- * rather than dropping the row keeps that coverage; the rest of the record
- * stays typed, so a real field going stale still fails this test.
- */
-function notification(
-  over: Partial<Omit<NotificationView, "kind">> & { kind?: string } = {},
-): NotificationView {
-  return {
-    id: "n1",
-    at: new Date().toISOString(),
-    source: "operation",
-    kind: "operation.done",
-    class: "ok",
-    title: "oriole finished bootstrapping",
-    detail: "6 stages · 7m41s · ready.",
-    agent: "oriole",
-    fleet_id: "fxtr0001",
-    ref: null,
-    key: null,
-    actions: [],
-    read_at: null,
-    resolved_at: null,
-    muted: false,
-    ...over,
-  } as unknown as NotificationView;
-}
 
 const SEED: NotificationView[] = [
   notification({
@@ -82,34 +50,6 @@ const SEED: NotificationView[] = [
   }),
 ];
 
-interface Recorder {
-  api: NotifyApi;
-  acks: Array<{ id?: string; all?: true }>;
-}
-
-function recorder(rows: NotificationView[]): Recorder {
-  const acks: Array<{ id?: string; all?: true }> = [];
-  return {
-    acks,
-    api: {
-      fetchNotifications: () =>
-        Promise.resolve({
-          notifications: rows,
-          unread: rows.filter((r) => !r.read_at && !r.resolved_at).length,
-          // Core's own rule, mirrored: a row whose condition has cleared is
-          // returned in the list and counted in neither total (§4.9).
-          needs_action: rows.filter((r) => r.class === "needs_action" && !r.resolved_at).length,
-          mutes: [],
-        } as never),
-      ackNotification: (input) => {
-        acks.push(input as { id?: string; all?: true });
-        return Promise.resolve({ acked: 1 } as never);
-      },
-      muteNotification: () => Promise.resolve({ mutes: [] } as never),
-    },
-  };
-}
-
 function Harness({ api }: { api: NotifyApi }) {
   const anchor = useRef<HTMLButtonElement>(null);
   return (
@@ -122,101 +62,170 @@ function Harness({ api }: { api: NotifyApi }) {
   );
 }
 
+function tabs(): HTMLButtonElement[] {
+  return [...document.querySelectorAll(".nt-tabs button")] as HTMLButtonElement[];
+}
+
+function rowOf(title: string): HTMLElement {
+  const el = screen.getByText(title).closest(".nt-item");
+  if (!(el instanceof HTMLElement)) throw new Error(`no row for ${title}`);
+  return el;
+}
+
 describe("NotificationCenter", () => {
-  test("draws every seeded row, with its tone and its unread state", async () => {
-    const r = recorder(SEED);
-    render(<Harness api={r.api} />);
-
+  test("pins `Waiting on you` above the time sections, with tone and unread state", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
     await screen.findByText("create failed · marrow");
-    expect(screen.getByText("corvid wants to write /etc/nginx")).toBeTruthy();
-    expect(screen.getByText("Foundation v8 is available")).toBeTruthy();
 
+    const sections = [...document.querySelectorAll(".nt-sec")].map((s) =>
+      s.firstChild?.textContent?.trim(),
+    );
+    expect(sections).toEqual(["Waiting on you", "Today"]);
     const rows = document.querySelectorAll(".nt-item");
     expect(rows.length).toBe(3);
-    expect(rows[0]?.className).toContain("bad");
-    expect(rows[1]?.className).toContain("needs-action");
-    // Priority is the class; unread is its own attribute, and the read row says so.
-    expect(rows[1]?.getAttribute("data-unread")).toBe("true");
-    expect(rows[2]?.getAttribute("data-unread")).toBe("false");
+    expect(rows[0]?.className).toContain("needs-action");
+    expect(rows[0]?.getAttribute("data-unread")).toBe("true");
+    expect(rowOf("Foundation v8 is available").getAttribute("data-unread")).toBe("false");
   });
 
   test("the tabs count and filter", async () => {
-    const r = recorder(SEED);
-    render(<Harness api={r.api} />);
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
     await screen.findByText("create failed · marrow");
 
-    const tabs = [...document.querySelectorAll(".nt-tabs button")] as HTMLButtonElement[];
-    expect(tabs.map((t) => t.textContent)).toEqual(["All 3", "Needs you 1", "Fleet 2"]);
-
-    await userEvent.click(tabs[1]!);
+    await waitFor(() =>
+      expect(tabs().map((t) => t.textContent)).toEqual(["Needs you 1", "Unread 2", "All 3"]),
+    );
+    await userEvent.click(tabs()[0]!);
     expect(document.querySelectorAll(".nt-item").length).toBe(1);
-    expect(screen.getByText("corvid wants to write /etc/nginx")).toBeTruthy();
-
-    // `fleet` is the fleet's own sources — the chat approval is not one of them.
-    await userEvent.click(tabs[2]!);
+    await userEvent.click(tabs()[1]!);
     expect(document.querySelectorAll(".nt-item").length).toBe(2);
-    expect(screen.queryByText("corvid wants to write /etc/nginx")).toBeNull();
+    expect(screen.queryByText("Foundation v8 is available")).toBeNull();
   });
 
-  test("clicking a row acknowledges it, through the API and on screen", async () => {
-    const r = recorder(SEED);
-    render(<Harness api={r.api} />);
-    const hit = await screen.findByRole("button", { name: "Mark read: create failed · marrow" });
+  test("clicking a row with no action marks it read, through the API", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Mark read: create failed · marrow" }),
+    );
 
-    await userEvent.click(hit);
-
-    await waitFor(() => expect(r.acks).toEqual([{ id: "op-fail" }]));
-    expect(document.querySelector(".nt-item")?.getAttribute("data-unread")).toBe("false");
+    await waitFor(() =>
+      expect(fake.writes()).toEqual([{ method: "notifications.ack", input: { id: "op-fail" } }]),
+    );
+    expect(rowOf("create failed · marrow").getAttribute("data-unread")).toBe("false");
   });
 
-  test("`mark all read` clears every row in one call", async () => {
-    const r = recorder(SEED);
-    render(<Harness api={r.api} />);
+  test("`Mark N read` reads exactly the tab on screen, in one batch", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
     await screen.findByText("create failed · marrow");
 
-    await userEvent.click(screen.getByRole("button", { name: "mark all read" }));
+    await userEvent.click(tabs()[0]!);
+    await userEvent.click(screen.getByRole("button", { name: /Mark 1 read/ }));
 
-    await waitFor(() => expect(r.acks).toEqual([{ all: true }]));
-    for (const row of document.querySelectorAll(".nt-item")) {
-      expect(row.getAttribute("data-unread")).toBe("false");
-    }
+    // The unread failure is on another tab, and stays unread.
+    await waitFor(() =>
+      expect(fake.writes()).toEqual([{ method: "notifications.ack", input: { ids: ["approval"] } }]),
+    );
+    expect(fake.row("op-fail")?.read_at).toBeNull();
+  });
+
+  test("`Clear N read` takes the read rows out of the inbox, and undo brings them back", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
+    await screen.findByText("Foundation v8 is available");
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear 1 read/ }));
+    await waitFor(() => expect(screen.queryByText("Foundation v8 is available")).toBeNull());
+    expect(screen.getByRole("status").textContent).toContain("Cleared 1 notification");
+
+    await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
+    await screen.findByText("Foundation v8 is available");
+    expect(fake.writes().map((w) => w.input)).toEqual([
+      { ids: ["advisory"] },
+      { ids: ["advisory"], restore: true },
+    ]);
+  });
+
+  test("undoing a clear of an unread row marks it unread *before* restoring it", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+
+    await userEvent.click(
+      within(rowOf("create failed · marrow")).getByRole("button", { name: "Clear" }),
+    );
+    await waitFor(() => expect(screen.queryByText("create failed · marrow")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: /Undo/ }));
+
+    await screen.findByText("create failed · marrow");
+    // Clearing read the row; undo has to put the unread state back, and has to
+    // do it first, or core's clear-resolved-on-read sweep re-clears the row.
+    await waitFor(() =>
+      expect(fake.writes()).toEqual([
+        { method: "notifications.clear", input: { ids: ["op-fail"] } },
+        { method: "notifications.ack", input: { ids: ["op-fail"], unread: true } },
+        { method: "notifications.clear", input: { ids: ["op-fail"], restore: true } },
+      ]),
+    );
+    await waitFor(() =>
+      expect(rowOf("create failed · marrow").getAttribute("data-unread")).toBe("true"),
+    );
+  });
+
+  test("the keys: j focuses, e clears the focused card, z undoes", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+    const user = userEvent.setup();
+
+    await user.keyboard("j");
+    expect(document.querySelector('.nt-item[data-focus="true"]')?.textContent).toContain(
+      "corvid wants to write",
+    );
+    await user.keyboard("e");
+    await waitFor(() => expect(screen.queryByText("corvid wants to write /etc/nginx")).toBeNull());
+    await user.keyboard("z");
+    await screen.findByText("corvid wants to write /etc/nginx");
+    expect(fake.writes()[0]).toEqual({ method: "notifications.clear", input: { ids: ["approval"] } });
   });
 
   test("a cleared condition is drawn as history, and left out of `needs you`", async () => {
-    const cleared = notification({
-      id: "cleared",
+    const resolved = notification({
+      id: "resolved",
       class: "needs_action",
       source: "fleet",
       kind: "fleet.advisory",
       title: "Foundation update available",
       agent: null,
+      key: "foundation:update",
       resolved_at: new Date(Date.now() - 20 * 60_000).toISOString(),
     });
-    const r = recorder([...SEED, cleared]);
-    render(<Harness api={r.api} />);
+    const fake = fakeInbox([...SEED, resolved]);
+    render(<Harness api={fake.api} />);
     await screen.findByText("Foundation update available");
 
     const row = document.querySelector('[data-resolved="true"]');
-    expect(row).toBeTruthy();
-    // Neutral, not gold: the class it was raised at no longer drives the rule.
     expect(row?.className).toContain("resolved");
     expect(row?.textContent).toContain("cleared 20m ago");
-    // Nobody acknowledged it, so it is still unread — the two are not the same.
+    // A resolved condition is no longer open.
+    expect(row?.querySelector(".tag.open")).toBeNull();
     expect(row?.getAttribute("data-unread")).toBe("true");
-
-    const tabs = [...document.querySelectorAll(".nt-tabs button")] as HTMLButtonElement[];
-    expect(tabs.map((t) => t.textContent)).toEqual(["All 4", "Needs you 1", "Fleet 3"]);
-    await userEvent.click(tabs[1]!);
-    expect(screen.queryByText("Foundation update available")).toBeNull();
+    await waitFor(() =>
+      expect(tabs().map((t) => t.textContent)).toEqual(["Needs you 1", "Unread 2", "All 4"]),
+    );
   });
 
-  test("an empty inbox says what would land in it, rather than drawing an empty box", async () => {
-    const r = recorder([]);
-    render(<Harness api={r.api} />);
+  test("an empty inbox says ALL CLEAR, and Needs you says nothing is waiting", async () => {
+    const fake = fakeInbox([]);
+    render(<Harness api={fake.api} />);
 
-    await screen.findByText(CENTER_EMPTY);
-    expect(document.querySelectorAll(".nt-item").length).toBe(0);
-    // The foot is still there: the retention line is the answer to "is it broken".
-    expect(screen.getByText("kept 30 days · shared with the CLI's run log")).toBeTruthy();
+    await screen.findByText("All clear");
+    expect(screen.getByText(/Inbox zero\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View history →" })).toBeTruthy();
+    await userEvent.click(tabs()[0]!);
+    expect(screen.getByText("Nothing waiting on you")).toBeTruthy();
   });
 });

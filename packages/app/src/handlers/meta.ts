@@ -14,8 +14,11 @@
  */
 import {
   NotificationsAckInput,
+  NotificationsClearInput,
   NotificationsListInput,
   NotificationsMuteInput,
+  NotificationsSettingsInput,
+  NotificationsSnoozeInput,
   PresetsGetInput,
   PresetsSetInput,
   RunsListInput,
@@ -33,12 +36,18 @@ import type { Handler } from "./dispatch.ts";
 export const runsListSchema = declareRpc("runs.list", RunsListInput);
 export const teardownsListSchema = declareRpc("teardowns.list", TeardownsListInput);
 /**
- * §4.9: the operator's inbox. Three methods over the laptop's own
+ * §4.9: the operator's inbox. Every method is over the laptop's own
  * SQLite — no AWS, no fleet guard — so the centre still draws when the fleet
  * this portal is pointed at cannot be reached.
  */
 export const notificationsListSchema = declareRpc("notifications.list", NotificationsListInput);
 export const notificationsAckSchema = declareRpc("notifications.ack", NotificationsAckInput);
+export const notificationsClearSchema = declareRpc("notifications.clear", NotificationsClearInput);
+export const notificationsSnoozeSchema = declareRpc("notifications.snooze", NotificationsSnoozeInput);
+export const notificationsSettingsSchema = declareRpc(
+  "notifications.settings",
+  NotificationsSettingsInput,
+);
 export const notificationsMuteSchema = declareRpc("notifications.mute", NotificationsMuteInput);
 /**
  * §4.6's create presets: one `prefs` row on this laptop. No fleet envelope —
@@ -54,6 +63,8 @@ export const presetsSetSchema = declareRpc("presets.set", PresetsSetInput);
  * on the fleet it was raised for.
  */
 export const notificationsAckBody = withTarget(notificationsAckSchema);
+export const notificationsClearBody = withTarget(notificationsClearSchema);
+export const notificationsSnoozeBody = withTarget(notificationsSnoozeSchema);
 export const notificationsMuteBody = withTarget(notificationsMuteSchema);
 
 /** The name `/api/meta` answers under, for a transport that has no paths. */
@@ -221,7 +232,7 @@ export async function notificationsList(ctx: HandlerContext, params: unknown) {
 }
 
 /**
- * Both writes touch nothing but this laptop's own rows, so neither is blocked
+ * The row writes touch nothing but this laptop's own rows, so none is blocked
  * by a teardown or a foundation update in flight — no `requireWritable` here. A
  * `409` on "mark read" while the fleet is being torn down would be the portal
  * refusing to let an operator clear the notifications the teardown is
@@ -230,6 +241,27 @@ export async function notificationsList(ctx: HandlerContext, params: unknown) {
 export async function notificationsAck(ctx: HandlerContext, params: unknown) {
   const { hermetic: h, input } = requireTarget(ctx.state, parseInput(notificationsAckBody, params));
   return await h.notifications.ack(input);
+}
+
+export async function notificationsClear(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(notificationsClearBody, params));
+  return await h.notifications.clear(input);
+}
+
+export async function notificationsSnooze(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(notificationsSnoozeBody, params));
+  return await h.notifications.snooze(input);
+}
+
+/**
+ * The auto-clear rules are this laptop's, not any fleet's — the same sweep
+ * runs over every fleet's rows — so, like the presets below, no target: a
+ * window left on another fleet is still talking to the right laptop.
+ */
+export async function notificationsSettings(ctx: HandlerContext, params: unknown) {
+  return await ctx
+    .hermetic()
+    .notifications.settings(parseInput(notificationsSettingsSchema, params ?? {}));
 }
 
 export async function notificationsMute(ctx: HandlerContext, params: unknown) {
@@ -257,6 +289,9 @@ export const metaHandlers = {
   "teardowns.list": teardownsList,
   "notifications.list": notificationsList,
   "notifications.ack": notificationsAck,
+  "notifications.clear": notificationsClear,
+  "notifications.snooze": notificationsSnooze,
+  "notifications.settings": notificationsSettings,
   "notifications.mute": notificationsMute,
   "presets.get": presetsGet,
   "presets.set": presetsSet,
