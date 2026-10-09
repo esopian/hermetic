@@ -7,6 +7,7 @@ automatically for anyone who clones the repo.
 | Path | What | Origin |
 |---|---|---|
 | `caveman/` | Compressed-response mode (`/caveman lite\|full\|ultra`) | vendored, MIT |
+| `create-pr/` | Opens every PR via `gh`, body filled from `.github/pull_request_template.md` as a review guide (`/create-pr`) | this repo |
 | `orchestrator-mode/` | Main dispatches, a depth-1 task orchestrator delegates, workers implement | this repo |
 | `../agents/task-orchestrator.md` | The depth-1 orchestrator that skill spawns | this repo |
 
