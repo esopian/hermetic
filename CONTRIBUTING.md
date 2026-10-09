@@ -287,6 +287,10 @@ unnoticed.
 
 Conventional commits, imperative mood, subject ≤50 chars: `fix: refuse create when SG has inbound rules`, `feat(cli): add agent recreate`. Body explains why, not what, when the diff isn't self-explanatory.
 
+## Pull requests
+
+The repo squash-merges, so a PR's title becomes the commit subject on `master` and follows the rules above. The body follows `.github/pull_request_template.md`, which GitHub pre-fills: a review guide (TL;DR, how it works, review stops, acceptance tests, rollout) whose test table lists only checks that were actually run. In Claude Code, `/create-pr` (`.claude/skills/create-pr/`) fills it from the branch and opens the PR; agents open every PR through it.
+
 ## Adding a CLI command or RPC handler
 
 Every command/handler wraps exactly one core method — see "Parity contract" in `AGENTS.md` for the full six-step recipe (schema → core method → `PUBLIC_METHODS` → CLI command via `declare()` → RPC handler via `declareRpc()` → `bun test tests/parity.test.ts`). A handler lives under `packages/app/src/handlers/` and is wired into `HANDLERS` in `packages/app/src/handlers/dispatch.ts`; `declareRpc` is in `packages/app/src/declare.ts`, and `RPC_DECLARATIONS` in `packages/app/src/rpc/registry.ts` is what the parity test reads. Machinery requests that wrap no core method (meta, ops, the wizard's pre-init helpers) declare themselves as machinery instead and show up in `MACHINERY_RPC`.
@@ -336,7 +340,7 @@ To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` h
 
 1. Bump `version` in the root `package.json`. Commit it on `master`.
 2. Tag the commit `v<version>` (the `v` prefix is required — `.github/workflows/release.yml` checks it against `package.json`) and push the tag: `git push origin v<version>`.
-3. Pushing the tag starts `release.yml` on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version and points at a commit on `master`, runs `bun run check`, then `bun run app:build` (the stable channel), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
+3. Pushing the tag starts `release.yml` on a `macos-14` runner: it installs Hutch pinned to `.hutch-version` and `uv` (for cfn-lint and shellcheck), asserts the tag matches `package.json`'s version and points at a commit on `master`, runs `bun run check`'s steps (with its tests split into the same `cli` and `non-cli` shards `ci.yml` runs, `scripts/test-shard.ts`), then `bun run app:build` (the stable channel), then publishes a GitHub Release named for the tag with `packages/app/artifacts/*` attached and notes generated from the commits since the last tag. About ten minutes end to end.
 4. Verify: the release has three assets — `macos-arm64-Hermetic.dmg`, `stable-macos-arm64-Hermetic.app.tar.zst`, `stable-macos-arm64-update.json` — and, from the second release on, a fourth, `stable-macos-arm64-<prevhash>.patch`. `update.json` names the archive and the version. An install from an older tag should find the new release through Check for Updates and apply it (full archive if there is no patch to it yet, the patch otherwise); this needs the repository to be public, because the updater fetches `releases/latest/download/` without credentials.
 5. If the workflow fails partway, the tag is not undone — tags are never moved. Delete the draft release if `gh release create` left one (a failure before that step leaves none), fix whatever broke, bump the version again and cut a new tag; do not re-push the same tag.
 

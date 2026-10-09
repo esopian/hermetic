@@ -35,8 +35,10 @@ import {
 import { HermeticError } from "../errors.ts";
 import { archivePath, tarGz, type TarEntry } from "../release/tar.ts";
 import {
+  AGENT_PROFILE_PATH,
   APT_CONF_PATH,
   SUDOERS_PATH,
+  agentProfile,
   aptConf,
   aptSources,
   hermeticNftablesUnit,
@@ -369,6 +371,8 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
     { path: SUDOERS_PATH, mode: "0440", content: sudoersGrant(), owner: "root", group: "root" },
     // Read by every apt on the box, including one hermeticd did not start.
     { path: APT_CONF_PATH, mode: "0644", content: aptConf() },
+    // Sourced by `/etc/profile`; root's and world-readable, holds nothing secret.
+    { path: AGENT_PROFILE_PATH, mode: "0644", content: agentProfile() },
   ];
 
   /**

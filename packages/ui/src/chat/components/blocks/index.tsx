@@ -19,6 +19,7 @@ import { blockKind } from "../../chat-logic.ts";
 import { ApprovalBlock } from "./Approval.tsx";
 import { AttachmentBlock } from "./Attachment.tsx";
 import { HermeticBlock } from "./Hermetic.tsx";
+import { ProcessEventBlock } from "./ProcessEvent.tsx";
 import { QuestionBlock } from "./Question.tsx";
 import { ReasoningBlock } from "./Reasoning.tsx";
 import { SourcesBlock } from "./Sources.tsx";
@@ -69,10 +70,14 @@ export function Block({
       return <SourcesBlock block={block as ChatBlockOf<"sources">} />;
     case "hermetic":
       return <HermeticBlock block={block as ChatBlockOf<"hermetic">} />;
+    case "process_event":
+      // `Thread` draws an event message as a gutter row of its own and never
+      // reaches here with one; this is the same content for any other surface.
+      return <ProcessEventBlock block={block as ChatBlockOf<"process_event">} />;
     default:
       return <UnknownBlock block={block} />;
   }
 }
 
-export { ApprovalBlock, AttachmentBlock, HermeticBlock, QuestionBlock };
+export { ApprovalBlock, AttachmentBlock, HermeticBlock, ProcessEventBlock, QuestionBlock };
 export { ReasoningBlock, SourcesBlock, TextBlock, ToolBlock, UnknownBlock };

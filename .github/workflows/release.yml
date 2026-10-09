@@ -64,14 +64,26 @@ jobs:
             exit 1
           fi
 
-      # `bun run check` ends in lint:cfn and lint:sh, which run cfn-lint and
+      # The check below ends in lint:cfn and lint:sh, which run cfn-lint and
       # shellcheck through `uvx` (pinned in scripts/lint-cfn.ts and
       # scripts/lint-sh.ts) — the same install ci.yml's lint jobs make.
       - name: Install uv (for cfn-lint and shellcheck)
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
-      - run: bun run check
+      # `bun run check`, step by step, with its `bun test` replaced by the two
+      # shards ci.yml runs. A plain `bun test` gives every test Bun's default
+      # 5s timeout and 20 in flight; the cli shard's compiled-CLI spawns are
+      # CPU-bound, and on this runner v0.2.0's twelve slowest overran 5s
+      # together. scripts/test-shard.ts owns each shard's concurrency and
+      # timeout, so the release gate matches the one the commit already passed.
+      - run: bun run typecheck
+      - run: bun scripts/test-shard.ts cli
+      - run: bun scripts/test-shard.ts non-cli
+      - run: bun run lint:biome
+      - run: bun run lint
+      - run: bun run lint:cfn
+      - run: bun run lint:sh
       # Headroom, not a fix: v0.1.4's and v0.1.5's "No space left on device"
       # came from the DMG's own mounted volume being sized by hdiutil's
       # estimator, not from the runner's disk (v0.1.5 failed with 110 GB

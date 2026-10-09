@@ -1,0 +1,107 @@
+/**
+ * Classify a roster read's movement before it becomes an inbox row (§4.9).
+ *
+ * The roster carries one timestamp per bot — the newest row of any kind — so
+ * on its own it cannot tell the bot answering from Hermes injecting a
+ * background-process notice into the bot's session. Both would read as
+ * "<bot> on <instance> has a new message", and a failed command in a thread
+ * nobody has open would reach the inbox only as that.
+ *
+ * So, for each bot whose `last_message_at` has moved past its watermark
+ * (`chatMovementOf`, the same rule `observeChatActivity` applies), this reads
+ * the newest few rows of that bot's conversation once and looks at the rows in
+ * the window `(watermark, last_message_at]`:
+ *
+ * - each `process_event` block that is not routine raises its own
+ *   `chat.event:` row (`notifyProcessEvent`);
+ * - when every row in the window is such an event, each non-routine one was
+ *   recorded and the read reached back to the watermark, the bot is marked
+ *   `quiet` so `observeChatActivity` advances
+ *   the watermark without the generic row;
+ * - otherwise — a reply or an operator row among them, an empty window, a read
+ *   that failed — the bot is passed through unchanged and the generic row is
+ *   raised exactly as before.
+ *
+ * A first sighting, a bot that did not move and a store that cannot be read
+ * cost no request. A failed read never suppresses a row and never fails the
+ * roster read: each bot is its own `try`.
+ */
+import { isRoutineProcessEvent } from "../shared/process-event.ts";
+import type { ChatMessage, ProcessEventBlock } from "../schema/index.ts";
+import { chatMovementOf, laterThan, notifyProcessEvent } from "./notifications.ts";
+import type { ChatActivity, NotificationDeps } from "./notifications.ts";
+
+/**
+ * How many of a moved bot's newest rows the classifier reads. A roster poll
+ * runs every few seconds, so a window wider than this between two polls is
+ * rare. When the read may not reach back to the watermark — it came back full
+ * and every row in it is new — the rows it missed could hold a reply, so the
+ * bot is never marked quiet; its events are still raised.
+ */
+export const CHAT_CLASSIFY_LIMIT = 20;
+
+/** A background-process event message: role `system`, nothing but event blocks. */
+function eventBlocks(message: ChatMessage): ProcessEventBlock[] | null {
+  if (message.role !== "system" || message.blocks.length === 0) return null;
+  const events: ProcessEventBlock[] = [];
+  for (const block of message.blocks) {
+    if (block.kind !== "process_event") return null;
+    events.push(block);
+  }
+  return events;
+}
+
+/**
+ * The roster's bots, each passed through or marked `quiet`, with every
+ * non-routine background-process event in a moved bot's new rows raised.
+ *
+ * `read` must return the bot's newest rows *already redacted* — it is the only
+ * path a message takes into this module — and may throw; a throw is that one
+ * bot falling back to the generic row.
+ */
+export async function classifyChatActivity(
+  deps: NotificationDeps,
+  bots: readonly ChatActivity[],
+  read: (bot: ChatActivity) => Promise<readonly ChatMessage[]>,
+): Promise<ChatActivity[]> {
+  return await Promise.all(
+    bots.map(async (bot): Promise<ChatActivity> => {
+      try {
+        const move = chatMovementOf(deps, bot);
+        if (move?.kind !== "moved") return bot;
+        const { since, at } = move;
+        const rows = await read(bot);
+        const fresh = rows.filter(
+          (m) => (since === null || laterThan(m.at, since)) && !laterThan(m.at, at),
+        );
+        // Whether the read reached the watermark: it returned less than it was
+        // allowed to, or it holds a row from before the window.
+        const covered =
+          rows.length < CHAT_CLASSIFY_LIMIT ||
+          (since !== null && rows.some((m) => !laterThan(m.at, since)));
+        // Nothing in the window: the transcript read disagrees with the roster
+        // (another session moved, say). Not evidence of a quiet bot.
+        if (fresh.length === 0) return bot;
+        let quiet = covered;
+        for (const message of fresh) {
+          const events = eventBlocks(message);
+          if (events === null) {
+            quiet = false;
+            continue;
+          }
+          for (const block of events) {
+            if (isRoutineProcessEvent(block)) continue;
+            const where = { instance: bot.instance, bot: bot.bot, title: bot.title ?? null };
+            // A row that could not be written must not be swallowed by a
+            // watermark that moved anyway: the generic row stands in for it.
+            if (!notifyProcessEvent(deps, where, block, message.id)) quiet = false;
+          }
+        }
+        return quiet ? { ...bot, quiet: true } : bot;
+      } catch {
+        // The inbox is a courtesy; a failed read falls back to the generic row.
+        return bot;
+      }
+    }),
+  );
+}

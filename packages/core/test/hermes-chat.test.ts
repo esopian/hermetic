@@ -14,6 +14,7 @@
  * died with the dashboard process, a gateway with no warm slot) are the ones an
  * operator meets.
  */
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
   createHermesChat,
@@ -307,6 +308,31 @@ function blocks(frames: ChatFrame[]): ChatBlock[] {
 }
 
 /* ── the recorded turn ────────────────────────────────────────────────────── */
+
+describe("hermes-chat · prompt capability", () => {
+  /**
+   * From Hermes `v2026.9.21` the gateway sends approvals and clarifications
+   * only to a client that has said it answers them, and withdraws them at once
+   * otherwise. The turn socket says so first, before the session exists.
+   */
+  test("the turn socket advertises server requests before it creates the session", async () => {
+    const h = harness(turnScript(RECORDED_TURN));
+    await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    const sent = h.sockets[0]?.sent ?? [];
+    expect(sent[0]).toMatchObject({ method: "client.capabilities", params: { server_requests: true } });
+    expect(sent[1]?.method).toBe("session.create");
+  });
+
+  test("a gateway that predates the method still runs the turn", async () => {
+    const h = harness({
+      ...turnScript(RECORDED_TURN),
+      errors: { "client.capabilities": { code: -32601, message: "Method not found" } },
+    });
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    expect(frames.some((f) => f.type === "error")).toBe(false);
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+});
 
 describe("hermes-chat · the recorded turn", () => {
   test("replays the probed turn as the frame sequence a head renders", async () => {
@@ -1812,6 +1838,34 @@ describe("hermes-chat · sessions", () => {
   });
 });
 
+describe("hermes-chat · a notice in a preview", () => {
+  test("a session and a bot whose preview opens with a notice read as the event", () => {
+    // Upstream's own cut: 60 characters, newlines flattened, `...` appended.
+    const cut = "[IMPORTANT: Background process proc_3be1c0a4d2e1 completed n...";
+    const [session] = mapSessions(BOX, "default", {
+      sessions: [{ session_id: "s1", title: "Bot Chat", preview: cut }],
+    });
+    expect(session?.preview).toBe("proc_3be1c0a4d2e1 completed");
+    const swarm = mapSwarm(
+      BOX,
+      {
+        profiles: [
+          { name: "default", is_default: true, canonical_session: { id: "s1", preview: cut } },
+        ],
+      },
+      null,
+      null,
+      null,
+    );
+    expect(swarm.bots[0]?.preview).toBe("proc_3be1c0a4d2e1 completed");
+    // Anything else passes through untouched.
+    const [plain] = mapSessions(BOX, "default", {
+      sessions: [{ session_id: "s2", title: "t", preview: "why is it down?" }],
+    });
+    expect(plain?.preview).toBe("why is it down?");
+  });
+});
+
 describe("hermes-chat · history", () => {
   test("maps roles, parts and usage, and keeps an unrecognised part whole", () => {
     const messages = mapHistory(BOX, SESSION_ID, {
@@ -2006,6 +2060,44 @@ describe("hermes-chat · history", () => {
     expect(message?.id).toBe(`${SESSION_ID}:rw-4211`);
   });
 
+  test("a background-process notice is a system event, not the operator, and keeps its id", () => {
+    const notice =
+      "[IMPORTANT: Background process proc_77aa19b3c5f0 exited (exit code 1).\nCommand: bun test packages/ui\nOutput:\n611 pass\n1 fail]";
+    const stamped = "2026-09-29T00:24:30.000Z";
+    const [minted, durable, spoken] = mapHistory(BOX, SESSION_ID, {
+      messages: [
+        { role: "user", content: notice, at: stamped },
+        { role: "user", id: 4211, content: notice, at: stamped },
+        // Quoting a notice is still the operator talking.
+        { role: "user", content: `what does this mean? ${notice}`, at: stamped },
+      ],
+    });
+    expect(minted?.role).toBe("system");
+    expect(minted?.author).toBeNull();
+    expect(minted?.blocks).toHaveLength(1);
+    expect(minted?.blocks[0]).toMatchObject({
+      kind: "process_event",
+      event: "completion",
+      outcome: "failed",
+      process_id: "proc_77aa19b3c5f0",
+      exit_code: 1,
+      output_tail: "611 pass\n1 fail",
+      raw: notice,
+    });
+    // The id is the one this row had before notices were recognised: the same
+    // hash of session, role, author, words and stamp that `rowId` has always
+    // taken — role still `user`, as the box stored it — so an observation's
+    // cursor does not see an old notice as a new message.
+    const digest = createHash("sha256")
+      .update([SESSION_ID, "user", "", notice, stamped].join("\u0000"))
+      .digest("hex");
+    expect(minted?.id).toBe(`${SESSION_ID}:h${digest.slice(0, 16)}`);
+    expect(durable?.id).toBe(`${SESSION_ID}:4211`);
+    expect(durable?.role).toBe("system");
+    expect(spoken?.role).toBe("user");
+    expect(spoken?.blocks[0]?.kind).toBe("text");
+  });
+
   test("an id the box did not give survives the window sliding under it", () => {
     // `order=latest` slides: the same message is the 7th row on one read and the
     // 6th on the next, and an index-derived id would call that a new message.
@@ -2170,6 +2262,8 @@ describe("hermes-chat · durable addressing", () => {
     await turn.next();
     await turn.next();
     expect(h.sockets[0]?.sent.map(({ method, params }) => ({ method, params }))).toEqual([
+      // The turn socket answers prompts, so it says so before anything else.
+      { method: "client.capabilities", params: { server_requests: true } },
       {
         method: "session.resume",
         params: {
@@ -2205,7 +2299,7 @@ describe("hermes-chat · durable addressing", () => {
     const turn = adapter.send(BOX, "research", "hello")[Symbol.asyncIterator]();
     await turn.next();
     await turn.next();
-    expect(h.sockets[0]?.sent[0]?.params).toEqual({ profile: "research" });
+    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research" });
     expect(await adapter.abort(BOX, "research")).toBe(true);
     expect(h.sockets[1]?.sent[0]?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
     await turn.return?.();
@@ -2300,6 +2394,7 @@ describe("semantic live activity and requests", () => {
       frames.find((frame) => frame.type === "block" && frame.block.kind === "question"),
     ).toMatchObject({ seq: 3 });
     expect(h.sockets[0]?.sent.map((call) => call.method)).toEqual([
+      "client.capabilities",
       "session.create",
       "session.events.since",
       "prompt.submit",

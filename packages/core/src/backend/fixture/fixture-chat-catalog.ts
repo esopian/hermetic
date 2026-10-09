@@ -9,6 +9,7 @@
  */
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { KESTREL_EVENTS_SESSION, KESTREL_EVENTS_TRANSCRIPT } from "./fixture-chat-process-events.ts";
 
 /* ── prose the transcripts are made of ────────────────────────────────────── */
 
@@ -970,4 +971,8 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
       incomplete: null,
     },
   ],
+
+  // Background-process events (§9.2), built from upstream's notice text in
+  // their own module so the parse is the one the history reader runs.
+  [KESTREL_EVENTS_SESSION]: KESTREL_EVENTS_TRANSCRIPT,
 };

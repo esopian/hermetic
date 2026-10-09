@@ -32,6 +32,7 @@ import {
   ERROR_CODES,
   HermeticError,
 } from "@hermetic/core";
+import { shortCommand } from "@hermetic/core/shared";
 import type {
   Bot,
   ChatBlock,
@@ -39,6 +40,7 @@ import type {
   ChatMessage,
   ChatObserveEvent,
   ErrorCode,
+  ProcessEventBlock,
   Session,
   Swarm,
 } from "@hermetic/core";
@@ -141,6 +143,80 @@ export function sessionRow(session: Session, now: number): string[] {
   ];
 }
 
+/** The word an event row leads with: what kind of notice Hermes injected. */
+function processKind(block: ProcessEventBlock): string {
+  switch (block.event) {
+    case "completion":
+      return "process";
+    case "watch_match":
+    case "watch_disabled":
+      return "watch";
+    case "delegation":
+      return "subagents";
+    default:
+      return "notice";
+  }
+}
+
+/** The last non-empty line of a string, trimmed; "" when there is none. */
+function lastLine(text: string | null | undefined): string {
+  const lines = (text ?? "").split("\n").filter((line) => line.trim() !== "");
+  return (lines[lines.length - 1] ?? "").trim();
+}
+
+/** The first non-empty line of a string, trimmed; "" when there is none. */
+function firstLine(text: string | null | undefined): string {
+  return (
+    (text ?? "")
+      .split("\n")
+      .find((line) => line.trim() !== "")
+      ?.trim() ?? ""
+  );
+}
+
+/**
+ * A background-process notice (§9.2) as one summary line plus its detail.
+ *
+ * The summary is `■ <kind> <status> [exit N] [command] [duration]`; a DM reply
+ * leads with `■ dm-reply <profile> → <this bot>` and prints the reply as the
+ * detail; a failure prints the last line of its output under the summary, the
+ * line an operator would otherwise have to open the output to find. `self` is
+ * the bot the transcript belongs to, when the caller knows it.
+ */
+function processEventLines(block: ProcessEventBlock, self: string): { head: string; detail: string[] } {
+  const exit = block.exit_code == null ? "" : `exit ${block.exit_code}`;
+  const id = block.process_id ?? "";
+  if (block.dm) {
+    const head = ["■ dm-reply", `${block.dm.to_profile} → ${self}`, id, exit]
+      .filter((part) => part !== "")
+      .join("  ");
+    return { head, detail: block.dm.reply.split("\n") };
+  }
+  let status: string;
+  switch (block.event) {
+    case "watch_match":
+      status = `matched "${block.watch?.pattern ?? "?"}"`;
+      break;
+    case "delegation": {
+      const d = block.delegation;
+      status = d ? `${d.succeeded} of ${d.total} finished` : (block.status ?? block.outcome);
+      break;
+    }
+    case "completion":
+      status = block.status ?? block.outcome;
+      break;
+    default:
+      status = firstLine(block.message ?? block.raw) || block.outcome;
+  }
+  const command = block.command ? shortCommand(block.command) : "";
+  const duration = block.duration_s == null ? "" : `duration ${formatAge(block.duration_s * 1000)}`;
+  const head = [`■ ${processKind(block)} ${status}`, exit, command, duration]
+    .filter((part) => part !== "")
+    .join("  ");
+  const tail = block.outcome === "failed" ? lastLine(block.output_tail ?? block.delegation?.error) : "";
+  return { head, detail: tail === "" ? [] : [tail] };
+}
+
 /**
  * One block, as one or more lines of plain text.
  *
@@ -178,6 +254,10 @@ export function blockLines(block: ChatBlock): string[] {
       return [`[sources]`, ...block.items.map((item) => `  ${item.title} — ${item.href}`)];
     case "hermetic":
       return [`[${block.card}] ${block.ref}`];
+    case "process_event": {
+      const { head, detail } = processEventLines(block, "this bot");
+      return [head, ...detail.map((line) => `  ${line}`)];
+    }
     case "unknown":
       return [`[${block.name}] ${JSON.stringify(block.payload)}`];
   }
@@ -189,14 +269,28 @@ export function blockLines(block: ChatBlock): string[] {
  * The author is printed when the message carries one, and that is not
  * decoration either — in a room or a peer-driven turn the speaker is not the
  * session's own bot, and a transcript that hid it would read as though it were.
+ *
+ * A message carrying a `process_event` block is Hermes' notice, not anyone's
+ * speech, so its role prints as `event` and the block's summary rides on the
+ * head line, its detail indented under it.
  */
-export function messageLines(message: ChatMessage, now: number): string[] {
+export function messageLines(message: ChatMessage, now: number, self = "this bot"): string[] {
+  const events = message.blocks.filter((b): b is ProcessEventBlock => b.kind === "process_event");
   const who =
-    message.author == null
-      ? message.role
-      : `${message.role} ${botAddress(message.author.instance, message.author.bot)}`;
-  const head = `${ago(message.at, now)} ago  ${who}${message.incomplete === true ? "  (incomplete)" : ""}`;
-  const body = message.blocks.flatMap(blockLines).map((line) => `  ${line}`);
+    events.length > 0
+      ? "event"
+      : message.author == null
+        ? message.role
+        : `${message.role} ${botAddress(message.author.instance, message.author.bot)}`;
+  const parsed = events.map((block) => processEventLines(block, self));
+  const summary = parsed[0] === undefined ? "" : ` ${parsed[0].head}`;
+  const head = `${ago(message.at, now)} ago  ${who}${summary}${message.incomplete === true ? "  (incomplete)" : ""}`;
+  const rest = message.blocks.filter((b) => b.kind !== "process_event").flatMap(blockLines);
+  const body = [
+    ...(parsed[0]?.detail ?? []),
+    ...parsed.slice(1).flatMap((p) => [p.head, ...p.detail]),
+    ...rest,
+  ].map((line) => `  ${line}`);
   const error = message.error == null ? [] : [`  ! ${message.error}`];
   return [head, ...body, ...error];
 }
@@ -275,7 +369,8 @@ export function observeText(event: ChatObserveEvent, now: number, opening: boole
         `${event.session === null ? "" : ` (${event.session})`}` +
         ` — ${event.messages.length} messages${capped ? `, last ${shown.length} shown` : ""}\n`;
       if (shown.length === 0) return header;
-      const rows = shown.map((message) => `${messageLines(message, now).join("\n")}\n`);
+      const self = botAddress(event.instance, event.bot);
+      const rows = shown.map((message) => `${messageLines(message, now, self).join("\n")}\n`);
       return `${header}${rows.join("")}`;
     }
     case "message":
@@ -473,7 +568,9 @@ export function register(program: Command): void {
         }
         const now = Date.now();
         for (const message of result.messages) {
-          await out(`${messageLines(message, now).join("\n")}\n`);
+          await out(
+            `${messageLines(message, now, botAddress(result.instance, result.bot)).join("\n")}\n`,
+          );
         }
       }),
   );

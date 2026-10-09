@@ -523,6 +523,7 @@ export const CHAT_BLOCK_KINDS = [
   "question",
   "sources",
   "hermetic",
+  "process_event",
   "unknown",
 ] as const;
 

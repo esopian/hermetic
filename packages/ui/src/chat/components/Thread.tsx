@@ -18,13 +18,17 @@
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { RedactedText } from "./RedactedText.tsx";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import type { MentionBot } from "../chat-mentions.ts";
 import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts";
 import type { Observation } from "../chat-conversations.ts";
 import { composerState, hasKnownOrigin, originClass, railTime } from "../chat-logic.ts";
 import { turnRows } from "../chat-turns.ts";
+import { eventAnchors, hasProcessEvents, processStarts, threadItems } from "../process-events.ts";
+import type { EventDensity } from "../process-events.ts";
+import { densityThreadKey, useEventDensity } from "../event-density.ts";
+import { ProcessBurst, ProcessEventContext, ProcessEventRow } from "./blocks/ProcessEvent.tsx";
 import { useNotifyIfAvailable } from "../../state/notify-state.tsx";
 import { useViewAck } from "../../nav/view-ack.ts";
 import { pinToBottom, useStickToBottom } from "../stick-to-bottom.ts";
@@ -235,6 +239,38 @@ export function NoRoute({ detail }: { detail?: string | null }) {
   );
 }
 
+/**
+ * The thread's "background events" density. Drawn only in a thread that has
+ * any: a switch for rows that are not there is a question nobody asked.
+ */
+function DensitySwitch({
+  density,
+  onChange,
+}: {
+  density: EventDensity;
+  onChange: (density: EventDensity) => void;
+}) {
+  const options: [EventDensity, string][] = [
+    ["compact", "compact"],
+    ["failures", "failures only"],
+  ];
+  return (
+    <div className="ch-ev-density" role="group" aria-label="Background events">
+      <span className="kicker">events</span>
+      {options.map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={density === value}
+          onClick={() => onChange(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** What fills the log when there is no transcript to draw. */
 function Empty({
   state,
@@ -346,12 +382,30 @@ export function Thread({
   // One turn is one row: a durable read hands back an assistant row per tool
   // call, and the operator asked for one grouping (`chat-turns.ts`). The live
   // message never folds into the turn above it.
-  const rows = turnRows(live ? [...messages, live] : messages, now, { breakBefore: live?.id });
+  const all = live ? [...messages, live] : messages;
+  const rows = turnRows(all, now, { breakBefore: live?.id });
+  // Background-process events (§9.2): folded into bursts, filtered by the
+  // thread's density, and linked to the calls that started them. The switch
+  // only exists in a thread that has events, so a thread without them is drawn
+  // exactly as it always was whatever this browser once stored for it.
+  const eventful = hasProcessEvents(all);
+  const [density, setDensity] = useEventDensity(densityThreadKey(fleetId, instance, bot, session?.id));
+  const items = threadItems(rows, eventful ? density : "compact");
+  const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
   // One predicate for the header badge and the composer band: an empty
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
   const composer = composerState(state, destination);
   const status = faceStatus(agent);
+  const processContext = {
+    fleetId,
+    instance,
+    bot,
+    botTitle,
+    status,
+    starts,
+    anchors: eventAnchors(items),
+  };
 
   const notify = useNotifyIfAvailable();
   /**
@@ -448,6 +502,7 @@ export function Thread({
           </div>
         </div>
         <div className="ch-thead-actions">
+          {eventful ? <DensitySwitch density={density} onChange={setDensity} /> : null}
           {actions}
           {fixture ? <span className="ch-chip static">canned</span> : null}
           {agent ? <span className="ch-chip static">{agent.display_status}</span> : null}
@@ -479,41 +534,62 @@ export function Thread({
       ) : null}
 
       <div className="ch-log" ref={log} data-autoscroll>
-        {rows.length === 0 ? (
-          <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
-        ) : (
-          rows.map((row) => (
-            // Keyed on the turn's *first* source id: the merged row is named by
-            // its last one, which moves every time the turn takes another row,
-            // and a key that moves remounts the article — losing the group the
-            // reader closed and the step they opened mid-turn.
-            <div key={row.ids[0] ?? row.message.id}>
-              {row.divider ? (
-                <div className="ch-divider">
-                  <hr />
-                  <span>{row.divider}</span>
-                  <hr />
+        <ProcessEventContext.Provider value={processContext}>
+          {rows.length === 0 ? (
+            <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
+          ) : items.length === 0 ? (
+            // Every row here is a routine event and "failures only" hides them all.
+            <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
+          ) : (
+            items.map((item) => {
+              // Keyed on the row's *first* source id: the merged row is named by
+              // its last one, which moves every time the turn takes another row,
+              // and a key that moves remounts the article — losing the group the
+              // reader closed and the step they opened mid-turn. A burst is keyed
+              // the same way, on its first event.
+              const key = item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
+              const divider = item.kind === "burst" ? item.divider : item.row.divider;
+              const ids =
+                item.kind === "burst"
+                  ? item.entries.map((entry) => entry.row.message.id)
+                  : item.row.ids;
+              return (
+                <div key={key}>
+                  {divider ? (
+                    <div className="ch-divider">
+                      <hr />
+                      <span>{divider}</span>
+                      <hr />
+                    </div>
+                  ) : null}
+                  <RowBoundary
+                    resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
+                    label={item.kind === "burst" ? item.key : item.row.message.id}
+                  >
+                    {item.kind === "burst" ? (
+                      <ProcessBurst entries={item.entries} />
+                    ) : item.kind === "event" ? (
+                      <ProcessEventRow entry={item} />
+                    ) : (
+                      <Message
+                        row={item.row}
+                        fleetId={fleetId}
+                        instance={instance}
+                        bot={bot}
+                        botTitle={botTitle}
+                        status={status}
+                        now={now}
+                        streaming={sending && live !== null && item.row.message.id === live.id}
+                        activity={live !== null && item.row.message.id === live.id ? activity : "idle"}
+                        inReply={item.inReply}
+                      />
+                    )}
+                  </RowBoundary>
                 </div>
-              ) : null}
-              <RowBoundary
-                resetKey={`${row.ids.join(",")}:${row.message.blocks?.length ?? 0}`}
-                label={row.message.id}
-              >
-                <Message
-                  row={row}
-                  fleetId={fleetId}
-                  instance={instance}
-                  bot={bot}
-                  botTitle={botTitle}
-                  status={status}
-                  now={now}
-                  streaming={sending && live !== null && row.message.id === live.id}
-                  activity={live !== null && row.message.id === live.id ? activity : "idle"}
-                />
-              </RowBoundary>
-            </div>
-          ))
-        )}
+              );
+            })
+          )}
+        </ProcessEventContext.Provider>
       </div>
 
       <Composer
