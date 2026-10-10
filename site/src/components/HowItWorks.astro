@@ -1,0 +1,72 @@
+---
+import SectionHead from "./SectionHead.astro";
+import Terminal from "./Terminal.astro";
+---
+<section class="s" id="how">
+  <SectionHead num="§02" kicker="How it works" title="From AWS profile to a working agent">
+    {/* design.md §1 "If it isn't in core, it doesn't exist" (parity), §3.2 rule 2 (long operations stream OpEvents) */}
+    <p>The app walks you through it; the CLI runs the same steps. Long operations report each phase as it runs.</p>
+  </SectionHead>
+  <div class="how">
+    <div class="steps">
+      {/* design.md §4.7 Account safety (STS freeze, Tailscale OAuth client) */}
+      <div class="step on" data-t="0"><div class="n">01</div><div class="b"><h4>Init</h4><p>Pick an AWS profile, freeze the account via STS, hand over a Tailscale OAuth client. <code>hermetic init</code></p></div></div>
+      {/* design.md §5 AWS foundation, §5.1 Fleet-scoped IAM, §5.2 Tailnet policy */}
+      <div class="step" data-t="1"><div class="n">02</div><div class="b"><h4>Foundation</h4><p>One CloudFormation stack, once per fleet: tables, bucket, fleet-scoped IAM, tailnet policy entries.</p></div></div>
+      {/* design.md §6.2 Create, §6.3 First boot (stages install Tailscale and Hermes), §7.3 (pinned Chrome for Testing) */}
+      <div class="step" data-t="2"><div class="n">03</div><div class="b"><h4>Create an agent</h4><p>hermetic launches stock Ubuntu ARM on EC2 with a new data volume. <code>hermeticd</code> then installs Hermes, Chrome and Tailscale.</p></div></div>
+      {/* design.md §9 (`plan rollout`, `plan recreate` → `apply`); board/table/triage views: docs/ui-brief.md. `upgrade` itself takes no plan (§9). */}
+      <div class="step" data-t="3"><div class="n">04</div><div class="b"><h4>Operate</h4><p>Watch the fleet as a board, a table or a triage list. Upgrades, rollouts and recreates show a plan before they run.</p></div></div>
+    </div>
+    <Terminal>
+      <div class="bar"><span>~ zsh</span><span id="tlabel">hermetic init</span></div>
+<pre id="tbody"></pre>
+    </Terminal>
+  </div>
+</section>
+
+{/* The terminal transcripts below are illustrative, not captured output. */}
+<script is:inline>
+// "How it works" terminal — each step swaps in the op-event stream it produces.
+(function(){
+  var T=[
+    ['hermetic init',
+'<span class="o">$</span> hermetic init --create --profile ops\n'+
+'<span class="g">▸ preflight   </span> tailscale cli ........... <span class="k">ok</span>\n'+
+'<span class="g">▸ preflight   </span> oauth scopes ............ <span class="k">ok</span>\n'+
+'<span class="g">▸ preflight   </span> https certificates ...... <span class="k">ok</span>\n'+
+'<span class="g">▸ identity    </span> account <span class="w">123456789012</span> frozen\n'+
+'<span class="g">▸ secrets     </span> oauth client → SSM\n'+
+'<span class="g">▸ policy      </span> tailnet entries written  <span class="g">// hermetic:managed</span>\n'+
+'<span class="k">✓ fleet ew1h45re ready to build a foundation</span>'],
+    ['hermetic foundation',
+'<span class="o">$</span> hermetic foundation status\n'+
+'<span class="g">stack      </span> hermetic <span class="g">·</span> <span class="k">CREATE_COMPLETE</span>\n'+
+'<span class="g">version    </span> v14 <span class="g">(latest)</span>\n'+
+'<span class="g">tables     </span> agents · events\n'+
+'<span class="g">bucket     </span> hermetic-ew1h45re-artifacts\n'+
+'<span class="g">network    </span> public <span class="g">· 0 inbound rules</span>\n'+
+'<span class="g">directory  </span> fleet <span class="w">main</span> registered'],
+    ['hermetic agent create',
+'<span class="o">$</span> hermetic agent create kestrel --size L\n'+
+'<span class="g">[ 5%] plan       </span> name ok · volume new · 100 GiB\n'+
+'<span class="g">[18%] launch     </span> i-0c3f… t4g.xlarge eu-west-1b\n'+
+'<span class="g">[31%] volume     </span> vol-0d27… attached /dev/sdf\n'+
+'<span class="g">[46%] bootstrap  </span> 01-tailscale <span class="k">✓</span>  02-hermeticd <span class="k">✓</span>\n'+
+'<span class="g">[63%] bootstrap  </span> 03-hermes <span class="k">✓</span>  04-browser <span class="o">…</span>\n'+
+'<span class="g">[  —] </span>           <span class="cursor"></span>'],
+    ['hermetic plan rollout',
+'<span class="o">$</span> hermetic plan rollout --hermes 0.21.3\n'+
+'<span class="g">plan rollout · 2 of 5 agents behind</span>\n'+
+'  <span class="y">~</span> corvid   0.21.1 → 0.21.3   <span class="g">restart hermes</span>\n'+
+'  <span class="y">~</span> moth     skipped            <span class="g">stopped</span>\n'+
+'  <span class="g">= atlas lumen kestrel  up to date</span>\n\n'+
+'<span class="o">$</span> hermetic apply plan-7f2a --yes\n'+
+'<span class="k">✓ corvid ready · 0.21.3</span>']
+  ];
+  var steps=document.querySelectorAll('.step'),body=document.getElementById('tbody'),lab=document.getElementById('tlabel');
+  function show(i){steps.forEach(function(s,j){s.classList.toggle('on',i===j)});lab.textContent=T[i][0];body.innerHTML=T[i][1]}
+  steps.forEach(function(s,i){s.onclick=function(){show(i)}});
+  show(0);
+})();
+</script>

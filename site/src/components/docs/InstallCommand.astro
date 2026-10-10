@@ -1,0 +1,21 @@
+---
+/*
+ * The one-line installer, built from the site's own URL (astro.config.ts `site`) so it names
+ * whatever host this build deploys to. The script itself is public/install.sh.
+ */
+import { Code } from "@astrojs/starlight/components";
+
+interface Props {
+  /** Extra arguments passed through `bash -s --`, e.g. "--version v0.1.6". */
+  args?: string;
+  /** Prefix for the `bash` side of the pipe, e.g. an environment variable. */
+  env?: string;
+}
+
+const { args, env } = Astro.props;
+const url = new URL("/install.sh", Astro.site ?? "https://hermetic-site.pages.dev").href;
+const bash = [env, "bash", args ? `-s -- ${args}` : ""].filter(Boolean).join(" ");
+const code = `curl -fsSL ${url} | ${bash}`;
+---
+
+<Code code={code} lang="sh" />

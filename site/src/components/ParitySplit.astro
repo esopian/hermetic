@@ -1,0 +1,37 @@
+---
+import Kicker from "./Kicker.astro";
+import SectionHead from "./SectionHead.astro";
+import StatusSquare from "./StatusSquare.astro";
+import Terminal from "./Terminal.astro";
+---
+<section class="s">
+  <SectionHead num="§04" kicker="Parity" title="Every app action is also a CLI command">
+    {/* design.md §11.4 Parity (one test, every public method has one CLI command and one RPC handler), §1 "If it isn't in core, it doesn't exist". `--json` on every command: §4.7 names it for stdout; not stated as universal in design.md. */}
+    <p>A test on every commit checks that each operation exists in both. Add <code class="mono">--json</code> to any command for scripts.</p>
+  </SectionHead>
+  <div class="split">
+    <div>
+      <Kicker>Terminal</Kicker><h3>hermetic agent ps</h3>
+      <Terminal framed><pre><span class="o">$</span> hermetic agent ps
+<span class="g">NAME     STATUS         VERSION  SIZE  TAILSCALE</span>
+atlas    <span class="k">ready</span>          0.21.3   M     atlas.tail7c1e.ts.net
+corvid   <span class="y">degraded</span>       <span class="y">0.21.1</span>   S     corvid.tail7c1e.ts.net
+kestrel  <span class="o">bootstrapping</span>  —        L     kestrel.tail7c1e.ts.net
+lumen    <span class="k">ready</span>          0.21.3   M     lumen.tail7c1e.ts.net
+moth     <span class="g">stopped</span>        0.21.3   S     —</pre></Terminal>
+    </div>
+    <div>
+      <Kicker>Desktop app</Kicker><h3>Table view</h3>
+      <div class="tbl-wrap">
+      <table class="tbl">
+        <tr><th>Agent</th><th>Status</th><th>Version</th><th>Size</th></tr>
+        <tr><td class="nm">atlas</td><td style="color:var(--ok)"><StatusSquare kind="ok" />READY</td><td>0.21.3</td><td><span class="chip">M</span>t4g.large</td></tr>
+        <tr><td class="nm">corvid</td><td style="color:var(--warn)"><StatusSquare kind="warn" />DEGRADED</td><td style="color:var(--warn)">0.21.1</td><td><span class="chip">S</span>t4g.medium</td></tr>
+        <tr><td class="nm">kestrel</td><td style="color:var(--acc)"><StatusSquare kind="acc" pulse />BOOTSTRAPPING</td><td>—</td><td><span class="chip">L</span>t4g.xlarge</td></tr>
+        <tr><td class="nm">lumen</td><td style="color:var(--ok)"><StatusSquare kind="ok" />READY</td><td>0.21.3</td><td><span class="chip">M</span>t4g.large</td></tr>
+        <tr><td class="nm">moth</td><td style="color:var(--fg3)"><StatusSquare kind="off" />STOPPED</td><td>0.21.3</td><td><span class="chip">S</span>t4g.medium</td></tr>
+      </table>
+      </div>
+    </div>
+  </div>
+</section>

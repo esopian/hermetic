@@ -1,0 +1,5 @@
+# Cloudflare Pages project for the hermetic site. Deployed by Direct Upload from
+# .github/workflows/site.yml (`wrangler pages deploy dist`); there is no Git integration.
+name = "hermetic-site"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-09-01"

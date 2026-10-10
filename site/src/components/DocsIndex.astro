@@ -1,0 +1,43 @@
+---
+import { docs } from "../data/links";
+import Kicker from "./Kicker.astro";
+import SectionHead from "./SectionHead.astro";
+
+const cards = [
+  {
+    kicker: "Start",
+    title: "Getting started",
+    body: "Install, clear quarantine, run the wizard, create your first agent.",
+    href: docs.gettingStarted,
+  },
+  {
+    kicker: "Operate",
+    title: "Operations",
+    body: "Prerequisites, Tailscale OAuth scopes, foundation updates, teardown.",
+    href: docs.operations,
+  },
+  {
+    kicker: "Reference",
+    title: "CLI reference",
+    body: "Every command, flag and exit code, generated from the CLI itself.",
+    href: docs.cliReference,
+  },
+  {
+    kicker: "Understand",
+    title: "Security model",
+    body: "What is sealed, what is shared, and the trade-offs you accept today.",
+    href: docs.securityModel,
+  },
+];
+
+// The card's footer shows the route it opens, without the trailing slash.
+const route = (href: string): string => href.replace(/\/$/, "");
+---
+<section class="s" id="docs">
+  <SectionHead num="§05" kicker="Documentation" title="Documentation" />
+  <div class="docs">
+    {cards.map((c) => (
+      <a class="doc" href={c.href}><Kicker>{c.kicker}</Kicker><h4>{c.title}</h4><p>{c.body}</p><span class="go">{route(c.href)} →</span></a>
+    ))}
+  </div>
+</section>

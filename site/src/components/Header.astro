@@ -1,0 +1,17 @@
+---
+import { repo } from "../data/links";
+import Button from "./Button.astro";
+---
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="sq"></span>Hermetic</a>
+    <nav class="main">
+      <a href="#how">How it works</a>
+      <a href="/docs/">Docs</a>
+      <a href={repo.home}>GitHub ↗</a>
+    </nav>
+    <div class="top-r">
+      <Button variant="p" small href="#download">↓ Download</Button>
+    </div>
+  </div>
+</header>

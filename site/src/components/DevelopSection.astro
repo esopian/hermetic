@@ -1,0 +1,33 @@
+---
+import { repo } from "../data/links";
+import Button from "./Button.astro";
+import Kicker from "./Kicker.astro";
+import SectionHead from "./SectionHead.astro";
+---
+<section class="s" id="dev">
+  <SectionHead num="§06" kicker="Develop" title="TypeScript on the laptop and on the box">
+    {/* design.md §1 ("one language end to end") */}
+    <p>Everything is built on Bun and open source under the MIT license. Build, test and contribution instructions live in the repository.</p>
+  </SectionHead>
+  <div class="dev">
+    <div>
+      {/* design.md §3.1 Packages, §3.3 (Zod schemas, one source of types) */}
+      <Kicker style="margin-bottom:8px">Packages</Kicker>
+      <div class="pk"><code>core</code><span>The SDK: all logic, all AWS, SQLite, DynamoDB. Zod schemas are the source of truth.</span></div>
+      <div class="pk"><code>cli</code><span>Commander head. Imports core in-process.</span></div>
+      <div class="pk"><code>app</code><span>Electrobun head: main process, typed RPC over core.</span></div>
+      <div class="pk"><code>ui</code><span>React in the webview. Never touches AWS.</span></div>
+      <div class="pk" style="border-bottom:0"><code>agentd</code><span><span class="mono">hermeticd</span>, the node agent on each box.</span></div>
+    </div>
+    <div>
+      {/* Developer setup is deliberately not on the site (site/AGENTS.md "Audience"); it lives in README.md and CONTRIBUTING.md. */}
+      <Kicker style="margin-bottom:12px">Build it yourself</Kicker>
+      <p class="dev-note">The README covers setting up a checkout and running the app from source. CONTRIBUTING covers the toolchain, the tests and how releases are cut. The design spec is the authority on how hermetic behaves.</p>
+      <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap"><Button variant="s" small href={repo.readme}>README →</Button><Button variant="s" small href={repo.contributing}>Contributing →</Button><Button variant="s" small href={repo.architecture}>Architecture →</Button><Button variant="s" small href={repo.designSpec}>Design spec →</Button></div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .dev-note { color: var(--fg2); font-size: 15px; max-width: 36em; }
+</style>

@@ -18,7 +18,9 @@
  * cannot read is *not* a clean bill of health, and must never exit 0. Exit
  * codes: 0 clean, 1 advisory found, 2 the scan itself failed.
  */
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 /** Severities that fail the gate. Anything below is printed and passes. */
 export const FAILING_SEVERITIES = new Set(["high", "critical"]);
@@ -230,24 +232,53 @@ export async function runAudit(cwd: string): Promise<AuditRun> {
   }
 }
 
-if (import.meta.main) {
-  // fileURLToPath, not `.pathname`: a checkout under a path with a space in it
-  // is percent-encoded there, and Bun.spawn would reject the cwd.
-  const root = fileURLToPath(new URL("..", import.meta.url));
+/** Scan one directory's resolved tree, retrying only an infrastructure failure. */
+async function scan(cwd: string, label: string): Promise<Verdict> {
   let verdict: Verdict = { kind: "broken", reason: "the scanner never ran" };
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    verdict = classify(await runAudit(root));
+    verdict = classify(await runAudit(cwd));
     // Only an infrastructure failure is worth retrying; an advisory will not
     // heal on a second look.
     if (verdict.kind !== "broken") break;
     if (attempt < ATTEMPTS) {
-      process.stderr.write(`audit:dependencies: ${verdict.reason} — retrying once\n`);
+      process.stderr.write(`audit:dependencies (${label}): ${verdict.reason} — retrying once\n`);
     }
   }
-  if (verdict.kind === "broken") {
-    process.stderr.write(`${report(verdict)}\n`);
-    process.exit(2);
+  return verdict;
+}
+
+if (import.meta.main) {
+  // fileURLToPath, not `.pathname`: a checkout under a path with a space in it
+  // is percent-encoded there, and Bun.spawn would reject the cwd.
+  const root = fileURLToPath(new URL("..", import.meta.url));
+
+  // `site/` is a separate toolchain (AGENTS.md "Layout"): its own `bun.lock`,
+  // never installed by the root `bun install`, so `bun audit` from the repo
+  // root never resolves it and a high-severity advisory in site's dependency
+  // graph would otherwise pass this gate silently. It has no core-behavior
+  // stake, but it is still code this repo ships to a browser, so it gets the
+  // same gate rather than a lesser one — run only when the directory exists
+  // (checkout without `site/`, or before phase 1 landed there).
+  const targets: { cwd: string; label: string }[] = [{ cwd: root, label: "root" }];
+  const siteDir = join(root, "site");
+  if (existsSync(join(siteDir, "bun.lock"))) {
+    targets.push({ cwd: siteDir, label: "site" });
   }
-  process.stdout.write(`${report(verdict)}\n`);
-  if (verdict.kind === "vulnerable") process.exit(1);
+
+  let worstExit = 0;
+  for (const { cwd, label } of targets) {
+    const verdict = await scan(cwd, label);
+    const prefixed = `${report(verdict)}\n`.replace(
+      /^audit:dependencies:/gm,
+      `audit:dependencies (${label}):`,
+    );
+    if (verdict.kind === "broken") {
+      process.stderr.write(prefixed);
+      worstExit = 2;
+      continue;
+    }
+    process.stdout.write(prefixed);
+    if (verdict.kind === "vulnerable" && worstExit < 2) worstExit = 1;
+  }
+  if (worstExit !== 0) process.exit(worstExit);
 }

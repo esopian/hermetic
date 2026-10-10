@@ -39,6 +39,8 @@ packages/ui       React. Webview only. Talks to the main process over Electrobun
 packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema` and `@hermetic/core/shared`.
 ```
 
+`site/` — marketing + docs site, not a workspace, own toolchain, mobile in scope there (see `site/AGENTS.md`).
+
 ### Import boundaries
 
 The table below is the `ALLOWED` literal in `tests/boundaries.test.ts` — edit both together. That test parses every `packages/*/src` file with `Bun.Transpiler` and resolves every import, `export … from`, `import()` and `require()` specifier to one cell:

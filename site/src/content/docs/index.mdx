@@ -1,0 +1,30 @@
+---
+slug: docs
+title: hermetic documentation
+description: Run a fleet of Hermes agents on AWS, reachable only over Tailscale.
+sidebar:
+  label: Overview
+---
+
+hermetic manages a fleet of Hermes agents on AWS from a macOS desktop app and a CLI that share one core. {/* README.md intro; design.md §1 "If it isn't in core, it doesn't exist" */}
+
+Each agent is an EC2 instance with no inbound network rules. You reach it over Tailscale and nothing else. {/* design.md §1 "Sealed inbound, open outbound", §7.2 */} The instance can be replaced at any time; the EBS data volume where the agent keeps what it has learned outlives it. {/* design.md §1 "Instances are disposable, volumes are precious" */}
+
+hermetic is pre-alpha. {/* README.md "Status" */}
+
+## Start here
+
+- [Install](/docs/start/install/) the desktop app and the `hermetic` CLI.
+- [Create your first fleet](/docs/start/first-fleet/): the AWS and Tailscale setup, `hermetic init`, and a first agent.
+
+## Understand it
+
+- [Principles](/docs/concepts/principles/) behind the design.
+- [Security model](/docs/concepts/security-model/): what is sealed, what is shared, and the trade-offs that are accepted today.
+
+## Run it
+
+- The [operations runbook](/docs/operate/overview/) covers a real fleet from `init` to teardown.
+- The [CLI reference](/docs/reference/cli/) and [exit codes](/docs/reference/exit-codes/) are generated from the CLI itself.
+
+The authoritative specification is [`docs/design.md`](https://github.com/esopian/hermetic/blob/master/docs/design.md) in the repository. Where this site and the spec disagree, the spec is right.

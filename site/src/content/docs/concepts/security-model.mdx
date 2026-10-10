@@ -1,0 +1,70 @@
+---
+slug: docs/concepts/security-model
+title: Security model
+description: What hermetic seals, what the fleet's agents share, and the trade-offs accepted today.
+sidebar:
+  order: 2
+---
+
+This page describes how an agent is reached, what its instance role may do, and where secrets go. It includes the trade-offs hermetic accepts today, since those decide how far you can trust one agent box. The full reasoning is in [`docs/design.md`](https://github.com/esopian/hermetic/blob/master/docs/design.md) §5, §7.2 and §8.
+
+## One home, one account
+
+A hermetic home is frozen to one AWS account at `init`. Every call re-verifies the account through STS before touching AWS, and fails with `ACCOUNT_MISMATCH` if it differs. A home can hold several fleets in that account; if the foundation's own fleet tag disagrees with the fleet the home expects, the call fails with `FLEET_MISMATCH`. {/* design.md §1, §4.7; docs/operations.md "Recovery scenarios" */}
+
+Every foundation resource is named for its fleet's id, and every lookup of an agent's instance or volume filters on the fleet id too, so two fleets in one account cannot reach each other's resources through a shared name. {/* design.md §5 */}
+
+## Network
+
+- Agents have no inbound security group rules, no key pairs and no open port 22. {/* design.md §7.2 */}
+- In the default `public` network mode each instance has a public IP, but nothing listens on it. The security group and an nftables host firewall both drop unsolicited inbound traffic; the firewall allows only the `tailscale0` interface and loopback. {/* design.md §7.2, §6.4 */}
+- Services on the box bind to loopback only. Tailscale Serve publishes the dashboard with a real certificate on the agent's tailnet name. {/* design.md §7.2 */}
+- SSH is Tailscale SSH, authenticated by tailnet identity and your ACL. {/* design.md §7.2 */}
+
+Outbound traffic is open, with no network-level egress filtering. Agents reach the web, Tailscale's control plane, model providers and package repositories directly, or through a NAT instance in `nat` mode. S3 and DynamoDB traffic goes through VPC gateway endpoints. {/* design.md §7.2 "Egress model" */} One dashboard action sends data to a destination hermetic did not choose: Hermes's debug-share uploads a redacted log tail to `paste.rs` when asked. {/* design.md §7.2 "One documented exception" */}
+
+## The tailnet ACL is the perimeter
+
+An agent's dashboard has no login. Hermes runs in its unauthenticated local mode behind a loopback reverse proxy, so whoever your tailnet policy lets reach `tag:hermetic` on port 443 can drive every agent in the fleet. Hermes's audit log records no per-user identity. {/* design.md §6.4 "Dashboard access"; docs/operations.md "Prerequisites" */}
+
+Port 443 also carries the agent's browser over noVNC. Someone who can open an agent's dashboard can also drive its browser, and through it read files on the box such as the agent's `.env`. {/* design.md §5.2 "The 443 entry is now interactive" */}
+
+Keep the `acls` rule that admits `tag:hermetic` narrow. There is no second gate behind it. {/* docs/operations.md "Prerequisites" */}
+
+### Access to your policy file
+
+The `policy_file` OAuth scope cannot be restricted to a tag, so a leaked fleet credential could edit your whole tailnet policy. hermetic limits what it does with the scope: it only splices text between its `// hermetic:managed` markers, validates every candidate with Tailscale's `/acl/validate` (which runs your policy's own tests), writes with the ETag of the policy you reviewed, shows a diff before any write, and records each write as an event. You can leave the scope off and paste the entries yourself. {/* design.md §5.2 "The trade-off, and what is done about it" */}
+
+## IAM: one role for the whole fleet
+
+All agents in a fleet share one IAM role and instance profile. There is no per-agent role, so IAM does not isolate one agent from another. {/* design.md §5 "Stack contents", §5.1 */}
+
+The role is scoped to the fleet's own resources: {/* design.md §5.1 */}
+
+| Service | What the role may do |
+| --- | --- |
+| SSM Parameter Store | Read parameters under `/hermes/<fleet_id>/*`. Nothing under `/hermetic/`, where the fleet's Tailscale OAuth secret lives. |
+| KMS | Decrypt, but only through SSM, so only those same parameters. |
+| DynamoDB | `GetItem`, `PutItem`, `UpdateItem` and `Query` on the fleet's `agents` and `events` tables. Never `Scan`. |
+| S3 | The fleet bucket's `config/`, `artifacts/`, `hermes/` and `browser/` prefixes, and the fleet manifest. |
+| Bedrock | Invoke the model ARNs the foundation grants, and list models and inference profiles. |
+| SSM agent | The Session Manager and SSM agent permissions, written inline. `AmazonSSMManagedInstanceCore` is not attached, because it would allow reading any parameter in the account. |
+
+`hermeticd` only ever addresses its own agent's rows, parameters and config. IAM does not enforce that. A compromised agent box can read every agent's SSM parameters in its fleet, including their provider keys, and every agent's rows and config. {/* design.md §5.1 "Why not ABAC" and the paragraph after it */} It cannot read the fleet's Tailscale OAuth secret or any other fleet's parameters. {/* design.md §5.1 SSM bullet */}
+
+Here, "the box" means any process on the instance. The instance metadata service is unrestricted, so the Hermes gateway, a terminal-tool command, or anything the agent installed can obtain the role's credentials. {/* design.md §5.1, last paragraph */} The agent's `hermes` account also has passwordless root through sudo. {/* design.md §6.4, §10 "Agent sudo" */}
+
+Restoring per-agent isolation needs a role per agent, and narrowing who can reach instance metadata is the cheaper lever. Both are future work. {/* design.md §5.1 */}
+
+## Secrets
+
+hermetic owns the existence of each secret slot, meaning its name and the policy around it, and sees the value only in transit. Values are never logged, echoed or written to disk on your laptop. {/* design.md §8.2; README.md "Safety model" */}
+
+- The only secret every agent has is its Tailscale auth key: single-use, expiring in an hour, stored as an SSM SecureString and consumed at first boot. {/* design.md §8.1; docs/operations.md "Rotate the Tailscale OAuth client" */}
+- With the default Bedrock provider, that is the only secret. The instance role is the agent's identity for everything else. {/* design.md §8.1 */}
+- A keyed provider's API key is typed once, into a provider profile (`hermetic providers create --api-key-stdin`), never as a flag value and never on `agent create`. Your laptop copies it into the agent's own SSM slot. At boot `hermeticd` writes it to a root-owned, mode 600 file on tmpfs that Hermes reads as its environment. It never lands on the data volume and does not survive a stop. {/* design.md §8.1 "Never collected at create", "The key's path onto the box" */}
+- Bitwarden Secrets Manager is an opt-in per agent, with one machine account and one project per agent. {/* design.md §8.1 "Optional" */}
+
+## Destructive operations
+
+Destructive commands plan first and need explicit confirmation. `agent recreate` and `agent destroy` refuse without `--yes`. `teardown` and `init --reset` also need the twelve-digit account id typed back; `--yes` alone is not enough. {/* design.md §3.2 rule 3; docs/operations.md "Stop / start / recreate / destroy semantics", "The typed confirmation" */}

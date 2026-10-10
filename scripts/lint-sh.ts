@@ -12,8 +12,11 @@
  * same rules; set SHELLCHECK=/path/to/shellcheck to use an installed binary
  * instead (version is then yours to keep in step). Wired into `bun run check`
  * via `bun run lint:sh`, next to `lint:cfn`.
+ *
+ * It also lints the site's `curl … | bash` installer (`site/public/install.sh`):
+ * the other shell hermetic hands to someone else's machine.
  */
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** The `shellcheck-py` release, which carries shellcheck 0.11.0. */
@@ -56,6 +59,9 @@ const files = readdirSync(STAGES_DIR)
   .sort()
   .map((name) => join(STAGES_DIR, name));
 
+/** Served from the site at `/install.sh`; linted here because the root CI job has shellcheck. */
+export const INSTALLER = join(import.meta.dir, "..", "site", "public", "install.sh");
+
 if (files.length === 0) {
   process.stderr.write(`lint:sh: no stage scripts under ${STAGES_DIR}\n`);
   process.exit(2);
@@ -63,7 +69,8 @@ if (files.length === 0) {
 
 // shellcheck exits non-zero for anything at or above `-S`, which is what makes
 // a warning fail the build rather than scroll past.
-const proc = Bun.spawnSync([...cmd, "-S", SEVERITY, "--format", "tty", ...files], {
+const installer = existsSync(INSTALLER) ? [INSTALLER] : [];
+const proc = Bun.spawnSync([...cmd, "-S", SEVERITY, "--format", "tty", ...files, ...installer], {
   stdout: "inherit",
   stderr: "inherit",
 });
@@ -72,5 +79,5 @@ if (proc.exitCode !== 0) {
   process.exit(proc.exitCode ?? 1);
 }
 process.stdout.write(
-  `lint:sh: ${files.length} bootstrap stage(s) clean (shellcheck ${SHELLCHECK_VERSION}, -S ${SEVERITY})\n`,
+  `lint:sh: ${files.length} bootstrap stage(s)${installer.length ? " + site installer" : ""} clean (shellcheck ${SHELLCHECK_VERSION}, -S ${SEVERITY})\n`,
 );

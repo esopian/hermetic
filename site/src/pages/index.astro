@@ -1,0 +1,32 @@
+---
+import ArchitectureDiagram from "../components/ArchitectureDiagram.astro";
+import CtaBand from "../components/CtaBand.astro";
+import DevelopSection from "../components/DevelopSection.astro";
+import DocsIndex from "../components/DocsIndex.astro";
+import EnvStrip from "../components/EnvStrip.astro";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import Hero from "../components/Hero.astro";
+import HowItWorks from "../components/HowItWorks.astro";
+import ParitySplit from "../components/ParitySplit.astro";
+import PrincipleGrid from "../components/PrincipleGrid.astro";
+import ProofStrip from "../components/ProofStrip.astro";
+import Marketing from "../layouts/Marketing.astro";
+---
+<Marketing
+  title="Hermetic: Sealed Agents"
+  description="hermetic gives each Hermes agent its own EC2 instance in your AWS account, reachable only over Tailscale, with memory that survives a rebuild."
+>
+  <EnvStrip />
+  <Header />
+  <Hero />
+  <ProofStrip />
+  <PrincipleGrid />
+  <HowItWorks />
+  <ArchitectureDiagram />
+  <ParitySplit />
+  <DocsIndex />
+  <DevelopSection />
+  <CtaBand />
+  <Footer />
+</Marketing>

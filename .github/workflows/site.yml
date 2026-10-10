@@ -1,0 +1,89 @@
+name: Site
+
+# Reusable: `release.yml` calls this after a release publishes, with the tag
+# that was just released. `workflow_dispatch` gives the same path a name a
+# maintainer can call by hand — a docs fix or a re-deploy of a tag that failed
+# to reach Cloudflare the first time, with no need to cut a new release.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The tag (or other ref) to build and deploy.
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The tag (or other ref) to build and deploy.
+        type: string
+        required: true
+
+concurrency:
+  # One production deploy at a time; a re-dispatch waits for the one in
+  # flight rather than racing it onto the same Cloudflare Pages project.
+  group: site-production
+  cancel-in-progress: false
+
+# Nothing here writes to this repository — the one write this workflow makes
+# is to Cloudflare, through the `deploy` job's own scoped token below.
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Gates the Cloudflare credentials behind a GitHub environment: only a
+    # ref matching that environment's deployment-branch/tag policy may reach
+    # the secrets below (see site/README.md "Deploy setup" for the one-time
+    # policy setup, and its note on what workflow_dispatch resolves the ref
+    # to).
+    environment: site-production
+    steps:
+      - name: Check out ${{ inputs.ref }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # The commit-hash Wrangler records for this deploy has to be the SHA of
+      # the checked-out ref, not `github.sha` — on workflow_dispatch that
+      # would be the SHA the workflow itself runs from (the default branch),
+      # which is not what was built. Read it back from the checkout instead
+      # of trusting an input.
+      - name: Resolve the checked-out commit
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Installs the root workspace too: site/scripts/cli-reference.ts spawns
+      # `bun ../packages/cli/src/main.ts`, so the CLI's own dependencies have
+      # to be on disk. `./.github/actions/setup` already runs the root
+      # `bun install --frozen-lockfile` — not duplicated here.
+      - uses: ./.github/actions/setup
+
+      - name: Install site dependencies
+        working-directory: site
+        run: bun install --frozen-lockfile
+
+      - name: Check and build the site
+        working-directory: site
+        run: bun run check && bun run build
+        env:
+          # Read by site/src/data/release.ts for the version badge and
+          # download links. Passed through env, never interpolated into the
+          # shell text of this run: block.
+          HERMETIC_RELEASE_TAG: ${{ inputs.ref }}
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@4e88846969242f7752bcfdaf5511bfbb3985ca47 # v4.1.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
+          command: >-
+            pages deploy dist
+            --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+            --branch=main
+            --commit-hash=${{ steps.commit.outputs.sha }}
