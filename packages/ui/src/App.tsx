@@ -26,6 +26,8 @@ import { Header } from "./components/Header.tsx";
 import { Bell } from "./components/notify/Bell.tsx";
 import { NotificationCenter } from "./components/notify/Center.tsx";
 import { Toasts } from "./components/notify/Toasts.tsx";
+import { InboxDrawer } from "./components/notify/InboxDrawer.tsx";
+import { UndoBarView } from "./components/notify/InboxParts.tsx";
 import { useNotifyIfAvailable } from "./state/notify-state.tsx";
 import { ShortcutsPopover } from "./components/Shortcuts.tsx";
 import { InitWizard } from "./components/InitWizard.tsx";
@@ -163,6 +165,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
    */
   const setCenterOpenRef = useRef<((open: boolean) => void) | null>(null);
   setCenterOpenRef.current = notify?.setCenterOpen ?? null;
+  const inboxDrawerOpen = notify?.drawerOpen ?? false;
+  const openDrawerRef = useRef<(() => void) | null>(null);
+  openDrawerRef.current = notify ? () => notify.openDrawer() : null;
   // Sticky: once the wizard is up it stays up until the operator opens the
   // fleet, so the last step is not yanked away the moment the config lands.
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -185,6 +190,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const overlay = {
     shortcutsOpen,
     notifyOpen,
+    inboxOpen: inboxDrawerOpen,
     popoverOpen: nav.popoverOpen,
     teardownOpen: nav.teardownOpen,
     createOpen: nav.createOpen,
@@ -291,6 +297,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
     filterRef,
     toggleShortcuts,
     openInbox: setCenterOpenRef,
+    openInboxDrawer: openDrawerRef,
   });
 
   /**
@@ -398,7 +405,12 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
             onOpenSettings={nav.openSettings}
           />
         ) : null}
+        {notify.drawerOpen ? (
+          <InboxDrawer onOpenAgent={nav.openAgent} onOpenSettings={nav.openSettings} />
+        ) : null}
         <Toasts onOpenAgent={nav.openAgent} />
+        {/* Inside the centre while it is open; over the page otherwise. */}
+        {notifyOpen ? null : <UndoBarView placement="page" />}
       </>
     );
   /**

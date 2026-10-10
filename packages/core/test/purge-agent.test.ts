@@ -148,7 +148,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       const rows = s.notifications.list({ limit: 50 }, F).filter((n) => n.agent === "alpha");
       expect(rows).toHaveLength(1);
       expect(rows[0]?.resolved_at).not.toBeNull();
-      expect(s.notifications.counts(F)).toEqual({ unread: 0, needs_action: 0 });
+      expect(s.notifications.counts(F)).toMatchObject({ unread: 0, needs_action: 0 });
       s.close();
     });
 

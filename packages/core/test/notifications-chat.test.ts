@@ -1353,12 +1353,21 @@ describe("chat.message: a background-process event", () => {
       }),
       "m-4",
     );
-    expect(rows(store).map((r) => r.title)).toEqual([
-      "Subagents finished for default on atlas",
-      "Subagents finished for default on atlas with failures",
-      "A background command failed to start on default on atlas",
-      "A background command was lost on default on atlas",
-    ]);
+    // All four rows share one timestamp, and the store breaks a tie by id the
+    // way SQLite's `ORDER BY at DESC, id DESC` does, so the order is not the
+    // order of insertion. The labels are what this test is about.
+    expect(
+      rows(store)
+        .map((r) => r.title)
+        .sort(),
+    ).toEqual(
+      [
+        "Subagents finished for default on atlas",
+        "Subagents finished for default on atlas with failures",
+        "A background command failed to start on default on atlas",
+        "A background command was lost on default on atlas",
+      ].sort(),
+    );
   });
 
   test("a notice with no process id is keyed on the message that carried it", () => {

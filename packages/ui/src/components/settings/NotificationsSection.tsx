@@ -1,11 +1,11 @@
 /**
  * Settings → Notifications: the rules that decide how much of the inbox
- * interrupts, and the full inbox itself.
+ * interrupts, and the way to the inbox itself.
  *
- * Two things in one section on purpose. The rules are unreadable in the
- * abstract — "should health changes toast?" is a question nobody can answer
- * without seeing how many health changes there are — so the archive they are
- * about is on the same page, below them.
+ * The archive used to be the last block of this page. It is the full inbox
+ * drawer now (`⇧I`) — views, sources, agents, multi-select and core's
+ * auto-clear rule — and this page keeps a short `Inbox` block that opens it,
+ * so the rules and the rows they are about are still one click apart.
  *
  * Everything here is *this laptop's* (§7.1 item 4), which is why the page has
  * no save bar: delivery mode, quiet hours and the desktop permission only
@@ -15,19 +15,17 @@
  * about the rows themselves and the CLI's `hermetic inbox` on this machine has
  * to agree — but they are still this home's, not the fleet's.
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   DELIVERIES,
   PREF_GROUPS,
   desktopAllowed,
   inQuietHours,
-  isResolved,
 } from "../../logic/notification-logic.ts";
 import type { Delivery, PrefGroup } from "../../logic/notification-logic.ts";
 import { useNotify } from "../../state/notify-state.tsx";
 import type { MuteTarget } from "../../state/notify-state.tsx";
 import type { NotificationSourceView } from "../../api/index.ts";
-import { NotificationRow } from "../notify/NotificationRow.tsx";
 import {
   Block,
   PageFoot,
@@ -132,23 +130,10 @@ function permissionLine(p: ReturnType<typeof useNotify>["desktopPermission"]): s
 
 export function NotificationsSection() {
   const notify = useNotify();
-  const [unreadOnly, setUnreadOnly] = useState(false);
   const [muteAgent, setMuteAgent] = useState("");
   const [muteSource, setMuteSource] = useState<NotificationSourceView | "">("");
   const [quietTicked, flashQuiet] = useSavedTick();
   const now = Date.now();
-
-  /**
-   * "Unread only" means the rows the unread count is counting, and core does not
-   * count a row whose condition has cleared — so neither does this filter. The
-   * full list still holds them, marked as history: a cleared condition is a
-   * record, not an item of work, and the two lists say so the same way the
-   * centre's `all` and `needs you` tabs do.
-   */
-  const rows = useMemo(
-    () => (unreadOnly ? notify.items.filter((n) => !n.read_at && !isResolved(n)) : notify.items),
-    [notify.items, unreadOnly],
-  );
 
   const prefs = notify.prefs;
   const setDelivery = (group: PrefGroup, delivery: Delivery) => {
@@ -329,46 +314,18 @@ export function NotificationsSection() {
         </div>
       </Block>
 
-      <Block
-        title="Inbox"
-        right={
-          <>
-            <TextAction onClick={() => void notify.ackAll()}>Mark all read</TextAction>
-            <TextAction onClick={() => void notify.refresh()}>Refresh</TextAction>
-          </>
-        }
-      >
-        <div className="nt-inbox-bar">
-          <label className="st-check">
-            <input
-              type="checkbox"
-              checked={unreadOnly}
-              onChange={(e) => setUnreadOnly(e.target.checked)}
-            />
-            unread only
-          </label>
-          <span className="mono st-cell-sm nt-inbox-count">
-            {notify.unread} unread · {notify.needsAction} need you
-          </span>
-        </div>
-        {notify.error ? (
-          <div className="wiz-error mono" role="alert">
-            Could not read the inbox: {notify.error}
-          </div>
-        ) : null}
-        <div className="nt-inbox">
-          {rows.length === 0 ? (
-            <div className="nt-empty mono">
-              {unreadOnly
-                ? "Nothing unread."
-                : "Nothing yet. Failed and finished operations, health changes and fleet advisories land here."}
-            </div>
-          ) : (
-            rows.map((n) => (
-              <NotificationRow key={n.id} n={n} now={now} onAck={(id) => void notify.ack(id)} />
-            ))
-          )}
-        </div>
+      {/* The inbox itself lives in the drawer (`⇧I`), which has the views,
+          the sources, multi-select and the auto-clear rule; this is the way
+          there from the page that sets the rules about it. */}
+      <Block title="Inbox">
+        <SettingRow
+          label="Full inbox"
+          desc={`${notify.unread} unread · ${notify.needsAction} need you · ${notify.history} in History, kept 30 days. Auto-clear lives in the inbox's foot.`}
+        >
+          <button type="button" className="btn-mini" onClick={() => notify.openDrawer()}>
+            Open inbox
+          </button>
+        </SettingRow>
       </Block>
 
       <PageFoot>saves as you change it · rules in this app&apos;s storage, mutes in this home</PageFoot>

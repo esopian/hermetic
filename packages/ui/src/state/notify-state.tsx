@@ -15,13 +15,34 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { hiddenByListening } from "@hermetic/core/shared";
-import { ackNotification, fetchNotifications, muteNotification } from "../api/index.ts";
+import {
+  ackNotification,
+  clearNotifications,
+  fetchNotifications,
+  muteNotification,
+  notificationSettings,
+  snoozeNotifications,
+} from "../api/index.ts";
 import type {
   NotificationMuteView,
+  NotificationSettingsView,
   NotificationSourceView,
   NotificationView,
   NotificationsResult,
 } from "../api/index.ts";
+import {
+  affectedRows,
+  applyVerb,
+  chunkIds,
+  countDelta,
+  inInbox,
+  isCleared,
+  isSnoozed,
+  restoreWrites,
+  verbLabel,
+  verbWrites,
+} from "../logic/inbox-logic.ts";
+import type { DrawerView, InboxVerb, InboxWrite } from "../logic/inbox-logic.ts";
 import {
   TOAST_STACK_MAX,
   defaultPrefs,
@@ -99,17 +120,44 @@ export interface Notify {
   setWatching: (watched: WatchedThread | null) => void;
   ack: (id: string) => Promise<void>;
   /**
-   * Marks several rows read as one gesture.
+   * Marks several rows read as one gesture, in one batch write (`{ ids }`).
    *
-   * The route takes one id or `--all` and nothing in between (`NotificationsAckInput`
-   * insists on exactly one), so this is a loop over the client call rather than
-   * a wider request — a coalesced card in the centre stands for every row in
-   * its run, and acking it has to clear all of them, not just the one drawn.
+   * Not undoable, on purpose: this is what reading does (opening a row, the
+   * chat view catching up, a toast's `mark read`), not a verb the operator
+   * chose from the inbox. The undoable verbs go through `act`.
    */
   ackMany: (ids: readonly string[]) => Promise<void>;
   ackAll: () => Promise<void>;
-  mute: (target: MuteTarget) => Promise<void>;
-  unmute: (target: MuteTarget) => Promise<void>;
+  mute: (target: MuteTarget, options?: { undoable?: boolean }) => Promise<void>;
+  unmute: (target: MuteTarget, options?: { undoable?: boolean }) => Promise<void>;
+  /**
+   * One undoable inbox verb over `rows` — read, unread, clear, restore, snooze,
+   * unsnooze. Applied optimistically, written in batches, and recorded with an
+   * inverse built from the rows' state *before* it (`restoreWrites`), so undo
+   * puts back exactly what was there: a clear of unread rows restores them and
+   * marks them unread again.
+   */
+  act: (verb: InboxVerb, rows: readonly NotificationView[]) => Promise<void>;
+  /** The undo bar's line, while it is showing; `null` otherwise. */
+  undo: UndoBar | null;
+  /** Undoes the most recent verb (`z`). */
+  undoLast: () => Promise<void>;
+  dismissUndo: () => void;
+  /** Server totals for the drawer rail: active snoozes and History rows. */
+  snoozed: number;
+  history: number;
+  /** The rows of the drawer's own views, once `loadView` has read them. */
+  views: { snoozed: NotificationView[] | null; history: NotificationView[] | null };
+  loadView: (view: "snoozed" | "history") => Promise<void>;
+  /** The full inbox drawer (`⇧I`, `Full inbox →`, Settings' `Open inbox`). */
+  drawerOpen: boolean;
+  drawerView: DrawerView;
+  openDrawer: (view?: DrawerView) => void;
+  closeDrawer: () => void;
+  /** Core's auto-clear rule; `null` until `loadSettings` has read it. */
+  settings: NotificationSettingsView | null;
+  loadSettings: () => Promise<void>;
+  saveSettings: (patch: Partial<NotificationSettingsView>) => Promise<void>;
   toasts: Toast[];
   dismissToast: (key: string) => void;
   refresh: () => Promise<void>;
@@ -137,9 +185,52 @@ export interface NotifyApi {
   fetchNotifications: typeof fetchNotifications;
   ackNotification: typeof ackNotification;
   muteNotification: typeof muteNotification;
+  /** Optional so a test about reading and acking need not fake the Inbox v2 writes. */
+  clearNotifications?: typeof clearNotifications;
+  snoozeNotifications?: typeof snoozeNotifications;
+  notificationSettings?: typeof notificationSettings;
 }
 
-const LIVE_API: NotifyApi = { fetchNotifications, ackNotification, muteNotification };
+const LIVE_API: NotifyApi = {
+  fetchNotifications,
+  ackNotification,
+  muteNotification,
+  clearNotifications,
+  snoozeNotifications,
+  notificationSettings,
+};
+
+/** How long the undo bar stays up after a verb. */
+export const UNDO_BAR_MS = 6000;
+
+/** The undo bar's line: `Cleared 4 notifications · kept in History for 30 days`. */
+export interface UndoBar {
+  /** Unique per verb, so the bar's life animation restarts on the next one. */
+  key: number;
+  label: string;
+  sub: string;
+}
+
+/** One entry on the undo stack: the bar's words and the way back. */
+type UndoEntry =
+  | {
+      key: number;
+      label: string;
+      sub: string;
+      kind: "rows";
+      prior: NotificationView[];
+      after: NotificationView[];
+    }
+  | { key: number; label: string; sub: string; kind: "mute"; target: MuteTarget; clear: boolean };
+
+/** An entry before the stack numbers it; distributive, so each arm keeps its own fields. */
+type NewUndoEntry = UndoEntry extends infer E ? (E extends UndoEntry ? Omit<E, "key"> : never) : never;
+
+/** Deep enough to walk back a flurry of verbs, shallow enough not to matter. */
+const UNDO_DEPTH = 20;
+
+/** The longest `setTimeout` a browser honours; a later snooze is re-armed on the next read. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 const NotifyContext = createContext<Notify | null>(null);
 
@@ -187,8 +278,35 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [centerOpen, setCenterOpen] = useState(false);
+  const [centerOpenState, setCenterOpenState] = useState(false);
+  const centerOpen = centerOpenState;
   const [watching, setWatching] = useState<WatchedThread | null>(null);
+  const [snoozed, setSnoozed] = useState(0);
+  const [history, setHistory] = useState(0);
+  const [nextSnoozeAt, setNextSnoozeAt] = useState<string | null>(null);
+  const [views, setViews] = useState<Notify["views"]>({ snoozed: null, history: null });
+  /** Which drawer views have been read, so a settled write re-reads exactly those. */
+  const loadedViews = useRef<Set<"snoozed" | "history">>(new Set());
+  /** Led by a ref for the same reason `items` is (`writeItems` below). */
+  const viewsRef = useRef(views);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerView, setDrawerView] = useState<DrawerView>("inbox");
+  const [settings, setSettings] = useState<NotificationSettingsView | null>(null);
+  const [undo, setUndo] = useState<UndoBar | null>(null);
+  const undoStack = useRef<UndoEntry[]>([]);
+  const undoSeq = useRef(0);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Inbox writes in flight, and a counter bumped as each one starts. A read that
+   * began before a write and lands after it would put the pre-write rows back
+   * over the optimistic ones, so it is dropped — the write's own settle re-reads.
+   */
+  const writesInFlight = useRef(0);
+  const writeEpoch = useRef(0);
+  const setCenterOpen = useCallback((open: boolean) => {
+    setCenterOpenState(open);
+    if (open) setDrawerOpen(false);
+  }, []);
   /**
    * There is no browser permission to hold: the app owns the OS one and raises
    * on the page's behalf (`app.notify`), so the page is always allowed and the
@@ -316,10 +434,14 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   const refresh = useCallback(async () => {
     if (listeningRef.current?.pending.length || listeningRef.current?.loading) return;
     const gen = ++refreshGeneration.current;
+    const epoch = writeEpoch.current;
     setLoading(true);
     try {
       const result: NotificationsResult = await api.fetchNotifications({ limit: INBOX_PAGE });
       if (gen !== refreshGeneration.current) return;
+      // A verb started while this read was out: its rows are newer than the
+      // answer, and its settle is already going to read again.
+      if (epoch !== writeEpoch.current) return;
       // The page the server returned, before this laptop's listening filter:
       // whether the inbox is bigger than one page is the server's fact.
       setTruncated(result.notifications.length >= INBOX_PAGE);
@@ -328,6 +450,11 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       // page while a listening write is pending; re-read after it commits.
       setUnread(result.unread);
       setNeedsAction(result.needs_action);
+      // Inbox v2's totals and the next snooze to wake up; tolerant of a head
+      // that predates them.
+      setSnoozed(typeof result.snoozed === "number" ? result.snoozed : 0);
+      setHistory(typeof result.history === "number" ? result.history : 0);
+      setNextSnoozeAt(result.next_snooze_at ?? null);
       setMutes(result.mutes);
       setError(null);
     } catch (e: unknown) {
@@ -373,6 +500,190 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
     });
   }, [fleet, pushToast, maybeDesktop, accepts, writeItems]);
 
+  const writeMute = useCallback(
+    async (input: MuteTarget, clear: boolean) => {
+      try {
+        const result = await api.muteNotification({ ...input, ...(clear ? { clear: true } : {}) });
+        setMutes(result.mutes);
+        writeItems((prev) => applyMutes(prev, result.mutes));
+        const v = viewsRef.current;
+        const next = {
+          snoozed: v.snoozed ? applyMutes(v.snoozed, result.mutes) : null,
+          history: v.history ? applyMutes(v.history, result.mutes) : null,
+        };
+        viewsRef.current = next;
+        setViews(next);
+        setError(null);
+        // A newly muted target stops toasting, including anything of its own
+        // already on screen: the operator asked for silence, not for silence
+        // starting with the next one.
+        if (!clear) {
+          const targets = new Set(muteTargets(input));
+          setToasts((prev) =>
+            prev.filter(
+              (t) =>
+                !(
+                  (!!t.notification.agent && targets.has(`agent:${t.notification.agent}`)) ||
+                  targets.has(`source:${t.notification.source}`)
+                ),
+            ),
+          );
+        }
+        return true;
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      }
+    },
+    [api, writeItems],
+  );
+
+  /* ── the undo stack ──────────────────────────────────────────────────── */
+
+  const dismissUndo = useCallback(() => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = null;
+    setUndo(null);
+  }, []);
+
+  const pushUndo = useCallback((entry: NewUndoEntry) => {
+    const key = ++undoSeq.current;
+    undoStack.current = [...undoStack.current, { ...entry, key } as UndoEntry].slice(-UNDO_DEPTH);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo({ key, label: entry.label, sub: entry.sub });
+    undoTimer.current = setTimeout(() => {
+      undoTimer.current = null;
+      setUndo(null);
+    }, UNDO_BAR_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+    },
+    [],
+  );
+
+  const mute = useCallback(
+    async (target: MuteTarget, options: { undoable?: boolean } = {}) => {
+      const ok = await writeMute(target, false);
+      if (ok && options.undoable)
+        pushUndo({
+          kind: "mute",
+          target,
+          clear: false,
+          label: `Muted ${target.agent ? `agent ${target.agent}` : `source ${target.source}`}`,
+          sub: "rows still land, silently",
+        });
+    },
+    [writeMute, pushUndo],
+  );
+  const unmute = useCallback(
+    async (target: MuteTarget, options: { undoable?: boolean } = {}) => {
+      const ok = await writeMute(target, true);
+      if (ok && options.undoable)
+        pushUndo({
+          kind: "mute",
+          target,
+          clear: true,
+          label: `Unmuted ${target.agent ?? target.source}`,
+          sub: "",
+        });
+    },
+    [writeMute, pushUndo],
+  );
+
+  /* ── the drawer's own views ──────────────────────────────────────────── */
+
+  const writeViews = useCallback((next: Notify["views"]) => {
+    viewsRef.current = next;
+    setViews(next);
+  }, []);
+
+  const loadView = useCallback(
+    async (view: "snoozed" | "history") => {
+      loadedViews.current.add(view);
+      try {
+        const result = await api.fetchNotifications({ limit: INBOX_PAGE, view });
+        writeViews({ ...viewsRef.current, [view]: result.notifications.filter(accepts) });
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [api, accepts, writeViews],
+  );
+
+  /**
+   * After the last write of a burst settles, read again: the counts, the
+   * History total and anything core's auto-clear sweep moved are the server's
+   * facts, and only a read carries them.
+   */
+  const settle = useCallback(() => {
+    if (writesInFlight.current > 0) return;
+    void refresh();
+    for (const view of loadedViews.current) void loadView(view);
+  }, [refresh, loadView]);
+
+  /** One write, sent through the injected api. */
+  const send = useCallback(
+    async (write: InboxWrite) => {
+      if (write.method === "notifications.ack") {
+        await api.ackNotification(write.input);
+        return;
+      }
+      if (write.method === "notifications.clear") {
+        await (api.clearNotifications ?? clearNotifications)(write.input);
+        return;
+      }
+      await (api.snoozeNotifications ?? snoozeNotifications)(write.input);
+    },
+    [api],
+  );
+
+  const runWrites = useCallback(
+    async (writes: readonly InboxWrite[]) => {
+      if (writes.length === 0) return;
+      writesInFlight.current += 1;
+      writeEpoch.current += 1;
+      try {
+        for (const write of writes) await send(write);
+        setError(null);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        writesInFlight.current -= 1;
+        settle();
+      }
+    },
+    [send, settle],
+  );
+
+  /**
+   * A read, bracketed like every other inbox write. Reading can trigger core's
+   * auto-clear sweep (a resolved row read is cleared), which only a fresh read
+   * shows, so it settles afterwards. It also bumps `writeEpoch`, so a refresh
+   * already in flight cannot answer with the row still unread and flip the
+   * optimistic write back. A failed read puts the error on screen rather than
+   * silently leaving a row the operator believes they read; the settle's read
+   * then puts the row back as the server has it.
+   */
+  const readWrite = useCallback(
+    async (write: () => Promise<unknown>) => {
+      writesInFlight.current += 1;
+      writeEpoch.current += 1;
+      try {
+        await write();
+        setError(null);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        writesInFlight.current -= 1;
+        settle();
+      }
+    },
+    [settle],
+  );
+
   const ack = useCallback(
     async (id: string) => {
       // Optimistic: the row goes read here, and the server's count replaces the
@@ -390,15 +701,9 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
         }),
       );
       if (wasUnread) setUnread((u) => Math.max(0, u - 1));
-      try {
-        await api.ackNotification({ id });
-        setError(null);
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : String(e));
-        void refresh();
-      }
+      await readWrite(() => api.ackNotification({ id }));
     },
-    [api, refresh, writeItems],
+    [api, readWrite, writeItems],
   );
 
   const ackMany = useCallback(
@@ -416,61 +721,155 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
         prev.map((n) => (wanted.has(n.id) && !n.read_at ? { ...n, read_at: at } : n)),
       );
       if (unreadCleared) setUnread((u) => Math.max(0, u - unreadCleared));
-      try {
-        for (const id of wanted) await api.ackNotification({ id });
-        setError(null);
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : String(e));
-        void refresh();
-      }
+      // One write per batch, not one per row: a coalesced card of forty
+      // messages is one gesture and one request (`{ ids }`, 1..500).
+      await readWrite(async () => {
+        for (const ids of chunkIds([...wanted])) await api.ackNotification({ ids });
+      });
     },
-    [api, refresh, writeItems],
+    [api, readWrite, writeItems],
   );
 
   const ackAll = useCallback(async () => {
     const at = new Date().toISOString();
     writeItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: at })));
     setUnread(0);
-    try {
-      await api.ackNotification({ all: true });
-      setError(null);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-      void refresh();
-    }
-  }, [api, refresh, writeItems]);
+    await readWrite(() => api.ackNotification({ all: true }));
+  }, [api, readWrite, writeItems]);
 
-  const writeMute = useCallback(
-    async (input: MuteTarget, clear: boolean) => {
-      try {
-        const result = await api.muteNotification({ ...input, ...(clear ? { clear: true } : {}) });
-        setMutes(result.mutes);
-        writeItems((prev) => applyMutes(prev, result.mutes));
-        setError(null);
-        // A newly muted target stops toasting, including anything of its own
-        // already on screen: the operator asked for silence, not for silence
-        // starting with the next one.
-        if (!clear) {
-          const targets = new Set(muteTargets(input));
-          setToasts((prev) =>
-            prev.filter(
-              (t) =>
-                !(
-                  (!!t.notification.agent && targets.has(`agent:${t.notification.agent}`)) ||
-                  targets.has(`source:${t.notification.source}`)
-                ),
-            ),
-          );
+  /**
+   * Puts `next` into every list that holds these rows, moving each between the
+   * inbox, the snoozed view and History as its new state says, and moves the
+   * badge by what that changed.
+   */
+  const placeRows = useCallback(
+    (next: readonly NotificationView[], now: number) => {
+      const byId = new Map(next.map((n) => [n.id, n]));
+      const before = itemsRef.current.filter((n) => byId.has(n.id));
+      // A row that was not held in the inbox (it came from a drawer view) has
+      // its own prior copy in the views; count against that one.
+      const heldIds = new Set(before.map((n) => n.id));
+      const v = viewsRef.current;
+      for (const n of [...(v.snoozed ?? []), ...(v.history ?? [])])
+        if (byId.has(n.id) && !heldIds.has(n.id)) {
+          before.push(n);
+          heldIds.add(n.id);
         }
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      const delta = countDelta(before, next, now);
+      writeItems((prev) => {
+        const replaced = prev.map((n) => byId.get(n.id) ?? n);
+        const have = new Set(prev.map((n) => n.id));
+        const added = next.filter((n) => !have.has(n.id) && inInbox(n, now));
+        if (added.length === 0) return replaced;
+        return [...replaced, ...added].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      });
+      const place = (
+        list: NotificationView[] | null,
+        belongs: (n: NotificationView) => boolean,
+      ): NotificationView[] | null => {
+        if (list === null) return null;
+        const have = new Set(list.map((n) => n.id));
+        const kept = list.map((n) => byId.get(n.id) ?? n).filter(belongs);
+        const added = next.filter((n) => !have.has(n.id) && belongs(n));
+        return [...kept, ...added].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      };
+      writeViews({
+        snoozed: place(v.snoozed, (n) => !isCleared(n) && isSnoozed(n, now)),
+        history: place(v.history, (n) => isCleared(n) || isResolved(n)),
+      });
+      if (delta.unread) setUnread((u) => Math.max(0, u + delta.unread));
+      if (delta.needs) setNeedsAction((c) => Math.max(0, c + delta.needs));
     },
-    [api],
+    [writeItems, writeViews],
   );
 
-  const mute = useCallback((target: MuteTarget) => writeMute(target, false), [writeMute]);
-  const unmute = useCallback((target: MuteTarget) => writeMute(target, true), [writeMute]);
+  /** The freshest copy this provider holds of each row, else the one passed in. */
+  const freshest = useCallback((rows: readonly NotificationView[]): NotificationView[] => {
+    const held = new Map<string, NotificationView>();
+    const v = viewsRef.current;
+    for (const n of [...(v.history ?? []), ...(v.snoozed ?? []), ...itemsRef.current])
+      held.set(n.id, n);
+    return rows.map((n) => held.get(n.id) ?? n);
+  }, []);
+
+  const act = useCallback(
+    async (verb: InboxVerb, rows: readonly NotificationView[]) => {
+      const now = Date.now();
+      const at = new Date(now).toISOString();
+      const prior = affectedRows(verb, freshest(rows), now);
+      if (prior.length === 0) return;
+      const after = prior.map((n) => applyVerb(n, verb, at));
+      const { label, sub } = verbLabel(verb, prior, now);
+      pushUndo({ kind: "rows", prior, after, label, sub });
+      placeRows(after, now);
+      await runWrites(verbWrites(verb, prior));
+    },
+    [freshest, pushUndo, placeRows, runWrites],
+  );
+
+  const undoLast = useCallback(async () => {
+    const entry = undoStack.current[undoStack.current.length - 1];
+    if (!entry) return;
+    undoStack.current = undoStack.current.slice(0, -1);
+    dismissUndo();
+    if (entry.kind === "mute") {
+      await writeMute(entry.target, !entry.clear);
+      return;
+    }
+    const now = Date.now();
+    const current = freshest(entry.after);
+    placeRows(entry.prior, now);
+    await runWrites(restoreWrites(entry.prior, current, now));
+  }, [dismissUndo, writeMute, freshest, placeRows, runWrites]);
+
+  /* ── the drawer, and core's auto-clear rule ──────────────────────────── */
+
+  const openDrawer = useCallback((view?: DrawerView) => {
+    setCenterOpenState(false);
+    if (view) setDrawerView(view);
+    setDrawerOpen(true);
+  }, []);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+
+  const settingsApi = api.notificationSettings ?? notificationSettings;
+  const loadSettings = useCallback(async () => {
+    try {
+      setSettings(await settingsApi({}));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [settingsApi]);
+  const saveSettings = useCallback(
+    async (patch: Partial<NotificationSettingsView>) => {
+      setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
+      try {
+        setSettings(await settingsApi(patch));
+        setError(null);
+        // The sweep runs on the next read; make that now rather than later.
+        void refresh();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+        void loadSettings();
+      }
+    },
+    [settingsApi, refresh, loadSettings],
+  );
+
+  /**
+   * A snoozed row comes back on its own at `snoozed_until`; the page learns
+   * that by reading again at the earliest one the server reported.
+   */
+  useEffect(() => {
+    if (!nextSnoozeAt) return;
+    const at = Date.parse(nextSnoozeAt);
+    if (Number.isNaN(at)) return;
+    const delay = Math.min(MAX_TIMER_MS, Math.max(0, at - Date.now()) + 250);
+    const t = setTimeout(() => {
+      void refresh();
+      if (loadedViews.current.has("snoozed")) void loadView("snoozed");
+    }, delay);
+    return () => clearTimeout(t);
+  }, [nextSnoozeAt, refresh, loadView]);
 
   /**
    * Nothing to ask for: the app asked the OS when it started, and a page-level
@@ -525,6 +924,21 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       ackAll,
       mute,
       unmute,
+      act,
+      undo,
+      undoLast,
+      dismissUndo,
+      snoozed,
+      history,
+      views,
+      loadView,
+      drawerOpen,
+      drawerView,
+      openDrawer,
+      closeDrawer,
+      settings,
+      loadSettings,
+      saveSettings,
       toasts,
       dismissToast,
       refresh,
@@ -543,12 +957,28 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       prefs,
       setPrefs,
       centerOpen,
+      setCenterOpen,
       watching,
       ack,
       ackMany,
       ackAll,
       mute,
       unmute,
+      act,
+      undo,
+      undoLast,
+      dismissUndo,
+      snoozed,
+      history,
+      views,
+      loadView,
+      drawerOpen,
+      drawerView,
+      openDrawer,
+      closeDrawer,
+      settings,
+      loadSettings,
+      saveSettings,
       toasts,
       dismissToast,
       refresh,

@@ -144,6 +144,8 @@ const BODIES: Record<string, object> = {
   },
 
   "notifications.ack": { all: true },
+  "notifications.clear": { read: true },
+  "notifications.snooze": { ids: ["fxn000000001"], clear: true },
   "notifications.mute": { agent: "ember" },
   "chat.listen": { instance: "ember", listening: true },
   "chat.send": { instance: "ember", bot: "default", message: "hello" },

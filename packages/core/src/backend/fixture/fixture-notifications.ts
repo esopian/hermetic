@@ -31,6 +31,8 @@ export const FIXTURE_NOTIFICATION_IDS = [
   "fxn000000008",
   "fxn000000009",
   "fxn000000010",
+  "fxn000000011",
+  "fxn000000012",
 ] as const;
 
 const MINUTE_MS = 60_000;
@@ -52,6 +54,13 @@ interface FixtureRow extends Omit<NotificationInsert, "id" | "at" | "fleet" | "r
    * listing rather than only after a scan has run and closed something.
    */
   resolved?: true;
+  /**
+   * Set on a row the operator has already taken out of the inbox, so the
+   * History view has something in it from the first open (§4.9).
+   */
+  cleared?: true;
+  /** Set on a row snoozed until this long after the seed, for the Snoozed view. */
+  snoozed_for_ms?: number;
 }
 
 const ROWS: readonly FixtureRow[] = [
@@ -207,6 +216,37 @@ const ROWS: readonly FixtureRow[] = [
     resolved: true,
     actions: [{ label: "Volumes", target: "volumes" }],
   },
+  {
+    /**
+     * Snoozed until tomorrow: out of the inbox and the counts, listed under
+     * `--view snoozed`, and back on its own once the moment passes. Appended
+     * for the same reason as the row above.
+     */
+    ago_ms: 50 * MINUTE_MS,
+    source: "operation",
+    kind: "operation.done",
+    class: "ok",
+    title: "ember reboot finished",
+    detail: "48s",
+    agent: "ember",
+    ref: "fxr000000002",
+    snoozed_for_ms: 20 * HOUR_MS,
+    actions: [{ label: "Details", target: "run", ref: "fxr000000002" }],
+  },
+  {
+    /** Read and cleared: the History view's only row that was never a condition. */
+    ago_ms: 30 * HOUR_MS,
+    source: "operation",
+    kind: "operation.done",
+    class: "ok",
+    title: "corvid stop finished",
+    detail: "12s",
+    agent: "corvid",
+    ref: "fxr000000003",
+    read_at_ago_ms: 29 * HOUR_MS,
+    cleared: true,
+    actions: [{ label: "Details", target: "run", ref: "fxr000000003" }],
+  },
 ];
 
 /**
@@ -229,13 +269,16 @@ export function seedFixtureNotifications(
      * re-seed would re-apply the muted source somebody had just cleared, and
      * `bun run dev:fixture` is a loop somebody runs twenty times an hour.
      */
-    if (store.list({ limit: 1 }, fleet).length > 0) return;
+    // `all`, not the default `inbox`: an operator who has cleared every row
+    // still has a seeded home, and must not be handed the seed again.
+    if (store.list({ limit: 1, view: "all" }, fleet).length > 0) return;
     const at = now();
     ROWS.forEach((row, i) => {
-      const { ago_ms, read_at_ago_ms: read, resolved, ...rest } = row;
+      const { ago_ms, read_at_ago_ms: read, resolved, cleared, snoozed_for_ms, ...rest } = row;
+      const id = FIXTURE_NOTIFICATION_IDS[i] as string;
       store.insert({
         ...rest,
-        id: FIXTURE_NOTIFICATION_IDS[i] as string,
+        id,
         at: new Date(at - ago_ms).toISOString(),
         fleet,
         ...(read === undefined ? {} : { read_at: new Date(at - read).toISOString() }),
@@ -248,6 +291,10 @@ export function seedFixtureNotifications(
        * closing a condition is not the operator having read about it (§4.9).
        */
       if (resolved === true && rest.key != null) store.resolve(rest.key);
+      if (cleared === true) store.clear({ ids: [id] }, fleet);
+      if (snoozed_for_ms !== undefined) {
+        store.snooze({ ids: [id], until: new Date(at + snoozed_for_ms).toISOString() }, fleet);
+      }
     });
     /**
      * One source muted, so the mute filter and the "muted" styling are both on

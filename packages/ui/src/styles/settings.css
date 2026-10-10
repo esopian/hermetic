@@ -751,14 +751,6 @@
   overflow: auto;
 }
 
-/* Notifications: the inbox's own bar, and the rows it holds. */
-.st-view .nt-inbox-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 10px 0;
-}
 .st-mute-add {
   display: flex;
   gap: 8px;

@@ -106,6 +106,18 @@ export const Notification = z.object({
   read_at: Iso.nullish(),
   resolved_at: Iso.nullish(),
   /**
+   * The operator took the row out of the inbox (§4.9). It stays listed under
+   * the `history` view until retention deletes it. Clearing also stamps
+   * `read_at` if the row was unread, so a cleared row never counts as unread.
+   */
+  cleared_at: Iso.nullish(),
+  /**
+   * Hidden from the inbox while this is in the future; it reappears on its own
+   * once the moment passes. Nothing moves the row when it does — the views are
+   * derived from the clock at read time.
+   */
+  snoozed_until: Iso.nullish(),
+  /**
    * Derived at list time by joining the mute table — never stored, because a
    * mute applies to every row an agent or a source has ever raised and a stored
    * copy would be right only until the next `inbox mute`.
@@ -131,16 +143,69 @@ export function chatActionRef(instance: string, bot: string): string {
 export const NotificationMute = z.object({ target: z.string().min(1), at: Iso });
 export type NotificationMute = z.infer<typeof NotificationMute>;
 
+/**
+ * Which slice of the log `notifications.list` returns (§4.9). Derived from the
+ * row's stamps and the clock, never stored:
+ *
+ * - `inbox` — not cleared, and not snoozed into the future.
+ * - `snoozed` — not cleared, and snoozed into the future.
+ * - `history` — cleared, or resolved. A resolved row that nobody has cleared is
+ *   in both `inbox` and `history`: it is still in front of the operator, and it
+ *   is already part of the record.
+ * - `all` — every row, whatever its state (`inbox --view all`).
+ */
+export const NotificationView = z.enum(["inbox", "snoozed", "history", "all"]);
+export type NotificationView = z.infer<typeof NotificationView>;
+
+/** How long a read row stays in the inbox before the sweep clears it (§4.9). */
+export const AutoClearRead = z.enum(["never", "1d", "7d", "30d"]);
+export type AutoClearRead = z.infer<typeof AutoClearRead>;
+
+/**
+ * The inbox's two auto-clear rules. A laptop preference, shared by the CLI and
+ * the app, so it lives in core beside the mutes rather than in the page.
+ */
+export const NotificationSettings = z.object({
+  auto_clear_read: AutoClearRead,
+  clear_resolved_on_read: z.boolean(),
+});
+export type NotificationSettings = z.infer<typeof NotificationSettings>;
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  auto_clear_read: "7d",
+  clear_resolved_on_read: true,
+};
+
 export const NotificationsListResult = z.object({
   notifications: z.array(Notification),
+  /** Unread rows in the inbox view: not resolved, not cleared, not snoozed. */
   unread: z.number().int(),
+  /** The `needs_action` share of `unread`. */
   needs_action: z.number().int(),
+  /** Rows snoozed into the future, in the same scope as the two counts above. */
+  snoozed: z.number().int(),
+  /** Rows in the `history` view, in the same scope. */
+  history: z.number().int(),
+  /**
+   * The earliest `snoozed_until` still in the future, or null. A head that
+   * wants a snoozed row back on time refetches at this moment.
+   */
+  next_snooze_at: Iso.nullable(),
   mutes: z.array(NotificationMute),
 });
 export type NotificationsListResult = z.infer<typeof NotificationsListResult>;
 
 export const NotificationsAckResult = z.object({ acked: z.number().int() });
 export type NotificationsAckResult = z.infer<typeof NotificationsAckResult>;
+
+export const NotificationsClearResult = z.object({ cleared: z.number().int() });
+export type NotificationsClearResult = z.infer<typeof NotificationsClearResult>;
+
+export const NotificationsSnoozeResult = z.object({ snoozed: z.number().int() });
+export type NotificationsSnoozeResult = z.infer<typeof NotificationsSnoozeResult>;
+
+export const NotificationsSettingsResult = NotificationSettings;
+export type NotificationsSettingsResult = z.infer<typeof NotificationsSettingsResult>;
 
 export const NotificationsMuteResult = z.object({ mutes: z.array(NotificationMute) });
 export type NotificationsMuteResult = z.infer<typeof NotificationsMuteResult>;
