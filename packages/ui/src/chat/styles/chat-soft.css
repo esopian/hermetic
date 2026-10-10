@@ -240,7 +240,7 @@
 [data-skin="soft"] .ch-msg {
   border-bottom: 0;
   padding: 16px 26px;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: 14px;
   animation: chrise 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -354,7 +354,7 @@
 [data-skin="soft"] .ch-event {
   border-bottom: 0;
   padding: 7px 26px;
-  grid-template-columns: 36px 1fr auto;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   gap: 14px;
   font-size: 11px;
   color: var(--text-muted);
