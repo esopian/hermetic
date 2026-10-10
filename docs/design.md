@@ -118,7 +118,7 @@ A stream is an RPC open/close pair rather than a connection: the page asks to wa
 
 `bun run dev` starts the desktop app against the real backend; `dev:fixture` and `dev:wizard` start it against the in-memory fixture, the second forcing the init wizard. All three run `hutch run dev …` in `packages/app` through `scripts/dev-app.ts`, which also ends the session when the app is quit, so there is one launcher and no second way to start a head.
 
-Hutch is pinned by `.hutch-version` (0.26.0, Electrobun 2.0.1, Cottontail 0.6.0). `bun run app:prepare` (`hutch electrobun prepare`) materialises the toolchain into `packages/app/.hutch/devkit`, and `scripts/typecheck.ts` refuses to run without it rather than typechecking against a shape it cannot see. A dev run rebuilds the view bundle and restarts the app on a source change; the page is inspected with Safari's Web Inspector, which attaches to the webview directly.
+Hutch is pinned by `.hutch-version` (0.27.1, Electrobun 2.0.1, Cottontail 0.6.0). `bun run app:prepare` (`hutch electrobun prepare`) materialises the toolchain into `packages/app/.hutch/devkit`, and `scripts/typecheck.ts` refuses to run without it rather than typechecking against a shape it cannot see. A dev run rebuilds the view bundle and restarts the app on a source change; the page is inspected with Safari's Web Inspector, which attaches to the webview directly.
 
 `HERMETIC_DEV_SCRIPT` drives a dev-only probe (`packages/app/src/main/dev-probe.ts`): a script the main process runs against the live app, so a flow can be exercised without a person clicking it. It exists only in a dev run.
 
