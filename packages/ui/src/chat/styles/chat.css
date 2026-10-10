@@ -778,17 +778,24 @@
   font-weight: 700;
 }
 
+/* The transcript scrolls vertically only. Anything wider than the column (a
+   code block, a diff, a display equation) scrolls inside its own box; the
+   `minmax(0, 1fr)` tracks on every row below are what keep it in that box. */
 .ch-log {
   flex: 1;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-bottom: 8px;
 }
 
 /* ── a message row ──────────────────────────────────────────────────────── */
 
+/* `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track floors at its content's
+   min-content width, so one unbroken line in a `white-space: pre` code block
+   widened the row, and with it the whole log, by the length of that line. */
 .ch-msg {
   display: grid;
-  grid-template-columns: 34px 1fr;
+  grid-template-columns: 34px minmax(0, 1fr);
   gap: 12px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--line);
@@ -1338,7 +1345,7 @@
 }
 .ch-step {
   display: grid;
-  grid-template-columns: 12px 1fr auto;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   font-size: 12.5px;
@@ -1408,7 +1415,7 @@
 /* A system event line: not a message, but part of the record. */
 .ch-event {
   display: grid;
-  grid-template-columns: 34px 1fr auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 9px 20px;
