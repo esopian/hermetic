@@ -474,6 +474,51 @@ describe("Bot Mode capability probes", () => {
     expect(c.reason).toContain("unauthorized for this session");
     expect(c.profiles).toBe(true);
   });
+  test("a running driver is enough for local rooms when RoomLink is off", async () => {
+    // What a v2026.9.24 gateway without a RoomLink secret answers: the room
+    // service is running, and `persistent_process` comes from the disabled
+    // RoomLink catalog, so it is false.
+    const g = gateway({
+      rpc: async (method) => {
+        if (method === "groups.capabilities")
+          return {
+            ...MODERN_GATEWAY,
+            persistent_process: false,
+            room_link: { enabled: false, reason: "gateway_roomlink_secret_unavailable" },
+          };
+        if (method === "groups.create")
+          return { room: { room_id: "review", name: "Review", members: [] } };
+        return { profiles: [{ name: "default" }, { name: "scribe" }] };
+      },
+    });
+    const c = await g.bots.capabilities({ instance: "atlas" });
+    expect(c.room_driver).toBe(true);
+    expect(c.status.room_driver).toBe("supported");
+    expect(c.detail.room_driver).toBeNull();
+    const room = await g.rooms.create({
+      instance: "atlas",
+      room: "review",
+      name: "Review",
+      members: [
+        { instance: "atlas", bot: "default" },
+        { instance: "atlas", bot: "scribe" },
+      ],
+    });
+    expect(room.id).toBe("review");
+  });
+  test("a stopped driver refuses room work", async () => {
+    const g = gateway({
+      rpc: async (method) => {
+        if (method === "groups.capabilities") return { ...MODERN_GATEWAY, driver: false };
+        return { profiles: [{ name: "default" }, { name: "scribe" }] };
+      },
+    });
+    const c = await g.bots.capabilities({ instance: "atlas" });
+    expect(c.hosted_rooms).toBe(true);
+    expect(c.room_driver).toBe(false);
+    expect(c.status.room_driver).toBe("refused");
+    expect(c.detail.room_driver).toContain("not running");
+  });
   test("an unreachable box is never reported as an unsupported gateway", async () => {
     const g = gateway({
       rpc: async () => {
