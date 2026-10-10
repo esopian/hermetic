@@ -343,7 +343,13 @@ export function createBotMode(
       const version = typeof groups.protocol_version === "number" ? groups.protocol_version : null;
       const hostedStatus = verdict(rooms, version === ROOM_PROTOCOL_VERSION);
       const hosted = hostedStatus === "supported";
-      const driver = hosted && groups.driver === true && groups.persistent_process === true;
+      // `driver` is the whole answer for a room on this instance: it is whether
+      // the gateway's hosted-room service is running, which is the same check
+      // upstream's room handlers make before accepting work. `persistent_process`
+      // is not read here. Upstream copies it out of the RoomLink peer catalog
+      // (`tui_gateway/methods_groups.py` at `v2026.9.24`), so it is false whenever
+      // RoomLink is disabled, which says nothing about local rooms.
+      const driver = hosted && groups.driver === true;
       // A driver claim can only be read off a protocol this build understands,
       // so an unknown hosted-room probe leaves the driver unknown too.
       const driverStatus: S.BotCapabilityStatus =
@@ -382,7 +388,7 @@ export function createBotMode(
           hosted_rooms: hostedReason,
           room_driver: driver
             ? null
-            : (hostedReason ?? "This gateway has no persistent hosted-room driver"),
+            : (hostedReason ?? "This gateway's hosted-room driver is not running"),
         },
         status: {
           profiles: profilesStatus,
@@ -488,7 +494,7 @@ export function createBotMode(
         c.detail.room_driver ??
           c.detail.hosted_rooms ??
           c.reason ??
-          "This gateway has no persistent hosted-room driver",
+          "This gateway's hosted-room driver is not running",
       );
   }
   const rooms = {

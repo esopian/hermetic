@@ -183,7 +183,9 @@ export function withFixtureBotMode(
         return {
           protocol_version: 2,
           driver: true,
-          persistent_process: true,
+          // Upstream reads this off the RoomLink catalog, so with RoomLink off
+          // it is false even though the driver is running.
+          persistent_process: false,
           authority_gateway_id: `fixture-${box.instance}`,
           room_link: { enabled: false, reason: "RoomLink is not configured in fixture mode" },
           max_log_limit: 500,
