@@ -20,7 +20,7 @@ import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
 import { approvalBlock, mapUsage, questionBlock, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
-import { describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
+import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
 
@@ -146,6 +146,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await rpc.request("session.resume", {
         session_id: stored,
         profile: bot,
+        source: HERMETIC_SESSION_SOURCE,
         defer_history: true,
         omit_messages: true,
       }),
@@ -199,7 +200,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (opts.session) {
         session = await resume(rpc, box, bot, opts.session);
       } else {
-        const created = rec(await rpc.request("session.create", { profile: bot }));
+        // Stamped so `session.list` can tell this session from the box's own TUI
+        // (`HERMETIC_SESSION_SOURCE`); `portal` still comes only from the local record.
+        const created = rec(
+          await rpc.request("session.create", { profile: bot, source: HERMETIC_SESSION_SOURCE }),
+        );
         const runtime = str(created?.session_id);
         if (!runtime)
           throw chatError(
@@ -686,6 +691,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
           await rpc.request("session.resume", {
             session_id: stored,
             profile: bot,
+            source: HERMETIC_SESSION_SOURCE,
             lazy: true,
             omit_messages: true,
           }),

@@ -107,7 +107,30 @@ describe("canonical identity", () => {
     expect(result[0]?.session).toBe("root");
     expect(result[1]?.session).toBe("root");
     expect(h.calls.filter((c) => c.method === "session.create")).toHaveLength(1);
+    expect(h.calls.find((c) => c.method === "session.create")?.params).toMatchObject({
+      title: "Bot Chat",
+      source: "hermetic",
+    });
     expect(h.calls.at(-1)?.method).toBe("session.title");
+  });
+  test("a new separate session and a compaction are stamped source: hermetic", async () => {
+    const h = canonicalHarness(async (method) => {
+      if (method === "session.create") return { session_id: "runtime", stored_session_id: "stored" };
+      if (method === "session.title") return { title: "Chat" };
+      if (method === "session.list") return { sessions: [{ id: "root", title: "Bot Chat" }] };
+      if (method === "session.resume") return { session_id: "runtime" };
+      if (method === "session.compress") return { status: "compressed" };
+      throw new Error(method);
+    });
+    await h.service.conversation(box, "default", { new_session: true });
+    await h.service.compact(box, "default");
+    expect(h.calls.find((c) => c.method === "session.create")?.params).toMatchObject({
+      source: "hermetic",
+    });
+    expect(h.calls.find((c) => c.method === "session.resume")?.params).toMatchObject({
+      session_id: "root",
+      source: "hermetic",
+    });
   });
   test("a compressed row is canonical by its root title, as the session list reads it", async () => {
     // `mapSessions` classifies `kind: "canonical"` from `root_title ?? title`;
@@ -314,6 +337,11 @@ describe("pending decision ownership", () => {
     expect(await h.service.respond(box, { ...target, question_id: "question-1" })).toEqual({
       status: "ok",
       remaining: [],
+    });
+    expect(h.calls.find((c) => c.method === "session.resume")?.params).toMatchObject({
+      profile: "research",
+      session_id: "stored",
+      source: "hermetic",
     });
     expect(h.calls.at(-1)).toEqual({
       method: "clarify.lock",

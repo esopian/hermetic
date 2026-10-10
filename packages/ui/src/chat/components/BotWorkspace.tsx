@@ -325,6 +325,8 @@ export function BotWorkspace({
                   selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])
                 }
                 mentionHint="Mention a teammate on this instance; Hermes handles delivery."
+                sessions={chat.sessions}
+                onChooseSession={(session) => select(selection.instance, selection.bot, session)}
               />
             </div>
           </BotResponses.Provider>

@@ -297,7 +297,9 @@ describe("persistent entry frames", () => {
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
     key(input, "Enter");
     expect((await sendable(container)).value).toBe("hello channel");
-    expect(container.querySelector(".ch-composer [role=note]")?.textContent).toContain("#acme-support");
+    expect(container.querySelector(".ch-composer .ch-send.warn")?.textContent).toContain(
+      "Send to #acme-support",
+    );
     expect(h.calls.send).toBe(0);
     key(await sendable(container), "Enter");
     expect(h.calls.send).toBe(1);

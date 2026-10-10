@@ -16,7 +16,7 @@
 
 .ch-ev {
   display: grid;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: 14px;
   padding: 6px 26px;
   scroll-margin: 24px;
@@ -240,7 +240,7 @@
 }
 /* A member of a burst: the burst's own gutter already carries the rule. */
 .ch-ev.sub {
-  grid-template-columns: 12px 1fr;
+  grid-template-columns: 12px minmax(0, 1fr);
   gap: 10px;
   padding: 4px 0;
 }
@@ -274,7 +274,7 @@
 }
 .ch-ev-dm-body {
   display: grid;
-  grid-template-columns: 30px 1fr;
+  grid-template-columns: 30px minmax(0, 1fr);
   gap: 12px;
   padding: 12px 14px;
 }

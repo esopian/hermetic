@@ -405,7 +405,9 @@ export function withFixtureBotMode(
           instance: box.instance,
           bot,
           kind: c?.session === id ? "canonical" : "thread",
-          origin: "portal",
+          // What a real box lists for a session hermetic created: the `source`
+          // it stamped. `portal` is the local record's to grant (`claimLocal`).
+          origin: "hermetic",
           title: c?.session === id ? "Bot Chat" : "Additional chat",
           unread: 0,
           turn_count: (transcripts.get(stored) ?? []).length,

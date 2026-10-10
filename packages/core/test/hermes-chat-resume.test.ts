@@ -317,6 +317,12 @@ describe("hermes-chat · turn continuation", () => {
       "session.events.since",
     ]);
     expect(sinceCalls(h.sockets[1])[0]?.last_seen).toBe(42);
+    // The reattach is stamped like every other door into a session. On resume
+    // upstream applies it to the runtime record only, never the stored origin.
+    expect(h.sockets[1]?.sent.find((s) => s.method === "session.resume")?.params).toMatchObject({
+      session_id: SESSION_ID,
+      source: "hermetic",
+    });
     // The answer reads as one uninterrupted sentence, with nothing said twice.
     expect(deltas(frames)).toEqual(["one ", "two ", "three "]);
     expect(deltas(frames).join("")).toBe("one two three ");

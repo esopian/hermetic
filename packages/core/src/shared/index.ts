@@ -41,6 +41,10 @@ export type { FleetTarget } from "./target.ts";
 // --- Inbox listening rule (§4.6) ------------------------------------------
 export { INSTANCE_NOTIFICATION_SOURCES, hiddenByListening } from "./notifications.ts";
 
+// --- Session origins (§9.2) ---------------------------------------------
+export { SESSION_ORIGIN_NAMES } from "./session-origins.ts";
+export type { SessionOriginName } from "./session-origins.ts";
+
 // --- Background-process events in chat (§9.2) ----------------------------
 export {
   PROCESS_COMMAND_MAX,

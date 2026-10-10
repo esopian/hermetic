@@ -287,13 +287,20 @@ describe("the rail has something to group", () => {
 });
 
 describe("sessions carry where they came from", () => {
-  test("every origin is seeded, so the destination banner has something to fire on", () => {
+  test("every origin is seeded, so the composer has each destination to react to", () => {
     const seen = new Set(FIXTURE_CHAT_SESSIONS.map((s) => s.origin));
     expect([...seen].sort()).toEqual([...SESSION_ORIGINS].sort());
   });
 
+  /**
+   * `hermetic` is the exception, and deliberately detail-less: a real
+   * `session.list` row never names a chat or a job, and that origin is the one
+   * the composer says nothing about, so it is the case that has to read well
+   * with nothing to say.
+   */
   test("a foreign origin says concretely what it was", () => {
-    for (const session of FIXTURE_CHAT_SESSIONS.filter((s) => s.origin !== "portal")) {
+    const foreign = FIXTURE_CHAT_SESSIONS.filter((s) => !["portal", "hermetic"].includes(s.origin));
+    for (const session of foreign) {
       expect(session.origin_detail).toBeTruthy();
     }
   });

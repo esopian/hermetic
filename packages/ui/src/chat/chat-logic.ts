@@ -3,7 +3,7 @@
  *
  * Everything the chat view *decides* lives here rather than in the components
  * that draw it: how the rail groups and orders a fleet's worth of bots, which
- * session origins oblige the composer to restate where a reply is going,
+ * session origins oblige the composer to say what sending will do,
  * whether a card opens closed, which renderer a block reaches, and what a
  * failed turn is called in English. Those are the rules the chat design
  * states in prose — "a green exit code was never news", "gold outranks
@@ -22,11 +22,15 @@
  * about what it says.
  */
 
+import { SESSION_ORIGIN_NAMES } from "@hermetic/core/shared";
+import type { SessionOriginName } from "@hermetic/core/shared";
+
 /* ── the records, as the rules see them ──────────────────────────────────── */
 
 /**
- * `SessionOrigin` in `core/src/schema/chat.ts`, structurally, and widened to
- * `string` at every call site that takes one.
+ * `SessionOrigin` in `core/src/schema/chat.ts`, by name — the same array, from
+ * `@hermetic/core/shared` (the UI may not import the schema door), so the two
+ * cannot drift. Widened to `string` at every call site that takes one.
  *
  * Widened on purpose: the origin travels from a box, through an adapter that
  * explicitly tolerates shapes it has never seen, to here. A build of the portal
@@ -34,17 +38,9 @@
  * name — and must treat it as foreign, because the one thing worse than an
  * unlabelled destination is a wrong label saying "portal".
  */
-export type OriginName = "portal" | "desktop" | "cli" | "routine" | "peer" | "room" | "channel";
+export type OriginName = SessionOriginName;
 
-export const ORIGIN_NAMES: readonly OriginName[] = [
-  "portal",
-  "desktop",
-  "cli",
-  "routine",
-  "peer",
-  "room",
-  "channel",
-];
+export const ORIGIN_NAMES: readonly OriginName[] = SESSION_ORIGIN_NAMES;
 
 export interface BotLike {
   instance: string;
@@ -212,133 +208,25 @@ export function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/* ── origins, and the banner that is a safety feature ────────────────────── */
-
-export interface DestinationNotice {
-  /** The `.ch-band` tone class, one of four. */
-  tone: "acc" | "warn" | "bad";
-  /** The sentence that names what drove the turn. */
-  headline: string;
-  /** Where a reply actually goes, which is the half that is load-bearing. */
-  detail: string;
-  /** The short label on the `.ch-origin` badge; the badge's class is the origin. */
-  badge: string;
-}
-
-/**
- * What the composer must restate above the input, or `null` for a session this
- * portal started.
- *
- * `warn` on the two that leave the tailnet or answer a machine (`channel`,
- * `peer`) and on the one whose reply does not go where the operator is looking
- * (`routine`); `acc` on the three that are still a human on this fleet's own
- * boxes. The notice is never dismissible, so it does not carry an action to
- * dismiss it with — a component that wants "Open room →" gets it from the
- * session, not from here.
- *
- * Callers use `destinationNotice` below rather than this. `portal` — the one
- * value that suppresses the warning — must come from a session that was
- * actually read, and this function cannot tell a read `portal` from a caller
- * that had nothing and defaulted.
- */
-export function originNotice(
-  origin: string,
-  detail: string | null | undefined,
-  /**
-   * Set when the session is `kind: "canonical"` and has zero messages. Upstream
-   * Hermes stamps *every* websocket client `source: "tui"` — its own CLI/TUI
-   * and this portal's own `session.create` for the canonical Bot Chat alike —
-   * so `origin: "cli"` means only "a websocket client this portal did not
-   * record", not specifically a shell. On a freshly created, empty canonical
-   * session that reads as noise (the banner plus a CLI badge over "Nothing
-   * said yet"), so it is suppressed rather than shown.
-   */
-  emptyCanonical?: boolean,
-): DestinationNotice | null {
-  const where = detail?.trim() ? detail.trim() : null;
-  switch (origin) {
-    case "portal":
-      return null;
-    case "desktop":
-      return {
-        tone: "acc",
-        badge: "desktop",
-        headline: "A Hermes Desktop is attached to this session.",
-        detail: "Replying here appears there too — it is one session with two clients.",
-      };
-    case "cli":
-      if (emptyCanonical) return null;
-      return {
-        tone: "acc",
-        badge: "cli",
-        headline:
-          "This session was started by another client — the box's own CLI, or a portal that did not record it.",
-        detail: "Replying here continues it; whoever has that client open sees the answer.",
-      };
-    case "routine":
-      return {
-        tone: "warn",
-        badge: "routine",
-        headline: `A scheduled run drove this turn${where ? ` — ${where}` : ""}.`,
-        detail: "Replying starts a new session. The routine's next run will not see it.",
-      };
-    case "peer":
-      return {
-        tone: "warn",
-        badge: "peer",
-        headline: `Another bot drove this turn${where ? ` — ${where}` : ""}.`,
-        detail: "Replying here answers a robot, not a person.",
-      };
-    case "room":
-      return {
-        tone: "acc",
-        badge: "room",
-        headline: "This turn was driven by the room, not by you.",
-        detail: `Replying here posts into ${where ?? "the room"}, where the other members will see it.`,
-      };
-    case "channel":
-      return {
-        tone: "warn",
-        badge: where ?? "channel",
-        headline: `This session came from a messaging channel${where ? ` — ${where}` : ""}.`,
-        detail: "Replying here leaves the tailnet and is delivered to that channel.",
-      };
-    default:
-      // An origin this build has never heard of. Treated as foreign and said
-      // plainly, because the alternative is labelling it `portal` by omission.
-      return {
-        tone: "warn",
-        badge: origin,
-        headline: `This session came from ${origin}, which this portal did not start.`,
-        detail: "Where a reply is delivered is decided by the box, not by this window.",
-      };
-  }
-}
+/* ── origins, and where a reply goes ─────────────────────────────────────── */
 
 /**
  * What the thread knows about where a reply goes — and the reason the composer
  * takes this rather than a bare origin string.
  *
- * `portal` is the single value that suppresses the destination banner, so it
- * has to be something positively *read* off a session, never something a caller
- * fell back to. The window this closes is real and was a live defect: a bot is
- * selected, the session list is still in flight, `session` is null, and a bare
- * `origin ?? "portal"` renders no band over an enabled composer. Press Enter in
- * that window on a `channel` session and the reply leaves the tailnet and lands
- * in somebody's Slack with nothing having been restated.
+ * `portal` has to be something positively *read* off a session, never something
+ * a caller fell back to. The window this closes is real and was a live defect:
+ * a bot is selected, the session list is still in flight, `session` is null,
+ * and a bare `origin ?? "portal"` renders a plain composer, enabled. Press
+ * Enter in that window on a `channel` session and the reply leaves the tailnet
+ * and lands in somebody's Slack with nothing having said so.
  *
  * So the three not-yet-known states are separate values, and each of them
  * *disables* the composer. Waiting a beat is a cost; sending a message to a
  * destination nobody named is not a cost, it is the failure.
  */
 export type Destination =
-  | {
-      state: "known";
-      origin: string;
-      detail: string | null;
-      /** See `originNotice`'s `emptyCanonical` param — a freshly created, empty canonical session. */
-      emptyCanonical?: boolean;
-    }
+  | { state: "known"; origin: string; detail: string | null }
   /** The session read has not come back yet. */
   | { state: "pending" }
   /**
@@ -351,38 +239,128 @@ export type Destination =
   /** The session read failed, or the box named a session it then did not list. */
   | { state: "unknown"; reason: string };
 
+/** The slim band above a composer that cannot send yet. */
+export interface DestinationNotice {
+  /** The `.ch-band` tone class. */
+  tone: "acc" | "warn" | "bad";
+  /** The one line the band says. */
+  headline: string;
+  /** The short label on the `.ch-origin` badge; the badge's class is `originClass`. */
+  badge: string;
+  /** Hover text, for what does not fit on one line — the read's failure reason. */
+  title?: string;
+}
+
+const detailOf = (dest: Destination): string | null =>
+  dest.state === "known" && dest.detail?.trim() ? dest.detail.trim() : null;
+
 /**
- * The band above the composer, for any of the four states.
+ * The band above the composer, or `null` when there is none — which is every
+ * known destination.
  *
- * A destination that is not known gets a `bad` band and not silence, because
- * silence is indistinguishable from `portal` — and `portal` is the answer this
- * whole mechanism exists to stop the UI from assuming.
+ * A band is now only for a composer that is **blocked**: the session read is
+ * in flight (`pending`), the bot has conversations and none is this portal's
+ * (`unchosen`, which the composer follows with one chip per session), or the
+ * read failed (`unknown`). Each of those disables sending, so the band is the
+ * explanation for a dead button rather than a warning beside a live one. Where
+ * sending *works* but has a consequence, the consequence is on the send button
+ * and the footer (`sendLabel`, `composerHint`), which is where the eye is at
+ * the moment of sending.
+ *
+ * A destination that is not known gets a band and not silence, because silence
+ * is what `portal` looks like — and `portal` is the answer this whole mechanism
+ * exists to stop the UI from assuming.
  */
 export function destinationNotice(dest: Destination): DestinationNotice | null {
-  if (dest.state === "known") return originNotice(dest.origin, dest.detail, dest.emptyCanonical);
-  if (dest.state === "pending") {
-    return {
-      tone: "acc",
-      badge: "reading",
-      headline: "Reading which conversation this is.",
-      detail: "The composer unlocks once the box has said where a reply would go.",
-    };
+  switch (dest.state) {
+    case "known":
+      return null;
+    case "pending":
+      return { tone: "acc", badge: "reading", headline: "Reading which conversation this is." };
+    case "unchosen":
+      return { tone: "warn", badge: "choose", headline: "Reply into" };
+    case "unknown":
+      return {
+        tone: "bad",
+        badge: "unknown",
+        headline: "hermetic could not read where a reply would go.",
+        title: `${dest.reason} Sending is held until it can — a session can be a Slack channel or another bot.`,
+      };
   }
-  if (dest.state === "unchosen") {
-    return {
-      tone: "warn",
-      badge: "choose",
-      headline: `This bot has ${dest.count} conversation${dest.count === 1 ? "" : "s"} and none of them is this portal's.`,
-      detail:
-        "Pick the one to reply into. They go to different places — one of them may leave the tailnet.",
-    };
+}
+
+/**
+ * The send button's text, or `null` for the plain `↵`.
+ *
+ * Set for the three destinations where pressing Enter does something the
+ * operator might not have meant, and always `warn`: a `routine` reply starts a
+ * new session the routine never reads, a `peer` reply answers another bot
+ * rather than a person, and a `channel` reply leaves the tailnet for somebody's
+ * Slack. Those moved off a band and onto the button because the button is the
+ * one thing certainly on screen, and in focus, at the moment of sending — a
+ * band above the input was read once and then scrolled past by habit. An
+ * origin this build does not recognise is treated as consequential too, since
+ * the alternative is labelling it `portal` by omission.
+ *
+ * `portal`, `hermetic`, `cli`, `desktop` and `room` are `null`: a reply there
+ * continues a conversation on this fleet's own boxes, and the header's badge
+ * already says whose. Not-yet-known destinations are `null` as well, because
+ * their composer is disabled and the band says why.
+ */
+export function sendLabel(dest: Destination): { label: string; tone: "warn" } | null {
+  if (dest.state !== "known") return null;
+  const where = detailOf(dest);
+  switch (dest.origin) {
+    case "portal":
+    case "hermetic":
+    case "cli":
+    case "desktop":
+    case "room":
+      return null;
+    case "routine":
+      return { label: "Send · new session", tone: "warn" };
+    case "peer":
+      return { label: `Reply to ${where ?? "another bot"}`, tone: "warn" };
+    case "channel":
+      return { label: `Send to ${where ?? "the channel"}`, tone: "warn" };
+    default:
+      return { label: `Send to ${where ?? dest.origin}`, tone: "warn" };
   }
-  return {
-    tone: "bad",
-    badge: "unknown",
-    headline: "hermetic could not read where a reply would go.",
-    detail: `${dest.reason} Sending is held until it can — a session can be a Slack channel or another bot.`,
-  };
+}
+
+/**
+ * A fragment for the composer's footer, after "over the tailnet · <name>", or
+ * `null`. The text carries no leading separator; the composer joins it.
+ *
+ * `muted` where a reply lands somewhere else as well and nothing is lost by it:
+ * a `desktop` session is also open in Hermes Desktop, and a `room` reply is
+ * read by the room's other members. `warn` beside a send button that already
+ * says what the reply does, for the half the button has no room for: the
+ * `routine` will not see it, and a `channel` reply leaves the tailnet.
+ *
+ * `portal`, `hermetic` and `cli` say nothing. `portal` needs no restating; the
+ * other two mean only "this laptop holds no record of sending into it" — true
+ * of this operator's own session from another Mac, after a wiped database or
+ * after the 30-day prune — so restating them is wrong too often to be worth
+ * the pixels. The header badge still names them.
+ */
+export function composerHint(dest: Destination): { text: string; tone: "muted" | "warn" } | null {
+  if (dest.state !== "known") return null;
+  const where = detailOf(dest);
+  switch (dest.origin) {
+    case "desktop":
+      return { text: "also open in Hermes Desktop", tone: "muted" };
+    case "room":
+      return { text: `posts to ${where ?? "the room"}`, tone: "muted" };
+    case "routine":
+      // No detail here on purpose: a real box names no job, and a fixture
+      // detail like "cron: 06:00 daily digest" does not read as a name.
+      return { text: "the routine will not see this", tone: "warn" };
+    case "channel":
+      return { text: "leaves the tailnet", tone: "warn" };
+    default:
+      return null;
+  }
 }
 
 /** The `.ch-origin` badge class: the origin when it is known, and never `portal` otherwise. */
@@ -391,16 +369,14 @@ export function originClass(dest: Destination): string {
 }
 
 /**
- * Whether this thread may name an origin at all — the one predicate behind both
- * the header's `.ch-origin` badge and the composer's destination band.
+ * Whether this thread may name an origin at all — the predicate behind the
+ * header's `.ch-origin` badge.
  *
  * A canonical Bot Chat with no messages in it has no origin: nothing has been
- * said, so nothing started it. Upstream Hermes still stamps the session
- * `source: "tui"` (see `originNotice`'s `emptyCanonical`), which the portal
- * reads as `cli`, and drawing `● cli` over "Nothing said yet" is a claim about
- * a client that does not exist. The band is already silenced for that case;
- * the badge is the same claim in four characters, so it is silenced by the same
- * test rather than by a second copy of it.
+ * said, so nothing started it. The box still reports the session's `source`
+ * (`hermetic` for one this portal created, `tui` from an older build, which
+ * reads as `cli`), and drawing a badge over "Nothing said yet" is a claim
+ * about a conversation that has not happened.
  */
 export function hasKnownOrigin(
   session: { kind?: string | null } | null | undefined,
@@ -1089,7 +1065,7 @@ export function composerState(
     return { enabled: false, placeholder: "reading which conversation this is…" };
   }
   if (dest.state === "unchosen") {
-    return { enabled: false, placeholder: "pick a conversation in the rail to reply into" };
+    return { enabled: false, placeholder: "pick a conversation above to reply into" };
   }
   if (dest.state === "unknown") {
     return { enabled: false, placeholder: "no destination — hermetic will not guess where this goes" };

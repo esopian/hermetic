@@ -323,6 +323,35 @@ describe("hermes-chat · prompt capability", () => {
     expect(sent[1]?.method).toBe("session.create");
   });
 
+  /**
+   * Upstream stores an explicit `source` verbatim and lists it back on every
+   * `session.list` row; with none, every websocket client is stamped `tui` and
+   * hermetic's sessions read as the box's own terminal. Both doors into a
+   * session carry it.
+   */
+  test("session.create and session.resume both carry source: hermetic", async () => {
+    const created = harness(turnScript(RECORDED_TURN));
+    await collect(createHermesChat(created.deps).send(BOX, "default", "hi"));
+    const create = created.sockets[0]?.sent.find((call) => call.method === "session.create");
+    expect(create?.params).toMatchObject({ profile: "default", source: "hermetic" });
+
+    const resumed = harness({
+      results: {
+        "session.resume": { session_id: "runtime-1", running: false, info: {} },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    const turn = createHermesChat(resumed.deps)
+      .send(BOX, "default", "again", { session: "durable-1" })
+      [Symbol.asyncIterator]();
+    await turn.next();
+    await turn.next();
+    await turn.return?.();
+    const resume = resumed.sockets[0]?.sent.find((call) => call.method === "session.resume");
+    expect(resume?.params).toMatchObject({ session_id: "durable-1", source: "hermetic" });
+    expect(resumed.sockets[0]?.sent.some((call) => call.method === "session.create")).toBe(false);
+  });
+
   test("a gateway that predates the method still runs the turn", async () => {
     const h = harness({
       ...turnScript(RECORDED_TURN),
@@ -1005,6 +1034,7 @@ describe("hermes-chat · abort", () => {
       expect(calls[0]?.params).toEqual({
         session_id: SESSION_ID,
         profile: "research",
+        source: "hermetic",
         lazy: true,
         omit_messages: true,
       });
@@ -1671,6 +1701,13 @@ describe("hermes-chat · the captured roster", () => {
         { id: "h", source: "portal" },
         { id: "i", origin: "portal" },
         { id: "j" },
+        // What hermetic itself stamps on create/resume: some hermetic opened
+        // it, which is foreign — not *this* laptop's `portal`.
+        { id: "k", source: "hermetic" },
+        // The gateway's Platform enum: the box's own CLI, and two channels.
+        { id: "l", source: "local" },
+        { id: "m", source: "matrix" },
+        { id: "n", source: "api_server" },
       ],
     });
     expect(spread.map((row) => row.origin)).toEqual([
@@ -1684,6 +1721,10 @@ describe("hermes-chat · the captured roster", () => {
       "cli",
       "cli",
       "cli",
+      "hermetic",
+      "cli",
+      "channel",
+      "channel",
     ]);
     expect(spread.some((row) => row.origin === "portal")).toBe(false);
   });
@@ -2269,6 +2310,7 @@ describe("hermes-chat · durable addressing", () => {
         params: {
           session_id: "durable-research",
           profile: "research",
+          source: "hermetic",
           defer_history: true,
           omit_messages: true,
         },
@@ -2299,7 +2341,7 @@ describe("hermes-chat · durable addressing", () => {
     const turn = adapter.send(BOX, "research", "hello")[Symbol.asyncIterator]();
     await turn.next();
     await turn.next();
-    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research" });
+    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research", source: "hermetic" });
     expect(await adapter.abort(BOX, "research")).toBe(true);
     expect(h.sockets[1]?.sent[0]?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
     await turn.return?.();
