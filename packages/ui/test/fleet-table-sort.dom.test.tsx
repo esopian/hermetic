@@ -64,7 +64,6 @@ function Host({ agents = FLEET }: { agents?: AgentView[] }) {
       tailnet="acme.ts.net"
       fresh={new Set()}
       volumes={[]}
-      showDestroyed={false}
       selected={null}
       sort={sort}
       onSort={(key) => setSort((s) => nextSort(s, key))}
@@ -169,7 +168,6 @@ describe("FleetTable · the fleet-prefixed cloud hostname", () => {
         fleetId="k7m2x9qa"
         fresh={new Set()}
         volumes={[]}
-        showDestroyed={false}
         selected={null}
         sort={null}
         onSort={() => {}}

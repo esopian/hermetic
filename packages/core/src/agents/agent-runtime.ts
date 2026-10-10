@@ -62,8 +62,8 @@ export interface AgentRuntimeDeps {
   config: LocalConfig | null;
   /** Overrides the actor ARN from STS; only tests should pass this. */
   actor?: string | undefined;
-  /** `attach.ts`'s poll and progress cadence; tests shrink both. */
-  attach?: { pollMs?: number; progressMs?: number } | undefined;
+  /** `attach.ts`'s poll and progress cadence, and destroy's tailnet wait; tests shrink all three. */
+  attach?: { pollMs?: number; progressMs?: number; tailnetOfflineMs?: number } | undefined;
   /** The post-handoff watch's budget and poll (`handoff.ts`); off by default. */
   handoff?: { budgetMs?: number; pollMs?: number } | undefined;
 }
@@ -242,6 +242,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
       now: () => backend.clock.now().getTime(),
       pollMs: deps.attach?.pollMs,
       progressMs: deps.attach?.progressMs,
+      tailnetOfflineMs: deps.attach?.tailnetOfflineMs,
     };
   }
 

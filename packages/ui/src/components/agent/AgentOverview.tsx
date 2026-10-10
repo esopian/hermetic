@@ -136,6 +136,23 @@ export function eventLine(e: AgentEvent): string {
   return `[${fmtClock(e.timestamp)}] ${e.actor} ${e.action}${move}${e.detail ? ` ${e.detail}` : ""}`;
 }
 
+/**
+ * A whole event log as text, one `eventLine` each, with a failed stage's log
+ * tail indented under its own headline: the event line says which step broke,
+ * these lines say why, and the whole log is still on the box (§4.2). Shared by
+ * the drawer's Logs activity source and the Destroyed lens's history.
+ */
+export function eventsText(events: readonly AgentEvent[]): string {
+  if (events.length === 0) return "— no recorded events —";
+  return events
+    .map((e) => {
+      const head = eventLine(e);
+      if (!e.log_tail) return head;
+      return [head, ...e.log_tail.split("\n").map((line) => `    ${line}`)].join("\n");
+    })
+    .join("\n");
+}
+
 export interface HistoryState {
   events: AgentEvent[] | null;
   historyLoading: boolean;

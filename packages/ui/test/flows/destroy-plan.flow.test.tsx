@@ -216,7 +216,7 @@ describe("the destroy confirmation, over a real head", () => {
      * plan it would apply is no longer the plan the operator read. The button
      * goes dead again until the new one lands.
      */
-    await user.click(within(confirm).getByRole("radio", { name: /Delete data volume/ }));
+    await user.click(within(confirm).getByRole("radio", { name: /Keep volume/ }));
     await waitFor(() => {
       expect(within(confirm).getByRole("button", { name: "Destroy" }).hasAttribute("disabled")).toBe(
         true,

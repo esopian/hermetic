@@ -63,7 +63,6 @@ export function FleetTable({
   fleetId,
   fresh,
   volumes,
-  showDestroyed,
   selected,
   sort,
   onSort,
@@ -84,7 +83,6 @@ export function FleetTable({
   fleetId?: string | null;
   fresh: Set<string>;
   volumes: VolumeView[];
-  showDestroyed: boolean;
   selected: string | null;
   /**
    * Owned by the app shell, not by this table: the board and the triage view
@@ -98,7 +96,7 @@ export function FleetTable({
   onSeeVolumes: () => void;
 }) {
   const listening = useListeningIfAvailable();
-  const board = boardVolumes(volumes, agents, showDestroyed);
+  const board = boardVolumes(volumes, agents);
   const loose = board.shown;
   const looseGib = loose.reduce((n, v) => n + v.size_gib, 0) + board.overflow.gib;
   const looseCost = loose.reduce((n, v) => n + v.monthly_cost_usd, 0) + board.overflow.monthly;

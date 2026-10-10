@@ -19,7 +19,7 @@ import type { AgentLogLine, AgentLogQuery, AgentView } from "../../api/index.ts"
 import { fmtClock, isOff } from "../../logic/format.ts";
 import { InlineScan } from "../Loading.tsx";
 import type { HistoryState } from "./AgentOverview.tsx";
-import { eventLine } from "./AgentOverview.tsx";
+import { eventsText } from "./AgentOverview.tsx";
 
 /** Where a read comes from. `activity` is the history; `console` needs only EC2; the rest need the box. */
 export interface LogSourceOption {
@@ -153,21 +153,7 @@ export function AgentLogs({ agent, history }: { agent: AgentView; history: Histo
   let body: string | null = null;
   if (source.id === "activity") {
     const events = history.events;
-    body =
-      events === null
-        ? null
-        : events.length === 0
-          ? "— no recorded events —"
-          : events
-              .map((e) => {
-                // A failed stage's log tail, indented under its own headline:
-                // the event line says which step broke, these lines say why,
-                // and the whole log is still on the box (§4.2).
-                const head = eventLine(e);
-                if (!e.log_tail) return head;
-                return [head, ...e.log_tail.split("\n").map((line) => `    ${line}`)].join("\n");
-              })
-              .join("\n");
+    body = events === null ? null : eventsText(events);
   } else if (read.state === "ok") {
     body =
       read.lines.length === 0

@@ -978,7 +978,7 @@ describe("agents.create --rollback-on-failure", () => {
     // Both prefixes really had something in them: an assertion that a prefix is
     // empty passes just as well when nothing was ever written to it.
     expect(backend.mutations).toContain("secrets.deleteByPrefix");
-    expect(backend.mutations).toContain("artifacts.deleteByPrefix");
+    expect(backend.mutations).toContain("artifacts.purgeByPrefix");
     expect(await backend.artifacts.list("config/atlas/")).toEqual([]);
 
     // Events are never deleted (§6.6): the history says the run failed and that
@@ -1222,7 +1222,7 @@ describe("agents.create --rollback-on-failure", () => {
     for (const m of [
       "compute.deleteVolume",
       "secrets.deleteByPrefix",
-      "artifacts.deleteByPrefix",
+      "artifacts.purgeByPrefix",
       "store.agents.delete",
     ]) {
       expect(backend.mutations).not.toContain(m);
@@ -1260,7 +1260,7 @@ describe("agents.create --rollback-on-failure", () => {
       "compute.terminate",
       "compute.deleteVolume",
       "secrets.deleteByPrefix",
-      "artifacts.deleteByPrefix",
+      "artifacts.purgeByPrefix",
       "store.agents.delete",
     ]) {
       expect(backend.mutations).not.toContain(m);

@@ -13,54 +13,52 @@ export interface Counts {
   busy: number;
   stopped: number;
   unreachable: number;
-  destroyed: number;
 }
 
 /**
- * `isOff` is true for both `stopped` and `destroyed` (they share a color), but
- * the dashboard treats them very differently — a destroyed agent is history,
- * not a machine you can start — so every bucket below tests this first.
+ * A destroy deletes the agent's row (§6.7), and `agents.list` drops any legacy
+ * `destroyed` row a fleet still holds, so the fleet never carries destroyed
+ * agents: they are reviewed on the Destroyed lens, from their tombstones. The
+ * checks on this below are a cheap guard, not a live path.
  */
 function isDestroyed(a: AgentView): boolean {
   return a.display_status === "destroyed";
 }
 
-/** The fleet minus its tombstones — what the dashboard shows by default. */
+/** The fleet minus any `destroyed` row — a guard only, since `agents.list` returns none. */
 export function withoutDestroyed(agents: AgentView[]): AgentView[] {
   return agents.filter((a) => !isDestroyed(a));
 }
 
 /**
- * Deselect only when the *toggle* closes over a destroyed agent. Keying on the
- * agent's status alone would slam the drawer shut the moment a `destroy` op
- * wrote its final transition — which lands before the op's `done` event — so
- * the operator would lose the progress bar and any late failure at ~95%.
+ * Close the drawer when the agent it names is gone from the fleet — a destroy
+ * that finished releases the row, so the next scan simply lacks the name.
+ *
+ * Only once a scan has landed: while the fleet is still loading, "not in the
+ * fleet" means "not read yet", and deselecting then would drop a perfectly
+ * good `#agent/<name>` link on every cold start. A link to a destroyed agent
+ * closes too: the list never carries one, legacy or not.
  */
 export function shouldDeselect(
-  prevShow: boolean,
-  nextShow: boolean,
-  selectedStatus: string | null,
+  scanned: boolean,
+  selected: string | null,
+  byName: ReadonlyMap<string, AgentView>,
 ): boolean {
-  return prevShow && !nextShow && selectedStatus === "destroyed";
+  if (!scanned || selected === null) return false;
+  return !byName.has(selected);
 }
 
 export function countsOf(agents: AgentView[]): Counts {
   const c: Counts = {
-    // The headline is the fleet you are running: destroyed rows are history and
-    // are carried by `destroyed` alone.
     total: 0,
     ready: 0,
     degraded: 0,
     busy: 0,
     stopped: 0,
     unreachable: 0,
-    destroyed: 0,
   };
   for (const a of agents) {
-    if (isDestroyed(a)) {
-      c.destroyed += 1;
-      continue;
-    }
+    if (isDestroyed(a)) continue;
     c.total += 1;
     if (a.display_status === "ready") c.ready += 1;
     else if (a.display_status === "degraded") c.degraded += 1;
@@ -71,32 +69,13 @@ export function countsOf(agents: AgentView[]): Counts {
   return c;
 }
 
-/**
- * The empty-state line under an empty fleet view.
- *
- * `hiddenDestroyed` is the number of destroyed rows the toggle is hiding *that
- * match the current query* — so a search for a destroyed agent by name says
- * where it went instead of flatly denying it exists, which the fleet's own
- * history (§6.6) would contradict.
- */
+/** The empty-state line under an empty fleet view. */
 export function emptyHint(opts: {
-  /** Every row the fleet holds, destroyed included. */
+  /** Live agents in the fleet. */
   total: number;
   query: string;
-  hiddenDestroyed: number;
 }): string {
   if (opts.total === 0) return "no agents in this fleet · press n to create one";
-  const q = opts.query.trim();
-  const n = opts.hiddenDestroyed;
-  if (n > 0) {
-    const agents = `${n} destroyed agent${n === 1 ? "" : "s"}`;
-    if (q) {
-      return `nothing matches “${opts.query}” among live agents · ${agents} ${
-        n === 1 ? "matches" : "match"
-      } — use the toolbar to show them`;
-    }
-    return `${agents} hidden — use the toolbar to show them`;
-  }
   return `nothing matches “${opts.query}”`;
 }
 
@@ -161,7 +140,6 @@ const STATUS_RANK: Record<string, number> = {
   destroying: 6,
   ready: 7,
   stopped: 8,
-  destroyed: 9,
 };
 
 /**
@@ -309,23 +287,19 @@ export interface TriageGroup {
   items: AgentView[];
 }
 
-export function triageGroups(
-  agents: AgentView[],
-  latest: string | null,
-  showDestroyed = false,
-): TriageGroup[] {
-  const attention = agents.filter(
+export function triageGroups(agents: AgentView[], latest: string | null): TriageGroup[] {
+  const live = withoutDestroyed(agents);
+  const attention = live.filter(
     (a) =>
       a.display_status === "degraded" ||
       a.display_status === "unreachable" ||
       a.display_status === "error" ||
       (!isOff(a) && !isBusy(a) && isBehind(a, latest)),
   );
-  const progress = agents.filter((a) => isBusy(a));
-  const healthy = agents.filter((a) => a.display_status === "ready" && !isBehind(a, latest));
-  const stopped = agents.filter((a) => isOff(a) && !isDestroyed(a));
-  const destroyed = agents.filter(isDestroyed);
-  const groups: TriageGroup[] = [
+  const progress = live.filter((a) => isBusy(a));
+  const healthy = live.filter((a) => a.display_status === "ready" && !isBehind(a, latest));
+  const stopped = live.filter((a) => isOff(a));
+  return [
     {
       key: "attention",
       label: "attention",
@@ -355,17 +329,4 @@ export function triageGroups(
       items: stopped,
     },
   ];
-  // Last, and only while the toggle is on — where it behaves like every other
-  // group, `— none —` and all. Gating on `destroyed.length` instead would make
-  // the group appear and vanish under a live fleet as rows come and go.
-  if (showDestroyed) {
-    groups.push({
-      key: "destroyed",
-      label: "destroyed",
-      color: "var(--fg3)",
-      hint: "Record kept; instance gone, data volume retained.",
-      items: destroyed,
-    });
-  }
-  return groups;
 }

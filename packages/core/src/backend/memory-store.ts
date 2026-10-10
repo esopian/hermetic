@@ -3,8 +3,13 @@
  * `memory.ts` (AGENTS.md rule 5). Reads and writes the backend's own maps and
  * records every mutation through it, exactly as the in-class literal did.
  */
-import type { Agent, AgentEvent, FleetItem, FleetSettings } from "../schema/index.ts";
-import { FLEET_KEY } from "../schema/index.ts";
+import type { Agent, AgentEvent, AgentTombstone, FleetItem, FleetSettings } from "../schema/index.ts";
+import {
+  FLEET_KEY,
+  tombstoneNamePrefix,
+  tombstoneSortKey,
+  tombstonesNewestFirst,
+} from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import type {
   AgentPatch,
@@ -77,8 +82,37 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
        * `doctor` reports it.
        */
       unparseable: (): string[] => [...b.unparseableRows],
-      delete: async (name: string): Promise<void> => {
+      /**
+       * As the real store: conditional on `expectedVersion` and
+       * `expectedCreatedAt` when given — one incarnation at one version — and
+       * a no-op when gone.
+       */
+      delete: async (
+        name: string,
+        opts?: { expectedVersion: number; expectedCreatedAt: string },
+      ): Promise<void> => {
         b.record("store.agents.delete");
+        const current = b.agents.get(name);
+        if (!current) return;
+        if (
+          opts !== undefined &&
+          (current.version !== opts.expectedVersion || current.created_at !== opts.expectedCreatedAt)
+        ) {
+          const replaced = current.created_at !== opts.expectedCreatedAt;
+          throw new HermeticError(
+            "CONFLICT",
+            replaced
+              ? `agent ${name} is a different incarnation now (created ${current.created_at}, expected ${opts.expectedCreatedAt}); the record was not deleted`
+              : `agent ${name} changed underneath this operation (expected version ${opts.expectedVersion}, found ${current.version}); the record was not deleted`,
+            {
+              name,
+              expected: opts.expectedVersion,
+              actual: current.version,
+              expected_created_at: opts.expectedCreatedAt,
+              actual_created_at: current.created_at,
+            },
+          );
+        }
         b.agents.delete(name);
       },
     },
@@ -92,6 +126,30 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
           .filter((e) => e.name === name)
           .sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0));
         return structuredClone(limit === undefined ? rows : rows.slice(0, limit));
+      },
+      appendTombstone: async (tombstone: AgentTombstone): Promise<void> => {
+        b.record("store.events.appendTombstone");
+        b.tombstones.set(
+          tombstoneSortKey(tombstone.name, tombstone.destroyed_at),
+          structuredClone({ ...tombstone, legacy: false }),
+        );
+      },
+      /**
+       * The real store's two reads (`DynamoEventStore.queryTombstones`): with
+       * a name, the keys under its prefix — separator included, exactly the
+       * `begins_with` key condition — in reverse key order; without one, the
+       * whole partition sorted by `destroyed_at`, and only then limited.
+       */
+      queryTombstones: async (opts?: { name?: string; limit?: number }): Promise<AgentTombstone[]> => {
+        const name = opts?.name;
+        const rows =
+          name === undefined
+            ? [...b.tombstones.values()].sort(tombstonesNewestFirst)
+            : [...b.tombstones.entries()]
+                .filter(([key]) => key.startsWith(tombstoneNamePrefix(name)))
+                .sort(([a], [c]) => (a < c ? 1 : a > c ? -1 : 0))
+                .map(([, t]) => t);
+        return structuredClone(opts?.limit === undefined ? rows : rows.slice(0, opts.limit));
       },
     },
     fleet: {

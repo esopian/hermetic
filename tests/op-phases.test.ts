@@ -84,8 +84,9 @@ describe("the lifecycle rails are core's phases", () => {
   test("destroy", async () => {
     const emitted = await phasesOf(seeded().agents.destroy({ name: "atlas", yes: true }));
     // The bootstrap in reverse: the box, its tailnet device, its secrets, its
-    // config objects, then the volume it is allowed to keep (§6.7).
-    expect(emitted).toEqual(["instance", "tailnet", "secrets", "config", "volume", "done"]);
+    // config objects, the volume (deleted unless kept), then the row itself —
+    // tombstone written, record deleted, name free (§6.7).
+    expect(emitted).toEqual(["instance", "tailnet", "secrets", "config", "volume", "release", "done"]);
     pin("destroy", emitted);
   });
 

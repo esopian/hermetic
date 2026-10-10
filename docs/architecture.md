@@ -30,7 +30,7 @@ flowchart LR
 
 **core** (`packages/core/src/`). The root holds the SDK's entry points: `open.ts` (`openHermetic`/`openForInit`, fleet and directory-region resolution; every head starts here), `hermetic.ts` (assembles the SDK; ~570 lines of wiring), `context.ts` (`CoreContext` — the one object every long operation takes: backend, clock, actor, guards, TTL locks, the §4.3 `transition()`, event and render helpers — built once from `agents/agent-runtime.ts`), `surface.ts` (the parity declaration: `PUBLIC_METHODS`, `STREAMING_METHODS`, the two schema tables — a contract kept apart from the code it constrains), `hermetic-deps.ts` (the public `HermeticDeps` contract) and `reads.ts` (list/get/history/config reads). Everything else is grouped by concern; each long operation is a module taking `{ ctx, ...its own few deps }`:
 
-- `agents/` — lifecycle (`lifecycle.ts` + `lifecycle/` create, recreate, adopt-volume, release, recorded-instance), destroy, power, update, rollback, rollout, attach, handoff, archive, logs, desktop, probe, `agent-set.ts` (`agents.set`), `plans.ts` + `plan-apply.ts`, `state.ts` (the §4.3 machine).
+- `agents/` — lifecycle (`lifecycle.ts` + `lifecycle/` create, recreate, adopt-volume, release, release-name, recorded-instance), destroy, power, update, rollback, rollout, attach, handoff, archive, logs, desktop, probe, `agent-set.ts` (`agents.set`), `plans.ts` + `plan-apply.ts`, `state.ts` (the §4.3 machine).
 - `fleet/` — fleets, selection and locks, `init.ts` + `init-*.ts` (create/attach branches, freeze, directory, narrated CFN wait, release step), `foundation/` (status, plan, update, change-set, release, rollout) + `foundation-migrations.ts`, network, policy, doctor, teardown, preflight, skew, legacy params, tailnet devices, hujson.
 - `release/` — `artifacts.ts` + `artifacts-release.ts`/`artifacts-manifest.ts` (where this build's release comes from; the fleet manifest and its lock), the Hermes and browser mirrors, git, tar; `build-versions.ts` at the root says what this build ships (`hermeticd`, `hermes_ref`, `chrome_ref`).
 - `render/` — `render.ts` fanning out to `render-hermes.ts`, `render-system.ts`, `render-units.ts`, `render-browser.ts`, plus cloud-init and create defaults; `schema/hermes.ts` (`splitHermesSettings`) decides which Hermes settings are managed on every apply versus seeded once.
@@ -55,7 +55,7 @@ The chat stack (§9.2) has two layers. `chat/hermes/hermes-chat.ts` is the Herme
 Everything core can do to the outside world is one interface (`packages/core/src/backend/types.ts`), grouped to mirror §4.1's stores plus the two things that are neither a store nor CloudFormation:
 
 - `identity` — STS/IAM/Organizations reads (caller identity, account alias, org id)
-- `store` — `agents` (conditional-write DynamoDB table), `events` (append-only), `fleet` (the `_fleet` singleton row)
+- `store` — `agents` (conditional-write DynamoDB table), `events` (append-only; also holds the `_destroyed` tombstone partition, §4.2), `fleet` (the `_fleet` singleton row)
 - `secrets` — SSM slot lifecycle (`ensureSlot`/`put`/`exists`/`isPlaceholder`/`list`/`deleteByPrefix`)
 - `artifacts` — S3 (`putObject`/`exists`/`getText`/`deleteByPrefix`/`emptyBucket`/`presign`)
 - `compute` — EC2 (volumes, instances, the security-group inbound check, AMI resolution, `listManagedInstances`)

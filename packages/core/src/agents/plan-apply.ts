@@ -94,11 +94,25 @@ export function createApply(deps: ApplyDeps) {
          * dies (§6.7).
          */
         const expected = await plans.assertCurrent(plan);
+        /**
+         * §6.7 turned the volume default around: a plan written before it
+         * carried `delete_volume`, which the schema now drops, and a missing
+         * `keep_volume` would read as "delete" — destroying a disk the plan
+         * the operator reviewed said to keep. `plans.ts` always writes the
+         * boolean, so its absence can only mean an older plan.
+         */
+        if (plan.options.keep_volume === undefined) {
+          throw new HermeticError(
+            "PLAN_STALE",
+            `this destroy plan predates the current build of hermetic and does not say whether to keep ${plan.target}'s data volume (destroy now deletes it by default); run \`hermetic plan destroy ${plan.target}\` again, with --keep-volume to keep it`,
+            { kind: plan.kind, target: plan.target },
+          );
+        }
         yield* destroy(
           {
             name: validateName(plan.target),
             yes: true,
-            delete_volume: plan.options.delete_volume === true,
+            keep_volume: plan.options.keep_volume,
           },
           opts,
           expected,

@@ -17,7 +17,11 @@ function seeded() {
   return { backend, hermetic: testHermetic({ backend, config: FIXTURE_CONFIG }) };
 }
 
-/** The destroyed fixture agent's kept data volume — the reclaimable case (§6.6). */
+/**
+ * The destroyed fixture agent's kept data volume — the reclaimable case. No row
+ * names it: `oriole` is a tombstone, and the volume carries
+ * `hermetic:former_agent=oriole` and no `agent` tag (§6.7).
+ */
 const ORIOLE = "vol-fixture00000000012";
 /** A volume whose agent row is gone entirely, not merely destroyed. */
 const NO_ROW = "vol-fixture0000000dorado";
@@ -28,6 +32,23 @@ const GROVE_B = "vol-fixture000000groveb";
 const ATTACHED = "vol-fixture00000000001";
 /** `juniper` is stopped: free, but a live row still owns it. */
 const OWNED = "vol-fixture00000000008";
+
+/**
+ * A legacy `destroyed` row naming `ORIOLE`, as a pre-tombstone destroy left
+ * one (§6.7). The fixture models only the new world, so a test about the old
+ * one makes it.
+ */
+function legacyOriole(backend: MemoryBackend, name = "oriole"): void {
+  const base = structuredClone(backend.agents.get("juniper")!);
+  backend.agents.set(name, {
+    ...base,
+    name,
+    status: "destroyed",
+    instance_id: null,
+    volume_id: ORIOLE,
+    resources: { volume_id: ORIOLE, ssm_paths: [] },
+  });
+}
 
 async function groupOf(volumeId: string): Promise<string> {
   const { hermetic } = seeded();
@@ -53,7 +74,7 @@ describe("volumes.list groups by who is reading a volume", () => {
     expect(await groupOf(OWNED)).toBe("detached");
   });
 
-  test("no_agent: the row is destroyed, so nothing is reading it", async () => {
+  test("no_agent: the agent was destroyed, so nothing is reading it", async () => {
     expect(await groupOf(ORIOLE)).toBe("no_agent");
   });
 
@@ -139,7 +160,8 @@ describe("volumes.get", () => {
   test("carries the tags and the snapshots", async () => {
     const { hermetic } = seeded();
     const detail = await hermetic.volumes.get({ volume_id: ORIOLE });
-    expect(detail.tags["agent"]).toBe("oriole");
+    expect(detail.tags["agent"]).toBeUndefined();
+    expect(detail.tags["hermetic:former_agent"]).toBe("oriole");
     expect(detail.tags["hermetic:managed"]).toBe("true");
     expect(detail.snapshot_list.length).toBe(detail.snapshots);
   });
@@ -289,8 +311,9 @@ describe("volumes.delete", () => {
     const { backend, hermetic } = seeded();
     await hermetic.volumes.delete({ volume_id: ORIOLE, yes: true });
     expect(backend.volumes.has(ORIOLE)).toBe(false);
-    // The row itself is untouched: events survive, and so does the record (§4.3).
-    expect((await backend.store.agents.get("oriole"))?.status).toBe("destroyed");
+    // The record is untouched: the tombstone and the events survive (§6.7).
+    expect((await backend.store.events.queryTombstones({ name: "oriole" })).length).toBe(1);
+    expect((await backend.store.events.query("oriole")).length).toBeGreaterThan(0);
   });
 });
 
@@ -315,7 +338,9 @@ describe("agents.create --volume", () => {
     await drain(hermetic.agents.create({ name: "cinder-2", volume_id: ORIOLE }));
     const events = await backend.store.events.query("cinder-2");
     const adopted = events.find((e) => e.action === "volume");
-    expect(adopted?.detail).toContain("agent=oriole");
+    // The disk carried no `agent` tag — a destroy released it from the name and
+    // left `former_agent=oriole` in its place, which is what the event names.
+    expect(adopted?.detail).toContain("former_agent=oriole");
     expect(adopted?.detail).toContain("agent=cinder-2");
   });
 
@@ -374,13 +399,23 @@ describe("agents.create --volume", () => {
     expect(backend.mutations).not.toContain("compute.runInstance");
   });
 
-  test("a destroyed agent's name is still taken, whatever its volume says", async () => {
-    const { hermetic } = seeded();
-    // §4.3: `destroyed` is terminal and the row is kept forever, so reclaiming
-    // oriole's memory means giving the new agent a different name.
-    expect(await codeOf(drain(hermetic.agents.create({ name: "oriole", volume_id: ORIOLE })))).toBe(
-      "NAME_TAKEN",
-    );
+  test("a destroyed agent's name is free again, and may adopt its kept volume on purpose", async () => {
+    const { backend, hermetic } = seeded();
+    // §6.7: the destroy released the name, and the kept disk is adoptable
+    // only by naming it — which this does.
+    await drain(hermetic.agents.create({ name: "oriole", volume_id: ORIOLE }));
+    expect((await backend.store.agents.get("oriole"))?.resources.volume_id).toBe(ORIOLE);
+    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    expect(backend.volumes.get(ORIOLE)?.former_agent ?? null).toBeNull();
+  });
+
+  test("a plain create of a destroyed name does not find its kept volume", async () => {
+    const { backend, hermetic } = seeded();
+    await drain(hermetic.agents.create({ name: "oriole" }));
+    const row = (await backend.store.agents.get("oriole"))!;
+    expect(row.resources.volume_id).not.toBe(ORIOLE);
+    expect(backend.volumes.get(ORIOLE)?.agent ?? null).toBeNull();
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
   });
 
   /**
@@ -389,9 +424,9 @@ describe("agents.create --volume", () => {
    * agent that no longer exists, waiting to be silently inherited by the next
    * create under that name (§1).
    */
-  test("a rollback puts an adopted volume's agent tag back", async () => {
+  test("a rollback puts an adopted volume's tags back", async () => {
     const { backend, hermetic } = seeded();
-    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
     backend.compute.runInstance = async () => {
       throw new HermeticError("INTERNAL", "RunInstances exploded");
     };
@@ -400,7 +435,8 @@ describe("agents.create --volume", () => {
       drain(hermetic.agents.create({ name: "cinder-2", volume_id: ORIOLE, rollback_on_failure: true })),
     );
 
-    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    expect(backend.volumes.get(ORIOLE)?.agent ?? null).toBeNull();
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
     expect(backend.volumes.has(ORIOLE)).toBe(true);
     // And the row is gone, so nothing at all is left claiming oriole's memory.
     expect(await backend.store.agents.get("cinder-2")).toBeNull();
@@ -436,10 +472,10 @@ describe("agents.create --volume", () => {
       drain(hermetic.agents.create({ name: "cinder-2", volume_id: ORIOLE, rollback_on_failure: true })),
     );
 
-    // Given back to the row that still names the disk — a destroyed row is kept
-    // forever and goes on naming its volume (§4.3), so this is a fact rather
-    // than a guess.
-    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    // Given back to the agent the tombstone says kept the disk (§6.7) — a fact
+    // rather than a guess — and as `former_agent`, never as `agent`.
+    expect(backend.volumes.get(ORIOLE)?.agent ?? null).toBeNull();
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
     expect(backend.volumes.has(ORIOLE)).toBe(true);
     expect(await backend.store.agents.get("cinder-2")).toBeNull();
   });
@@ -501,7 +537,7 @@ describe("agents.create --volume", () => {
     expect(backend.mutations).not.toContain("compute.runInstance");
     expect(backend.mutations).not.toContain("compute.retagVolume");
     expect(backend.mutations).not.toContain("secrets.put");
-    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
   });
 
   test("a rollback never deletes an adopted volume", async () => {
@@ -521,9 +557,10 @@ describe("agents.create --volume", () => {
 });
 
 /**
- * §9.1: a volume's owner is a row, rows are kept forever (§4.3), and a
- * reclaimed disk is therefore named by *two* rows — the destroyed agent whose
- * memory it holds, and the live one now reading it. Which of the two a scan
+ * §9.1: a volume's owner is a row, and on a fleet that destroyed agents before
+ * names were released a legacy `destroyed` row (§4.3) still sits in the table,
+ * so a reclaimed disk can be named by *two* rows — the legacy record of the
+ * agent whose memory it holds, and the live one now reading it. Which of the two a scan
  * returns first is arbitrary, and answering with the first one made the live
  * owner invisible roughly half the time: `volume delete` then saw `no_agent`
  * on both of its looks and deleted a running agent's memory.
@@ -537,6 +574,9 @@ describe("a volume named by a destroyed row and a live one", () => {
    */
   async function reclaimed(order: "destroyed first" | "live first") {
     const { backend, hermetic } = seeded();
+    // A pre-tombstone `destroyed` row still naming the disk (§6.7): the shape
+    // an older build left, and the one that made two rows name one volume.
+    legacyOriole(backend);
     await drain(hermetic.agents.create({ name: "cinder-2", volume_id: ORIOLE }));
     const volume = backend.volumes.get(ORIOLE)!;
     backend.volumes.set(ORIOLE, { ...volume, state: "available", attached_to: null });
@@ -576,13 +616,33 @@ describe("a volume named by a destroyed row and a live one", () => {
     });
   }
 
-  test("a destroyed row alone is retained_by, and still reclaimable", async () => {
+  test("a former_agent tag alone is retained_by, and still reclaimable", async () => {
     const { hermetic } = seeded();
     const { volumes } = await hermetic.volumes.list({});
     const view = volumes.find((v) => v.volume_id === ORIOLE)!;
     expect(view.owners).toEqual([]);
     expect(view.retained_by).toBe("oriole");
+    expect(view.agent_status).toBe("destroyed");
     expect(view.group).toBe("no_agent");
+  });
+
+  test("a legacy destroyed row names the former owner when the disk has no tag", async () => {
+    const { backend, hermetic } = seeded();
+    legacyOriole(backend, "wren");
+    const v = backend.volumes.get(ORIOLE)!;
+    backend.volumes.set(ORIOLE, { ...v, former_agent: null });
+    const view = (await hermetic.volumes.list({})).volumes.find((x) => x.volume_id === ORIOLE)!;
+    expect(view.retained_by).toBe("wren");
+    expect(view.group).toBe("no_agent");
+  });
+
+  test("a tombstone recording the id is the last word when nothing else says", async () => {
+    const { backend, hermetic } = seeded();
+    const v = backend.volumes.get(ORIOLE)!;
+    backend.volumes.set(ORIOLE, { ...v, former_agent: null });
+    const view = (await hermetic.volumes.list({})).volumes.find((x) => x.volume_id === ORIOLE)!;
+    expect(view.retained_by).toBe("oriole");
+    expect(view.owners).toEqual([]);
   });
 
   /**
@@ -768,7 +828,7 @@ describe("the volume reservation", () => {
     );
     expect(backend.claims.size).toBe(0);
     expect(backend.mutations).not.toContain("compute.retagVolume");
-    expect(backend.volumes.get(ORIOLE)?.agent).toBe("oriole");
+    expect(backend.volumes.get(ORIOLE)?.former_agent).toBe("oriole");
   });
 
   /**

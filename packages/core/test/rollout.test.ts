@@ -60,6 +60,14 @@ describe("plan.rollout", () => {
   test("every agent is accounted for, converging or skipped with a reason", async () => {
     const { backend, hermetic } = fleet();
     behind(backend, "atlas");
+    // A legacy `destroyed` row (§6.7): the fixture seeds none, since a destroy
+    // now deletes the row, so the one this test is about is made here.
+    backend.agents.set("oriole", {
+      ...structuredClone(backend.agents.get("juniper")!),
+      name: "oriole",
+      status: "destroyed",
+      instance_id: null,
+    });
 
     const plan = await hermetic.plan.rollout({});
     const ids = plan.steps.map((s) => s.id);

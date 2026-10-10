@@ -19,9 +19,9 @@ import {
 
 const PLAN = { kind: "destroy", target: "lumen" } as unknown as Plan;
 
-const KEY = destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", deleteVolume: false });
-const WITH_VOLUME = destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", deleteVolume: true });
-const OTHER_FLEET = destroyInputsKey({ fleetId: "sg7k2m4p", name: "lumen", deleteVolume: false });
+const KEY = destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", keepVolume: false });
+const WITH_VOLUME = destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", keepVolume: true });
+const OTHER_FLEET = destroyInputsKey({ fleetId: "sg7k2m4p", name: "lumen", keepVolume: false });
 
 const planned: DestroyPlanState = { status: "planned", inputs: KEY, plan: PLAN };
 
@@ -30,17 +30,17 @@ describe("destroyInputsKey", () => {
     expect(KEY).not.toBe(WITH_VOLUME);
     expect(KEY).not.toBe(OTHER_FLEET);
     // `a-b` + `c` must not read as `a` + `b-c`: both halves are [a-z0-9-].
-    expect(destroyInputsKey({ fleetId: "a-b", name: "c", deleteVolume: false })).not.toBe(
-      destroyInputsKey({ fleetId: "a", name: "b-c", deleteVolume: false }),
+    expect(destroyInputsKey({ fleetId: "a-b", name: "c", keepVolume: false })).not.toBe(
+      destroyInputsKey({ fleetId: "a", name: "b-c", keepVolume: false }),
     );
   });
 
   test("is stable for the same inputs, so a re-render does not invalidate a plan", () => {
-    expect(destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", deleteVolume: false })).toBe(KEY);
+    expect(destroyInputsKey({ fleetId: "fxtr0001", name: "lumen", keepVolume: false })).toBe(KEY);
   });
 
   test("a home with no fleet still keys, rather than colliding on undefined", () => {
-    expect(destroyInputsKey({ fleetId: null, name: "lumen", deleteVolume: false })).not.toBe(KEY);
+    expect(destroyInputsKey({ fleetId: null, name: "lumen", keepVolume: false })).not.toBe(KEY);
   });
 });
 
@@ -96,7 +96,7 @@ describe("armedPlan", () => {
     expect(
       armedPlan(
         planned,
-        destroyInputsKey({ fleetId: "fxtr0001", name: "atlas", deleteVolume: false }),
+        destroyInputsKey({ fleetId: "fxtr0001", name: "atlas", keepVolume: false }),
         true,
         false,
       ),

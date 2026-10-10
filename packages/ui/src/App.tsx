@@ -1,6 +1,7 @@
 /**
  * The shell: header, env strip, view nav, and the fleet page — its toolbar,
- * then either one of three agent layouts or the volume lanes, by the lens the
+ * then one of three agent layouts, the volume lanes or the destroyed-agent
+ * audit, by the lens the
  * toolbar's headline switch is on — footer, and the drawers. Everything below
  * reads one live fleet from `useFleet` and its place on the page from `useNav`
  * (`nav-state.tsx`).
@@ -41,6 +42,7 @@ import { Toolbar } from "./components/Toolbar.tsx";
 import { ViewNav } from "./components/ViewNav.tsx";
 import { VolumeDeleteDrawer } from "./components/VolumeDeleteDrawer.tsx";
 import { VolumesView } from "./components/VolumesView.tsx";
+import { DestroyedView, useDestroyedAudit } from "./components/DestroyedView.tsx";
 import { filterVolumes, settleVolumes, type SettledPhase } from "./logic/volume-logic.ts";
 import { fleetPhase, volumeScan } from "./logic/loading.ts";
 import { NavProvider, useNav, useNavKeys } from "./nav/nav-state.tsx";
@@ -127,9 +129,12 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   ]);
   const [layout, setLayout] = useLayout();
   const [query, setQuery] = useState("");
-  // A destroyed agent is a record, not a machine: the fleet keeps the row
-  // forever (§6.6) but the dashboard hides it until someone asks. Session-only.
-  const [showDestroyed, setShowDestroyed] = useState(false);
+  /**
+   * §6.7: a destroy deletes the agent's row, so a destroyed agent is on no
+   * layout here; its tombstone and history are the Destroyed lens's, read
+   * only while that lens is up.
+   */
+  const destroyedAudit = useDestroyedAudit(initialized && nav.fleetLens === "destroyed");
   /** The create drawer's running op, so reopening re-attaches to its stream. */
   const [createOp, setCreateOp] = useState<CreateOp | null>(null);
   /**
@@ -192,12 +197,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const overlayRef = useRef(overlay);
   overlayRef.current = overlay;
 
-  // Two independent filters, in order: the destroyed toggle narrows the fleet,
-  // then the text query narrows that.
-  const shown = useMemo(
-    () => (showDestroyed ? fleet.agents : withoutDestroyed(fleet.agents)),
-    [fleet.agents, showDestroyed],
-  );
+  // `agents.list` never returns a destroyed row (§6.7); the filter is a cheap
+  // guard against one arriving anyway. The text query narrows the rest.
+  const shown = useMemo(() => withoutDestroyed(fleet.agents), [fleet.agents]);
   const filtered = useMemo(
     () => filterAgents(shown, query, fleet.tailnet, fleetId),
     [shown, query, fleet.tailnet, fleetId],
@@ -207,23 +209,12 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   // order. It changes nothing an operator can see — the fleet re-renders on
   // every poll anyway.
   const visible = useMemo(() => sortAgents(filtered, sort, Date.now()), [filtered, sort]);
-  // Counted over the whole fleet, not `shown`: the legend tells the truth about
-  // what exists, and the toggle carries the destroyed count either way.
+  // Counted over the whole fleet, not the filtered view: the legend tells the
+  // truth about what exists.
   const counts = useMemo(() => countsOf(fleet.agents), [fleet.agents]);
-  const groups = useMemo(
-    () => triageGroups(visible, fleet.latest, showDestroyed),
-    [visible, fleet.latest, showDestroyed],
-  );
-  // Destroyed rows the toggle is hiding *and* the query would have matched —
-  // what the empty state owes the operator who searched for one by name.
-  const hiddenDestroyed = useMemo(() => {
-    if (showDestroyed) return 0;
-    const gone = fleet.agents.filter((a) => a.display_status === "destroyed");
-    return filterAgents(gone, query, fleet.tailnet, fleetId).length;
-  }, [fleet.agents, showDestroyed, query, fleet.tailnet, fleetId]);
-  // Every row, destroyed included: `agents.create` still refuses a destroyed
-  // agent's name with NAME_TAKEN, so hiding it here would offer a name that
-  // cannot be used.
+  const groups = useMemo(() => triageGroups(visible, fleet.latest), [visible, fleet.latest]);
+  // Every live agent's name: the only names `agents.create` refuses, since a
+  // destroy releases its name (§6.7) and the list carries no destroyed rows.
   const names = useMemo(() => new Set(fleet.agents.map((a) => a.name)), [fleet.agents]);
   /**
    * The volumes the agents lens may draw as tombstones: narrowed by the same
@@ -279,33 +270,17 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
     [fleet.markFresh, fleet.setOp],
   );
 
-  // Hiding destroyed agents hides the drawer of one too. Keyed on the toggle
-  // closing, never on the agent's status: an agent that becomes destroyed while
-  // its drawer is open stays open, so a running `destroy` keeps its progress bar
-  // (the final transition lands before the op's `done` event) and the drawer's
-  // finished-effect still gets to clear the op id.
-  const prevShowDestroyed = useRef(showDestroyed);
+  /**
+   * The drawer of an agent that is no longer in the fleet closes: a finished
+   * destroy deletes the row (§6.7), and a hash naming an agent this fleet has
+   * never had — a bookmark kept past a destroy, or a typed `#agent/lumne` —
+   * would otherwise render no drawer at all but leave the hash sitting there,
+   * so a reload came back to the same nothing. `shouldDeselect` waits for a
+   * scan: before one, "not in `byName`" means "not read yet".
+   */
   const { selected, closeAgent } = nav;
   useEffect(() => {
-    const prev = prevShowDestroyed.current;
-    prevShowDestroyed.current = showDestroyed;
-    const status = selected ? (fleet.byName.get(selected)?.display_status ?? null) : null;
-    if (!shouldDeselect(prev, showDestroyed, status)) return;
-    closeAgent();
-  }, [showDestroyed, selected, fleet.byName, closeAgent]);
-
-  /**
-   * A hash naming an agent this fleet has never had — a bookmark kept past a
-   * destroy, or a typed `#agent/lumne` — rendered no drawer at all but left the
-   * hash sitting there, so a reload came back to the same nothing and the
-   * selection was invisible state nobody could clear.
-   *
-   * Only once a scan has landed: while the fleet is still loading, "not in
-   * `byName`" means "not read yet", and clearing then would drop a perfectly
-   * good `#agent/<name>` link on every cold start.
-   */
-  useEffect(() => {
-    if (scanning || selected === null || fleet.byName.has(selected)) return;
+    if (!shouldDeselect(!scanning, selected, fleet.byName)) return;
     closeAgent();
   }, [scanning, selected, fleet.byName, closeAgent]);
 
@@ -345,7 +320,8 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
     if (previous === null || fleetId === null || previous === fleetId) return;
     settled.current = null;
     volumes.reset();
-  }, [fleetId, volumes.reset]);
+    destroyedAudit.reset();
+  }, [fleetId, volumes.reset, destroyedAudit.reset]);
 
   /**
    * An op that can move a volume — destroy, create, recreate, stop, start —
@@ -354,17 +330,22 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
    * agent's volume attached until the next 30s poll.
    */
   const { refresh: refreshVolumes } = volumes;
+  const { refresh: refreshDestroyed } = destroyedAudit;
+  // Read through a ref: the lens changing is not a reason to re-settle.
+  const onDestroyedLens = useRef(false);
+  onDestroyedLens.current = nav.fleetLens === "destroyed";
   useEffect(() => {
     if (!fleet.scanned) return;
     const { next, changed } = settleVolumes(settled.current, fleet.agents);
     settled.current = next;
-    if (changed) refreshVolumes();
-  }, [fleet.scanned, fleet.agents, refreshVolumes]);
+    if (!changed) return;
+    refreshVolumes();
+    // A destroy settling is a new tombstone; the lens reads again on entry anyway.
+    if (onDestroyedLens.current) refreshDestroyed();
+  }, [fleet.scanned, fleet.agents, refreshVolumes, refreshDestroyed]);
 
   const region = fleet.meta?.config?.region ?? "—";
-  // `fleet.agents.length`, not `counts.total`: counts excludes destroyed rows,
-  // and a fleet that is nothing but tombstones is not an empty fleet.
-  const hint = emptyHint({ total: fleet.agents.length, query, hiddenDestroyed });
+  const hint = emptyHint({ total: counts.total, query });
   /**
    * §8.3: an empty fleet with no ready profile is not "press New agent" — the
    * create drawer would open on a call-to-action instead of a form. Say so
@@ -377,7 +358,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
    * With no ready profile that first step is the provider instead.
    */
   const emptyAction =
-    fleet.agents.length > 0 ? null : noReadyProfile ? (
+    counts.total > 0 ? null : noReadyProfile ? (
       <button type="button" className="btn btn-primary" onClick={nav.setUpProvider}>
         Set up a provider →
       </button>
@@ -618,8 +599,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         onQuery={setQuery}
         layout={layout}
         onLayout={setLayout}
-        showDestroyed={showDestroyed}
-        onShowDestroyed={setShowDestroyed}
+        destroyedCount={destroyedAudit.tombstones?.length ?? null}
+        destroyedBusy={destroyedAudit.loading}
+        onRefreshDestroyed={destroyedAudit.refresh}
         sort={sort}
         onClearSort={() => setSort(null)}
         showVolumes={showVolumes}
@@ -628,7 +610,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         filterRef={filterRef}
       />
 
-      {nav.fleetLens === "volumes" ? (
+      {nav.fleetLens === "destroyed" ? (
+        <DestroyedView audit={destroyedAudit} query={query} onClearQuery={() => setQuery("")} />
+      ) : nav.fleetLens === "volumes" ? (
         /*
          * §9's inventory, under the fleet's own toolbar. It has its own read
          * state (`vscan`), so it never waits on the instance scan above.
@@ -656,9 +640,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
       ) : visible.length === 0 ? (
         <EmptyState
           hint={
-            noReadyProfile && fleet.agents.length === 0
-              ? `${hint} · no provider profile is ready yet`
-              : hint
+            noReadyProfile && counts.total === 0 ? `${hint} · no provider profile is ready yet` : hint
           }
           action={emptyAction}
         />
@@ -671,7 +653,6 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           fleetId={fleetId}
           fresh={fleet.fresh}
           volumes={fleetVolumes}
-          showDestroyed={showDestroyed}
           selected={nav.selected}
           sort={sort}
           onSort={onSort}
@@ -686,7 +667,6 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           tailnet={fleet.tailnet}
           fleetId={fleetId}
           volumes={fleetVolumes}
-          showDestroyed={showDestroyed}
           onSelect={nav.select}
           onCreateOnVolume={nav.openCreateOnVolume}
           onSeeVolumes={nav.openVolumes}
@@ -700,7 +680,6 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           selected={nav.selected}
           agents={visible}
           volumes={fleetVolumes}
-          showDestroyed={showDestroyed}
           onSelect={nav.select}
           onCreateOnVolume={nav.openCreateOnVolume}
           onSeeVolumes={nav.openVolumes}
