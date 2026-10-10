@@ -6,11 +6,13 @@ import {
   type HermesSettings,
   Provider,
   SecretsMode,
+  HERMES_SEED_CONFIG,
   Size,
   hermesConfigGetArgv,
   hermesConfigSetArgv,
 } from "../src/schema/index.ts";
 import { assertFullyRendered, renderAgentConfig, serveCommands } from "../src/render/render.ts";
+import { HERMETIC_PLATFORM_HINT } from "../src/render/render-hermes.ts";
 import { HermeticError } from "../src/errors.ts";
 
 /**
@@ -231,6 +233,35 @@ describe("renderAgentConfig", () => {
     expect(index).toContain("autoconnect=true");
     expect(index).toContain("resize=scale");
     expect(index).toContain("reconnect=true");
+  });
+
+  /**
+   * Sessions hermetic opens are stamped `source: "hermetic"`, which Hermes uses
+   * as the platform key for its system-prompt hint and has no built-in entry
+   * for. The managed scope supplies one, where the agent's own config cannot
+   * shadow it — and it has to survive `yamlString` quoting intact, quotes,
+   * backticks, em dashes and all.
+   */
+  test("the managed config carries the hermetic platform hint, intact", () => {
+    const stated = render({
+      size: "large",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes: { max_turns: 40, terminal_backend: "local" },
+    });
+    for (const out of [browserOn(), stated]) {
+      const managed = fileAt(out, "/etc/hermes/config.yaml");
+      expect(managed).toMatch(/^platform_hints:\n {2}hermetic:\n {4}replace: "/m);
+      expect(managed).toContain(
+        "MEDIA:/path tags are NOT intercepted here (they print as literal text)",
+      );
+      const parsed = Bun.YAML.parse(managed) as {
+        platform_hints?: { hermetic?: { replace?: unknown } };
+      };
+      expect(parsed.platform_hints?.hermetic?.replace).toBe(HERMETIC_PLATFORM_HINT);
+    }
+    // Managed, never seeded: the agent's own file must not carry a copy to shadow.
+    expect(fileAt(browserOn(), HERMES_SEED_CONFIG)).not.toContain("platform_hints");
   });
 
   /**

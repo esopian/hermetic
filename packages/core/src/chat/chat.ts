@@ -89,13 +89,13 @@ export { defaultHermesChat, fixtureHermesChat } from "./chat-transport.ts";
  * The record of the sessions *this laptop* opened (§9.2).
  *
  * The box cannot answer this question, and that is not a gap to be closed. A
- * session hermetic opened over `/api/ws` and one the box's own TUI opened arrive
- * at the adapter identically; upstream's `source` field names a *kind of client*
- * rather than an installation, and `portal` is not among the values it can
- * produce. So the adapter maps nothing onto the `portal` origin, deliberately —
- * `portal` is the one value that silences the composer's destination warning,
- * and a warning that can be switched off by a string a box chose is not a
- * warning.
+ * session's `source` names a *kind of client* rather than an installation: a
+ * session hermetic created reads `hermetic` whichever operator's hermetic it
+ * was, and `portal` is not among the values the box can produce. So the
+ * adapter maps nothing onto the `portal` origin, deliberately — `portal` is the
+ * one value that silences the composer's destination restatement (send label
+ * and footer), and a warning that can be switched off by a string a box chose
+ * is not a warning.
  *
  * What the laptop *does* know is which sessions it sent into. That is local
  * state, in the local SQLite beside `runs` and the inbox, and the fact that two
@@ -205,8 +205,9 @@ export interface ChatDeps {
    */
   now?: () => string;
   /**
-   * Which sessions this laptop started, so the destination banner can stop
-   * firing on threads the operator opened from this portal thirty seconds ago.
+   * Which sessions this laptop started, so the composer's destination
+   * restatement (send label and footer) can stop appearing on threads the
+   * operator opened from this portal thirty seconds ago.
    * Optional, and absence means every session reads as foreign — which is the
    * safe direction and the reason it is safe to leave out.
    */
@@ -527,7 +528,8 @@ export function createChat(deps: ChatDeps) {
    * described it.
    *
    * The whole point is the asymmetry. `portal` silences the composer's
-   * destination warning, so it may only ever be granted on this laptop's own
+   * destination restatement (send label and footer), so it may only ever be
+   * granted on this laptop's own
    * evidence that it sent into that conversation — never inferred from a value
    * the box chose, and never withheld from a session the box called foreign.
    */

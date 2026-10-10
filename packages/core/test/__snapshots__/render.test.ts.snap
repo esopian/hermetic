@@ -2,8 +2,8 @@
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "3a0b459447424bd4",
-  "key": "config/atlas/3a0b459447424bd4.tgz",
+  "config_hash": "addb46e2330e165d",
+  "key": "config/atlas/addb46e2330e165d.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -43,7 +43,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "3a0b459447424bd4",
+    "config_hash": "addb46e2330e165d",
     "files": [
       {
         "content": 
@@ -111,6 +111,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -680,8 +683,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "22e30e6ccd801bef",
-  "key": "config/atlas/22e30e6ccd801bef.tgz",
+  "config_hash": "9f63e92d75e1eeb9",
+  "key": "config/atlas/9f63e92d75e1eeb9.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -726,7 +729,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "22e30e6ccd801bef",
+    "config_hash": "9f63e92d75e1eeb9",
     "files": [
       {
         "content": 
@@ -794,6 +797,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -1365,8 +1371,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "4864bd868e3ce777",
-  "key": "config/atlas/4864bd868e3ce777.tgz",
+  "config_hash": "7b17d1a6e9a44593",
+  "key": "config/atlas/7b17d1a6e9a44593.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -1406,7 +1412,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "4864bd868e3ce777",
+    "config_hash": "7b17d1a6e9a44593",
     "files": [
       {
         "content": 
@@ -1474,6 +1480,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -2040,8 +2049,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "5caf3c1ec24061dc",
-  "key": "config/atlas/5caf3c1ec24061dc.tgz",
+  "config_hash": "c8bdc328fce391ed",
+  "key": "config/atlas/c8bdc328fce391ed.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2086,7 +2095,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "5caf3c1ec24061dc",
+    "config_hash": "c8bdc328fce391ed",
     "files": [
       {
         "content": 
@@ -2154,6 +2163,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -2722,8 +2734,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "a843304167a469a6",
-  "key": "config/atlas/a843304167a469a6.tgz",
+  "config_hash": "ebd1e31405581afc",
+  "key": "config/atlas/ebd1e31405581afc.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2763,7 +2775,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "a843304167a469a6",
+    "config_hash": "ebd1e31405581afc",
     "files": [
       {
         "content": 
@@ -2831,6 +2843,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -3397,8 +3412,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "ec6f18a5464e87ca",
-  "key": "config/atlas/ec6f18a5464e87ca.tgz",
+  "config_hash": "abb7d19212226c53",
+  "key": "config/atlas/abb7d19212226c53.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -3443,7 +3458,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ec6f18a5464e87ca",
+    "config_hash": "abb7d19212226c53",
     "files": [
       {
         "content": 
@@ -3511,6 +3526,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -4079,8 +4097,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
 {
-  "config_hash": "5c98b2f98f4c30f8",
-  "key": "config/atlas/5c98b2f98f4c30f8.tgz",
+  "config_hash": "207fda301c2cbda4",
+  "key": "config/atlas/207fda301c2cbda4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4120,7 +4138,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "5c98b2f98f4c30f8",
+    "config_hash": "207fda301c2cbda4",
     "files": [
       {
         "content": 
@@ -4190,6 +4208,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -4756,8 +4777,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "0fa7ccc61a900558",
-  "key": "config/atlas/0fa7ccc61a900558.tgz",
+  "config_hash": "9b9b8dc71eeeec23",
+  "key": "config/atlas/9b9b8dc71eeeec23.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4802,7 +4823,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0fa7ccc61a900558",
+    "config_hash": "9b9b8dc71eeeec23",
     "files": [
       {
         "content": 
@@ -4872,6 +4893,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -5440,8 +5464,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
 {
-  "config_hash": "33b6fb3c662e5eb0",
-  "key": "config/atlas/33b6fb3c662e5eb0.tgz",
+  "config_hash": "1656ce69f44e8b48",
+  "key": "config/atlas/1656ce69f44e8b48.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -5481,7 +5505,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "33b6fb3c662e5eb0",
+    "config_hash": "1656ce69f44e8b48",
     "files": [
       {
         "content": 
@@ -5549,6 +5573,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -6115,8 +6142,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "3563e60b72692c5b",
-  "key": "config/atlas/3563e60b72692c5b.tgz",
+  "config_hash": "52e1dfa37d3327d3",
+  "key": "config/atlas/52e1dfa37d3327d3.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6161,7 +6188,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "3563e60b72692c5b",
+    "config_hash": "52e1dfa37d3327d3",
     "files": [
       {
         "content": 
@@ -6229,6 +6256,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -6797,8 +6827,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
 {
-  "config_hash": "05bd173af82f7879",
-  "key": "config/atlas/05bd173af82f7879.tgz",
+  "config_hash": "232ff0766dce54ff",
+  "key": "config/atlas/232ff0766dce54ff.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6838,7 +6868,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "05bd173af82f7879",
+    "config_hash": "232ff0766dce54ff",
     "files": [
       {
         "content": 
@@ -6906,6 +6936,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -7472,8 +7505,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "259408293b73bca7",
-  "key": "config/atlas/259408293b73bca7.tgz",
+  "config_hash": "d6818f227e24ea84",
+  "key": "config/atlas/d6818f227e24ea84.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -7518,7 +7551,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "259408293b73bca7",
+    "config_hash": "d6818f227e24ea84",
     "files": [
       {
         "content": 
@@ -7586,6 +7619,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -8154,8 +8190,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "26f4b3eb7f0f7c56",
-  "key": "config/atlas/26f4b3eb7f0f7c56.tgz",
+  "config_hash": "57934e6c3088ff4e",
+  "key": "config/atlas/57934e6c3088ff4e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8195,7 +8231,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "26f4b3eb7f0f7c56",
+    "config_hash": "57934e6c3088ff4e",
     "files": [
       {
         "content": 
@@ -8263,6 +8299,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -8832,8 +8871,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "477f8e7fc0fe4ed6",
-  "key": "config/atlas/477f8e7fc0fe4ed6.tgz",
+  "config_hash": "28df5dd73e504c8d",
+  "key": "config/atlas/28df5dd73e504c8d.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8878,7 +8917,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "477f8e7fc0fe4ed6",
+    "config_hash": "28df5dd73e504c8d",
     "files": [
       {
         "content": 
@@ -8946,6 +8985,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -9517,8 +9559,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "af366ae145d36d9b",
-  "key": "config/atlas/af366ae145d36d9b.tgz",
+  "config_hash": "66d4054432e21ae4",
+  "key": "config/atlas/66d4054432e21ae4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -9558,7 +9600,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "af366ae145d36d9b",
+    "config_hash": "66d4054432e21ae4",
     "files": [
       {
         "content": 
@@ -9626,6 +9668,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -10192,8 +10237,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "56df74d1b962974b",
-  "key": "config/atlas/56df74d1b962974b.tgz",
+  "config_hash": "e5f7c43de9dbfa73",
+  "key": "config/atlas/e5f7c43de9dbfa73.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10238,7 +10283,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "56df74d1b962974b",
+    "config_hash": "e5f7c43de9dbfa73",
     "files": [
       {
         "content": 
@@ -10306,6 +10351,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -10874,8 +10922,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "23b060bc65b6bd53",
-  "key": "config/atlas/23b060bc65b6bd53.tgz",
+  "config_hash": "41216cb9f52d0520",
+  "key": "config/atlas/41216cb9f52d0520.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10915,7 +10963,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "23b060bc65b6bd53",
+    "config_hash": "41216cb9f52d0520",
     "files": [
       {
         "content": 
@@ -10983,6 +11031,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -11549,8 +11600,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "b405109791bed3dd",
-  "key": "config/atlas/b405109791bed3dd.tgz",
+  "config_hash": "6621b670a346eaec",
+  "key": "config/atlas/6621b670a346eaec.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -11595,7 +11646,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b405109791bed3dd",
+    "config_hash": "6621b670a346eaec",
     "files": [
       {
         "content": 
@@ -11663,6 +11714,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -12231,8 +12285,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
 {
-  "config_hash": "5234e8f0176994a1",
-  "key": "config/atlas/5234e8f0176994a1.tgz",
+  "config_hash": "864eb10f55b9a0c3",
+  "key": "config/atlas/864eb10f55b9a0c3.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -12272,7 +12326,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "5234e8f0176994a1",
+    "config_hash": "864eb10f55b9a0c3",
     "files": [
       {
         "content": 
@@ -12342,6 +12396,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -12908,8 +12965,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "bddf8fa582c91166",
-  "key": "config/atlas/bddf8fa582c91166.tgz",
+  "config_hash": "d983f4ccbe4c7d49",
+  "key": "config/atlas/d983f4ccbe4c7d49.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -12954,7 +13011,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "bddf8fa582c91166",
+    "config_hash": "d983f4ccbe4c7d49",
     "files": [
       {
         "content": 
@@ -13024,6 +13081,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -13592,8 +13652,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
 {
-  "config_hash": "b9d7b58e53644e86",
-  "key": "config/atlas/b9d7b58e53644e86.tgz",
+  "config_hash": "6b17d41fbccf8853",
+  "key": "config/atlas/6b17d41fbccf8853.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13633,7 +13693,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b9d7b58e53644e86",
+    "config_hash": "6b17d41fbccf8853",
     "files": [
       {
         "content": 
@@ -13701,6 +13761,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -14267,8 +14330,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "b6a38a87fa0c7d34",
-  "key": "config/atlas/b6a38a87fa0c7d34.tgz",
+  "config_hash": "a9d513dd177c051e",
+  "key": "config/atlas/a9d513dd177c051e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -14313,7 +14376,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b6a38a87fa0c7d34",
+    "config_hash": "a9d513dd177c051e",
     "files": [
       {
         "content": 
@@ -14381,6 +14444,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -14949,8 +15015,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
 {
-  "config_hash": "86e022cf88f4b89e",
-  "key": "config/atlas/86e022cf88f4b89e.tgz",
+  "config_hash": "4e21344dfb6e128e",
+  "key": "config/atlas/4e21344dfb6e128e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -14990,7 +15056,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "86e022cf88f4b89e",
+    "config_hash": "4e21344dfb6e128e",
     "files": [
       {
         "content": 
@@ -15058,6 +15124,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -15624,8 +15693,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "962d6b7efd29f889",
-  "key": "config/atlas/962d6b7efd29f889.tgz",
+  "config_hash": "0129118b7a74f949",
+  "key": "config/atlas/0129118b7a74f949.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15670,7 +15739,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "962d6b7efd29f889",
+    "config_hash": "0129118b7a74f949",
     "files": [
       {
         "content": 
@@ -15738,6 +15807,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -16306,8 +16378,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "c0a4ed5083916d2e",
-  "key": "config/atlas/c0a4ed5083916d2e.tgz",
+  "config_hash": "782374d483a7c2d7",
+  "key": "config/atlas/782374d483a7c2d7.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -16347,7 +16419,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c0a4ed5083916d2e",
+    "config_hash": "782374d483a7c2d7",
     "files": [
       {
         "content": 
@@ -16415,6 +16487,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -16984,8 +17059,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "78edc63969ea5dbf",
-  "key": "config/atlas/78edc63969ea5dbf.tgz",
+  "config_hash": "83b9b771db027201",
+  "key": "config/atlas/83b9b771db027201.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17030,7 +17105,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "78edc63969ea5dbf",
+    "config_hash": "83b9b771db027201",
     "files": [
       {
         "content": 
@@ -17098,6 +17173,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -17669,8 +17747,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "ac54d831e95b711b",
-  "key": "config/atlas/ac54d831e95b711b.tgz",
+  "config_hash": "027bfa39e1478f04",
+  "key": "config/atlas/027bfa39e1478f04.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17710,7 +17788,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ac54d831e95b711b",
+    "config_hash": "027bfa39e1478f04",
     "files": [
       {
         "content": 
@@ -17778,6 +17856,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -18344,8 +18425,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "f68471b437fc6383",
-  "key": "config/atlas/f68471b437fc6383.tgz",
+  "config_hash": "cca150557cf90955",
+  "key": "config/atlas/cca150557cf90955.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -18390,7 +18471,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "f68471b437fc6383",
+    "config_hash": "cca150557cf90955",
     "files": [
       {
         "content": 
@@ -18458,6 +18539,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -19026,8 +19110,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "9cfd95ff0f77cb22",
-  "key": "config/atlas/9cfd95ff0f77cb22.tgz",
+  "config_hash": "38c826ad8e314468",
+  "key": "config/atlas/38c826ad8e314468.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19067,7 +19151,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "9cfd95ff0f77cb22",
+    "config_hash": "38c826ad8e314468",
     "files": [
       {
         "content": 
@@ -19135,6 +19219,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -19701,8 +19788,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "a394d9c84f0454d4",
-  "key": "config/atlas/a394d9c84f0454d4.tgz",
+  "config_hash": "b5fc0c36f85f48ec",
+  "key": "config/atlas/b5fc0c36f85f48ec.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19747,7 +19834,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "a394d9c84f0454d4",
+    "config_hash": "b5fc0c36f85f48ec",
     "files": [
       {
         "content": 
@@ -19815,6 +19902,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -20383,8 +20473,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
 {
-  "config_hash": "390fb6ffdf86024a",
-  "key": "config/atlas/390fb6ffdf86024a.tgz",
+  "config_hash": "85a996f8c6d736fa",
+  "key": "config/atlas/85a996f8c6d736fa.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -20424,7 +20514,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "390fb6ffdf86024a",
+    "config_hash": "85a996f8c6d736fa",
     "files": [
       {
         "content": 
@@ -20494,6 +20584,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -21060,8 +21153,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "695b9103af355213",
-  "key": "config/atlas/695b9103af355213.tgz",
+  "config_hash": "8287e65caed795dc",
+  "key": "config/atlas/8287e65caed795dc.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21106,7 +21199,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "695b9103af355213",
+    "config_hash": "8287e65caed795dc",
     "files": [
       {
         "content": 
@@ -21176,6 +21269,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -21744,8 +21840,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
 {
-  "config_hash": "19218ad5b4bfca15",
-  "key": "config/atlas/19218ad5b4bfca15.tgz",
+  "config_hash": "b7f86ddc2542d925",
+  "key": "config/atlas/b7f86ddc2542d925.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21785,7 +21881,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "19218ad5b4bfca15",
+    "config_hash": "b7f86ddc2542d925",
     "files": [
       {
         "content": 
@@ -21853,6 +21949,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -22419,8 +22518,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "ec821a15b6e3e8d6",
-  "key": "config/atlas/ec821a15b6e3e8d6.tgz",
+  "config_hash": "bc6e8eae141492e2",
+  "key": "config/atlas/bc6e8eae141492e2.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -22465,7 +22564,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ec821a15b6e3e8d6",
+    "config_hash": "bc6e8eae141492e2",
     "files": [
       {
         "content": 
@@ -22533,6 +22632,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -23101,8 +23203,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
 {
-  "config_hash": "07032baeb742dd6d",
-  "key": "config/atlas/07032baeb742dd6d.tgz",
+  "config_hash": "98f74bf3b9f03dad",
+  "key": "config/atlas/98f74bf3b9f03dad.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23142,7 +23244,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "07032baeb742dd6d",
+    "config_hash": "98f74bf3b9f03dad",
     "files": [
       {
         "content": 
@@ -23210,6 +23312,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",
@@ -23776,8 +23881,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "40c114278b1a6b33",
-  "key": "config/atlas/40c114278b1a6b33.tgz",
+  "config_hash": "e3b016a4b1653672",
+  "key": "config/atlas/e3b016a4b1653672.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23822,7 +23927,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "40c114278b1a6b33",
+    "config_hash": "e3b016a4b1653672",
     "files": [
       {
         "content": 
@@ -23890,6 +23995,9 @@ browser:
   cdp_url: "http://127.0.0.1:9222"
   headed: true
   engine: chrome
+platform_hints:
+  hermetic:
+    replace: "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's \`deliver\` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session."
 "
 ,
         "group": "hermes",

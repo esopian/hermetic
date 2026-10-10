@@ -21,6 +21,7 @@
  */
 import { z } from "zod";
 import { Iso } from "./common.ts";
+import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
 
 export {
   PROCESS_COMMAND_MAX,
@@ -49,20 +50,26 @@ export type BotRef = z.infer<typeof BotRef>;
  *
  * The portal did not start most of the sessions it shows. A box runs messaging
  * channels, cron jobs, a dashboard and a CLI; Hermes Desktop can attach to it;
- * other bots drive turns on it. So the origin travels with the session and the
- * composer restates the destination whenever it is not `portal`.
+ * other bots drive turns on it. So the origin travels with the session, and the
+ * composer says what sending does wherever that has a consequence.
  *
  * This is a safety field, not a decoration: a reply into a `channel` session
  * leaves the tailnet and lands in somebody's Slack, and a reply into a `peer`
  * session is answering a robot. Neither is what the operator assumed when they
  * hit Enter in a box that looks like every other box.
+ *
+ * The values themselves live in `shared/session-origins.ts`, where the UI can
+ * read them too.
  */
-export const SessionOrigin = z.enum(["portal", "desktop", "cli", "routine", "peer", "room", "channel"]);
+export const SessionOrigin = z.enum(SESSION_ORIGIN_NAMES);
 export type SessionOrigin = z.infer<typeof SessionOrigin>;
 
 export const SESSION_ORIGINS = SessionOrigin.options;
 
-/** Origins whose destination is not this portal, and which the composer must restate. */
+/**
+ * Origins whose destination is not this portal: every value but `portal`, which
+ * only this laptop's own record of sending into a session may grant.
+ */
 export const FOREIGN_ORIGINS: readonly SessionOrigin[] = SESSION_ORIGINS.filter((o) => o !== "portal");
 
 export const SessionKind = z.enum(["canonical", "thread", "routine"]);

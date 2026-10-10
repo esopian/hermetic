@@ -4,7 +4,7 @@
  * Four things live here and nowhere else: the roster the rail draws, which bot
  * and session the operator is looking at, each conversation's transcript
  * and draft, and its independent live turn. The rules are not here — they are in `chat-logic.ts`,
- * pure, so "which origins need the banner" and "gold outranks orange" are
+ * pure, so "which origins relabel the send button" and "gold outranks orange" are
  * testable without mounting a provider. The shape is `notify-state.tsx`'s:
  * a provider, injectable calls, and a `useChatIfAvailable()` for a tree that
  * has no provider.
@@ -294,7 +294,9 @@ export interface Chat {
    * Where a reply would go, as far as this thread has actually established it.
    *
    * Not `session?.origin ?? "portal"`. `portal` is the one value that silences
-   * the destination banner, so it has to be read rather than fallen back to —
+   * the composer's destination restatement (send label and footer), and an
+   * unread destination disables sending, so it has to be read rather than
+   * fallen back to —
    * `Destination` in `chat-logic.ts` has the argument.
    */
   destination: Destination;

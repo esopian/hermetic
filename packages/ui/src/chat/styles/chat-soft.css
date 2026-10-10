@@ -227,6 +227,10 @@
 [data-skin="soft"] .ch-band.acc {
   border-left-width: 3px;
 }
+[data-skin="soft"] .ch-band.slim {
+  padding: 5px 26px;
+  font-size: 12px;
+}
 
 /* ── 5 · messages ───────────────────────────────────────────────────────────
    No rule between rows. Turns are separated by space, and a run of messages
@@ -574,6 +578,18 @@
   background: var(--acc);
   border-color: var(--acc);
   color: var(--acc-fg);
+}
+[data-skin="soft"] .ch-send.warn {
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  border-color: var(--warn);
+  color: var(--text-warn);
+  font-size: 12.5px;
+}
+[data-skin="soft"] .ch-send.warn:hover,
+[data-skin="soft"] .ch-send.warn.ready {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: var(--bg);
 }
 /* Stop is still destructive in either skin. */
 [data-skin="soft"] .ch-send.stop {

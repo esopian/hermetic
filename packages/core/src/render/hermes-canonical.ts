@@ -1,6 +1,6 @@
 /** Canonical Bot Chat identity and lifecycle. Wire contracts live at Hermes v2026.9.14. */
 import { HermeticError } from "../errors.ts";
-import { rec, records, str } from "../chat/hermes/hermes-chat-wire.ts";
+import { HERMETIC_SESSION_SOURCE, rec, records, str } from "../chat/hermes/hermes-chat-wire.ts";
 import type { BoxAddress, HermesChatOptions } from "../chat/hermes/hermes-chat.ts";
 import type { ChatConversation, ChatRespondInput } from "../schema/index.ts";
 
@@ -97,7 +97,9 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
         return identity(box, bot, opts.session, opts.session, false, "thread");
       }
       if (opts.new_session) {
-        const created = rec(await rpc.request("session.create", { profile: bot }));
+        const created = rec(
+          await rpc.request("session.create", { profile: bot, source: HERMETIC_SESSION_SOURCE }),
+        );
         const stored = str(created?.stored_session_id);
         const runtime = str(created?.session_id);
         if (!stored || !runtime) throw failure("New session returned no durable/runtime identity");
@@ -148,6 +150,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
         const created = rec(
           await rpc.request("session.create", {
             profile: bot,
+            source: HERMETIC_SESSION_SOURCE,
             title: "Bot Chat",
             hidden: true,
             follow_profile_config: true,
@@ -224,6 +227,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       const resumed = rec(
         await rpc.request("session.resume", {
           profile: bot,
+          source: HERMETIC_SESSION_SOURCE,
           session_id: current.session,
           defer_history: true,
           omit_messages: true,
@@ -289,6 +293,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       const snapshot = rec(
         await rpc.request("session.resume", {
           profile: input.bot,
+          source: HERMETIC_SESSION_SOURCE,
           session_id: input.session,
           defer_history: true,
           omit_messages: true,
