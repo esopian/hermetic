@@ -542,6 +542,11 @@
 .ch-origin.cli i {
   background: var(--fg2);
 }
+/* Some hermetic opened it, and this laptop has no record of sending into it.
+   Close to portal's own story, so a warm hue near `--acc` without being it. */
+.ch-origin.hermetic i {
+  background: #d08770;
+}
 .ch-origin.routine i {
   background: #b48ead;
 }
@@ -776,6 +781,71 @@
 }
 .ch-band > span:first-of-type {
   font-weight: 700;
+}
+/* The composer's band for a composer that cannot send yet: one row, headline
+   and badge, half the padding — it explains a dead button, it is not news. */
+.ch-band.slim {
+  padding: 5px 20px;
+  font-size: 12px;
+  gap: 6px 10px;
+}
+/* A conversation to reply into, offered by the `unchosen` band. A button, so
+   it fills on hover; the swatch is the session's origin hue. */
+.ch-pick {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.ch-pick:hover {
+  border-color: var(--fg);
+}
+.ch-pick i {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  background: var(--fg3);
+}
+.ch-pick .m {
+  color: var(--text-muted);
+}
+.ch-pick.warn {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--line2));
+}
+.ch-pick.portal i {
+  background: var(--acc);
+}
+.ch-pick.hermetic i {
+  background: #d08770;
+}
+.ch-pick.desktop i {
+  background: #7aa2f7;
+}
+.ch-pick.cli i {
+  background: var(--fg2);
+}
+.ch-pick.routine i {
+  background: #b48ead;
+}
+.ch-pick.peer i {
+  background: #88c0d0;
+}
+.ch-pick.room i {
+  background: var(--ok);
+}
+.ch-pick.channel i {
+  background: var(--warn);
 }
 
 /* The transcript scrolls vertically only. Anything wider than the column (a
@@ -1499,6 +1569,33 @@
   background: var(--bad);
   color: var(--danger-text);
 }
+/* A send whose reply does something the operator may not have meant — a new
+   session, a robot, somebody's Slack — says so in words, at the same height
+   as the plain `↵`. */
+.ch-send.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-transform: none;
+  white-space: nowrap;
+}
+.ch-send.label .k {
+  font-size: 15px;
+  font-weight: 900;
+}
+.ch-send.warn {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid var(--warn);
+  color: var(--text-warn);
+}
+.ch-send.warn:hover,
+.ch-send.warn.ready {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: var(--bg);
+}
 .ch-composer-foot {
   display: flex;
   align-items: center;
@@ -1511,6 +1608,13 @@
 }
 .ch-composer-foot .right {
   margin-left: auto;
+}
+/* What a reply does beyond this window, after "over the tailnet · <name>". */
+.ch-composer-hint.muted {
+  color: var(--fg2);
+}
+.ch-composer-hint.warn {
+  color: var(--text-warn);
 }
 /* 10.5px, not 9.5: a key cap has to be readable at a glance and `⌘` is a
    drawing, not a letter — below ~10px it and `⇧` turn to mush. Modifiers are

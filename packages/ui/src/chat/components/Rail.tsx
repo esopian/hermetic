@@ -334,8 +334,8 @@ export function Rail({
                       at all: a bot's conversations are where the origins live,
                       and without a row to click, every `cli`, `routine`, `peer`,
                       `room` and `channel` session on the fleet is unreachable —
-                      which would make the destination banner a feature that
-                      almost never fires. Only the selected bot's, because the
+                      which would make the composer's destination restatement
+                      (send label and footer) a feature that almost never fires. Only the selected bot's, because the
                       session list is read one bot at a time.
                     */}
                     {open && sessions.length > 0 ? (

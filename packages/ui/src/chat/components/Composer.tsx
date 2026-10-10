@@ -1,40 +1,44 @@
 /**
- * The composer, and the band above it.
+ * The composer, and what it says about where a reply goes.
  *
- * **The origin banner is a safety feature, not decoration.** Every session
- * carries where it came from, and the portal started almost none of them: a box
- * runs messaging channels, cron jobs, a dashboard and a CLI, Hermes Desktop can
- * attach to it, and other bots drive turns on it. So whenever the origin is
- * anything but `portal`, the composer restates the destination directly above
- * the input, and it cannot be dismissed.
- *
- * The reason is specific and it is not "for clarity". A reply into a `channel`
- * session leaves the tailnet and lands in somebody's Slack. A reply into a
- * `peer` session answers another robot. A reply into a `routine` session starts
- * a session the routine will never read. None of those is what the operator
- * assumed when they hit Enter in a box that looks like every other box, and
- * there is no other moment at which they could find out.
- *
- * `destinationNotice()` decides what it says; this decides where it goes. It is
- * rendered here — inside the composer, above the input — rather than up beside
- * the thread header, because it is a statement about what *sending* does, and a
- * banner at the top of a scrolled transcript is not on screen at the moment
- * that matters. Thread-level bands (stopped, reconnecting, destroyed) stay at
- * the top where the skeleton puts them; this one travels with the button.
+ * Every session carries where it came from, and the portal started few of
+ * them. The composer restates the destination only where sending has a
+ * consequence or cannot happen yet. A consequence goes on the send button and
+ * the footer (`sendLabel`, `composerHint` in `chat-logic.ts`): a `routine`
+ * reply starts a new session ("Send · new session"), a `peer` reply answers a
+ * robot ("Reply to …"), a `channel` reply leaves the tailnet ("Send to …"), all
+ * in warn — the button is the one thing certainly in view when Enter is
+ * pressed. A `desktop` or `room` reply gets only a muted footer fragment. A
+ * composer that is blocked — the session read in flight, a bot whose
+ * conversations are none of them this portal's, a read that failed — gets a
+ * slim one-line band explaining the dead button, and for `unchosen` one chip
+ * per conversation to pick from. `portal`, `hermetic` and `cli` say nothing:
+ * the last two mean only that this laptop holds no record of sending into the
+ * session, which is too often this operator's own conversation to be worth a
+ * warning, and the header's origin badge still names them. Thread-level bands
+ * (stopped, reconnecting, destroyed) stay at the top of the thread.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { useRef, useState } from "react";
 import { insertMention, mentionAt, mentionHandle, mentionOptions } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
-import { destinationNotice, originClass, previewOf } from "../chat-logic.ts";
+import { composerHint, destinationNotice, originClass, previewOf, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
 import type { Destination } from "../chat-logic.ts";
+
+/** A conversation the `unchosen` band offers as a chip. */
+export interface ComposerChoice {
+  id: string;
+  title: string;
+  origin: string;
+  origin_detail?: string | null;
+}
 
 export function Composer({
   /**
    * Where a reply goes, and how sure the thread is — never a bare origin.
-   * `portal` is the one value that silences the band, so it has to be a value
-   * that was read rather than one that was fallen back to.
+   * `portal` must be a value that was read rather than one that was fallen
+   * back to: the not-yet-known states are what disable sending.
    */
   destination,
   placeholder,
@@ -47,6 +51,8 @@ export function Composer({
   onAbort,
   mentions = [],
   mentionHint,
+  choices = [],
+  onChoose,
 }: {
   destination: Destination;
   placeholder: string;
@@ -59,6 +65,10 @@ export function Composer({
   onAbort: () => void;
   mentions?: readonly MentionBot[];
   mentionHint?: string;
+  /** The bot's conversations, drawn as chips when the destination is `unchosen`. */
+  choices?: readonly ComposerChoice[];
+  /** Select a conversation, as the rail's Sessions tab does. */
+  onChoose?: (session: string) => void;
 }) {
   const [localText, setLocalText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
@@ -69,6 +79,9 @@ export function Composer({
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
   const notice = destinationNotice(destination);
+  const label = sendLabel(destination);
+  const hint = composerHint(destination);
+  const picks = destination.state === "unchosen" && onChoose ? choices : [];
   const match = dismissed ? null : mentionAt(text, cursor);
   const options = match ? mentionOptions(mentions, match.query) : [];
   const choose = (bot: MentionBot) => {
@@ -120,10 +133,29 @@ export function Composer({
       {notice ? (
         // Undismissible by construction: there is no control here to dismiss it
         // with, and it is re-derived from the session on every render.
-        <div className={`ch-band ${notice.tone}`} role="note">
-          <i className="dot" />
-          <span>{notice.headline}</span>
-          <span className="sub">{notice.detail}</span>
+        <div className={`ch-band slim ${notice.tone}`} role="note" title={notice.title}>
+          <span>
+            {destination.state === "unchosen" && picks.length === 0
+              ? "Pick a conversation in the rail to reply into."
+              : notice.headline}
+          </span>
+          {picks.map((pick) => {
+            const where = pick.origin_detail?.trim() || pick.origin;
+            // The warn tint marks "leaves the tailnet", which only `channel`
+            // does; `routine` and `peer` stay on this fleet's own boxes.
+            return (
+              <button
+                type="button"
+                key={pick.id}
+                className={`ch-pick ${pick.origin}${pick.origin === "channel" ? " warn" : ""}`}
+                onClick={() => onChoose?.(pick.id)}
+              >
+                <i aria-hidden="true" />
+                {`${pick.title} · ${where}`}
+                {pick.origin === "channel" ? <span className="m"> · leaves tailnet</span> : null}
+              </button>
+            );
+          })}
           <span className="spacer" />
           <span className={`ch-origin ${originClass(destination)}`}>
             <i />
@@ -230,12 +262,24 @@ export function Composer({
         />
         <button
           type="button"
-          className={text.trim() && enabled ? "ch-send ready" : "ch-send"}
+          className={[
+            "ch-send",
+            label ? `label ${label.tone}` : "",
+            text.trim() && enabled ? "ready" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
           disabled={!enabled || text.trim().length === 0 || (sending && !chat)}
           title={canQueue ? "Queue (⌘↵ or Enter)" : "Send (⌘↵ or Enter)"}
           onClick={submit}
         >
-          ↵
+          {label ? (
+            <>
+              {label.label} <span className="k">↵</span>
+            </>
+          ) : (
+            "↵"
+          )}
         </button>
       </div>
 
@@ -248,6 +292,11 @@ export function Composer({
         </span>
         <span className="right">
           {sending ? "turn in flight" : where ? `over the tailnet · ${where}` : ""}
+          {hint ? (
+            <span className={`ch-composer-hint ${hint.tone}`}>
+              {sending || where ? ` · ${hint.text}` : hint.text}
+            </span>
+          ) : null}
         </span>
       </div>
     </div>

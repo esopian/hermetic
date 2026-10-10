@@ -93,6 +93,12 @@ export function ChatView({
 
   if (withRail) return <BotWorkspace withContext={withContext} />;
 
+  /** The rail's select, shared with the composer's session chips. */
+  const select = (where: string, name: string, session: string | null = null) => {
+    if (chat.select(where, name, session) && isChatHash(window.location.hash))
+      window.location.hash = chatHash({ instance: where, bot: name, session });
+  };
+
   return (
     <div
       className={!withRail ? "ch-body ch-compact" : withContext ? "ch-body with-context" : "ch-body"}
@@ -112,10 +118,7 @@ export function ChatView({
           query={chat.query}
           onQuery={chat.setQuery}
           selection={selection}
-          onSelect={(instance, bot, session = null) => {
-            if (chat.select(instance, bot, session) && isChatHash(window.location.hash))
-              window.location.hash = chatHash({ instance, bot, session });
-          }}
+          onSelect={select}
           now={chat.now}
         />
       ) : null}
@@ -165,6 +168,8 @@ export function ChatView({
           tailnetDetail={chat.tailnetDetail}
           onSend={chat.send}
           onAbort={chat.abort}
+          sessions={chat.sessions}
+          onChooseSession={(session) => select(selection.instance, selection.bot, session)}
         />
       ) : chat.offTailnet ? (
         /*

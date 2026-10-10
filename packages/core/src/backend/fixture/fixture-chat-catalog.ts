@@ -521,6 +521,37 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
     },
   ],
 
+  /** A colleague's hermetic opened this; nothing at the composer says so. */
+  "sx-atlas-hermetic": [
+    {
+      id: "mx-atlas-hermetic-1",
+      session: "sx-atlas-hermetic",
+      role: "user",
+      author: null,
+      at: at("07:41:20"),
+      blocks: [{ kind: "text", markdown: "How many granite snapshots are past the 14-day retention?" }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-atlas-hermetic-2",
+      session: "sx-atlas-hermetic",
+      role: "bot",
+      author: { instance: "atlas", bot: "default" },
+      at: at("07:44:09"),
+      blocks: [
+        {
+          kind: "text",
+          markdown: "Six, the oldest from Aug 30. None are tagged `keep`, so all six can go.",
+        },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+  ],
+
   /** The turn ceiling, hit from the CLI where nobody was watching. */
   "sx-atlas-cli": [
     {

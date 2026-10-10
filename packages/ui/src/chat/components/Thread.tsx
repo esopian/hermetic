@@ -349,6 +349,8 @@ export function Thread({
   actions,
   mentions,
   mentionHint,
+  sessions = [],
+  onChooseSession,
 }: {
   fleetId: string;
   instance: string;
@@ -377,6 +379,13 @@ export function Thread({
   actions?: ReactNode;
   mentions?: readonly MentionBot[];
   mentionHint?: string;
+  /**
+   * This bot's sessions, offered as chips when the destination is `unchosen`.
+   * Passed by the surface that owns the rail, with the same select the rail's
+   * Sessions tab performs, so a chip and a rail row land in the same place.
+   */
+  sessions?: readonly SessionView[];
+  onChooseSession?: (session: string) => void;
 }) {
   const log = useRef<HTMLDivElement>(null);
   // One turn is one row: a durable read hands back an assistant row per tool
@@ -478,8 +487,8 @@ export function Thread({
           </div>
           <div className="ch-thead-sub">
             {/*
-              The header's badge reads the same `Destination` the composer's
-              band does. It must not fall back to `portal` for a session that
+              The header's badge reads the same `Destination` the composer
+              does. It must not fall back to `portal` for a session that
               has not been read — a badge saying `portal` is the same claim the
               band exists to stop the UI from making.
             */}
@@ -593,11 +602,9 @@ export function Thread({
       </div>
 
       <Composer
-        destination={
-          destination.state === "known" && !knownOrigin
-            ? { ...destination, emptyCanonical: true }
-            : destination
-        }
+        destination={destination}
+        choices={sessions}
+        onChoose={onChooseSession}
         placeholder={
           composer.placeholder === "Message…"
             ? `Message ${botLabel(instance, bot, botTitle)}…`

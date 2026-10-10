@@ -17,6 +17,7 @@ import {
   hermesConfigSetArgv,
   splitHermesSettings,
 } from "../schema/index.ts";
+import { HERMETIC_SESSION_SOURCE } from "../chat/hermes/hermes-chat-wire.ts";
 import { browserManagedConfigLines } from "./render-browser.ts";
 import { HermeticError } from "../errors.ts";
 import { COMMAND_ALLOWLIST } from "./render-system.ts";
@@ -99,6 +100,21 @@ export function imageProvenance(input: RenderInput): string {
     }) + "\n"
   );
 }
+
+/**
+ * The system-prompt hint for a session hermetic opened, keyed in
+ * `platform_hints` by `HERMETIC_SESSION_SOURCE` (`hermes-chat-wire.ts`).
+ *
+ * Hermes uses a session's `source` as the agent's platform and looks the hint
+ * up in its built-in `PLATFORM_HINTS`, which has no `hermetic` entry — so a
+ * session stamped `hermetic` would otherwise get no surface hint at all, where
+ * an unstamped one got `tui`'s. `platform_hints.<platform>.replace` applies
+ * even with no built-in to replace (`agent/system_prompt.py`
+ * `_resolve_platform_hint`). The text mirrors upstream's `tui` hint, plus the
+ * one fact that differs: this surface renders markdown.
+ */
+export const HERMETIC_PLATFORM_HINT =
+  "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's `deliver` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session.";
 
 /**
  * The managed half: the provider wiring, and whichever settings the operator
@@ -210,6 +226,14 @@ export function hermesManagedConfig(input: RenderInput): string {
   if (managed.terminal_backend !== undefined) {
     lines.push("terminal:", "  backend: " + yamlString(managed.terminal_backend));
   }
+
+  // Managed, not seeded: the hint describes the surface hermetic drives, so an
+  // agent's own config must not be able to shadow it.
+  lines.push(
+    "platform_hints:",
+    "  " + HERMETIC_SESSION_SOURCE + ":",
+    "    replace: " + yamlString(HERMETIC_PLATFORM_HINT),
+  );
 
   lines.push("");
   return lines.join("\n");

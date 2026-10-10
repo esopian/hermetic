@@ -286,7 +286,8 @@ export function createChatSend(ctx: ChatSendContext) {
       turnSeen = true;
       // The local session record is not the inbox's and does not depend on one:
       // a `Hermetic` with no notification store still owes the operator a
-      // destination banner that stops firing on their own conversations.
+      // composer whose destination restatement (send label and footer) stops
+      // appearing on their own conversations.
       rememberSession();
       const notifications = deps.notifications;
       if (!notifications) return;
@@ -377,8 +378,8 @@ export function createChatSend(ctx: ChatSendContext) {
     }
 
     /**
-     * Record that this laptop sent into this conversation, so the destination
-     * banner stops calling it foreign (§9.2, and `LocalChatSessions` above).
+     * Record that this laptop sent into this conversation, so the session stops
+     * reading as foreign (§9.2, and `LocalChatSessions` above).
      *
      * Written after the turn rather than when it was addressed, because a send
      * that never reached the box is not this portal joining a conversation. A
