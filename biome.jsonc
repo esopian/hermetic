@@ -23,7 +23,9 @@
       "!**/*.md",
       // graft rewrites its hook helpers and its settings entries on every run; formatting them
       // would fight the generator the same way snapshots do.
-      "!.claude"
+      "!.claude",
+      // site/ is its own toolchain with its own biome.jsonc and `bun run check`; it checks itself.
+      "!site"
     ]
   },
   // Chosen to match the code as it was already written, so adopting the formatter is churn-free

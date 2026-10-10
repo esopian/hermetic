@@ -1,0 +1,226 @@
+/*
+ * Starlight re-skinned onto the tokens (tokens.css) and the visual rules of docs/ui-brief.md:
+ * zero radius, borders as structure (3px major seams, 2px controls, 1px rows), Archivo and
+ * JetBrains Mono.
+ *
+ * The site is dark only. components/starlight/ThemeProvider.astro always sets data-theme="dark",
+ * and the mapping below is also written for data-theme="light" so a stale stored preference can
+ * never produce a second palette. This file is unlayered, so it wins over Starlight's layers.
+ */
+
+:root,
+:root[data-theme="light"],
+::backdrop {
+  color-scheme: dark;
+
+  --sl-color-white: var(--fg);
+  --sl-color-gray-1: var(--fg);
+  --sl-color-gray-2: var(--fg2);
+  --sl-color-gray-3: var(--fg3);
+  --sl-color-gray-4: var(--line2);
+  --sl-color-gray-5: var(--line);
+  --sl-color-gray-6: var(--bg2);
+  --sl-color-gray-7: var(--bg2);
+  --sl-color-black: var(--bg);
+
+  --sl-color-accent-low: #3a1a0d;
+  --sl-color-accent: var(--acc);
+  --sl-color-accent-high: var(--acc);
+
+  --sl-color-text: var(--fg2);
+  --sl-color-text-accent: var(--acc);
+  --sl-color-text-invert: var(--acc-fg);
+  --sl-color-bg: var(--bg);
+  --sl-color-bg-nav: var(--bg);
+  --sl-color-bg-sidebar: var(--bg);
+  --sl-color-bg-inline-code: var(--bg3);
+  --sl-color-bg-accent: var(--acc);
+  --sl-color-hairline-light: var(--line2);
+  --sl-color-hairline: var(--line);
+  --sl-color-hairline-shade: var(--bg);
+  --sl-color-backdrop-overlay: rgba(0, 0, 0, 0.55);
+
+  --sl-color-orange-low: #3a2c0d;
+  --sl-color-orange: var(--warn);
+  --sl-color-orange-high: var(--warn);
+  --sl-color-green-low: #0f2e20;
+  --sl-color-green: var(--ok);
+  --sl-color-green-high: var(--ok);
+  --sl-color-red-low: #3a1512;
+  --sl-color-red: var(--bad);
+  --sl-color-red-high: var(--bad);
+  --sl-color-blue-low: var(--bg3);
+  --sl-color-blue: var(--fg2);
+  --sl-color-blue-high: var(--fg);
+  --sl-color-purple-low: #3a1a0d;
+  --sl-color-purple: var(--acc);
+  --sl-color-purple-high: var(--acc);
+
+  --sl-shadow-sm: none;
+  --sl-shadow-md: none;
+  --sl-shadow-lg: none;
+
+  --sl-font: var(--sans);
+  --sl-font-mono: var(--mono);
+
+  --sl-nav-height: 64px;
+}
+
+/* Zero radius anywhere (docs/ui-brief.md, "Look"). */
+*,
+*::before,
+*::after {
+  /* biome-ignore lint/complexity/noImportantStyles: zero radius is a hard rule (docs/ui-brief.md); Starlight's own component styles set radii at higher specificity. */
+  border-radius: 0 !important;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg2);
+}
+
+/* Header: one 3px seam. Scoped to the <header>: Header.astro's inner div is also `.header`. */
+header.header {
+  border-bottom: 3px solid var(--fg);
+}
+
+/* Sidebar and table of contents sit behind 1px rules. */
+.sidebar-pane {
+  border-inline-end: 1px solid var(--line);
+}
+
+.sidebar-content .top-level > li > details > summary .group-label > span,
+.sidebar-content .top-level > li > .group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 800;
+}
+
+.sidebar-content a:hover {
+  color: var(--fg);
+}
+
+starlight-toc h2,
+mobile-starlight-toc .toggle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+
+starlight-toc a[aria-current="true"] {
+  color: var(--acc);
+}
+
+/* Page title and headings: heavy Archivo, like the dashboard. */
+h1#_top {
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.sl-markdown-content :is(h2, h3, h4, h5, h6) {
+  color: var(--fg);
+  font-weight: 800;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  border-top: 2px solid var(--fg);
+  padding-top: 0.75rem;
+}
+
+.sl-markdown-content a {
+  color: var(--fg);
+  text-decoration-color: var(--acc);
+  text-underline-offset: 3px;
+}
+
+.sl-markdown-content a:hover {
+  color: var(--acc);
+}
+
+.sl-markdown-content :not(pre) > code {
+  font-family: var(--mono);
+  background: var(--bg3);
+  color: var(--fg);
+  padding: 0.1em 0.3em;
+}
+
+/* Tables: 2px header rule, 1px row rules. */
+.sl-markdown-content table {
+  border-collapse: collapse;
+}
+
+.sl-markdown-content :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sl-markdown-content th {
+  border-bottom: 2px solid var(--fg);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  background: transparent;
+}
+
+.sl-markdown-content tr:nth-child(2n) {
+  background: transparent;
+}
+
+/* Asides: a 2px left rule in the variant's colour on bg2, no tinted fill. */
+.starlight-aside {
+  background: var(--bg2);
+  border: 0;
+  border-inline-start: 2px solid var(--sl-color-asides-border, var(--fg));
+}
+
+/* Buttons and inputs: 2px outlines. */
+.sl-link-button,
+site-search button[data-open-modal] {
+  border: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg);
+}
+
+.sl-link-button.primary {
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.sl-link-button.primary:hover {
+  background: var(--acc);
+  color: var(--acc-fg);
+  border-color: var(--acc);
+}
+
+/* Pagination links: 2px outlines. */
+.pagination-links a {
+  border: 2px solid var(--line2);
+  box-shadow: none;
+}
+
+.pagination-links a:hover {
+  border-color: var(--fg);
+}
+
+/* Footer meta (edit link) in mono, like the dashboard footer. */
+.meta {
+  font-family: var(--mono);
+  font-size: 11px;
+}

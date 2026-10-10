@@ -1,0 +1,12 @@
+---
+/*
+ * The dark terminal frame. The caller writes the <pre> itself, so its whitespace is laid out in
+ * the caller's file exactly as it renders.
+ */
+interface Props {
+  framed?: boolean;
+}
+
+const { framed = false } = Astro.props;
+---
+<div class="term" style={framed ? "border:2px solid var(--fg)" : undefined}><slot /></div>

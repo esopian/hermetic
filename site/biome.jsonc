@@ -1,0 +1,81 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  // The site is not a root workspace (site/AGENTS.md); root `biome check .` excludes it and this
+  // file checks it instead. Formatter settings are copied from the root biome.jsonc.
+  "root": true,
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!dist",
+      "!.astro",
+      "!.wrangler",
+      "!src/content/docs/_synced",
+      "!**/*.md",
+      "!**/*.mdx"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 104,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false,
+      "quoteProperties": "asNeeded"
+    }
+  },
+  "html": {
+    // Biome's .astro support is partial; it formats and lints the frontmatter script only.
+    "formatter": { "enabled": false }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        // strictest TypeScript (noPropertyAccessFromIndexSignature) requires process.env["X"].
+        "useLiteralKeys": "off"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  },
+  "overrides": [
+    {
+      // Biome reads only an .astro file's frontmatter, so a component imported there and used in
+      // the template looks unused. astro check (TypeScript) is the unused-symbol check for these.
+      "includes": ["**/*.astro"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnusedImports": "off", "noUnusedVariables": "off" }
+        }
+      }
+    },
+    {
+      // base.css keeps the approved mock's rule order (surface by surface); reordering for
+      // specificity would change the cascade. Same call as the root biome.jsonc.
+      "includes": ["**/*.css"],
+      "linter": {
+        "rules": {
+          "style": { "noDescendingSpecificity": "off" }
+        }
+      }
+    }
+  ]
+}
