@@ -590,6 +590,7 @@ export function useNavKeys({
   filterRef,
   toggleShortcuts,
   openInbox,
+  openInboxDrawer,
 }: {
   /** Nothing but `?` fires before this home is bound, or while the wizard is up. */
   enabled: boolean;
@@ -601,6 +602,8 @@ export function useNavKeys({
   toggleShortcuts: () => void;
   /** Opens the notification centre; `null` where this tree has no inbox. */
   openInbox: RefObject<((open: boolean) => void) | null>;
+  /** Opens the full inbox drawer (`⇧I`); absent or `null` where there is no inbox. */
+  openInboxDrawer?: RefObject<(() => void) | null>;
 }): void {
   const { openCreate, openSettings, closeView } = useNav();
   useEffect(() => {
@@ -612,7 +615,7 @@ export function useNavKeys({
         e.ctrlKey ||
         e.metaKey ||
         e.altKey ||
-        (e.shiftKey && e.key !== "?")
+        (e.shiftKey && e.key !== "?" && e.key !== "I")
       )
         return;
       const target = e.target as HTMLElement | null;
@@ -660,6 +663,12 @@ export function useNavKeys({
         e.preventDefault();
         openInbox.current?.(true);
       }
+      // `⇧I` for the full inbox. Shift is the only modifier let through for
+      // it; the drawer is an overlay, so a second press is refused like `i`.
+      if (e.key === "I") {
+        e.preventDefault();
+        openInboxDrawer?.current?.();
+      }
       if (e.key === ",") {
         e.preventDefault();
         openSettings();
@@ -667,5 +676,15 @@ export function useNavKeys({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openCreate, openSettings, closeView, enabled, overlay, filterRef, toggleShortcuts, openInbox]);
+  }, [
+    openCreate,
+    openSettings,
+    closeView,
+    enabled,
+    overlay,
+    filterRef,
+    toggleShortcuts,
+    openInbox,
+    openInboxDrawer,
+  ]);
 }

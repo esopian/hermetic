@@ -2,7 +2,7 @@ import { z } from "zod";
 import { AGENT_NAME_RE } from "../shared/naming.ts";
 export { AGENT_NAME_RE } from "../shared/naming.ts";
 import { Iso, ProfileId, Region, SecretSlug } from "./common.ts";
-import { NotificationSource } from "./notification.ts";
+import { AutoClearRead, NotificationSource, NotificationView } from "./notification.ts";
 import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
 import { ProfileName } from "./profile.ts";
@@ -748,27 +748,104 @@ export type RunsListInput = z.infer<typeof RunsListInput>;
  * `hermetic inbox` (§4.9): the local notification log, read newest
  * first. `since` is what a poller passes — rows strictly newer than a timestamp
  * it already delivered — so a reconnecting client is not handed its own inbox
- * a second time.
+ * a second time. `view` picks the slice (`NotificationView`); absent is
+ * `inbox`, the rows still in front of the operator.
  */
 export const NotificationsListInput = z.object({
   unread: z.boolean().optional(),
   limit: z.number().int().min(1).max(500).default(100),
   since: Iso.optional(),
+  view: NotificationView.optional(),
 });
 export type NotificationsListInput = z.infer<typeof NotificationsListInput>;
 
+/** The most rows one inbox write may name, so a batch is one bounded statement. */
+export const NOTIFICATION_BATCH_MAX = 500;
+
+const NotificationIds = z.array(z.string().min(1)).min(1).max(NOTIFICATION_BATCH_MAX);
+
+/** How many of a request's selectors are present; every inbox write wants exactly one. */
+function selectorCount(...present: boolean[]): number {
+  return present.filter(Boolean).length;
+}
+
 /**
- * `hermetic inbox ack <id>` / `--all`. Exactly one, for the reason
- * `FleetsAliasInput` insists on exactly one: "mark everything read" is a
- * different instruction from "mark this read", and a request carrying both says
- * neither.
+ * `hermetic inbox ack <id...>` / `--all`, optionally `--unread`. Exactly one
+ * selector, for the reason `FleetsAliasInput` insists on exactly one: "mark
+ * everything read" is a different instruction from "mark these read", and a
+ * request carrying both says neither.
+ *
+ * `unread` reverses the write — it clears `read_at` — and is refused with
+ * `all`: "mark everything unread" is not a thing anybody asks for, and a
+ * mistyped one would bury the inbox's only record of what was already seen.
  */
 export const NotificationsAckInput = z
-  .object({ id: z.string().min(1).optional(), all: z.boolean().optional() })
-  .refine((v) => (v.all === true) !== (v.id !== undefined), {
-    message: "provide a notification id or --all",
+  .object({
+    id: z.string().min(1).optional(),
+    ids: NotificationIds.optional(),
+    all: z.boolean().optional(),
+    unread: z.boolean().optional(),
+  })
+  .refine((v) => selectorCount(v.id !== undefined, v.ids !== undefined, v.all === true) === 1, {
+    message: "provide notification ids or --all, not both",
+  })
+  .refine((v) => !(v.all === true && v.unread === true), {
+    message: "--unread takes notification ids, not --all",
   });
 export type NotificationsAckInput = z.infer<typeof NotificationsAckInput>;
+
+/**
+ * `hermetic inbox clear <id...>` / `--read` / `--resolved`, optionally
+ * `--restore`. Clearing takes rows out of the inbox and into History, where
+ * they stay until retention deletes them (§4.9).
+ *
+ * `read` and `resolved` address the inbox view in the caller's scope — the
+ * rows the operator can see, not the whole table. `restore` puts named rows
+ * back (clearing both `cleared_at` and `snoozed_until`), which is what an undo
+ * sends; it takes ids only, because "restore everything I have ever cleared"
+ * would resurrect a month of history in one keystroke.
+ */
+export const NotificationsClearInput = z
+  .object({
+    ids: NotificationIds.optional(),
+    read: z.boolean().optional(),
+    resolved: z.boolean().optional(),
+    restore: z.boolean().optional(),
+  })
+  .refine((v) => selectorCount(v.ids !== undefined, v.read === true, v.resolved === true) === 1, {
+    message: "provide notification ids, --read or --resolved — exactly one",
+  })
+  .refine((v) => !(v.restore === true && v.ids === undefined), {
+    message: "--restore takes notification ids",
+  });
+export type NotificationsClearInput = z.infer<typeof NotificationsClearInput>;
+
+/**
+ * `hermetic inbox snooze <id...> --until <iso>` / `--clear`. Either a moment
+ * to hide the rows until, or `clear` to bring them back now — never both. The
+ * moment has to be in the future; that is checked against core's clock when the
+ * request runs, not here, because a schema has no clock worth trusting.
+ */
+export const NotificationsSnoozeInput = z
+  .object({
+    ids: NotificationIds,
+    until: Iso.optional(),
+    clear: z.boolean().optional(),
+  })
+  .refine((v) => (v.until !== undefined) !== (v.clear === true), {
+    message: "provide --until or --clear, not both",
+  });
+export type NotificationsSnoozeInput = z.infer<typeof NotificationsSnoozeInput>;
+
+/**
+ * `hermetic inbox settings [--auto-clear …] [--clear-resolved-on-read …]`.
+ * A patch: each stated field replaces its value, and an empty request reads.
+ */
+export const NotificationsSettingsInput = z.object({
+  auto_clear_read: AutoClearRead.optional(),
+  clear_resolved_on_read: z.boolean().optional(),
+});
+export type NotificationsSettingsInput = z.infer<typeof NotificationsSettingsInput>;
 
 /**
  * `hermetic inbox mute <agent>` / `mute source:<source>` / `--clear`. The two
