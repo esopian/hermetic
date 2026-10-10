@@ -93,10 +93,13 @@ export type { FleetsDeps } from "./fleet/fleets.ts";
  * §4.9: the operator's inbox. The store contract and the
  * in-process fallback are exported because a head opens the store — the CLI and
  * the portal each open the local database themselves — and because the fixture
- * seed writes rows into one. The three methods themselves stay behind
+ * seed writes rows into one. The methods themselves stay behind
  * `hermetic.ts`, like every other module of this shape.
  */
 export type {
+  NotificationAckWrite,
+  NotificationClearWrite,
+  NotificationCounts,
   NotificationDeps,
   NotificationInsert,
   NotificationStore,

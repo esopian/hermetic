@@ -24,6 +24,8 @@ import type {
   NetworkMode,
   NetworkPlan,
   NetworkReport,
+  NotificationListView,
+  NotificationSettingsView,
   NotificationSourceView,
   NotificationsResult,
   OpEvent,
@@ -618,19 +620,56 @@ export async function listOps(
  * page cannot count what it did not fetch.
  */
 export function fetchNotifications(
-  input: { unread?: boolean; limit?: number; since?: string } = {},
+  input: { unread?: boolean; limit?: number; since?: string; view?: NotificationListView } = {},
 ): Promise<NotificationsResult> {
   return transport().request<NotificationsResult>("notifications.list", { ...input });
 }
 
-/** `POST /api/notifications/ack` — one row by id, or every unread row. */
+/**
+ * Marks rows read — one id, a batch of ids in one write, or every unread row —
+ * or, with `unread: true`, marks them unread again (not with `all`).
+ */
 export function ackNotification(
-  input: { id: string } | { all: true },
+  input: { id: string; unread?: boolean } | { ids: string[]; unread?: boolean } | { all: true },
 ): Promise<BridgeResult<"notifications.ack">> {
   return transport().request<BridgeResult<"notifications.ack">>("notifications.ack", {
     ...input,
     target: target(),
   });
+}
+
+/**
+ * Takes rows out of the inbox into History (kept for the 30-day retention), or
+ * with `restore` puts them back and lifts any snooze — the inverse the undo bar
+ * sends.
+ */
+export function clearNotifications(
+  input: { ids: string[]; restore?: boolean } | { read: true } | { resolved: true },
+): Promise<BridgeResult<"notifications.clear">> {
+  return transport().request<BridgeResult<"notifications.clear">>("notifications.clear", {
+    ...input,
+    target: target(),
+  });
+}
+
+/** Hides rows from the inbox until `until`, or lifts a snooze with `clear`. */
+export function snoozeNotifications(
+  input: { ids: string[]; until: string } | { ids: string[]; clear: true },
+): Promise<BridgeResult<"notifications.snooze">> {
+  return transport().request<BridgeResult<"notifications.snooze">>("notifications.snooze", {
+    ...input,
+    target: target(),
+  });
+}
+
+/**
+ * The inbox's auto-clear rule, which is core's and shared with the CLI's
+ * `hermetic inbox settings`. An empty input reads it.
+ */
+export function notificationSettings(
+  input: Partial<NotificationSettingsView> = {},
+): Promise<NotificationSettingsView> {
+  return transport().request<NotificationSettingsView>("notifications.settings", { ...input });
 }
 
 /**

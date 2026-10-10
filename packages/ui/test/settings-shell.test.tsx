@@ -161,7 +161,7 @@ const MARKER: Record<SettingsSection, string> = {
   diagnostics: "Run doctor",
   presets: "Reset to built-in",
   chat: "Avatar style",
-  notifications: "unread only",
+  notifications: "Open inbox",
   runs: "reading the local run log…",
   danger: "TEAR DOWN THE FOUNDATION",
 };

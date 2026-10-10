@@ -128,6 +128,10 @@ export type NotificationMuteView = NotificationsResult["mutes"][number];
 export type NotificationActionView = NotificationView["actions"][number];
 /** The `source` enum, read back off the row rather than re-declared here. */
 export type NotificationSourceView = NotificationView["source"];
+/** Which slice of the inbox `notifications.list` reads: the inbox itself by default. */
+export type NotificationListView = "inbox" | "snoozed" | "history" | "all";
+/** Core's auto-clear rule (`notifications.settings`), shared with the CLI. */
+export type NotificationSettingsView = BridgeResult<"notifications.settings">;
 
 /**
  * §9.2's chat wire types, read back off the bridge for the same
