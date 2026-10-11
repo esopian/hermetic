@@ -101,6 +101,13 @@ export class BoxHost extends FakeHost {
   readonly groups = new Set<string>(["root"]);
   /** Each account's home, field 6 of `getent passwd`; `useradd --home-dir` and `usermod --home` move it. */
   readonly userHomes = new Map<string, string>([["root", "/root"]]);
+  /**
+   * Each account's login shell, field 7 of `getent passwd`; `useradd --shell` and
+   * `usermod --shell` set it. An account added without one reads back as
+   * `/usr/sbin/nologin`, which is what a box created before `hermes` got a login
+   * shell looks like.
+   */
+  readonly userShells = new Map<string, string>();
   /** URL → the bytes `curl -o` writes for it; unscripted fetches get `stubBody`. */
   readonly curlBodies = new Map<string, string | Uint8Array>();
   /** Upstream Hermes: ref → the version `hermes --version` prints once installed from it. */
@@ -166,14 +173,17 @@ export class BoxHost extends FakeHost {
         if (db === "group") return this.groups.has(name) ? ok(`${name}:x:1000:\n`) : fail(2);
         if (!this.users.has(name)) return fail(2);
         const home = this.userHomes.get(name) ?? `/home/${name}`;
-        return ok(`${name}:x:1000:1000::${home}:/usr/sbin/nologin\n`);
+        const shell = this.userShells.get(name) ?? "/usr/sbin/nologin";
+        return ok(`${name}:x:1000:1000::${home}:${shell}\n`);
       }
       case "useradd":
       case "usermod": {
         const who = operands(args).at(-1);
         const home = flagValue(args, ["--home-dir", "--home", "-d"]);
         if (who && bin === "useradd") this.addUser(who);
+        const shell = flagValue(args, ["--shell", "-s"]);
         if (who && home) this.userHomes.set(who, home);
+        if (who && shell) this.userShells.set(who, shell);
         return ok();
       }
       case "groupadd": {

@@ -12,6 +12,7 @@ import type { AppLog } from "../log.ts";
 import type { OpRegistry } from "../ops.ts";
 import type { FleetPoller } from "../poller.ts";
 import type { AppState } from "../state.ts";
+import type { TerminalHost } from "../terminal/host.ts";
 import type { StreamRegistry } from "./streams.ts";
 
 /**
@@ -107,6 +108,13 @@ export interface HandlerContext {
    * on meaning exactly what it meant before.
    */
   native?: NativeDeps;
+  /**
+   * The in-app terminal's sessions (issue #18). One per process, shared by
+   * every window's context: a session outlives the window that opened it.
+   * Optional for the same reason `native` is — a context built without one
+   * refuses the `terminal.*` requests `UNSUPPORTED` and ignores their messages.
+   */
+  terminals?: TerminalHost;
 }
 
 /**

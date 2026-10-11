@@ -1540,3 +1540,30 @@ describe("providers: named profiles over the fixture fleet", () => {
     expect(JSON.stringify(recorder.list({ limit: 5 }))).not.toContain(key);
   });
 });
+
+describe("inbox settings --terminal-alerts", () => {
+  /**
+   * Issue #18: the desktop terminal's master switch, validated with the same
+   * schema core parses with and printed beside the auto-clear rules. Put back
+   * on at the end: the home is shared by every test in this file.
+   */
+  test("off persists, prints, and is read back; on restores it", async () => {
+    const off = await run("inbox", "settings", "--terminal-alerts", "off");
+    expect(off.code).toBe(0);
+    expect(off.stdout).toContain("terminal alerts: off\n");
+
+    const read = await run("inbox", "settings", "--json");
+    expect(read.code).toBe(0);
+    expect(JSON.parse(read.stdout)).toMatchObject({ terminal_alerts: false });
+
+    const on = await run("inbox", "settings", "--terminal-alerts", "on", "--json");
+    expect(on.code).toBe(0);
+    expect(JSON.parse(on.stdout)).toMatchObject({ terminal_alerts: true });
+  });
+
+  test("anything but on or off is refused by the schema", async () => {
+    const { code, stderr } = await run("inbox", "settings", "--terminal-alerts", "sometimes");
+    expect(code).toBe(2);
+    expect(stderr).toContain("terminal_alerts");
+  });
+});

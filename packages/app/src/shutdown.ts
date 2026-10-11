@@ -36,11 +36,18 @@ export interface StoppableObservations {
   stop(): Promise<void>;
 }
 
+/** As much of the terminal host as a shutdown needs (`terminal/host.ts`). */
+export interface StoppableTerminals {
+  /** Hangs up every live session. Synchronous: nothing after a quit gets to wait. */
+  stopAll(): void;
+}
+
 export interface ShutdownTarget {
   server: StoppableServer;
   state?: PollingState;
   log?: AppLog;
   chat?: StoppableObservations;
+  terminals?: StoppableTerminals;
 }
 
 /**
@@ -56,6 +63,17 @@ export const SIGNAL_EXIT_CODES: Readonly<Record<string, number>> = {
 /** Stops the poller and closes the listener. Exported so a test can call it. */
 export async function shutdown(target: ShutdownTarget, signal: string): Promise<void> {
   target.log?.line("info", "portal", `shutting down (${signal})`);
+  /**
+   * The terminal sessions first, and synchronously (issue #18): every
+   * `tailscale ssh` this process started is hung up before anything below can
+   * await, so a teardown that stalls on the chat owner or a second Ctrl-C that
+   * exits mid-way still leaves no session running without its window.
+   */
+  try {
+    target.terminals?.stopAll();
+  } catch {
+    // Same rule as the poller: a session that will not stop is not a reason to stay up.
+  }
   try {
     target.state?.poller?.stop();
   } catch {

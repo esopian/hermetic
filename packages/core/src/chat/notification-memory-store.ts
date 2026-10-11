@@ -202,6 +202,16 @@ export class MemoryNotificationStore implements NotificationStore {
     return moved;
   }
 
+  ackRef(source: Notification["source"], ref: string, fleet: string | null): number {
+    const at = this.now().toISOString();
+    const target = this.forFleet(fleet).filter(
+      (r) => r.source === source && r.ref === ref && r.read_at == null,
+    );
+    for (const row of target) row.read_at = at;
+    this.sweep();
+    return target.length;
+  }
+
   clear(input: NotificationClearWrite, fleet: string | null, instances?: readonly string[]): number {
     const at = this.now().toISOString();
     if (input.restore === true) {

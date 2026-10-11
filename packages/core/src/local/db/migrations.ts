@@ -503,7 +503,9 @@ const MIGRATIONS: Migration[] = [
      * laptop that ran it purges its own local state; every other laptop finds
      * out by seeing a different `created_at` on the live row, and this is where
      * it remembers the one it saw last. Created empty on purpose: an existing
-     * home's state is adopted on its first read, never purged by the upgrade.
+     * home's state is adopted on its first read, never purged by the upgrade —
+     * unless a tombstone shows the name changed hands after that state was
+     * written (`oldestStateAt` in `db/incarnations.ts`).
      */
     name: "agent-incarnations",
     version: 13,

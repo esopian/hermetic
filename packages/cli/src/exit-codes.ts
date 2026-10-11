@@ -124,6 +124,18 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   BROWSER_NEEDS_FOUNDATION_UPDATE: 7,
   /** The CDN served something other than the pinned build: a precondition of the environment. */
   BROWSER_MIRROR_MISMATCH: 9,
+  /**
+   * The in-app terminal's refusals (issue #18). The CLI never raises them —
+   * `hermetic ssh` execs `tailscale ssh` itself — but the table is exhaustive.
+   * Each is a precondition of the environment (the box is off, the laptop's
+   * Tailscale is missing, down or on another tailnet), so they join the 9s; the
+   * session cap is a conflict with what is already open, like `LOCKED`.
+   */
+  TERMINAL_AGENT_OFF: 9,
+  TAILSCALE_MISSING: 9,
+  TAILSCALE_STOPPED: 9,
+  TAILSCALE_WRONG_TAILNET: 9,
+  TERMINAL_LIMIT: 7,
   UNSUPPORTED: 10,
   /** The stack update itself failed or rolled back: a plain failure (§6.6 step 3). */
   FOUNDATION_UPDATE_FAILED: EXIT_FAILURE,

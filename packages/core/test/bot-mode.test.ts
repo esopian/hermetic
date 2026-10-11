@@ -370,6 +370,27 @@ describe("Bot Mode real surface in fixture mode", () => {
     await h.rooms.rename({ instance: "atlas", room: room.id, name: "Renamed", event_id: "rename-1" });
     expect((await h.rooms.get({ instance: "atlas", room: room.id })).name).toBe("Renamed");
   });
+  test("a room's history follows this laptop's redaction switch", async () => {
+    const key = "sk-ant-FIXTUREFIXTUREFIXTURE";
+    const h = await fixture();
+    const room = await h.rooms.create({
+      instance: "atlas",
+      room: "key-room",
+      name: "Keys",
+      members: [
+        { instance: "atlas", bot: "default" },
+        { instance: "atlas", bot: "scribe" },
+      ],
+    });
+    await h.rooms.send({ instance: "atlas", room: room.id, text: `try ${key}`, event_id: "event-k" });
+    const said = async () =>
+      JSON.stringify((await h.rooms.history({ instance: "atlas", room: room.id })).events);
+    // Off by default (§9.2): the room log is shown as the box wrote it.
+    expect(await said()).toContain(key);
+    await h.chat.settings({ redact: true });
+    expect(await said()).not.toContain(key);
+    expect(await said()).toContain("try [redacted]");
+  });
   test("archive retires canonical identity without deleting transcript", async () => {
     const h = await fixture();
     const ref = { instance: "atlas", bot: "default" },

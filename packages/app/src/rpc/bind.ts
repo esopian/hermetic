@@ -19,6 +19,8 @@ import type { HandlerContext } from "../handlers/ctx.ts";
 import { dispatch } from "../handlers/dispatch.ts";
 import { KEEPALIVE_EVENT } from "../handlers/streams.ts";
 import type { StreamFrame, StreamSink } from "../handlers/streams.ts";
+import { terminalMessageHandlers } from "../handlers/terminal.ts";
+import type { TerminalFrame } from "../terminal/channel.ts";
 import { InitInFlightError } from "../init-op.ts";
 import type { AppLog } from "../log.ts";
 import { RequestValidationError } from "../validation.ts";
@@ -56,7 +58,15 @@ export interface RpcBindingDeps<Rpc> {
   /** This window's context. Its `streams` registry is dropped by `close()`. */
   ctx: HandlerContext;
   log?: AppLog;
+  /**
+   * Names this window to the terminal host, which keys `terminal.view` by it
+   * (two windows can show one session). Minted here when absent.
+   */
+  windowKey?: string;
 }
+
+/** Window keys for bindings that were not given one. */
+let nextWindow = 0;
 
 export interface RpcBinding<Rpc> {
   /** Whatever `defineRPC` returned, for the `BrowserWindow` that wants it. */
@@ -259,6 +269,11 @@ function push(send: SendMessage, message: StreamMessageName, id: string, frame: 
           : { stream_id: id, line: frame.data },
       );
       return;
+    case "terminal.frame":
+      // The terminal's sink is only ever handed `TerminalFrame`s
+      // (`bridgeChannel`), and those are already `{ event, data }`.
+      send("terminal.frame", { stream_id: id, frame: frame as TerminalFrame });
+      return;
   }
 }
 
@@ -358,6 +373,7 @@ function pumpFor(name: string, params: unknown, send: SendMessage): StreamPump |
 
 export function createRpcBinding<Rpc>(deps: RpcBindingDeps<Rpc>): RpcBinding<Rpc> {
   const { ctx, send, log } = deps;
+  const windowKey = deps.windowKey ?? `window-${++nextWindow}`;
 
   const requests: Record<string, (params: never) => unknown> = {};
   for (const name of REQUEST_NAMES) {
@@ -396,7 +412,23 @@ export function createRpcBinding<Rpc>(deps: RpcBindingDeps<Rpc>): RpcBinding<Rpc
       messages: {
         "page.ready": () => {
           log?.line("debug", "rpc", "page ready");
+          // A reload keeps this binding, and so this window's key: whatever
+          // the old page said it was viewing, and the keystroke count it was
+          // on, belong to a page that is gone. The new one reports afresh.
+          ctx.terminals?.forgetWindow(windowKey);
+          // The old page's attaches died with it and the new page attaches
+          // afresh; left open, each would stall on credits it can never be
+          // acked for and resync once a second until its session ends.
+          // `page.ready` precedes the new page's first attach, so only the
+          // old page's streams are here to close.
+          for (const id of ctx.terminals?.attachIds((s) => ctx.streams.has(s)) ?? []) {
+            ctx.streams.close(id);
+          }
         },
+        // Keystrokes, acks and the view state. Never logged — not here, not
+        // in the handlers — because the first of them is what the operator
+        // typed, passwords included (`handlers/terminal.ts`).
+        ...terminalMessageHandlers(ctx, windowKey),
       },
     },
   });
@@ -405,6 +437,9 @@ export function createRpcBinding<Rpc>(deps: RpcBindingDeps<Rpc>): RpcBinding<Rpc
     rpc,
     close() {
       ctx.streams.closeAll();
+      // Whatever this window showed is no longer shown by it; the sessions
+      // themselves belong to the process and carry on.
+      ctx.terminals?.forgetWindow(windowKey);
     },
   };
 }

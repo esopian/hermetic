@@ -59,6 +59,10 @@ import type { NotificationPrefs, WatchedThread } from "../logic/notification-log
 import { transport } from "../api/transport.ts";
 import { isVisible } from "../lib/visibility.ts";
 import { useListeningIfAvailable } from "./listening-state.tsx";
+import { isTerminalKind } from "../logic/terminal-notify.ts";
+import { useTerminalNotify } from "./terminal-notify-state.ts";
+import type { ReturnToast } from "./terminal-notify-state.ts";
+import { viewedTerminal } from "./terminal-watch.ts";
 import { useFleetIfAvailable } from "./state.tsx";
 
 /**
@@ -160,6 +164,13 @@ export interface Notify {
   saveSettings: (patch: Partial<NotificationSettingsView>) => Promise<void>;
   toasts: Toast[];
   dismissToast: (key: string) => void;
+  /**
+   * The pinned "while you were away" toast (issue #18): the newest terminal
+   * row that interrupted while the window was hidden, raised when it comes
+   * back. `null` when there is none.
+   */
+  returnToast: ReturnToast | null;
+  dismissReturnToast: () => void;
   refresh: () => Promise<void>;
   /**
    * Whether the *first* read came back a full page, i.e. the inbox is larger
@@ -292,6 +303,9 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerView, setDrawerView] = useState<DrawerView>("inbox");
   const [settings, setSettings] = useState<NotificationSettingsView | null>(null);
+  /** Read at delivery time by the `terminal_alerts` gate below. */
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [undo, setUndo] = useState<UndoBar | null>(null);
   const undoStack = useRef<UndoEntry[]>([]);
   const undoSeq = useRef(0);
@@ -421,14 +435,40 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
    * is shut.
    * Otherwise the row is on screen and an OS banner is a second copy of it.
    */
+  /**
+   * The terminal's banner gate and return toast (`terminal-notify-state.ts`).
+   * Terminal rows take their banner through it; the return toast reads the
+   * rows held here when the window comes back.
+   */
+  const terminal = useTerminalNotify({
+    itemsRef,
+    raiseDesktop,
+    mayBanner: () => !(isVisible() && centerRef.current),
+    dismissToastsFor: (ids) => setToasts((prev) => prev.filter((t) => !ids.has(t.notification.id))),
+  });
+  const terminalBanner = terminal.banner;
+  const noteTerminalRow = terminal.noteRow;
+
   const maybeDesktop = useCallback(
     (n: NotificationView) => {
-      if (!shouldDesktop(n, prefsRef.current, prefsRef.current.quiet, new Date(), watchingRef.current))
+      if (
+        !shouldDesktop(
+          n,
+          prefsRef.current,
+          prefsRef.current.quiet,
+          new Date(),
+          watchingRef.current,
+          viewedTerminal(),
+        )
+      )
         return;
       if (isVisible() && centerRef.current) return;
-      raiseDesktop({ title: n.title, body: n.detail, tag: n.id });
+      // Terminal banners coalesce (at most one per session per 60 s, one per
+      // 10 s app-wide); every other source raises its own.
+      if (isTerminalKind(n.kind)) terminalBanner(n);
+      else raiseDesktop({ title: n.title, body: n.detail, tag: n.id });
     },
-    [raiseDesktop],
+    [raiseDesktop, terminalBanner],
   );
 
   const refresh = useCallback(async () => {
@@ -488,8 +528,20 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
         writeItems((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev]));
         if (delta.unread) setUnread((u) => u + delta.unread);
         if (delta.needs_action) setNeedsAction((c) => c + delta.needs_action);
-        if (shouldToast(n, prefsRef.current, prefsRef.current.quiet, new Date(), watchingRef.current))
-          pushToast(n);
+        // `terminal_alerts` off means nothing is raised. Core already writes no
+        // terminal row then; this holds the line for one written in the instant
+        // before the switch, which would otherwise toast after it.
+        if (isTerminalKind(n.kind) && settingsRef.current?.terminal_alerts === false) return;
+        const toasts = shouldToast(
+          n,
+          prefsRef.current,
+          prefsRef.current.quiet,
+          new Date(),
+          watchingRef.current,
+          viewedTerminal(),
+        );
+        if (toasts) pushToast(n);
+        if (isTerminalKind(n.kind)) noteTerminalRow(n, toasts);
         maybeDesktop(n);
       },
       onCounts: (counts) => {
@@ -498,7 +550,7 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
         setNeedsAction(counts.needs_action);
       },
     });
-  }, [fleet, pushToast, maybeDesktop, accepts, writeItems]);
+  }, [fleet, pushToast, maybeDesktop, accepts, writeItems, noteTerminalRow]);
 
   const writeMute = useCallback(
     async (input: MuteTarget, clear: boolean) => {
@@ -941,6 +993,8 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       saveSettings,
       toasts,
       dismissToast,
+      returnToast: terminal.returnToast,
+      dismissReturnToast: terminal.dismissReturnToast,
       refresh,
       truncated,
       error,
@@ -981,6 +1035,8 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       saveSettings,
       toasts,
       dismissToast,
+      terminal.returnToast,
+      terminal.dismissReturnToast,
       refresh,
       truncated,
       error,

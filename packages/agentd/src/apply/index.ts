@@ -54,6 +54,7 @@ import { ensureAgentVenv } from "./agent-python.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
+import { ensureShellIntegration } from "./shell.ts";
 
 /**
  * The phases live in their own modules; everything callers and tests reached
@@ -94,6 +95,15 @@ export {
   shasumFor,
 } from "./node-web.ts";
 export { SECRETS_ENV_DIR, SECRETS_ENV_PATH, envLine, materialiseSecrets } from "./secrets.ts";
+export {
+  BASHRC_PATH,
+  SHELL_HOOK_LINE,
+  SHELL_HOOK_MARKER,
+  SHELL_INTEGRATION_PATH,
+  SHELL_SUDOERS_PATH,
+  ensureShellIntegration,
+  withShellHook,
+} from "./shell.ts";
 
 export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<ApplyResult> {
   const { host } = opts;
@@ -256,6 +266,15 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
       at(),
     ),
   );
+
+  // ─── 3a. the terminal's shell integration (issue #18) ──────────────────────
+  // Not from the manifest: the script is core's, the same on every box, and
+  // the laptop's terminal parses what it prints. Nothing restarts over it — a
+  // shell reads it when it starts, so only new sessions see a change. After the
+  // manifest's own files, so a sudoers drop-in the manifest renders is
+  // validated (and, if broken, reported) first.
+  emit(opEvent("files", 0.56, "checking the terminal shell integration", at()));
+  await ensureShellIntegration(host, write, result, dry);
 
   // ─── 3b. Runtime secrets → tmpfs EnvironmentFile (§6.4, §8.3) ──────────────
   const keyEnv = PROVIDERS[manifest.provider].env;

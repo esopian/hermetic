@@ -14,8 +14,16 @@
 import { z } from "zod";
 import { Iso } from "./common.ts";
 
-/** Which part of hermetic raised the row. `budget` is reserved for a later phase. */
-export const NotificationSource = z.enum(["operation", "agent", "fleet", "chat", "budget"]);
+/**
+ * Which part of hermetic raised the row. `budget` is reserved for a later phase.
+ *
+ * `terminal` is the desktop app's own SSH sessions (issue #18): output, a
+ * finished command, a bell, a dropped connection, while the session is not on
+ * screen. Not an instance source (`INSTANCE_NOTIFICATION_SOURCES`): the session
+ * is one this laptop opened, so listening does not scope it, the same way it
+ * does not scope this laptop's own ops.
+ */
+export const NotificationSource = z.enum(["operation", "agent", "fleet", "chat", "budget", "terminal"]);
 export type NotificationSource = z.infer<typeof NotificationSource>;
 
 export const NOTIFICATION_SOURCES = NotificationSource.options;
@@ -44,6 +52,18 @@ export const NotificationKind = z.enum([
   "fleet.advisory",
   "chat.message",
   "chat.error",
+  /**
+   * The terminal kinds (issue #18), written by `notifyTerminalEvent` and never
+   * carrying a byte of the session's output: the agent, the session's number,
+   * what happened, and for `terminal.finished` the exit status, the run time
+   * and a sanitized program name. `terminal.output` is a condition (one row per
+   * session while it holds); the other four are events.
+   */
+  "terminal.output",
+  "terminal.finished",
+  "terminal.input",
+  "terminal.bell",
+  "terminal.disconnected",
 ]);
 export type NotificationKind = z.infer<typeof NotificationKind>;
 
@@ -72,6 +92,12 @@ export const NotificationActionTarget = z.enum([
    * it as the thread to open by hand in the meantime.
    */
   "chat",
+  /**
+   * A desktop terminal session (issue #18). `ref` is `<agent>/<session_id>`
+   * (`terminalActionRef`, `schema/terminal.ts`), split on the first `/` for
+   * the same reason as `chat`'s.
+   */
+  "terminal",
 ]);
 export type NotificationActionTarget = z.infer<typeof NotificationActionTarget>;
 
@@ -162,18 +188,26 @@ export const AutoClearRead = z.enum(["never", "1d", "7d", "30d"]);
 export type AutoClearRead = z.infer<typeof AutoClearRead>;
 
 /**
- * The inbox's two auto-clear rules. A laptop preference, shared by the CLI and
- * the app, so it lives in core beside the mutes rather than in the page.
+ * The inbox's two auto-clear rules, and the terminal master switch. A laptop
+ * preference, shared by the CLI and the app, so it lives in core beside the
+ * mutes rather than in the page.
  */
 export const NotificationSettings = z.object({
   auto_clear_read: AutoClearRead,
   clear_resolved_on_read: z.boolean(),
+  /**
+   * Whether the desktop terminal raises anything at all (issue #18). Off is a
+   * stronger thing than a `source:terminal` mute: nothing is written, and
+   * turning it off resolves the terminal conditions already open.
+   */
+  terminal_alerts: z.boolean(),
 });
 export type NotificationSettings = z.infer<typeof NotificationSettings>;
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   auto_clear_read: "7d",
   clear_resolved_on_read: true,
+  terminal_alerts: true,
 };
 
 export const NotificationsListResult = z.object({

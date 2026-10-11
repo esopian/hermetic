@@ -146,3 +146,14 @@ export {
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
 } from "./rpc.ts";
+
+// --- Terminal shell integration (issue #18) --------------------------------
+export {
+  DETACHABLE_PROGRAMS,
+  SHELL_INTEGRATION_SCRIPT,
+  SHELL_MARKER_OSC,
+  SSH_LOGIN_USER,
+  parseShellMarker,
+  sanitizeProgramName,
+} from "./shell-markers.ts";
+export type { ShellMarker } from "./shell-markers.ts";

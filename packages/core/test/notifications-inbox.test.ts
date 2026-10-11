@@ -298,6 +298,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       expect(notificationsSettings(h.deps)).toEqual({
         auto_clear_read: "7d",
         clear_resolved_on_read: true,
+        terminal_alerts: true,
       });
       // insert: a row already read eight days ago lands cleared.
       h.store.insert(row("stale", { at: h.iso(-9 * DAY), read_at: h.iso(-8 * DAY) }));
@@ -328,7 +329,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       const h = harness(kind);
       expect(
         notificationsSettings(h.deps, { auto_clear_read: "never", clear_resolved_on_read: false }),
-      ).toEqual({ auto_clear_read: "never", clear_resolved_on_read: false });
+      ).toEqual({ auto_clear_read: "never", clear_resolved_on_read: false, terminal_alerts: true });
       h.store.insert(row("old", { at: h.iso(-20 * DAY), read_at: h.iso(-20 * DAY) }));
       h.store.insert(row("cond", { key: "k:c", read_at: h.iso() }));
       h.store.resolve("k:c");
@@ -347,6 +348,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       expect(notificationsSettings(h.deps)).toEqual({
         auto_clear_read: "1d",
         clear_resolved_on_read: false,
+        terminal_alerts: true,
       });
       expect(refusal(() => notificationsSettings(h.deps, { auto_clear_read: "2d" }))).toBe(
         "VALIDATION",
@@ -405,7 +407,11 @@ describe("the SQLite store's settings", () => {
     notificationsSettings(h.deps, { auto_clear_read: "30d", clear_resolved_on_read: false });
     const db = h.db as Database;
     const reopened = new SqliteNotificationStore(db);
-    expect(reopened.settings()).toEqual({ auto_clear_read: "30d", clear_resolved_on_read: false });
+    expect(reopened.settings()).toEqual({
+      auto_clear_read: "30d",
+      clear_resolved_on_read: false,
+      terminal_alerts: true,
+    });
     db.run(`UPDATE prefs SET value = 'soon' WHERE key = 'notifications.auto_clear_read'`);
     expect(reopened.settings().auto_clear_read).toBe("7d");
   });

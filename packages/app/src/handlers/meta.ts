@@ -259,9 +259,13 @@ export async function notificationsSnooze(ctx: HandlerContext, params: unknown) 
  * window left on another fleet is still talking to the right laptop.
  */
 export async function notificationsSettings(ctx: HandlerContext, params: unknown) {
-  return await ctx
+  const settings = await ctx
     .hermetic()
     .notifications.settings(parseInput(notificationsSettingsSchema, params ?? {}));
+  // The terminal host gates its own alerts on this (issue #18): told now, so
+  // a switch flipped off silences the very next event rather than a later open.
+  ctx.terminals?.setAlerts(settings.terminal_alerts);
+  return settings;
 }
 
 export async function notificationsMute(ctx: HandlerContext, params: unknown) {

@@ -52,12 +52,14 @@ import { createAgentLogs } from "./agents/agent-logs.ts";
 import { MemoryInstanceListeningStore } from "./chat/instance-listening.ts";
 import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/chat.ts";
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
+import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
 import {
   MemoryNotificationStore,
   createNotifications,
   type NotificationDeps,
 } from "./chat/notifications.ts";
+import { registerTerminalNotices } from "./chat/terminal-notifications.ts";
 import { bwsPath, createSecrets, providerKeyPath, tsKeyPath } from "./profiles/secrets.ts";
 import { createVolumes } from "./volumes/volumes.ts";
 import { createDesktop } from "./agents/desktop.ts";
@@ -72,6 +74,7 @@ import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
@@ -237,6 +240,9 @@ export function createHermetic(deps: HermeticDeps) {
     purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    // A first sighting's evidence that the name changed hands unseen (§6.7).
+    releases: async (name) =>
+      (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
   });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({
@@ -453,9 +459,18 @@ export function createHermetic(deps: HermeticDeps) {
 
   const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
   const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
-  const botMode = createBotMode({ guardFleet, getAgent, instanceListening, hermes: hermesChat });
+  // §9.2: whether transcript content is masked, read by every chat read as it starts.
+  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  const botMode = createBotMode({
+    guardFleet,
+    getAgent,
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
   const chat = createChat({
     instanceListening,
+    chatSettings,
     fleet: () => deps.config?.fleet_id ?? null,
     guardFleet,
     // Chat reads rows without the fleet list, and its sessions, fence and
@@ -519,7 +534,7 @@ export function createHermetic(deps: HermeticDeps) {
     },
   });
 
-  return {
+  const hermetic = {
     ...botMode,
     init: initWithHelpers,
     config: { show: configShow },
@@ -621,4 +636,11 @@ export function createHermetic(deps: HermeticDeps) {
     /** Derived-state constants the heads render against. */
     constants: { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS },
   };
+  /**
+   * The desktop terminal's inbox source (issue #18), reached through
+   * `terminalNotices(hermetic)` rather than a member: it is not a command, so it
+   * has no place on the surface `tests/parity.test.ts` walks.
+   */
+  registerTerminalNotices(hermetic, notificationDeps.store);
+  return hermetic;
 }

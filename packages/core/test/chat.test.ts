@@ -26,7 +26,8 @@ import { MemoryLocalChatSessions, createChat, fixtureHermesChat } from "../src/c
 import type { ChatDeps } from "../src/chat/chat.ts";
 import { mapHistory, WARM_SLOTS_PER_GATEWAY } from "../src/chat/hermes/hermes-chat.ts";
 import type { BoxAddress, HermesChatClient } from "../src/chat/hermes/hermes-chat.ts";
-import { redactText } from "../src/chat/chat-redact.ts";
+import { REDACTED, redactText } from "../src/chat/chat-redact.ts";
+import { MemoryChatSettingsStore } from "../src/chat/chat-settings.ts";
 import { HermeticError } from "../src/errors.ts";
 import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
 import type { StackInfo } from "../src/backend/types.ts";
@@ -34,6 +35,9 @@ import type { Agent, ChatFrame, ChatMessage, Session, Swarm } from "../src/schem
 
 /** An Anthropic-shaped key built only from the `FIXTURE` sentinel (§8.3). */
 const KEY = "sk-ant-FIXTUREFIXTUREFIXTURE";
+
+/** Redaction is off by default (§9.2); the tests of the door state it on. */
+const REDACT_ON: Partial<ChatDeps> = { chatSettings: new MemoryChatSettingsStore({ redact: true }) };
 const AT = "2026-09-17T09:00:00.000Z";
 
 const backend = seedFixtureFleet(new MemoryBackend());
@@ -261,14 +265,17 @@ describe("the roster read", () => {
 
 describe("the redaction door", () => {
   test("a key in a bot's label does not leave this module", async () => {
-    const { chat } = harness({
-      swarm: (box) =>
-        Promise.resolve(
-          swarm(box.instance, {
-            bots: [{ ...swarm(box.instance).bots[0]!, title: `key ${KEY}`, description: KEY }],
-          }),
-        ),
-    });
+    const { chat } = harness(
+      {
+        swarm: (box) =>
+          Promise.resolve(
+            swarm(box.instance, {
+              bots: [{ ...swarm(box.instance).bots[0]!, title: `key ${KEY}`, description: KEY }],
+            }),
+          ),
+      },
+      REDACT_ON,
+    );
     const result = await chat.swarms({ instance: "atlas" });
     const bot = result.swarms[0]?.bots[0];
     expect(bot?.title).not.toContain("sk-ant-");
@@ -278,46 +285,52 @@ describe("the redaction door", () => {
   test("a key in a session title does not leave this module", async () => {
     // Hermes titles a session from the first thing said in it, so a key pasted
     // into a composer is a session title before it is anything else.
-    const { chat } = harness({ sessions: () => Promise.resolve([session({ title: KEY })]) });
+    const { chat } = harness({ sessions: () => Promise.resolve([session({ title: KEY })]) }, REDACT_ON);
     const result = await chat.sessions({ instance: "atlas", bot: "default" });
     expect(result.sessions[0]?.title).not.toContain("sk-ant-");
   });
 
   test("a key in a transcript does not leave this module", async () => {
-    const { chat } = harness({
-      history: () =>
-        Promise.resolve([message({ blocks: [{ kind: "text", markdown: `export KEY=${KEY}` }] })]),
-    });
+    const { chat } = harness(
+      {
+        history: () =>
+          Promise.resolve([message({ blocks: [{ kind: "text", markdown: `export KEY=${KEY}` }] })]),
+      },
+      REDACT_ON,
+    );
     const result = await chat.history({ instance: "atlas", bot: "default" });
     expect(JSON.stringify(result.messages)).not.toContain("sk-ant-");
   });
 
   test("durable tool arguments and results pass through the same redaction door", async () => {
-    const { chat } = harness({
-      history: (box) =>
-        Promise.resolve(
-          mapHistory(box, "s1", [
-            {
-              role: "assistant",
-              tool_calls: [
-                {
-                  id: "call_FIXTURE",
-                  function: {
-                    name: "terminal",
-                    arguments: JSON.stringify({ command: `printf ${KEY}` }),
+    const { chat } = harness(
+      {
+        history: (box) =>
+          Promise.resolve(
+            mapHistory(box, "s1", [
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call_FIXTURE",
+                    function: {
+                      name: "terminal",
+                      arguments: JSON.stringify({ command: `printf ${KEY}` }),
+                    },
                   },
-                },
-              ],
-            },
-            {
-              role: "tool",
-              tool_call_id: "call_FIXTURE",
-              tool_name: "terminal",
-              content: JSON.stringify({ output: KEY, exit_code: 0, error: null }),
-            },
-          ]),
-        ),
-    });
+                ],
+              },
+              {
+                role: "tool",
+                tool_call_id: "call_FIXTURE",
+                tool_name: "terminal",
+                content: JSON.stringify({ output: KEY, exit_code: 0, error: null }),
+              },
+            ]),
+          ),
+      },
+      REDACT_ON,
+    );
     const result = await chat.history({ instance: "atlas", bot: "default", session: "s1" });
     const block = result.messages[1]?.blocks[0];
     expect(block).toMatchObject({
@@ -337,14 +350,80 @@ describe("the redaction door", () => {
   });
 
   test("a key in a live frame does not leave this module", async () => {
+    const { chat } = harness(
+      {
+        send: () =>
+          (async function* () {
+            yield { type: "delta", seq: 1, message: "m1", text: `the key is ${KEY}` } as const;
+          })(),
+      },
+      REDACT_ON,
+    );
+    const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
+    expect(JSON.stringify(frames)).not.toContain("sk-ant-");
+  });
+});
+
+describe("the redaction switch", () => {
+  test("is off until this laptop turns it on, and a stated field writes it", async () => {
+    const { chat } = harness();
+    expect(await chat.settings({})).toEqual({ redact: false });
+    expect(await chat.settings({ redact: true })).toEqual({ redact: true });
+    expect(await chat.settings()).toEqual({ redact: true });
+  });
+
+  test("refuses a value that is not a boolean", async () => {
+    const { chat } = harness();
+    await expect(chat.settings({ redact: "yes" })).rejects.toThrow(
+      "chat settings input does not validate",
+    );
+  });
+
+  test("off, a transcript leaves this module as the box wrote it", async () => {
     const { chat } = harness({
+      swarm: (box) =>
+        Promise.resolve(
+          swarm(box.instance, { bots: [{ ...swarm(box.instance).bots[0]!, title: `key ${KEY}` }] }),
+        ),
+      sessions: () => Promise.resolve([session({ title: KEY })]),
+      history: () =>
+        Promise.resolve([message({ blocks: [{ kind: "text", markdown: `export KEY=${KEY}` }] })]),
       send: () =>
         (async function* () {
           yield { type: "delta", seq: 1, message: "m1", text: `the key is ${KEY}` } as const;
         })(),
     });
+    expect((await chat.swarms({ instance: "atlas" })).swarms[0]?.bots[0]?.title).toBe(`key ${KEY}`);
+    expect((await chat.sessions({ instance: "atlas", bot: "default" })).sessions[0]?.title).toBe(KEY);
+    const history = await chat.history({ instance: "atlas", bot: "default" });
+    expect(JSON.stringify(history.messages)).toContain(KEY);
     const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
-    expect(JSON.stringify(frames)).not.toContain("sk-ant-");
+    expect(frames.map((f) => (f.type === "delta" ? f.text : "")).join("")).toBe(`the key is ${KEY}`);
+  });
+
+  test("off, a failure is masked anyway", async () => {
+    const { chat } = harness({
+      history: () => Promise.reject(new HermeticError("CHAT_PROTOCOL", `box said ${KEY}`)),
+      send: () =>
+        (async function* (): AsyncIterable<ChatFrame> {
+          yield { type: "error", code: "CHAT_UNREACHABLE", message: `gateway said ${KEY}` };
+        })(),
+    });
+    const thrown = await chat.history({ instance: "atlas", bot: "default" }).catch((e: unknown) => e);
+    expect((thrown as Error).message).toBe(`box said ${REDACTED}`);
+    const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
+    expect(frames).toEqual([
+      { type: "error", code: "CHAT_UNREACHABLE", message: `gateway said ${REDACTED}` },
+    ]);
+  });
+
+  test("a change applies to the next read", async () => {
+    const { chat } = harness({ sessions: () => Promise.resolve([session({ title: KEY })]) });
+    const read = async () =>
+      (await chat.sessions({ instance: "atlas", bot: "default" })).sessions[0]?.title;
+    expect(await read()).toBe(KEY);
+    await chat.settings({ redact: true });
+    expect(await read()).toBe(REDACTED);
   });
 });
 
@@ -516,7 +595,7 @@ describe("a secret split across frames", () => {
   });
 
   test("the key does not survive in what leaves this module", async () => {
-    const { chat } = harness(streaming(SPLIT));
+    const { chat } = harness(streaming(SPLIT), REDACT_ON);
     const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
     expect(emitted(frames)).not.toContain("sk-ant-api03");
     expect(JSON.stringify(frames)).not.toContain("sk-ant-api03");
@@ -527,7 +606,7 @@ describe("a secret split across frames", () => {
     // end: a client that had to wait for `done` to see the first word would be
     // a worse chat than the one this replaced.
     const prose = Array.from({ length: 40 }, (_, i) => `word${i} `);
-    const { chat } = harness(streaming(prose));
+    const { chat } = harness(streaming(prose), REDACT_ON);
     const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
     expect(emitted(frames)).toBe(prose.join(""));
     expect(frames.filter((f) => f.type === "delta").length).toBeGreaterThan(1);
@@ -535,14 +614,17 @@ describe("a secret split across frames", () => {
 
   test("an aborted turn keeps the words it had already said", async () => {
     const controller = new AbortController();
-    const { chat } = harness({
-      send: () =>
-        (async function* (): AsyncIterable<ChatFrame> {
-          yield { type: "delta", seq: 1, message: "m1", text: "half a sentence" };
-          controller.abort();
-          yield { type: "delta", seq: 2, message: "m1", text: " and the rest" };
-        })(),
-    });
+    const { chat } = harness(
+      {
+        send: () =>
+          (async function* (): AsyncIterable<ChatFrame> {
+            yield { type: "delta", seq: 1, message: "m1", text: "half a sentence" };
+            controller.abort();
+            yield { type: "delta", seq: 2, message: "m1", text: " and the rest" };
+          })(),
+      },
+      REDACT_ON,
+    );
     const frames = await collect(
       chat.send({ instance: "atlas", bot: "default", message: "hi" }, { signal: controller.signal }),
     );
@@ -550,32 +632,38 @@ describe("a secret split across frames", () => {
   });
 
   test("a turn that fails mid-sentence flushes before it reports the failure", async () => {
-    const { chat } = harness({
-      send: () =>
-        (async function* (): AsyncIterable<ChatFrame> {
-          yield { type: "delta", seq: 1, message: "m1", text: "half a sentence" };
-          throw new HermeticError("CHAT_TURN_FAILED", "the socket closed");
-        })(),
-    });
+    const { chat } = harness(
+      {
+        send: () =>
+          (async function* (): AsyncIterable<ChatFrame> {
+            yield { type: "delta", seq: 1, message: "m1", text: "half a sentence" };
+            throw new HermeticError("CHAT_TURN_FAILED", "the socket closed");
+          })(),
+      },
+      REDACT_ON,
+    );
     const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
     expect(emitted(frames)).toBe("half a sentence");
     expect(frames.at(-1)).toMatchObject({ type: "error", code: "CHAT_TURN_FAILED" });
   });
 
   test("a block frame never overtakes the sentence it interrupted", async () => {
-    const { chat } = harness({
-      send: () =>
-        (async function* (): AsyncIterable<ChatFrame> {
-          yield { type: "delta", seq: 1, message: "m1", text: "before" };
-          yield {
-            type: "block",
-            seq: 2,
-            message: "m1",
-            block: { kind: "text", markdown: "a block" },
-          };
-          yield { type: "delta", seq: 3, message: "m1", text: "after" };
-        })(),
-    });
+    const { chat } = harness(
+      {
+        send: () =>
+          (async function* (): AsyncIterable<ChatFrame> {
+            yield { type: "delta", seq: 1, message: "m1", text: "before" };
+            yield {
+              type: "block",
+              seq: 2,
+              message: "m1",
+              block: { kind: "text", markdown: "a block" },
+            };
+            yield { type: "delta", seq: 3, message: "m1", text: "after" };
+          })(),
+      },
+      REDACT_ON,
+    );
     const frames = await collect(chat.send({ instance: "atlas", bot: "default", message: "hi" }));
     expect(frames.map((f) => f.type)).toEqual(["delta", "block", "delta"]);
   });
