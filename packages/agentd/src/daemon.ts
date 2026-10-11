@@ -19,6 +19,7 @@ import {
 import { makeUpdateGate, type UpdateGate } from "./update-request.ts";
 import { makeRequestGate, type RequestGate } from "./request-gate.ts";
 import { convergeOnce, type ConvergeOutcome } from "./converge.ts";
+import { ensureLoginShell } from "./apply/accounts.ts";
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { redactValue } from "./redact.ts";
 import { HERMETICD_VERSION } from "./version.ts";
@@ -73,6 +74,21 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
   const hermeticdSha256 = await runningBinarySha256(host);
 
   const ctx = await bootContext(host, deps);
+  /**
+   * The account fixes a release carries but no apply will run for it: a
+   * self-update restarts this service and nothing else (§6.5). Best effort —
+   * a `usermod` that fails costs the operator's SSH login, not the heartbeat.
+   */
+  await ensureLoginShell(host).then(
+    (changed) => {
+      if (changed) log("gave the hermes account its login shell");
+    },
+    (e: unknown) => {
+      log(
+        `could not give the hermes account its login shell: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    },
+  );
   // The one thing the two loops share: the heartbeat sees a rollout request on
   // the row, the update loop acts on it (§6.6).
   const gate = makeUpdateGate({ log });

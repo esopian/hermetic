@@ -62,7 +62,13 @@ export const RESYNC_MIN_MS = 1000;
 /** Quiet before a keepalive. */
 export const KEEPALIVE_MS = 5000;
 
-export type TerminalExitReason = "exited" | "closed" | "shutdown" | "acl_denied" | "disconnected";
+export type TerminalExitReason =
+  | "exited"
+  | "closed"
+  | "shutdown"
+  | "acl_denied"
+  | "no_login_shell"
+  | "disconnected";
 
 export interface TerminalExitInfo {
   code: number | null;

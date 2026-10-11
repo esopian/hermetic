@@ -136,6 +136,9 @@ describe("labels", () => {
     expect(endedLine({ code: 255, signal: null, reason: "acl_denied" }, null)).toBe(
       "[session ended · denied by tailnet policy]",
     );
+    expect(endedLine({ code: 0, signal: null, reason: "no_login_shell" }, 2_000)).toBe(
+      "[session ended · no login shell for hermes · 2s]",
+    );
   });
 
   test("the ssh command quotes only what needs it", () => {
