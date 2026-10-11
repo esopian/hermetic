@@ -1544,6 +1544,28 @@ describe("chat.event: a roster movement is classified by one history read", () =
     expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
   });
 
+  test("another bot's DM delivery is not news on its own", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        row("d1", LATER, {
+          role: "user",
+          from_bot: { name: "Marshall", handle: "scribe" },
+          blocks: [{ kind: "text", markdown: "Re-run the QA pass on #4124." }],
+        }),
+      ],
+    };
+    const { client } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    expect(rows(store)).toEqual([]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+  });
+
   test("a marker on a failed turn, or mentioned in prose, is still a message", async () => {
     for (const reply of [
       { error: "TURN_FAILED", blocks: [{ kind: "text" as const, markdown: "NO_REPLY" }] },

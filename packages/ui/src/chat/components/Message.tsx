@@ -26,6 +26,8 @@ import { failureCopy } from "../chat-logic.ts";
 import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
+import { dmBotName, messageAgentCall, resolveDmBot } from "../bot-dm.ts";
+import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 
@@ -156,19 +158,26 @@ export function Message({
   inReply?: string | null;
 }) {
   const { message, continuation } = row;
+  const dm = useBotDm();
   // Every source id this article stands for. A `#message=` link names the row
   // the box wrote, which may now be in the middle of a merged turn, so the
   // article has to answer to all of them and not only to the one it is named by.
   const ids = row.ids?.length ? row.ids : [message.id];
-  const mine = message.role === "user";
+  // Another bot's `message_agent` delivery is on the user role, and it is that
+  // bot speaking, not the operator (`bot-dm.ts`).
+  const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
+  const sender = fromBot ? resolveDmBot([fromBot.handle, fromBot.name], dm.teammates) : null;
+  const mine = message.role === "user" && !fromBot;
   const author = message.author ?? null;
-  const who = mine
-    ? "You"
-    : botLabel(
-        author?.instance ?? instance,
-        author?.bot ?? bot,
-        !author || (author.instance === instance && author.bot === bot) ? botTitle : null,
-      );
+  const who = fromBot
+    ? dmBotName(sender, fromBot.name)
+    : mine
+      ? "You"
+      : botLabel(
+          author?.instance ?? instance,
+          author?.bot ?? bot,
+          !author || (author.instance === instance && author.bot === bot) ? botTitle : null,
+        );
   const broken = !!message.error || !!message.incomplete;
   if (message.blocks.length === 0 && !broken && !message.usage) return null;
   const closedRequests = new Set(
@@ -236,6 +245,13 @@ export function Message({
   let run: { activity: boolean; blocks: typeof blocks } | null = null;
   for (const block of blocks) {
     const attention = needsAttention(block);
+    // A DM to another bot is a line between the prose, not a step in the
+    // group: it closes the run, so the turn reads in the order it happened.
+    if (messageAgentCall(block)) {
+      sections.push({ activity: false, blocks: [block] });
+      run = null;
+      continue;
+    }
     if (isActivity(block) && !attention) {
       if (run) run.blocks.push(block);
       else {
@@ -283,7 +299,20 @@ export function Message({
       tabIndex={-1}
       className={`ch-msg${mine ? " me" : ""}${continuation ? " cont" : ""}`}
     >
-      {mine ? (
+      {fromBot ? (
+        sender ? (
+          <Face
+            fleetId={fleetId}
+            instance={instance}
+            bot={sender.name}
+            size={36}
+            status={status}
+            square={false}
+          />
+        ) : (
+          <div className="ch-avatar">{fromBot.name.slice(0, 2).toUpperCase()}</div>
+        )
+      ) : mine ? (
         <OperatorFace />
       ) : (
         <Face
@@ -342,6 +371,14 @@ export function Message({
                   <p className="ch-silent-note" title={silentTitle(markdownOf(section.blocks[0]))}>
                     {SILENT_LABEL}
                   </p>
+                ) : messageAgentCall(section.blocks[0]!) ? (
+                  <DmSentMarker
+                    call={messageAgentCall(section.blocks[0]!)!}
+                    at={message.at}
+                    fleetId={fleetId}
+                    instance={author?.instance ?? instance}
+                    status={status}
+                  />
                 ) : (
                   <Block
                     block={section.blocks[0]!}
@@ -355,6 +392,22 @@ export function Message({
           )}
           {broken ? <FailureCard {...splitError(message.error)} /> : null}
           {message.usage ? <Meter usage={message.usage} /> : null}
+          {fromBot ? (
+            <div className="ch-dm-mark from">
+              {dm.open ? (
+                <button
+                  type="button"
+                  onClick={() => dm.open?.({ side: "receiver", deliveryId: message.id })}
+                >
+                  <RedactedText text={`Message from ${who}`} /> <span aria-hidden="true">⇄</span>
+                </button>
+              ) : (
+                <span className="ch-dm-mark-static">
+                  <RedactedText text={`Message from ${who}`} />
+                </span>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </article>

@@ -17,6 +17,9 @@
  * - a bot row that is only an intentional-silence marker (`NO_REPLY`,
  *   `[SILENT]`, …) is the bot choosing not to answer — Hermes suppressed its
  *   delivery — so it is passed over like a routine event;
+ * - another bot's `message_agent` delivery (`from_bot`) is passed over too:
+ *   it is not the operator's message and not news on its own — the bot's
+ *   reply to it, when it lands, raises the row;
  * - when every row in the window is such an event or such a silence, each
  *   non-routine event was recorded and the read reached back to the watermark,
  *   the bot is marked `quiet` so `observeChatActivity` advances
@@ -103,7 +106,7 @@ export async function classifyChatActivity(
         if (fresh.length === 0) return bot;
         let quiet = covered;
         for (const message of fresh) {
-          if (isSilentReply(message)) continue;
+          if (isSilentReply(message) || message.from_bot) continue;
           const events = eventBlocks(message);
           if (events === null) {
             quiet = false;

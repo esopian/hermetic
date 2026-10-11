@@ -220,8 +220,12 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * head that does not recognise one falls back to the raw payload. New
  * renderers can therefore be added without a schema change, and an upstream
  * tool this file has never heard of still renders as something.
+ *
+ * `message_agent` is Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`): a head
+ * draws it as a "Messaged <bot>" marker rather than a tool step, and falls back
+ * to the tool row when its arguments are not the `{target, message}` it knows.
  */
-export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot"]);
+export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot", "message_agent"]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
 export const ToolStatus = z.enum(["running", "ok", "warn", "bad"]);
@@ -532,6 +536,15 @@ export const ChatMessage = z.object({
   error: z.string().nullish(),
   /** The turn stopped before it finished: aborted, timed out, lost the socket. */
   incomplete: z.boolean().nullish(),
+  /**
+   * Set on a `user` row that is another bot's `message_agent` delivery rather
+   * than the operator speaking: Hermes stores it on the user role, signed
+   * `Message from 🤖 <name> (@<handle>): …`. The signature is lifted into this
+   * field and the row's text is the message alone
+   * (`chat/hermes/bot-delivery.ts`). `handle` is null for the legacy signature,
+   * which named the sender only.
+   */
+  from_bot: z.object({ name: z.string().min(1), handle: z.string().min(1).nullable() }).nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

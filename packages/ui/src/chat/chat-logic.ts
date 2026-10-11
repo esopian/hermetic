@@ -99,6 +99,8 @@ export interface MessageLike {
   } | null;
   error?: string | null;
   incomplete?: boolean | null;
+  /** Another bot's `message_agent` delivery, on the user role (`bot-dm.ts`). */
+  from_bot?: { name: string; handle?: string | null } | null;
 }
 
 /* ── time ────────────────────────────────────────────────────────────────── */
@@ -572,7 +574,8 @@ export interface MessageRow<M extends MessageLike = MessageLike> {
 
 /** Who said it, as a grouping key: role for the operator, `bot@instance` otherwise. */
 export function authorKey(m: MessageLike): string {
-  if (m.role === "user") return "user";
+  // A delivery is the sending bot speaking, never a continuation of "You".
+  if (m.role === "user") return m.from_bot ? `dm:${m.from_bot.handle ?? m.from_bot.name}` : "user";
   if (m.author) return `${m.author.bot}@${m.author.instance}`;
   return m.role;
 }

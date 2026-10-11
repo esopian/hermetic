@@ -9,6 +9,7 @@ import { checkAbort } from "../../abort.ts";
 import type { BoxAddress, HermesChatOptions } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
 import { arr, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
+import { botDeliveryPreview } from "./bot-delivery.ts";
 import { processNoticePreview } from "./process-notice.ts";
 import type { Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
 
@@ -217,9 +218,10 @@ function sessionOrigin(raw: string | null): SessionOrigin {
 
 /**
  * A preview as the rail shows it: an injected notice (`process-notice.ts`)
- * becomes its one-line sentence, anything else passes through untouched.
+ * becomes its one-line sentence, another bot's DM delivery reads `Name: body`
+ * (`bot-delivery.ts`), anything else passes through untouched.
  */
 export function eventPreview(preview: string | null): string | null {
   if (preview === null) return null;
-  return processNoticePreview(preview) ?? preview;
+  return processNoticePreview(preview) ?? botDeliveryPreview(preview) ?? preview;
 }

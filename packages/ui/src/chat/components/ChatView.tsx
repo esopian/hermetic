@@ -168,6 +168,7 @@ export function ChatView({
           tailnetDetail={chat.tailnetDetail}
           onSend={chat.send}
           onAbort={chat.abort}
+          teammates={swarm?.bots}
           sessions={chat.sessions}
           onChooseSession={(session) => select(selection.instance, selection.bot, session)}
         />
