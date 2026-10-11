@@ -3,6 +3,8 @@ import { NOTIFICATION_RETENTION_DAYS } from "../../chat/notifications.ts";
 import type { InstanceListeningStore } from "../../chat/instance-listening.ts";
 import type { LocalChatSessions } from "../../chat/chat.ts";
 import type { ChatFenceRow, ChatFenceStore } from "../../chat/chat-fence.ts";
+import { DEFAULT_CHAT_SETTINGS } from "../../chat/chat-settings.ts";
+import type { ChatSettings, ChatSettingsStore } from "../../chat/chat-settings.ts";
 
 /**
  * Which conversations this laptop started (§9.2).
@@ -159,5 +161,36 @@ export class SqliteInstanceListeningStore implements InstanceListeningStore {
         instance,
       ]);
     }
+  }
+}
+
+/** The `prefs` row the transcript-redaction switch lives in (§9.2). */
+export const PREF_CHAT_REDACT = "chat.redact";
+
+/**
+ * This laptop's chat settings, one `prefs` row each. A value another build
+ * wrote that this one cannot read is the default, the bargain the inbox's
+ * settings make.
+ */
+export class SqliteChatSettingsStore implements ChatSettingsStore {
+  constructor(private readonly db: Database) {}
+
+  settings(): ChatSettings {
+    const row = this.db.query(`SELECT value FROM prefs WHERE key = ?`).get(PREF_CHAT_REDACT) as {
+      value: string;
+    } | null;
+    const redact =
+      row?.value === "true" ? true : row?.value === "false" ? false : DEFAULT_CHAT_SETTINGS.redact;
+    return { redact };
+  }
+
+  setSettings(patch: Partial<ChatSettings>): ChatSettings {
+    if (patch.redact !== undefined) {
+      this.db.run(
+        `INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [PREF_CHAT_REDACT, String(patch.redact)],
+      );
+    }
+    return this.settings();
   }
 }
