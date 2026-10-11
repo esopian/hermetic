@@ -1,15 +1,22 @@
 /** Bot Mode's allowlisted, profile-scoped management surface. No arbitrary RPC or paths. */
 import { z } from "zod";
 import { AgentName, BotName } from "./requests.ts";
-const Id = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[a-zA-Z0-9_.:-]+$/)
-  .refine((v) => v !== "." && v !== "..", "A concrete identifier is required");
+const identifier = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[a-zA-Z0-9_.:-]+$/)
+    .refine((v) => v !== "." && v !== "..", "A concrete identifier is required");
+const Id = identifier(200);
+/** Upstream caps room and event ids at 128 (`MAX_ROOM_ID_CHARS`, `MAX_EVENT_ID_CHARS`). */
+const RoomId = identifier(128);
+const EventId = identifier(128);
 const Text = z.string().max(100_000);
 const Ref = { instance: AgentName, bot: BotName };
-const RoomRef = { instance: AgentName, room: Id };
+const RoomRef = { instance: AgentName, room: RoomId };
+/** Upstream reserves these mention handles; a member's handle is its bot name. */
+const RESERVED_HANDLES = new Set(["all", "everyone"]);
 export const BotCapabilitiesInput = z.object({ instance: AgentName }).strict();
 export const BotProfileInput = z.object(Ref).strict();
 export const BotCreateInput = z
@@ -54,17 +61,23 @@ export const RoomGetInput = z.object(RoomRef).strict();
 export const RoomCreateInput = z
   .object({
     instance: AgentName,
-    room: Id,
+    room: RoomId,
     name: z.string().trim().min(1).max(120),
     members: z.array(z.object(Ref).strict()).min(2).max(6),
   })
   .strict()
   .refine(
-    (v) => new Set(v.members.map((m) => `${m.instance}/${m.bot}`)).size === v.members.length,
+    (v) => !v.members.some((m) => RESERVED_HANDLES.has(m.bot.toLowerCase())),
+    "A room member cannot be named all or everyone",
+  )
+  // Upstream compares handles case-insensitively, so `Scribe` and `scribe` collide.
+  .refine(
+    (v) =>
+      new Set(v.members.map((m) => `${m.instance}/${m.bot}`.toLowerCase())).size === v.members.length,
     "Room members must be unique",
   );
 export const RoomRenameInput = z
-  .object({ ...RoomRef, name: z.string().trim().min(1).max(120), event_id: Id })
+  .object({ ...RoomRef, name: z.string().trim().min(1).max(120), event_id: EventId })
   .strict();
 export const RoomDeleteInput = z.object({ ...RoomRef, confirm: z.literal(true) }).strict();
 export const RoomHistoryInput = z
@@ -74,7 +87,7 @@ export const RoomHistoryInput = z
     limit: z.number().int().min(1).max(500).optional(),
   })
   .strict();
-export const RoomSendInput = z.object({ ...RoomRef, text: Text.min(1), event_id: Id }).strict();
+export const RoomSendInput = z.object({ ...RoomRef, text: Text.min(1), event_id: EventId }).strict();
 export const RoomControlInput = z
   .object({ ...RoomRef, action: z.enum(["stop", "retry"]), task_id: Id.optional() })
   .strict()

@@ -1,4 +1,5 @@
 /** Typed Bot Mode operations. Upstream owns profiles, room logs and schedules. */
+import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import * as S from "../schema/bot-mode.ts";
 import { agentDashboardUrl, cloudName } from "../schema/index.ts";
@@ -671,11 +672,16 @@ export function createBotMode(
       });
     }),
     control: operation(S.RoomControlInput, async (p, o) => {
+      // Upstream defaults an absent `cancel_id` to one fixed value and derives the
+      // stop fence's event id from it, so every Stop after the first in a room
+      // would replay that fence instead of superseding later work. A fresh id per
+      // Stop fits its identifier rule (128 chars, `[A-Za-z0-9][A-Za-z0-9._:-]*`).
+      const cancel = p.action === "stop" ? { cancel_id: `hermetic-stop-${randomUUID()}` } : {};
       const result = record(
         await rpc(
           p.instance,
           `groups.${p.action}`,
-          { ...roomParams(p), ...(p.task_id ? { task_id: p.task_id } : {}) },
+          { ...roomParams(p), ...(p.task_id ? { task_id: p.task_id } : {}), ...cancel },
           o,
         ),
       );

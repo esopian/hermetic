@@ -12,6 +12,7 @@ import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/
 import { FIXTURE_LEGACY_GATEWAY } from "../src/backend/fixture/fixture-bot-mode.ts";
 import type { StackInfo } from "../src/backend/types.ts";
 import { HermeticError } from "../src/errors.ts";
+import { RoomCreateInput, RoomRenameInput, RoomSendInput } from "../src/schema/bot-mode.ts";
 const botModeBackend = seedFixtureFleet(new MemoryBackend());
 const botModeAgents = await botModeBackend.store.agents.scan();
 const seededFleet = await botModeBackend.store.fleet.get();
@@ -35,9 +36,13 @@ function canonicalHarness(
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
 ) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
+  const patches: { session: string; body: Record<string, unknown> }[] = [];
   const service = createCanonicalSessions({
     now: () => "2026-09-18T00:00:00Z",
-    patch: async () => ({ ok: true, archived: true }),
+    patch: async (_box, session, body) => {
+      patches.push({ session, body });
+      return { ok: true, archived: true };
+    },
     connect: async () => ({
       request: async (method, params) => {
         calls.push({ method, params });
@@ -46,7 +51,7 @@ function canonicalHarness(
       close() {},
     }),
   });
-  return { service, calls };
+  return { service, calls, patches };
 }
 describe("canonical identity", () => {
   test("reads exact title and follows compression without warming or creating", async () => {
@@ -151,9 +156,23 @@ describe("canonical identity", () => {
     }));
     await expect(h.service.conversation(box, "default")).rejects.toThrow("another profile");
   });
-  test("an archived Bot Chat is a named conflict, not an endless retry", async () => {
-    // Upstream hides an archived session from the title lookup but keeps its
-    // UNIQUE title, so create collides and the second look still finds nothing.
+  test("archiving Bot Chat sends no title, which upstream refuses on a hidden canonical row", async () => {
+    // A user title write on a hidden "Bot Chat" row raises upstream, and the
+    // PATCH applies `title` before the flags, so a rename would 400 the whole
+    // archive. The next Bot Chat's title write retires the archived name itself.
+    const h = canonicalHarness(async (method) => {
+      if (method === "session.list")
+        return { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat" }] };
+      throw new Error(method);
+    });
+    expect((await h.service.archive(box, "default", "tip")).session).toBe("root");
+    expect(h.patches).toEqual([
+      { session: "root", body: { profile: "default", archived: true, hidden: true } },
+    ]);
+  });
+  test("a title held by an unlisted session is a named conflict, not an endless retry", async () => {
+    // The title lookup does not return the holder, so create collides and the
+    // second look still finds nothing.
     const h = canonicalHarness(async (method) => {
       if (method === "profiles.list")
         return {
@@ -172,10 +191,10 @@ describe("canonical identity", () => {
     expect(failed).toBeInstanceOf(HermeticError);
     expect((failed as HermeticError).code).toBe("CONFLICT");
     // The message states what was observed — the title is taken by a session
-    // this gateway does not list — and names archival as the likely cause, not
-    // as a certainty: the same branch catches a row that has not landed yet.
+    // this gateway does not list — and no longer blames archival, which upstream
+    // now resolves by retiring an archived Bot Chat's title on the next claim.
     expect((failed as HermeticError).message).toContain("does not list");
-    expect((failed as HermeticError).message).toContain("most likely archived");
+    expect((failed as HermeticError).message).not.toContain("archived");
     expect((failed as HermeticError).message).toContain("--session");
     expect((failed as HermeticError).message).not.toContain("retry");
   });
@@ -836,6 +855,54 @@ describe("hosted room tail reads and repeated sends", () => {
       h.rooms.send({ ...target, text: "something else entirely", event_id: "event-1" }),
     );
     expect(failed.code).toBe("CONFLICT");
+  });
+  test("each Stop sends its own cancel id, so a second Stop fences later work", async () => {
+    // Upstream defaults an absent `cancel_id` to a fixed value and keys the stop
+    // fence on it: a repeated id is an idempotent replay of the first fence.
+    const sent: Record<string, unknown>[] = [];
+    const g = roomGateway((method, params) => {
+      if (method !== "groups.stop") throw new HermeticError("CHAT_PROTOCOL", `not asked for ${method}`);
+      sent.push(params);
+      return { cancelled: 0 };
+    });
+    await g.rooms.control({ ...ROOM, action: "stop" });
+    await g.rooms.control({ ...ROOM, action: "stop" });
+    const ids = sent.map((p) => p.cancel_id);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^hermetic-stop-[A-Za-z0-9._:-]{1,114}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
+describe("hosted room input bounds", () => {
+  const member = (bot: string) => ({ instance: "atlas", bot });
+  const room = (members: { instance: string; bot: string }[], id = "review") => ({
+    instance: "atlas",
+    room: id,
+    name: "Review",
+    members,
+  });
+  test("room and event ids stop at upstream's 128 characters", () => {
+    const pair = [member("default"), member("scribe")];
+    expect(RoomCreateInput.safeParse(room(pair, "r".repeat(128))).success).toBe(true);
+    expect(RoomCreateInput.safeParse(room(pair, "r".repeat(129))).success).toBe(false);
+    const ref = { instance: "atlas", room: "review", text: "hi" };
+    expect(RoomSendInput.safeParse({ ...ref, event_id: "e".repeat(128) }).success).toBe(true);
+    expect(RoomSendInput.safeParse({ ...ref, event_id: "e".repeat(129) }).success).toBe(false);
+    expect(
+      RoomRenameInput.safeParse({ instance: "atlas", room: "r".repeat(129), name: "x", event_id: "e" })
+        .success,
+    ).toBe(false);
+  });
+  test("members cannot take a reserved mention handle, in any case", () => {
+    for (const reserved of ["all", "everyone", "ALL", "Everyone"])
+      expect(RoomCreateInput.safeParse(room([member("default"), member(reserved)])).success).toBe(
+        false,
+      );
+  });
+  test("member uniqueness ignores case, as upstream's handles do", () => {
+    expect(RoomCreateInput.safeParse(room([member("scribe"), member("Scribe")])).success).toBe(false);
+    expect(RoomCreateInput.safeParse(room([member("scribe"), member("default")])).success).toBe(true);
   });
 });
 
