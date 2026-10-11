@@ -12,6 +12,8 @@ import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import { Message } from "../src/chat/components/Message.tsx";
 import { Thread } from "../src/chat/components/Thread.tsx";
 import { BotDmContext } from "../src/chat/components/BotDm.tsx";
+import { ProcessEventBlock } from "../src/chat/components/blocks/ProcessEvent.tsx";
+import { eventOf } from "./process-event-fixtures.ts";
 
 let server: FakeServer | null = null;
 afterEach(() => {
@@ -185,6 +187,29 @@ describe("the receiver's delivery row", () => {
     expect(container.querySelector(".ch-avatar.me")).toBeNull();
     expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from Marshall ⇄");
     expect(container.querySelector(".ch-msg-body")?.textContent).toContain(ASK);
+  });
+});
+
+describe("the DM reply card", () => {
+  const reply = (to_profile: string) => eventOf({ dm: { to_profile, reply: REPLY, warnings: [] } });
+  const renderReply = (to_profile: string) =>
+    render(
+      <BotDmContext.Provider value={{ teammates: TEAM, open: () => {} }}>
+        <ProcessEventBlock block={reply(to_profile)} />
+      </BotDmContext.Provider>,
+    );
+
+  test("names the replier by its roster title, not its profile id", () => {
+    const { container } = renderReply("auditor");
+    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("NickQABot → ");
+    expect(container.querySelector(".ch-ev-dm-head")?.textContent).not.toContain("auditor");
+    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("NickQABot");
+  });
+
+  test("falls back to the profile id for a bot not on the roster", () => {
+    const { container } = renderReply("stranger");
+    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("stranger → ");
+    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("stranger");
   });
 });
 
