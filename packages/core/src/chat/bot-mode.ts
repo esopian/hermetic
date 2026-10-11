@@ -6,6 +6,7 @@ import { agentDashboardUrl, cloudName } from "../schema/index.ts";
 import type { ChatDeps, ChatOptions } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
+import { botHandle } from "../shared/bot-handles.ts";
 import { redactDeep, redactText } from "./chat-redact.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
 
@@ -421,15 +422,30 @@ export function createBotMode(
       mcp_servers: records(r.mcp_servers),
     });
   });
+  /**
+   * `profiles.create`, then the Bot Mode namespace the way Desktop's create
+   * dialog writes it (`apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:451-486`
+   * at v2026.9.24): the friendly `title` and `created` in epoch milliseconds,
+   * beside the `version` marker that makes the profile Bot Mode managed. The
+   * look keys (`shape`, `color`, `imageKind`) are Desktop's to choose; Hermetic
+   * seeds its avatars itself and invents none.
+   *
+   * Desktop also sends `profiles.create` a description of `"title — description"`.
+   * That is not copied: the teammate roster already joins the two
+   * (`_role_line`, `tools/bot_mode_probe.py:132-155`), so the title would read
+   * twice there, and `bots.get` would hand the prefix back as part of a
+   * description the operator never typed.
+   */
   const create = operation(S.BotCreateInput, async (p, opts) => {
-    const { instance, ...input } = p;
+    const { instance, title, ...input } = p;
     const created = record(await rpc(instance, "profiles.create", input, opts));
     if (created.ok !== true) return unsupported("Gateway did not create the profile");
+    const meta = { version: 1, ...(title ? { title } : {}), created: Date.now() };
     const configured = record(
       await rpc(
         instance,
         "profiles.configure",
-        { name: p.name, ui_meta: { "hermes-bots": { version: 1 } } },
+        { name: p.name, ui_meta: { "hermes-bots": meta } },
         opts,
       ),
     );
@@ -605,10 +621,17 @@ export function createBotMode(
             profile: "default",
             room_id: p.room,
             name: p.name,
+            // The default profile's handle is `hermes`, the alias `message_agent`
+            // and Desktop give it (`tools/bot_mode_probe.py:67-69`,
+            // `apps/desktop/src/plugins/hermes-bots/data.ts:1011-1017`). The room
+            // matches `@handle` against these registered handles alone
+            // (`resolve_mentions`, `gateway/hosted_room_discussion.py:302-318`),
+            // so a room created as `@default` before this keeps `@default`:
+            // the roster is frozen at creation.
             members: p.members.map((m) => ({
               member_id: m.bot,
               profile: m.bot,
-              handle: m.bot,
+              handle: botHandle(m.bot),
               display_name: m.bot,
             })),
           },

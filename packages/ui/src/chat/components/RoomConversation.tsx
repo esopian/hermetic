@@ -172,7 +172,10 @@ export function RoomConversation({
   /**
    * Members as the gateway addresses them: it matches `@handle` against the
    * room's frozen roster (`hosted_room_discussion.resolve_mentions`), so the
-   * handle is what is inserted, never a friendly slug it would not know.
+   * handle is what is inserted, never a friendly slug it would not know. The
+   * default profile is `@hermes` in a room created now and `@default` in one
+   * created before, so typing either name finds it, and the room's own handle
+   * is what lands in the draft.
    */
   const picker = useMentionPicker({
     text: draft,
@@ -182,7 +185,7 @@ export function RoomConversation({
       key: member.member_id,
       tag: member.handle,
       display: memberName(instance, member.profile, member.display_name, roster),
-      forms: [botHandle(member.profile)],
+      forms: [...new Set([botHandle(member.profile), member.profile])],
       instance,
       bot: member.profile,
     })),

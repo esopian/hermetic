@@ -98,12 +98,14 @@ export function BotField({
   value = "",
   textarea = false,
   required = false,
+  maxLength,
 }: {
   label: string;
   name: string;
   value?: string;
   textarea?: boolean;
   required?: boolean;
+  maxLength?: number;
 }) {
   const id = useId();
   return (
@@ -119,7 +121,14 @@ export function BotField({
           rows={4}
         />
       ) : (
-        <input id={id} className="wiz-input" name={name} defaultValue={value} required={required} />
+        <input
+          id={id}
+          className="wiz-input"
+          name={name}
+          defaultValue={value}
+          required={required}
+          maxLength={maxLength}
+        />
       )}
     </label>
   );

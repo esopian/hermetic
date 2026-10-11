@@ -231,4 +231,59 @@ describe("the room composer", () => {
     expect(input.value).toBe("@scribe ");
     expect(draft).toBe("@scribe ");
   });
+
+  /**
+   * A room created now registers the default profile as `@hermes`; one created
+   * before registers `@default`, and its roster is frozen. Either name finds
+   * the member, and the room's own handle is what is inserted.
+   */
+  test("the default profile answers to hermes and to default, inserting the room's handle", async () => {
+    for (const [handle, typed] of [
+      ["hermes", "def"],
+      ["default", "her"],
+    ] as const) {
+      server?.restore();
+      server = fakeServer({
+        "rooms.get": {
+          instance: INSTANCE,
+          id: "r1",
+          name: "Standup",
+          members: [
+            { member_id: "default", profile: "default", handle, display_name: "Front desk" },
+            { member_id: "scribe", profile: "scribe", handle: "scribe", display_name: "Marshall" },
+          ],
+          revision: 1,
+          latest_seq: 0,
+          created_at: AT,
+          updated_at: AT,
+          disbanded_at: null,
+          working: false,
+          blocked: false,
+          pending_actions: [],
+        },
+        "rooms.history": { events: [], cursor: 0, has_more: false },
+      });
+      render(
+        <RoomConversation
+          instance={INSTANCE}
+          id="r1"
+          fleetId="fxtr0001"
+          onDraft={() => {}}
+          onPending={() => {}}
+          onClosed={() => {}}
+          onChanged={() => {}}
+        />,
+      );
+      const input = screen.getByLabelText("Message the room") as HTMLTextAreaElement;
+      await waitFor(() => expect(screen.getAllByText("Marshall").length).toBeGreaterThan(0));
+      await userEvent.type(input, `@${typed}`);
+      const members = within(
+        screen.getByRole("listbox", { name: "Mention a room member" }),
+      ).getAllByRole("option");
+      expect(members).toHaveLength(1);
+      await userEvent.keyboard("{Enter}");
+      expect(input.value).toBe(`@${handle} `);
+      cleanup();
+    }
+  });
 });

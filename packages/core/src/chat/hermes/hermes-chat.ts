@@ -136,6 +136,14 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     now: deps.now,
     patch: (box, session, body, opts) =>
       peer.botModeRest(box, "PATCH", `/api/sessions/${encodeURIComponent(session)}`, body, opts),
+    read: (box, session, bot, opts) =>
+      peer.botModeRest(
+        box,
+        "GET",
+        `/api/sessions/${encodeURIComponent(session)}?profile=${encodeURIComponent(bot)}`,
+        undefined,
+        opts,
+      ),
   });
   const roster = createChatRoster({ connect: connection.connect });
   const sessions = createChatSessions({ connect: connection.connect });

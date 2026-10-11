@@ -21,6 +21,13 @@ export interface CanonicalDeps {
     body: Record<string, unknown>,
     opts: HermesChatOptions,
   ): Promise<unknown>;
+  /**
+   * One stored session row as the dashboard returns it
+   * (`GET /api/sessions/{id}?profile=…`, `hermes_cli/web_routers/sessions.py:500-513`
+   * at v2026.9.24): the full `sessions` row, `archived` included, which no
+   * session RPC carries.
+   */
+  read(box: BoxAddress, session: string, bot: string, opts: HermesChatOptions): Promise<unknown>;
   now(): string;
 }
 const failure = (message: string) => new HermeticError("CHAT_PROTOCOL", message);
@@ -173,24 +180,57 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
         )
           throw error;
         const winner = await find(rpc, box, bot);
-        /**
-         * The observed fact and nothing more: the title is taken by a session
-         * the lookup does not return. Archival no longer produces it — upstream
-         * retires an archived hidden holder's title when a new Bot Chat claims
-         * it — so this is a row that has not landed yet, or one some other
-         * writer holds outside the lookup. A `CONFLICT` naming the way around
-         * it rather than an endless create-collide-look retry.
-         */
-        if (!winner)
-          throw new HermeticError(
-            "CONFLICT",
-            `Bot Chat for ${bot} is taken by a session this gateway does not list. Address the session directly with \`hermetic chat ${box.instance}/${bot} --session <id>\`, or free the title in Hermes.`,
-          );
+        if (!winner) throw await unlistedHolder(box, bot, error.message, opts);
         return winner;
       }
     } finally {
       rpc.close();
     }
+  }
+
+  /**
+   * The `CONFLICT` for a "Bot Chat" title held by a session the title lookup
+   * does not return, rather than an endless create-collide-look retry.
+   *
+   * The lookup drops archived rows (`_session_list_by_title`,
+   * `tui_gateway/methods_session.py:461-479` at v2026.9.24). Since Hermes
+   * v2026.9.21 (b6207cb5903) a new Bot Chat's title write retires an archived
+   * hidden holder's name in the same transaction (`hermes_state_titles.py:105-117`),
+   * so this only happens there for a row that has not landed yet. An older
+   * gateway keeps the archived holder's title, and every new Bot Chat collides
+   * with it. Upstream's refusal names the holder ("already in use by session
+   * <id>", `hermes_state_titles.py:109`), so its row is read for `archived`
+   * and the hint says which case this is; when the row cannot be read, it
+   * names both. Never auto-unarchived: an operator who archived that session
+   * did it on purpose.
+   */
+  async function unlistedHolder(
+    box: BoxAddress,
+    bot: string,
+    refusal: string,
+    opts: HermesChatOptions,
+  ): Promise<HermeticError> {
+    const holder = /already in use by session ([A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9_])?)/.exec(
+      refusal,
+    )?.[1];
+    const direct = `\`hermetic chat ${box.instance}/${bot} --session ${holder ?? "<id>"}\``;
+    const archived =
+      holder === undefined
+        ? undefined
+        : await deps.read(box, holder, bot, opts).then(
+            (row) => rec(row)?.archived,
+            () => undefined,
+          );
+    if (archived === true || archived === 1)
+      return new HermeticError(
+        "CONFLICT",
+        `Bot Chat for ${bot} is held by archived session ${holder}, whose title this gateway has not released (Hermes v2026.9.21 and later release an archived Bot Chat's title on the next claim). Unarchive it in Hermes to resume it, or address it directly with ${direct}.`,
+      );
+    const which = holder === undefined ? "a session" : `session ${holder}`;
+    return new HermeticError(
+      "CONFLICT",
+      `Bot Chat for ${bot} is taken by ${which}, which this gateway does not list. If it is archived (a gateway older than Hermes v2026.9.21 keeps an archived Bot Chat's title), unarchive it in Hermes; otherwise address it directly with ${direct}, or free the title in Hermes.`,
+    );
   }
 
   async function conversation(

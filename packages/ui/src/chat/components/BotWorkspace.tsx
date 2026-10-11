@@ -413,6 +413,9 @@ export function BotWorkspace({
             const created = await botsCreate({
               instance: String(data.get("instance")),
               name: String(data.get("name")),
+              ...(String(data.get("title") ?? "").trim()
+                ? { title: String(data.get("title")).trim() }
+                : {}),
               description: String(data.get("description")),
               soul: String(data.get("soul")),
               ...(data.get("model") ? { model: String(data.get("model")) } : {}),

@@ -9,9 +9,11 @@
  * roster refresh being observed, not the field echoing its own draft.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "./dom.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "./dom.ts";
 import type { ChatSwarmsResult, SwarmView } from "../src/api/index.ts";
-import { ChatProvider } from "../src/chat/chat-state.tsx";
+import { FormData as HappyFormData } from "happy-dom";
+import { type ReactNode, useMemo } from "react";
+import { ChatContext, ChatProvider, useChat } from "../src/chat/chat-state.tsx";
 import type { ChatApi } from "../src/chat/chat-state.tsx";
 import { BotWorkspace } from "../src/chat/components/BotWorkspace.tsx";
 import { resetBotCapabilityMemo } from "../src/chat/bot-capabilities.ts";
@@ -60,12 +62,31 @@ afterEach(() => {
 });
 
 /**
- * Mounts the workspace; `refuse` makes every `bots.update` fail with that
- * message, `rosterDown` every roster read after the first.
+ * The provider's own chat, except that a forced `refreshSwarms` — the read a
+ * rename makes once its update is saved — rejects. The real one never does: it
+ * catches its own failure and reports it as `swarmsError`, so a roster outage
+ * at the fetch alone cannot tell whether the rename swallows a refresh that
+ * throws.
  */
-async function mount(refuse?: string, rosterDown = false) {
+function RefreshRejects({ children }: { children: ReactNode }) {
+  const chat = useChat();
+  const value = useMemo(
+    () => ({
+      ...chat,
+      refreshSwarms: (options?: { force?: boolean }) =>
+        options?.force ? Promise.reject(new Error("roster read failed")) : chat.refreshSwarms(options),
+    }),
+    [chat],
+  );
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+}
+
+/**
+ * Mounts the workspace; `refuse` makes every `bots.update` fail with that
+ * message, `refreshRejects` the roster refresh after a saved rename.
+ */
+async function mount(refuse?: string, refreshRejects = false) {
   let title: string | null = "Marshall";
-  let reads = 0;
   server = fakeServer({
     "bots.update": (call: TransportCall) => {
       if (refuse) return errorBody("CONFLICT", refuse);
@@ -74,10 +95,7 @@ async function mount(refuse?: string, rosterDown = false) {
     },
   });
   const api: ChatApi = {
-    fetchSwarms: () =>
-      rosterDown && reads++ > 0
-        ? Promise.reject(new Error("roster read failed"))
-        : Promise.resolve({ swarms: [swarmOf(title)] } as ChatSwarmsResult),
+    fetchSwarms: () => Promise.resolve({ swarms: [swarmOf(title)] } as ChatSwarmsResult),
     fetchSessions: (instance: string, bot: string) =>
       Promise.resolve({ instance, bot, sessions: [] } as never),
     fetchHistory: (instance: string, bot: string) =>
@@ -85,9 +103,10 @@ async function mount(refuse?: string, rosterDown = false) {
     sendTurn: () => () => {},
     abortTurn: () => Promise.resolve({} as never),
   };
+  const workspace = <BotWorkspace withContext={false} />;
   render(
     <ChatProvider api={api}>
-      <BotWorkspace withContext={false} />
+      {refreshRejects ? <RefreshRejects>{workspace}</RefreshRejects> : workspace}
     </ChatProvider>,
   );
   await screen.findByText(/Canonical Bot Chat/);
@@ -167,7 +186,7 @@ describe("renaming a bot from its thread header", () => {
     expect(document.activeElement === field()).toBe(true);
   });
 
-  test("a saved title whose roster refresh fails is not a failed rename", async () => {
+  test("a saved title whose roster refresh rejects is not a failed rename", async () => {
     const s = await mount(undefined, true);
     await waitFor(() => expect(header().textContent).toContain("Marshall"));
     fireEvent.click(pencil());
@@ -177,5 +196,88 @@ describe("renaming a bot from its thread header", () => {
     expect(document.querySelector(".ch-title-error")?.textContent).toBeUndefined();
     expect(s.to("bots.update")).toHaveLength(1);
     expect(document.activeElement === pencil()).toBe(true);
+  });
+});
+
+/** A capability sweep where every probe answered and every flag is on. */
+const CAPABLE = {
+  instance: INSTANCE,
+  profiles: true,
+  routines: true,
+  hosted_rooms: true,
+  room_driver: true,
+  room_methods: [],
+  protocol_version: 2,
+  room_features: [],
+  membership_edit: false,
+  cross_instance_rooms: false,
+  cross_instance_relay: false,
+  reason: null,
+  detail: { profiles: null, routines: null, hosted_rooms: null, room_driver: null },
+  status: {
+    profiles: "supported",
+    routines: "supported",
+    hosted_rooms: "supported",
+    room_driver: "supported",
+  },
+};
+
+/** Creates `librarian` through the dialog, typing `typed` as its friendly name; returns what `bots.create` was sent. */
+async function createWithTitle(typed: string): Promise<Record<string, unknown>> {
+  server?.restore();
+  server = fakeServer({
+    "bots.capabilities": CAPABLE,
+    "bots.create": { instance: INSTANCE, bot: "librarian" },
+    "chat.open": { instance: INSTANCE, bot: "librarian", session: "s1" },
+  });
+  const api: ChatApi = {
+    fetchSwarms: () => Promise.resolve({ swarms: [swarmOf(null)] } as ChatSwarmsResult),
+    fetchSessions: (instance: string, bot: string) =>
+      Promise.resolve({ instance, bot, sessions: [] } as never),
+    fetchHistory: (instance: string, bot: string) =>
+      Promise.resolve({ instance, bot, session: null, messages: [] } as never),
+    sendTurn: () => () => {},
+    abortTurn: () => Promise.resolve({} as never),
+  };
+  render(
+    <ChatProvider api={api}>
+      <BotWorkspace withContext={false} />
+    </ChatProvider>,
+  );
+  await screen.findByText(/Canonical Bot Chat/);
+  fireEvent.click(screen.getByRole("button", { name: "Create bot" }));
+  const title = (await screen.findByLabelText("Friendly name (optional)")) as HTMLInputElement;
+  expect(title.maxLength).toBe(64);
+  const form = title.form as HTMLFormElement;
+  fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "librarian" } });
+  fireEvent.change(title, { target: { value: typed } });
+  const submit = () => within(form).getByRole("button", { name: /^Create bot$/ }) as HTMLButtonElement;
+  await waitFor(() => expect(submit().disabled).toBe(false));
+  fireEvent.submit(form);
+  await waitFor(() => expect(server?.to("bots.create")).toHaveLength(1));
+  const params = server?.to("bots.create")[0]?.params as Record<string, unknown>;
+  cleanup();
+  return params;
+}
+
+describe("naming a bot as it is created", () => {
+  /**
+   * Desktop's create dialog asks for a title beside the profile name; this one
+   * does too, and sends it trimmed — or not at all when the field is blank.
+   */
+  test("the friendly name goes to bots.create beside the profile name", async () => {
+    // `setup.ts` keeps bun's own `FormData`, which reads nothing from a
+    // happy-dom form; the dialog's submit reads its fields through happy-dom's.
+    const native = globalThis.FormData;
+    globalThis.FormData = HappyFormData as unknown as typeof FormData;
+    try {
+      const named = await createWithTitle("  Head Librarian ");
+      expect(named).toMatchObject({ name: "librarian", title: "Head Librarian" });
+      const blank = await createWithTitle("   ");
+      expect(blank.name).toBe("librarian");
+      expect(blank).not.toHaveProperty("title");
+    } finally {
+      globalThis.FormData = native;
+    }
   });
 });
