@@ -576,6 +576,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
       // (`resolveCreateDefaults`). Absent on older rows, which then render the
       // catalog default they were always rendering.
       seed: agent.seed,
+      hermes_hold: agent.hermes_hold,
       /**
        * The slot hermeticd reads this agent's provider key from (§8.3). Taken
        * from the row rather than derived from the profile, because the row is

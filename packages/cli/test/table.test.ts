@@ -72,12 +72,31 @@ describe("agent status · the Hermes settings", () => {
     expect(line(a, "reasoning")).toBe("medium (seeded — the agent's to change)");
   });
 
+  /** A row from before `--hold` carries no list and holds every stated key. */
   test("a stated setting is managed, and only that one", () => {
     const a = agent({ hermes: { model: "claude-sonnet-5", max_turns: 42 } });
     expect(line(a, "model")).toBe("claude-sonnet-5 (managed)");
     expect(line(a, "max turns")).toBe("42 (managed)");
     expect(line(a, "terminal")).toBe("local (seeded — the agent's to change)");
     expect(line(a, "reasoning")).toBe("medium (seeded — the agent's to change)");
+  });
+
+  /**
+   * `--hold` (§6.4): with a list on the row, a stated value is seeded and
+   * re-asserted on change, a listed one is managed, and the model is managed
+   * either way.
+   */
+  test("with a hold list, only a held setting and the model are managed", () => {
+    const a = agent({
+      hermes: { model: "claude-sonnet-5", max_turns: 42, reasoning_effort: "high" },
+      hermes_hold: ["reasoning_effort"],
+    });
+    expect(line(a, "model")).toBe("claude-sonnet-5 (managed)");
+    expect(line(a, "reasoning")).toBe("high (managed)");
+    expect(line(a, "max turns")).toBe(
+      "42 (seeded — the agent's to change; re-asserted when `agent set` moves it)",
+    );
+    expect(line(a, "terminal")).toBe("local (seeded — the agent's to change)");
   });
 
   /**
