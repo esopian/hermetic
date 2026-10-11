@@ -375,7 +375,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           const last = id === undefined ? undefined : FIXTURE_CHAT_TRANSCRIPTS[id]?.at(-1);
           const block = last?.blocks.find((b) => b.kind === "process_event");
           return block?.kind === "process_event"
-            ? { ...bot, preview: processEventSentence(block) }
+            ? { ...bot, preview: processEventSentence(block), preview_role: "system" as const }
             : bot;
         }),
       });

@@ -315,6 +315,51 @@
   color: var(--fg3);
 }
 
+/* ── a bot that chose not to answer ──────────────────────────────────────── */
+
+/* A reply that was only `NO_REPLY` (`chat-silence.ts`) is not somebody
+   speaking either, so it takes the event row's shape — the same 36px track and
+   26px inset — with a small face in place of the rule and one muted line. The
+   token itself is in the tooltip. */
+.ch-silent {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 6px 26px;
+  scroll-margin: 24px;
+}
+.ch-silent:focus {
+  outline: none;
+}
+.ch-silent:focus-visible {
+  outline: 1px dashed var(--fg3);
+}
+.ch-silent-gut {
+  display: flex;
+  justify-content: center;
+}
+.ch-silent-line,
+.ch-silent-note {
+  font: 11.5px / 1.6 var(--mono);
+  color: var(--fg3);
+}
+.ch-silent-line b {
+  font-weight: 700;
+  color: var(--fg2);
+}
+.ch-silent-at {
+  margin-left: 10px;
+}
+/* Inside a turn that did other work first, the closing marker is just the line. */
+.ch-msg-body .ch-silent-note {
+  margin: 6px 0 0;
+}
+/* The rail row's preview: already muted mono, so only the colour drops a step. */
+.ch-conv-prev .ch-conv-silent {
+  color: var(--fg3);
+}
+
 /* ── the thread's density switch ─────────────────────────────────────────── */
 
 .ch-ev-density {

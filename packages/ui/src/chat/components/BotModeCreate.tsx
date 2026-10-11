@@ -81,6 +81,9 @@ export function BotCreateDialog({
       <InstancePicker swarms={swarms} value={instance} onChange={setChosen} />
       <CapabilityNote gate={gate} onRetry={capabilities.reload} />
       <BotField label="Profile name" name="name" required />
+      {/* Desktop's create dialog asks for the same thing ("Title"); it is the
+          name the roster shows, and a rename edits it later. */}
+      <BotField label="Friendly name (optional)" name="title" maxLength={64} />
       <BotField label="Description" name="description" />
       <BotField label="Role" name="soul" textarea />
       <BotField label="Model (optional)" name="model" />

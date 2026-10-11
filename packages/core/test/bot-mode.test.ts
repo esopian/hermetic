@@ -12,6 +12,7 @@ import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/
 import { FIXTURE_LEGACY_GATEWAY } from "../src/backend/fixture/fixture-bot-mode.ts";
 import type { StackInfo } from "../src/backend/types.ts";
 import { HermeticError } from "../src/errors.ts";
+import { RoomCreateInput, RoomRenameInput, RoomSendInput } from "../src/schema/bot-mode.ts";
 const botModeBackend = seedFixtureFleet(new MemoryBackend());
 const botModeAgents = await botModeBackend.store.agents.scan();
 const seededFleet = await botModeBackend.store.fleet.get();
@@ -33,11 +34,23 @@ async function fixture() {
 const box = { instance: "atlas", baseUrl: "https://fixture.invalid" };
 function canonicalHarness(
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  read: (session: string, bot: string) => Promise<unknown> = async () => {
+    throw new HermeticError("NOT_FOUND", "the double holds no session rows");
+  },
 ) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
+  const patches: { session: string; body: Record<string, unknown> }[] = [];
+  const reads: { session: string; bot: string }[] = [];
   const service = createCanonicalSessions({
     now: () => "2026-09-18T00:00:00Z",
-    patch: async () => ({ ok: true, archived: true }),
+    patch: async (_box, session, body) => {
+      patches.push({ session, body });
+      return { ok: true, archived: true };
+    },
+    read: async (_box, session, bot) => {
+      reads.push({ session, bot });
+      return read(session, bot);
+    },
     connect: async () => ({
       request: async (method, params) => {
         calls.push({ method, params });
@@ -46,7 +59,7 @@ function canonicalHarness(
       close() {},
     }),
   });
-  return { service, calls };
+  return { service, calls, patches, reads };
 }
 describe("canonical identity", () => {
   test("reads exact title and follows compression without warming or creating", async () => {
@@ -151,10 +164,23 @@ describe("canonical identity", () => {
     }));
     await expect(h.service.conversation(box, "default")).rejects.toThrow("another profile");
   });
-  test("an archived Bot Chat is a named conflict, not an endless retry", async () => {
-    // Upstream hides an archived session from the title lookup but keeps its
-    // UNIQUE title, so create collides and the second look still finds nothing.
+  test("archiving Bot Chat sends no title, which upstream refuses on a hidden canonical row", async () => {
+    // A user title write on a hidden "Bot Chat" row raises upstream, and the
+    // PATCH applies `title` before the flags, so a rename would 400 the whole
+    // archive. The next Bot Chat's title write retires the archived name itself.
     const h = canonicalHarness(async (method) => {
+      if (method === "session.list")
+        return { sessions: [{ id: "root", resolved_id: "tip", title: "Bot Chat" }] };
+      throw new Error(method);
+    });
+    expect((await h.service.archive(box, "default", "tip")).session).toBe("root");
+    expect(h.patches).toEqual([
+      { session: "root", body: { profile: "default", archived: true, hidden: true } },
+    ]);
+  });
+  /** A gateway whose title lookup lists no Bot Chat and whose title write is refused with `refusal`. */
+  const heldTitle = (refusal: string, read?: (session: string) => Promise<unknown>) =>
+    canonicalHarness(async (method) => {
       if (method === "profiles.list")
         return {
           bot_mode_protocol: true,
@@ -162,22 +188,72 @@ describe("canonical identity", () => {
         };
       if (method === "session.list") return { sessions: [] };
       if (method === "session.create") return { session_id: "runtime", stored_session_id: "stored" };
-      if (method === "session.title") throw new Error("Title 'Bot Chat' is already in use");
+      if (method === "session.title") throw new Error(refusal);
       throw new Error(method);
-    });
+    }, read);
+  const conflictOf = async (h: ReturnType<typeof heldTitle>) => {
     const failed = await h.service.conversation(box, "default", { create: true }).then(
       () => null,
       (e: unknown) => e,
     );
     expect(failed).toBeInstanceOf(HermeticError);
     expect((failed as HermeticError).code).toBe("CONFLICT");
-    // The message states what was observed — the title is taken by a session
-    // this gateway does not list — and names archival as the likely cause, not
-    // as a certainty: the same branch catches a row that has not landed yet.
-    expect((failed as HermeticError).message).toContain("does not list");
-    expect((failed as HermeticError).message).toContain("most likely archived");
-    expect((failed as HermeticError).message).toContain("--session");
     expect((failed as HermeticError).message).not.toContain("retry");
+    return (failed as HermeticError).message;
+  };
+  test("a title held by an archived session says so, on a gateway that keeps its title", async () => {
+    // Before Hermes v2026.9.21 an archived Bot Chat keeps its title, and the
+    // title lookup drops archived rows: every new Bot Chat collides with it.
+    // Upstream's refusal names the holder, whose row says it is archived.
+    const h = heldTitle("Title 'Bot Chat' is already in use by session 20260901_old.1", async () => ({
+      id: "20260901_old.1",
+      archived: 1,
+      hidden: 1,
+    }));
+    const message = await conflictOf(h);
+    expect(h.reads).toEqual([{ session: "20260901_old.1", bot: "default" }]);
+    expect(message).toContain("held by archived session 20260901_old.1");
+    expect(message).toContain("Unarchive it in Hermes");
+    expect(message).toContain("--session 20260901_old.1");
+    expect(message).toContain("upgrade the gateway to Hermes v2026.9.21 or later");
+    expect(message).not.toContain("If it is archived");
+  });
+  test("an archived holder that is not hidden keeps its title on any gateway, so no upgrade is offered", async () => {
+    // Upstream releases the title only when the holder is archived and hidden
+    // (`hermes_state_titles.py:108-117` at v2026.9.24).
+    const h = heldTitle("Title 'Bot Chat' is already in use by session s-3", async () => ({
+      id: "s-3",
+      archived: 1,
+      hidden: 0,
+    }));
+    const message = await conflictOf(h);
+    expect(message).toContain("held by archived session s-3, which still holds the title");
+    expect(message).toContain("Unarchive it in Hermes");
+    expect(message).toContain("retitle it there");
+    expect(message).toContain("--session s-3");
+    expect(message).not.toContain("upgrade");
+    expect(message).not.toContain("v2026.9.21");
+  });
+  test("a holder that is not archived, or cannot be read, gets both possibilities", async () => {
+    const live = heldTitle("Title 'Bot Chat' is already in use by session s-2", async () => ({
+      id: "s-2",
+      archived: 0,
+    }));
+    const unread = heldTitle("Title 'Bot Chat' is already in use by session s-2");
+    for (const h of [live, unread]) {
+      const message = await conflictOf(h);
+      expect(message).toContain("taken by session s-2, which this gateway does not list");
+      expect(message).toContain("If it is archived");
+      expect(message).toContain("unarchive it in Hermes");
+      expect(message).toContain("--session s-2");
+    }
+    // A refusal that names no holder reads nothing and keeps the placeholder.
+    const anonymous = heldTitle("Title 'Bot Chat' is already in use");
+    const message = await conflictOf(anonymous);
+    expect(anonymous.reads).toEqual([]);
+    expect(message).toContain("taken by a session");
+    expect(message).toContain("If it is archived");
+    expect(message).toContain("--session <id>");
   });
   test("title uniqueness conflict adopts another client's winner", async () => {
     let lists = 0;
@@ -837,6 +913,206 @@ describe("hosted room tail reads and repeated sends", () => {
     );
     expect(failed.code).toBe("CONFLICT");
   });
+  test("each Stop sends its own cancel id, so a second Stop fences later work", async () => {
+    // Upstream defaults an absent `cancel_id` to a fixed value and keys the stop
+    // fence on it: a repeated id is an idempotent replay of the first fence.
+    const sent: Record<string, unknown>[] = [];
+    const g = roomGateway((method, params) => {
+      if (method !== "groups.stop") throw new HermeticError("CHAT_PROTOCOL", `not asked for ${method}`);
+      sent.push(params);
+      return { cancelled: 0 };
+    });
+    await g.rooms.control({ ...ROOM, action: "stop" });
+    await g.rooms.control({ ...ROOM, action: "stop" });
+    const ids = sent.map((p) => p.cancel_id);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^hermetic-stop-[A-Za-z0-9._:-]{1,114}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
+describe("hosted room input bounds", () => {
+  const member = (bot: string) => ({ instance: "atlas", bot });
+  const room = (members: { instance: string; bot: string }[], id = "review") => ({
+    instance: "atlas",
+    room: id,
+    name: "Review",
+    members,
+  });
+  test("room and event ids stop at upstream's 128 characters", () => {
+    const pair = [member("default"), member("scribe")];
+    expect(RoomCreateInput.safeParse(room(pair, "r".repeat(128))).success).toBe(true);
+    expect(RoomCreateInput.safeParse(room(pair, "r".repeat(129))).success).toBe(false);
+    const ref = { instance: "atlas", room: "review", text: "hi" };
+    expect(RoomSendInput.safeParse({ ...ref, event_id: "e".repeat(128) }).success).toBe(true);
+    expect(RoomSendInput.safeParse({ ...ref, event_id: "e".repeat(129) }).success).toBe(false);
+    expect(
+      RoomRenameInput.safeParse({ instance: "atlas", room: "r".repeat(129), name: "x", event_id: "e" })
+        .success,
+    ).toBe(false);
+  });
+  test("members cannot take a reserved mention handle, in any case", () => {
+    for (const reserved of ["all", "everyone", "ALL", "Everyone"])
+      expect(RoomCreateInput.safeParse(room([member("default"), member(reserved)])).success).toBe(
+        false,
+      );
+  });
+  test("member uniqueness ignores case, as upstream's handles do", () => {
+    expect(RoomCreateInput.safeParse(room([member("scribe"), member("Scribe")])).success).toBe(false);
+    expect(RoomCreateInput.safeParse(room([member("scribe"), member("default")])).success).toBe(true);
+    // `default` is `@hermes`, so a legacy profile directory named `hermes` collides with it.
+    expect(RoomCreateInput.safeParse(room([member("default"), member("hermes")])).success).toBe(false);
+  });
+  test("room and event ids follow upstream's IDENTIFIER_RE: a letter or digit first", () => {
+    const pair = [member("default"), member("scribe")];
+    const ref = { instance: "atlas", room: "review", text: "hi" };
+    const uuid = "0f8b6f2e-4c1d-4b7a-9a52-3d2f1c0e9b7a";
+    for (const id of [uuid, `hermetic-stop-${uuid}`, "a:b.c-d_e", "Z"]) {
+      expect(RoomCreateInput.safeParse(room(pair, id)).success).toBe(true);
+      expect(RoomSendInput.safeParse({ ...ref, event_id: id }).success).toBe(true);
+    }
+    for (const id of [".hidden", "-x", "_x", ":x", "a b", " a", "a/b", ""]) {
+      expect(RoomCreateInput.safeParse(room(pair, id)).success).toBe(false);
+      expect(RoomSendInput.safeParse({ ...ref, event_id: id }).success).toBe(false);
+    }
+  });
+});
+
+describe("hosted room handles", () => {
+  test("a new room registers the default profile as @hermes and every other bot by name", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const g = gateway({
+      rpc: async (method, params) => {
+        if (method === "profiles.list") return { profiles: [{ name: "default" }, { name: "scribe" }] };
+        if (method === "groups.capabilities") return MODERN_GATEWAY;
+        if (method === "groups.create") {
+          sent.push(params);
+          return { room: { room_id: "review", name: "Review", members: params.members } };
+        }
+        throw new HermeticError("CHAT_PROTOCOL", `the double was not asked for ${method}`);
+      },
+    });
+    const created = await g.rooms.create({
+      instance: "atlas",
+      room: "review",
+      name: "Review",
+      members: [
+        { instance: "atlas", bot: "default" },
+        { instance: "atlas", bot: "scribe" },
+      ],
+    });
+    expect(sent[0]?.members).toEqual([
+      { member_id: "default", profile: "default", handle: "hermes", display_name: "default" },
+      { member_id: "scribe", profile: "scribe", handle: "scribe", display_name: "scribe" },
+    ]);
+    expect(created.members.map((m) => [m.profile, m.handle])).toEqual([
+      ["default", "hermes"],
+      ["scribe", "scribe"],
+    ]);
+  });
+  test("a room created as @default reads back as @default: its roster is frozen upstream", async () => {
+    const g = gateway({
+      rpc: async () => ({
+        room: {
+          room_id: "old",
+          name: "Old",
+          members: [{ member_id: "default", profile: "default", handle: "default" }],
+        },
+      }),
+    });
+    const old = await g.rooms.get({ instance: "atlas", room: "old" });
+    expect(old.members[0]).toMatchObject({ profile: "default", handle: "default" });
+  });
+});
+
+describe("creating a bot", () => {
+  /** The `hermes-bots` namespace a `profiles.configure` carried. */
+  const markerOf = (params: Record<string, unknown> | undefined) =>
+    (params?.ui_meta as Record<string, Record<string, unknown>> | undefined)?.["hermes-bots"];
+  function createGateway() {
+    const sent: { method: string; params: Record<string, unknown> }[] = [];
+    const g = gateway({
+      rpc: async (method, params) => {
+        sent.push({ method, params });
+        if (method === "profiles.create") return { ok: true, name: params.name };
+        if (method === "profiles.configure") return { ok: true, applied: { ui_meta: true } };
+        if (method === "profiles.describe") return { name: params.name, description: "Digest" };
+        throw new HermeticError("CHAT_PROTOCOL", `the double was not asked for ${method}`);
+      },
+    });
+    return { g, sent };
+  }
+  test("a friendly name is written beside the Bot Mode marker, as Desktop writes it", async () => {
+    const { g, sent } = createGateway();
+    const before = Date.now();
+    const profile = await g.bots.create({
+      instance: "atlas",
+      name: "scribe",
+      title: "  Marshall ",
+      description: "Digest",
+    });
+    // The title is not a `profiles.create` field, and the description is not
+    // prefixed with it: the teammate roster joins the two itself.
+    expect(sent[0]).toEqual({
+      method: "profiles.create",
+      params: { name: "scribe", description: "Digest" },
+    });
+    const meta = markerOf(sent[1]?.params);
+    expect(sent[1]?.method).toBe("profiles.configure");
+    expect(meta).toEqual({ version: 1, title: "Marshall", created: expect.any(Number) });
+    expect(meta?.created as number).toBeGreaterThanOrEqual(before);
+    expect(meta?.created as number).toBeLessThanOrEqual(Date.now());
+    expect(profile.description).toBe("Digest");
+  });
+  test("without a friendly name only the marker and the creation time are written", async () => {
+    for (const title of [undefined, "", "   "]) {
+      const { g, sent } = createGateway();
+      await g.bots.create({
+        instance: "atlas",
+        name: "scribe",
+        ...(title === undefined ? {} : { title }),
+      });
+      const meta = markerOf(sent[1]?.params);
+      expect(meta).toEqual({ version: 1, created: expect.any(Number) });
+    }
+  });
+  test("a friendly name over 64 characters is refused before the gateway is asked", async () => {
+    const { g, sent } = createGateway();
+    const error = await failureOf(
+      g.bots.create({ instance: "atlas", name: "scribe", title: "x".repeat(65) }),
+    );
+    expect(error.code).toBe("VALIDATION");
+    expect(sent).toEqual([]);
+  });
+  test("in the fixture the roster shows the friendly name a new bot was created with", async () => {
+    const h = await fixture();
+    await h.bots.create({ instance: "atlas", name: "librarian", title: "Head Librarian" });
+    const bots = (await h.chat.swarms({ instance: "atlas" })).swarms[0]?.bots;
+    expect(bots?.find((b) => b.name === "librarian")?.title).toBe("Head Librarian");
+  });
+});
+
+describe("the canonical chat never resets", () => {
+  async function say(message: string) {
+    const h = await fixture();
+    const blocks: string[] = [];
+    for await (const frame of h.chat.send({ instance: "atlas", bot: "default", message }))
+      if (frame.type === "block" && frame.block.kind === "text") blocks.push(frame.block.markdown);
+    return blocks;
+  }
+  test("/new and /reset compact instead, in Desktop's words", async () => {
+    for (const message of ["/new", "/reset "]) {
+      const [notice, ...rest] = await say(message);
+      expect(rest).toEqual([]);
+      expect(notice).toStartWith("This chat never resets.");
+      expect(notice).toContain("Bot chats are one continuous conversation — compacting instead.");
+      expect(notice).toContain("start a separate session");
+      expect(notice).not.toContain("Bot Chat preserved");
+    }
+  });
+  test("a typed /compact reports the gateway's own completion status", async () => {
+    expect(await say("/compact")).toEqual(["✓ Context compression complete"]);
+  });
 });
 
 /**
@@ -947,5 +1223,213 @@ describe("Bot Mode capability certainty", () => {
     await g.bots.capabilities({ instance: "atlas" });
     expect(cronCalls(g)).toHaveLength(2);
     expect(g.calls.some((c) => c.includes("profile=all"))).toBe(false);
+  });
+});
+
+describe("bot titles", () => {
+  /**
+   * A gateway whose `scribe` row carries Desktop's look keys beside a title
+   * (or `bots`), at revision 4 (or no revision map at all), and which records
+   * every `profiles.configure` it is sent.
+   */
+  function titleGateway(
+    reply: (params: Record<string, unknown>) => unknown,
+    bots: Record<string, unknown> = {
+      title: "Scribe",
+      shape: "hex",
+      color: "#123456",
+      custom: true,
+    },
+    revisions = true,
+  ) {
+    const sent: Record<string, unknown>[] = [];
+    const g = gateway({
+      rpc: async (method, params) => {
+        if (method === "profiles.list")
+          return {
+            profiles: [
+              {
+                name: "scribe",
+                ui_meta: { "hermes-bots": bots, other: { kept: true } },
+                ...(revisions ? { ui_meta_revisions: { "hermes-bots": 4, other: 9 } } : {}),
+              },
+            ],
+          };
+        if (method === "profiles.configure") {
+          sent.push(params);
+          return reply(params);
+        }
+        if (method === "profiles.describe") return { name: "scribe" };
+        throw new HermeticError("CHAT_PROTOCOL", `the double was not asked for ${method}`);
+      },
+    });
+    return { g, sent };
+  }
+  const saved = () => ({
+    ok: true,
+    applied: { ui_meta: true, ui_meta_revisions: { "hermes-bots": 5 } },
+  });
+  const REF = { instance: "atlas", bot: "scribe" };
+
+  test("a rename merges the title into the existing namespace, at the revision it read", async () => {
+    const { g, sent } = titleGateway(saved);
+    await g.bots.update({ ...REF, title: "  Marshall  " });
+    expect(sent).toEqual([
+      {
+        name: "scribe",
+        ui_meta: {
+          "hermes-bots": { title: "Marshall", shape: "hex", color: "#123456", custom: true },
+        },
+        ui_meta_expected_revisions: { "hermes-bots": 4 },
+      },
+    ]);
+  });
+
+  test("a reset writes an empty title, as Desktop does, and keeps every other key", async () => {
+    // A missing key would let Desktop's `{ ...cached, ...server }` merge keep
+    // the old title and write it back.
+    for (const title of [null, "", "   "]) {
+      const { g, sent } = titleGateway(saved);
+      await g.bots.update({ ...REF, title });
+      expect(sent[0]?.ui_meta).toEqual({
+        "hermes-bots": { title: "", shape: "hex", color: "#123456", custom: true },
+      });
+    }
+  });
+
+  test("a title write leaves the avatar's `custom` flag as it found it", async () => {
+    const { g, sent } = titleGateway(saved, { title: "Scribe", shape: "hex" });
+    await g.bots.update({ ...REF, title: "Marshall" });
+    expect(sent[0]?.ui_meta).toEqual({ "hermes-bots": { title: "Marshall", shape: "hex" } });
+    const reset = titleGateway(saved, { title: "Scribe", custom: false });
+    await reset.g.bots.update({ ...REF, title: null });
+    expect(reset.sent[0]?.ui_meta).toEqual({ "hermes-bots": { title: "", custom: false } });
+  });
+
+  test("a title is sent alone and first; the other fields follow only once it is saved", async () => {
+    const { g, sent } = titleGateway((params) =>
+      params.ui_meta ? saved() : { ok: true, applied: { soul: true, description: true } },
+    );
+    await g.bots.update({ ...REF, title: "Marshall", soul: "Terse.", description: "Digest" });
+    expect(sent).toEqual([
+      {
+        name: "scribe",
+        ui_meta: {
+          "hermes-bots": { title: "Marshall", shape: "hex", color: "#123456", custom: true },
+        },
+        ui_meta_expected_revisions: { "hermes-bots": 4 },
+      },
+      { name: "scribe", soul: "Terse.", description: "Digest" },
+    ]);
+    // A refused title stops the edit before any other field is written.
+    const refused = titleGateway(() => ({
+      ok: true,
+      applied: {
+        ui_meta: false,
+        ui_meta_conflicts: { "hermes-bots": { expected: 4, actual: 5 } },
+      },
+    }));
+    const error = await failureOf(refused.g.bots.update({ ...REF, title: "Marshall", soul: "Terse." }));
+    expect(error.code).toBe("CONFLICT");
+    expect(refused.sent).toHaveLength(1);
+    expect(refused.sent[0]?.soul).toBeUndefined();
+  });
+
+  test("a model needing confirmation still asks, after the title is saved", async () => {
+    const { g, sent } = titleGateway((params) =>
+      params.ui_meta
+        ? saved()
+        : params.confirm_expensive_model === true
+          ? { ok: true, applied: { model: true } }
+          : { ok: false, confirm_required: true, confirm_message: "Opus is pricey" },
+    );
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall", model: "opus" }));
+    expect(error.code).toBe("CONFIRMATION_REQUIRED");
+    expect(error.message).toBe("Opus is pricey");
+    expect(sent[1]).toEqual({ name: "scribe", model: "opus" });
+    await g.bots.update({ ...REF, title: "Marshall", model: "opus", confirm_expensive_model: true });
+    expect(sent.at(-1)).toEqual({ name: "scribe", model: "opus", confirm_expensive_model: true });
+  });
+
+  test("a row without `ui_meta_revisions` is a gateway without CAS: refused, never written", async () => {
+    const { g, sent } = titleGateway(saved, undefined, false);
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall" }));
+    expect(error.code).toBe("CHAT_PROTOCOL");
+    expect(error.message).toContain("titles");
+    expect(sent).toEqual([]);
+  });
+
+  test("a revision conflict is a named CONFLICT, not a silent overwrite", async () => {
+    const { g } = titleGateway(() => ({
+      ok: true,
+      applied: {
+        ui_meta: false,
+        ui_meta_conflicts: { "hermes-bots": { expected: 4, actual: 5 } },
+        ui_meta_revisions: { "hermes-bots": 5 },
+      },
+    }));
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall" }));
+    expect(error.code).toBe("CONFLICT");
+    expect(error.message).toContain("revision 4 expected, 5 found");
+  });
+
+  test("an unapplied write fails, and a gateway without the contract is unsupported", async () => {
+    const failed = titleGateway(() => ({ ok: false, applied: { ui_meta: false } }));
+    expect((await failureOf(failed.g.bots.update({ ...REF, title: "M" }))).code).toBe("CONFLICT");
+    const old = titleGateway(() => ({ ok: true }));
+    const error = await failureOf(old.g.bots.update({ ...REF, title: "M" }));
+    expect(error.code).toBe("CHAT_PROTOCOL");
+    expect(error.message).toContain("titles");
+  });
+
+  test("each half is one call: the title alone, the fields alone, and confirmation only on the fields", async () => {
+    const { g, sent } = titleGateway((params) =>
+      params.ui_meta ? saved() : { ok: true, applied: { model: true } },
+    );
+    await g.bots.update({ ...REF, title: "Marshall", confirm_expensive_model: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toHaveProperty("confirm_expensive_model");
+    expect(g.calls.filter((c) => c === "profiles.list")).toHaveLength(1);
+    sent.length = 0;
+    await g.bots.update({ ...REF, title: "Marshall", model: "opus", confirm_expensive_model: true });
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).not.toHaveProperty("confirm_expensive_model");
+    expect(sent[1]).toEqual({ name: "scribe", model: "opus", confirm_expensive_model: true });
+    // The profile returned is read after both writes have landed.
+    expect(g.calls.slice(-3)).toEqual([
+      "profiles.configure",
+      "profiles.configure",
+      "profiles.describe",
+    ]);
+  });
+
+  test("an update without a title never reads or writes ui_meta", async () => {
+    const { g, sent } = titleGateway(() => ({ ok: true, applied: { description: true } }));
+    await g.bots.update({ ...REF, description: "Digest" });
+    expect(sent).toEqual([{ name: "scribe", description: "Digest" }]);
+    expect(g.calls).not.toContain("profiles.list");
+  });
+
+  test("a title over 64 characters is refused before the gateway is asked", async () => {
+    const { g, sent } = titleGateway(saved);
+    expect((await failureOf(g.bots.update({ ...REF, title: "x".repeat(65) }))).code).toBe("VALIDATION");
+    expect(sent).toEqual([]);
+  });
+
+  test("in the fixture a rename changes the roster title and a reset restores the profile name", async () => {
+    const h = await fixture();
+    const scribe = async () =>
+      (await h.chat.swarms({ instance: "atlas" })).swarms[0]?.bots.find((b) => b.name === "scribe");
+    expect((await scribe())?.title).toBe("Marshall");
+    await h.bots.update({ instance: "atlas", bot: "scribe", title: "Archivist" });
+    expect((await scribe())?.title).toBe("Archivist");
+    await h.bots.update({ instance: "atlas", bot: "scribe", title: null });
+    expect((await scribe())?.title).toBe("scribe");
+    // The default profile's title is its display name, which a reset leaves alone.
+    await h.bots.update({ instance: "atlas", bot: "default", title: "Front desk" });
+    const atlas = async () => (await h.chat.swarms({ instance: "atlas" })).swarms[0]?.bots;
+    expect((await atlas())?.find((b) => b.is_default)?.title).toBe("Front desk");
+    await h.bots.update({ instance: "atlas", bot: "default", title: "" });
+    expect((await atlas())?.find((b) => b.is_default)?.title).toBe("atlas");
   });
 });

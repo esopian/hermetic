@@ -1520,6 +1520,161 @@ describe("chat.event: a roster movement is classified by one history read", () =
     );
   });
 
+  test("an event the bot answered with a silence marker raises nothing", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        eventRow("e1", DURING),
+        row("r1", LATER, {
+          blocks: [
+            { kind: "reasoning", text: "nothing to say" },
+            { kind: "text", markdown: " *NO_REPLY* " },
+          ],
+        }),
+      ],
+    };
+    const { client } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    expect(rows(store)).toEqual([]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+  });
+
+  test("another bot's DM delivery is not news on its own", async () => {
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        row("d1", LATER, {
+          role: "user",
+          from_bot: { name: "Marshall", handle: "scribe" },
+          blocks: [{ kind: "text", markdown: "Re-run the QA pass on #4124." }],
+        }),
+      ],
+    };
+    const { client } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    expect(rows(store)).toEqual([]);
+    expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+  });
+
+  test("an operator line that merely reads like a signature is still news", async () => {
+    // A handle-less signature (only the legacy bracketed form parses as one);
+    // a real delivery always carries its sender's handle, so this one is the
+    // operator speaking.
+    const store = new MemoryNotificationStore();
+    const state = {
+      at: AT,
+      transcript: [
+        row("r0", AT),
+        row("u1", LATER, {
+          role: "user",
+          from_bot: { name: "HR", handle: null },
+          blocks: [{ kind: "text", markdown: "the offsite moved" }],
+        }),
+      ],
+    };
+    const { client } = classifying(state);
+    const chat = harness(client, store);
+    await chat.swarms({ instance: "atlas" });
+    state.at = LATER;
+    await chat.swarms({ instance: "atlas" });
+    expect(rows(store).map((r) => r.key)).toEqual([
+      `${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`,
+    ]);
+  });
+
+  test("a silence marker after tool runs raises nothing, as the thread draws it silent", async () => {
+    const tool = (id: string) => ({
+      kind: "tool" as const,
+      tool_id: id,
+      name: "terminal",
+      args: { command: "ls" },
+      result: "ok",
+      status: "ok" as const,
+    });
+    for (const blocks of [
+      [
+        { kind: "reasoning" as const, text: "check first" },
+        tool("t1"),
+        { kind: "text" as const, markdown: "NO_REPLY" },
+      ],
+      [
+        tool("t1"),
+        { kind: "text" as const, markdown: "" },
+        tool("t2"),
+        { kind: "text" as const, markdown: "[SILENT]" },
+      ],
+      [{ kind: "text" as const, markdown: "NO_REPLY" }, tool("t1")],
+    ]) {
+      const store = new MemoryNotificationStore();
+      const state = { at: AT, transcript: [row("r0", AT), row("r1", LATER, { blocks })] };
+      const { client } = classifying(state);
+      const chat = harness(client, store);
+      await chat.swarms({ instance: "atlas" });
+      state.at = LATER;
+      await chat.swarms({ instance: "atlas" });
+      expect(rows(store)).toEqual([]);
+      expect(store.seenStatus(FLEET, chatSeenSubject("atlas", "default"))).toBe(LATER);
+    }
+  });
+
+  test("tool runs ending in a marker are still news when prose precedes it or the turn failed", async () => {
+    const tool = {
+      kind: "tool" as const,
+      name: "terminal",
+      args: {},
+      status: "ok" as const,
+    };
+    for (const reply of [
+      {
+        blocks: [
+          { kind: "text" as const, markdown: "Deploy finished." },
+          tool,
+          { kind: "text" as const, markdown: "NO_REPLY" },
+        ],
+      },
+      { incomplete: true, blocks: [tool, { kind: "text" as const, markdown: "NO_REPLY" }] },
+    ]) {
+      const store = new MemoryNotificationStore();
+      const state = { at: AT, transcript: [row("r0", AT), row("r1", LATER, reply)] };
+      const { client } = classifying(state);
+      const chat = harness(client, store);
+      await chat.swarms({ instance: "atlas" });
+      state.at = LATER;
+      await chat.swarms({ instance: "atlas" });
+      expect(rows(store).map((r) => r.key)).toEqual([
+        `${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`,
+      ]);
+    }
+  });
+
+  test("a marker on a failed turn, or mentioned in prose, is still a message", async () => {
+    for (const reply of [
+      { error: "TURN_FAILED", blocks: [{ kind: "text" as const, markdown: "NO_REPLY" }] },
+      { blocks: [{ kind: "text" as const, markdown: "Use NO_REPLY when no answer is needed." }] },
+    ]) {
+      const store = new MemoryNotificationStore();
+      const state = { at: AT, transcript: [row("r0", AT), row("r1", LATER, reply)] };
+      const { client } = classifying(state);
+      const chat = harness(client, store);
+      await chat.swarms({ instance: "atlas" });
+      state.at = LATER;
+      await chat.swarms({ instance: "atlas" });
+      expect(rows(store).map((r) => r.key)).toEqual([
+        `${CHAT_MESSAGE_PREFIX}${FLEET}:atlas/default:${LATER}`,
+      ]);
+    }
+  });
+
   test("a history read that fails falls back to the generic row, and the roster still answers", async () => {
     const store = new MemoryNotificationStore();
     const state = {

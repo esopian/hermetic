@@ -411,7 +411,7 @@ const LIVE_API: ChatApi = {
   resumeObservation,
 };
 
-const ChatContext = createContext<Chat | null>(null);
+export const ChatContext = createContext<Chat | null>(null);
 
 /* ── frame assembly ──────────────────────────────────────────────────────── */
 
@@ -538,7 +538,7 @@ interface RailBump {
    * What the row quotes until the next roster read answers for it. `null` means
    * this bump has nothing to say about the words and the roster's stand.
    */
-  preview: string | null;
+  preview: NonNullable<ChatArrival["preview"]> | null;
   seq: number;
 }
 
@@ -564,10 +564,10 @@ function withBumps(swarms: readonly SwarmView[], bumps: ReadonlyMap<string, Rail
       const bump = bumps.get(railKey(swarm.instance, bot.name));
       if (!bump) return bot;
       const at = newest(bot.last_message_at, bump.at);
-      const preview = bump.preview ?? bot.preview;
-      if (bump.unread === 0 && at === bot.last_message_at && preview === bot.preview) return bot;
+      if (bump.unread === 0 && at === bot.last_message_at && !bump.preview) return bot;
       touched = true;
-      return { ...bot, unread: bot.unread + bump.unread, last_message_at: at, preview };
+      // A bump's quote moves the words and who wrote them together (`preview_role`).
+      return { ...bot, ...bump.preview, unread: bot.unread + bump.unread, last_message_at: at };
     });
     return touched ? { ...swarm, bots } : swarm;
   });
