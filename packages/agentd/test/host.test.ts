@@ -246,12 +246,41 @@ describe("readFile reads the whole file, whatever stat said", () => {
 });
 
 describe("the OS readings come from systeminformation", () => {
-  // No canned answers here: the real library against whatever kernel runs the
-  // suite. The procfs-reads-empty bug lived exactly where no test looked.
+  /**
+   * No canned answers here: the real library against whatever kernel runs the
+   * suite. The procfs-reads-empty bug lived exactly where no test looked.
+   *
+   * In a child process, not this one. The UI's DOM tests install happy-dom's
+   * globals into the shared test process, and Bun's `os.cpus()` sizes its array
+   * from `navigator.hardwareConcurrency` — happy-dom's, not the machine's — so
+   * on a runner with fewer cores than happy-dom claims the array has holes and
+   * `currentLoad()` throws. hermeticd never has a DOM; the child is the
+   * environment it actually runs in.
+   */
   test("cpu, memory and the filesystem holding a path all measure", async () => {
-    const cpu = await host.cpuLoad();
-    const mem = await host.memory();
-    const fs = await host.filesystem(dir);
+    const hostModule = join(import.meta.dir, "../src/host.ts");
+    const script = `
+      const { realHost } = await import(${JSON.stringify(hostModule)});
+      const host = realHost();
+      const readings = {
+        cpu: await host.cpuLoad(),
+        mem: await host.memory(),
+        fs: await host.filesystem(${JSON.stringify(dir)}),
+      };
+      process.stdout.write(JSON.stringify(readings));
+    `;
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    const { cpu, mem, fs } = JSON.parse(stdout) as {
+      cpu: number | null;
+      mem: { total: number; available: number } | null;
+      fs: { mount: string; size: number; usePct: number } | null;
+    };
 
     expect(cpu).not.toBeNull();
     expect(cpu as number).toBeGreaterThanOrEqual(0);
