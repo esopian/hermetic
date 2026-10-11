@@ -79,28 +79,3 @@ export function createLocalAgentPurge(deps: LocalAgentPurgeDeps) {
     if (failures.length > 0) throw failures[0];
   };
 }
-
-/**
- * The earliest dated state this laptop holds for `fleet` + `name`, or null with
- * none — what §6.7's first-sighting check (`predatesRelease`, `hermetic.ts`)
- * compares a predecessor's tombstone against. Dated means the first session
- * this laptop opened on the name and the `agent:<name>` mute.
- *
- * The rest of what the purge drops cannot say when it was gathered: a
- * listening opt-in and a fence carry no stamp, and a watermark's moves on every
- * write. State made only of those reads as none, so a first sighting adopts it
- * rather than guessing.
- */
-export function oldestLocalAgentState(
-  deps: Pick<LocalAgentPurgeDeps, "notifications" | "localSessions">,
-  fleetId: string,
-  name: string,
-): string | null {
-  const target = agentMuteTarget(name);
-  const stamps = [
-    deps.localSessions.oldestAt(fleetId, name),
-    deps.notifications.mutes().find((m) => m.target === target)?.at ?? null,
-  ].filter((at): at is string => at !== null && !Number.isNaN(Date.parse(at)));
-  if (stamps.length === 0) return null;
-  return stamps.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
-}

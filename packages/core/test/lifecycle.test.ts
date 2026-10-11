@@ -205,6 +205,42 @@ describe("agents.set", () => {
   });
 
   /**
+   * `--hold` (§6.4). A new agent always carries a list, so stating a value
+   * seeds it; `set --hold` replaces the list; and a seeded row from before the
+   * field keeps no list — holding every key it states — until one is sent.
+   */
+  test("a create writes a hold list, and set replaces it", async () => {
+    const { hermetic } = seeded();
+    await drain(
+      hermetic.agents.create({
+        name: "wren",
+        provider_profile: "openrouter-cheap",
+        hermes: { max_turns: 600 },
+        hold: ["reasoning_effort", "reasoning_effort"],
+      }),
+    );
+    expect((await hermetic.agents.get("wren")).hermes_hold).toEqual(["reasoning_effort"]);
+    const held = await hermetic.agents.set({ name: "wren", hold: ["max_turns"] });
+    expect(held.hermes_hold).toEqual(["max_turns"]);
+    expect(held.hermes?.max_turns).toBe(600);
+    const none = await hermetic.agents.set({ name: "wren", hold: [] });
+    expect(none.hermes_hold).toEqual([]);
+  });
+
+  test("a create with no --hold holds nothing", async () => {
+    const { hermetic } = seeded();
+    await drain(hermetic.agents.create({ name: "wren", provider_profile: "openrouter-cheap" }));
+    expect((await hermetic.agents.get("wren")).hermes_hold).toEqual([]);
+  });
+
+  test("setting a value on a row from before --hold leaves it without a list", async () => {
+    const { hermetic } = seeded();
+    expect((await hermetic.agents.get("fathom")).hermes_hold).toBeUndefined();
+    const next = await hermetic.agents.set({ name: "fathom", hermes: { max_turns: 40 } });
+    expect(next.hermes_hold).toBeUndefined();
+  });
+
+  /**
    * §8.3: a provider change is *staged*, not applied. `fathom` is a bedrock
    * agent; naming a keyed provider writes `pending` and leaves the running
    * binding exactly where it was, because moving it needs a credential copied
@@ -2374,11 +2410,12 @@ describe("ssh / logs", () => {
   test("ssh returns argv for the head to exec; core never spawns", async () => {
     const { hermetic } = seeded();
     // The row's own `tailscale_dns_name`, which is what the node answers on —
-    // never the bare agent name, which since v3 is not a hostname at all.
+    // never the bare agent name, which since v3 is not a hostname at all. The
+    // login user is explicit: left to default, it would be the laptop's own.
     expect(await hermetic.ssh({ name: "atlas" })).toEqual([
       "tailscale",
       "ssh",
-      "fxtr0001-atlas.hermetic.ts.net",
+      "hermes@fxtr0001-atlas.hermetic.ts.net",
     ]);
     await expect(hermetic.ssh({ name: "Atlas" })).rejects.toThrow(HermeticError);
   });

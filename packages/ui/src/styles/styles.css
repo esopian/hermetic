@@ -4293,6 +4293,38 @@ button:focus-visible,
 .nt-toast-x:hover {
   color: var(--fg);
 }
+/*
+ * The return toast (issue #18): pinned top-centre, apart from the stack, in
+ * the accent frame — it is the one toast that is waiting for a keypress.
+ */
+.nt-rtoast {
+  position: fixed;
+  top: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 210;
+  width: 560px;
+  max-width: calc(100vw - 40px);
+  background: var(--bg2);
+  border: 3px solid var(--acc);
+  box-shadow: 0 18px 40px -14px rgba(0, 0, 0, 0.7);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  padding: 12px 14px;
+  align-items: center;
+}
+.nt-rtoast-k {
+  font: 700 10px var(--mono);
+  color: var(--acc);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.nt-rtoast-acts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 /* the read-life bar: a toast that is about to leave says so */
 .nt-toast-life {
   grid-column: 1 / -1;

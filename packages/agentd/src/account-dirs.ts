@@ -20,8 +20,8 @@ export const BROWSER_PROFILE_ROOT = `${HERMES_ACCOUNT_HOME}/browser`;
  * Run one command as the `hermes` account instead of as root.
  *
  * `runuser` rather than `su`: it execs the argv directly rather than through a
- * login shell, so the account's `nologin` shell does not stop it and there is no
- * shell to quote anything for.
+ * login shell, so the account's shell (whatever it is) never matters here and
+ * there is no shell to quote anything for.
  */
 export function asHermes(argv: readonly string[]): string[] {
   return ["runuser", "-u", HERMES_ACCOUNT, "--", ...argv];

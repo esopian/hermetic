@@ -107,6 +107,7 @@ export function fakeInbox(seed: NotificationView[]) {
       return Promise.resolve({
         auto_clear_read: "7d",
         clear_resolved_on_read: true,
+        terminal_alerts: true,
         ...input,
       } as never);
     },

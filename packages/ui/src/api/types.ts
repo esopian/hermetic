@@ -186,6 +186,8 @@ export type SettingsSetInput = Omit<BridgeInput<"settings.set">, "target">;
  * the write carries no fleet envelope.
  */
 export type PresetsResult = BridgeResult<"presets.get">;
+/** This laptop's chat settings (`chat.settings`), shared with the CLI. */
+export type ChatSettingsView = BridgeResult<"chat.settings">;
 export type PresetsSetInput = BridgeInput<"presets.set">;
 
 /**

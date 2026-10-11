@@ -4,6 +4,7 @@
  * post-steps that install the seed without ever overwriting one. Final file
  * content, no templating — see `render.ts`.
  */
+import type { HermesSettings, HoldableSetting } from "../schema/index.ts";
 import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
@@ -57,8 +58,50 @@ function shellQuote(value: string): string {
  */
 const ASSERTED_DIR = "/etc/hermetic/asserted";
 
-/** The last `approvals.mode` hermetic asserted; see `seedCommands`. */
-const APPROVALS_MARKER = ASSERTED_DIR + "/approvals_mode";
+/**
+ * The seeded settings an operator's stated value is re-asserted for, and the
+ * Hermes config leaf each one is (`seedCommands`). `approvals_mode` is not here
+ * because it is re-asserted whether or not it was stated — see its own note.
+ */
+const REASSERTED_LEAVES = {
+  terminal_backend: "terminal.backend",
+  max_turns: "agent.max_turns",
+  reasoning_effort: "agent.reasoning_effort",
+} as const satisfies Record<HoldableSetting, string>;
+
+/**
+ * Write `leaf` through Hermes when the value hermetic last asserted for `key`
+ * differs from `value`, and record the new one. The marker is
+ * `ASSERTED_DIR/<key>`; the approvals note in `seedCommands` says why a marker
+ * rather than a probe, and why it is written last.
+ *
+ * `value` is embedded raw in the `test` and the `printf`, so it is held to a
+ * closed alphabet here rather than trusted to stay one: every caller today
+ * passes an enum member or an integer, and a value with a quote in it would be
+ * a shell injection into a root post-step. The `config set` argv is shell-quoted
+ * as well, as the one place the rule must not depend on the caller.
+ */
+function assertOnChange(
+  key: keyof HermesSettings,
+  leaf: string,
+  value: string,
+  restart: string,
+): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new HermeticError("INTERNAL", `refusing to re-assert ${key}: value is not a plain word`, {
+      key,
+    });
+  }
+  const marker = `${ASSERTED_DIR}/${key}`;
+  const sets = hermesConfigSetArgv(leaf, shellQuote(value)).join(" ");
+  return (
+    `test "$(cat ${marker} 2>/dev/null)" = "${value}" || { ` +
+    `${sets} >/dev/null && ` +
+    `${restart} && ` +
+    `install -d -m 0755 ${ASSERTED_DIR} && ` +
+    `printf '%s' '${value}' > ${marker}; }`
+  );
+}
 
 /**
  * The marker that tells Hermes this box is an image it must not update itself.
@@ -136,7 +179,12 @@ export const HERMETIC_PLATFORM_HINT =
  */
 export function hermesManagedConfig(input: RenderInput): string {
   const provider = PROVIDERS[input.provider];
-  const { managed } = splitHermesSettings(input.hermes, provider.default_model, input.seed);
+  const { managed } = splitHermesSettings(
+    input.hermes,
+    provider.default_model,
+    input.seed,
+    input.hermes_hold,
+  );
 
   const lines = [
     "# Rendered by hermetic for agent " + input.name + ". Final file, no templating.",
@@ -257,7 +305,12 @@ export function hermesManagedConfig(input: RenderInput): string {
  */
 export function hermesSeedConfig(input: RenderInput): string {
   const provider = PROVIDERS[input.provider];
-  const { seed } = splitHermesSettings(input.hermes, provider.default_model, input.seed);
+  const { seed } = splitHermesSettings(
+    input.hermes,
+    provider.default_model,
+    input.seed,
+    input.hermes_hold,
+  );
 
   const lines = [
     "# Rendered by hermetic for agent " + input.name + ". Final file, no templating.",
@@ -402,6 +455,7 @@ export function seedCommands(input: RenderInput): string[] {
     input.hermes,
     PROVIDERS[input.provider].default_model,
     input.seed,
+    input.hermes_hold,
   );
   // Both units, in one `try-restart`: the seed is the agent's own config and
   // the gateway reads it exactly as the dashboard does.
@@ -447,7 +501,8 @@ export function seedCommands(input: RenderInput): string[] {
      *
      * The value needs no shell quoting of its own — `ApprovalsMode` is a closed
      * enum of three lowercase words, so there is nothing in it for `/bin/sh` to
-     * find — but the `config set` argv goes through `shellQuote` anyway,
+     * find, and `assertOnChange` refuses anything that is not a plain word —
+     * but the `config set` argv goes through `shellQuote` anyway,
      * because that is the one call whose value is joined into a command line
      * and the rule there should not depend on today's enum.
      *
@@ -469,15 +524,25 @@ export function seedCommands(input: RenderInput): string[] {
      * and at worst one extra bounce on a retry, both of which are harmless
      * precisely because the steps before the marker are idempotent.
      */
-    const mode = seed.approvals_mode;
-    const sets = hermesConfigSetArgv("approvals.mode", shellQuote(mode)).join(" ");
-    commands.push(
-      `test "$(cat ${APPROVALS_MARKER} 2>/dev/null)" = "${mode}" || { ` +
-        `${sets} >/dev/null && ` +
-        `${restartBoth} && ` +
-        `install -d -m 0755 ${ASSERTED_DIR} && ` +
-        `printf '%s' '${mode}' > ${APPROVALS_MARKER}; }`,
-    );
+    commands.push(assertOnChange("approvals_mode", "approvals.mode", seed.approvals_mode, restartBoth));
+  }
+  /**
+   * A stated value hermetic does not hold (§6.4, `splitHermesSettings`) is a
+   * seed, and a seed lands once: without this, `agent set --max-turns 600` on
+   * an agent that has already booted would change the row, the seed file and
+   * `config_hash`, and nothing the agent reads. So the stated value is
+   * re-asserted the way `approvals.mode` is — through Hermes, behind a marker,
+   * on change only — and between changes the key is the box's.
+   *
+   * Only a *stated* value. An unstated key is the fleet's default, which the
+   * seed file already carried at first boot, and asserting it here would
+   * overwrite whatever the agent had since chosen on every box the first time
+   * this command shipped. A held key needs none of it: the managed scope wins.
+   */
+  for (const [key, leaf] of Object.entries(REASSERTED_LEAVES) as Array<[HoldableSetting, string]>) {
+    const value = seed[key];
+    if (value === undefined || input.hermes?.[key] === undefined) continue;
+    commands.push(assertOnChange(key, leaf, String(value), restartBoth));
   }
   return commands;
 }

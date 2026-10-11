@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
 import { useChatIfAvailable } from "../chat/chat-state.tsx";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { ChatView } from "../chat/components/ChatView.tsx";
-import { isTopmostOverlay } from "../lib/focus.ts";
+import { isTopmostOverlay, keyboardOwned } from "../lib/focus.ts";
 import { openExternal } from "../lib/open-external.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
 import { fleetIdOf, history as fetchHistory, rebootAgent, rerunAgent } from "../api/index.ts";
@@ -41,6 +41,9 @@ import { AgentLifecycle } from "./agent/AgentLifecycle.tsx";
 import { AgentLogs } from "./agent/AgentLogs.tsx";
 import { AgentOverview } from "./agent/AgentOverview.tsx";
 import { AgentSectionNav } from "./agent/AgentSectionNav.tsx";
+import { AgentTerminal } from "./agent/AgentTerminal.tsx";
+import { useTerminalSessions } from "./agent/useTerminalSession.ts";
+import type { SettingsSection } from "../nav/settings-nav.ts";
 import { RAIL_FADE_MS, useAgentOp } from "./agent/useAgentOp.ts";
 import { useDesktopAttach } from "./agent/useDesktopAttach.ts";
 import { useDestroyFlow } from "./agent/useDestroyFlow.ts";
@@ -88,6 +91,9 @@ export function AgentDrawer({
   setConfirmOpen,
   tab = DEFAULT_AGENT_TAB,
   onTab,
+  session = null,
+  onSession,
+  onSettings,
   covered = false,
 }: {
   agent: AgentView;
@@ -113,6 +119,14 @@ export function AgentDrawer({
   tab?: AgentTab;
   onTab?: (tab: AgentTab) => void;
   /**
+   * The Terminal section's session, from the hash (`#agent/<name>/terminal/<id>`),
+   * and its writer. Mirrored locally like `tab` for a caller with no router.
+   */
+  session?: string | null;
+  onSession?: (session: string | null) => void;
+  /** Settings › a section: the terminal's "alerts off" and ACL panel go there. */
+  onSettings?: (section: SettingsSection) => void;
+  /**
    * Another surface is open over this drawer (Settings, Volumes, a create
    * drawer). The drawer stays mounted underneath, which for the Desktop
    * section means a live RFB stream nobody can see — so the flag is passed
@@ -131,6 +145,21 @@ export function AgentDrawer({
   useEffect(() => {
     setSection(tab);
   }, [tab]);
+
+  /** The Terminal section's session, mirrored from the hash like `section` is from `tab`. */
+  const [termSession, setTermSession] = useState<string | null>(session);
+  useEffect(() => {
+    setTermSession(session);
+  }, [session]);
+  const pickSession = useCallback(
+    (next: string | null) => {
+      setTermSession(next);
+      onSession?.(next);
+    },
+    [onSession],
+  );
+  /** The session table for this agent: the nav's sub-line and the section both read it. */
+  const terminal = useTerminalSessions(name);
 
   /** The conversation the drawer's Chat section should show: this agent's, on its `default` bot. */
   const chatTarget = useCallback(
@@ -188,6 +217,8 @@ export function AgentDrawer({
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      // The terminal's screen owns the keyboard while it has focus (`t`, ⌘⇧K included).
+      if (keyboardOwned()) return;
       const root = document.querySelector<HTMLElement>('[aria-labelledby="agent-title"]');
       if (
         (e.metaKey || e.ctrlKey) &&
@@ -447,6 +478,26 @@ export function AgentDrawer({
         </div>
       );
       break;
+    case "terminal":
+      /*
+        Mounted only while selected, like Desktop — but unmounting detaches
+        rather than ends: the sessions are the main process's (D2).
+      */
+      body = (
+        <AgentTerminal
+          agent={agent}
+          tailnet={tailnet}
+          fleetId={fleetId}
+          fixture={meta?.fixture === true}
+          terminal={terminal}
+          session={termSession}
+          onSession={pickSession}
+          onSection={go}
+          onSettings={(to) => onSettings?.(to)}
+          covered={covered}
+        />
+      );
+      break;
     case "logs":
       body = <AgentLogs agent={agent} history={history} />;
       break;
@@ -462,6 +513,7 @@ export function AgentDrawer({
           busy={busy}
           onRunOp={run}
           desktop={desktop}
+          onOpenTerminal={() => go("terminal")}
         />
       );
       break;
@@ -508,6 +560,8 @@ export function AgentDrawer({
         // keeps that keystroke, so this line is for the frames that would not
         // (see `inFrame`).
         if (inFrame()) return;
+        // Same for the terminal: Esc is a key the shell (vi, less) wants.
+        if (keyboardOwned()) return;
         if (confirmOpen) setConfirmOpen(false);
         else if (section === "chat" && chat?.sending) void chat.abort();
         else onClose();
@@ -599,6 +653,7 @@ export function AgentDrawer({
           section={section}
           onSection={selectSection}
           chat={{ available: !!entry && !!chat, watched, listening: !!listening }}
+          terminal={terminal}
         />
         <div className="dr-main" role="tabpanel" aria-labelledby={`agent-tab-${section}`}>
           {/*

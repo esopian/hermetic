@@ -11,7 +11,7 @@
  * happens to touch the row, which may be never.
  */
 import { describe, expect, test } from "bun:test";
-import { openHermetic } from "@hermetic/core";
+import { openHermetic, terminalNotices } from "@hermetic/core";
 import type { AgentView, Hermetic } from "@hermetic/core";
 import {
   ADVISORY_INTERVAL_MS,
@@ -569,5 +569,47 @@ describe("getPoller", () => {
     } finally {
       fresh.stop();
     }
+  });
+});
+
+describe("flushNotifications", () => {
+  /**
+   * A row a head raised itself (the terminal's attention, issue #18) goes out
+   * now rather than on the next one-minute tick, exactly once even when a
+   * tick and a flush read the inbox at the same moment.
+   */
+  test("delivers a new row now, once, and nothing after stop", async () => {
+    const { hermetic, poller, seen } = await harness();
+    const target = hermetic.target;
+    if (target === null) throw new Error("the fixture has a fleet");
+    // The poller's watermark is the millisecond it was built and `since` is
+    // exclusive, so a row stamped in that same millisecond is never read. Step
+    // past it, or the test fails whenever the harness is fast enough.
+    await Bun.sleep(2);
+    terminalNotices(hermetic).raise({
+      fleet_id: target.fleet_id,
+      agent: "atlas",
+      session_id: "flush1",
+      session_index: 1,
+      event: "bell",
+    });
+    await Promise.all([poller.flushNotifications(), poller.poll(), poller.flushNotifications()]);
+    const delivered = seen.filter(
+      (e): e is FleetEvent & { type: "notification" } =>
+        e.type === "notification" && e.notification.ref === "flush1",
+    );
+    expect(delivered.map((e) => e.notification.kind)).toEqual(["terminal.bell"]);
+
+    poller.stop();
+    seen.length = 0;
+    terminalNotices(hermetic).raise({
+      fleet_id: target.fleet_id,
+      agent: "atlas",
+      session_id: "flush2",
+      session_index: 1,
+      event: "bell",
+    });
+    await poller.flushNotifications();
+    expect(seen).toEqual([]);
   });
 });

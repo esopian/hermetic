@@ -28,32 +28,82 @@ export interface CloseDecision {
   message: string;
 }
 
+/**
+ * A terminal session with something running in it (D9, issue #18): the agent,
+ * the session's index, and the command when it reads as plain words
+ * (`busyForQuit` in `terminal/activity.ts` decides that).
+ */
+export interface BusySession {
+  name: string;
+  index: number;
+  label?: string;
+}
+
 /** One op as a line the operator recognises: the method and what it is acting on. */
 function describe(op: OpSummary): string {
   return op.target === null ? op.method : `${op.method} ${op.target}`;
 }
 
+/** `atlas #1 — apt upgrade`, or `atlas #1` when the command did not pass the sanitizer. */
+export function describeSession(session: BusySession): string {
+  const head = `${session.name} #${session.index}`;
+  return session.label === undefined ? head : `${head} — ${session.label}`;
+}
+
+/** At most `MAX_LISTED_OPS` lines, indented, and a count of the rest. */
+function listing(lines: string[]): string {
+  const listed = lines.slice(0, MAX_LISTED_OPS).map((line) => `  ${line}`);
+  const hidden = lines.length - listed.length;
+  if (hidden > 0) listed.push(`  +${hidden} more`);
+  return listed.join("\n");
+}
+
 /**
  * Whether to ask, and what to ask. Pure — no clock, no registry, no dialog — so
  * the phrasing at 0, 1, 5 and 20 running ops is a test rather than a screenshot.
+ *
+ * Busy terminal sessions ask too; idle and unknown ones close silently (D9),
+ * which is why the caller passes only the busy ones.
  */
-export function closeDecision(running: OpSummary[]): CloseDecision {
-  if (running.length === 0) return { needsPrompt: false, message: "" };
+export function closeDecision(running: OpSummary[], busy: BusySession[] = []): CloseDecision {
+  if (running.length === 0 && busy.length === 0) return { needsPrompt: false, message: "" };
 
-  const listed = running.slice(0, MAX_LISTED_OPS).map((op) => `  ${describe(op)}`);
-  const hidden = running.length - listed.length;
-  if (hidden > 0) listed.push(`  +${hidden} more`);
-
-  const count =
-    running.length === 1
-      ? "1 operation is still running"
-      : `${running.length} operations are still running`;
+  const parts: string[] = [];
+  if (running.length > 0) {
+    const count =
+      running.length === 1
+        ? "1 operation is still running"
+        : `${running.length} operations are still running`;
+    parts.push(`${count}:\n\n${listing(running.map(describe))}`);
+  }
+  if (busy.length > 0) {
+    const count =
+      busy.length === 1 ? "1 terminal session is busy" : `${busy.length} terminal sessions are busy`;
+    parts.push(`${count}:\n\n${listing(busy.map(describeSession))}`);
+  }
+  const consequences: string[] = [];
+  // "Quitting will not stop them on AWS" is the part worth saying: the
+  // operator's real question is whether closing the window cancels the work
+  // or merely stops watching it. It stops watching it.
+  if (running.length > 0) {
+    consequences.push(
+      busy.length > 0
+        ? "Quitting stops watching the operations; it does not undo work already started on AWS."
+        : "Quitting stops watching them; it does not undo work already started on AWS.",
+    );
+  }
+  // A terminal session is the opposite: it lives in this process, so quitting
+  // hangs it up and whatever ran in it gets the hangup too.
+  if (busy.length > 0) {
+    consequences.push(
+      busy.length === 1
+        ? "Quitting hangs up the session and what runs in it."
+        : "Quitting hangs up the sessions and what runs in them.",
+    );
+  }
   return {
     needsPrompt: true,
-    // "Quitting will not stop them on AWS" is the part worth saying: the
-    // operator's real question is whether closing the window cancels the work
-    // or merely stops watching it. It stops watching it.
-    message: `${count}:\n\n${listed.join("\n")}\n\nQuitting stops watching them; it does not undo work already started on AWS. Quit anyway?`,
+    message: `${parts.join("\n\n")}\n\n${consequences.join(" ")} Quit anyway?`,
   };
 }
 
@@ -78,8 +128,15 @@ export interface CloseAttempt {
   deny(): void;
 }
 
+/** As much of the terminal host as the guard reads (`terminal/host.ts`). */
+export interface BusyTerminals {
+  busySessions(): BusySession[];
+}
+
 export interface CloseGuardOptions {
   ops: RunningOps;
+  /** The in-app terminal's sessions; a busy one asks like a running op does. */
+  terminals?: BusyTerminals;
   /** Native modal; resolves true when the operator chose to quit. */
   confirm(message: string): Promise<boolean>;
   /** The same teardown `installShutdown` runs for a signal: poller, chat, exit. */
@@ -129,17 +186,23 @@ export function installCloseGuard(options: CloseGuardOptions): void {
   let committed = false;
 
   /** Everything after the decision, which may take as long as a human does. */
-  const settle = async (running: OpSummary[], message: string): Promise<void> => {
+  const settle = async (running: OpSummary[], busy: BusySession[], message: string): Promise<void> => {
     if (message !== "") {
       const quit = await options.confirm(message);
       if (!quit) {
         // Declined: the window stays, and the next Cmd-Q must be able to ask
         // again — this is the one path that puts the flag back.
         leaving = false;
-        options.log?.line("info", "close", "quit cancelled", { running: running.length });
+        options.log?.line("info", "close", "quit cancelled", {
+          running: running.length,
+          busy_sessions: busy.length,
+        });
         return;
       }
-      options.log?.line("warn", "close", "quitting with running ops", { running: running.length });
+      options.log?.line("warn", "close", "quitting with running work", {
+        running: running.length,
+        busy_sessions: busy.length,
+      });
     }
     committed = true;
     await options.shutdown();
@@ -166,12 +229,20 @@ export function installCloseGuard(options: CloseGuardOptions): void {
       return;
     }
     const running = options.ops.list({ status: "running" }).ops;
-    const decision = closeDecision(running);
+    let busy: BusySession[] = [];
+    try {
+      busy = options.terminals?.busySessions() ?? [];
+    } catch {
+      // A host that cannot say is a host with nothing to ask about; the deny
+      // below must still happen in this tick.
+    }
+    const decision = closeDecision(running, busy);
     event.deny();
     leaving = true;
     if (decision.needsPrompt) {
       options.log?.line("info", "close", "close denied, confirming with the operator", {
         running: running.length,
+        busy_sessions: busy.length,
       });
     }
     /**
@@ -188,7 +259,7 @@ export function installCloseGuard(options: CloseGuardOptions): void {
      * suites in the same `bun test` process did to the global one.
      */
     defer(() => {
-      void settle(running, decision.needsPrompt ? decision.message : "").catch((e: unknown) => {
+      void settle(running, busy, decision.needsPrompt ? decision.message : "").catch((e: unknown) => {
         // A dialog or a teardown that throws must not leave the app
         // permanently unquittable: clear the flag so the next Cmd-Q gets a
         // fresh attempt rather than the silent `return` above.

@@ -145,6 +145,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // read names an `<instance>/<bot>` pair, because that is the unit (§9.2).
   "chat.listening": "chat listening",
   "chat.listen": "chat listen",
+  // §9.2: this laptop's chat settings — whether transcripts are masked.
+  "chat.settings": "chat settings",
   "chat.swarms": "bots ls",
   "chat.sessions": "chat ls",
   "chat.history": "chat log",
