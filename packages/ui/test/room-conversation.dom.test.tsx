@@ -347,6 +347,69 @@ describe("room polling reads forward, not from the top", () => {
   });
 });
 
+function memberPost(
+  room: string,
+  seq: number,
+  id: string,
+  text: string,
+  kind = "message.member",
+): RoomEvent {
+  return {
+    ...eventOf(room, seq, id, text),
+    kind,
+    actor: { kind: "member", id: "atlas" },
+    member_id: "atlas",
+  };
+}
+
+describe("a member that chose not to answer", () => {
+  test("a post that is only a silence token is the muted marker, never the token", async () => {
+    const rooms = await mount([{ id: "room-a", name: "Room A" }]);
+    rooms.pages.set("room-a", [
+      {
+        events: [
+          memberPost("room-a", 1, "e1", " [SILENT] "),
+          memberPost("room-a", 2, "e2", "NO_REPLY"),
+          memberPost("room-a", 3, "e3", "a real answer"),
+          eventOf("room-a", 4, "e4", "NO_REPLY"),
+        ],
+        cursor: 4,
+        has_more: false,
+      },
+    ]);
+    await open("Room A");
+    await waitFor(() => expect(screen.getByText("a real answer")).toBeDefined());
+    const markers = [...document.querySelectorAll<HTMLElement>(".ch-silent")];
+    expect(markers).toHaveLength(2);
+    expect(markers[0]?.textContent).toMatch(/atlas stayed silent/);
+    expect(markers[0]?.getAttribute("title")).toBe("replied [SILENT] — Hermes suppresses delivery");
+    expect(document.body.textContent).not.toContain("[SILENT]");
+    // The operator's own `NO_REPLY` is their words, drawn as a bubble.
+    const bubbles = [...document.querySelectorAll<HTMLElement>(".ch-msg")];
+    expect(bubbles.map((b) => b.querySelector(".bm-pre")?.textContent)).toEqual([
+      "a real answer",
+      "NO_REPLY",
+    ]);
+    expect(bubbles[1]?.querySelector(".ch-avatar.me")).not.toBeNull();
+    rooms.server.restore();
+  });
+
+  test("a member event that is not a message keeps its literal text", async () => {
+    const rooms = await mount([{ id: "room-a", name: "Room A" }]);
+    rooms.pages.set("room-a", [
+      {
+        events: [memberPost("room-a", 1, "e1", "NO_REPLY", "error.member")],
+        cursor: 1,
+        has_more: false,
+      },
+    ]);
+    await open("Room A");
+    await waitFor(() => expect(screen.getByText("NO_REPLY")).toBeDefined());
+    expect(document.querySelector(".ch-silent")).toBeNull();
+    rooms.server.restore();
+  });
+});
+
 describe("an unknown delivery is reconciled, not replayed", () => {
   test("a retry the gateway recognises reads as delivered, once", async () => {
     const rooms = await mount([{ id: "room-a", name: "Room A" }]);

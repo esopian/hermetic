@@ -14,6 +14,7 @@ import type { HostedRoomView, RoomEventView } from "../../api/index.ts";
 import { HERMETIC_GATES } from "../bot-capabilities.ts";
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { botLabel } from "../chat-presentation.ts";
+import { SILENT_LABEL, isSilentPreview, silentTitle } from "../chat-silence.ts";
 import { threadTime } from "../chat-logic.ts";
 import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { GatedNote } from "./CapabilityNote.tsx";
@@ -415,47 +416,67 @@ export function RoomConversation({
           ) : null}
           {events
             .filter((e) => e.text)
-            .map((event) => (
-              <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
-                <article className="ch-msg">
-                  {event.actor.kind === "user" ? (
-                    <div className="ch-avatar me">ME</div>
-                  ) : (
-                    <Face
-                      fleetId={fleetId}
-                      instance={instance}
-                      bot={event.member_id ?? event.actor.id}
-                      size={36}
-                      status="ready"
-                      square={false}
-                    />
-                  )}
-                  <div className="ch-msg-body">
-                    <div className="ch-msg-head">
-                      <b>
-                        {event.actor.kind === "user"
-                          ? "You"
-                          : (() => {
-                              const who = event.member_id ?? event.actor.id;
-                              const member = memberOf(who);
-                              return memberName(
-                                instance,
-                                member?.profile ?? who,
-                                member?.display_name,
-                                roster,
-                              );
-                            })()}
-                      </b>
-                      {/* One formatter for every stamp in the app; see `threadTime`. */}
-                      <time>{threadTime(event.created_at, now)}</time>
+            .map((event) => {
+              const bot = event.actor.kind !== "user";
+              const who = event.member_id ?? event.actor.id;
+              const member = memberOf(who);
+              const name = bot
+                ? memberName(instance, member?.profile ?? who, member?.display_name, roster)
+                : "You";
+              // A member's post that is only a Hermes silence token is the same
+              // muted marker the bot thread draws (`chat-silence.ts`). The
+              // operator's own words and any non-message event stay literal.
+              if (bot && event.kind.startsWith("message") && isSilentPreview(event.text)) {
+                return (
+                  <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
+                    <article className="ch-silent" title={silentTitle(event.text ?? "")}>
+                      <span className="ch-silent-gut">
+                        <Face
+                          fleetId={fleetId}
+                          instance={instance}
+                          bot={who}
+                          size={20}
+                          status="ready"
+                          square={false}
+                        />
+                      </span>
+                      <span className="ch-silent-line">
+                        <b>{name}</b> {SILENT_LABEL}
+                        <span className="ch-silent-at">{threadTime(event.created_at, now)}</span>
+                      </span>
+                    </article>
+                  </RowBoundary>
+                );
+              }
+              return (
+                <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
+                  <article className="ch-msg">
+                    {bot ? (
+                      <Face
+                        fleetId={fleetId}
+                        instance={instance}
+                        bot={who}
+                        size={36}
+                        status="ready"
+                        square={false}
+                      />
+                    ) : (
+                      <div className="ch-avatar me">ME</div>
+                    )}
+                    <div className="ch-msg-body">
+                      <div className="ch-msg-head">
+                        <b>{name}</b>
+                        {/* One formatter for every stamp in the app; see `threadTime`. */}
+                        <time>{threadTime(event.created_at, now)}</time>
+                      </div>
+                      <p className="bm-pre">
+                        <RedactedText text={event.text ?? ""} />
+                      </p>
                     </div>
-                    <p className="bm-pre">
-                      <RedactedText text={event.text ?? ""} />
-                    </p>
-                  </div>
-                </article>
-              </RowBoundary>
-            ))}
+                  </article>
+                </RowBoundary>
+              );
+            })}
           {!events.length ? (
             <p className="bm-note">Start a shared conversation with these bots.</p>
           ) : null}
