@@ -6,7 +6,7 @@ import { AutoClearRead, NotificationSource, NotificationView } from "./notificat
 import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
 import { ProfileName } from "./profile.ts";
-import { HermesSettings } from "./hermes.ts";
+import { HermesHold, HermesSettings } from "./hermes.ts";
 import { FLEET_KEY, FleetDefaults, NetworkMode } from "./fleet.ts";
 import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
@@ -103,8 +103,17 @@ export const CreateAgentInput = z
      * Everything here is optional; what is left unsaid comes from
      * `HERMES_DEFAULTS` and the provider's `default_model` at render time, so a
      * create that names nothing still produces a usable agent.
+     *
+     * Stating a value here seeds it; it does not hold it (§6.4). `hold` names
+     * the settings hermetic should hold in the managed scope instead.
      */
     hermes: HermesSettings.optional(),
+    /**
+     * The Hermes settings hermetic holds on this agent (`--hold`, §6.4). Absent
+     * holds nothing: every stated setting is a starting value the agent's own
+     * dashboard can change. The model of a profile-bound agent is held anyway.
+     */
+    hold: HermesHold.optional(),
   })
   .refine((v) => v.volume_id === undefined || v.volume_gib === undefined, {
     message: "--volume takes the volume as it is; --volume-gib would have to resize it",
@@ -193,6 +202,14 @@ export const SetAgentInput = z.object({
    * row already carries.
    */
   hermes: HermesSettings.optional(),
+  /**
+   * Which Hermes settings hermetic holds (`--hold`, §6.4). A *replacement*,
+   * not a merge, unlike `hermes` beside it: the list is the whole answer, and
+   * an empty one holds nothing. Absent leaves the row's list alone — including
+   * the absent list of an agent created before `--hold`, which goes on holding
+   * every setting its operator stated until this is sent.
+   */
+  hold: HermesHold.optional(),
 });
 export type SetAgentInput = z.infer<typeof SetAgentInput>;
 
