@@ -219,3 +219,47 @@ describe("a followed `execLines` does not outlive its reader", () => {
     expect(lines).toEqual(["one"]);
   });
 });
+
+describe("readFile reads the whole file, whatever stat said", () => {
+  test("absent, under a file, or a directory is null; a file is its content", async () => {
+    const path = join(dir, "present");
+    await writeFile(path, "hello\n");
+
+    expect(await host.readFile(path)).toBe("hello\n");
+    expect(await host.readBytes(path)).toEqual(new TextEncoder().encode("hello\n"));
+    expect(await host.readFile(join(dir, "absent"))).toBeNull();
+    expect(await host.readFile(join(path, "child"))).toBeNull();
+    expect(await host.readFile(dir)).toBeNull();
+    expect(await host.readBytes(join(dir, "absent"))).toBeNull();
+  });
+
+  // procfs files stat at size 0. A stat'ed `BunFile` trusted that and read "",
+  // which is how every box reported 0% CPU and 0% memory. Linux only: there is
+  // no procfs to read anywhere else, and CI runs here.
+  test.skipIf(process.platform !== "linux")("procfs files read back non-empty", async () => {
+    const stat = await host.readFile("/proc/stat");
+    const meminfo = await host.readFile("/proc/meminfo");
+
+    expect(stat).toMatch(/^cpu /);
+    expect(meminfo).toMatch(/^MemTotal:/);
+  });
+});
+
+describe("the OS readings come from systeminformation", () => {
+  // No canned answers here: the real library against whatever kernel runs the
+  // suite. The procfs-reads-empty bug lived exactly where no test looked.
+  test("cpu, memory and the filesystem holding a path all measure", async () => {
+    const cpu = await host.cpuLoad();
+    const mem = await host.memory();
+    const fs = await host.filesystem(dir);
+
+    expect(cpu).not.toBeNull();
+    expect(cpu as number).toBeGreaterThanOrEqual(0);
+    expect(cpu as number).toBeLessThanOrEqual(100);
+    expect(mem?.total ?? 0).toBeGreaterThan(0);
+    expect(mem?.available ?? -1).toBeGreaterThanOrEqual(0);
+    expect(fs?.size ?? 0).toBeGreaterThan(0);
+    expect(fs?.mount.startsWith("/")).toBe(true);
+    expect(fs?.usePct ?? -1).toBeGreaterThanOrEqual(0);
+  });
+});

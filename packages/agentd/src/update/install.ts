@@ -573,9 +573,8 @@ async function backUpBinary(host: Host): Promise<void> {
 /** Bytes available on the filesystem holding `path`; `null` when unknowable. */
 async function freeSpaceFor(host: Host, path: string): Promise<number | null> {
   const slash = path.lastIndexOf("/");
-  const fs = await host.statfs(slash <= 0 ? "/" : path.slice(0, slash));
-  if (fs === null || fs.blockSize <= 0) return null;
-  return fs.available * fs.blockSize;
+  const fs = await host.filesystem(slash <= 0 ? "/" : path.slice(0, slash));
+  return fs === null ? null : fs.available;
 }
 
 function describeBytes(bytes: number): string {

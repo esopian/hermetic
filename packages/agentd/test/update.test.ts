@@ -524,10 +524,11 @@ describe("a binary swap and the restart that has to follow it (§6.5)", () => {
     seedStages(host, bodies);
     const size = "ELF-hermeticd-0.2.0".length;
     // Room for two copies where three are needed.
-    host.statfsResult = {
-      blockSize: 1,
-      blocks: 1_000_000,
+    host.filesystemResult = {
+      mount: "/",
+      size: 1_000_000,
       available: size * (MIN_FREE_SPACE_FACTOR - 1),
+      usePct: 0,
     };
 
     const result = await update(service(deps, 1));
