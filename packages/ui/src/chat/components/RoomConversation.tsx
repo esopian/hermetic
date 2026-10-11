@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { botHandle } from "@hermetic/core/shared";
 import {
   ApiError,
   roomsGet,
@@ -17,6 +18,7 @@ import { threadTime } from "../chat-logic.ts";
 import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { GatedNote } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
+import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../../lib/visibility.ts";
@@ -161,6 +163,29 @@ export function RoomConversation({
   );
   /** The clock every stamp in this pane is rendered against, shared with the rail. */
   const now = chat?.now ?? Date.now();
+  const input = useRef<HTMLTextAreaElement>(null);
+  const write = (text: string) => {
+    setDraft(text);
+    onDraft(text);
+  };
+  /**
+   * Members as the gateway addresses them: it matches `@handle` against the
+   * room's frozen roster (`hosted_room_discussion.resolve_mentions`), so the
+   * handle is what is inserted, never a friendly slug it would not know.
+   */
+  const picker = useMentionPicker({
+    text: draft,
+    setText: write,
+    input,
+    candidates: (room?.members ?? []).map((member) => ({
+      key: member.member_id,
+      tag: member.handle,
+      display: memberName(instance, member.profile, member.display_name, roster),
+      forms: [botHandle(member.profile)],
+      instance,
+      bot: member.profile,
+    })),
+  });
   const memberOf = (id_: string | null | undefined) =>
     room?.members.find((m) => m.member_id === id_) ?? null;
   const target = { instance, room: id };
@@ -483,18 +508,23 @@ export function RoomConversation({
           ))}
         </div>
         <div className="ch-composer">
-          <div className="ch-input-wrap">
+          <div className="ch-input-wrap bm-input-wrap">
+            <MentionList picker={picker} fleetId={fleetId} label="Mention a room member" />
             <textarea
+              ref={input}
               className="ch-input"
               aria-label="Message the room"
               placeholder="Message the room…"
               value={draft}
+              {...picker.inputProps}
               onChange={(e) => {
-                setDraft(e.target.value);
-                onDraft(e.target.value);
+                write(e.target.value);
+                picker.track(e.target);
               }}
+              onSelect={(e) => picker.track(e.currentTarget)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (e.nativeEvent.isComposing || picker.onKeyDown(e)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void send();
                 }

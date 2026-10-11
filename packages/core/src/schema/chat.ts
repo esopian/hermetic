@@ -30,6 +30,8 @@ export {
   shortCommand,
 } from "../shared/process-event.ts";
 export type { ProcessEventLike } from "../shared/process-event.ts";
+export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "../shared/bot-handles.ts";
+export type { BotIdentity } from "../shared/bot-handles.ts";
 export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "../shared/silence.ts";
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
