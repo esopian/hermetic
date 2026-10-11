@@ -32,6 +32,17 @@ describe("botAliasForms", () => {
     // A leading underscore survives the slug but not the charset rule.
     expect(botAliasForms("_x")).toEqual([]);
   });
+
+  test("edge dashes are trimmed, interior runs kept, and a dash-heavy title stays fast", () => {
+    // The collapsed form keeps its edge dashes and so fails the charset rule.
+    expect(botAliasForms("--a--b--")).toEqual(["a--b"]);
+    const started = performance.now();
+    expect(botAliasForms(`a${"-".repeat(50_000)}!b`)).toEqual([
+      `a${"-".repeat(50_001)}b`,
+      `a${"-".repeat(50_000)}b`,
+    ]);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
 });
 
 describe("botMentionTag", () => {

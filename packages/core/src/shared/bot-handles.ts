@@ -51,6 +51,19 @@ export function botHandle(name: string): string {
 }
 
 /**
+ * Strips leading and trailing `-`. A scan rather than `/^-+|-+$/g`, whose
+ * `-+$` branch retries from every dash of an interior run and goes quadratic
+ * on a title that is mostly dashes.
+ */
+function trimDashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "-") start++;
+  while (end > start && value[end - 1] === "-") end--;
+  return value.slice(start, end);
+}
+
+/**
  * Taggable `@`-forms of a friendly name, in upstream's order: slugified ("Dr.
  * Foo" → `dr-foo`, the form autocomplete inserts) then collapsed (`drfoo`).
  * Forms outside the mention charset and reserved tokens are dropped.
@@ -60,7 +73,7 @@ export function botAliasForms(title: string | null | undefined): string[] {
     .trim()
     .toLowerCase();
   if (!name) return [];
-  const slug = name.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  const slug = trimDashes(name.replace(/[^a-z0-9_-]+/g, "-"));
   const collapsed = name.replace(/[^a-z0-9_-]+/g, "");
   return [...new Set([slug, collapsed])].filter(
     (form) => MENTION_FORM_RE.test(form) && !RESERVED_MENTION_FORMS.has(form),
