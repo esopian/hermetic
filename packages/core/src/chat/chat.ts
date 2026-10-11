@@ -119,6 +119,12 @@ export interface LocalChatSessions {
   mine(fleet: string | null, sessions: readonly string[]): Set<string>;
   /** Drop every session this laptop recorded against `instance` in `fleet` (§6.7). */
   forgetInstance(fleet: string | null, instance: string): void;
+  /**
+   * The earliest `at` recorded against `instance` in `fleet`, or null with none:
+   * how far back this laptop's sessions on the name reach (§6.7's first-sighting
+   * check, `local/purge-agent.ts`).
+   */
+  oldestAt(fleet: string | null, instance: string): string | null;
 }
 
 /**
@@ -161,6 +167,17 @@ export class MemoryLocalChatSessions implements LocalChatSessions {
       if (this.rows.has(this.key(fleet, id))) found.add(id);
     }
     return found;
+  }
+
+  oldestAt(fleet: string | null, instance: string): string | null {
+    const head = this.key(fleet, "");
+    let oldest: string | null = null;
+    for (const [key, owner] of this.instances) {
+      if (owner !== instance || !key.startsWith(head)) continue;
+      const at = this.rows.get(key);
+      if (at !== undefined && (oldest === null || at < oldest)) oldest = at;
+    }
+    return oldest;
   }
 }
 

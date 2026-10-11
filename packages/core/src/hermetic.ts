@@ -71,7 +71,8 @@ import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
-import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { createLocalAgentPurge, oldestLocalAgentState } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
@@ -237,6 +238,25 @@ export function createHermetic(deps: HermeticDeps) {
     purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    /**
+     * A first sighting whose state outlived a release this laptop never saw:
+     * offline while another laptop destroyed and re-created the name, and
+     * reading it for the first time since `agent_incarnations` existed. Any
+     * tombstone of a predecessor (created before the live row) that ends after
+     * the oldest dated state here proves that state was gathered against a box
+     * that is gone. With no dated state, no tombstone query is made.
+     */
+    predatesRelease: async (fleet, name, createdAt) => {
+      const oldest = oldestLocalAgentState(purgeDeps, fleet, name);
+      if (oldest === null) return false;
+      const tombstones = await backend.store.events.queryTombstones({ name });
+      return tombstones.some(
+        (t) =>
+          t.fleet_id === fleet &&
+          Date.parse(t.created_at) < Date.parse(createdAt) &&
+          Date.parse(incarnationEnd(t)) > Date.parse(oldest),
+      );
+    },
   });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({

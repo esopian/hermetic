@@ -72,6 +72,13 @@ export class SqliteLocalChatSessions implements LocalChatSessions {
       instance,
     ]);
   }
+
+  oldestAt(fleet: string | null, instance: string): string | null {
+    const row = this.db
+      .query(`SELECT MIN(at) AS at FROM chat_local_sessions WHERE fleet = ? AND instance = ?`)
+      .get(fleet ?? "", instance) as { at: string | null };
+    return row.at;
+  }
 }
 
 /**

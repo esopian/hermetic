@@ -23,8 +23,12 @@
  *   upgrade that introduced this table: the state already on disk was gathered
  *   against *some* incarnation this laptop cannot now identify, and assuming it
  *   was the wrong one would wipe every operator's chat history, listening
- *   opt-ins and mutes on upgrade. A name released and re-taken before that first
- *   read keeps its stale state, exactly as it did before this table existed;
+ *   opt-ins and mutes on upgrade. The one exception is a name provably released
+ *   since its local state was gathered: a laptop offline while another destroyed
+ *   and re-created the name, reading it for the first time on this build. When
+ *   `predatesRelease` (on the deps) finds a tombstone of a predecessor dated
+ *   after the oldest dated state this laptop holds for the name, the first
+ *   sighting purges once before it records;
  * - recorded, but absent from a *complete* scan: the name was released and not
  *   yet taken again. Purged and forgotten, so a dead box's open notifications
  *   stop counting in the badge here too. A single-row read (`getAgent`) cannot
@@ -74,7 +78,8 @@
  * (`isOlder`, the `inFuture` exception) stay here in one place rather than
  * being repeated in SQL.
  *
- * Purely local, like the tables it guards — nothing here reaches AWS, and it
+ * Purely local, like the tables it guards — nothing here reaches AWS (the one
+ * fleet read a first sighting may need is `predatesRelease`, injected), and it
  * must never move to DynamoDB, because "what this laptop has seen" is the whole
  * meaning of a row.
  */
@@ -156,6 +161,15 @@ export interface IncarnationReconcilerDeps {
    * caller must call straight after its own `scan()` resolves.
    */
   unparseable?: () => readonly string[];
+  /**
+   * Asked on a first sighting only, before the record is claimed: whether the
+   * local state this laptop holds for `name` was gathered against a box the
+   * name has since been released from (the live row's `created_at` is passed so
+   * only a predecessor's tombstone counts). `true` turns the adoption into a
+   * replacement, purging once. Absent, or throwing, the sighting adopts as it
+   * always did: a check that cannot answer must not wipe state.
+   */
+  predatesRelease?: (fleetId: string, name: string, createdAt: string) => Promise<boolean>;
 }
 
 export interface ReconcileOptions {
@@ -242,11 +256,29 @@ export function createIncarnationReconciler(deps: IncarnationReconcilerDeps) {
      * Bounded: a record still contended after `CLAIM_ATTEMPTS` lost claims is
      * left for the next read, which compares afresh.
      */
+    /**
+     * Whether a first sighting must purge (`predatesRelease`). Asked at most
+     * once per name per call and before the claim, so the claim-then-purge
+     * order holds: a lost claim still purges nothing.
+     */
+    const firstSightingPurges = async (name: string, createdAt: string): Promise<boolean> => {
+      if (!deps.predatesRelease) return false;
+      try {
+        return await deps.predatesRelease(fleet, name, createdAt);
+      } catch {
+        return false;
+      }
+    };
     const settle = async (name: string, createdAt: string, recordedAt: string | undefined) => {
       let prior = recordedAt;
+      let stale: boolean | undefined;
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
-        const action = decide(prior, createdAt);
+        let action = decide(prior, createdAt);
         if (action === "keep") return;
+        if (action === "adopt") {
+          stale ??= await firstSightingPurges(name, createdAt);
+          if (stale) action = "replace";
+        }
         try {
           if (!deps.store.claim(fleet, name, prior, createdAt)) {
             prior = deps.store.get(fleet, name);
@@ -292,8 +324,9 @@ const CLAIM_ATTEMPTS = 4;
 
 /**
  * What a live row asks of its name's record, given the value it holds now:
- * `keep` it, `adopt` the row on a first sighting (record, purge nothing), or
- * `replace` it (record, then purge the old box's state).
+ * `keep` it, `adopt` the row on a first sighting (record, purge nothing — unless
+ * `predatesRelease` makes it a replacement), or `replace` it (record, then
+ * purge the old box's state).
  */
 function decide(prior: string | undefined, createdAt: string): "keep" | "adopt" | "replace" {
   if (prior === createdAt) return "keep";
