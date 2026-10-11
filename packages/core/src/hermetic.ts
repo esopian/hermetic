@@ -73,6 +73,7 @@ import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
@@ -238,6 +239,9 @@ export function createHermetic(deps: HermeticDeps) {
     purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    // A first sighting's evidence that the name changed hands unseen (§6.7).
+    releases: async (name) =>
+      (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
   });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({
