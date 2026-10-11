@@ -38,6 +38,8 @@ import type * as plans from "../handlers/plans.ts";
 import type * as providers from "../handlers/providers.ts";
 import type * as secrets from "../handlers/secrets.ts";
 import type { StreamFrame, StreamRefRequest } from "../handlers/streams.ts";
+import type * as terminal from "../handlers/terminal.ts";
+import type { TerminalFrame } from "../terminal/channel.ts";
 
 /** One entry of `bun.requests`: what the page sends, and what it gets back. */
 export interface RpcRequest<Params, Response> {
@@ -100,7 +102,8 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof ops.opHandlers &
   typeof plans.planHandlers &
   typeof providers.providerHandlers &
-  typeof secrets.secretHandlers;
+  typeof secrets.secretHandlers &
+  typeof terminal.terminalHandlers;
 
 /** The one shape every close half answers with (`streams.ts`). */
 export type StreamClosed = { closed: boolean };
@@ -181,6 +184,29 @@ export type MachineryRequests = {
   "app.checkForUpdate": RpcRequest<Record<string, never>, Answer<typeof app.checkForUpdate>>;
   "app.installCli": RpcRequest<Record<string, never>, Answer<typeof app.installCli>>;
   "app.notify": RpcRequest<Input<typeof app.AppNotifyRequest>, Answer<typeof app.notify>>;
+
+  /**
+   * The in-app terminal (issue #18, `handlers/terminal.ts`). `terminal.attach`
+   * opens a stream whose frames ride `terminal.frame`; `terminal.detach` is its
+   * close half. Keystrokes, acks and the view state are messages
+   * (`BunMessages`), not requests.
+   */
+  "terminal.open": RpcRequest<Input<typeof terminal.TerminalOpenRequest>, Answer<typeof terminal.open>>;
+  "terminal.attach": RpcRequest<Input<typeof terminal.TerminalSessionRequest>, { stream_id: string }>;
+  "terminal.detach": RpcRequest<StreamRef, StreamClosed>;
+  "terminal.resize": RpcRequest<
+    Input<typeof terminal.TerminalResizeRequest>,
+    Answer<typeof terminal.resize>
+  >;
+  "terminal.close": RpcRequest<
+    Input<typeof terminal.TerminalSessionRequest>,
+    Answer<typeof terminal.close>
+  >;
+  "terminal.list": RpcRequest<Input<typeof terminal.TerminalListRequest>, Answer<typeof terminal.list>>;
+  "terminal.external": RpcRequest<
+    Input<typeof terminal.TerminalExternalRequest>,
+    Answer<typeof terminal.external>
+  >;
 };
 
 /**
@@ -218,6 +244,13 @@ export const MACHINERY_REQUEST_NAMES = [
   "app.checkForUpdate",
   "app.installCli",
   "app.notify",
+  "terminal.open",
+  "terminal.attach",
+  "terminal.detach",
+  "terminal.resize",
+  "terminal.close",
+  "terminal.list",
+  "terminal.external",
 ] as const satisfies readonly (keyof MachineryRequests)[];
 
 export type BunRequests = PublicRequests & MachineryRequests;
@@ -268,16 +301,35 @@ export type WebviewMessages = {
    * over the `document`'s.
    */
   "app.visibility": { visible: boolean };
+  /**
+   * One frame of a `terminal.attach` stream (`terminal/channel.ts`): the
+   * session's snapshot, raw output, a refused keystroke chunk, or `exit`,
+   * which is always the last. `keepalive` is never sent, as for every stream.
+   */
+  "terminal.frame": { stream_id: string; frame: TerminalFrame };
 };
 
 export type WebviewMessageName = keyof WebviewMessages;
 
 /**
- * Page → main process. One message: the page has mounted and is ready to be
- * pushed at, which is what a head with no socket has instead of a connection.
+ * Page → main process, fire-and-forget. `page.ready`: the page has mounted and
+ * is ready to be pushed at, which is what a head with no socket has instead of
+ * a connection. The three `terminal.*` messages are the in-app terminal's hot
+ * path (`handlers/terminal.ts`): a keystroke is not worth a round trip, and
+ * none of them is ever logged.
  */
 export type BunMessages = {
   "page.ready": Record<string, never>;
+  /**
+   * Keystrokes for a session, `in_seq` counting from 0 per page; exactly one
+   * of `data` (xterm `onData`) and `binary` (`onBinary`, base64). At most
+   * 16 KiB each, or the chunk comes back as an `input_error` frame.
+   */
+  "terminal.input": Input<typeof terminal.TerminalInputMessage>;
+  /** Output parsed up to `upto` on screen generation `gen` of one attach. */
+  "terminal.ack": Input<typeof terminal.TerminalAckMessage>;
+  /** The session this window shows now, or null: visible, focused, drawer on Terminal. */
+  "terminal.view": Input<typeof terminal.TerminalViewMessage>;
 };
 
 /**
@@ -314,6 +366,7 @@ export const MESSAGE_FOR_REQUEST = {
   "chat.send": "chat.frame",
   logs: "logs.line",
   "logs.open": "logs.line",
+  "terminal.attach": "terminal.frame",
 } as const satisfies Record<string, WebviewMessageName>;
 
 export type StreamingRequestName = keyof typeof MESSAGE_FOR_REQUEST;

@@ -50,6 +50,14 @@ export type RequestName =
   | "app.notify"
   // And opens this one: a link in the operator's browser (`lib/open-external.ts`).
   | "app.openExternal"
+  // The in-app terminal (issue #18, `api/terminal.ts`): the app's own session
+  // table, so machinery rather than core methods. `terminal.attach` is a
+  // stream (`StreamName`), not a request.
+  | "terminal.open"
+  | "terminal.resize"
+  | "terminal.close"
+  | "terminal.list"
+  | "terminal.external"
   // core methods
   | "init"
   | "agents.list"
@@ -64,6 +72,7 @@ export type RequestName =
   | "agents.rerun"
   | "agents.probe"
   | "agents.desktop"
+  | "ssh"
   | "plan.destroy"
   | "plan.foundation"
   | "plan.policy"
@@ -140,7 +149,7 @@ export type RequestName =
   | "routines.history";
 
 /** The name of a finite stream. Disjoint from `RequestName` on purpose: a stream is not an answer. */
-export type StreamName = "ops.subscribe" | "logs.open" | "chat.turn";
+export type StreamName = "ops.subscribe" | "logs.open" | "chat.turn" | "terminal.attach";
 
 /** Which long-lived feed a `subscribe` means. One socket each, today and under RPC. */
 export type SubscriptionKind = "fleet" | "chat";
@@ -210,6 +219,12 @@ export interface StreamHandlers {
    * cursor — a finished op replays whole either way.
    */
   resumes?: boolean;
+  /**
+   * The stream's name on the other side, once the open has answered. Only a
+   * reader that must *say* something about its stream needs it — the
+   * terminal's acks name the attach they are for (`api/terminal.ts`).
+   */
+  onOpen?: (streamId: string) => void;
 }
 
 /** What a long-lived subscription reports. The transport reconnects; the protocol reads frames. */

@@ -29,6 +29,7 @@ import { AgentProfilePanel } from "../AgentProfilePanel.tsx";
 import { CopyId } from "../primitives.tsx";
 import type { RunOp } from "./AgentLifecycle.tsx";
 import type { useDesktopAttach } from "./useDesktopAttach.ts";
+import { useSshCommand } from "./useSshCommand.ts";
 
 /**
  * `HERMES_DEFAULTS.approvals_mode` (`packages/core/src/schema/hermes.ts`),
@@ -67,6 +68,7 @@ export function AgentConfig({
   busy,
   onRunOp,
   desktop,
+  onOpenTerminal,
 }: {
   agent: AgentView;
   meta: Meta | null;
@@ -79,7 +81,11 @@ export function AgentConfig({
   onRunOp: RunOp;
   /** `useDesktopAttach`, owned by the drawer so a revealed token dies with the agent switch. */
   desktop: ReturnType<typeof useDesktopAttach>;
+  /** The Terminal section, for the `ssh` row's `Open terminal →`. */
+  onOpenTerminal?: () => void;
 }) {
+  const host = hostname(agent.name, tailnet, agent.tailscale_dns_name, fleetId);
+  const ssh = useSshCommand(agent.name, host);
   /** §6.6: the marks that qualify this agent's own versions (`skew-logic.ts`). */
   const fMark = foundationMark(meta?.foundation);
   const hdMark = hermeticdMark(meta?.foundation, agent.name);
@@ -172,7 +178,25 @@ export function AgentConfig({
             <span className="k">last seen</span>
             <span className="v">{heartbeatAge(agent)}</span>
             <span className="k">ssh</span>
-            <span className="v">tailscale ssh · ACL-scoped</span>
+            {/*
+              The real command (core's `ssh` argv), not a description of it:
+              this is the row an operator copies from when the in-app
+              terminal is not what they want.
+            */}
+            <span className="v dr-ssh">
+              <span className="mono dr-ssh-cmd">{ssh.command}</span>
+              <span className="dr-ssh-row">
+                <button type="button" className="btn btn-secondary btn-mini" onClick={ssh.copy}>
+                  {ssh.copied ? "Copied" : "Copy"}
+                </button>
+                {onOpenTerminal ? (
+                  <button type="button" className="btn btn-secondary btn-mini" onClick={onOpenTerminal}>
+                    Open terminal →
+                  </button>
+                ) : null}
+              </span>
+              <span className="dr-ssh-note">tailscale ssh · ACL-scoped · no keypair</span>
+            </span>
             <span className="k">ingress</span>
             <span className="v">0 inbound rules</span>
           </div>

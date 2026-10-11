@@ -91,7 +91,20 @@ export function isTopmostOverlay(root: HTMLElement | null): boolean {
   return stack[stack.length - 1]?.root === root;
 }
 
+/**
+ * Whether focus is inside an element that owns the keyboard — the terminal's
+ * screen (`data-owns-keys`, `TerminalPane.tsx`), where Esc and Tab are keys
+ * for the shell. Overlays and page shortcuts stand aside while it is; clicking
+ * outside the element hands the keyboard back.
+ */
+export function keyboardOwned(): boolean {
+  if (typeof document === "undefined") return false;
+  const active = document.activeElement;
+  return active instanceof Element && active.closest("[data-owns-keys]") !== null;
+}
+
 function dismissTopmost(e: KeyboardEvent) {
+  if (keyboardOwned()) return;
   if (
     e.key !== "Escape" ||
     e.defaultPrevented ||
@@ -175,7 +188,7 @@ export function useFocusTrap(
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !isTopmostOverlay(root)) return;
+      if (e.key !== "Tab" || !isTopmostOverlay(root) || keyboardOwned()) return;
       const items = focusableWithin(root);
       if (items.length === 0) {
         // Nothing to tab between: hold focus on the dialog rather than letting

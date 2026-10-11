@@ -46,6 +46,48 @@ describe("shutdown", () => {
     expect(log.lines.join("")).toContain("INFO  portal shutting down (SIGINT)");
   });
 
+  test("terminal sessions are hung up first, before anything awaits", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const chat = {
+      stop: () =>
+        new Promise<void>((resolve) => {
+          order.push("chat");
+          release = resolve;
+        }),
+    };
+    const server = { stop: () => void order.push("server") };
+    const done = shutdown(
+      {
+        server,
+        chat,
+        terminals: { stopAll: () => void order.push("terminals") },
+      },
+      "quit",
+    );
+    // Synchronously, in the call itself: a stalled chat owner cannot hold it back.
+    expect(order).toEqual(["terminals", "chat"]);
+    release();
+    await done;
+    expect(order).toEqual(["terminals", "chat", "server"]);
+  });
+
+  test("a terminal host that throws does not stop the shutdown", async () => {
+    const server = fakeServer();
+    await shutdown(
+      {
+        server,
+        terminals: {
+          stopAll() {
+            throw new Error("wedged");
+          },
+        },
+      },
+      "SIGTERM",
+    );
+    expect(server.stops).toEqual([true]);
+  });
+
   test("an uninitialized server has no poller and stops anyway", async () => {
     const server = fakeServer();
     await shutdown({ server, state: { poller: null } }, "SIGTERM");

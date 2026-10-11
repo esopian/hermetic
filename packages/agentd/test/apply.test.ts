@@ -335,10 +335,53 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
   });
 
   /**
-   * `hermes` is a `--system` account with `nologin`, so nothing ever starts
+   * `tailscale ssh hermes@<host>` (§9.3) starts the account's login shell, and
+   * `nologin` would print "This account is currently not available". The
+   * `useradd` runs once, so a box created with `nologin` has to be moved by the
+   * same re-assertion as the home. `usermod --shell` is safe on a live account.
+   */
+  describe("the hermes account has a bash login shell", () => {
+    test("a new account is created with /bin/bash", async () => {
+      await apply(makeManifest(), { host });
+
+      const useradd = host.commands.find((c) => c.startsWith("useradd "))!;
+      expect(useradd).toContain("--shell /bin/bash");
+      expect(useradd).not.toContain("nologin");
+      // Read back as bash, so nothing needs to move.
+      expectNotRan(host, /^usermod --shell/);
+    });
+
+    test("an existing nologin account is moved to /bin/bash", async () => {
+      host.users.add("hermes");
+      host.groups.add("hermes");
+      host.userHomes.set("hermes", HERMES_ACCOUNT_HOME);
+      host.userShells.set("hermes", "/usr/sbin/nologin");
+
+      await apply(makeManifest(), { host });
+
+      const move = /^usermod --shell \/bin\/bash hermes$/;
+      expectRan(host, move);
+      expect(ranInOrder(host, [move, /^systemctl restart /])).toBe(true);
+    });
+
+    test("an account already on /bin/bash is left alone", async () => {
+      host.users.add("hermes");
+      host.groups.add("hermes");
+      host.userHomes.set("hermes", HERMES_ACCOUNT_HOME);
+      host.userShells.set("hermes", "/bin/bash");
+
+      await apply(makeManifest(), { host });
+
+      expectNotRan(host, /^usermod --shell/);
+    });
+  });
+
+  /**
+   * Nobody is normally logged in as `hermes` (operators only occasionally
+   * `tailscale ssh` in), so nothing normally starts
    * `user@<uid>.service` for it. Upstream's system-scope gateway unit orders
    * itself `After=`/`Wants=` that manager, and only linger keeps one running for
-   * an account nobody logs into — so linger is a precondition of *starting* the
+   * an account nobody is logged into — so linger is a precondition of *starting* the
    * gateway, and, like the account itself, has to be in place before the units
    * phase rather than left to whatever the installer happened to do.
    */
@@ -2454,7 +2497,8 @@ describe("apply's refusals and bounds", () => {
   test("a sudoers file is validated at a staged path before it is installed", async () => {
     await apply(makeManifest(), { host });
 
-    const visudo = host.commandsMatching(/^visudo /);
+    // The terminal's own drop-in (`apply/shell.ts`) is validated the same way.
+    const visudo = host.commandsMatching(/^visudo /).filter((c) => c.includes(SUDOERS_APT));
     expect(visudo).toEqual([`visudo -c -q -f ${SUDOERS_APT}.new`]);
     // Validated where it cannot yet be read as policy, then renamed into place.
     // The dot in `.new` is what makes the staged name inert: sudo skips any
