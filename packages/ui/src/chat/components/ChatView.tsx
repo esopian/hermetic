@@ -160,6 +160,7 @@ export function ChatView({
           sending={chat.sending}
           activity={chat.activity}
           historyError={chat.historyError}
+          turnError={chat.turnError}
           now={chat.now}
           fixture={fixture}
           reconnectAttempt={chat.reconnectAttempt}

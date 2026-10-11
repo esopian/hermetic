@@ -122,6 +122,26 @@ function ObservationBand({
   );
 }
 
+/**
+ * What a refused turn's band says. A refusal never reached the box, so the
+ * message the operator typed is not in the transcript the re-read brings back;
+ * the band is the only record that it was not sent. `FLEET_MISMATCH` is a
+ * window left open across a fleet switch (§4.7), and `NO_TARGET` a window that
+ * never learned its fleet: both are fixed by reloading, which the head's own
+ * message says.
+ */
+export function turnErrorHeadline(code: string): string {
+  switch (code) {
+    case "ABORT_FAILED":
+      return "The turn could not be stopped.";
+    case "FLEET_MISMATCH":
+    case "NO_TARGET":
+      return "Not sent: this window is showing a fleet the app is no longer serving.";
+    default:
+      return "The message was not sent.";
+  }
+}
+
 /** The thread-level band: one condition, stated, with no way to dismiss it. */
 function Band({
   state,
@@ -346,6 +366,7 @@ export function Thread({
   sending,
   activity = sending ? "thinking" : "idle",
   historyError,
+  turnError = null,
   now,
   fixture = false,
   reconnectAttempt = 0,
@@ -376,6 +397,11 @@ export function Thread({
   sending: boolean;
   activity?: TurnActivity;
   historyError: string | null;
+  /**
+   * Why the last turn was refused before it reached the box, or why stopping
+   * it failed. Cleared by the next send.
+   */
+  turnError?: { code: string; message: string } | null;
   now: number;
   fixture?: boolean;
   reconnectAttempt?: number;
@@ -604,6 +630,14 @@ export function Thread({
           <i className="dot" />
           <span>The transcript could not be read.</span>
           <span className="sub">{historyError}</span>
+        </div>
+      ) : null}
+
+      {turnError ? (
+        <div className="ch-band bad" role="alert">
+          <i className="dot" />
+          <span>{turnErrorHeadline(turnError.code)}</span>
+          <span className="sub">{turnError.message}</span>
         </div>
       ) : null}
 

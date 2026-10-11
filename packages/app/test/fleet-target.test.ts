@@ -62,9 +62,10 @@ const UNSCOPED: Record<string, string> = {
 
 /**
  * The same decision for the requests that wrap no core method
- * (`MACHINERY_RPC`). None of them is fleet-scoped — but that has to be recorded
- * per name, not left as a gap nothing can look into, which is why a new
- * machinery name fails this file until it is written down here.
+ * (`MACHINERY_RPC`). Almost none of them is fleet-scoped — `chat.turn`, the
+ * page's own send path, is the exception and sits in `BODIES` — but that has to
+ * be recorded per name, not left as a gap nothing can look into, which is why a
+ * new machinery name fails this file until it is written down here or there.
  */
 const UNSCOPED_MACHINERY: Record<string, string> = {
   "app.checkForUpdate": "asks this build about itself; no account is involved",
@@ -74,23 +75,6 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "app.openExternal": "hands a URL to this laptop's browser",
   "chat.observe.resume": "re-establishes this head's own observation; it writes nothing",
   "chat.subscribe": "reads this head's own observations",
-  /**
-   * Not an exemption on the merits — a hole, recorded as one.
-   *
-   * `chat.turn` is not a wrapper around the guarded `chat.send`: it is a second
-   * dispatch entry that validates with `chatSendSchema` (which has no `target`
-   * field) and calls `ctx.hermetic()` directly, so no §4.7 check runs on it at
-   * all. It is also the only send path the page has — `packages/ui/src/api/chat.ts`
-   * passes a `target` that zod then strips — so a window left open across a
-   * fleet switch can land a turn on a box in the fleet the head moved to.
-   *
-   * TODO(evan): give `chat.turn` the same `withTarget`/`requireTarget` pair
-   * `chat.send` has (`packages/app/src/handlers/chat.ts:229`). Left alone here
-   * because adding a guard is a behaviour change, not part of the head cutover;
-   * the pinning case below fails the moment it is fixed, which is the signal to
-   * move this name into `BODIES` and delete both.
-   */
-  "chat.turn": "UNGUARDED — a known hole, pinned below; see the TODO(evan) above",
   "chat.turn.abort": "closes a stream this head opened",
   "chat.unsubscribe": "closes a stream this head opened",
   "fixture.chat.hint": "exists only in fixture mode, where there is no account to mismatch",
@@ -149,6 +133,8 @@ const BODIES: Record<string, object> = {
   "notifications.mute": { agent: "ember" },
   "chat.listen": { instance: "ember", listening: true },
   "chat.send": { instance: "ember", bot: "default", message: "hello" },
+  /* Machinery, but the page's own send path: `chat.send` under another name. */
+  "chat.turn": { instance: "ember", bot: "default", message: "hello" },
   "chat.abort": { instance: "ember", bot: "default" },
   /* Bot Mode (§9.2): every one of these writes to a box. */
   "chat.open": { instance: "ember", bot: "default" },
@@ -449,42 +435,11 @@ describe("§4.7: a mutation names the fleet it is for", () => {
         (name) => !answered.has(name),
       ),
     ).toEqual([]);
-    // And every machinery name has a reason written down.
-    expect([...MACHINERY_RPC].filter((n) => !(n in UNSCOPED_MACHINERY)).sort()).toEqual([]);
-  });
-
-  /**
-   * The hole `UNSCOPED_MACHINERY` records for `chat.turn`, pinned so it cannot
-   * be forgotten and cannot be fixed silently.
-   *
-   * `test.failing` on purpose: it passes while the hole is open and *fails* the
-   * day someone gives `chat.turn` a target guard — which is when this case and
-   * the `UNSCOPED_MACHINERY` entry both go, and the name joins `BODIES` above.
-   */
-  test.failing("chat.turn refuses a foreign target the way `chat.send` does", async () => {
-    const { ctx } = await harness();
-    const elsewhere: FleetTarget = {
-      account_id: "999999999999",
-      region: "eu-west-1",
-      fleet_id: STAGING_ID,
-    };
-    const outcome = await dispatch(
-      ctx,
-      "chat.turn",
-      { instance: "ember", bot: "default", message: "hello", target: elsewhere },
-      () => {},
-    ).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    // Today this resolves with a `stream_id`: the turn was accepted against the
-    // fleet the request did not name. Close it before asserting, so the pinning
-    // case leaves no live turn behind whichever way it goes.
-    if ("value" in outcome) {
-      ctx.streams.close((outcome.value as { stream_id: string }).stream_id);
-      throw new Error("chat.turn accepted a foreign target");
-    }
-    expect(isHermeticError(outcome.error) ? outcome.error.code : outcome.error).toBe("FLEET_MISMATCH");
+    // And every machinery name is either guarded (and probed) or has a reason
+    // written down.
+    expect(
+      [...MACHINERY_RPC].filter((n) => !(n in BODIES) && !(n in UNSCOPED_MACHINERY)).sort(),
+    ).toEqual([]);
   });
 
   /**

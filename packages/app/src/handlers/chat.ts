@@ -214,18 +214,20 @@ export async function send(
 }
 
 /**
- * `chat.turn`: the same turn for a transport that cannot set a body — an
- * `EventSource` can only issue a `GET`, so the message rides in the query
- * string and there is no envelope around it. Validated against the schema
- * `chat.send` validates against, because it is the same request.
+ * `chat.turn`: the same turn under the name the page opens it with, closed by
+ * `chat.turn.abort` rather than by hanging up. It was the `EventSource` route,
+ * whose `GET` had no body to carry an envelope; over the bridge its params are
+ * an object like any other request's, so it carries the same §4.7 target
+ * `chat.send` does and is refused `FLEET_MISMATCH` the same way. A window left
+ * open across a fleet switch must not land a turn on a box in the fleet the
+ * head moved to.
  */
 export async function turn(
   ctx: HandlerContext,
   params: unknown,
   sink: StreamSink,
 ): Promise<{ stream_id: string }> {
-  const input = parseInput(chatSendSchema, params);
-  return startTurn(ctx, ctx.hermetic(), input, sink);
+  return send(ctx, params, sink);
 }
 
 /** Hanging up, for a transport with nothing to hang up. */
