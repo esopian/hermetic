@@ -18,11 +18,12 @@
  */
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
-import { ActivityGroup, isActivity, needsAttention } from "./Activity.tsx";
+import { ActivityGroup, isActivity, isStatusBlock, needsAttention } from "./Activity.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { failureCopy } from "../chat-logic.ts";
+import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
@@ -97,6 +98,11 @@ function Meter({ usage }: { usage: NonNullable<ChatMessageView["usage"]> }) {
       {usage.model ? <span className="mono">{usage.model}</span> : null}
     </div>
   );
+}
+
+/** A text block's words; empty for any other kind. */
+function markdownOf(block: ChatBlockView | undefined): string {
+  return block?.kind === "text" ? block.markdown : "";
 }
 
 /**
@@ -184,6 +190,40 @@ export function Message({
         closedRequests.has(block.request_id)
       ),
   );
+  // An intentional-silence marker (`chat-silence.ts`) is never drawn as prose:
+  // a settled one becomes a muted "stayed silent" line, and one still
+  // streaming is held back behind the caret until it diverges into an answer.
+  const silent = silentBlock(message, blocks, streaming);
+  const held = heldBlock(blocks, streaming);
+  if (held >= 0) blocks[held] = { kind: "text", markdown: "" };
+  if (silent >= 0 && blocks.every((block, i) => i === silent || isStatusBlock(block))) {
+    // Nothing else in the turn: one line in the event column, not a bubble.
+    // Status snapshots go too — a settled group shows nothing for them.
+    return (
+      <article
+        data-chat-message={message.id}
+        data-chat-ids={ids.join(" ")}
+        tabIndex={-1}
+        className="ch-silent"
+        title={silentTitle(markdownOf(blocks[silent]))}
+      >
+        <span className="ch-silent-gut">
+          <Face
+            fleetId={fleetId}
+            instance={author?.instance ?? instance}
+            bot={author?.bot ?? bot}
+            size={20}
+            status={status}
+            square={false}
+          />
+        </span>
+        <span className="ch-silent-line">
+          <b>{who}</b> {SILENT_LABEL}
+          <span className="ch-silent-at">{fmtClock(message.at)}</span>
+        </span>
+      </article>
+    );
+  }
   const waiting = blocks.some((block) => block.kind === "approval" || block.kind === "question");
   // One turn's work is one group. Only something addressed to the reader —
   // prose, a question, an approval, a card — closes the run; a notice *about*
@@ -298,12 +338,18 @@ export function Message({
                 resetKey={`${message.id}:${index}:${section.blocks.length}:${sectionSignal(section.blocks)}`}
                 label={`${message.id} block ${index}`}
               >
-                <Block
-                  block={section.blocks[0]!}
-                  now={now}
-                  streaming={streaming && activity === "streaming" && index === sections.length - 1}
-                  mine={mine}
-                />
+                {section.blocks[0] === blocks[silent] ? (
+                  <p className="ch-silent-note" title={silentTitle(markdownOf(section.blocks[0]))}>
+                    {SILENT_LABEL}
+                  </p>
+                ) : (
+                  <Block
+                    block={section.blocks[0]!}
+                    now={now}
+                    streaming={streaming && activity === "streaming" && index === sections.length - 1}
+                    mine={mine}
+                  />
+                )}
               </RowBoundary>
             ),
           )}

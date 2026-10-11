@@ -957,6 +957,31 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
   ],
 
   "sx-kestrel-portal": [
+    // An intentional-silence turn (§9.2): the bot answers with upstream's bare
+    // `NO_REPLY` marker, which Hermes keeps in the transcript and suppresses on
+    // delivery. The thread draws it as "stayed silent", never as the token.
+    {
+      id: "mx-kestrel-portal-fyi",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("08:51:00"),
+      blocks: [{ kind: "text", markdown: "FYI only, no reply needed: deploy finished." }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-kestrel-portal-silent",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("08:51:04"),
+      blocks: [{ kind: "text", markdown: "NO_REPLY" }],
+      usage: usage(2100, 4, 0.0008, "claude-sonnet-5"),
+      error: null,
+      incomplete: null,
+    },
     {
       id: "mx-kestrel-portal-1",
       session: "sx-kestrel-portal",

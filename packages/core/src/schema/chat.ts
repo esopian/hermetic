@@ -30,6 +30,7 @@ export {
   shortCommand,
 } from "../shared/process-event.ts";
 export type { ProcessEventLike } from "../shared/process-event.ts";
+export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "../shared/silence.ts";
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
 

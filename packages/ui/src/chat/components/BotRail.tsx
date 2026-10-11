@@ -16,6 +16,7 @@ import type { ConversationActivity } from "../chat-activity.ts";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { Face } from "./Face.tsx";
 import { RedactedText } from "./RedactedText.tsx";
+import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 
 export function BotRail({
   swarms,
@@ -137,7 +138,12 @@ export function BotRail({
               {inPinned ? <span className="bm-pin-where">{bot.instance} · </span> : null}
               {/* `||`, not `??`: a box can send an empty description, and an empty
                   string would leave the row blank under the name. */}
-              <RedactedText text={bot.preview || bot.description || bot.name} />
+              {/* A bare `NO_REPLY` is the bot choosing not to answer, not its words. */}
+              {isSilentPreview(bot.preview) ? (
+                <span className="ch-conv-silent">{SILENT_LABEL}</span>
+              ) : (
+                <RedactedText text={bot.preview || bot.description || bot.name} />
+              )}
             </span>
           </span>
           <span className="ch-conv-right">

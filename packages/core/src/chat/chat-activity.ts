@@ -14,9 +14,12 @@
  *
  * - each `process_event` block that is not routine raises its own
  *   `chat.event:` row (`notifyProcessEvent`);
- * - when every row in the window is such an event, each non-routine one was
- *   recorded and the read reached back to the watermark, the bot is marked
- *   `quiet` so `observeChatActivity` advances
+ * - a bot row that is only an intentional-silence marker (`NO_REPLY`,
+ *   `[SILENT]`, …) is the bot choosing not to answer — Hermes suppressed its
+ *   delivery — so it is passed over like a routine event;
+ * - when every row in the window is such an event or such a silence, each
+ *   non-routine event was recorded and the read reached back to the watermark,
+ *   the bot is marked `quiet` so `observeChatActivity` advances
  *   the watermark without the generic row;
  * - otherwise — a reply or an operator row among them, an empty window, a read
  *   that failed — the bot is passed through unchanged and the generic row is
@@ -27,6 +30,7 @@
  * roster read: each bot is its own `try`.
  */
 import { isRoutineProcessEvent } from "../shared/process-event.ts";
+import { isIntentionalSilence } from "../shared/silence.ts";
 import type { ChatMessage, ProcessEventBlock } from "../schema/index.ts";
 import { chatMovementOf, laterThan, notifyProcessEvent } from "./notifications.ts";
 import type { ChatActivity, NotificationDeps } from "./notifications.ts";
@@ -49,6 +53,21 @@ function eventBlocks(message: ChatMessage): ProcessEventBlock[] | null {
     events.push(block);
   }
   return events;
+}
+
+/**
+ * A bot row whose whole answer is a silence marker: nothing the operator could
+ * read. A failed or cut-off turn is never silence, whatever its text says
+ * (upstream's `is_intentional_silence_agent_result`).
+ */
+function isSilentReply(message: ChatMessage): boolean {
+  if (message.role !== "bot" || message.error || message.incomplete) return false;
+  let text = "";
+  for (const block of message.blocks) {
+    if (block.kind === "text") text += block.markdown;
+    else if (block.kind !== "reasoning") return false;
+  }
+  return isIntentionalSilence(text);
 }
 
 /**
@@ -84,6 +103,7 @@ export async function classifyChatActivity(
         if (fresh.length === 0) return bot;
         let quiet = covered;
         for (const message of fresh) {
+          if (isSilentReply(message)) continue;
           const events = eventBlocks(message);
           if (events === null) {
             quiet = false;
