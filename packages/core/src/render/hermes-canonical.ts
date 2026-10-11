@@ -198,11 +198,15 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
    * hidden holder's name in the same transaction (`hermes_state_titles.py:105-117`),
    * so this only happens there for a row that has not landed yet. An older
    * gateway keeps the archived holder's title, and every new Bot Chat collides
-   * with it. Upstream's refusal names the holder ("already in use by session
-   * <id>", `hermes_state_titles.py:109`), so its row is read for `archived`
-   * and the hint says which case this is; when the row cannot be read, it
-   * names both. Never auto-unarchived: an operator who archived that session
-   * did it on purpose.
+   * with it. An archived holder that is not hidden (archived in Hermes, not by
+   * hermetic) keeps its title on every gateway: upstream releases only the two
+   * together. Upstream's refusal names the holder ("already in use by session
+   * <id>", `hermes_state_titles.py:119`), so its row is read for `archived` and
+   * `hidden` and the hint says which case this is; when the row cannot be
+   * read, it names both. A row with no `hidden` at all is read as hidden — the
+   * flag is what hermetic archives with — so it gets the older-gateway hint.
+   * Never auto-unarchived: an operator who archived that session did it on
+   * purpose.
    */
   async function unlistedHolder(
     box: BoxAddress,
@@ -214,17 +218,21 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       refusal,
     )?.[1];
     const direct = `\`hermetic chat ${box.instance}/${bot} --session ${holder ?? "<id>"}\``;
-    const archived =
+    const row =
       holder === undefined
         ? undefined
-        : await deps.read(box, holder, bot, opts).then(
-            (row) => rec(row)?.archived,
-            () => undefined,
-          );
-    if (archived === true || archived === 1)
+        : await deps.read(box, holder, bot, opts).then(rec, () => undefined);
+    const flag = (value: unknown) =>
+      value === true || value === 1 ? true : value === false || value === 0 ? false : null;
+    if (flag(row?.archived) === true && flag(row?.hidden) === false)
       return new HermeticError(
         "CONFLICT",
-        `Bot Chat for ${bot} is held by archived session ${holder}, whose title this gateway has not released (Hermes v2026.9.21 and later release an archived Bot Chat's title on the next claim). Unarchive it in Hermes to resume it, or address it directly with ${direct}.`,
+        `Bot Chat for ${bot} is held by archived session ${holder}, which still holds the title: Hermes releases an archived Bot Chat's title only when it is also hidden. Unarchive it in Hermes to resume it, retitle it there, or address it directly with ${direct}.`,
+      );
+    if (flag(row?.archived) === true)
+      return new HermeticError(
+        "CONFLICT",
+        `Bot Chat for ${bot} is held by archived session ${holder}, whose title this gateway has not released (Hermes v2026.9.21 and later release an archived, hidden Bot Chat's title on the next claim). Unarchive it in Hermes to resume it, address it directly with ${direct}, or upgrade the gateway to Hermes v2026.9.21 or later.`,
       );
     const which = holder === undefined ? "a session" : `session ${holder}`;
     return new HermeticError(

@@ -23,6 +23,11 @@
  * both (`tools/bot_mode_dm.py:238`, and the relay's rewrite regex requires
  * them too), so here a row is a delivery only when it carries both — or is the
  * exact legacy bracketed form. Anything else is the operator speaking.
+ * Requiring both is what lets the name be looser than Desktop's `[^:\n(]`:
+ * a friendly name may hold `(` or `:` (`QA (nightly)`, `Ops: Night`), so it is
+ * any one line, as upstream's own `_SENDER_STAMP_RE` reads it (`.+?`,
+ * `tools/bot_relay.py:239`). The lazy match ends the name at the first
+ * ` (@handle): `, so a body that quotes one later is still body.
  *
  * Deviation two: Desktop's connection group is non-capturing, and here it
  * captures. A relayed `(@scribe@laptop)` names the `scribe` on `laptop`, not
@@ -32,12 +37,12 @@
 import type { ChatBlock, ChatMessage } from "../../schema/index.ts";
 
 /**
- * Desktop's `AGENT_MESSAGE_RE`, the glyph and the handle required and the
- * connection group capturing: 1 name, 2 handle, 3 connection, 4 legacy name,
- * 5 body.
+ * Desktop's `AGENT_MESSAGE_RE`, the glyph and the handle required, the name
+ * any one line and the connection group capturing: 1 name, 2 handle,
+ * 3 connection, 4 legacy name, 5 body.
  */
 const AGENT_MESSAGE_RE =
-  /^(?:Message from 🤖\s*([^:\n(]{1,64}?)\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}))?\):\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
+  /^(?:Message from 🤖\s*([^\n]{1,64}?)\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}))?\):\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
 
 /** The sender a delivery row is signed with. */
 export type BotDeliverySender = NonNullable<ChatMessage["from_bot"]>;

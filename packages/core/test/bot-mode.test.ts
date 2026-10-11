@@ -215,7 +215,24 @@ describe("canonical identity", () => {
     expect(message).toContain("held by archived session 20260901_old.1");
     expect(message).toContain("Unarchive it in Hermes");
     expect(message).toContain("--session 20260901_old.1");
+    expect(message).toContain("upgrade the gateway to Hermes v2026.9.21 or later");
     expect(message).not.toContain("If it is archived");
+  });
+  test("an archived holder that is not hidden keeps its title on any gateway, so no upgrade is offered", async () => {
+    // Upstream releases the title only when the holder is archived and hidden
+    // (`hermes_state_titles.py:108-117` at v2026.9.24).
+    const h = heldTitle("Title 'Bot Chat' is already in use by session s-3", async () => ({
+      id: "s-3",
+      archived: 1,
+      hidden: 0,
+    }));
+    const message = await conflictOf(h);
+    expect(message).toContain("held by archived session s-3, which still holds the title");
+    expect(message).toContain("Unarchive it in Hermes");
+    expect(message).toContain("retitle it there");
+    expect(message).toContain("--session s-3");
+    expect(message).not.toContain("upgrade");
+    expect(message).not.toContain("v2026.9.21");
   });
   test("a holder that is not archived, or cannot be read, gets both possibilities", async () => {
     const live = heldTitle("Title 'Bot Chat' is already in use by session s-2", async () => ({

@@ -62,6 +62,33 @@ describe("a delivery row", () => {
     }
   });
 
+  test("a friendly name holding brackets or a colon parses, and ends at the first stamp", () => {
+    // Upstream's `_SENDER_STAMP_RE` reads the name as `.+?` (`tools/bot_relay.py:239`).
+    expect(parseBotDelivery("Message from 🤖 QA (nightly) (@qa): hi")).toEqual({
+      from: { name: "QA (nightly)", handle: "qa" },
+      body: "hi",
+    });
+    expect(parseBotDelivery("Message from 🤖 Ops: Night (@ops): rotate keys")).toEqual({
+      from: { name: "Ops: Night", handle: "ops" },
+      body: "rotate keys",
+    });
+    expect(parseBotDelivery("Message from 🤖 QA (nightly) (@qa@laptop): hi")).toEqual({
+      from: { name: "QA (nightly)", handle: "qa", connection: "laptop" },
+      body: "hi",
+    });
+    // A body that quotes another stamp is still body.
+    expect(parseBotDelivery("Message from 🤖 Marshall (@scribe): ask Nick (@auditor): now")).toEqual({
+      from: { name: "Marshall", handle: "scribe" },
+      body: "ask Nick (@auditor): now",
+    });
+    const [session] = mapSessions(BOX, "auditor", {
+      sessions: [
+        { session_id: "s1", title: "Bot Chat", preview: "Message from 🤖 QA (nightly) (@qa): hi" },
+      ],
+    });
+    expect(session?.preview).toBe("QA (nightly): hi");
+  });
+
   test("an operator line that only reads like a signature is the operator speaking", () => {
     // Desktop's pattern takes all of these as deliveries; upstream never
     // writes a stamp without both the glyph and the handle.
