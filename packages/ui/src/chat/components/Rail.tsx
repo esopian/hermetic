@@ -25,6 +25,7 @@ import { activityFor } from "../chat-activity.ts";
 import type { ConversationActivity, TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 import { useState } from "react";
 import type { BotView, SessionView, SwarmView } from "../../api/index.ts";
 import {
@@ -107,7 +108,11 @@ function Conv({
           `??`, because a box can send an empty string for either.
         */}
         <span className="ch-conv-prev">
-          {bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)}
+          {isSilentPreview(bot.preview, bot.preview_role) ? (
+            <span className="ch-conv-silent">{SILENT_LABEL}</span>
+          ) : (
+            bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)
+          )}
         </span>
       </span>
       <span className="ch-conv-right">

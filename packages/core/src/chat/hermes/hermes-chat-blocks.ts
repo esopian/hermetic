@@ -31,6 +31,8 @@ const TOOL_RENDER: Record<string, ToolRender> = {
   image: "image",
   sql: "table",
   query: "table",
+  // Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`).
+  message_agent: "message_agent",
 };
 
 /** The spellings upstream has used for a tool's arguments, most specific first. */

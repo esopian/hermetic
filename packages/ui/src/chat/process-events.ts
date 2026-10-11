@@ -24,6 +24,7 @@
  */
 import { isRoutineProcessEvent, processEventSentence } from "@hermetic/core/shared";
 import type { ChatBlockOf } from "../api/index.ts";
+import { messageAgentCall } from "./bot-dm.ts";
 import type { BlockLike, MessageLike } from "./chat-logic.ts";
 import type { TurnRow } from "./chat-turns.ts";
 
@@ -321,12 +322,17 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * The process a `terminal` call started in the background, or null. Hermes
+ * The process a `terminal` call started in the background, or null, or the
+ * delivery a `message_agent` call queued. For `terminal`, Hermes
  * answers `background: true` with `{ output: "Background process started",
  * session_id: "proc_…" }`, which arrives as an object or, from an older
  * adapter, as that object's JSON — anything else is not a start.
  */
 export function backgroundProcessId(block: BlockLike): string | null {
+  // A `message_agent` call's acknowledgement names the delivery process whose
+  // completion notice carries the reply (`bot-dm.ts`).
+  const dm = messageAgentCall(block);
+  if (dm) return dm.processId;
   if (block.kind !== "tool" || block["name"] !== "terminal") return null;
   const args = recordOf(block["args"]);
   if (args?.["background"] !== true) return null;
@@ -405,15 +411,17 @@ export function searchableText(message: Pick<MessageLike, "blocks">): string {
 
 /**
  * What the rail quotes for a message this browser just watched land: its prose,
- * or, for an event row, the one sentence every head words it with.
+ * or, for an event row, the one sentence every head words it with. Another
+ * bot's DM delivery is quoted as that bot speaking, as core's roster preview is.
  */
-export function previewText(message: Pick<MessageLike, "blocks">): string {
+export function previewText(message: Pick<MessageLike, "blocks" | "from_bot">): string {
   const event = processEventOf(message);
   if (event) return processEventSentence(event);
-  return message.blocks
+  const prose = message.blocks
     .map((block) =>
       block.kind === "text" && typeof block["markdown"] === "string" ? block["markdown"] : "",
     )
     .filter((text) => text.length > 0)
     .join("\n");
+  return message.from_bot && prose ? `${message.from_bot.name}: ${prose}` : prose;
 }

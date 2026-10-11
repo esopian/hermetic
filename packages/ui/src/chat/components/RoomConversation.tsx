@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { botHandle } from "@hermetic/core/shared";
 import {
   ApiError,
   roomsGet,
@@ -13,10 +14,12 @@ import type { HostedRoomView, RoomEventView } from "../../api/index.ts";
 import { HERMETIC_GATES } from "../bot-capabilities.ts";
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { botLabel } from "../chat-presentation.ts";
+import { SILENT_LABEL, isSilentPreview, silentTitle } from "../chat-silence.ts";
 import { threadTime } from "../chat-logic.ts";
 import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { GatedNote } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
+import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../../lib/visibility.ts";
@@ -161,6 +164,32 @@ export function RoomConversation({
   );
   /** The clock every stamp in this pane is rendered against, shared with the rail. */
   const now = chat?.now ?? Date.now();
+  const input = useRef<HTMLTextAreaElement>(null);
+  const write = (text: string) => {
+    setDraft(text);
+    onDraft(text);
+  };
+  /**
+   * Members as the gateway addresses them: it matches `@handle` against the
+   * room's frozen roster (`hosted_room_discussion.resolve_mentions`), so the
+   * handle is what is inserted, never a friendly slug it would not know. The
+   * default profile is `@hermes` in a room created now and `@default` in one
+   * created before, so typing either name finds it, and the room's own handle
+   * is what lands in the draft.
+   */
+  const picker = useMentionPicker({
+    text: draft,
+    setText: write,
+    input,
+    candidates: (room?.members ?? []).map((member) => ({
+      key: member.member_id,
+      tag: member.handle,
+      display: memberName(instance, member.profile, member.display_name, roster),
+      forms: [...new Set([botHandle(member.profile), member.profile])],
+      instance,
+      bot: member.profile,
+    })),
+  });
   const memberOf = (id_: string | null | undefined) =>
     room?.members.find((m) => m.member_id === id_) ?? null;
   const target = { instance, room: id };
@@ -390,47 +419,67 @@ export function RoomConversation({
           ) : null}
           {events
             .filter((e) => e.text)
-            .map((event) => (
-              <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
-                <article className="ch-msg">
-                  {event.actor.kind === "user" ? (
-                    <div className="ch-avatar me">ME</div>
-                  ) : (
-                    <Face
-                      fleetId={fleetId}
-                      instance={instance}
-                      bot={event.member_id ?? event.actor.id}
-                      size={36}
-                      status="ready"
-                      square={false}
-                    />
-                  )}
-                  <div className="ch-msg-body">
-                    <div className="ch-msg-head">
-                      <b>
-                        {event.actor.kind === "user"
-                          ? "You"
-                          : (() => {
-                              const who = event.member_id ?? event.actor.id;
-                              const member = memberOf(who);
-                              return memberName(
-                                instance,
-                                member?.profile ?? who,
-                                member?.display_name,
-                                roster,
-                              );
-                            })()}
-                      </b>
-                      {/* One formatter for every stamp in the app; see `threadTime`. */}
-                      <time>{threadTime(event.created_at, now)}</time>
+            .map((event) => {
+              const bot = event.actor.kind !== "user";
+              const who = event.member_id ?? event.actor.id;
+              const member = memberOf(who);
+              const name = bot
+                ? memberName(instance, member?.profile ?? who, member?.display_name, roster)
+                : "You";
+              // A member's post that is only a Hermes silence token is the same
+              // muted marker the bot thread draws (`chat-silence.ts`). The
+              // operator's own words and any non-message event stay literal.
+              if (bot && event.kind.startsWith("message") && isSilentPreview(event.text)) {
+                return (
+                  <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
+                    <article className="ch-silent" title={silentTitle(event.text ?? "")}>
+                      <span className="ch-silent-gut">
+                        <Face
+                          fleetId={fleetId}
+                          instance={instance}
+                          bot={who}
+                          size={20}
+                          status="ready"
+                          square={false}
+                        />
+                      </span>
+                      <span className="ch-silent-line">
+                        <b>{name}</b> {SILENT_LABEL}
+                        <span className="ch-silent-at">{threadTime(event.created_at, now)}</span>
+                      </span>
+                    </article>
+                  </RowBoundary>
+                );
+              }
+              return (
+                <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
+                  <article className="ch-msg">
+                    {bot ? (
+                      <Face
+                        fleetId={fleetId}
+                        instance={instance}
+                        bot={who}
+                        size={36}
+                        status="ready"
+                        square={false}
+                      />
+                    ) : (
+                      <div className="ch-avatar me">ME</div>
+                    )}
+                    <div className="ch-msg-body">
+                      <div className="ch-msg-head">
+                        <b>{name}</b>
+                        {/* One formatter for every stamp in the app; see `threadTime`. */}
+                        <time>{threadTime(event.created_at, now)}</time>
+                      </div>
+                      <p className="bm-pre">
+                        <RedactedText text={event.text ?? ""} />
+                      </p>
                     </div>
-                    <p className="bm-pre">
-                      <RedactedText text={event.text ?? ""} />
-                    </p>
-                  </div>
-                </article>
-              </RowBoundary>
-            ))}
+                  </article>
+                </RowBoundary>
+              );
+            })}
           {!events.length ? (
             <p className="bm-note">Start a shared conversation with these bots.</p>
           ) : null}
@@ -483,18 +532,23 @@ export function RoomConversation({
           ))}
         </div>
         <div className="ch-composer">
-          <div className="ch-input-wrap">
+          <div className="ch-input-wrap bm-input-wrap">
+            <MentionList picker={picker} fleetId={fleetId} label="Mention a room member" />
             <textarea
+              ref={input}
               className="ch-input"
               aria-label="Message the room"
               placeholder="Message the room…"
               value={draft}
+              {...picker.inputProps}
               onChange={(e) => {
-                setDraft(e.target.value);
-                onDraft(e.target.value);
+                write(e.target.value);
+                picker.track(e.target);
               }}
+              onSelect={(e) => picker.track(e.currentTarget)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (e.nativeEvent.isComposing || picker.onKeyDown(e)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void send();
                 }

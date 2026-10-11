@@ -54,6 +54,17 @@ export {
 } from "./process-event.ts";
 export type { ProcessEventLike } from "./process-event.ts";
 
+// --- Intentional silence (§9.2) ------------------------------------------
+// Upstream's `NO_REPLY`/`[SILENT]` matcher: core keeps a silent reply out of
+// the inbox, the UI draws it as a marker and holds back a streamed prefix.
+export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "./silence.ts";
+
+// --- Bot handles and @-mentions (§9.2) -----------------------------------
+// The composer's mention picker and core's `message_agent` target mapping
+// must agree on which tag names which bot.
+export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "./bot-handles.ts";
+export type { BotIdentity } from "./bot-handles.ts";
+
 // --- Providers (§8.1) ----------------------------------------------------
 export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./providers.ts";
 export type { Provider, ProviderSpec } from "./providers.ts";

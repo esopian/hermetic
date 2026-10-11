@@ -20,8 +20,10 @@
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { useRef, useState } from "react";
-import { insertMention, mentionAt, mentionHandle, mentionOptions } from "../chat-mentions.ts";
+import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
+import { useFleetIfAvailable } from "../../state/state.tsx";
+import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { composerHint, destinationNotice, originClass, previewOf, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
 import type { Destination } from "../chat-logic.ts";
@@ -72,29 +74,24 @@ export function Composer({
 }) {
   const [localText, setLocalText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
-  const [cursor, setCursor] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
-  const [choice, setChoice] = useState(0);
   const chat = useChatIfAvailable();
+  const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
   const notice = destinationNotice(destination);
   const label = sendLabel(destination);
   const hint = composerHint(destination);
   const picks = destination.state === "unchosen" && onChoose ? choices : [];
-  const match = dismissed ? null : mentionAt(text, cursor);
-  const options = match ? mentionOptions(mentions, match.query) : [];
-  const choose = (bot: MentionBot) => {
-    if (!match) return;
-    const result = insertMention(text, match, mentionHandle(bot, mentions));
-    setText(result.text);
-    setCursor(result.cursor);
-    setDismissed(true);
-    requestAnimationFrame(() => {
-      input.current?.focus();
-      input.current?.setSelectionRange(result.cursor, result.cursor);
-    });
-  };
+  /**
+   * Teammates on this instance, as Hermes Desktop offers them. The caller
+   * already leaves out the bot this thread talks to; Hermes resolves the tag.
+   */
+  const picker = useMentionPicker({
+    text,
+    setText,
+    input,
+    candidates: mentions.map(botCandidate),
+  });
 
   /**
    * The queue exists only where the store does.
@@ -194,54 +191,24 @@ export function Composer({
       ) : null}
 
       <div className="ch-input-wrap bm-input-wrap">
-        {options.length > 0 ? (
-          <div className="bm-mentions" role="listbox" aria-label="Mention a bot">
-            {options.map((bot, index) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={index === choice}
-                key={`${bot.instance}/${bot.name}`}
-                onClick={() => choose(bot)}
-              >
-                <b>{bot.title}</b>
-                <span className="mono">
-                  {mentionHandle(bot, mentions)} · {bot.instance}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <MentionList picker={picker} fleetId={fleetId} label="Mention a bot" />
         <textarea
           ref={input}
           className="ch-input"
           aria-label={placeholder}
-          aria-autocomplete={mentions.length ? "list" : undefined}
+          {...picker.inputProps}
           rows={1}
           disabled={!editable}
           placeholder={placeholder}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            setCursor(e.target.selectionStart);
-            setDismissed(false);
-            setChoice(0);
+            picker.track(e.target);
           }}
-          onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
+          onSelect={(e) => picker.track(e.currentTarget)}
           onKeyDown={(e) => {
             if (e.defaultPrevented || e.nativeEvent.isComposing) return;
-            if (
-              options.length > 0 &&
-              ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)
-            ) {
-              e.preventDefault();
-              if (e.key === "Escape") setDismissed(true);
-              else if (e.key === "ArrowDown") setChoice((index) => (index + 1) % options.length);
-              else if (e.key === "ArrowUp")
-                setChoice((index) => (index + options.length - 1) % options.length);
-              else choose(options[choice % options.length]!);
-              return;
-            }
+            if (picker.onKeyDown(e)) return;
             // Enter sends, Shift+Enter is a newline, and ⌘Enter is a third
             // spelling of the first.
             if (e.key === "Enter" && !e.shiftKey) {

@@ -30,6 +30,9 @@ export {
   shortCommand,
 } from "../shared/process-event.ts";
 export type { ProcessEventLike } from "../shared/process-event.ts";
+export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "../shared/bot-handles.ts";
+export type { BotIdentity } from "../shared/bot-handles.ts";
+export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "../shared/silence.ts";
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
 
@@ -74,6 +77,10 @@ export const FOREIGN_ORIGINS: readonly SessionOrigin[] = SESSION_ORIGINS.filter(
 
 export const SessionKind = z.enum(["canonical", "thread", "routine"]);
 export type SessionKind = z.infer<typeof SessionKind>;
+
+/** Who wrote a message. Declared here because the roster quotes one (`Bot.preview_role`). */
+export const ChatRole = z.enum(["user", "bot", "system"]);
+export type ChatRole = z.infer<typeof ChatRole>;
 
 /* ── the roster ───────────────────────────────────────────────────────────── */
 
@@ -127,6 +134,20 @@ export const Bot = z.object({
    * a bot nobody has spoken to has nothing to preview.
    */
   preview: z.string().nullish(),
+  /**
+   * Who wrote the message `preview` quotes, when that is known.
+   *
+   * The rail reads a bare silence marker (`NO_REPLY`) as the bot staying
+   * silent, which is only true of a `bot` row: the operator typing "No reply"
+   * is the operator's words. Upstream's preview carries no role
+   * (`tui_gateway/methods_profiles.py` `_latest_message_preview` selects the
+   * newest `user`/`assistant` row's `content` alone, v2026.9.24), so it is set
+   * only where hermetic itself knows the row: a preview it rewrote from a
+   * background-process notice (`system`, as history lifts it) or another bot's
+   * delivery (`user`) — `eventPreviewOf` — or one built from a transcript row.
+   * Null is "not known", never "the operator".
+   */
+  preview_role: ChatRole.nullish(),
   unread: z.number().int().nonnegative(),
   needs_action: z.boolean(),
   muted: z.boolean(),
@@ -217,8 +238,12 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * head that does not recognise one falls back to the raw payload. New
  * renderers can therefore be added without a schema change, and an upstream
  * tool this file has never heard of still renders as something.
+ *
+ * `message_agent` is Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`): a head
+ * draws it as a "Messaged <bot>" marker rather than a tool step, and falls back
+ * to the tool row when its arguments are not the `{target, message}` it knows.
  */
-export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot"]);
+export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot", "message_agent"]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
 export const ToolStatus = z.enum(["running", "ok", "warn", "bad"]);
@@ -505,9 +530,6 @@ export const CHAT_BLOCK_KINDS = [
 
 /* ── messages ─────────────────────────────────────────────────────────────── */
 
-export const ChatRole = z.enum(["user", "bot", "system"]);
-export type ChatRole = z.infer<typeof ChatRole>;
-
 export const ChatUsage = z.object({
   input_tokens: z.number().int().nonnegative().nullish(),
   output_tokens: z.number().int().nonnegative().nullish(),
@@ -529,6 +551,23 @@ export const ChatMessage = z.object({
   error: z.string().nullish(),
   /** The turn stopped before it finished: aborted, timed out, lost the socket. */
   incomplete: z.boolean().nullish(),
+  /**
+   * Set on a `user` row that is another bot's `message_agent` delivery rather
+   * than the operator speaking: Hermes stores it on the user role, signed
+   * `Message from 🤖 <name> (@<handle>): …`. The signature is lifted into this
+   * field and the row's text is the message alone
+   * (`chat/hermes/bot-delivery.ts`). `handle` is null for the legacy signature,
+   * which named the sender only. `connection` is set only for a relayed
+   * sender (`(@<handle>@<connection>)`): the handle then names a bot on that
+   * connection, never a local one, so a head must not resolve it locally.
+   */
+  from_bot: z
+    .object({
+      name: z.string().min(1),
+      handle: z.string().min(1).nullable(),
+      connection: z.string().min(1).nullish(),
+    })
+    .nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

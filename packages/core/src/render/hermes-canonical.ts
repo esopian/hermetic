@@ -1,4 +1,4 @@
-/** Canonical Bot Chat identity and lifecycle. Wire contracts live at Hermes v2026.9.14. */
+/** Canonical Bot Chat identity and lifecycle. Wire contracts live at Hermes v2026.9.24. */
 import { HermeticError } from "../errors.ts";
 import { HERMETIC_SESSION_SOURCE, rec, records, str } from "../chat/hermes/hermes-chat-wire.ts";
 import type { BoxAddress, HermesChatOptions } from "../chat/hermes/hermes-chat.ts";
@@ -21,6 +21,13 @@ export interface CanonicalDeps {
     body: Record<string, unknown>,
     opts: HermesChatOptions,
   ): Promise<unknown>;
+  /**
+   * One stored session row as the dashboard returns it
+   * (`GET /api/sessions/{id}?profile=…`, `hermes_cli/web_routers/sessions.py:500-513`
+   * at v2026.9.24): the full `sessions` row, `archived` included, which no
+   * session RPC carries.
+   */
+  read(box: BoxAddress, session: string, bot: string, opts: HermesChatOptions): Promise<unknown>;
   now(): string;
 }
 const failure = (message: string) => new HermeticError("CHAT_PROTOCOL", message);
@@ -173,26 +180,65 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
         )
           throw error;
         const winner = await find(rpc, box, bot);
-        /**
-         * The observed fact and nothing more: the title is taken by a session
-         * the lookup does not return. Archival is what usually produces it —
-         * archival hides the row while the UNIQUE title survives it, so every
-         * retry creates, collides and looks again forever — but a row that has
-         * simply not landed yet reaches here too, which is why the message
-         * names the cause as likely rather than as certain. A `CONFLICT` with a
-         * repair in it either way, and never auto-unarchived: an operator who
-         * archived that session did it on purpose.
-         */
-        if (!winner)
-          throw new HermeticError(
-            "CONFLICT",
-            `Bot Chat for ${bot} is taken by a session this gateway does not list; it is most likely archived. Unarchive it in Hermes, or address the session directly with \`hermetic chat ${box.instance}/${bot} --session <id>\`.`,
-          );
+        if (!winner) throw await unlistedHolder(box, bot, error.message, opts);
         return winner;
       }
     } finally {
       rpc.close();
     }
+  }
+
+  /**
+   * The `CONFLICT` for a "Bot Chat" title held by a session the title lookup
+   * does not return, rather than an endless create-collide-look retry.
+   *
+   * The lookup drops archived rows (`_session_list_by_title`,
+   * `tui_gateway/methods_session.py:461-479` at v2026.9.24). Since Hermes
+   * v2026.9.21 (b6207cb5903) a new Bot Chat's title write retires an archived
+   * hidden holder's name in the same transaction (`hermes_state_titles.py:105-117`),
+   * so this only happens there for a row that has not landed yet. An older
+   * gateway keeps the archived holder's title, and every new Bot Chat collides
+   * with it. An archived holder that is not hidden (archived in Hermes, not by
+   * hermetic) keeps its title on every gateway: upstream releases only the two
+   * together. Upstream's refusal names the holder ("already in use by session
+   * <id>", `hermes_state_titles.py:119`), so its row is read for `archived` and
+   * `hidden` and the hint says which case this is; when the row cannot be
+   * read, it names both. A row with no `hidden` at all is read as hidden — the
+   * flag is what hermetic archives with — so it gets the older-gateway hint.
+   * Never auto-unarchived: an operator who archived that session did it on
+   * purpose.
+   */
+  async function unlistedHolder(
+    box: BoxAddress,
+    bot: string,
+    refusal: string,
+    opts: HermesChatOptions,
+  ): Promise<HermeticError> {
+    const holder = /already in use by session ([A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9_])?)/.exec(
+      refusal,
+    )?.[1];
+    const direct = `\`hermetic chat ${box.instance}/${bot} --session ${holder ?? "<id>"}\``;
+    const row =
+      holder === undefined
+        ? undefined
+        : await deps.read(box, holder, bot, opts).then(rec, () => undefined);
+    const flag = (value: unknown) =>
+      value === true || value === 1 ? true : value === false || value === 0 ? false : null;
+    if (flag(row?.archived) === true && flag(row?.hidden) === false)
+      return new HermeticError(
+        "CONFLICT",
+        `Bot Chat for ${bot} is held by archived session ${holder}, which still holds the title: Hermes releases an archived Bot Chat's title only when it is also hidden. Unarchive it in Hermes to resume it, retitle it there, or address it directly with ${direct}.`,
+      );
+    if (flag(row?.archived) === true)
+      return new HermeticError(
+        "CONFLICT",
+        `Bot Chat for ${bot} is held by archived session ${holder}, whose title this gateway has not released (Hermes v2026.9.21 and later release an archived, hidden Bot Chat's title on the next claim). Unarchive it in Hermes to resume it, address it directly with ${direct}, or upgrade the gateway to Hermes v2026.9.21 or later.`,
+      );
+    const which = holder === undefined ? "a session" : `session ${holder}`;
+    return new HermeticError(
+      "CONFLICT",
+      `Bot Chat for ${bot} is taken by ${which}, which this gateway does not list. If it is archived (a gateway older than Hermes v2026.9.21 keeps an archived Bot Chat's title), unarchive it in Hermes; otherwise address it directly with ${direct}, or free the title in Hermes.`,
+    );
   }
 
   async function conversation(
@@ -261,21 +307,12 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
   async function archive(box: BoxAddress, bot: string, session: string, opts: HermesChatOptions = {}) {
     const current = await conversation(box, bot, { ...opts, session });
     if (!current) throw new HermeticError("NOT_FOUND", "Session not found");
-    // Retire the exact registry root, freeing the canonical title without deleting history.
+    // Retire the exact registry root without deleting history. No title: upstream refuses a
+    // user rename of a hidden Bot Chat and applies `title` first, so it would 400 the whole
+    // PATCH. The next Bot Chat's title write retires this archived hidden holder's name in
+    // the same transaction (`hermes_state_titles.py`, v2026.9.24).
     const result = rec(
-      await deps.patch(
-        box,
-        current.root_session,
-        {
-          profile: bot,
-          archived: true,
-          hidden: true,
-          ...(current.kind === "canonical"
-            ? { title: `Bot Chat archived ${deps.now()} ${current.root_session}` }
-            : {}),
-        },
-        opts,
-      ),
+      await deps.patch(box, current.root_session, { profile: bot, archived: true, hidden: true }, opts),
     );
     if (result?.ok !== true || result.archived !== true)
       throw failure("Gateway did not confirm session archival");

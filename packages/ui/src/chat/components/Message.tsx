@@ -18,13 +18,16 @@
  */
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
-import { ActivityGroup, isActivity, needsAttention } from "./Activity.tsx";
+import { ActivityGroup, isActivity, isStatusBlock, needsAttention } from "./Activity.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { failureCopy } from "../chat-logic.ts";
+import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
+import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
+import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 
@@ -99,6 +102,11 @@ function Meter({ usage }: { usage: NonNullable<ChatMessageView["usage"]> }) {
   );
 }
 
+/** A text block's words; empty for any other kind. */
+function markdownOf(block: ChatBlockView | undefined): string {
+  return block?.kind === "text" ? block.markdown : "";
+}
+
 /**
  * A cheap signal of what a section currently says.
  *
@@ -150,19 +158,26 @@ export function Message({
   inReply?: string | null;
 }) {
   const { message, continuation } = row;
+  const dm = useBotDm();
   // Every source id this article stands for. A `#message=` link names the row
   // the box wrote, which may now be in the middle of a merged turn, so the
   // article has to answer to all of them and not only to the one it is named by.
   const ids = row.ids?.length ? row.ids : [message.id];
-  const mine = message.role === "user";
+  // Another bot's `message_agent` delivery is on the user role, and it is that
+  // bot speaking, not the operator (`bot-dm.ts`).
+  const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
+  const sender = fromBot ? dmSender(fromBot, dm.teammates) : null;
+  const mine = message.role === "user" && !fromBot;
   const author = message.author ?? null;
-  const who = mine
-    ? "You"
-    : botLabel(
-        author?.instance ?? instance,
-        author?.bot ?? bot,
-        !author || (author.instance === instance && author.bot === bot) ? botTitle : null,
-      );
+  const who = fromBot
+    ? dmBotName(sender, fromBot.name)
+    : mine
+      ? "You"
+      : botLabel(
+          author?.instance ?? instance,
+          author?.bot ?? bot,
+          !author || (author.instance === instance && author.bot === bot) ? botTitle : null,
+        );
   const broken = !!message.error || !!message.incomplete;
   if (message.blocks.length === 0 && !broken && !message.usage) return null;
   const closedRequests = new Set(
@@ -184,6 +199,40 @@ export function Message({
         closedRequests.has(block.request_id)
       ),
   );
+  // An intentional-silence marker (`chat-silence.ts`) is never drawn as prose:
+  // a settled one becomes a muted "stayed silent" line, and one still
+  // streaming is held back behind the caret until it diverges into an answer.
+  const silent = silentBlock(message, blocks, streaming);
+  const held = heldBlock(blocks, streaming);
+  if (held >= 0) blocks[held] = { kind: "text", markdown: "" };
+  if (silent >= 0 && blocks.every((block, i) => i === silent || isStatusBlock(block))) {
+    // Nothing else in the turn: one line in the event column, not a bubble.
+    // Status snapshots go too — a settled group shows nothing for them.
+    return (
+      <article
+        data-chat-message={message.id}
+        data-chat-ids={ids.join(" ")}
+        tabIndex={-1}
+        className="ch-silent"
+        title={silentTitle(markdownOf(blocks[silent]))}
+      >
+        <span className="ch-silent-gut">
+          <Face
+            fleetId={fleetId}
+            instance={author?.instance ?? instance}
+            bot={author?.bot ?? bot}
+            size={20}
+            status={status}
+            square={false}
+          />
+        </span>
+        <span className="ch-silent-line">
+          <b>{who}</b> {SILENT_LABEL}
+          <span className="ch-silent-at">{fmtClock(message.at)}</span>
+        </span>
+      </article>
+    );
+  }
   const waiting = blocks.some((block) => block.kind === "approval" || block.kind === "question");
   // One turn's work is one group. Only something addressed to the reader —
   // prose, a question, an approval, a card — closes the run; a notice *about*
@@ -196,6 +245,13 @@ export function Message({
   let run: { activity: boolean; blocks: typeof blocks } | null = null;
   for (const block of blocks) {
     const attention = needsAttention(block);
+    // A DM to another bot is a line between the prose, not a step in the
+    // group: it closes the run, so the turn reads in the order it happened.
+    if (messageAgentCall(block)) {
+      sections.push({ activity: false, blocks: [block] });
+      run = null;
+      continue;
+    }
     if (isActivity(block) && !attention) {
       if (run) run.blocks.push(block);
       else {
@@ -243,7 +299,20 @@ export function Message({
       tabIndex={-1}
       className={`ch-msg${mine ? " me" : ""}${continuation ? " cont" : ""}`}
     >
-      {mine ? (
+      {fromBot ? (
+        sender ? (
+          <Face
+            fleetId={fleetId}
+            instance={instance}
+            bot={sender.name}
+            size={36}
+            status={status}
+            square={false}
+          />
+        ) : (
+          <div className="ch-avatar">{fromBot.name.slice(0, 2).toUpperCase()}</div>
+        )
+      ) : mine ? (
         <OperatorFace />
       ) : (
         <Face
@@ -298,17 +367,47 @@ export function Message({
                 resetKey={`${message.id}:${index}:${section.blocks.length}:${sectionSignal(section.blocks)}`}
                 label={`${message.id} block ${index}`}
               >
-                <Block
-                  block={section.blocks[0]!}
-                  now={now}
-                  streaming={streaming && activity === "streaming" && index === sections.length - 1}
-                  mine={mine}
-                />
+                {section.blocks[0] === blocks[silent] ? (
+                  <p className="ch-silent-note" title={silentTitle(markdownOf(section.blocks[0]))}>
+                    {SILENT_LABEL}
+                  </p>
+                ) : messageAgentCall(section.blocks[0]!) ? (
+                  <DmSentMarker
+                    call={messageAgentCall(section.blocks[0]!)!}
+                    at={message.at}
+                    fleetId={fleetId}
+                    instance={author?.instance ?? instance}
+                    status={status}
+                  />
+                ) : (
+                  <Block
+                    block={section.blocks[0]!}
+                    now={now}
+                    streaming={streaming && activity === "streaming" && index === sections.length - 1}
+                    mine={mine}
+                  />
+                )}
               </RowBoundary>
             ),
           )}
           {broken ? <FailureCard {...splitError(message.error)} /> : null}
           {message.usage ? <Meter usage={message.usage} /> : null}
+          {fromBot ? (
+            <div className="ch-dm-mark from">
+              {dm.open ? (
+                <button
+                  type="button"
+                  onClick={() => dm.open?.({ side: "receiver", deliveryId: message.id })}
+                >
+                  <RedactedText text={`Message from ${who}`} /> <span aria-hidden="true">⇄</span>
+                </button>
+              ) : (
+                <span className="ch-dm-mark-static">
+                  <RedactedText text={`Message from ${who}`} />
+                </span>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </article>
