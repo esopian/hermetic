@@ -214,6 +214,34 @@ export const ERROR_CODES = [
    * bootstrap stage, minutes into a first boot nobody is watching.
    */
   "BROWSER_NEEDS_FOUNDATION_UPDATE",
+  /**
+   * A terminal session was asked for on an agent whose box is not running
+   * (issue #18). There is nothing to `tailscale ssh` into; starting the agent
+   * is the remedy, and the desktop app says so rather than spawning an ssh that
+   * would hang on a dead address.
+   */
+  "TERMINAL_AGENT_OFF",
+  /**
+   * No `tailscale` binary on this laptop, so a terminal session cannot be
+   * opened (issue #18). The §4.7 preflight found nothing on any candidate path.
+   */
+  "TAILSCALE_MISSING",
+  /**
+   * The laptop's Tailscale is installed but not running or not logged in, so
+   * `tailscale ssh` would fail (issue #18). `tailscale up` is the remedy.
+   */
+  "TAILSCALE_STOPPED",
+  /**
+   * The laptop's Tailscale is up on a tailnet other than the fleet's, so the
+   * agent's hostname does not resolve from here (issue #18). Switching tailnets
+   * is the remedy.
+   */
+  "TAILSCALE_WRONG_TAILNET",
+  /**
+   * Opening one more terminal session would pass a cap: three per agent, eight
+   * per app (issue #18). Ending a session is the remedy.
+   */
+  "TERMINAL_LIMIT",
   /** Input failed schema validation at the boundary — heads map it to 400. */
   "VALIDATION",
   "UNSUPPORTED",

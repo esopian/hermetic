@@ -2374,11 +2374,12 @@ describe("ssh / logs", () => {
   test("ssh returns argv for the head to exec; core never spawns", async () => {
     const { hermetic } = seeded();
     // The row's own `tailscale_dns_name`, which is what the node answers on —
-    // never the bare agent name, which since v3 is not a hostname at all.
+    // never the bare agent name, which since v3 is not a hostname at all. The
+    // login user is explicit: left to default, it would be the laptop's own.
     expect(await hermetic.ssh({ name: "atlas" })).toEqual([
       "tailscale",
       "ssh",
-      "fxtr0001-atlas.hermetic.ts.net",
+      "hermes@fxtr0001-atlas.hermetic.ts.net",
     ]);
     await expect(hermetic.ssh({ name: "Atlas" })).rejects.toThrow(HermeticError);
   });

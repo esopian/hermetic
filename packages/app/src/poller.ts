@@ -218,6 +218,11 @@ export class FleetPoller {
   private aborter = new AbortController();
   /** `stop()` is terminal; nothing here starts again afterwards. */
   private halted = false;
+  /**
+   * The inbox read in flight, tick or flush. Chained rather than overlapped:
+   * two reads from one watermark would each deliver the same new rows.
+   */
+  private notifyChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly hermetic: Hermetic,
@@ -333,7 +338,7 @@ export class FleetPoller {
     if (this.halted) return;
     await this.pollChat();
     if (this.halted) return;
-    await this.pollNotifications(at);
+    await this.serialNotifications(at);
     this.emit({ type: "poll", at });
   }
 
@@ -417,6 +422,23 @@ export class FleetPoller {
     } catch {
       /* a roster the tailnet would not answer costs the notification, not the poll */
     }
+  }
+
+  /**
+   * The inbox half of a tick, now rather than on the next one: a row a head
+   * raised itself (a terminal session's attention, issue #18) reaches the
+   * page in the same moment instead of up to a minute later. Never throws,
+   * and does nothing once the poller has stopped.
+   */
+  flushNotifications(): Promise<void> {
+    if (this.halted) return Promise.resolve();
+    return this.serialNotifications(new Date(this.now()).toISOString());
+  }
+
+  private serialNotifications(at: string): Promise<void> {
+    const run = this.notifyChain.then(() => this.pollNotifications(at));
+    this.notifyChain = run;
+    return run;
   }
 
   /**

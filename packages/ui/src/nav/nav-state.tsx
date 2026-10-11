@@ -36,7 +36,7 @@ import type { FleetLens } from "./fleet-nav.ts";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { isChatHash } from "../chat/chat-routing.ts";
 import type { View } from "../components/ViewNav.tsx";
-import { hasOpenOverlay } from "../lib/focus.ts";
+import { hasOpenOverlay, keyboardOwned } from "../lib/focus.ts";
 import { DEFAULT_SETTINGS_SECTION, parseSettingsHash, settingsHash } from "./settings-nav.ts";
 import type { SettingsSection } from "./settings-nav.ts";
 import { shortcutAllowed } from "./shortcuts.ts";
@@ -92,6 +92,16 @@ export interface Nav {
   selected: string | null;
   agentTab: AgentTab;
   setAgentTab: (tab: AgentTab) => void;
+  /**
+   * The terminal session the hash names (`#agent/<name>/terminal/<id>`), or
+   * `null`. Held here so the one hash writer spells it back rather than
+   * stripping it; the Terminal section reads it to pick the session a
+   * notification's `Open session` asked for, and writes it as the operator
+   * moves between sessions. Meaningless on any other section, and cleared by
+   * every move off Terminal (`setAgentTab`).
+   */
+  agentSession: string | null;
+  setAgentSession: (session: string | null) => void;
   /** The drawer's destroy confirm, owned here so a change of agent resets it. */
   teardownOpen: boolean;
   setTeardownOpen: (open: boolean) => void;
@@ -174,9 +184,17 @@ export function NavProvider({
   const [selected, setSelected] = useState<string | null>(
     () => parseAgentHash(currentHash())?.name ?? null,
   );
-  const [agentTab, setAgentTab] = useState<AgentTab>(
+  const [agentTab, setAgentTabState] = useState<AgentTab>(
     () => parseAgentHash(currentHash())?.tab ?? DEFAULT_AGENT_TAB,
   );
+  const [agentSession, setAgentSession] = useState<string | null>(
+    () => parseAgentHash(currentHash())?.session ?? null,
+  );
+  /** A session belongs to the Terminal section; any other section drops it. */
+  const setAgentTab = useCallback((tab: AgentTab) => {
+    setAgentTabState(tab);
+    if (tab !== "terminal") setAgentSession(null);
+  }, []);
   const [teardownOpen, setTeardownOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createOnVolume, setCreateOnVolume] = useState<VolumeView | null>(null);
@@ -320,16 +338,19 @@ export function NavProvider({
     else if (v.chatOpen) setChatOpen(false);
   }, []);
 
-  const select = useCallback((name: string) => {
-    setSelected(name);
-    // Opening an agent from the board always lands on Overview: the Desktop tab
-    // is a live stream, so it is somewhere an operator goes deliberately (by
-    // pressing the tab, or by following a `#agent/<name>/desktop` link) and
-    // never somewhere the last agent's tab carries them.
-    setAgentTab(DEFAULT_AGENT_TAB);
-    setTeardownOpen(false);
-    setPopoverOpen(false);
-  }, []);
+  const select = useCallback(
+    (name: string) => {
+      setSelected(name);
+      // Opening an agent from the board always lands on Overview: the Desktop tab
+      // is a live stream, so it is somewhere an operator goes deliberately (by
+      // pressing the tab, or by following a `#agent/<name>/desktop` link) and
+      // never somewhere the last agent's tab carries them.
+      setAgentTab(DEFAULT_AGENT_TAB);
+      setTeardownOpen(false);
+      setPopoverOpen(false);
+    },
+    [setAgentTab],
+  );
   const openAgent = useCallback(
     (name: string) => {
       setSettingsOpen(false);
@@ -395,7 +416,8 @@ export function NavProvider({
       const route = parseAgentHash(window.location.hash);
       if (route) {
         setSelected(route.name);
-        setAgentTab(route.tab);
+        setAgentTabState(route.tab);
+        setAgentSession(route.session ?? null);
         // Same reset `select()` does: back/forward onto another agent must not
         // land on the previous one's open teardown confirm, which names a
         // different agent and is a destructive step.
@@ -434,7 +456,7 @@ export function NavProvider({
           ? window.location.hash
           : "#chat"
         : selected
-          ? agentHash(selected, agentTab)
+          ? agentHash(selected, agentTab, agentSession)
           : fleetLensHash(fleetLens);
     if (window.location.hash === wants) return;
     if (wants) {
@@ -442,7 +464,7 @@ export function NavProvider({
     } else {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab]);
+  }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab, agentSession]);
 
   /**
    * §4.8: a fleet switch replaces every agent on the board, so anything on
@@ -502,6 +524,8 @@ export function NavProvider({
       selected,
       agentTab,
       setAgentTab,
+      agentSession,
+      setAgentSession,
       teardownOpen,
       setTeardownOpen,
       select,
@@ -539,6 +563,8 @@ export function NavProvider({
       closeView,
       selected,
       agentTab,
+      setAgentTab,
+      agentSession,
       teardownOpen,
       select,
       openAgent,
@@ -608,6 +634,8 @@ export function useNavKeys({
   const { openCreate, openSettings, closeView } = useNav();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The terminal's screen owns the keyboard while focused (`keyboardOwned`).
+      if (keyboardOwned()) return;
       if (
         e.defaultPrevented ||
         e.isComposing ||

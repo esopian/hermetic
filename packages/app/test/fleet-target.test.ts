@@ -95,6 +95,16 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "ops.list": "reads this head's op registry",
   "ops.subscribe": "reads this head's op registry",
   "ops.unsubscribe": "closes a stream this head opened",
+  // The in-app terminal (issue #18): sessions this process owns. `open` and
+  // `external` log in with core's `ssh` argv for the configured fleet, which
+  // is a read behind core's own account guard and writes nothing to it.
+  "terminal.attach": "reads a session this head owns",
+  "terminal.close": "ends a session this head owns; nothing on the account changes",
+  "terminal.detach": "closes a stream this head opened",
+  "terminal.external": "hands core's `ssh` argv to Terminal; it writes nothing",
+  "terminal.list": "reads this head's own sessions",
+  "terminal.open": "logs in with core's `ssh` argv for the configured fleet; it writes nothing",
+  "terminal.resize": "resizes a session this head owns",
 };
 
 /**

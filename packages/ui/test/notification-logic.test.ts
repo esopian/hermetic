@@ -90,6 +90,7 @@ describe("groupOf", () => {
         "agent.health",
         "chat.cron",
         "fleet.advisory",
+        "terminal.output",
       ].map((kind) => groupOf(n({ kind }))),
     );
     expect(reached.size).toBe(PREF_GROUPS.length);

@@ -91,6 +91,13 @@ export type ExecLike = (argv: readonly string[]) => Promise<ExecResult>;
 export interface ProbeOptions {
   exec?: ExecLike;
   binaries?: readonly string[];
+  /**
+   * Turns a bare candidate (`tailscale`, found on `PATH`) into the absolute
+   * path that answered. Defaults to `Bun.which`, except when `exec` is
+   * injected: a fake exec's candidates are fictional, and looking them up on
+   * the real `PATH` would mix the two worlds.
+   */
+  which?: (name: string) => string | null;
 }
 
 async function spawnCapture(argv: readonly string[]): Promise<ExecResult> {
@@ -232,6 +239,15 @@ export function parseTailscaleStatus(raw: string, binary: string): TailscalePref
 export async function probeLocalTailscale(opts: ProbeOptions = {}): Promise<TailscalePreflight> {
   const exec = opts.exec ?? spawnCapture;
   const binaries = opts.binaries ?? TAILSCALE_BINARIES;
+  const which = opts.which ?? (opts.exec ? () => null : (name: string) => Bun.which(name));
+  /**
+   * `binary` is what a head execs later (the desktop terminal puts it in place
+   * of the `tailscale` in `ssh`'s argv), so a bare name is resolved to the
+   * path it stood for here. Kept bare when the lookup finds nothing: it did
+   * answer, so it is runnable from this process's `PATH` either way.
+   */
+  const resolved = (binary: string): string =>
+    binary.includes("/") ? binary : (which(binary) ?? binary);
 
   let lastFailure: TailscalePreflight | null = null;
   for (const binary of binaries) {
@@ -251,13 +267,13 @@ export async function probeLocalTailscale(opts: ProbeOptions = {}): Promise<Tail
       lastFailure = {
         ...NO_TAILSCALE,
         installed: true,
-        binary,
+        binary: resolved(binary),
         problem:
           result.stderr.trim().split("\n")[0] ?? `\`${binary} status --json\` exited ${result.code}`,
       };
       continue;
     }
-    const status = parseTailscaleStatus(result.stdout, binary);
+    const status = parseTailscaleStatus(result.stdout, resolved(binary));
     /**
      * Unparseable output means this install did not answer — the shim case
      * above — so keep looking: another location may be a working install. A

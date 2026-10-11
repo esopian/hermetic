@@ -61,6 +61,13 @@ function isMuted(row: Pick<Notification, "agent" | "source">, muted: Set<string>
 /** The two `prefs` rows the auto-clear settings live in (§4.9). */
 export const PREF_INBOX_AUTO_CLEAR_READ = "notifications.auto_clear_read";
 export const PREF_INBOX_CLEAR_RESOLVED_ON_READ = "notifications.clear_resolved_on_read";
+/** The desktop terminal's master switch (issue #18), a third `prefs` row beside them. */
+export const PREF_INBOX_TERMINAL_ALERTS = "notifications.terminal_alerts";
+
+/** A stored boolean pref, or the default when absent or written by another build. */
+function prefBool(value: string | null, fallback: boolean): boolean {
+  return value === "true" ? true : value === "false" ? false : fallback;
+}
 
 type Clause = { where: string; params: string[] };
 
@@ -274,15 +281,16 @@ export class SqliteNotificationStore implements NotificationStore {
    */
   settings(): NotificationSettings {
     const auto = AutoClearReadSchema.safeParse(this.readPref(PREF_INBOX_AUTO_CLEAR_READ));
-    const resolved = this.readPref(PREF_INBOX_CLEAR_RESOLVED_ON_READ);
     return {
       auto_clear_read: auto.success ? auto.data : DEFAULT_NOTIFICATION_SETTINGS.auto_clear_read,
-      clear_resolved_on_read:
-        resolved === "true"
-          ? true
-          : resolved === "false"
-            ? false
-            : DEFAULT_NOTIFICATION_SETTINGS.clear_resolved_on_read,
+      clear_resolved_on_read: prefBool(
+        this.readPref(PREF_INBOX_CLEAR_RESOLVED_ON_READ),
+        DEFAULT_NOTIFICATION_SETTINGS.clear_resolved_on_read,
+      ),
+      terminal_alerts: prefBool(
+        this.readPref(PREF_INBOX_TERMINAL_ALERTS),
+        DEFAULT_NOTIFICATION_SETTINGS.terminal_alerts,
+      ),
     };
   }
 
@@ -292,6 +300,9 @@ export class SqliteNotificationStore implements NotificationStore {
     }
     if (patch.clear_resolved_on_read !== undefined) {
       this.writePref(PREF_INBOX_CLEAR_RESOLVED_ON_READ, String(patch.clear_resolved_on_read));
+    }
+    if (patch.terminal_alerts !== undefined) {
+      this.writePref(PREF_INBOX_TERMINAL_ALERTS, String(patch.terminal_alerts));
     }
     return this.settings();
   }
@@ -426,6 +437,17 @@ export class SqliteNotificationStore implements NotificationStore {
               [at, ...named.params],
             );
     }
+    this.sweep();
+    return moved;
+  }
+
+  ackRef(source: Notification["source"], ref: string, fleet: string | null): number {
+    const scope = this.scope(fleet);
+    const moved = this.update(
+      `UPDATE notifications SET read_at = ?
+        WHERE ${scope.where} AND source = ? AND ref = ? AND read_at IS NULL`,
+      [this.now().toISOString(), ...scope.params, source, ref],
+    );
     this.sweep();
     return moved;
   }
