@@ -351,6 +351,14 @@ export function isOff(a: AgentView): boolean {
 export interface DrawerActions {
   dashboard: boolean;
   upgrade: boolean;
+  /**
+   * `upgrade --now`: the converge has to be answered by the box's own
+   * hermeticd, so it needs a box that is up and heartbeating. Core asks only
+   * `ready`, `degraded` and `error` rows (`CONVERGEABLE`, `agents/converge.ts`)
+   * and reports any other as skipped; `unreachable` is a `ready` row whose
+   * heartbeat stopped, so there is nobody to answer it either.
+   */
+  upgradeNow: boolean;
   rerun: boolean;
   /** `agent reboot`: the OS on the box the agent already has (§6.5). */
   reboot: boolean;
@@ -364,6 +372,7 @@ export interface DrawerActions {
 const NO_ACTIONS: DrawerActions = {
   dashboard: false,
   upgrade: false,
+  upgradeNow: false,
   rerun: false,
   reboot: false,
   rebuild: false,
@@ -379,6 +388,9 @@ const NO_ACTIONS: DrawerActions = {
  */
 const REBOOTABLE = new Set(["ready", "degraded", "bootstrapping", "error", "unreachable"]);
 
+/** The statuses whose box can answer an in-place converge; see `DrawerActions.upgradeNow`. */
+const CONVERGEABLE = new Set(["ready", "degraded", "error"]);
+
 /** Recreate needs a settled row (§6.5): mid-flight statuses have no edge to it. */
 const REBUILDABLE = new Set(["ready", "degraded", "creating", "stopped", "error", "unreachable"]);
 
@@ -387,6 +399,7 @@ export function drawerActions(status: string): DrawerActions {
   return {
     dashboard: true,
     upgrade: true,
+    upgradeNow: CONVERGEABLE.has(status),
     rerun: true,
     reboot: REBOOTABLE.has(status),
     rebuild: REBUILDABLE.has(status),

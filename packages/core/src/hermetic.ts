@@ -293,10 +293,21 @@ export function createHermetic(deps: HermeticDeps) {
     );
   }
 
+  /**
+   * `upgrade --now` is §6.5's converge for one pin, so the test knob that
+   * shrinks a rollout's wait shrinks this one too; unset, it waits
+   * `HERMES_CONVERGE_TIMEOUT_MS` (`converge.ts`), twice a rollout's budget.
+   */
   const { rerun, reboot, upgrade } = createUpdate({
     ctx,
     hermesRef: BUILD_VERSIONS.hermes_ref,
     hermesMirror,
+    ...(deps.rollout?.convergeTimeoutMs === undefined
+      ? {}
+      : { convergeTimeoutMs: deps.rollout.convergeTimeoutMs }),
+    ...(deps.rollout?.convergePollMs === undefined
+      ? {}
+      : { convergePollMs: deps.rollout.convergePollMs }),
   });
   const { settingsGet, settingsSet } = createSettings({ ctx });
 

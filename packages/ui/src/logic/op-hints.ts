@@ -41,10 +41,10 @@ export function opNextActions(events: readonly OpEvent[], finished: boolean): st
 /**
  * The last thing the op said, when it ended.
  *
- * The message that matters most about an `upgrade` — "it takes effect on the
- * next recreate" — is an ordinary *info* line, because nothing went wrong:
- * pinning a version is all `upgrade` does, and the box takes it on its next
- * boot. It is still the whole answer to "did pressing Upgrade change anything
+ * The message that matters most about a pin-only `upgrade` — "it takes effect
+ * on the next recreate, or now with `--now`" — is an ordinary *info* line,
+ * because nothing went wrong: pinning a version is all that `upgrade` does, and
+ * the box takes it on its next boot. It is still the whole answer to "did pressing Upgrade change anything
  * yet", and the drawer's old stripped rail showed a phase name and a percentage
  * and dropped it. Surfaced beside the callout rather than buried in a log pane
  * the operator has to scroll.
@@ -137,6 +137,12 @@ export function serverReportedEnd(state: {
  * `hermetic upgrade --help`; `test/op-hints.test.ts` pins the shapes.
  */
 function retryCommand(label: string, agent: string): string | null {
+  // The drawer's "Upgrade now" labels its op `upgrade now → V`, and the retry
+  // is the same in-place converge: `--now` on the same command. A pin-only
+  // retry would succeed and leave the box exactly where the failure left it.
+  if (label.startsWith("upgrade now")) {
+    return `\`hermetic upgrade ${agent} --hermes <version> --now\``;
+  }
   if (label.startsWith("upgrade")) return `\`hermetic upgrade ${agent} --hermes <version>\``;
   if (label === "start") return `\`hermetic agent start ${agent}\``;
   if (label === "stop") return `\`hermetic agent stop ${agent}\``;

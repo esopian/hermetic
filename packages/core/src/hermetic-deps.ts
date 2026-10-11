@@ -237,8 +237,11 @@ export interface HermeticDeps {
   handoff?: { budgetMs?: number; pollMs?: number };
   /**
    * How long §6.5's converge waits for a box to report the config it was asked
-   * for, and how often it looks. Injected so a test does not spend real minutes;
-   * the defaults (`rollout.ts`) are what a real fleet gets.
+   * for, and how often it looks — both `plan rollout`'s apply and
+   * `upgrade --hermes V --now`, which share the step. Injected so a test does
+   * not spend real minutes, and so fixture mode's fake box (`open.ts`) is seen
+   * answering within a poll or two; the defaults (`converge.ts`) are what a
+   * real fleet gets.
    */
   rollout?: { convergeTimeoutMs?: number; convergePollMs?: number };
   /**

@@ -209,6 +209,21 @@ describe("failureHints", () => {
     expect(failureHints("INTERNAL", "upgrade → 1.3.0", "lumen", "ready").join(" ")).toContain(
       "hermetic upgrade lumen --hermes <version>",
     );
+    // The pin-only button's retry is the pin, not the in-place converge.
+    expect(failureHints("INTERNAL", "upgrade → 1.3.0", "lumen", "ready").join(" ")).not.toContain(
+      "--now",
+    );
+  });
+
+  /**
+   * "Upgrade now" failed while the box was converging (or before it was asked);
+   * re-pinning alone would succeed and leave the box on the old Hermes, so the
+   * retry keeps `--now`.
+   */
+  test("a failed upgrade-now suggests the same command with --now", () => {
+    expect(failureHints("INTERNAL", "upgrade now → 1.3.0", "lumen", "ready").join(" ")).toContain(
+      "hermetic upgrade lumen --hermes <version> --now",
+    );
   });
 
   /**
@@ -276,7 +291,16 @@ describe("failureHints", () => {
       /hermetic runs/,
       /hermetic doctor/,
     ];
-    const labels = ["create", "recreate", "start", "stop", "destroy", "upgrade → 1.3.0", "operation"];
+    const labels = [
+      "create",
+      "recreate",
+      "start",
+      "stop",
+      "destroy",
+      "upgrade → 1.3.0",
+      "upgrade now → 1.3.0",
+      "operation",
+    ];
     for (const label of labels) {
       for (const status of ["error", "ready", "creating", null]) {
         for (const hint of failureHints("INTERNAL", label, "lumen", status)) {

@@ -87,6 +87,18 @@ import type {
 export const FOUNDATION_ROLLOUT_WAIT_MS = 10 * 60_000;
 
 /**
+ * §6.5's converge, as fixture mode runs it. The fixture backend's fake box
+ * (`simulateConverge`, `memory-simulation.ts`) answers an `apply_request` about
+ * a second after it is written; at a real fleet's ten-second poll the demo — and
+ * every UI flow test that applies a rollout or an `upgrade --now` — would sit
+ * out most of a poll interval for nothing. The timeout is left at its default:
+ * the looks are counted (`converge.ts`), so a shorter poll only means more of
+ * them, and a fixture box that does not answer still ends in the same minutes a
+ * real one would.
+ */
+const FIXTURE_CONVERGE = { convergePollMs: 250 } as const;
+
+/**
  * The fixture's knobs (§3.5). Core reads no environment for any of these: a
  * head reads its fixture variables once, at its edge, and passes what it
  * found. Every one defaults to the fixture the suite runs against —
@@ -314,6 +326,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     });
     backend.slowStackMs = knobs.slowStackMs ?? 0;
     if (knobs.foundationUnsafe === true) backend.changeSetChanges = [...FIXTURE_UNSAFE_CHANGES];
+    // §6.5: a box that answers `plan rollout` and `upgrade --now`; see `fixtureConverge`.
+    backend.simulateConverge = true;
     const { runs } = openRunStore(opts.home, { fixture: true });
     const { teardowns } = openTeardownStore(opts.home, { fixture: true });
     /**
@@ -329,6 +343,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     return createHermetic({
       fixture: true,
       fixtureChat: { delayMs: knobs.chatDelayMs, cutAfter: knobs.chatCutAfter },
+      rollout: FIXTURE_CONVERGE,
       backend,
       config,
       runs,
@@ -1045,6 +1060,7 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
   // into `slowStackMs`) reproduces the minutes-long foundation phase so its
   // progress UX can be worked on.
   backend.slowStackMs = knobs.slowStackMs ?? 0;
+  backend.simulateConverge = true;
 
   let frozen: LocalConfig | null = existingConfig;
   const configStore: ConfigStore = {
@@ -1097,6 +1113,7 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
   const make = (): Hermetic =>
     createHermetic({
       fixture: true,
+      rollout: FIXTURE_CONVERGE,
       backend,
       config: frozen,
       configStore,

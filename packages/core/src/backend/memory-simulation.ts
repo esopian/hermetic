@@ -2,9 +2,10 @@
  * The fixture backend's demo simulations: what a real box or a real Tailscale
  * would do to the state on its own, mimicked so `--fixture` shows it happening.
  *
- * Split out of `memory.ts` (AGENTS.md rule 5). Neither is a port: `simulateRerun`
- * is hermeticd's resident runner and `tailscaleReformat` is the control plane's
- * pretty-printer, and both act on a `MemoryBackend` handed to them.
+ * Split out of `memory.ts` (AGENTS.md rule 5). None is a port: `simulateRerun`
+ * is hermeticd's resident runner, `simulateConverge` its heartbeat answering an
+ * `apply_request`, and `tailscaleReformat` the control plane's pretty-printer,
+ * and each acts on a `MemoryBackend` handed to it.
  */
 import { locateManagedBlocks, parseHujson } from "../fleet/hujson.ts";
 import type { MemoryBackend } from "./memory.ts";
@@ -207,6 +208,57 @@ export function simulateReboot(b: MemoryBackend, instanceId: string): void {
       metrics: structuredClone(metrics ?? null),
       last_heartbeat: at,
       updated_at: at,
+    });
+  });
+}
+
+/**
+ * The fixture's stand-in for hermeticd answering §6.5's `apply_request` — what
+ * `plan rollout`'s apply and `upgrade --hermes V --now` wait for.
+ *
+ * A real box notices the request on its next heartbeat, applies the bundle the
+ * hash names (reinstalling Hermes when the pin moved), restarts its units and
+ * reports the hash it now runs as `applied_config_hash`, with the Hermes
+ * version its dashboard answers as `running_hermes_version`. Nothing clears the
+ * request; the hash reaching it is the whole of "done". The fixture has no box,
+ * so without this both commands would sit out their full timeout — minutes —
+ * and then report every agent unconverged.
+ *
+ * Only a box that could answer does: `ready`, `degraded` or `error` (the
+ * statuses `converge.ts` asks) *and* one that has heartbeated, because a row
+ * that has never reported has no hermeticd listening. A row whose request was
+ * replaced or withdrawn in the meantime is left alone.
+ *
+ * Opt-in (`MemoryBackend.simulateConverge`), unlike `simulateRerun`: the suite's
+ * own `MemoryBackend`s are the box that *never* answers, which is the case the
+ * rollout tests exist to pin down. Fixture mode's open path turns it on.
+ */
+export function simulateConverge(b: MemoryBackend, name: string, requestId: string): void {
+  b.later(b.rerunDelayMs, () => {
+    const current = b.agents.get(name);
+    const asked = current?.apply_request;
+    if (!current || !asked || asked.id !== requestId) return;
+    if (!["ready", "degraded", "error"].includes(current.status)) return;
+    if (current.last_heartbeat === null || current.last_heartbeat === undefined) return;
+    if (current.applied_config_hash === asked.config_hash) return;
+    const at = b.now().toISOString();
+    b.agents.set(name, {
+      ...current,
+      version: current.version + 1,
+      applied_config_hash: asked.config_hash,
+      running_hermes_version: current.hermes_version,
+      last_heartbeat: at,
+      updated_at: at,
+    });
+    // The line the real daemon records (`agentd/src/daemon.ts`), word for word.
+    b.events.push({
+      name,
+      timestamp: at,
+      actor: `hermeticd/${name}`,
+      action: "apply",
+      from_status: null,
+      to_status: null,
+      detail: `converged to config ${asked.config_hash}`,
     });
   });
 }
