@@ -22,6 +22,7 @@ import {
 } from "@hermetic/core/schema";
 import type { FleetManifest } from "@hermetic/core/schema";
 import { collector } from "../src/events.ts";
+import { ensureLoginShell } from "../src/apply/accounts.ts";
 import { AgentdError } from "../src/errors.ts";
 import { APPLY_PENDING_PATH, LEGACY_STOP_MARKER_PATH } from "../src/apply-pending.ts";
 import { APPLIED_CONFIG_PATH } from "../src/manifest.ts";
@@ -373,6 +374,37 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
       await apply(makeManifest(), { host });
 
       expectNotRan(host, /^usermod --shell/);
+    });
+
+    /**
+     * An apply is not the only thing that has to fix this: a self-update brings
+     * the release that knows about the shell, but restarts the service rather
+     * than applying, so `hermeticd serve` re-asserts it at start-up.
+     */
+    test("ensureLoginShell moves a nologin account outside any apply", async () => {
+      host.users.add("hermes");
+      host.userShells.set("hermes", "/usr/sbin/nologin");
+
+      expect(await ensureLoginShell(host)).toBe(true);
+
+      expectRan(host, /^usermod --shell \/bin\/bash hermes$/);
+      expect(host.userShells.get("hermes")).toBe("/bin/bash");
+    });
+
+    test("ensureLoginShell leaves a bash account alone", async () => {
+      host.users.add("hermes");
+      host.userShells.set("hermes", "/bin/bash");
+
+      expect(await ensureLoginShell(host)).toBe(false);
+
+      expectNotRan(host, /^usermod /);
+    });
+
+    test("ensureLoginShell does nothing before the account exists", async () => {
+      expect(await ensureLoginShell(host)).toBe(false);
+
+      expectNotRan(host, /^usermod /);
+      expectNotRan(host, /^useradd /);
     });
   });
 

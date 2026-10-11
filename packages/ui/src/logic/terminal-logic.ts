@@ -211,9 +211,11 @@ export function endedLine(
         ? "app quit"
         : exit.reason === "acl_denied"
           ? "denied by tailnet policy"
-          : exit.signal !== null
-            ? `signal ${exit.signal}`
-            : `exit ${exit.code ?? "?"}`;
+          : exit.reason === "no_login_shell"
+            ? "no login shell for hermes"
+            : exit.signal !== null
+              ? `signal ${exit.signal}`
+              : `exit ${exit.code ?? "?"}`;
   const parts = ["session ended", how];
   if (ranMs !== null && ranMs >= 0) parts.push(duration(ranMs));
   return `[${parts.join(" · ")}]`;

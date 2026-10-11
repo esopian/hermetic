@@ -40,6 +40,13 @@ import type { AppLog } from "../log.ts";
 export const ACL_DENIED_RE = /tailnet policy does not permit|not allowed to ssh/i;
 /** The ssh client's own failure status: what a refused connection exits with. */
 export const ACL_EXIT_CODE = 255;
+/**
+ * What `nologin` prints when the login account has no shell: a box whose
+ * `hermes` account predates the login shell (§9.3) and has not yet run a
+ * hermeticd that sets it. Tailscale lets the login through, so the session
+ * shows the MOTD and then ends with an ordinary status, not 255.
+ */
+export const NO_LOGIN_SHELL_RE = /This account is currently not available/;
 /** A refusal comes at connect time; a 255 after this long is something else. */
 export const ACL_WINDOW_MS = 10_000;
 /** Between the hangup `close` sends and the kill that follows it. */
@@ -71,7 +78,8 @@ export interface TerminalSessionRow {
  * The ACL branch needs all three: a 255 alone is any ssh failure, the text
  * alone could be something the operator `cat`-ed, and the window is what makes
  * it a refusal at connect rather than a remote command that happened to print
- * those words.
+ * those words. The login-shell branch is the same idea without the status:
+ * `nologin`'s words within the window, whatever the ssh client exited with.
  */
 export function exitReason(input: {
   requested: EndRequest | null;
@@ -86,6 +94,7 @@ export function exitReason(input: {
   if (input.code === ACL_EXIT_CODE && input.ranMs < ACL_WINDOW_MS && ACL_DENIED_RE.test(input.tail())) {
     return "acl_denied";
   }
+  if (input.ranMs < ACL_WINDOW_MS && NO_LOGIN_SHELL_RE.test(input.tail())) return "no_login_shell";
   // A signal, or no status at all, is the client being killed under the
   // operator: never a shell that chose to end.
   if (input.signal !== null || input.code === null) return "disconnected";
