@@ -4,7 +4,8 @@
  *
  * Keys follow Hermes Desktop: ArrowUp/ArrowDown move and wrap, Tab and Enter
  * accept, Escape closes, and Space is never an accept — a mention takes a
- * literal space. The highlight belongs to one list: it goes back to the top
+ * literal space. Leaving the textarea closes the list the way Escape does; a
+ * click on a row does not leave it (the row keeps focus where it was). The highlight belongs to one list: it goes back to the top
  * whenever the rows, the typed prefix or the token under the caret change,
  * rather than staying on an index that now names a different bot.
  */
@@ -30,6 +31,7 @@ export interface MentionPicker {
     "aria-controls"?: string;
     "aria-expanded"?: boolean;
     "aria-activedescendant"?: string;
+    onBlur?: () => void;
   };
 }
 
@@ -117,6 +119,10 @@ export function useMentionPicker({
           "aria-controls": open ? listId : undefined,
           "aria-expanded": open,
           "aria-activedescendant": open ? `${listId}-${active}` : undefined,
+          // Focus gone elsewhere: a list left open would float over whatever took it.
+          onBlur: () => {
+            if (match) setClosedAt(match.start);
+          },
         }
       : {},
   };

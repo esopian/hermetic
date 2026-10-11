@@ -81,9 +81,9 @@ export function PartyFace({
 
 /**
  * The sender's `message_agent` call, as a line between the turn's prose.
- * Pending while the call runs, warn-coloured when upstream refused it — that
- * one expands to upstream's own sentence rather than opening an exchange that
- * never happened.
+ * Pending while the call runs, warn-coloured when upstream refused it or could
+ * not confirm it — those expand to upstream's own sentence rather than opening
+ * an exchange that never happened, or may not have.
  */
 export function DmSentMarker({
   call,
@@ -103,6 +103,21 @@ export function DmSentMarker({
   const target = resolveDmBot([call.to, call.target], teammates);
   const who = party(target, call.target);
   const anchor = call.processId ? processDomId("start", call.processId) : undefined;
+  if (call.state === "ambiguous") {
+    // Not "Couldn't message": upstream does not know, and says not to resend.
+    return (
+      <details className="ch-dm-mark unsure" id={anchor}>
+        <summary>
+          <RedactedText text={`Message to ${who.name} may not have been delivered`} />
+        </summary>
+        {call.error ? (
+          <p>
+            <RedactedText text={call.error} />
+          </p>
+        ) : null}
+      </details>
+    );
+  }
   if (call.state === "failed") {
     return (
       <details className="ch-dm-mark failed" id={anchor}>

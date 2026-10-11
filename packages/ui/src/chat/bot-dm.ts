@@ -13,6 +13,14 @@
  * Wording follows Desktop's `AgentDeliveryNotice`: "Messaging <bot>…" while
  * the call runs, "Messaged <bot>" once it is queued, "Message from <bot>" on
  * the receiving side.
+ *
+ * The acknowledgements `message_agent` answers with (`tools/bot_mode_dm.py`):
+ * `{status: "queued"|"claimed"|"settled", to, process_id?, …}` once the hand-off
+ * happened; `{status: "ambiguous", error: "… Do not resend."}` when the live
+ * owner's admission could not be confirmed either way; and `_err`'s
+ * `{error, reason}`, with no status, when nothing was sent. Any other shape —
+ * a terminal `failed`/`cancelled` record, a newer status — is not one this
+ * build reads, so it draws as the ordinary tool row.
  */
 import { botHandle, resolveBotTarget } from "@hermetic/core/shared";
 import type { BlockLike, MessageLike } from "./chat-logic.ts";
@@ -30,17 +38,24 @@ export interface MessageAgentCall {
   /** `target` exactly as the model wrote it: a profile name, a friendly name or an @slug. */
   target: string;
   message: string;
-  /** `pending` while the call runs, `sent` once queued, `failed` on an error acknowledgement. */
-  state: "pending" | "sent" | "failed";
+  /**
+   * `pending` while the call runs, `sent` once handed off, `ambiguous` when
+   * upstream could not tell whether it was (and says not to resend), `failed`
+   * on an error acknowledgement.
+   */
+  state: "pending" | "sent" | "ambiguous" | "failed";
   /** The acknowledgement's `@handle`, when it gave one. */
   to: string | null;
   /** The delivery's background process, whose completion notice carries the reply. */
   processId: string | null;
   /** Upstream's failure code (`runtime_offline`, `target_busy`, …) on a failed call. */
   reason: string | null;
-  /** Upstream's failure sentence on a failed call. */
+  /** Upstream's sentence on a failed or ambiguous call. */
   error: string | null;
 }
+
+/** The statuses upstream acknowledges a completed hand-off with. */
+const SENT = new Set(["queued", "claimed", "settled"]);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -74,13 +89,17 @@ export function messageAgentCall(block: BlockLike): MessageAgentCall | null {
   const message = typeof args?.["message"] === "string" ? args["message"] : null;
   if (!target || message === null) return null;
   const base = { target: target.trim(), message, to: null, processId: null, reason: null, error: null };
-  const result = block["result"];
-  if (block["status"] === "running" || result === null || result === undefined)
-    return { ...base, state: "pending" };
-  const ack = jsonObject(result);
+  if (block["status"] === "running") return { ...base, state: "pending" };
+  // A call with no result that is not running is one durable history could not
+  // pair with its result row (`warn`): nothing says it is still in flight.
+  const ack = jsonObject(block["result"]);
   if (!ack) return null;
+  const status = ack["status"];
   const error = text(ack["error"]);
-  if (error) return { ...base, state: "failed", error, reason: text(ack["reason"]) };
+  if (status === undefined || status === null)
+    return error ? { ...base, state: "failed", error, reason: text(ack["reason"]) } : null;
+  if (status === "ambiguous") return { ...base, state: "ambiguous", error, to: text(ack["to"]) };
+  if (typeof status !== "string" || !SENT.has(status)) return null;
   return {
     ...base,
     state: "sent",
@@ -106,6 +125,18 @@ export function resolveDmBot<B extends DmBot>(
   return null;
 }
 
+/**
+ * The roster bot a delivery's signature names, or null. A delivery the relay
+ * brought from another machine (`connection` set) is never a bot here, however
+ * its name reads: a same-named local bot is a different bot.
+ */
+export function dmSender<B extends DmBot>(
+  from: { name: string; handle?: string | null; connection?: string | null },
+  teammates: readonly B[],
+): B | null {
+  return from.connection ? null : resolveDmBot([from.handle, from.name], teammates);
+}
+
 /** The name a bot is shown by: its title, else its handle. */
 export function dmBotName(bot: DmBot | null, fallback: string): string {
   const title = bot?.title?.trim();
@@ -123,10 +154,14 @@ function bodyOf(message: Pick<MessageLike, "blocks">): string {
     .join("");
 }
 
+/** The shortest body a prefix match is trusted on: below it, two messages share one too easily. */
+const MIN_PREFIX = 16;
+
 /**
  * Whether a row is `sender`'s delivery of `message`. Exact (trimmed) first;
  * a prefix either way after it, because a box that capped or a fixture that
- * trimmed the body still names the same delivery.
+ * trimmed the body still names the same delivery — never on a short body,
+ * where a prefix says nothing about which message it was.
  */
 function isDeliveryOf(row: MessageLike, sender: string, message: string, exact: boolean): boolean {
   const from = row.from_bot;
@@ -136,8 +171,8 @@ function isDeliveryOf(row: MessageLike, sender: string, message: string, exact: 
   const body = bodyOf(row).trim();
   const want = message.trim();
   if (exact) return sameBody(body, want);
-  const probe = want.slice(0, 120);
-  return body.length > 0 && (body.startsWith(probe) || want.startsWith(body.slice(0, 120)));
+  if (body.length < MIN_PREFIX || want.length < MIN_PREFIX) return false;
+  return body.startsWith(want.slice(0, 120)) || want.startsWith(body.slice(0, 120));
 }
 
 /**
@@ -145,20 +180,28 @@ function isDeliveryOf(row: MessageLike, sender: string, message: string, exact: 
  * answered it: everything after it up to the next user row. Null when the
  * transcript does not hold it — the delivery has not run yet, or the Bot Chat
  * rolled over since.
+ *
+ * `since` is when the call was made. The same body sent twice is two
+ * deliveries, and the one a call made is the earliest written at or after it:
+ * upstream persists the call row before the tool runs, so its delivery is
+ * never older, and an earlier delivery of the same body answered an earlier
+ * call. A row whose stamp does not parse is never ruled out by it.
  */
 export function findExchange<M extends MessageLike>(
   transcript: readonly M[],
   sender: string,
   message: string,
+  since: string | null = null,
 ): { delivery: M; replies: M[] } | null {
+  const from = since ? Date.parse(since) : Number.NaN;
+  // With no time to order by, the latest delivery is the likeliest guess.
+  const find = Number.isNaN(from)
+    ? (match: (row: M) => boolean) => transcript.findLastIndex(match)
+    : (match: (row: M) => boolean) =>
+        transcript.findIndex((row) => !(Date.parse(row.at) < from) && match(row));
   let at = -1;
   for (const exact of [true, false]) {
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      if (isDeliveryOf(transcript[i]!, sender, message, exact)) {
-        at = i;
-        break;
-      }
-    }
+    at = find((row) => isDeliveryOf(row, sender, message, exact));
     if (at >= 0) break;
   }
   if (at < 0) return null;

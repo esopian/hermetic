@@ -26,7 +26,7 @@ import { failureCopy } from "../chat-logic.ts";
 import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
-import { dmBotName, messageAgentCall, resolveDmBot } from "../bot-dm.ts";
+import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
@@ -166,7 +166,7 @@ export function Message({
   // Another bot's `message_agent` delivery is on the user role, and it is that
   // bot speaking, not the operator (`bot-dm.ts`).
   const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
-  const sender = fromBot ? resolveDmBot([fromBot.handle, fromBot.name], dm.teammates) : null;
+  const sender = fromBot ? dmSender(fromBot, dm.teammates) : null;
   const mine = message.role === "user" && !fromBot;
   const author = message.author ?? null;
   const who = fromBot

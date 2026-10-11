@@ -100,7 +100,7 @@ export interface MessageLike {
   error?: string | null;
   incomplete?: boolean | null;
   /** Another bot's `message_agent` delivery, on the user role (`bot-dm.ts`). */
-  from_bot?: { name: string; handle?: string | null } | null;
+  from_bot?: { name: string; handle?: string | null; connection?: string | null } | null;
 }
 
 /* ── time ────────────────────────────────────────────────────────────────── */

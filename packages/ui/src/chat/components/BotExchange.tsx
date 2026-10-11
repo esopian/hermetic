@@ -22,9 +22,10 @@ import { useEffect, useRef, useState } from "react";
 import { fetchHistory } from "../../api/index.ts";
 import type { ChatMessageView } from "../../api/index.ts";
 import { useFocusTrap } from "../../lib/focus.ts";
-import { findExchange, noticeReply, resolveDmBot } from "../bot-dm.ts";
+import { dmSender, findExchange, noticeReply, resolveDmBot } from "../bot-dm.ts";
 import type { DmBot } from "../bot-dm.ts";
 import { chatHash } from "../chat-routing.ts";
+import { processStarts } from "../process-events.ts";
 import { turnRows } from "../chat-turns.ts";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { BotDmContext, PartyFace, party } from "./BotDm.tsx";
@@ -164,10 +165,7 @@ export function BotExchange({
     const index = transcript.findIndex((m) => m.id === request.deliveryId);
     const delivery = transcript[index];
     const from = delivery?.from_bot ?? null;
-    sender = party(
-      from ? resolveDmBot([from.handle, from.name], teammates) : null,
-      from?.name ?? "another bot",
-    );
+    sender = party(from ? dmSender(from, teammates) : null, from?.name ?? "another bot");
     target = party(self, bot);
     message = delivery
       ? delivery.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("")
@@ -185,11 +183,18 @@ export function BotExchange({
 
   // The sender side reads the target's Bot Chat; the receiver side already has it.
   const read = useBotChat(instance, request.side === "sender" ? target.bot : null);
+  // When the call was made: the stamp of the source row its delivery process
+  // started on, which a merged turn's own (first-row) stamp is not.
+  const since =
+    request.side === "sender"
+      ? (request.call.processId && processStarts(transcript).get(request.call.processId)?.at) ||
+        request.at
+      : null;
   const found =
     request.side === "receiver"
       ? local
       : read.state === "done"
-        ? findExchange(read.messages, bot, message)
+        ? findExchange(read.messages, bot, message, since)
         : null;
   const replies = (found?.replies ?? []).filter((m) => m.role === "bot");
   // The reply the delivery's completion notice carried back, for a target
@@ -255,6 +260,11 @@ export function BotExchange({
                 <p className="ch-dm-note">
                   {read.state === "failed" ? (
                     <RedactedText text={`Couldn't read ${target.name}'s Bot Chat: ${read.error}`} />
+                  ) : request.side === "sender" && !target.bot ? (
+                    // Nothing was read: there is no Bot Chat here to read.
+                    <RedactedText
+                      text={`${target.name} isn't a bot on this instance, so its side of the exchange can't be shown here.`}
+                    />
                   ) : found ? (
                     `${target.name} has not replied yet.`
                   ) : (

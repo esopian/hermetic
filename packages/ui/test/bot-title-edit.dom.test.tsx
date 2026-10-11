@@ -59,9 +59,13 @@ afterEach(() => {
   server = null;
 });
 
-/** Mounts the workspace; `refuse` makes every `bots.update` fail with that message. */
-async function mount(refuse?: string) {
+/**
+ * Mounts the workspace; `refuse` makes every `bots.update` fail with that
+ * message, `rosterDown` every roster read after the first.
+ */
+async function mount(refuse?: string, rosterDown = false) {
   let title: string | null = "Marshall";
+  let reads = 0;
   server = fakeServer({
     "bots.update": (call: TransportCall) => {
       if (refuse) return errorBody("CONFLICT", refuse);
@@ -70,7 +74,10 @@ async function mount(refuse?: string) {
     },
   });
   const api: ChatApi = {
-    fetchSwarms: () => Promise.resolve({ swarms: [swarmOf(title)] } as ChatSwarmsResult),
+    fetchSwarms: () =>
+      rosterDown && reads++ > 0
+        ? Promise.reject(new Error("roster read failed"))
+        : Promise.resolve({ swarms: [swarmOf(title)] } as ChatSwarmsResult),
     fetchSessions: (instance: string, bot: string) =>
       Promise.resolve({ instance, bot, sessions: [] } as never),
     fetchHistory: (instance: string, bot: string) =>
@@ -143,5 +150,32 @@ describe("renaming a bot from its thread header", () => {
     expect(alert.getAttribute("role")).toBe("alert");
     expect(field().value).toBe("Archivist");
     expect(field().disabled).toBe(false);
+  });
+
+  test("a refused save hands focus back to the field it disabled", async () => {
+    await mount("scribe: its Bot Mode settings changed elsewhere since they were read");
+    await waitFor(() => expect(header().textContent).toContain("Marshall"));
+    fireEvent.click(pencil());
+    fireEvent.change(field(), { target: { value: "Archivist" } });
+    // A browser drops focus from a field it disables; happy-dom keeps it, so
+    // the drop is made here, before the submit that disables it.
+    field().blur();
+    expect(document.activeElement === field()).toBe(false);
+    fireEvent.submit(field().form as HTMLFormElement);
+    await screen.findByText(/changed elsewhere/);
+    await waitFor(() => expect(field().disabled).toBe(false));
+    expect(document.activeElement === field()).toBe(true);
+  });
+
+  test("a saved title whose roster refresh fails is not a failed rename", async () => {
+    const s = await mount(undefined, true);
+    await waitFor(() => expect(header().textContent).toContain("Marshall"));
+    fireEvent.click(pencil());
+    fireEvent.change(field(), { target: { value: "Archivist" } });
+    fireEvent.submit(field().form as HTMLFormElement);
+    await waitFor(() => expect(screen.queryByLabelText("Bot name")?.outerHTML).toBeUndefined());
+    expect(document.querySelector(".ch-title-error")?.textContent).toBeUndefined();
+    expect(s.to("bots.update")).toHaveLength(1);
+    expect(document.activeElement === pencil()).toBe(true);
   });
 });

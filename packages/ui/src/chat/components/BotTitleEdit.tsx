@@ -34,6 +34,16 @@ export function BotTitleEdit({
     input = useRef<HTMLInputElement>(null);
   /** Focus goes back to the pencil once the field is gone, so a keyboard user is not dropped. */
   const refocus = useRef(false);
+  /**
+   * A failed save disabled the field, which drops its focus; it goes back to
+   * the field once it is enabled again, so the operator can fix and resubmit.
+   */
+  const retry = useRef(false);
+  useEffect(() => {
+    if (saving || !retry.current) return;
+    retry.current = false;
+    input.current?.focus();
+  }, [saving]);
   useEffect(() => {
     if (editing) input.current?.select();
     else if (refocus.current) {
@@ -58,6 +68,7 @@ export function BotTitleEdit({
       close();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      retry.current = true;
     } finally {
       setSaving(false);
     }

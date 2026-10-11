@@ -322,10 +322,13 @@ export function BotWorkspace({
                 onSend={chat.send}
                 onAbort={chat.abort}
                 onRename={async (title) => {
+                  // Only the update's own failure is a failed rename.
                   await botsUpdate({ instance: selection.instance, bot: selection.bot, title });
                   // Forced: the operator just acted, so the roster read is not a
-                  // background poll the visibility gate should skip.
-                  await chat.refreshSwarms({ force: true });
+                  // background poll the visibility gate should skip. A failed read
+                  // is the roster's to report (`swarmsError`), not the rename's:
+                  // the title is already saved.
+                  await chat.refreshSwarms({ force: true }).catch(() => {});
                 }}
                 mentions={
                   selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])

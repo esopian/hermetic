@@ -121,6 +121,25 @@ describe("the bot composer's mention list", () => {
     fireEvent.click(rows()[0]!);
     expect(input.value).toBe("@nickqabot ");
   });
+
+  test("leaving the textarea closes the list; typing again reopens it", async () => {
+    const input = composer();
+    await userEvent.type(input, "@ni");
+    expect(rows()).toHaveLength(1);
+    fireEvent.blur(input);
+    expect(list()?.outerHTML).toBeUndefined();
+    expect(input.value).toBe("@ni");
+    await userEvent.type(input, "c");
+    expect(rows().map((row) => row.textContent)).toEqual(["NickQABot@nickqabot"]);
+  });
+
+  test("a real mouse click on a row still picks it: the press keeps focus in the textarea", async () => {
+    const input = composer();
+    await userEvent.type(input, "@n");
+    await userEvent.click(rows()[0]!);
+    expect(input.value).toBe("@nickqabot ");
+    expect(document.activeElement).toBe(input);
+  });
 });
 
 describe("in the workspace", () => {

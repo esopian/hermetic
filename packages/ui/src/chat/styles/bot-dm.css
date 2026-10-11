@@ -46,20 +46,23 @@
   justify-content: flex-start;
   margin-top: 6px;
 }
-/* A refused DM: the reason in warn, upstream's sentence behind the disclosure. */
-.ch-dm-mark.failed {
+/*
+ * A refused DM, or one whose delivery upstream could not confirm: the summary
+ * in warn, upstream's sentence behind the disclosure.
+ */
+.ch-dm-mark:is(.failed, .unsure) {
   display: block;
   text-align: right;
   color: var(--warn);
 }
-.ch-dm-mark.failed summary {
+.ch-dm-mark:is(.failed, .unsure) summary {
   cursor: pointer;
   list-style: none;
 }
-.ch-dm-mark.failed summary::-webkit-details-marker {
+.ch-dm-mark:is(.failed, .unsure) summary::-webkit-details-marker {
   display: none;
 }
-.ch-dm-mark.failed p {
+.ch-dm-mark:is(.failed, .unsure) p {
   margin: 4px 0 0;
   color: var(--fg2);
   text-align: left;
