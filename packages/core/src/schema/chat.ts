@@ -542,9 +542,17 @@ export const ChatMessage = z.object({
    * `Message from 🤖 <name> (@<handle>): …`. The signature is lifted into this
    * field and the row's text is the message alone
    * (`chat/hermes/bot-delivery.ts`). `handle` is null for the legacy signature,
-   * which named the sender only.
+   * which named the sender only. `connection` is set only for a relayed
+   * sender (`(@<handle>@<connection>)`): the handle then names a bot on that
+   * connection, never a local one, so a head must not resolve it locally.
    */
-  from_bot: z.object({ name: z.string().min(1), handle: z.string().min(1).nullable() }).nullish(),
+  from_bot: z
+    .object({
+      name: z.string().min(1),
+      handle: z.string().min(1).nullable(),
+      connection: z.string().min(1).nullish(),
+    })
+    .nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

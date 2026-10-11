@@ -14,12 +14,13 @@
  *
  * - each `process_event` block that is not routine raises its own
  *   `chat.event:` row (`notifyProcessEvent`);
- * - a bot row that is only an intentional-silence marker (`NO_REPLY`,
- *   `[SILENT]`, …) is the bot choosing not to answer — Hermes suppressed its
- *   delivery — so it is passed over like a routine event;
- * - another bot's `message_agent` delivery (`from_bot`) is passed over too:
- *   it is not the operator's message and not news on its own — the bot's
- *   reply to it, when it lands, raises the row;
+ * - a bot row whose final text is an intentional-silence marker (`NO_REPLY`,
+ *   `[SILENT]`, …), with only tool runs and reasoning beside it, is the bot
+ *   choosing not to answer — Hermes suppressed its delivery — so it is passed
+ *   over like a routine event;
+ * - another bot's `message_agent` delivery (`from_bot` with a handle) is
+ *   passed over too: it is not the operator's message and not news on its
+ *   own — the bot's reply to it, when it lands, raises the row;
  * - when every row in the window is such an event or such a silence, each
  *   non-routine event was recorded and the read reached back to the watermark,
  *   the bot is marked `quiet` so `observeChatActivity` advances
@@ -59,18 +60,33 @@ function eventBlocks(message: ChatMessage): ProcessEventBlock[] | null {
 }
 
 /**
- * A bot row whose whole answer is a silence marker: nothing the operator could
- * read. A failed or cut-off turn is never silence, whatever its text says
- * (upstream's `is_intentional_silence_agent_result`).
+ * Blocks that are work the turn did rather than words addressed to the reader:
+ * the kinds the thread folds into its activity strip (the UI's `isActivity`,
+ * `packages/ui/src/chat/components/Activity.tsx`).
+ */
+const ACTIVITY_KINDS: ReadonlySet<string> = new Set(["activity", "tool", "reasoning", "unknown"]);
+
+/**
+ * A bot row whose final answer is a silence marker and which says nothing
+ * else: nothing the operator could read. The marker is the turn's last text
+ * block — the rule the thread draws a silent turn by
+ * (`packages/ui/src/chat/chat-silence.ts`) — so tool runs and reasoning before
+ * or after it do not make the turn news. Any other readable block does: a
+ * non-blank text block before it, an attachment, a question. A failed or
+ * cut-off turn is never silence, whatever its text says (upstream's
+ * `is_intentional_silence_agent_result`).
  */
 function isSilentReply(message: ChatMessage): boolean {
   if (message.role !== "bot" || message.error || message.incomplete) return false;
-  let text = "";
-  for (const block of message.blocks) {
-    if (block.kind === "text") text += block.markdown;
-    else if (block.kind !== "reasoning") return false;
-  }
-  return isIntentionalSilence(text);
+  const final = message.blocks.findLastIndex((block) => block.kind === "text");
+  const marker = message.blocks[final];
+  if (marker?.kind !== "text" || !isIntentionalSilence(marker.markdown)) return false;
+  return message.blocks.every(
+    (block, i) =>
+      i === final ||
+      ACTIVITY_KINDS.has(block.kind) ||
+      (block.kind === "text" && block.markdown.trim() === ""),
+  );
 }
 
 /**
@@ -106,7 +122,10 @@ export async function classifyChatActivity(
         if (fresh.length === 0) return bot;
         let quiet = covered;
         for (const message of fresh) {
-          if (isSilentReply(message) || message.from_bot) continue;
+          // A delivery always carries its sender's handle; a bare
+          // `Message from HR: …` the operator typed parses as a legacy
+          // signature with none, and is the operator speaking.
+          if (isSilentReply(message) || message.from_bot?.handle) continue;
           const events = eventBlocks(message);
           if (events === null) {
             quiet = false;

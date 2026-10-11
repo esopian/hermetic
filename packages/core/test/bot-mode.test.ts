@@ -1019,10 +1019,20 @@ describe("Bot Mode capability certainty", () => {
 
 describe("bot titles", () => {
   /**
-   * A gateway whose `scribe` row carries Desktop's look keys beside a title, at
-   * revision 4, and which records every `profiles.configure` it is sent.
+   * A gateway whose `scribe` row carries Desktop's look keys beside a title
+   * (or `bots`), at revision 4 (or no revision map at all), and which records
+   * every `profiles.configure` it is sent.
    */
-  function titleGateway(reply: (params: Record<string, unknown>) => unknown) {
+  function titleGateway(
+    reply: (params: Record<string, unknown>) => unknown,
+    bots: Record<string, unknown> = {
+      title: "Scribe",
+      shape: "hex",
+      color: "#123456",
+      custom: true,
+    },
+    revisions = true,
+  ) {
     const sent: Record<string, unknown>[] = [];
     const g = gateway({
       rpc: async (method, params) => {
@@ -1031,11 +1041,8 @@ describe("bot titles", () => {
             profiles: [
               {
                 name: "scribe",
-                ui_meta: {
-                  "hermes-bots": { title: "Scribe", shape: "hex", color: "#123456", custom: true },
-                  other: { kept: true },
-                },
-                ui_meta_revisions: { "hermes-bots": 4, other: 9 },
+                ui_meta: { "hermes-bots": bots, other: { kept: true } },
+                ...(revisions ? { ui_meta_revisions: { "hermes-bots": 4, other: 9 } } : {}),
               },
             ],
           };
@@ -1069,14 +1076,78 @@ describe("bot titles", () => {
     ]);
   });
 
-  test("a reset deletes the title and keeps every other key", async () => {
+  test("a reset writes an empty title, as Desktop does, and keeps every other key", async () => {
+    // A missing key would let Desktop's `{ ...cached, ...server }` merge keep
+    // the old title and write it back.
     for (const title of [null, "", "   "]) {
       const { g, sent } = titleGateway(saved);
       await g.bots.update({ ...REF, title });
       expect(sent[0]?.ui_meta).toEqual({
-        "hermes-bots": { shape: "hex", color: "#123456", custom: true },
+        "hermes-bots": { title: "", shape: "hex", color: "#123456", custom: true },
       });
     }
+  });
+
+  test("a title write leaves the avatar's `custom` flag as it found it", async () => {
+    const { g, sent } = titleGateway(saved, { title: "Scribe", shape: "hex" });
+    await g.bots.update({ ...REF, title: "Marshall" });
+    expect(sent[0]?.ui_meta).toEqual({ "hermes-bots": { title: "Marshall", shape: "hex" } });
+    const reset = titleGateway(saved, { title: "Scribe", custom: false });
+    await reset.g.bots.update({ ...REF, title: null });
+    expect(reset.sent[0]?.ui_meta).toEqual({ "hermes-bots": { title: "", custom: false } });
+  });
+
+  test("a title is sent alone and first; the other fields follow only once it is saved", async () => {
+    const { g, sent } = titleGateway((params) =>
+      params.ui_meta ? saved() : { ok: true, applied: { soul: true, description: true } },
+    );
+    await g.bots.update({ ...REF, title: "Marshall", soul: "Terse.", description: "Digest" });
+    expect(sent).toEqual([
+      {
+        name: "scribe",
+        ui_meta: {
+          "hermes-bots": { title: "Marshall", shape: "hex", color: "#123456", custom: true },
+        },
+        ui_meta_expected_revisions: { "hermes-bots": 4 },
+      },
+      { name: "scribe", soul: "Terse.", description: "Digest" },
+    ]);
+    // A refused title stops the edit before any other field is written.
+    const refused = titleGateway(() => ({
+      ok: true,
+      applied: {
+        ui_meta: false,
+        ui_meta_conflicts: { "hermes-bots": { expected: 4, actual: 5 } },
+      },
+    }));
+    const error = await failureOf(refused.g.bots.update({ ...REF, title: "Marshall", soul: "Terse." }));
+    expect(error.code).toBe("CONFLICT");
+    expect(refused.sent).toHaveLength(1);
+    expect(refused.sent[0]?.soul).toBeUndefined();
+  });
+
+  test("a model needing confirmation still asks, after the title is saved", async () => {
+    const { g, sent } = titleGateway((params) =>
+      params.ui_meta
+        ? saved()
+        : params.confirm_expensive_model === true
+          ? { ok: true, applied: { model: true } }
+          : { ok: false, confirm_required: true, confirm_message: "Opus is pricey" },
+    );
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall", model: "opus" }));
+    expect(error.code).toBe("CONFIRMATION_REQUIRED");
+    expect(error.message).toBe("Opus is pricey");
+    expect(sent[1]).toEqual({ name: "scribe", model: "opus" });
+    await g.bots.update({ ...REF, title: "Marshall", model: "opus", confirm_expensive_model: true });
+    expect(sent.at(-1)).toEqual({ name: "scribe", model: "opus", confirm_expensive_model: true });
+  });
+
+  test("a row without `ui_meta_revisions` is a gateway without CAS: refused, never written", async () => {
+    const { g, sent } = titleGateway(saved, undefined, false);
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall" }));
+    expect(error.code).toBe("CHAT_PROTOCOL");
+    expect(error.message).toContain("titles");
+    expect(sent).toEqual([]);
   });
 
   test("a revision conflict is a named CONFLICT, not a silent overwrite", async () => {

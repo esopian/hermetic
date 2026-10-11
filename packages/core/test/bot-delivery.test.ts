@@ -42,11 +42,27 @@ describe("a delivery row", () => {
     expect(ChatMessage.parse(message).from_bot).toEqual({ name: "Marshall", handle: "scribe" });
   });
 
-  test("a relayed handle drops its connection, and the robot glyph is optional", () => {
+  test("a relayed handle keeps its connection, and the robot glyph is optional", () => {
     expect(parseBotDelivery("Message from Nick QA (@auditor@laptop-2): ok")).toEqual({
-      from: { name: "Nick QA", handle: "auditor" },
+      from: { name: "Nick QA", handle: "auditor", connection: "laptop-2" },
       body: "ok",
     });
+  });
+
+  test("a relayed sender reaches the message as from_bot.connection; a local one carries none", () => {
+    const [relayed, local] = mapHistory(BOX, SESSION, {
+      messages: [
+        userRow(1, "Message from 🤖 Marshall (@scribe@laptop): from the other side"),
+        userRow(2, "Message from 🤖 Marshall (@scribe): from next door"),
+      ],
+    });
+    // `scribe@laptop` is not this box's scribe: without the connection a head
+    // would resolve the handle to the local bot of the same name.
+    expect(relayed?.from_bot).toEqual({ name: "Marshall", handle: "scribe", connection: "laptop" });
+    expect(relayed?.blocks).toEqual([{ kind: "text", markdown: "from the other side" }]);
+    expect(ChatMessage.parse(relayed).from_bot?.connection).toBe("laptop");
+    expect(local?.from_bot).toEqual({ name: "Marshall", handle: "scribe" });
+    expect(local?.from_bot && "connection" in local.from_bot).toBe(false);
   });
 
   test("a signature with no handle, and the legacy form, name the sender only", () => {

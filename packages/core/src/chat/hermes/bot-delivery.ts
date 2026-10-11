@@ -12,16 +12,24 @@
  *
  * The pattern is Hermes Desktop's `AGENT_MESSAGE_RE`
  * (`apps/desktop/src/components/assistant-ui/thread/user-message.tsx:90-91`),
- * verbatim, so a row Desktop draws as a delivery is one hermetic draws as a
- * delivery and nothing else is. It also accepts the relayed form
- * (`(@handle@connection)`, whose connection part is dropped here) and the
- * legacy `[Message from agent '<name>']` signature, which carries no handle.
+ * verbatim but for one group, so a row Desktop draws as a delivery is one
+ * hermetic draws as a delivery and nothing else is. It also accepts the
+ * relayed form (`(@handle@connection)`) and the legacy
+ * `[Message from agent '<name>']` signature, which carries no handle.
+ *
+ * The one change: Desktop's connection group is non-capturing, and here it
+ * captures. A relayed `(@scribe@laptop)` names the `scribe` on `laptop`, not
+ * this box's `scribe`, so the connection travels as `from_bot.connection` and
+ * a head knows not to resolve the handle locally. Matching is unchanged.
  */
 import type { ChatBlock, ChatMessage } from "../../schema/index.ts";
 
-/** Desktop's `AGENT_MESSAGE_RE`: 1 name, 2 handle, 3 legacy name, 4 body. */
+/**
+ * Desktop's `AGENT_MESSAGE_RE`, its connection group made capturing: 1 name,
+ * 2 handle, 3 connection, 4 legacy name, 5 body.
+ */
 const AGENT_MESSAGE_RE =
-  /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
+  /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}))?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
 
 /** The sender a delivery row is signed with. */
 export type BotDeliverySender = NonNullable<ChatMessage["from_bot"]>;
@@ -30,9 +38,13 @@ export type BotDeliverySender = NonNullable<ChatMessage["from_bot"]>;
 export function parseBotDelivery(text: string): { from: BotDeliverySender; body: string } | null {
   const match = AGENT_MESSAGE_RE.exec(text);
   if (!match) return null;
-  const name = (match[1] ?? match[3] ?? "").trim();
+  const name = (match[1] ?? match[4] ?? "").trim();
   if (!name) return null;
-  return { from: { name, handle: match[2] ?? null }, body: match[4] ?? "" };
+  const connection = match[3];
+  return {
+    from: { name, handle: match[2] ?? null, ...(connection ? { connection } : {}) },
+    body: match[5] ?? "",
+  };
 }
 
 /**

@@ -19,6 +19,7 @@ const text = (v: unknown, fallback = ""): string => str(v) ?? fallback;
 const unsupported = (message: string): never => {
   throw new HermeticError("CHAT_PROTOCOL", message);
 };
+const NO_TITLES = "This gateway does not store Bot Mode titles; update Hermes";
 
 /**
  * The hosted-room protocol version this build speaks (`groups.capabilities`,
@@ -440,8 +441,8 @@ export function createBotMode(
   });
   /**
    * The `ui_meta` half of a title change: the profile's current `hermes-bots`
-   * namespace with `title` merged in (or deleted, for a reset), sent with the
-   * revision it was read at.
+   * namespace with `title` merged in (an empty string, for a reset), sent with
+   * the revision it was read at.
    *
    * Upstream merges `ui_meta` one top-level key at a time
    * (`_configure_ui_meta`, `tui_gateway/methods_profiles.py` at `v2026.9.24`),
@@ -450,28 +451,48 @@ export function createBotMode(
    * revision makes the read-merge-write one compare-and-swap: if Desktop saved
    * that namespace in between, the gateway rejects the write instead of this
    * one silently undoing it.
+   *
+   * A reset writes `title: ""` rather than deleting the key, the way Desktop's
+   * own Edit profile does: Desktop merges its local cache under the server's
+   * namespace (`{ ...cached, ...server }`, `apps/desktop/src/plugins/hermes-bots/data.ts`),
+   * so a missing key would let a cached title survive and be written back.
+   * `custom` is left as found — upstream it marks a customised avatar, not a
+   * title.
+   *
+   * A row without `ui_meta_revisions` is a gateway that predates gateway-owned
+   * compare-and-swap (upstream always sends the map, empty for a new profile,
+   * as its feature detection); a write there would be a blind overwrite, so it
+   * is refused as unsupported.
    */
   async function titleMeta(instance: string, bot: string, title: string | null, opts: ChatOptions) {
     const listed = record(await rpc(instance, "profiles.list", { include_sessions: false }, opts));
     const row = records(listed.profiles).find((entry) => entry.name === bot);
     if (!row) throw new HermeticError("NOT_FOUND", `${bot}: profile not found on ${instance}`);
-    const meta: Record<string, unknown> = { ...record(record(row.ui_meta)["hermes-bots"]) };
-    if (title) meta.title = title;
-    else delete meta.title;
-    meta.custom = true;
-    const revision = record(row.ui_meta_revisions)["hermes-bots"];
+    const revisions = row.ui_meta_revisions;
+    if (typeof revisions !== "object" || revisions === null || Array.isArray(revisions))
+      return unsupported(NO_TITLES);
+    const meta = { ...record(record(row.ui_meta)["hermes-bots"]), title: title ?? "" };
+    const revision = record(revisions)["hermes-bots"];
     return {
       ui_meta: { "hermes-bots": meta },
       ui_meta_expected_revisions: { "hermes-bots": typeof revision === "number" ? revision : 0 },
     };
   }
+  const rejected = (r: Record<string, unknown>) =>
+    r.ok !== true || Object.values(record(r.applied)).some((v) => v === false);
+  /**
+   * The title goes in a `profiles.configure` of its own, before anything else.
+   * Upstream applies each section of one call independently
+   * (`methods_profiles.py`), so a title riding with a soul or a model could be
+   * saved and then reported as a CONFLICT or a confirmation prompt, leaving a
+   * half-applied edit the operator is told failed. Sent alone and first, a
+   * refused title stops the edit before any other field is written.
+   */
   const update = operation(S.BotUpdateInput, async (p, opts) => {
     const { instance, bot, title, ...changes } = p;
-    const meta = title === undefined ? {} : await titleMeta(instance, bot, title, opts);
-    const r = record(
-      await rpc(instance, "profiles.configure", { name: bot, ...changes, ...meta }, opts),
-    );
     if (title !== undefined) {
+      const meta = await titleMeta(instance, bot, title, opts);
+      const r = record(await rpc(instance, "profiles.configure", { name: bot, ...meta }, opts));
       const applied = record(r.applied);
       const conflict = record(record(applied.ui_meta_conflicts)["hermes-bots"]);
       if (Object.keys(conflict).length > 0)
@@ -481,19 +502,26 @@ export function createBotMode(
         );
       if (applied.ui_meta === false)
         throw new HermeticError("CONFLICT", `${bot}: the gateway did not save the new name`);
-      if (applied.ui_meta !== true)
-        return unsupported("This gateway does not store Bot Mode titles; update Hermes");
+      if (applied.ui_meta !== true) return unsupported(NO_TITLES);
+      if (rejected(r))
+        throw new HermeticError("CONFLICT", `${bot}: the gateway did not save the new name`);
     }
-    if (r.confirm_required === true)
-      throw new HermeticError(
-        "CONFIRMATION_REQUIRED",
-        text(r.confirm_message, "Confirm this model change"),
-      );
-    if (r.ok !== true || Object.values(record(r.applied)).some((v) => v === false))
-      throw new HermeticError(
-        "CONFLICT",
-        "Some profile changes were rejected. Reload before saving again.",
-      );
+    const fields = Object.entries(changes).filter(
+      ([k, v]) => v !== undefined && k !== "confirm_expensive_model",
+    );
+    if (fields.length > 0) {
+      const r = record(await rpc(instance, "profiles.configure", { name: bot, ...changes }, opts));
+      if (r.confirm_required === true)
+        throw new HermeticError(
+          "CONFIRMATION_REQUIRED",
+          text(r.confirm_message, "Confirm this model change"),
+        );
+      if (rejected(r))
+        throw new HermeticError(
+          "CONFLICT",
+          "Some profile changes were rejected. Reload before saving again.",
+        );
+    }
     return get({ instance, bot }, opts);
   });
   const remove = operation(S.BotDeleteInput, async (p, opts) => {

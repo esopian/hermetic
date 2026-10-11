@@ -114,7 +114,7 @@ export function withFixtureBotMode(
             is_default: b.is_default,
             // Seeded the way a real box stores them: a non-default bot's title
             // is the Bot Mode title an operator set (`ui_meta['hermes-bots']`,
-            // what `bots.update` rewrites and a reset deletes), and the default
+            // what `bots.update` rewrites and a reset blanks), and the default
             // profile's is its core `display_name`, which no reset touches.
             ...(b.title !== b.name && !b.is_default
               ? { ui_meta: { "hermes-bots": { title: b.title, custom: true } } }
@@ -201,6 +201,9 @@ export function withFixtureBotMode(
           skills: [],
           toolsets: [],
           mcp_servers: [],
+          // Upstream lists the map on every row, empty for a new profile: it is
+          // how a client feature-detects gateway-owned compare-and-swap.
+          ui_meta_revisions: {},
         });
         return { ok: true, name };
       case "profiles.configure": {
