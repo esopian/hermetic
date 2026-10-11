@@ -1092,3 +1092,9 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* A setting row whose controls mean nothing right now — the Terminal group
+   while `terminal_alerts` is off (issue #18). Readable, and plainly inert. */
+.st-dim {
+  opacity: 0.4;
+}

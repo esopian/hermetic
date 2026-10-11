@@ -32,6 +32,9 @@ import { FleetProvider } from "./state/state.tsx";
 // fonts it references are bundled with it (§3.6: the app is one bundle and
 // never fetches a stylesheet or a face over the network).
 import "katex/dist/katex.min.css";
+// xterm's own rules (the screen's layers, the hidden textarea that takes the
+// keys); the Terminal section's dress is `drawer.css`'s `.term*`, after it.
+import "@xterm/xterm/css/xterm.css";
 import "./styles/polish.css";
 // After polish.css, which pulls in styles.css: the chat rules are overrides of
 // the app's own, and chat-soft.css is an override of chat.css. Deleting the

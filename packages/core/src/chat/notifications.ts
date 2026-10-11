@@ -32,6 +32,7 @@ import {
   NotificationsMuteInput,
   NotificationsSettingsInput,
   NotificationsSnoozeInput,
+  TERMINAL_KEY_PREFIX,
   agentMuteTarget,
   chatActionRef,
   sourceMuteTarget,
@@ -172,7 +173,15 @@ export function notificationsSnooze(deps: NotificationDeps, input: unknown): Not
   return { snoozed: deps.store.snooze({ ids: parsed.ids, until }, deps.fleet()) };
 }
 
-/** An empty patch reads; anything stated replaces its field. */
+/**
+ * An empty patch reads; anything stated replaces its field.
+ *
+ * `terminal_alerts: false` also resolves every open terminal condition, in
+ * every fleet (the switch is this laptop's, not a fleet's): an operator who
+ * turned the alerts off has said they do not want to be told a session has
+ * output, and a badge still counting one would be telling them anyway. The
+ * rows stay as history.
+ */
 export function notificationsSettings(
   deps: NotificationDeps,
   input: unknown = {},
@@ -183,8 +192,14 @@ export function notificationsSettings(
     ...(parsed.clear_resolved_on_read === undefined
       ? {}
       : { clear_resolved_on_read: parsed.clear_resolved_on_read }),
+    ...(parsed.terminal_alerts === undefined ? {} : { terminal_alerts: parsed.terminal_alerts }),
   };
-  return Object.keys(patch).length === 0 ? deps.store.settings() : deps.store.setSettings(patch);
+  if (Object.keys(patch).length === 0) return deps.store.settings();
+  const settings = deps.store.setSettings(patch);
+  if (parsed.terminal_alerts === false) {
+    for (const key of deps.store.openKeys(TERMINAL_KEY_PREFIX, null)) deps.store.resolve(key);
+  }
+  return settings;
 }
 
 export function notificationsMute(deps: NotificationDeps, input: unknown): NotificationsMuteResult {

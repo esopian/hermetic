@@ -517,3 +517,278 @@
   margin-top: 3px;
   overflow-wrap: anywhere;
 }
+
+/* ── Terminal (issue #18) ────────────────────────────────────────────────────
+   The section is the drawer's; the screen is its own ground in both themes
+   (ui-brief "Terminal"): #0a0a09 under #d8d5cc, JetBrains Mono, square. */
+.term-section {
+  min-height: 100%;
+}
+.term-lead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.term-tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg2);
+  border: 1px solid var(--line2);
+  padding: 1px 6px;
+}
+.term-sq {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  display: inline-block;
+  background: var(--line2);
+}
+.term-sq.ok {
+  background: var(--ok);
+}
+.term-sq.acc {
+  background: var(--acc);
+}
+
+/* Panels: the cold start and every state that is not a screen. */
+.term-panel {
+  border: 2px solid var(--line2);
+  padding: 28px 28px 24px;
+  display: flex;
+  gap: 22px;
+}
+.term-glyph {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--fg);
+  color: var(--bg);
+  font: 900 15px var(--mono);
+}
+.term-panel-off .term-glyph {
+  background: var(--fg3);
+}
+.term-panel-bad {
+  border-color: var(--bad);
+}
+.term-panel-bad .term-glyph {
+  background: var(--bad);
+}
+.term-panel-warn {
+  border-color: var(--warn);
+}
+.term-panel-warn .term-glyph {
+  background: var(--warn);
+}
+.term-panel-body {
+  min-width: 0;
+}
+.term-panel h3 {
+  margin: 4px 0 6px;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+.term-panel p {
+  margin: 0 0 10px;
+  color: var(--fg2);
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-width: 520px;
+}
+.term-panel ol {
+  margin: 6px 0 4px;
+  padding-left: 18px;
+  color: var(--fg2);
+  font-size: 13px;
+}
+.term-panel ol li {
+  margin: 2px 0;
+}
+.term-panel-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.term-cmd {
+  display: flex;
+  align-items: stretch;
+  border: 2px solid var(--line2);
+  max-width: 520px;
+}
+.term-cmd code {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.term-cmd .btn {
+  border: 0;
+  border-left: 2px solid var(--line2);
+  height: auto;
+}
+.term-facts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--mono);
+  color: var(--fg3);
+}
+.term-facts-bad {
+  color: var(--bad);
+}
+
+/* The live pane: toolbar, the session strip under it, the screen, the foot. */
+.term-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.term-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  border: 2px solid var(--fg);
+  border-bottom: 0;
+  padding: 6px 8px;
+  background: var(--bg2);
+}
+.term-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  font: 700 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.term-notice {
+  font: 11px var(--mono);
+  color: var(--bad);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.term-spacer {
+  flex: 1;
+}
+.term-end {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.term-tabs {
+  display: flex;
+  order: 9;
+  flex-basis: calc(100% + 16px);
+  margin: 6px -8px -6px;
+  border-top: 1px solid var(--line2);
+  background: var(--bg);
+}
+.term-tabs button {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-right: 1px solid var(--line2);
+  font: 700 11px var(--mono);
+  color: var(--fg2);
+}
+.term-tabs button.on {
+  background: var(--fg);
+  color: var(--bg);
+}
+.term-tabs button.ended {
+  color: var(--fg3);
+}
+.term-tabs button.on.ended {
+  color: var(--bg);
+}
+/* A bell: one 150 ms flash of the tab (`BELL_FLASH_MS`). */
+.term-tabs button.bell {
+  background: var(--acc);
+  color: #0a0a09;
+}
+.term-tabs button[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.term-tabs button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+.term-dot {
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+  background: var(--acc);
+}
+.term-screen {
+  flex: 1;
+  min-height: 320px;
+  background: #0a0a09;
+  color: #d8d5cc;
+  border: 2px solid var(--fg);
+  border-radius: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+.term-screen:focus-within {
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+.term-screen .xterm,
+.term-screen .xterm-viewport {
+  /* xterm paints the theme ground inline too; this covers the frame before it does. */
+  background: #0a0a09;
+  height: 100%;
+}
+.term-foot {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding-top: 8px;
+  font: 11px var(--mono);
+  color: var(--fg3);
+}
+.term-foot-r {
+  margin-left: auto;
+  text-align: right;
+}
+.term-warn {
+  color: var(--warn);
+}
+.term-dim {
+  color: var(--fg3);
+  opacity: 0.8;
+}
+
+/* Config › Tailscale's `ssh` row: the command, Copy, and the way in. */
+.dr-ssh {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.dr-ssh-cmd {
+  word-break: break-all;
+}
+.dr-ssh-row {
+  display: flex;
+  gap: 6px;
+}
+.dr-ssh-note {
+  font-size: 10.5px;
+  color: var(--fg3);
+}

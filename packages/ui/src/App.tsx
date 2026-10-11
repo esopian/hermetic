@@ -730,6 +730,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           setConfirmOpen={nav.setTeardownOpen}
           tab={nav.agentTab}
           onTab={nav.setAgentTab}
+          session={nav.agentSession}
+          onSession={nav.setAgentSession}
+          onSettings={nav.openSettings}
           /*
            * Anything raised over the drawer suspends the Desktop tab's stream.
            * The drawer stays mounted underneath these, so without this the RFB

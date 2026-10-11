@@ -26,6 +26,7 @@ import { opHandlers } from "./ops.ts";
 import { planHandlers } from "./plans.ts";
 import { providerHandlers } from "./providers.ts";
 import { secretHandlers } from "./secrets.ts";
+import { terminalHandlers } from "./terminal.ts";
 
 export type { StreamSink, StreamFrame, StreamRegistry, StreamHandle } from "./streams.ts";
 export { createStreamRegistry } from "./streams.ts";
@@ -65,6 +66,7 @@ export const HANDLERS: Readonly<Record<string, Handler>> = Object.freeze(
     ...planHandlers,
     ...providerHandlers,
     ...secretHandlers,
+    ...terminalHandlers,
   }),
 );
 

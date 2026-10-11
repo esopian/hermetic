@@ -65,6 +65,8 @@ export {
   installAccountDir,
 } from "../account-dirs.ts";
 export const DOCKER_GROUP = "docker";
+/** The `hermes` account's login shell; what `tailscale ssh hermes@<host>` starts. */
+const HERMES_LOGIN_SHELL = "/bin/bash";
 
 /**
  * Create the `hermes` account, the `docker` group it needs to be in, its home
@@ -95,8 +97,10 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
       "--create-home",
       "--home-dir",
       HERMES_ACCOUNT_HOME,
+      // A login shell, because Tailscale SSH (§9.3) logs operators in as this
+      // account. See the re-assert below for why that is safe.
       "--shell",
-      "/usr/sbin/nologin",
+      HERMES_LOGIN_SHELL,
       "-G",
       DOCKER_GROUP,
       HERMES_USER,
@@ -127,16 +131,32 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
    * live account underneath a running gateway is not something to paper over.
    */
   const passwd = (await must(host, ["getent", "passwd", HERMES_USER])).stdout;
-  if (passwd.trim().split(":")[5] !== HERMES_ACCOUNT_HOME) {
+  const fields = passwd.trim().split(":");
+  if (fields[5] !== HERMES_ACCOUNT_HOME) {
     await must(host, ["usermod", "--home", HERMES_ACCOUNT_HOME, HERMES_USER]);
   }
   /**
-   * Give the account a user manager. `hermes` is `--system` and `nologin`, so
-   * it never logs in and systemd never starts `user@<uid>.service` for it —
-   * which upstream's system-scope gateway unit orders itself `After=`/`Wants=`
-   * (`hermes gateway install --system`). Linger is what makes that ordering
-   * satisfiable: it is what keeps a `user@<uid>.service` running for an account
-   * nobody logs into.
+   * Give the account a login shell, again for boxes created with `nologin`.
+   * Tailscale SSH (§9.3) logs operators in as this account (`SSH_LOGIN_USER`),
+   * and with `nologin` that login prints "This account is currently not
+   * available". It is not a new way in: the account has no password and the
+   * box runs no sshd, so the only path to a shell is Tailscale SSH, reachable
+   * only through the managed tailnet ACL's ssh rule.
+   *
+   * Unlike `--home` above, `usermod --shell` succeeds while the account has
+   * running processes, so this is safe on a live box with the gateway up.
+   */
+  if (fields[6] !== HERMES_LOGIN_SHELL) {
+    await must(host, ["usermod", "--shell", HERMES_LOGIN_SHELL, HERMES_USER]);
+  }
+  /**
+   * Give the account a user manager. systemd only starts `user@<uid>.service`
+   * while the account has a session, and nobody is normally logged in as
+   * `hermes` (an operator's `tailscale ssh` is occasional, and the gateway is a
+   * system-scope unit, not a login). Upstream's system-scope gateway unit
+   * orders itself `After=`/`Wants=` that manager (`hermes gateway install
+   * --system`). Linger is what makes that ordering satisfiable: it keeps a
+   * `user@<uid>.service` running for an account nobody is logged into.
    *
    * Upstream would mostly cope on its own — on a missing linger it enables
    * linger itself and otherwise warns, refusing outright only under a

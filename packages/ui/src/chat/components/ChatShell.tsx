@@ -9,7 +9,7 @@ import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { composerState, threadState } from "../chat-logic.ts";
 import { botLabel } from "../chat-presentation.ts";
-import { hasOpenOverlay } from "../../lib/focus.ts";
+import { hasOpenOverlay, keyboardOwned } from "../../lib/focus.ts";
 import { ChatView } from "./ChatView.tsx";
 import { QuickJump } from "./QuickJump.tsx";
 
@@ -149,6 +149,9 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
           ?.dataset.chatAgent ?? null;
     };
     const key = (e: KeyboardEvent) => {
+      // The terminal's screen owns the keyboard while focused: Ctrl-K is
+      // readline's kill-line there, not quick jump (`keyboardOwned`).
+      if (keyboardOwned()) return;
       if (!enabled || e.defaultPrevented || e.isComposing || e.repeat || e.altKey) return;
       const typing = (e.target instanceof Element ? e.target : null)?.closest(
         "input, textarea, select, [contenteditable=true]",

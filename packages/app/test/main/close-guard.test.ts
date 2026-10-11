@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { memoryLog } from "../../src/log.ts";
 import {
+  type BusySession,
   type CloseAttempt,
   MAX_LISTED_OPS,
   closeDecision,
@@ -77,6 +78,47 @@ describe("closeDecision", () => {
   });
 });
 
+describe("closeDecision with terminal sessions (D9)", () => {
+  const apt: BusySession = { name: "atlas", index: 1, label: "apt upgrade" };
+
+  test("no busy session and no op asks nothing", () => {
+    expect(closeDecision([], [])).toEqual({ needsPrompt: false, message: "" });
+  });
+
+  test("one busy session asks, named with its command", () => {
+    const decision = closeDecision([], [apt]);
+    expect(decision.needsPrompt).toBe(true);
+    expect(decision.message).toContain("1 terminal session is busy");
+    expect(decision.message).toContain("  atlas #1 — apt upgrade");
+    expect(decision.message).toContain("Quitting hangs up the session");
+    expect(decision.message).not.toContain("operation");
+  });
+
+  test("three busy sessions, one with no readable command", () => {
+    const decision = closeDecision(
+      [],
+      [apt, { name: "atlas", index: 2 }, { name: "corvid", index: 1, label: "2 background jobs" }],
+    );
+    expect(decision.message).toContain("3 terminal sessions are busy");
+    expect(decision.message).toContain("  atlas #2\n");
+    expect(decision.message).not.toContain("atlas #2 —");
+    expect(decision.message).toContain("  corvid #1 — 2 background jobs");
+    expect(decision.message).toContain("Quitting hangs up the sessions");
+  });
+
+  test("ops and sessions are both listed, ops first", () => {
+    const decision = closeDecision([op("agents.create", "lisbon")], [apt]);
+    const ops = decision.message.indexOf("1 operation is still running");
+    const sessions = decision.message.indexOf("1 terminal session is busy");
+    expect(ops).toBeGreaterThanOrEqual(0);
+    expect(sessions).toBeGreaterThan(ops);
+    expect(decision.message).toContain("agents.create lisbon");
+    expect(decision.message).toContain("atlas #1 — apt upgrade");
+    expect(decision.message).toContain("does not undo work already started on AWS");
+    expect(decision.message).toMatch(/Quit anyway\?$/);
+  });
+});
+
 /**
  * Two turns of the microtask queue: enough for the guard's deferred half to
  * reach `confirm` and for the answer to come back.
@@ -134,6 +176,56 @@ function harness(running: OpSummary[], answer: boolean | Promise<boolean>) {
 }
 
 describe("installCloseGuard", () => {
+  test("a busy terminal session prompts with nothing running", async () => {
+    const calls: string[] = [];
+    const listeners = new Map<string, (attempt: CloseAttempt) => void>();
+    const busy: BusySession[] = [{ name: "atlas", index: 1, label: "apt upgrade" }];
+    installCloseGuard({
+      ops: { list: () => ({ ops: [] }) },
+      terminals: { busySessions: () => busy },
+      confirm: async (message) => {
+        calls.push(`confirm:${message}`);
+        return false;
+      },
+      shutdown: async () => void calls.push("shutdown"),
+      on: (event, listener) => void listeners.set(event, listener),
+      defer: (run) => run(),
+    });
+    listeners.get("will-close")?.({ deny: () => {} });
+    await tick();
+    expect(calls).toEqual([`confirm:${closeDecision([], busy).message}`]);
+  });
+
+  test("idle sessions close silently, and a host that throws is no reason to ask", async () => {
+    for (const busySessions of [
+      () => [],
+      () => {
+        throw new Error("wedged");
+      },
+    ]) {
+      const calls: string[] = [];
+      let listener: ((attempt: CloseAttempt) => void) | undefined;
+      installCloseGuard({
+        ops: { list: () => ({ ops: [] }) },
+        terminals: { busySessions },
+        confirm: async () => {
+          calls.push("confirm");
+          return true;
+        },
+        shutdown: async () => void calls.push("shutdown"),
+        on: (event, given) => {
+          if (event === "will-close") listener = given;
+        },
+        defer: (run) => run(),
+      });
+      let denied = false;
+      listener?.({ deny: () => void (denied = true) });
+      await tick();
+      expect(denied).toBe(true);
+      expect(calls).toEqual(["shutdown"]);
+    }
+  });
+
   test("subscribes both ways of leaving", () => {
     const h = harness([], true);
     expect(h.events().sort()).toEqual(["before-quit", "will-close"]);

@@ -82,6 +82,9 @@ import {
   type SendMessage,
 } from "../../../app/src/rpc/bind.ts";
 import { REQUEST_NAMES } from "../../../app/src/rpc/schema.ts";
+import { TerminalHost } from "../../../app/src/terminal/host.ts";
+import { fixturePtySpawner } from "../../../app/src/terminal/pty-fixture.ts";
+import type { Timers } from "../../../app/src/terminal/timers.ts";
 import { fleetTarget, setFleetTarget } from "../../src/api/index.ts";
 import { installedTransport, setTransport } from "../../src/api/transport.ts";
 import {
@@ -165,6 +168,13 @@ export interface FlowHarnessOptions {
    * the fleet every ported spec was written against.
    */
   fleet?: string;
+  /**
+   * The terminal host's clock (issue #18): the canned shell's `sleep`, the
+   * attention rules' grace and throttles, the frame coalescing. Real time by
+   * default; a flow that needs "two seconds later" hands in a fake it can
+   * advance (`app/test/terminal/fake-timers.ts`).
+   */
+  terminalTimers?: Timers;
 }
 
 /**
@@ -221,6 +231,22 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     poller,
   });
   const chatOwner: ChatOwner = createChatOwner({ hermetic: () => state.hermetic });
+  /**
+   * The app's terminal host over the canned shell (`pty-fixture.ts`), exactly
+   * as `main/index.ts` builds it in fixture mode: no process is spawned, and
+   * its notification flush is the poller's, so a terminal row reaches the page
+   * the moment it is raised. Without it every `terminal.*` is `UNSUPPORTED`.
+   */
+  const timers = options.terminalTimers;
+  const terminals = new TerminalHost({
+    hermetic: () => state.hermetic,
+    spawner: fixturePtySpawner(timers === undefined ? {} : { timers }),
+    fixture: true,
+    flush: () => {
+      void state.poller?.flushNotifications();
+    },
+    ...(timers === undefined ? {} : { timers }),
+  });
   const ctx: HandlerContext = {
     state,
     hermetic: () => state.hermetic,
@@ -230,6 +256,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     fixture: true,
     opts: { fixture: true },
     streams: createStreamRegistry(),
+    terminals,
   };
 
   const calls: HarnessCall[] = [];
@@ -256,8 +283,13 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
    * calls.
    */
   type RequestTable = Record<string, (params: never) => unknown>;
+  /** The page → main messages (`page.ready`, the terminal's keystrokes, acks and view state). */
+  let appMessages: Record<string, (payload: never) => unknown> = {};
   const binding = createRpcBinding<RequestTable>({
-    defineRPC: (rpcOptions: RpcOptions) => rpcOptions.handlers.requests,
+    defineRPC: (rpcOptions: RpcOptions) => {
+      appMessages = rpcOptions.handlers.messages ?? {};
+      return rpcOptions.handlers.requests;
+    },
     send,
     ctx,
   });
@@ -295,6 +327,10 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     request: electrobunRequest((name, params) =>
       known.has(name) ? askHead(name, params) : Promise.reject(new Error(`no request named ${name}`)),
     ),
+    // Fire-and-forget, as Electrobun's is: no answer, and a throw stays on this side.
+    send: (name: string, payload: unknown) => {
+      appMessages[name]?.(payload as never);
+    },
   } as unknown as RpcHandle;
   const Electroview = class {
     constructor(readonly options: { rpc?: RpcHandle }) {}
@@ -367,6 +403,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
       poller.stop();
       binding.close();
       ctx.streams.closeAll();
+      terminals.stopAll();
       await chatOwner.stop();
     },
   };

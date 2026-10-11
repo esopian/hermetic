@@ -153,6 +153,13 @@ export interface NotificationStore {
    */
   ack(input: NotificationAckWrite, fleet: string | null): number;
   /**
+   * Marks read every unread row `source` raised about `ref`, in this fleet's
+   * scope, whatever its key — the read the desktop terminal makes when the
+   * operator looks at a session, which reads its events and its condition at
+   * once (issue #18). Sweeps, like `ack`. Returns how many moved.
+   */
+  ackRef(source: NotificationSource, ref: string, fleet: string | null): number;
+  /**
    * Clears the named rows, or every read / every resolved row in the inbox view
    * (listening scoped); `restore` un-clears and un-snoozes named rows instead.
    * Clearing stamps `read_at` on a row that had none. Returns how many moved.

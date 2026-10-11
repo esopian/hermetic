@@ -42,6 +42,9 @@ import { openState } from "../state.ts";
 import { createRpcBinding, type SendMessage } from "../rpc/bind.ts";
 import type { HermeticRPC } from "../rpc/schema.ts";
 import { shutdown, type StoppableServer } from "../shutdown.ts";
+import { TerminalHost } from "../terminal/host.ts";
+import { bunPtySpawner } from "../terminal/pty-bun.ts";
+import { fixturePtySpawner } from "../terminal/pty-fixture.ts";
 import { installCli } from "./cli-install.ts";
 import { installCloseGuard } from "./close-guard.ts";
 import { installDevProbe } from "./dev-probe.ts";
@@ -145,6 +148,23 @@ const ops = new OpRegistry({
  * Hermes Desktop, another operator's CLI or a routine (`chat-owner.ts`).
  */
 const chatOwner = createChatOwner({ hermetic: () => state.hermetic, log });
+
+/**
+ * The in-app terminal's sessions (issue #18), one table for the process: a
+ * session outlives the window that opened it, like an op does. Fixture mode
+ * gets the canned shell, which spawns nothing; core's fixture preflight is
+ * canned too, so the whole open path runs without a process or a network.
+ * The flush is the poller's, read per call because the state re-keys it.
+ */
+const terminals = new TerminalHost({
+  hermetic: () => state.hermetic,
+  spawner: fixture ? fixturePtySpawner() : bunPtySpawner(),
+  fixture,
+  flush: () => {
+    void state.poller?.flushNotifications();
+  },
+  log,
+});
 
 log.line("info", "app", `starting${fixture ? " (fixture)" : ""}`, {
   home: state.home,
@@ -338,6 +358,7 @@ const windows = createWindows({
       // default is carried so `AppOptions` is satisfied by something honest.
       opts: { fixture, ops, chatOwner, log },
       streams: createStreamRegistry(),
+      terminals,
       /**
        * What makes this head the desktop one: the same five capabilities the
        * HTTP head has none of, so `handlers/app.ts` answers instead of
@@ -422,7 +443,7 @@ const closingWindows: StoppableServer = {
 
 /** Poller, chat, pools, windows — but not the process; the close guard exits. */
 const teardown = (reason: string): Promise<void> =>
-  shutdown({ server: closingWindows, state, log, chat: chatOwner }, reason);
+  shutdown({ server: closingWindows, state, log, chat: chatOwner, terminals }, reason);
 
 /**
  * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
@@ -465,6 +486,7 @@ function deny(event: unknown): void {
  */
 installCloseGuard({
   ops,
+  terminals,
   confirm: confirmQuit,
   shutdown: async () => {
     await teardown("quit");

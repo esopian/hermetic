@@ -15,7 +15,8 @@
  * about the rows themselves and the CLI's `hermetic inbox` on this machine has
  * to agree — but they are still this home's, not the fleet's.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
   DELIVERIES,
   PREF_GROUPS,
@@ -23,6 +24,8 @@ import {
   inQuietHours,
 } from "../../logic/notification-logic.ts";
 import type { Delivery, PrefGroup } from "../../logic/notification-logic.ts";
+import { TERMINAL_TRIGGERS, TERMINAL_TRIGGER_LABEL } from "../../logic/terminal-notify.ts";
+import type { TerminalTrigger } from "../../logic/terminal-notify.ts";
 import { useNotify } from "../../state/notify-state.tsx";
 import type { MuteTarget } from "../../state/notify-state.tsx";
 import type { NotificationSourceView } from "../../api/index.ts";
@@ -47,6 +50,7 @@ const MUTEABLE_SOURCES: readonly NotificationSourceView[] = [
   "fleet",
   "chat",
   "budget",
+  "terminal",
 ];
 
 /**
@@ -66,6 +70,7 @@ function RuleRow({
   desktop,
   onDelivery,
   onDesktop,
+  extra,
 }: {
   id: PrefGroup;
   label: string;
@@ -74,6 +79,8 @@ function RuleRow({
   desktop: boolean;
   onDelivery: (d: Delivery) => void;
   onDesktop: (on: boolean) => void;
+  /** A group's own control after the desktop box — the Terminal group's trigger. */
+  extra?: (flash: () => void) => ReactNode;
 }) {
   const [ticked, flash] = useSavedTick();
   const allowed = desktopAllowed(delivery);
@@ -111,6 +118,66 @@ function RuleRow({
         />
         desktop
       </label>
+      {extra?.(flash)}
+    </SettingRow>
+  );
+}
+
+/**
+ * The Terminal group's trigger (issue #18): `New output` lets every terminal
+ * row interrupt; `Finished & input only` sends output rows to the inbox
+ * silently. Page-level, like the rest of this block.
+ */
+function TriggerSeg({
+  value,
+  onChange,
+}: {
+  value: TerminalTrigger;
+  onChange: (t: TerminalTrigger) => void;
+}) {
+  return (
+    <div className="seg st-seg nt-seg" role="group" aria-label="Terminal trigger">
+      {TERMINAL_TRIGGERS.map((t) => (
+        <button type="button" key={t} aria-pressed={value === t} onClick={() => onChange(t)}>
+          {TERMINAL_TRIGGER_LABEL[t]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The master switch, core's `terminal_alerts` (shared with the CLI's `hermetic
+ * inbox settings --terminal-alerts`). Off is stronger than a mute: core writes
+ * no terminal row at all, and resolves the ones already open. Disabled until
+ * the setting has been read, so the switch never shows a guess.
+ */
+function TerminalSwitch({ on, onChange }: { on: boolean | null; onChange: (on: boolean) => void }) {
+  const [ticked, flash] = useSavedTick();
+  return (
+    <SettingRow
+      label="Terminal notifications"
+      desc="Alert me when a terminal session I'm not looking at prints output, finishes a long command, may be waiting for input, rings the bell or disconnects. Output text is never included."
+      field="terminal_alerts"
+      state={<SavedTick on={ticked} />}
+    >
+      <div className="seg st-seg nt-seg" role="group" aria-label="Terminal notifications">
+        {[true, false].map((value) => (
+          <button
+            type="button"
+            key={value ? "on" : "off"}
+            aria-pressed={on === value}
+            disabled={on === null}
+            onClick={() => {
+              if (on === value) return;
+              onChange(value);
+              flash();
+            }}
+          >
+            {value ? "On" : "Off"}
+          </button>
+        ))}
+      </div>
     </SettingRow>
   );
 }
@@ -134,6 +201,13 @@ export function NotificationsSection() {
   const [muteSource, setMuteSource] = useState<NotificationSourceView | "">("");
   const [quietTicked, flashQuiet] = useSavedTick();
   const now = Date.now();
+
+  // `terminal_alerts` is core's, read lazily; this page is one of its readers.
+  const { settings, loadSettings } = notify;
+  useEffect(() => {
+    if (settings === null) void loadSettings();
+  }, [settings, loadSettings]);
+  const terminalAlerts = settings === null ? null : settings.terminal_alerts !== false;
 
   const prefs = notify.prefs;
   const setDelivery = (group: PrefGroup, delivery: Delivery) => {
@@ -175,18 +249,47 @@ export function NotificationsSection() {
       {/* Delivery is per source and three-valued, because "off" and "in the
           inbox but silent" are different requests. */}
       <Block title="Rules" right={<span className="mono dim">off · inbox only · toast</span>}>
-        {PREF_GROUPS.map((g) => (
-          <RuleRow
-            key={g.id}
-            id={g.id}
-            label={g.label}
-            what={g.what}
-            delivery={prefs.delivery[g.id]}
-            desktop={prefs.desktop[g.id]}
-            onDelivery={(d) => setDelivery(g.id, d)}
-            onDesktop={(on) => setDesktop(g.id, on)}
-          />
-        ))}
+        <TerminalSwitch
+          on={terminalAlerts}
+          onChange={(on) => void notify.saveSettings({ terminal_alerts: on })}
+        />
+        {PREF_GROUPS.map((g) =>
+          g.id === "terminal" && terminalAlerts === false ? (
+            // Nothing is raised while the switch is off, so the group's own
+            // controls would be choices about nothing. Dimmed, and saying so.
+            <div className="st-dim" key={g.id} data-off="true">
+              <SettingRow label={g.label} desc={g.what} field={g.id}>
+                <span className="mono st-cell-sm">
+                  Terminal notifications are off · nothing is raised
+                </span>
+              </SettingRow>
+            </div>
+          ) : (
+            <RuleRow
+              key={g.id}
+              id={g.id}
+              label={g.label}
+              what={g.what}
+              delivery={prefs.delivery[g.id]}
+              desktop={prefs.desktop[g.id]}
+              onDelivery={(d) => setDelivery(g.id, d)}
+              onDesktop={(on) => setDesktop(g.id, on)}
+              extra={
+                g.id === "terminal"
+                  ? (flash) => (
+                      <TriggerSeg
+                        value={prefs.terminalTrigger}
+                        onChange={(t) => {
+                          notify.setPrefs({ ...prefs, terminalTrigger: t });
+                          flash();
+                        }}
+                      />
+                    )
+                  : undefined
+              }
+            />
+          ),
+        )}
       </Block>
 
       <Block title="Quiet hours">
