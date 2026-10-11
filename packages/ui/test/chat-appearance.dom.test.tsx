@@ -5,13 +5,25 @@ import { CHAT_AVATAR_STYLE_KEY, setChatAvatarStyle } from "../src/chat/chat-appe
 import { Avatar } from "../src/chat/components/avatar/Avatar.tsx";
 import { Face } from "../src/chat/components/Face.tsx";
 import { ChatSection } from "../src/components/settings/ChatSection.tsx";
+import { fakeServer } from "./fake-transport.ts";
+import type { FakeServer } from "./fake-transport.ts";
+
+/**
+ * The page also reads core's redaction switch (`chat.settings`). These tests
+ * are about the avatar, so that read is held open: it never answers, and the
+ * Privacy block never re-renders under them.
+ */
+let server: FakeServer | null = null;
 
 beforeEach(() => {
+  server = fakeServer({ "chat.settings": () => new Promise(() => {}) });
   setChatAvatarStyle("blob");
   window.localStorage.removeItem(CHAT_AVATAR_STYLE_KEY);
 });
 afterEach(() => {
   cleanup();
+  server?.restore();
+  server = null;
   setChatAvatarStyle("blob");
   window.localStorage.removeItem(CHAT_AVATAR_STYLE_KEY);
 });

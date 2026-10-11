@@ -4,7 +4,8 @@
  * as one (§9.2). `chat.ts`'s `send` runs every frame through it.
  */
 import type { ChatFrame } from "../schema/index.ts";
-import { redactFrame, redactText } from "./chat-redact.ts";
+import { MASKED, redactText } from "./chat-redact.ts";
+import type { TranscriptMask } from "./chat-redact.ts";
 
 /* ── the delta gate ───────────────────────────────────────────────────────── */
 
@@ -86,7 +87,13 @@ export interface DeltaGate {
   flush(): ChatFrame[];
 }
 
-export function createDeltaGate(): DeltaGate {
+/**
+ * With redaction off there is nothing to hold text back for, so the gate is a
+ * pass-through: every frame leaves as it arrived, through `mask.frame`, which
+ * still masks an `error` frame.
+ */
+export function createDeltaGate(mask: TranscriptMask = MASKED): DeltaGate {
+  if (!mask.redact) return { accept: (frame) => [mask.frame(frame)], flush: () => [] };
   let pending = "";
   let seq = 0;
   let message = "";
@@ -101,7 +108,7 @@ export function createDeltaGate(): DeltaGate {
   function accept(frame: ChatFrame): ChatFrame[] {
     // A block, a done or an error ends whatever was being buffered: those carry
     // their own redaction and they must not arrive before the text they follow.
-    if (frame.type !== "delta") return [...flush(), redactFrame(frame)];
+    if (frame.type !== "delta") return [...flush(), mask.frame(frame)];
     // A delta for a different message is a different sentence; the previous
     // one is finished whether or not upstream said so.
     const out = frame.message === message ? [] : flush();

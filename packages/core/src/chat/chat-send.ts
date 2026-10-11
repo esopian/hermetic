@@ -10,6 +10,7 @@
 import { ChatSendInput } from "../schema/index.ts";
 import type { ChatFrame } from "../schema/index.ts";
 import { redactText } from "./chat-redact.ts";
+import type { TranscriptMask } from "./chat-redact.ts";
 import { markChatTurn, notifyChatError, resolveChatErrors } from "./notifications.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
 import { CHAT_FENCE_RENEW_MS, acquireChatFence } from "./chat-fence.ts";
@@ -66,10 +67,12 @@ export interface ChatSendContext {
   now: () => string;
   /** The laptop's clock in milliseconds, for the lease and nothing else. */
   nowMs: () => number;
+  /** This laptop's transcript mask, taken once as the turn starts (`chat-settings.ts`). */
+  mask: () => TranscriptMask;
 }
 
 export function createChatSend(ctx: ChatSendContext) {
-  const { deps, hermes, validateName, address, fenceStore, instanceListening, now, nowMs } = ctx;
+  const { deps, hermes, validateName, address, fenceStore, instanceListening, now, nowMs, mask } = ctx;
 
   /**
    * One turn, streamed frame by frame.
@@ -120,7 +123,7 @@ export function createChatSend(ctx: ChatSendContext) {
       fence = null;
     }
     return (async function* () {
-      const gate = createDeltaGate();
+      const gate = createDeltaGate(mask());
       /**
        * The turn's verdict, accumulated as the frames go past rather than
        * decided at the end, because a turn reaches its end three different

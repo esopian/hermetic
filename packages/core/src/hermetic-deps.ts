@@ -33,6 +33,7 @@ import type { ChatFenceStore } from "./chat/chat-fence.ts";
 import type { InstanceListeningStore } from "./chat/instance-listening.ts";
 import type { IncarnationStore } from "./local/incarnations.ts";
 import type { PresetStore } from "./local/create-presets.ts";
+import type { ChatSettingsStore } from "./chat/chat-settings.ts";
 
 export interface OpOptions {
   signal?: AbortSignal;
@@ -157,6 +158,12 @@ export interface HermeticDeps {
    */
   chatFence?: ChatFenceStore;
   instanceListening?: InstanceListeningStore;
+  /**
+   * §9.2's chat settings — whether transcript content is masked — in this
+   * laptop's `prefs`. Absent, an in-process store stands in, reading as the
+   * defaults (redaction off) until something is set.
+   */
+  chatSettings?: ChatSettingsStore;
   /**
    * Which incarnation of each agent name this laptop's local state describes
    * (`local/incarnations.ts`, §6.7). Local, beside the tables it guards. Absent

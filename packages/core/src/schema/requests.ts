@@ -878,6 +878,17 @@ export type ChatListeningInput = z.infer<typeof ChatListeningInput>;
 export const ChatListenInput = z.object({ instance: AgentName, listening: z.boolean() });
 export type ChatListenInput = z.infer<typeof ChatListenInput>;
 
+/**
+ * `hermetic chat settings [--redact on|off]` — this laptop's chat preferences,
+ * one `prefs` row each (§4.6, §9.2). Empty reads; a stated field writes it.
+ *
+ * `redact` masks transcript content — rosters, session lists, history reads,
+ * live frames — on its way out of core. Off by default. Errors are masked
+ * whichever way it is set.
+ */
+export const ChatSettingsInput = z.object({ redact: z.boolean().optional() });
+export type ChatSettingsInput = z.infer<typeof ChatSettingsInput>;
+
 export const DEFAULT_BOT = "default";
 
 /**

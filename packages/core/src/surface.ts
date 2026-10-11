@@ -41,6 +41,7 @@ import {
   ArtifactsPushApiInput as ArtifactsPushApiInputSchema,
   ArtifactsPushInput as ArtifactsPushInputSchema,
   ChatListeningInput as ChatListeningInputSchema,
+  ChatSettingsInput as ChatSettingsInputSchema,
   ChatListenInput as ChatListenInputSchema,
   ChatAbortInput as ChatAbortInputSchema,
   ChatHistoryInput as ChatHistoryInputSchema,
@@ -168,6 +169,9 @@ export const PUBLIC_METHODS = [
   // surface, declared above and covered by design.md §9.2.
   "chat.listening",
   "chat.listen",
+  // §9.2: this laptop's chat settings — transcript redaction — one `prefs` row
+  // each, no AWS.
+  "chat.settings",
   "chat.swarms",
   "chat.sessions",
   "chat.history",
@@ -308,6 +312,7 @@ export const REQUEST_SCHEMAS = {
    * elsewhere, not an op that can be restarted, replayed or resumed.
    */
   "chat.listening": ChatListeningInputSchema,
+  "chat.settings": ChatSettingsInputSchema,
   "chat.listen": ChatListenInputSchema,
   "chat.swarms": ChatSwarmsInputSchema,
   "chat.sessions": ChatSessionsInputSchema,
