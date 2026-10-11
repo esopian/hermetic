@@ -133,12 +133,33 @@ function purgeSpy(s: Stores, hold?: string) {
   };
 }
 
-function reconcilerFor(s: Stores, fleet: string | null = F) {
+function reconcilerFor(
+  s: Stores,
+  fleet: string | null = F,
+  releases?: (name: string) => Promise<readonly string[]>,
+) {
   return createIncarnationReconciler({
     store: s.incarnations,
     fleet: () => fleet,
     purge: reconcilePurge(s),
+    releases,
   });
+}
+
+/** `n` days before the real clock: inside the chat sessions' 30-day retention. */
+const NOW_MS = Date.now();
+const DAYS_AGO = (n: number) => new Date(NOW_MS - n * 86_400_000).toISOString();
+
+/** A tombstone read answering `ends` for every name, counting the names asked. */
+function releasesSpy(ends: readonly string[]) {
+  const asked: string[] = [];
+  return {
+    asked,
+    read: async (name: string) => {
+      asked.push(name);
+      return ends;
+    },
+  };
 }
 
 for (const kind of ["memory", "sqlite"] as const) {
@@ -225,6 +246,30 @@ for (const kind of ["memory", "sqlite"] as const) {
       await reconcilerFor(s)([{ name: "alpha", created_at: T1 }], { complete: true });
       expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
       expect(s.incarnations.list(F).get("alpha")).toBe(T1);
+      s.close();
+    });
+
+    test("a first sighting with no tombstone for the name adopts even old state", async () => {
+      const s = build(kind);
+      seed(s, "alpha");
+      s.localSessions.remember(
+        F,
+        { instance: "alpha", bot: "bot", session: "old-alpha" },
+        DAYS_AGO(10),
+      );
+      const releases = releasesSpy([]);
+
+      await reconcilerFor(
+        s,
+        F,
+        releases.read,
+      )([{ name: "alpha", created_at: DAYS_AGO(4) }], {
+        complete: true,
+      });
+
+      expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+      expect(s.localSessions.mine(F, ["old-alpha"]).size).toBe(1);
+      expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
       s.close();
     });
 
@@ -530,6 +575,164 @@ for (const kind of ["memory", "sqlite"] as const) {
 }
 
 /**
+ * A first sighting is only ever adopted — unless the fleet's tombstones show
+ * the name changed hands after this laptop gathered state for it (an offline
+ * laptop, or one upgrading onto `agent_incarnations` with stale state on disk).
+ * Only the SQLite store can date local state (`oldestStateAt`), and it is the
+ * one that outlives a process, which is the only way such a sighting arises.
+ */
+describe("a first sighting after a reuse this laptop did not see (sqlite)", () => {
+  /** State gathered ten days ago against the predecessor, plus today's seed. */
+  function stale(): Stores {
+    const s = build("sqlite");
+    seed(s, "alpha");
+    s.localSessions.remember(F, { instance: "alpha", bot: "bot", session: "old-alpha" }, DAYS_AGO(10));
+    return s;
+  }
+
+  test("state older than the predecessor's release is purged once, and the row recorded", async () => {
+    const s = stale();
+    seed(s, "beta");
+    s.localSessions.remember(F, { instance: "beta", bot: "bot", session: "old-beta" }, DAYS_AGO(10));
+    const releases = releasesSpy([DAYS_AGO(20), DAYS_AGO(5)]);
+    const reconcile = reconcilerFor(s, F, async (name) =>
+      name === "alpha" ? releases.read(name) : [],
+    );
+
+    await reconcile(
+      [
+        { name: "alpha", created_at: DAYS_AGO(4) },
+        { name: "beta", created_at: DAYS_AGO(4) },
+      ],
+      { complete: true },
+    );
+
+    expect(hasState(s, "alpha")).toEqual([false, false, false, false]);
+    expect(s.localSessions.mine(F, ["old-alpha"]).size).toBe(0);
+    expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
+    // No tombstone for beta: its equally old state is kept.
+    expect(hasState(s, "beta")).toEqual([true, true, true, true]);
+    expect(s.localSessions.mine(F, ["old-beta"]).size).toBe(1);
+
+    // The operator sets up the new box; the next read is no longer a first
+    // sighting, so neither asks the fleet again nor purges.
+    seed(s, "alpha");
+    await reconcile([{ name: "alpha", created_at: DAYS_AGO(4) }], { complete: true });
+    expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+    expect(releases.asked).toEqual(["alpha"]);
+    s.close();
+  });
+
+  test("state dated after the predecessor's release is this row's, and kept", async () => {
+    const s = build("sqlite");
+    seed(s, "alpha");
+    await reconcilerFor(
+      s,
+      F,
+      releasesSpy([DAYS_AGO(5)]).read,
+    )([{ name: "alpha", created_at: DAYS_AGO(4) }], { complete: true });
+    expect(hasState(s, "alpha")).toEqual([true, true, true, true]);
+    expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
+    s.close();
+  });
+
+  test("a tombstone ending after this row was born, or in the future, is no predecessor", async () => {
+    for (const end of [DAYS_AGO(3), new Date(NOW_MS + 86_400_000).toISOString(), "not a time"]) {
+      const s = stale();
+      await reconcilerFor(
+        s,
+        F,
+        releasesSpy([end]).read,
+      )([{ name: "alpha", created_at: DAYS_AGO(4) }], {
+        complete: true,
+      });
+      expect(s.localSessions.mine(F, ["old-alpha"]).size).toBe(1);
+      expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
+      s.close();
+    }
+  });
+
+  test("a failed tombstone read leaves the name unrecorded, and the next read purges", async () => {
+    const s = stale();
+    let fail = true;
+    const reconcile = reconcilerFor(s, F, async () => {
+      if (fail) throw new Error("throttled");
+      return [DAYS_AGO(5)];
+    });
+
+    await reconcile([{ name: "alpha", created_at: DAYS_AGO(4) }], { complete: true });
+    expect(s.localSessions.mine(F, ["old-alpha"]).size).toBe(1);
+    expect(s.incarnations.list(F).has("alpha")).toBe(false);
+
+    fail = false;
+    await reconcile([{ name: "alpha", created_at: DAYS_AGO(4) }], { complete: true });
+    expect(s.localSessions.mine(F, ["old-alpha"]).size).toBe(0);
+    expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
+    s.close();
+  });
+
+  test("undated state alone is adopted without asking the fleet", async () => {
+    const s = build("sqlite");
+    s.instanceListening.set(F, "alpha", true);
+    const releases = releasesSpy([DAYS_AGO(5)]);
+    await reconcilerFor(
+      s,
+      F,
+      releases.read,
+    )([{ name: "alpha", created_at: DAYS_AGO(4) }], {
+      complete: true,
+    });
+    expect(s.instanceListening.list(F)).toEqual(["alpha"]);
+    expect(releases.asked).toEqual([]);
+    expect(s.incarnations.get(F, "alpha")).toBe(DAYS_AGO(4));
+    s.close();
+  });
+
+  test("oldestStateAt dates watermarks, sessions and open notifications, by name and fleet", () => {
+    const home = mkdtempSync(join(tmpdir(), "hermetic-incarnations-"));
+    homes.push(home);
+    const local = openLocalDb({ home });
+    const store = new SqliteIncarnationStore(local.db);
+    const sessions = new SqliteLocalChatSessions(local.db);
+    const notificationsAt = (days: number) =>
+      new SqliteNotificationStore(local.db, () => new Date(DAYS_AGO(days)));
+    const notify = (days: number, agent: string, fleet: string) =>
+      notificationsAt(0).insert({
+        source: "agent",
+        kind: "agent.health",
+        class: "bad",
+        title: "down",
+        agent,
+        fleet,
+        at: DAYS_AGO(days),
+      });
+    expect(store.oldestStateAt(F, "alpha")).toBeUndefined();
+
+    sessions.remember(F, { instance: "alpha", bot: "bot", session: "a1" }, DAYS_AGO(3));
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(3));
+    notificationsAt(4).setSeenStatus(F, "alpha", "ready");
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(4));
+    notificationsAt(5).setSeenStatus(F, "chat:alpha/bot", "x");
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(5));
+    notify(6, "alpha", F);
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(6));
+    // A resolved notification is history, not state the purge would touch.
+    notificationsAt(0).resolveAgent(F, "alpha");
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(5));
+
+    // Neighbours that must not count: a name sharing the prefix, another fleet.
+    sessions.remember(F, { instance: "alphabet", bot: "bot", session: "b1" }, DAYS_AGO(9));
+    sessions.remember("fleetbbb", { instance: "alpha", bot: "bot", session: "c1" }, DAYS_AGO(9));
+    notificationsAt(9).setSeenStatus(F, "chat:alphabet/bot", "x");
+    notificationsAt(9).setSeenStatus("fleetbbb", "alpha", "ready");
+    notify(9, "alphabet", F);
+    notify(9, "alpha", "fleetbbb");
+    expect(store.oldestStateAt(F, "alpha")).toBe(DAYS_AGO(5));
+    local.close();
+  });
+});
+
+/**
  * Two laptops on one fleet: A runs the destroy, B only lists. B's local state
  * for the old box must not survive into the new one.
  */
@@ -625,6 +828,64 @@ describe("another laptop's release reaches this laptop's local state", () => {
     backend.unparseableRows = [];
     await b.hermetic.agents.list();
     expect(b.instanceListening.list(fleet)).toEqual(["atlas", "ember"]);
+  });
+
+  /**
+   * B was offline (or not yet on this build) while A destroyed and recreated
+   * the name, so B's first list is a first sighting — with state B gathered
+   * against the old box on disk. B's stores are SQLite, the ones that date
+   * state and outlive a process; its watermark predates A's release.
+   */
+  function offlineLaptop(backend: MemoryBackend) {
+    const home = mkdtempSync(join(tmpdir(), "hermetic-incarnations-"));
+    homes.push(home);
+    const local = openLocalDb({ home });
+    const before = () => new Date(backend.clock.now().getTime() - 3_600_000);
+    const instanceListening = new SqliteInstanceListeningStore(local.db);
+    const notifications = new SqliteNotificationStore(local.db, before);
+    const incarnations = new SqliteIncarnationStore(local.db);
+    const hermetic = testHermetic({
+      backend,
+      config: FIXTURE_CONFIG,
+      instanceListening,
+      notifications,
+      localSessions: new SqliteLocalChatSessions(local.db),
+      incarnations,
+    });
+    for (const name of ["ember", "atlas"]) {
+      instanceListening.set(fleet, name, true);
+      notifications.setSeenStatus(fleet, `chat:${name}/bot`, "x");
+    }
+    return { hermetic, instanceListening, notifications, incarnations, close: () => local.close() };
+  }
+
+  test("a name reused while B was offline: B's first list purges the old box's state", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const a = laptop(backend);
+    const b = offlineLaptop(backend);
+    const old = await backend.store.agents.get("ember");
+    if (!old) throw new Error("fixture has no ember");
+    await drain(a.hermetic.agents.destroy({ name: "ember", yes: true }));
+    const successor = new Date(backend.clock.now().getTime() + 3_600_000).toISOString();
+    await backend.store.agents.putIfAbsent({ ...old, created_at: successor, version: 1 });
+
+    await b.hermetic.agents.list();
+
+    expect(b.instanceListening.list(fleet)).toEqual(["atlas"]);
+    expect(b.notifications.seenStatus(fleet, "chat:ember/bot")).toBeNull();
+    expect(b.notifications.seenStatus(fleet, "chat:atlas/bot")).toBe("x");
+    expect(b.incarnations.get(fleet, "ember")).toBe(successor);
+    b.close();
+  });
+
+  test("no tombstone for the name: B's first list adopts its state", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const b = offlineLaptop(backend);
+    await b.hermetic.agents.list();
+    expect(b.instanceListening.list(fleet)).toEqual(["atlas", "ember"]);
+    expect(b.notifications.seenStatus(fleet, "chat:ember/bot")).toBe("x");
+    expect(b.incarnations.list(fleet).has("ember")).toBe(true);
+    b.close();
   });
 
   test("the same incarnation, listed again: B keeps everything", async () => {
