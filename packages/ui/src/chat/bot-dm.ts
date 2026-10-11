@@ -48,10 +48,19 @@ export interface MessageAgentCall {
   to: string | null;
   /** The delivery's background process, whose completion notice carries the reply. */
   processId: string | null;
-  /** Upstream's failure code (`runtime_offline`, `target_busy`, …) on a failed call. */
+  /** Upstream's failure code (`runtime_offline`, `target_busy`, …) on a failed call (`bot-dm-reasons.ts`). */
   reason: string | null;
   /** Upstream's sentence on a failed or ambiguous call. */
   error: string | null;
+  /**
+   * The valid targets a failed call's error lists, when upstream attached them:
+   * `teammates` on this install, registered `peers` (`_err`,
+   * `tools/bot_mode_dm.py:187-195`).
+   */
+  teammates: string[] | null;
+  peers: string[] | null;
+  /** Upstream's id for the call, which tells two identical calls in one turn apart. */
+  toolId: string | null;
 }
 
 /** The statuses upstream acknowledges a completed hand-off with. */
@@ -76,6 +85,12 @@ function jsonObject(value: unknown): Record<string, unknown> | null {
 const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim() ? value : null;
 
+/** A list of names, or null for anything that is not one. */
+const names = (value: unknown): string[] | null =>
+  Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string" && v.trim() !== "")
+    : null;
+
 /**
  * The call a block makes, or null when the block is not a `message_agent` call
  * this build can read — not hinted, arguments missing, or a result that is not
@@ -88,7 +103,17 @@ export function messageAgentCall(block: BlockLike): MessageAgentCall | null {
   const target = text(args?.["target"]);
   const message = typeof args?.["message"] === "string" ? args["message"] : null;
   if (!target || message === null) return null;
-  const base = { target: target.trim(), message, to: null, processId: null, reason: null, error: null };
+  const base = {
+    target: target.trim(),
+    message,
+    to: null,
+    processId: null,
+    reason: null,
+    error: null,
+    teammates: null,
+    peers: null,
+    toolId: text(block["tool_id"]),
+  };
   if (block["status"] === "running") return { ...base, state: "pending" };
   // A call with no result that is not running is one durable history could not
   // pair with its result row (`warn`): nothing says it is still in flight.
@@ -97,7 +122,16 @@ export function messageAgentCall(block: BlockLike): MessageAgentCall | null {
   const status = ack["status"];
   const error = text(ack["error"]);
   if (status === undefined || status === null)
-    return error ? { ...base, state: "failed", error, reason: text(ack["reason"]) } : null;
+    return error
+      ? {
+          ...base,
+          state: "failed",
+          error,
+          reason: text(ack["reason"]),
+          teammates: names(ack["teammates"]),
+          peers: names(ack["peers"]),
+        }
+      : null;
   if (status === "ambiguous") return { ...base, state: "ambiguous", error, to: text(ack["to"]) };
   if (typeof status !== "string" || !SENT.has(status)) return null;
   return {
@@ -123,6 +157,70 @@ export function resolveDmBot<B extends DmBot>(
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * Where a call says its message went: a handle, and the other machine it is on
+ * when it is not this one (`elsewhere`: a connection's label, or `peer
+ * <name>`). Null for text that names no destination.
+ */
+export interface DmDestination {
+  handle: string;
+  elsewhere: string | null;
+}
+
+/**
+ * The acknowledgement's `to`, as `_start_delivery` labels it
+ * (`tools/bot_mode_dm.py`): `@<handle>` for a teammate here (:282), `@<agent>
+ * on peer '<peer>'` for a registered peer (:262), `@<handle> on <connection>`
+ * for a relayed one (:315).
+ */
+const ACK_TO_RE = /^@([^\s@/]+)(?: on (?:peer '([^']+)'|(.+)))?$/;
+/** `<peer>/<agent>`, upstream's `_PEER_TARGET_RE` (`bot_mode_dm.py:54`). */
+const PEER_TARGET_RE = /^([a-z0-9][a-z0-9_-]{0,63})\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})$/;
+/** `<handle>@<connection>`: upstream routes any target with an `@` past the local roster (:268). */
+const RELAY_TARGET_RE = /^([^\s@/]+)@([^\s@/]+)$/;
+
+/**
+ * A call's destination. The acknowledgement's `to` is the box's own
+ * resolution, so it wins whenever there is one; only a call that has none —
+ * running, refused, ambiguous — falls back to the `target` the model wrote,
+ * which names another machine only in its `x@conn` and `peer/x` forms. A bare
+ * target stays local: it is the best guess there is, and a refused one names
+ * nobody anyway.
+ */
+export function dmDestination(call: Pick<MessageAgentCall, "to" | "target">): DmDestination | null {
+  if (call.to) {
+    const ack = ACK_TO_RE.exec(call.to.trim());
+    if (!ack) return null;
+    const peer = ack[2];
+    const connection = ack[3]?.trim();
+    return { handle: ack[1]!, elsewhere: peer ? `peer ${peer}` : connection || null };
+  }
+  const target = call.target.trim().replace(/^@+/, "");
+  const peer = PEER_TARGET_RE.exec(target);
+  if (peer) return { handle: peer[2]!, elsewhere: `peer ${peer[1]}` };
+  const relayed = RELAY_TARGET_RE.exec(target);
+  if (relayed) return { handle: relayed[1]!, elsewhere: relayed[2]! };
+  return target ? { handle: target, elsewhere: null } : null;
+}
+
+/**
+ * The bot a call messaged, as far as this instance can tell: the roster bot
+ * when it went to one here, else the name to show for it. A destination on
+ * another machine is never resolved locally, however its handle reads — a
+ * same-named bot here is a different bot (the same rule `dmSender` applies to
+ * a relayed delivery).
+ */
+export function dmTarget<B extends DmBot>(
+  call: Pick<MessageAgentCall, "to" | "target">,
+  teammates: readonly B[],
+): { bot: B | null; name: string; elsewhere: string | null } {
+  const where = dmDestination(call);
+  if (where?.elsewhere) return { bot: null, name: where.handle, elsewhere: where.elsewhere };
+  // An acknowledgement that does not parse still names the target; it just is not one to resolve on.
+  const bot = where ? resolveDmBot([call.to ?? call.target], teammates) : null;
+  return { bot, name: where?.handle ?? call.target, elsewhere: null };
 }
 
 /**
@@ -176,32 +274,64 @@ function isDeliveryOf(row: MessageLike, sender: string, message: string, exact: 
 }
 
 /**
+ * How far before its call a delivery may be stamped and still be the call's.
+ * Upstream persists the call row before the tool runs
+ * (`agent/turn_tool_round.py:118-121`) and the delivery is written by the
+ * process the tool starts, on the same box, so the delivery is never older on
+ * a true clock; the allowance only absorbs stamps that were rounded or
+ * re-based on the way here. The earlier sends of the same body (`earlier`)
+ * keep it from reaching back into a previous call's delivery.
+ */
+export const DELIVERY_SKEW_MS = 1_000;
+
+/**
  * The delivery of `message` from `sender` in a transcript, and the rows that
  * answered it: everything after it up to the next user row. Null when the
  * transcript does not hold it — the delivery has not run yet, or the Bot Chat
  * rolled over since.
  *
- * `since` is when the call was made. The same body sent twice is two
- * deliveries, and the one a call made is the earliest written at or after it:
- * upstream persists the call row before the tool runs, so its delivery is
- * never older, and an earlier delivery of the same body answered an earlier
- * call. A row whose stamp does not parse is never ruled out by it.
+ * `since` is when the call was made, and `earlier` when each earlier call
+ * from the same thread sent the same body to the same bot was, oldest first.
+ * The same body sent twice is two deliveries, written in the order the calls
+ * were made, so the calls claim them in order: each takes the earliest
+ * unclaimed delivery stamped no more than `DELIVERY_SKEW_MS` before it, and
+ * this call's is the last one claimed. Two calls in one turn share a stamp
+ * and still get one delivery each. An earlier call whose delivery rolled out
+ * of the transcript claims this call's instead, and this call finds none: the
+ * exchange then says so and shows the completion notice's reply, which is
+ * keyed by process and cannot be the wrong one. A row whose stamp does not
+ * parse is never ruled out by it.
  */
 export function findExchange<M extends MessageLike>(
   transcript: readonly M[],
   sender: string,
   message: string,
   since: string | null = null,
+  earlier: readonly string[] = [],
 ): { delivery: M; replies: M[] } | null {
   const from = since ? Date.parse(since) : Number.NaN;
-  // With no time to order by, the latest delivery is the likeliest guess.
-  const find = Number.isNaN(from)
-    ? (match: (row: M) => boolean) => transcript.findLastIndex(match)
-    : (match: (row: M) => boolean) =>
-        transcript.findIndex((row) => !(Date.parse(row.at) < from) && match(row));
   let at = -1;
   for (const exact of [true, false]) {
-    at = find((row) => isDeliveryOf(row, sender, message, exact));
+    const hits: number[] = [];
+    transcript.forEach((row, i) => {
+      if (isDeliveryOf(row, sender, message, exact)) hits.push(i);
+    });
+    if (!hits.length) continue;
+    // With no time to order by, the latest delivery is the likeliest guess.
+    if (Number.isNaN(from)) {
+      at = hits.at(-1)!;
+      break;
+    }
+    const claimed = new Set<number>();
+    const claim = (stamp: number): number => {
+      const hit = hits.find(
+        (i) => !claimed.has(i) && !(Date.parse(transcript[i]!.at) < stamp - DELIVERY_SKEW_MS),
+      );
+      if (hit !== undefined) claimed.add(hit);
+      return hit ?? -1;
+    };
+    for (const stamp of earlier.map(Date.parse)) if (!Number.isNaN(stamp)) claim(stamp);
+    at = claim(from);
     if (at >= 0) break;
   }
   if (at < 0) return null;
@@ -211,6 +341,37 @@ export function findExchange<M extends MessageLike>(
     replies.push(row);
   }
   return { delivery: transcript[at]!, replies };
+}
+
+/**
+ * When a call was made, read off the sender's own unmerged transcript, and
+ * when every earlier call that sent the same body to the same bot was (for
+ * `findExchange`). A call is the same one by upstream's tool id, else by its
+ * delivery process; `sameTarget` says which earlier calls went to the bot
+ * this one did. `since` is null when the call is not in the transcript, and
+ * the caller falls back to a stamp of its own.
+ */
+export function callSends(
+  transcript: readonly MessageLike[],
+  call: MessageAgentCall,
+  sameTarget: (other: MessageAgentCall) => boolean,
+): { since: string | null; earlier: string[] } {
+  const earlier: string[] = [];
+  const isThis = (other: MessageAgentCall) =>
+    call.toolId
+      ? other.toolId === call.toolId
+      : call.processId !== null && other.processId === call.processId;
+  for (const row of transcript) {
+    for (const block of row.blocks) {
+      const other = messageAgentCall(block);
+      if (!other) continue;
+      if (isThis(other)) return { since: row.at, earlier };
+      // Only a hand-off can have a delivery to claim.
+      if (other.state === "sent" && sameBody(other.message, call.message) && sameTarget(other))
+        earlier.push(row.at);
+    }
+  }
+  return { since: null, earlier: [] };
 }
 
 /**

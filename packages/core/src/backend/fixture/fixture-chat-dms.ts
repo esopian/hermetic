@@ -14,7 +14,8 @@
  *
  * Two DMs: NickQABot → Marshall at 07:40, and Marshall → NickQABot at 08:02,
  * the screenshot pair the thread's "Messaged" marker and exchange view were
- * designed against. Split out of `fixture-chat-catalog.ts` (AGENTS.md rule 5).
+ * designed against. A third, Marshall → Remy on another machine at 08:06, is
+ * refused because that machine is offline: the failed marker and its Retry. Split out of `fixture-chat-catalog.ts` (AGENTS.md rule 5).
  */
 import { stripBotDelivery } from "../../chat/hermes/bot-delivery.ts";
 import { parseProcessNotice } from "../../chat/hermes/process-notice.ts";
@@ -109,6 +110,34 @@ function messageAgent(
     status: "ok",
     exit_code: null,
     duration_ms: 212,
+    render: "message_agent",
+  };
+}
+
+/**
+ * A `message_agent` call upstream refused before anything was sent: `_err`'s
+ * `{error, reason}` with no status. This one is the relay's refusal for a
+ * machine that is offline (`tools/bot_mode_dm.py:314`, its sentence from
+ * `tools/bot_relay.py:296-299`) — a retryable reason, so the thread offers
+ * Retry, and a target on another machine, so it names no bot here.
+ */
+function refusedMessageAgent(
+  id: string,
+  target: string,
+  message: string,
+  error: string,
+  reason: string,
+): ChatBlock {
+  return {
+    kind: "tool",
+    tool_id: id,
+    name: "message_agent",
+    server: null,
+    args: { target, message },
+    result: { error, reason },
+    status: "bad",
+    exit_code: null,
+    duration_ms: 38,
     render: "message_agent",
   };
 }
@@ -256,8 +285,16 @@ export const SCRIBE_BOT_CHAT_TRANSCRIPT: readonly ChatMessage[] = [
     AUDITOR_REPLY,
   ),
   said("mx-atlas-scribe-8", SCRIBE_BOT_CHAT_SESSION, SCRIBE, "08:06:00", [
+    refusedMessageAgent(
+      "call-scribe-relay",
+      "remy@laptop",
+      "#4124 passed re-QA at e4cf2ec. The release notes can go out once it merges.",
+      "@remy on Evan's MacBook is offline right now — the message was NOT queued. Try again once that machine reconnects to the Desktop.",
+      "runtime_offline",
+    ),
     text(
-      "NickQABot passed #4124 at `e4cf2ec`: the secret-bounty fix holds, and so do the cap and Nick's cases.",
+      "NickQABot passed #4124 at `e4cf2ec`: the secret-bounty fix holds, and so do the cap and Nick's cases. " +
+        "I tried to tell Remy for the release notes, but Evan's MacBook is offline, so that message wasn't sent.",
     ),
   ]),
 ];

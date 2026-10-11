@@ -464,7 +464,24 @@ export function Thread({
   // It belongs to the conversation it was opened from and closes with it.
   const [exchange, setExchange] = useState<ExchangeRequest | null>(null);
   useEffect(() => setExchange(null), [instance, bot, session?.id]);
-  const dm = useMemo(() => ({ teammates, open: setExchange }), [teammates]);
+  // A refused DM's Retry asks this bot through the composer's own path
+  // (`BotDm.tsx`), so only where the composer could send it. `message_agent`
+  // runs only in the canonical Bot Chat, so a refusal is only ever drawn in
+  // the thread whose composer sends there. A ref keeps the context stable
+  // across renders while still calling the newest `send`.
+  const sendRef = useRef<(text: string) => void>(() => {});
+  const retrySender = composer.enabled ? botLabel(instance, bot, botTitle) : null;
+  const dm = useMemo(
+    () => ({
+      teammates,
+      open: setExchange,
+      retry:
+        retrySender === null
+          ? null
+          : { send: (text: string) => sendRef.current(text), sender: retrySender },
+    }),
+    [teammates, retrySender],
+  );
 
   // The log follows the bottom while a turn is arriving, and only then: a
   // reader who scrolled up into older turns is reading those, and yanking them
@@ -482,6 +499,7 @@ export function Thread({
     if (node) pinToBottom(node, pin.current);
     onSend(text);
   };
+  sendRef.current = send;
 
   // Looking at a conversation is what marks its messages read (see `view-ack`).
   useViewAck({

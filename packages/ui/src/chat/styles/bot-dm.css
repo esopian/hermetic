@@ -69,6 +69,32 @@
   font-family: var(--mono);
   font-size: 11.5px;
 }
+/* A refusal's Retry sits on the summary's line, after the disclosure. */
+.ch-dm-mark.failed {
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 10px;
+}
+.ch-dm-mark.failed > details {
+  min-width: 0;
+}
+.ch-dm-mark.failed p.ch-dm-why {
+  font-family: inherit;
+  font-size: 12px;
+}
+.ch-dm-retry {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg3);
+}
+.ch-dm-retry .ch-chip:disabled {
+  cursor: default;
+  border-color: var(--line);
+  color: var(--fg3);
+}
 
 /* ── the exchange ────────────────────────────────────────────────────────── */
 

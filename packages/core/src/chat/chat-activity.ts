@@ -122,9 +122,10 @@ export async function classifyChatActivity(
         if (fresh.length === 0) return bot;
         let quiet = covered;
         for (const message of fresh) {
-          // A delivery always carries its sender's handle; a bare
-          // `Message from HR: …` the operator typed parses as a legacy
-          // signature with none, and is the operator speaking.
+          // A delivery always carries its sender's handle. The legacy
+          // `[Message from agent '…']` form carries none, and a row whose
+          // sender is not named by a handle may be the operator typing one
+          // (`bot-delivery.ts` already leaves `Message from HR: …` alone).
           if (isSilentReply(message) || message.from_bot?.handle) continue;
           const events = eventBlocks(message);
           if (events === null) {

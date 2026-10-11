@@ -42,11 +42,42 @@ describe("a delivery row", () => {
     expect(ChatMessage.parse(message).from_bot).toEqual({ name: "Marshall", handle: "scribe" });
   });
 
-  test("a relayed handle keeps its connection, and the robot glyph is optional", () => {
-    expect(parseBotDelivery("Message from Nick QA (@auditor@laptop-2): ok")).toEqual({
+  test("a relayed handle keeps its connection", () => {
+    expect(parseBotDelivery("Message from 🤖 Nick QA (@auditor@laptop-2): ok")).toEqual({
       from: { name: "Nick QA", handle: "auditor", connection: "laptop-2" },
       body: "ok",
     });
+  });
+
+  test("upstream's own stamps parse", () => {
+    // `tests/tools/test_bot_mode_dm.py:312,516,530,546` (v2026.9.24): the
+    // prefix `message_agent` writes, and a friendly name over the handle.
+    for (const [stamp, name, handle] of [
+      ["Message from 🤖 hermes (@hermes): ", "hermes", "hermes"],
+      ["Message from 🤖 Maia (@hermes): ", "Maia", "hermes"],
+      ["Message from 🤖 Maia Prime (@hermes): ", "Maia Prime", "hermes"],
+      ["Message from 🤖 coder (@coder): ", "coder", "coder"],
+    ] as const) {
+      expect(parseBotDelivery(`${stamp}ping`)).toEqual({ from: { name, handle }, body: "ping" });
+    }
+  });
+
+  test("an operator line that only reads like a signature is the operator speaking", () => {
+    // Desktop's pattern takes all of these as deliveries; upstream never
+    // writes a stamp without both the glyph and the handle.
+    for (const text of [
+      "Message from HR: the offsite moved",
+      "Message from 🤖 HR: the offsite moved",
+      "Message from Nick QA (@auditor): ok",
+      "Message from agent 'researcher': here is the paper",
+    ]) {
+      expect(parseBotDelivery(text)).toBeNull();
+    }
+    const [message] = mapHistory(BOX, SESSION, {
+      messages: [userRow(1, "Message from HR: the offsite moved")],
+    });
+    expect(message?.blocks).toEqual([{ kind: "text", markdown: "Message from HR: the offsite moved" }]);
+    expect(message && "from_bot" in message).toBe(false);
   });
 
   test("a relayed sender reaches the message as from_bot.connection; a local one carries none", () => {
@@ -65,15 +96,10 @@ describe("a delivery row", () => {
     expect(local?.from_bot && "connection" in local.from_bot).toBe(false);
   });
 
-  test("a signature with no handle, and the legacy form, name the sender only", () => {
-    const [bare, legacy] = mapHistory(BOX, SESSION, {
-      messages: [
-        userRow(1, "Message from 🤖 hermes: are you there?"),
-        userRow(2, [{ type: "text", text: "[Message from agent 'scribe'] digest is late" }]),
-      ],
+  test("the legacy bracketed form names the sender only", () => {
+    const [legacy] = mapHistory(BOX, SESSION, {
+      messages: [userRow(2, [{ type: "text", text: "[Message from agent 'scribe'] digest is late" }])],
     });
-    expect(bare?.from_bot).toEqual({ name: "hermes", handle: null });
-    expect(bare?.blocks).toEqual([{ kind: "text", markdown: "are you there?" }]);
     expect(legacy?.from_bot).toEqual({ name: "scribe", handle: null });
     expect(legacy?.blocks).toEqual([{ kind: "text", markdown: "digest is late" }]);
   });
@@ -113,6 +139,15 @@ describe("a delivery row", () => {
       ],
     });
     expect(session?.preview).toBe("Marshall: re-run QA...");
+  });
+
+  test("the rail quotes an operator line that reads like a signature as typed", () => {
+    const [session] = mapSessions(BOX, "auditor", {
+      sessions: [
+        { session_id: "s1", title: "Bot Chat", preview: "Message from HR: the offsite moved" },
+      ],
+    });
+    expect(session?.preview).toBe("Message from HR: the offsite moved");
   });
 });
 

@@ -12,24 +12,32 @@
  *
  * The pattern is Hermes Desktop's `AGENT_MESSAGE_RE`
  * (`apps/desktop/src/components/assistant-ui/thread/user-message.tsx:90-91`),
- * verbatim but for one group, so a row Desktop draws as a delivery is one
- * hermetic draws as a delivery and nothing else is. It also accepts the
- * relayed form (`(@handle@connection)`) and the legacy
- * `[Message from agent '<name>']` signature, which carries no handle.
+ * with two deliberate deviations. It accepts the relayed form
+ * (`(@handle@connection)`, re-stamped by `qualify_sender_stamp`,
+ * `tools/bot_relay.py:239-254`) and the legacy `[Message from agent '<name>']`
+ * signature, which carries no handle and which Desktop still parses.
  *
- * The one change: Desktop's connection group is non-capturing, and here it
+ * Deviation one, tighter: Desktop makes the 🤖 glyph and the `(@handle)`
+ * optional, so an operator who types "Message from HR: the offsite moved" is
+ * drawn as a bot. Upstream builds the stamp exactly one way, glyph and handle
+ * both (`tools/bot_mode_dm.py:238`, and the relay's rewrite regex requires
+ * them too), so here a row is a delivery only when it carries both — or is the
+ * exact legacy bracketed form. Anything else is the operator speaking.
+ *
+ * Deviation two: Desktop's connection group is non-capturing, and here it
  * captures. A relayed `(@scribe@laptop)` names the `scribe` on `laptop`, not
  * this box's `scribe`, so the connection travels as `from_bot.connection` and
- * a head knows not to resolve the handle locally. Matching is unchanged.
+ * a head knows not to resolve the handle locally.
  */
 import type { ChatBlock, ChatMessage } from "../../schema/index.ts";
 
 /**
- * Desktop's `AGENT_MESSAGE_RE`, its connection group made capturing: 1 name,
- * 2 handle, 3 connection, 4 legacy name, 5 body.
+ * Desktop's `AGENT_MESSAGE_RE`, the glyph and the handle required and the
+ * connection group capturing: 1 name, 2 handle, 3 connection, 4 legacy name,
+ * 5 body.
  */
 const AGENT_MESSAGE_RE =
-  /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}))?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
+  /^(?:Message from 🤖\s*([^:\n(]{1,64}?)\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63}))?\):\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u;
 
 /** The sender a delivery row is signed with. */
 export type BotDeliverySender = NonNullable<ChatMessage["from_bot"]>;

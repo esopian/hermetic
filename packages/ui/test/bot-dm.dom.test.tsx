@@ -12,7 +12,8 @@ import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import { Message } from "../src/chat/components/Message.tsx";
 import { Thread } from "../src/chat/components/Thread.tsx";
 import { BotDmContext } from "../src/chat/components/BotDm.tsx";
-import { findExchange } from "../src/chat/bot-dm.ts";
+import { DELIVERY_SKEW_MS, findExchange } from "../src/chat/bot-dm.ts";
+import { DM_FAILURE_REASONS } from "../src/chat/bot-dm-reasons.ts";
 import { ProcessEventBlock } from "../src/chat/components/blocks/ProcessEvent.tsx";
 import { eventOf } from "./process-event-fixtures.ts";
 
@@ -100,7 +101,11 @@ function renderMessage(message: ChatMessageView, bot_ = "scribe") {
   );
 }
 
-function renderThread(bot_: string, messages: ChatMessageView[]) {
+function renderThread(
+  bot_: string,
+  messages: ChatMessageView[],
+  opts: { onSend?: (text: string) => void; state?: "ready" | "stopped" } = {},
+) {
   return render(
     <Thread
       fleetId="fxtr0001"
@@ -110,13 +115,13 @@ function renderThread(bot_: string, messages: ChatMessageView[]) {
       agent={null}
       session={null}
       destination={{ state: "known", origin: "portal", detail: null }}
-      state="ready"
+      state={opts.state ?? "ready"}
       messages={messages}
       live={null}
       sending={false}
       historyError={null}
       now={NOW}
-      onSend={() => {}}
+      onSend={opts.onSend ?? (() => {})}
       onAbort={() => {}}
       teammates={TEAM}
     />,
@@ -151,18 +156,47 @@ describe("the sender's message_agent call", () => {
     expect(container.querySelector(".ch-dm-mark")?.textContent).toBe("MessagingNickQABot…");
   });
 
-  test("a refused call is a warn line that expands to upstream's sentence", () => {
+  test("a refused call is a warn line that expands to the reason, upstream's sentence and the teammates", () => {
     const { container } = renderMessage(
       bot("m1", [
-        dmCall({ error: "NickQABot is busy with another turn.", reason: "target_busy" }, "bad"),
+        dmCall(
+          {
+            error: "No teammate named 'nickqa' on this install.",
+            reason: "unknown",
+            teammates: ["auditor", "hermes"],
+            peers: [],
+          },
+          "bad",
+        ),
       ]),
     );
-    const mark = container.querySelector<HTMLDetailsElement>("details.ch-dm-mark.failed");
-    expect(mark?.querySelector("summary")?.textContent).toBe(
-      "Couldn't message NickQABot · target_busy",
-    );
-    expect(mark?.textContent).toContain("NickQABot is busy with another turn.");
-    expect(mark?.querySelector("button")).toBeNull();
+    const mark = container.querySelector<HTMLElement>(".ch-dm-mark.failed");
+    expect(mark?.querySelector("summary")?.textContent).toBe("Couldn't message NickQABot · failed");
+    const body = mark?.querySelector("details")?.textContent ?? "";
+    expect(body).toContain(DM_FAILURE_REASONS["unknown"]!.guidance);
+    expect(body).toContain("No teammate named 'nickqa' on this install.");
+    expect(body).toContain("Teammates: @auditor, @hermes");
+    // An empty list is no line at all.
+    expect(body).not.toContain("Peers");
+    // No retry for a reason a second send cannot fix, nor where nothing can send.
+    expect(within(mark!).queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+  });
+
+  test("every reason code reads as its label; an unknown or absent one as 'failed'", () => {
+    const cases: [unknown, string][] = [
+      ...Object.entries(DM_FAILURE_REASONS).map(([code, r]) => [code, r.label] as [unknown, string]),
+      ["flux_capacitor", "failed"],
+      [undefined, "failed"],
+    ];
+    for (const [reason, label] of cases) {
+      const { container } = renderMessage(
+        bot("m1", [dmCall({ error: "Delivery failed.", ...(reason ? { reason } : {}) }, "bad")]),
+      );
+      expect(container.querySelector(".ch-dm-mark.failed summary")?.textContent).toBe(
+        `Couldn't message NickQABot · ${label}`,
+      );
+      cleanup();
+    }
   });
 
   test("a result that is not upstream's JSON falls back to the tool row", () => {
@@ -442,7 +476,8 @@ describe("matching a delivery to its call", () => {
     const capped = long.slice(0, 30);
     const transcript = rows(["d0", capped], ["d1", capped]);
     expect(findExchange(transcript, "scribe", long, AT)?.delivery.id).toBe("d0");
-    expect(findExchange(transcript, "scribe", long, atPlus(500))?.delivery.id).toBe("d1");
+    expect(findExchange(transcript, "scribe", long, AT, [AT])?.delivery.id).toBe("d1");
+    expect(findExchange(transcript, "scribe", long, atPlus(1_500))?.delivery.id).toBe("d1");
     expect(findExchange(transcript, "scribe", long, atPlus(5_000))).toBeNull();
   });
 
@@ -450,5 +485,181 @@ describe("matching a delivery to its call", () => {
     const transcript = rows(["d0", "ok, merged and deployed it all"]);
     expect(findExchange(transcript, "scribe", "ok", AT)).toBeNull();
     expect(findExchange(rows(["d0", "ok"]), "scribe", "ok, merged and deployed", AT)).toBeNull();
+  });
+});
+
+describe("retrying a refused DM", () => {
+  const BUSY = {
+    error:
+      "Delivery failed: @auditor's Bot Chat is open on another surface right now, so your message was NOT delivered. Try again later.",
+    reason: "target_busy",
+  };
+  const refused = (result: unknown) =>
+    bot("m1", [
+      { ...dmCall(result, "bad"), args: { target: "@auditor", message: ASK } } as ChatBlockView,
+    ]);
+
+  test("asks the sender bot once, through the thread's send path, then disables", () => {
+    server = fakeServer({});
+    const sent: string[] = [];
+    renderThread("scribe", [refused(BUSY)], { onSend: (text) => sent.push(text) });
+    const mark = document.querySelector<HTMLElement>(".ch-dm-mark.failed")!;
+    expect(mark.querySelector("summary")?.textContent).toBe(
+      "Couldn't message NickQABot · busy in another window",
+    );
+    const retry = within(mark).getByRole("button", { name: "Retry" }) as HTMLButtonElement;
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(sent).toEqual([
+      "Please retry your message_agent delivery to @auditor — it failed with target_busy.",
+    ]);
+    expect(retry.disabled).toBe(true);
+    expect(mark.textContent).toContain("Asked Marshall to retry");
+  });
+
+  test("is offered only for a reason a second send can fix", () => {
+    server = fakeServer({});
+    for (const [code, reason] of Object.entries(DM_FAILURE_REASONS)) {
+      renderThread("scribe", [refused({ error: "Delivery failed.", reason: code })]);
+      const button = screen.queryByRole("button", { name: "Retry" });
+      expect([code, Boolean(button)]).toEqual([code, reason.retry]);
+      cleanup();
+    }
+    renderThread("scribe", [refused({ error: "Delivery failed.", reason: "flux_capacitor" })]);
+    expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+  });
+
+  test("is not offered where the thread cannot send", () => {
+    server = fakeServer({});
+    const sent: string[] = [];
+    renderThread("scribe", [refused(BUSY)], { state: "stopped", onSend: (text) => sent.push(text) });
+    expect(document.querySelector(".ch-dm-mark.failed")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("a DM to another machine", () => {
+  test("an acknowledgement naming a connection is never a local bot, whatever its handle", async () => {
+    server = fakeServer({});
+    const relayed = JSON.stringify({
+      status: "queued",
+      to: "@auditor on laptop",
+      process_id: "proc_r1",
+    });
+    // `auditor` is NickQABot here; the ack says this one is on `laptop`.
+    renderThread("scribe", [
+      bot("m1", [{ ...dmCall(relayed), args: { target: "auditor", message: ASK } } as ChatBlockView]),
+    ]);
+    const marker = screen.getByRole("button", { name: /Messaged/ });
+    expect(marker.textContent).toBe("Messagedauditor on laptop");
+    expect(marker.querySelector(".ch-ava")).toBeNull();
+    fireEvent.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ auditor on laptop" });
+    expect(dialog.textContent).toContain(
+      "auditor on laptop is on another machine, so its side of the exchange can't be shown here.",
+    );
+    expect(dialog.textContent).not.toContain("NickQABot");
+    expect(
+      within(dialog).queryByRole("button", { name: /Open .*Bot Chat/ })?.outerHTML,
+    ).toBeUndefined();
+    // No local Bot Chat was read for it.
+    expect(server.calls).toEqual([]);
+  });
+
+  test("a peer acknowledgement, and a target in either remote form, name the other machine", () => {
+    const peer = { status: "queued", to: "@auditor on peer 'spark'" };
+    const { container } = renderMessage(
+      bot("m1", [
+        { ...dmCall(peer), args: { target: "spark/auditor", message: ASK } } as ChatBlockView,
+      ]),
+    );
+    expect(container.querySelector(".ch-dm-mark")?.textContent).toBe("Messagedauditor on peer spark");
+    cleanup();
+    for (const [target, name] of [
+      ["auditor@laptop", "auditor on laptop"],
+      ["spark/auditor", "auditor on peer spark"],
+    ]) {
+      const { container: c } = renderMessage(
+        bot("m1", [{ ...dmCall(null, "running"), args: { target, message: ASK } } as ChatBlockView]),
+      );
+      expect(c.querySelector(".ch-dm-mark")?.textContent).toBe(`Messaging${name}…`);
+      cleanup();
+    }
+  });
+
+  test("a bare target stands in only when the acknowledgement names no destination", () => {
+    // A local ack wins over a target that would resolve elsewhere.
+    const { container } = renderMessage(
+      bot("m1", [
+        {
+          ...dmCall({ status: "queued", to: "@auditor" }),
+          args: { target: "Marshall", message: ASK },
+        } as ChatBlockView,
+      ]),
+    );
+    expect(container.querySelector(".ch-dm-mark")?.textContent).toBe("MessagedNickQABot");
+    cleanup();
+    // Running: no ack yet, so the bare target is the best guess there is.
+    const { container: running } = renderMessage(
+      bot("m1", [
+        { ...dmCall(null, "running"), args: { target: "auditor", message: ASK } } as ChatBlockView,
+      ]),
+    );
+    expect(running.querySelector(".ch-dm-mark")?.textContent).toBe("MessagingNickQABot…");
+  });
+});
+
+describe("pairing a call with its delivery", () => {
+  const rowsAt = (...bodies: [string, number][]) =>
+    bodies.map(([id, ms]) => delivery(id, { name: "Marshall", handle: "scribe" }, atPlus(ms)));
+
+  test("a delivery stamped a moment before its call is still the call's", () => {
+    const transcript = rowsAt(["d0", -300]);
+    expect(findExchange(transcript, "scribe", ASK, AT)?.delivery.id).toBe("d0");
+    // Past the allowance it belongs to something earlier.
+    expect(findExchange(rowsAt(["d0", -DELIVERY_SKEW_MS - 1]), "scribe", ASK, AT)).toBeNull();
+  });
+
+  test("two identical calls in one turn each get their own delivery, in order", () => {
+    const transcript = rowsAt(["d0", 400], ["d1", 900]);
+    expect(findExchange(transcript, "scribe", ASK, AT)?.delivery.id).toBe("d0");
+    expect(findExchange(transcript, "scribe", ASK, AT, [AT])?.delivery.id).toBe("d1");
+    // A third call of the same body has nothing left to claim yet.
+    expect(findExchange(transcript, "scribe", ASK, AT, [AT, AT])).toBeNull();
+  });
+
+  test("an earlier call of the same body in another turn keeps its own delivery", () => {
+    const transcript = rowsAt(["d0", 300], ["d1", 60_300]);
+    expect(findExchange(transcript, "scribe", ASK, atPlus(60_000), [AT])?.delivery.id).toBe("d1");
+    // Its delivery rolled out of the transcript: it takes this call's, and this one finds none.
+    expect(findExchange(rowsAt(["d1", 60_300]), "scribe", ASK, atPlus(60_000), [AT])).toBeNull();
+  });
+
+  test("the exchange opened from the second of two identical calls shows the second reply", async () => {
+    server = fakeServer({
+      "chat.history": {
+        instance: "atlas",
+        bot: "auditor",
+        session: "sx-auditor",
+        messages: [
+          delivery("d0", { name: "Marshall", handle: "scribe" }, atPlus(200)),
+          bot("r0", [{ kind: "text", markdown: "First answer." }], "auditor"),
+          delivery("d1", { name: "Marshall", handle: "scribe" }, atPlus(700)),
+          bot("r1", [{ kind: "text", markdown: "Second answer." }], "auditor"),
+        ],
+      },
+    });
+    const call = (id: string, proc: string) =>
+      ({
+        ...dmCall(JSON.stringify({ status: "queued", to: "@auditor", process_id: proc })),
+        tool_id: id,
+      }) as ChatBlockView;
+    renderThread("scribe", [bot("m1", [call("c1", "proc_1"), call("c2", "proc_2")])]);
+    const markers = screen.getAllByRole("button", { name: /Messaged/ });
+    fireEvent.click(markers[1]!);
+    const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ NickQABot" });
+    await waitFor(() => expect(dialog.textContent).toContain("Second answer."));
+    expect(dialog.textContent).not.toContain("First answer.");
   });
 });

@@ -22,13 +22,12 @@ import { useEffect, useRef, useState } from "react";
 import { fetchHistory } from "../../api/index.ts";
 import type { ChatMessageView } from "../../api/index.ts";
 import { useFocusTrap } from "../../lib/focus.ts";
-import { dmSender, findExchange, noticeReply, resolveDmBot } from "../bot-dm.ts";
+import { callSends, dmSender, dmTarget, findExchange, noticeReply } from "../bot-dm.ts";
 import type { DmBot } from "../bot-dm.ts";
 import { chatHash } from "../chat-routing.ts";
-import { processStarts } from "../process-events.ts";
 import { turnRows } from "../chat-turns.ts";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
-import { BotDmContext, PartyFace, party } from "./BotDm.tsx";
+import { BotDmContext, PartyFace, party, targetParty } from "./BotDm.tsx";
 import type { ExchangeRequest, Party } from "./BotDm.tsx";
 import { Message } from "./Message.tsx";
 import { RedactedText } from "./RedactedText.tsx";
@@ -155,10 +154,7 @@ export function BotExchange({
   let local: { delivery: ChatMessageView; replies: ChatMessageView[] } | null = null;
   if (request.side === "sender") {
     sender = party(self, bot);
-    target = party(
-      resolveDmBot([request.call.to, request.call.target], teammates),
-      request.call.target,
-    );
+    target = targetParty(request.call, teammates);
     message = request.call.message;
     at = request.at;
   } else {
@@ -183,18 +179,21 @@ export function BotExchange({
 
   // The sender side reads the target's Bot Chat; the receiver side already has it.
   const read = useBotChat(instance, request.side === "sender" ? target.bot : null);
-  // When the call was made: the stamp of the source row its delivery process
-  // started on, which a merged turn's own (first-row) stamp is not.
-  const since =
+  // When the call was made — the stamp of its own source row, which a merged
+  // turn's (first-row) stamp is not — and when each earlier send of the same
+  // body to the same bot was, so a repeated body pairs with its own delivery.
+  const sends =
     request.side === "sender"
-      ? (request.call.processId && processStarts(transcript).get(request.call.processId)?.at) ||
-        request.at
+      ? callSends(transcript, request.call, (other) => {
+          const to = dmTarget(other, teammates);
+          return !to.elsewhere && to.bot?.name === target.bot;
+        })
       : null;
   const found =
     request.side === "receiver"
       ? local
       : read.state === "done"
-        ? findExchange(read.messages, bot, message, since)
+        ? findExchange(read.messages, bot, message, sends?.since ?? at, sends?.earlier)
         : null;
   const replies = (found?.replies ?? []).filter((m) => m.role === "bot");
   // The reply the delivery's completion notice carried back, for a target
@@ -235,7 +234,7 @@ export function BotExchange({
         </div>
         <div className="ch-dm-body">
           {/* Nothing drawn in here opens a second exchange over this one. */}
-          <BotDmContext.Provider value={{ teammates, open: null }}>
+          <BotDmContext.Provider value={{ teammates, open: null, retry: null }}>
             <Said
               rows={[spoken("dm-sent", at, sender, instance, message)]}
               who={sender}
@@ -260,6 +259,11 @@ export function BotExchange({
                 <p className="ch-dm-note">
                   {read.state === "failed" ? (
                     <RedactedText text={`Couldn't read ${target.name}'s Bot Chat: ${read.error}`} />
+                  ) : request.side === "sender" && target.elsewhere ? (
+                    // The relay or a peer carried it: its Bot Chat is on that machine.
+                    <RedactedText
+                      text={`${target.name} is on another machine, so its side of the exchange can't be shown here.`}
+                    />
                   ) : request.side === "sender" && !target.bot ? (
                     // Nothing was read: there is no Bot Chat here to read.
                     <RedactedText

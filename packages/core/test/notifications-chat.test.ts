@@ -1567,8 +1567,9 @@ describe("chat.event: a roster movement is classified by one history read", () =
   });
 
   test("an operator line that merely reads like a signature is still news", async () => {
-    // `Message from HR: …` parses as a handle-less signature; a real delivery
-    // always carries its sender's handle, so this one is the operator speaking.
+    // A handle-less signature (only the legacy bracketed form parses as one);
+    // a real delivery always carries its sender's handle, so this one is the
+    // operator speaking.
     const store = new MemoryNotificationStore();
     const state = {
       at: AT,
