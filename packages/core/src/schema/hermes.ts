@@ -51,14 +51,18 @@ export {
  *   operator owns it, and the agent's own dashboard can change it.
  *
  * Which of the two a given setting lands in is decided by whether the operator
- * ever stated it. `agent create` with no `--model` seeds the provider's default
- * and steps back — switching model in the dashboard is the most ordinary thing
- * an operator does, and a managed key cannot be switched at all. `agent create
- * --model X` means the opposite: they asked hermetic to hold the model, so
- * hermetic holds it, and `agent set --model Y` is what moves it. The rule is
- * one sentence — **hermetic manages what it was told to manage** — and it is
- * the only rule that makes both `agent set --model` and the dashboard's model
- * picker work without either lying about which one won.
+ * asked hermetic to *hold* it. Stating a value is not that: `agent create
+ * --max-turns 600` says what the agent starts with, and the agent's own
+ * dashboard can still move it — tuning a running agent is the most ordinary
+ * thing an operator does, and a managed key cannot be tuned at all. `--hold
+ * max_turns` means the opposite: hermetic holds the key, and `agent set` is
+ * what moves it. The rule is one sentence — **hermetic manages what it was
+ * told to manage** — and `HermesHold` is the one place it is told.
+ *
+ * The model is the exception. A profile-bound agent's model is managed whether
+ * or not anyone said so (§8.3): a profile exists to answer which model its
+ * credential runs, and an agent that drifted off it on the box would make that
+ * answer a suggestion. `splitHermesSettings` carries the rest of the rule.
  */
 
 /**
@@ -104,8 +108,10 @@ export type ApprovalsMode = z.infer<typeof ApprovalsMode>;
 
 /**
  * What an operator may say about Hermes. Every field is optional, and the
- * optionality carries meaning: a stated field is managed, an unstated one is
- * seeded from `HERMES_DEFAULTS` (see the module comment). Nothing here is
+ * optionality carries meaning: a stated field is the agent's starting value,
+ * an unstated one is seeded from the fleet's defaults and `HERMES_DEFAULTS`
+ * (see the module comment). Whether hermetic then *holds* a field is
+ * `HermesHold`'s question, not this object's. Nothing here is
  * frozen onto the row unless it was stated, so a fleet default that moves in a
  * later hermetic release reaches every agent that never overrode it.
  *
@@ -133,6 +139,29 @@ export const HermesSettings = z.object({
   approvals_mode: ApprovalsMode.optional(),
 });
 export type HermesSettings = z.infer<typeof HermesSettings>;
+
+/**
+ * The settings an operator can ask hermetic to hold (`--hold`, §6.4).
+ *
+ * Not every `HermesSettings` key. `model` is held on every profile-bound agent
+ * already, so naming it would be a flag that does nothing. `approvals_mode` is
+ * seed-only by design (`SEED_ONLY`): holding it would make the mode
+ * un-flippable on the box in both directions at once.
+ */
+export const HoldableSetting = z.enum(["terminal_backend", "max_turns", "reasoning_effort"]);
+export type HoldableSetting = z.infer<typeof HoldableSetting>;
+
+/**
+ * Which of an agent's Hermes settings hermetic holds in the managed scope.
+ *
+ * On a request it replaces whatever the row held: `--hold max_turns` holds
+ * exactly that, and an empty list holds nothing. On the row it is nullish, and
+ * the two absences mean different things from the one an empty list means —
+ * see `splitHermesSettings`: a row written before this field existed held every
+ * key its operator stated, and still does until somebody says otherwise.
+ */
+export const HermesHold = z.array(HoldableSetting);
+export type HermesHold = z.infer<typeof HermesHold>;
 
 /**
  * The fleet's answers where an agent states none.
@@ -177,26 +206,6 @@ export const HERMES_DEFAULTS = {
 } as const satisfies Required<Omit<HermesSettings, "model">>;
 
 /**
- * Split an agent's stated settings into the two files that carry them.
- *
- * `managed` is what the operator stated, verbatim — it goes into the managed
- * scope and is rewritten on every apply. `seed` is the rest, filled from the
- * fleet defaults and the provider's `default_model` — it is written into the
- * user scope once and then belongs to whoever is driving the agent.
- *
- * Every key appears in exactly one of the two. That is what keeps the two files
- * from disagreeing: a seeded key an operator later edits on the box is not also
- * sitting in the managed file waiting to override the edit. Which of the two a
- * key lands in is "did the operator state it", with one exception the `SEED_ONLY`
- * set names — those keys are seeded whether stated or not.
- *
- * `seedDefaults` is the fleet's own answers as they stood when this agent was
- * created (`Agent.seed`, resolved by `resolveCreateDefaults`). It fills unstated
- * fields ahead of `defaultModel` and `HERMES_DEFAULTS`, and it can only ever
- * reach `seed`: a fleet default is not a per-agent instruction, so inheriting
- * one must never make hermetic *manage* a field the operator never named.
- */
-/**
  * The keys that go to `seed` even when the operator stated them.
  *
  * `approvals_mode` is one because managing it would make it un-flippable on the
@@ -222,10 +231,43 @@ export const HERMES_DEFAULTS = {
  */
 const SEED_ONLY = new Set<keyof HermesSettings>(["approvals_mode"]);
 
+/**
+ * Split an agent's stated settings into the two files that carry them.
+ *
+ * `managed` goes into the managed scope and is rewritten on every apply. `seed`
+ * is written into the user scope once and then belongs to whoever is driving
+ * the agent. Every key appears in exactly one of the two. That is what keeps
+ * the two files from disagreeing: a seeded key an operator later edits on the
+ * box is not also sitting in the managed file waiting to override the edit.
+ *
+ * A key is managed when hermetic was told to hold it, and seeded otherwise:
+ *
+ * - **`hold` is a list** (every agent created since `--hold` existed): a key in
+ *   it is managed, with the value it resolves to — stated, else the fleet's,
+ *   else `HERMES_DEFAULTS` — so `--hold max_turns` on its own pins the value the
+ *   agent has now. A key not in it is seeded, stated or not; a stated one is
+ *   re-asserted when the stated answer changes (`seedCommands`), since a seed
+ *   alone lands only on first boot.
+ * - **`hold` is absent** (a row written before the field): every *stated* key
+ *   is managed, exactly as it always was. Re-reading those rows under the new
+ *   rule would hand settings their operators asked hermetic to hold to the box
+ *   without anyone asking; `agent set --hold` is how one moves over.
+ *
+ * `model` is managed whenever it is stated, under both rules: every
+ * profile-bound agent states it (`create-agent.ts`), and a profile's model is
+ * held by design (§8.3). `SEED_ONLY` names the keys seeded whatever is said.
+ *
+ * `seedDefaults` is the fleet's own answers as they stood when this agent was
+ * created (`Agent.seed`, resolved by `resolveCreateDefaults`). It fills unstated
+ * fields ahead of `defaultModel` and `HERMES_DEFAULTS`, and on its own it can
+ * only ever reach `seed`: a fleet default is not a per-agent instruction, so
+ * inheriting one must never make hermetic *manage* a field nobody held.
+ */
 export function splitHermesSettings(
   settings: HermesSettings | null | undefined,
   defaultModel: string,
   seedDefaults?: HermesSettings | null | undefined,
+  hold?: readonly HoldableSetting[] | null | undefined,
 ): { managed: HermesSettings; seed: HermesSettings } {
   const stated = settings ?? {};
   const fleet = seedDefaults ?? {};
@@ -240,8 +282,13 @@ export function splitHermesSettings(
   };
   const managed: HermesSettings = {};
   const seed: HermesSettings = {};
+  const held = (key: keyof HermesSettings): boolean => {
+    if (SEED_ONLY.has(key)) return false;
+    if (key === "model" || hold === null || hold === undefined) return stated[key] !== undefined;
+    return (hold as readonly string[]).includes(key);
+  };
   for (const key of Object.keys(full) as Array<keyof Required<HermesSettings>>) {
-    const target = stated[key] === undefined || SEED_ONLY.has(key) ? seed : managed;
+    const target = held(key) ? managed : seed;
     // `as never` only because TypeScript cannot see that `full[key]` and the
     // target's `[key]` are the same union member for the same key.
     target[key] = full[key] as never;

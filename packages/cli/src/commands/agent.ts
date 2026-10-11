@@ -21,7 +21,12 @@ import { renderOp } from "../stream.ts";
 import { assertConfirmable, confirmPlan } from "../confirm.ts";
 import { declare } from "../declare.ts";
 import { HermeticError, ROOT_GIB_MAX, ROOT_GIB_MIN, resolveCreatePreset } from "@hermetic/core";
-import type { HermesSettings, PresetsView, ResolvedCreatePreset } from "@hermetic/core";
+import type {
+  HermesSettings,
+  HoldableSetting,
+  PresetsView,
+  ResolvedCreatePreset,
+} from "@hermetic/core";
 import {
   AgentRefInput,
   CreateAgentInput,
@@ -50,23 +55,74 @@ function hermesOptions(cmd: Cmd): Cmd {
     .option("--max-turns <n>", "ceiling on tool-calling turns in one agent run")
     .option("--reasoning <effort>", "low | medium | high")
     .option("--approvals <mode>", "smart | manual | off (default off)")
+    .option(
+      "--hold <keys>",
+      "settings hermetic holds, comma-separated: terminal,max-turns,reasoning (or none)",
+    )
     .addHelpText(
       "after",
-      "\nA setting you name here is one hermetic holds: it is written to the agent's\n" +
-        "managed config on every apply and cannot be changed on the box. A setting you\n" +
-        "leave out is seeded once with the fleet default and is then the agent's own,\n" +
-        "changeable from its dashboard.\n" +
-        "\n--approvals is the exception: it is written to the agent's own config rather\n" +
-        "than the managed one, so it can still be changed on the box, and hermetic\n" +
-        "re-asserts it only when you change the answer here.\n",
+      "\nA setting you name here is the agent's starting value: it is written to the\n" +
+        "agent's own config, changeable from its dashboard, and hermetic writes it\n" +
+        "again only when you change the answer here. A setting you leave out is seeded\n" +
+        "once with the fleet default.\n" +
+        "\n--hold makes hermetic hold a setting instead: it is written to the agent's\n" +
+        "managed config on every apply and cannot be changed on the box. On `set` the\n" +
+        "list replaces the one before it. The model is always held (it comes from the\n" +
+        "agent's provider profile); --approvals can never be held. An agent created\n" +
+        "before --hold existed holds every setting it was given until --hold is set.\n",
     );
+}
+
+/**
+ * `--hold`'s spellings, mapped onto the setting each one holds. The flag names
+ * the settings by the flags that state them, so `--hold max-turns` reads as the
+ * `--max-turns` it pins; the schema's own key names are accepted too, since
+ * that is what `--json` prints back.
+ */
+const HOLD_SPELLINGS: Readonly<Record<string, HoldableSetting>> = {
+  terminal: "terminal_backend",
+  terminal_backend: "terminal_backend",
+  "terminal-backend": "terminal_backend",
+  "max-turns": "max_turns",
+  max_turns: "max_turns",
+  reasoning: "reasoning_effort",
+  reasoning_effort: "reasoning_effort",
+  "reasoning-effort": "reasoning_effort",
+};
+
+/**
+ * `--hold a,b` as the list `CreateAgentInput.hold`/`SetAgentInput.hold` take,
+ * or `undefined` when the flag was not given. `none` (or an empty value) is the
+ * explicit empty list — on `set`, the way to stop holding anything. An unknown
+ * name is refused here, naming the spellings, because core would only be able
+ * to say which enum it failed.
+ */
+export function holdFrom(raw: unknown): HoldableSetting[] | undefined {
+  if (raw === undefined) return undefined;
+  const names = String(raw)
+    .split(",")
+    .map((n) => n.trim().toLowerCase())
+    .filter((n) => n !== "");
+  if (names.length === 1 && names[0] === "none") return [];
+  return names.map((n) => {
+    const key = HOLD_SPELLINGS[n];
+    if (key === undefined) {
+      throw new HermeticError(
+        "VALIDATION",
+        `--hold: unknown setting "${n}"; use terminal, max-turns, reasoning or none`,
+        { hold: n },
+      );
+    }
+    return key;
+  });
 }
 
 /**
  * Gather those flags into the one nested object the schema takes, or
  * `undefined` when none were given — which is not the same as an empty object.
- * Naming nothing means hermetic manages nothing here; that is what puts these
- * settings in the seed rather than the managed config.
+ * Naming nothing means the fleet's defaults are seeded; naming a setting seeds
+ * the value given instead. Neither makes hermetic hold it — that is `--hold`
+ * (`holdFrom`).
  */
 function hermesFrom(
   opts: Record<string, unknown>,
@@ -81,7 +137,7 @@ function hermesFrom(
     max_turns: toInt(opts["maxTurns"] as string | undefined),
     reasoning_effort: opts["reasoning"],
     // Seed-only, stated or not (`SEED_ONLY` in `schema/hermes.ts`): naming it
-    // moves the seed hermetic writes, it never makes the mode a managed key.
+    // moves the seed hermetic writes, and `--hold` cannot make it managed.
     approvals_mode: opts["approvals"],
   });
   return Object.keys(settings).length === 0 ? undefined : (settings as HermesSettings);
@@ -128,6 +184,7 @@ export function createInputFrom(
       volume_id: opts["volume"],
       rollback_on_failure: opts["rollbackOnFailure"],
       hermes: hermesFrom(opts),
+      hold: holdFrom(opts["hold"]),
     }),
   });
 }
@@ -482,6 +539,7 @@ export function register(program: Command): void {
             root_gib: toInt(opts["rootGib"] as string | undefined),
             hermes_version: opts["hermesVersion"],
             hermes: hermesFrom(opts, { omitModel: true }),
+            hold: holdFrom(opts["hold"]),
           }),
         );
         const agent = await ctx.hermetic.agents.set(input);

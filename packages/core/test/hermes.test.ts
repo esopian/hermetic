@@ -108,4 +108,40 @@ describe("splitHermesSettings", () => {
       "terminal_backend",
     ]);
   });
+
+  /**
+   * `--hold` (§6.4). With a list on the row, stating a value seeds it and only
+   * a listed key is managed; with no list at all — a row written before the
+   * field — every stated key stays managed, so no existing agent moves.
+   */
+  describe("with a hold list", () => {
+    test("a stated key not in the list is seeded", () => {
+      const { managed, seed } = splitHermesSettings({ max_turns: 600 }, "catalog-model", null, []);
+      expect(managed).toEqual({});
+      expect(seed.max_turns).toBe(600);
+    });
+
+    test("a listed key is managed, stated or not", () => {
+      const { managed, seed } = splitHermesSettings(
+        { reasoning_effort: "high" },
+        "catalog-model",
+        { max_turns: 42 },
+        ["reasoning_effort", "max_turns"],
+      );
+      expect(managed).toEqual({ reasoning_effort: "high", max_turns: 42 });
+      expect(seed).not.toHaveProperty("max_turns");
+      expect(seed).not.toHaveProperty("reasoning_effort");
+    });
+
+    test("a stated model is managed whatever the list says", () => {
+      const { managed } = splitHermesSettings({ model: "stated-model" }, "catalog-model", null, []);
+      expect(managed).toEqual({ model: "stated-model" });
+    });
+
+    test("an absent list holds every stated key, as before", () => {
+      const stated = { max_turns: 600, terminal_backend: "docker" } as const;
+      expect(splitHermesSettings(stated, "catalog-model", null, undefined).managed).toEqual(stated);
+      expect(splitHermesSettings(stated, "catalog-model", null, null).managed).toEqual(stated);
+    });
+  });
 });

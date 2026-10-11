@@ -68,6 +68,35 @@ export const DOCKER_GROUP = "docker";
 /** The `hermes` account's login shell; what `tailscale ssh hermes@<host>` starts. */
 const HERMES_LOGIN_SHELL = "/bin/bash";
 
+/** `usermod --shell` when the passwd entry's shell is not the login shell; true when it ran. */
+async function setLoginShell(host: Host, current: string | undefined): Promise<boolean> {
+  if (current === HERMES_LOGIN_SHELL) return false;
+  await must(host, ["usermod", "--shell", HERMES_LOGIN_SHELL, HERMES_USER]);
+  return true;
+}
+
+/**
+ * Give an existing `hermes` account its login shell, outside any apply.
+ *
+ * `ensureAccounts` re-asserts the shell, but only an apply runs it, and an apply
+ * only runs on a bootstrap or on a converge whose config hash moved. A box
+ * created with `nologin` by an older hermeticd therefore stayed `nologin` after
+ * the self-update brought it a release that knows better: the nightly update
+ * swaps the binary and restarts the service, and a rollout over an unchanged
+ * render finds the box already `current`. Its Tailscale SSH login (§9.3) kept
+ * printing "This account is currently not available" until a `recreate`.
+ *
+ * `hermeticd serve` calls this at start-up, which every self-update ends with,
+ * so the release that carries the login shell is the release that sets it.
+ * Nothing to do when the account does not exist yet: the bootstrap's apply
+ * creates it with the right shell. Returns true when it changed the shell.
+ */
+export async function ensureLoginShell(host: Host): Promise<boolean> {
+  const passwd = await host.exec(["getent", "passwd", HERMES_USER]);
+  if (passwd.code !== 0) return false;
+  return setLoginShell(host, passwd.stdout.trim().split(":")[6]);
+}
+
 /**
  * Create the `hermes` account, the `docker` group it needs to be in, its home
  * on the data volume and the `$HERMES_HOME` its unit sets as
@@ -145,10 +174,9 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
    *
    * Unlike `--home` above, `usermod --shell` succeeds while the account has
    * running processes, so this is safe on a live box with the gateway up.
+   * `ensureLoginShell` runs the same check at `hermeticd serve` start-up.
    */
-  if (fields[6] !== HERMES_LOGIN_SHELL) {
-    await must(host, ["usermod", "--shell", HERMES_LOGIN_SHELL, HERMES_USER]);
-  }
+  await setLoginShell(host, fields[6]);
   /**
    * Give the account a user manager. systemd only starts `user@<uid>.service`
    * while the account has a session, and nobody is normally logged in as

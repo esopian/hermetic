@@ -404,6 +404,18 @@ describe("exit reasons", () => {
     expect(h.host.list()[0]?.session_id).toBe(session_id);
   });
 
+  test("nologin's words within 10 s are no_login_shell, whatever the status", async () => {
+    const h = await harness();
+    await open(h);
+    h.ptys[0]?.emit(
+      "Welcome to Ubuntu 24.04.4 LTS\r\n\r\nThis account is currently not available.\r\n",
+    );
+    h.ptys[0]?.emit("Connection to atlas.tail4b7e2.ts.net. closed.\r\n");
+    h.ptys[0]?.end({ code: 0, signal: null });
+    await until(() => h.host.list()[0]?.state === "ended");
+    expect(h.host.list()[0]?.exit).toEqual({ code: 0, signal: null, reason: "no_login_shell" });
+  });
+
   test("the same exit after 10 s is a disconnect", async () => {
     const h = await harness();
     await open(h);
@@ -431,6 +443,11 @@ describe("exit reasons", () => {
       exitReason({ ...base, requested: "closed", code: 255, tail: () => "not allowed to ssh" }),
     ).toBe("closed");
     expect(exitReason({ ...base, requested: "shutdown", code: 0 })).toBe("shutdown");
+    const nologin = () => "This account is currently not available.";
+    expect(exitReason({ ...base, code: 1, tail: nologin })).toBe("no_login_shell");
+    // Past the connect window it is something the operator printed.
+    expect(exitReason({ ...base, code: 0, ranMs: 10_000, tail: nologin })).toBe("exited");
+    expect(exitReason({ ...base, requested: "closed", code: 0, tail: nologin })).toBe("closed");
   });
 
   test("a shell exit is read off the last command line the integration saw start", () => {

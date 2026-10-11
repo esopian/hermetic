@@ -114,6 +114,7 @@ export type RequestName =
   | "presets.set"
   | "chat.listening"
   | "chat.listen"
+  | "chat.settings"
   | "chat.swarms"
   | "chat.sessions"
   | "chat.history"

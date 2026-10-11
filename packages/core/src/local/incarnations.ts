@@ -18,13 +18,21 @@
  * - an earlier `created_at` than the recorded one: a read that was delayed past
  *   a newer one (two scans in flight). Ignored — it neither purges nor records,
  *   so the reconciliation never moves backward to the predecessor;
- * - no record at all: the first time this laptop sees the name. It is recorded
- *   and nothing is purged. That includes every name on the first read after the
- *   upgrade that introduced this table: the state already on disk was gathered
- *   against *some* incarnation this laptop cannot now identify, and assuming it
- *   was the wrong one would wipe every operator's chat history, listening
- *   opt-ins and mutes on upgrade. A name released and re-taken before that first
- *   read keeps its stale state, exactly as it did before this table existed;
+ * - no record at all: the first time this laptop sees the name. It is recorded,
+ *   and as a rule nothing is purged. That includes every name on the first read
+ *   after the upgrade that introduced this table: the state already on disk was
+ *   gathered against *some* incarnation this laptop cannot identify from the
+ *   record alone, and assuming it was the wrong one would wipe every operator's
+ *   chat history, listening opt-ins and mutes on upgrade. The one exception is
+ *   evidence that it was the wrong one: a name released and re-taken while this
+ *   laptop was not looking (offline, or not yet upgraded). If the store dates
+ *   any of the name's local state (`oldestStateAt`) to before the end of a
+ *   predecessor's life — the newest tombstone for the name that ended no later
+ *   than this row was born (`releases`, `predecessorEnd`) — that state was
+ *   gathered against the predecessor, and the name is purged once, after the
+ *   claim, exactly as a `replace` is. State with no date (a listening opt-in, a
+ *   fence) cannot be attributed, so a name holding only that is adopted as
+ *   before;
  * - recorded, but absent from a *complete* scan: the name was released and not
  *   yet taken again. Purged and forgotten, so a dead box's open notifications
  *   stop counting in the badge here too. A single-row read (`getAgent`) cannot
@@ -74,9 +82,10 @@
  * (`isOlder`, the `inFuture` exception) stay here in one place rather than
  * being repeated in SQL.
  *
- * Purely local, like the tables it guards — nothing here reaches AWS, and it
- * must never move to DynamoDB, because "what this laptop has seen" is the whole
- * meaning of a row.
+ * Purely local, like the tables it guards — the record must never move to
+ * DynamoDB, because "what this laptop has seen" is the whole meaning of a row.
+ * The one read of the fleet it makes is through `releases`, and only on a first
+ * sighting of a name this laptop already holds dated state for.
  */
 
 /**
@@ -99,8 +108,22 @@ export interface IncarnationStore {
   /** Drop `name`'s record if it still holds `expected`. Returns whether it did. */
   forgetIf(fleet: string, name: string, expected: string): boolean;
   forget(fleet: string, name: string): void;
+  /**
+   * The earliest timestamp on any *dated* local state this laptop holds for
+   * `name` in `fleet` — the state a purge would drop that says when it was
+   * written — or `undefined` when there is none. Read only on a first
+   * sighting, to tell state left by a predecessor from state about this row.
+   * Absent on a store that cannot see those tables (`MemoryIncarnationStore`),
+   * which then adopts every first sighting as it always did.
+   */
+  oldestStateAt?(fleet: string, name: string): string | undefined;
 }
 
+/**
+ * The in-process record. It has no `oldestStateAt`: it lives and dies with the
+ * memory stores beside it, so a first sighting here can never find state from
+ * an earlier process to attribute.
+ */
 export class MemoryIncarnationStore implements IncarnationStore {
   private readonly fleets = new Map<string, Map<string, string>>();
 
@@ -156,6 +179,14 @@ export interface IncarnationReconcilerDeps {
    * caller must call straight after its own `scan()` resolves.
    */
   unparseable?: () => readonly string[];
+  /**
+   * The end (`incarnationEnd`: `released_at ?? destroyed_at`) of every life
+   * the fleet's tombstones record for `name`, in any order. Read only on a
+   * first sighting of a name the store holds dated state for. Absent, or
+   * throwing, means no predecessor is known: an absent dep adopts as before,
+   * and a throw leaves the name unrecorded so the next read asks again.
+   */
+  releases?: (name: string) => Promise<readonly string[]>;
 }
 
 export interface ReconcileOptions {
@@ -242,11 +273,44 @@ export function createIncarnationReconciler(deps: IncarnationReconcilerDeps) {
      * Bounded: a record still contended after `CLAIM_ATTEMPTS` lost claims is
      * left for the next read, which compares afresh.
      */
+    /**
+     * Whether a first sighting of `name` finds state a predecessor left: some
+     * of it dated before the end of the life that held the name before this
+     * row. `null` when that cannot be told yet (the tombstone read failed), so
+     * the caller leaves the name unrecorded for the next read to ask again
+     * rather than adopting the state for good.
+     */
+    const predecessorStateLeft = async (name: string, createdAt: string): Promise<boolean | null> => {
+      let oldest: string | undefined;
+      try {
+        oldest = deps.store.oldestStateAt?.(fleet, name);
+      } catch {
+        // Unreadable reads as "nothing dated": adopt, as before this check.
+        return false;
+      }
+      if (oldest === undefined || deps.releases === undefined) return false;
+      let ends: readonly string[];
+      try {
+        ends = await deps.releases(name);
+      } catch {
+        return null;
+      }
+      const end = predecessorEnd(ends, createdAt);
+      return end !== undefined && isOlder(oldest, end);
+    };
     const settle = async (name: string, createdAt: string, recordedAt: string | undefined) => {
       let prior = recordedAt;
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
         const action = decide(prior, createdAt);
         if (action === "keep") return;
+        // Decided before the claim, so a purge still follows only a claim this
+        // call won: a lost one re-reads and decides again like any other.
+        let stale = action === "replace";
+        if (action === "adopt") {
+          const left = await predecessorStateLeft(name, createdAt);
+          if (left === null) return;
+          stale = left;
+        }
         try {
           if (!deps.store.claim(fleet, name, prior, createdAt)) {
             prior = deps.store.get(fleet, name);
@@ -256,7 +320,7 @@ export function createIncarnationReconciler(deps: IncarnationReconcilerDeps) {
           // Unrecorded means the next read compares again; nothing is lost.
           return;
         }
-        if (action === "replace") await purge(name);
+        if (stale) await purge(name);
         return;
       }
     };
@@ -292,8 +356,9 @@ const CLAIM_ATTEMPTS = 4;
 
 /**
  * What a live row asks of its name's record, given the value it holds now:
- * `keep` it, `adopt` the row on a first sighting (record, purge nothing), or
- * `replace` it (record, then purge the old box's state).
+ * `keep` it, `adopt` the row on a first sighting (record; purge only state a
+ * predecessor left, `predecessorStateLeft`), or `replace` it (record, then
+ * purge the old box's state).
  */
 function decide(prior: string | undefined, createdAt: string): "keep" | "adopt" | "replace" {
   if (prior === createdAt) return "keep";
@@ -315,6 +380,25 @@ function decide(prior: string | undefined, createdAt: string): "keep" | "adopt" 
    */
   if (isOlder(createdAt, prior) && !inFuture(prior)) return "keep";
   return "replace";
+}
+
+/**
+ * The end of the life that held the name just before the row born at
+ * `createdAt`: the latest of `ends` no later than that birth. A release always
+ * ends before its successor is born (`release-name.ts`'s floor), so a later end
+ * is not a predecessor of this row. Tombstones are writable by the boxes, so
+ * one ending past this laptop's clock (beyond `FUTURE_SKEW_MS`) is forged and
+ * passed over, as is an end that does not parse.
+ */
+function predecessorEnd(ends: readonly string[], createdAt: string): string | undefined {
+  const bornMs = Date.parse(createdAt);
+  let best: string | undefined;
+  for (const end of ends) {
+    const endMs = Date.parse(end);
+    if (Number.isNaN(endMs) || endMs > bornMs || inFuture(end)) continue;
+    if (best === undefined || endMs > Date.parse(best)) best = end;
+  }
+  return best;
 }
 
 export type ReconcileIncarnations = ReturnType<typeof createIncarnationReconciler>;

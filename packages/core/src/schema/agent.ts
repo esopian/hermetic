@@ -15,7 +15,7 @@ export { PROVIDERS_LIST, PROVIDERS, providerNeedsKey } from "../shared/providers
 export type { ProviderSpec } from "../shared/providers.ts";
 import { browserIdentities } from "./browser.ts";
 import { Iso, ProfileId, Region, Sha256, Version } from "./common.ts";
-import { HermesSettings } from "./hermes.ts";
+import { HermesHold, HermesSettings } from "./hermes.ts";
 
 /** Stored lifecycle status (§4.3). `unreachable` is never stored — see DisplayStatus. */
 export const AgentStatus = z.enum([
@@ -553,6 +553,16 @@ export const Agent = z.object({
    * created with.
    */
   seed: HermesSettings.nullish(),
+  /**
+   * Which Hermes settings hermetic holds in the managed scope (`--hold`, §6.4);
+   * everything else stated in `hermes` is a starting value the box then owns.
+   *
+   * Nullish, and absent is not empty: a row written before the field held every
+   * key its operator stated, and `splitHermesSettings` reads an absent list
+   * that way so no existing agent changes behaviour on upgrade. `agents.create`
+   * always writes a list, so every new row is on the new rule.
+   */
+  hermes_hold: HermesHold.nullish(),
   tailscale_ip: z.string().nullish(),
   /**
    * The MagicDNS name the node actually holds (`tailscale status` `Self.DNSName`,

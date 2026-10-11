@@ -415,9 +415,15 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        * so — a profile exists to answer "which model does this credential run",
        * and an agent that could drift off it on the box would make the answer a
        * suggestion. Everything else here is still only what was actually
-       * stated; what is left unsaid stays seeded (`splitHermesSettings`).
+       * stated, and stated is not held: the rest is seeded, and only what
+       * `hold` names joins the model in the managed scope (`splitHermesSettings`).
        */
       hermes: { ...(parsed.hermes ?? {}), model: binding.model },
+      /**
+       * Always a list, never absent: an absent list is how a row written before
+       * `--hold` says it holds every stated key, and a new agent is not one.
+       */
+      hermes_hold: [...new Set(parsed.hold ?? [])],
       /**
        * And what the *fleet* said, pinned as of now. Everything here is seeded,
        * never managed (`splitHermesSettings`), so it is the agent's from first

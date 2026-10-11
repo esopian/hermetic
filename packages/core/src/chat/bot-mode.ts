@@ -7,7 +7,8 @@ import type { ChatDeps, ChatOptions } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
 import { botHandle } from "../shared/bot-handles.ts";
-import { redactDeep, redactText } from "./chat-redact.ts";
+import { redactText } from "./chat-redact.ts";
+import { MemoryChatSettingsStore, maskFor } from "./chat-settings.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
 
 /**
@@ -221,8 +222,9 @@ function probeProfile(roster: unknown): string {
 }
 
 export function createBotMode(
-  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes">,
+  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes" | "chatSettings">,
 ) {
+  const settings = deps.chatSettings ?? new MemoryChatSettingsStore();
   async function box(instance: string) {
     validateName(instance);
     const { fleet } = await deps.guardFleet();
@@ -273,11 +275,14 @@ export function createBotMode(
           "VALIDATION",
           parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
         );
+      // Room logs and routine runs are transcript content: masked when this
+      // laptop's `redact` is on. A failure below is masked either way.
+      const mask = maskFor(settings);
       try {
         opts.signal?.throwIfAborted();
         const result = await work(parsed.data, opts);
         opts.signal?.throwIfAborted();
-        return redactDeep(result) as O;
+        return mask.deep(result);
       } catch (error) {
         // The caller hanging up is not a failure of the gateway and not a
         // verdict on anything: it propagates as the abort it is, never as a

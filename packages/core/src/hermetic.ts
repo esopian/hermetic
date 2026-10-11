@@ -52,6 +52,7 @@ import { createAgentLogs } from "./agents/agent-logs.ts";
 import { MemoryInstanceListeningStore } from "./chat/instance-listening.ts";
 import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/chat.ts";
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
+import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
 import {
   MemoryNotificationStore,
@@ -73,6 +74,7 @@ import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
@@ -238,6 +240,9 @@ export function createHermetic(deps: HermeticDeps) {
     purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    // A first sighting's evidence that the name changed hands unseen (§6.7).
+    releases: async (name) =>
+      (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
   });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({
@@ -454,9 +459,18 @@ export function createHermetic(deps: HermeticDeps) {
 
   const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
   const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
-  const botMode = createBotMode({ guardFleet, getAgent, instanceListening, hermes: hermesChat });
+  // §9.2: whether transcript content is masked, read by every chat read as it starts.
+  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  const botMode = createBotMode({
+    guardFleet,
+    getAgent,
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
   const chat = createChat({
     instanceListening,
+    chatSettings,
     fleet: () => deps.config?.fleet_id ?? null,
     guardFleet,
     // Chat reads rows without the fleet list, and its sessions, fence and

@@ -37,6 +37,7 @@ import {
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
+  ChatSettingsInput,
   ChatSwarmsInput,
 } from "@hermetic/core";
 import type { Hermetic } from "@hermetic/core";
@@ -59,6 +60,7 @@ import type { StreamSink } from "./streams.ts";
  */
 export const chatListeningSchema = declareRpc("chat.listening", ChatListeningInput);
 export const chatListenSchema = declareRpc("chat.listen", ChatListenInput);
+export const chatSettingsSchema = declareRpc("chat.settings", ChatSettingsInput);
 export const chatSwarmsSchema = declareRpc("chat.swarms", ChatSwarmsInput);
 export const chatSessionsSchema = declareRpc("chat.sessions", ChatSessionsInput);
 export const chatHistorySchema = declareRpc("chat.history", ChatHistoryInput);
@@ -116,6 +118,23 @@ export const ChatSubscribeRequest = z.object({});
 
 export async function listening(ctx: HandlerContext, params: unknown) {
   return await ctx.hermetic().chat.listening(parseInput(chatListeningSchema, params ?? {}));
+}
+
+/**
+ * This laptop's chat settings (§9.2). A `redact` that changed drops the held
+ * observations and re-establishes them, the way a fleet switch does, so a
+ * snapshot read under the old setting is never handed to the next reader.
+ */
+export async function settings(ctx: HandlerContext, params: unknown) {
+  const input = parseInput(chatSettingsSchema, params ?? {});
+  const h = ctx.hermetic();
+  const before = input.redact === undefined ? null : (await h.chat.settings({})).redact;
+  const result = await h.chat.settings(input);
+  if (before !== null && before !== result.redact) {
+    await ctx.chatOwner.reset();
+    void ctx.chatOwner.sync();
+  }
+  return result;
 }
 
 /**
@@ -401,6 +420,7 @@ const turnEntry: Handler = (ctx, params, sink) => turn(ctx, params, requireSink(
 export const chatHandlers = {
   "chat.listening": listening,
   "chat.listen": listen,
+  "chat.settings": settings,
   "chat.swarms": swarms,
   "chat.sessions": sessions,
   "chat.history": history,
