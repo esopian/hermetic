@@ -19,6 +19,7 @@ import {
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import { mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
+import { stripBotDelivery } from "./bot-delivery.ts";
 import { parseProcessNotice } from "./process-notice.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
@@ -152,6 +153,11 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // role and blocks change — the id below is computed from the row exactly
     // as before, so a transcript read either side of this change agrees.
     const notice = role === "user" ? processNoticeOf(row) : null;
+    const blocks = notice ? [notice] : durableHistoryBlocks(row, calls, completed);
+    // Another bot's `message_agent` delivery, likewise on the user role: the
+    // signature becomes `from_bot` and the text keeps only the message. The key
+    // is omitted rather than null on every other row, so their shape is as before.
+    const delivery = role === "user" && !notice ? stripBotDelivery(blocks) : null;
     out.push({
       id:
         str(row.id) ??
@@ -165,10 +171,11 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
       role: notice ? "system" : role,
       author: authorRef(box, row.author ?? row.from),
       at,
-      blocks: notice ? [notice] : durableHistoryBlocks(row, calls, completed),
+      blocks: delivery ? delivery.blocks : blocks,
       usage: mapUsage(rec(row.usage)),
       error: str(row.error),
       incomplete: row.incomplete === true ? true : null,
+      ...(delivery ? { from_bot: delivery.from } : {}),
     });
   }
   return out;

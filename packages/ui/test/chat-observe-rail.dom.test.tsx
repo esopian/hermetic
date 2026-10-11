@@ -417,6 +417,40 @@ describe("the rail moves on the stream, not on the roster's tick", () => {
     expect(railBadge("beta")).toBe(null);
   });
 
+  test("another bot's delivery into an unread canonical chat raises its badge", async () => {
+    const h = harness();
+    h.swarms = [swarmWith("atlas", ["atlas", "beta"])];
+    await mount(h);
+    // Bot Chat, as the server keys a canonical observation.
+    const beta = { instance: "atlas", bot: "beta", session: null };
+    const user = { session: "s-beta", role: "user" };
+
+    // The operator's own prompt, then a legacy signature that names no
+    // handle — possibly the operator typing one. Neither is news.
+    await deliver(h, arrivalFor(beta, messageOf({ ...user, id: "beta-op" })), beta);
+    await deliver(
+      h,
+      arrivalFor(
+        beta,
+        messageOf({ ...user, id: "beta-legacy", from_bot: { name: "HR", handle: null } }),
+      ),
+      beta,
+    );
+    expect(railBadge("beta")).toBe(null);
+
+    // Hermes stores a `message_agent` delivery on the user role; it is still
+    // another bot speaking, and the bot nobody is reading has something new.
+    await deliver(
+      h,
+      arrivalFor(
+        beta,
+        messageOf({ ...user, id: "beta-dm", from_bot: { name: "Marshall", handle: "marshall" } }),
+      ),
+      beta,
+    );
+    await waitFor(() => expect(railBadge("beta")).toBe("1"));
+  });
+
   test("the roster read is authoritative and the local count does not double it", async () => {
     const h = harness();
     h.swarms = [swarmWith("atlas", ["atlas", "beta"])];

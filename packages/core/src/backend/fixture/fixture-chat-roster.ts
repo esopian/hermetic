@@ -99,19 +99,22 @@ const SWARMS: Readonly<Record<string, SwarmSpec>> = {
       {
         ...QUIET,
         name: "scribe",
-        title: "Scribe",
+        // Friendly titles that are not the profile name, so a rename, a reset
+        // and an @mention by title are all distinguishable from the handle.
+        title: "Marshall",
         description: "Writes the morning digest and files it in the run log.",
         is_default: false,
         model: "claude-haiku-4-5",
         section: "Team",
-        last_message_at: at("06:00:12"),
+        // Its Bot Chat (`fixture-chat-dms.ts`), which is newer than the digest.
+        last_message_at: at("08:06:00"),
         warm: true,
         unread: 2,
       },
       {
         ...QUIET,
         name: "auditor",
-        title: "Auditor",
+        title: "NickQABot",
         description: "Reads the Bedrock grant and complains about it.",
         is_default: false,
         model: "us.anthropic.claude-sonnet-5",
@@ -402,6 +405,19 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     turn_count: 1,
   },
   {
+    // Marshall's Bot Chat: the DMs with NickQABot (`fixture-chat-dms.ts`).
+    id: "sx-atlas-scribe-bot-chat",
+    instance: "atlas",
+    bot: "scribe",
+    kind: "canonical",
+    origin: "portal",
+    origin_detail: null,
+    title: "Bot Chat",
+    last_message_at: at("08:06:00"),
+    unread: 0,
+    turn_count: 4,
+  },
+  {
     id: "sx-atlas-auditor-portal",
     instance: "atlas",
     bot: "auditor",
@@ -411,7 +427,7 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     title: "Bedrock grant audit",
     last_message_at: at("08:14:03"),
     unread: 1,
-    turn_count: 3,
+    turn_count: 6,
   },
   {
     id: "sx-atlas-clio-channel",

@@ -681,7 +681,8 @@ export interface ChatActivity {
    *
    * Set by the roster read's classifier (`chat-activity.ts`) when every row
    * the bot gained since the watermark is a background-process event, each one
-   * routine or already raised as its own `chat.event:` row. "Has a new
+   * routine or already raised as its own `chat.event:` row, or a reply that is
+   * only an intentional-silence marker (`NO_REPLY`, `[SILENT]`). "Has a new
    * message" would then be about nothing anybody said, so the watermark
    * advances and nothing is inserted. Absent or false is today's behaviour.
    */

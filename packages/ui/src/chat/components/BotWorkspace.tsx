@@ -321,10 +321,20 @@ export function BotWorkspace({
                 tailnetDetail={chat.tailnetDetail}
                 onSend={chat.send}
                 onAbort={chat.abort}
+                onRename={async (title) => {
+                  // Only the update's own failure is a failed rename.
+                  await botsUpdate({ instance: selection.instance, bot: selection.bot, title });
+                  // Forced: the operator just acted, so the roster read is not a
+                  // background poll the visibility gate should skip. A failed read
+                  // is the roster's to report (`swarmsError`), not the rename's:
+                  // the title is already saved.
+                  await chat.refreshSwarms({ force: true }).catch(() => {});
+                }}
                 mentions={
                   selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])
                 }
                 mentionHint="Mention a teammate on this instance; Hermes handles delivery."
+                teammates={swarm?.bots}
                 sessions={chat.sessions}
                 onChooseSession={(session) => select(selection.instance, selection.bot, session)}
               />
@@ -403,6 +413,9 @@ export function BotWorkspace({
             const created = await botsCreate({
               instance: String(data.get("instance")),
               name: String(data.get("name")),
+              ...(String(data.get("title") ?? "").trim()
+                ? { title: String(data.get("title")).trim() }
+                : {}),
               description: String(data.get("description")),
               soul: String(data.get("soul")),
               ...(data.get("model") ? { model: String(data.get("model")) } : {}),

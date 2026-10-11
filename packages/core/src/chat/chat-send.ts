@@ -33,6 +33,27 @@ import type { ChatDeps, ChatOptions } from "./chat.ts";
  */
 const ATTRIBUTION_DEADLINE_MS = 5_000;
 
+/**
+ * What the canonical chat says when a slash command compacts it.
+ *
+ * `/new` and `/reset` would fork Bot Chat, so they compact instead, and the
+ * operator is told so in Hermes Desktop's words — its composer middleware
+ * reroutes them the same way and toasts "This chat never resets"
+ * (`apps/desktop/src/plugins/hermes-bots/plugin.tsx:756-784` at v2026.9.24).
+ * Desktop's last line points at its Sessions mode; Hermetic's equivalent is a
+ * separate session. A typed `/compact` gets the gateway's own completion
+ * status (`tui_gateway/compute_host_bridge.py:340`). A compaction the gateway
+ * did not perform reports its status either way.
+ */
+function compactNotice(message: string, result: { compressed: boolean; status: string }): string {
+  const outcome = result.compressed ? null : `Compaction: ${result.status}`;
+  if (/^\/compact\s*$/.test(message.trim())) return outcome ?? "✓ Context compression complete";
+  const notice =
+    "This chat never resets. Bot chats are one continuous conversation — compacting instead. " +
+    "For a throwaway session with this bot, start a separate session.";
+  return outcome ? `${notice}\n\n${outcome}` : notice;
+}
+
 /** What `send` reads from the surface that built it. */
 export interface ChatSendContext {
   deps: ChatDeps;
@@ -170,12 +191,7 @@ export function createChatSend(ctx: ChatSendContext) {
             type: "block",
             seq: 0,
             message: "compact",
-            block: {
-              kind: "text",
-              markdown: result.compressed
-                ? "Context compacted. Bot Chat preserved."
-                : `Compaction: ${result.status}`,
-            },
+            block: { kind: "text", markdown: compactNotice(parsed.message, result) },
           };
           yield { type: "done", seq: 1, message: "compact" };
           return;

@@ -28,6 +28,8 @@ import { shortCommand } from "@hermetic/core/shared";
 import { fmtClock } from "../../../logic/format.ts";
 import { chatHash } from "../../chat-routing.ts";
 import { botLabel } from "../../chat-presentation.ts";
+import { resolveDmBot } from "../../bot-dm.ts";
+import { useBotDm } from "../BotDm.tsx";
 import {
   FAILURE_TAIL_LINES,
   OUTPUT_TAIL_LINES,
@@ -374,8 +376,11 @@ function DmReply({ event, at }: { event: ProcessEventView; at: string | null }) 
   const context = useProcessEvents();
   const dm = event.dm!;
   const span = useSpan(event, at);
+  const { teammates } = useBotDm();
   const to = dm.to_profile;
-  const replier = botLabel(context.instance, to, null);
+  // Named by its roster title, as everywhere else a bot speaks; the profile id
+  // when the replier is not on this instance's roster.
+  const replier = botLabel(context.instance, to, resolveDmBot([to], teammates)?.title);
   const delivery = [
     event.process_id ? `delivered by ${event.process_id}` : null,
     event.exit_code != null ? `exit ${event.exit_code}` : null,

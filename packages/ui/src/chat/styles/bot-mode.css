@@ -249,29 +249,43 @@
   bottom: 100%;
   left: 20px;
   right: 20px;
+  /* Eight rows fit; the cap is upstream's, the scroll is for short windows. */
+  max-height: 290px;
+  overflow-y: auto;
   background: var(--bg2);
   border: 1px solid var(--line2);
   z-index: 20;
   box-shadow: 0 -10px 25px #0005;
 }
+/* Face, friendly name, then the tag that will be inserted, right-aligned. */
 .bm-mentions button {
   display: flex;
-  justify-content: space-between;
-  gap: 14px;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 7px 12px;
   background: transparent;
   color: var(--fg);
   border: 0;
   cursor: pointer;
+  text-align: left;
+}
+.bm-mentions button > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
 }
 .bm-mentions button[aria-selected="true"] {
   background: var(--sel);
   box-shadow: inset 2px 0 var(--acc);
 }
 .bm-mentions .mono {
-  font-size: 10px;
+  margin-left: auto;
+  font: 11px var(--mono);
   color: var(--fg2);
+  white-space: nowrap;
 }
 .bm-request-actions {
   width: 100%;
