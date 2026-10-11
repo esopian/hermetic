@@ -263,6 +263,35 @@ export function AclPanel({ onPolicy, onRetry }: { onPolicy: () => void; onRetry:
   );
 }
 
+/**
+ * The box let the login through and `nologin` ended it: the `hermes` account was
+ * created by a hermeticd older than the terminal (§9.3). The release that sets
+ * the shell does so when it starts, so the remedy is getting it onto the box.
+ */
+export function NoLoginShellPanel({ host, onRetry }: { host: string; onRetry: () => void }) {
+  return (
+    <TermPanel
+      tone="bad"
+      kicker="Terminal · no login shell"
+      title="This agent's hermes account can't log in yet"
+      actions={
+        <button type="button" className="btn btn-secondary" onClick={onRetry}>
+          Try again
+        </button>
+      }
+    >
+      <p>
+        The box was created by a hermeticd older than the terminal, so{" "}
+        <span className="mono">hermes</span> still has the <span className="mono">nologin</span> shell.
+        Push this build's hermeticd with <span className="mono">hermetic artifacts push</span>: the box
+        takes it on its nightly update and sets the shell when the new hermeticd starts. A{" "}
+        <span className="mono">recreate</span> fixes it now. Until then,{" "}
+        <span className="mono">tailscale ssh root@{host}</span> logs in as root.
+      </p>
+    </TermPanel>
+  );
+}
+
 /** A deep link (a notification's `Open session`) to a session the app no longer holds. */
 export function ClosedPanel({ onConnect }: { onConnect: () => void }) {
   return (

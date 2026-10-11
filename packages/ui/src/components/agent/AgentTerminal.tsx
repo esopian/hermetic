@@ -37,7 +37,14 @@ import {
   setTerminalShowing,
   viewedTerminal,
 } from "../../state/terminal-watch.ts";
-import { AclPanel, ClosedPanel, ColdPanel, PreflightPanel, StoppedPanel } from "./TerminalPanels.tsx";
+import {
+  AclPanel,
+  ClosedPanel,
+  ColdPanel,
+  NoLoginShellPanel,
+  PreflightPanel,
+  StoppedPanel,
+} from "./TerminalPanels.tsx";
 import { TerminalPane } from "./TerminalPane.tsx";
 import {
   asProblem,
@@ -288,6 +295,7 @@ export function AgentTerminal({
     ) : null;
   } else {
     const acl = selected?.state === "ended" && selected.exit?.reason === "acl_denied";
+    const nologin = selected?.state === "ended" && selected.exit?.reason === "no_login_shell";
     const live = sessions.filter((s) => s.state === "live").length;
     const foot = !terminal.alerts ? (
       <>
@@ -306,6 +314,7 @@ export function AgentTerminal({
     body = (
       <>
         {acl ? <AclPanel onPolicy={() => onSettings("policy")} onRetry={() => void connect()} /> : null}
+        {nologin ? <NoLoginShellPanel host={host} onRetry={() => void connect()} /> : null}
         <TerminalPane
           sessions={sessions}
           selected={opening ? null : selected}

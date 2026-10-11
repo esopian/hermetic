@@ -170,6 +170,7 @@ function stateOfEnded(s: TerminalSessionView): string {
   const exit = s.exit;
   if (exit === undefined) return "ended";
   if (exit.reason === "acl_denied") return "ended · denied";
+  if (exit.reason === "no_login_shell") return "ended · no login shell";
   if (exit.reason === "closed") return "ended · closed";
   return exit.signal !== null ? `ended · ${exit.signal}` : `ended · exit ${exit.code ?? "?"}`;
 }
