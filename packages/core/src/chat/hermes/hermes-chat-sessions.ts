@@ -11,7 +11,7 @@ import type { Rpc } from "./hermes-chat-rpc.ts";
 import { arr, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
 import { botDeliveryPreview } from "./bot-delivery.ts";
 import { processNoticePreview } from "./process-notice.ts";
-import type { Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
+import type { ChatRole, Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
 
 /** What `createChatSessions` needs, and nothing more. */
 export interface ChatSessionsDeps {
@@ -222,6 +222,23 @@ function sessionOrigin(raw: string | null): SessionOrigin {
  * (`bot-delivery.ts`), anything else passes through untouched.
  */
 export function eventPreview(preview: string | null): string | null {
-  if (preview === null) return null;
-  return processNoticePreview(preview) ?? botDeliveryPreview(preview) ?? preview;
+  return eventPreviewOf(preview).preview;
+}
+
+/**
+ * `eventPreview`, with the role of the row it quotes when the rewrite proves
+ * one (`Bot.preview_role`): a notice is the `system` row history lifts it to,
+ * a delivery is the `user` row Hermes stored it on. Anything else is upstream's
+ * text alone, which names no role, so the role is null.
+ */
+export function eventPreviewOf(preview: string | null): {
+  preview: string | null;
+  preview_role: ChatRole | null;
+} {
+  if (preview === null) return { preview: null, preview_role: null };
+  const notice = processNoticePreview(preview);
+  if (notice !== null) return { preview: notice, preview_role: "system" };
+  const delivery = botDeliveryPreview(preview);
+  if (delivery !== null) return { preview: delivery, preview_role: "user" };
+  return { preview, preview_role: null };
 }

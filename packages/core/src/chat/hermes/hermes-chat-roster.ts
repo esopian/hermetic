@@ -13,7 +13,7 @@ import {
   type HermesChatOptions,
 } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
-import { eventPreview, mapSessions } from "./hermes-chat-sessions.ts";
+import { eventPreviewOf, mapSessions } from "./hermes-chat-sessions.ts";
 import { arr, describe, isHermeticCode, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
 import type { Bot, BotRef, Room, Swarm } from "../../schema/index.ts";
 
@@ -231,7 +231,7 @@ export function mapSwarm(
        * `last_session` gets a watermark but no preview rather than somebody
        * else's words.
        */
-      preview: botPreview(row),
+      ...botPreview(row),
       /**
        * These two *are* per-operator state, living in local SQLite (§9.2).
        * Whether this laptop has read a message, and whether this operator has
@@ -366,12 +366,13 @@ function spoke(session: Record<string, unknown>): boolean {
  *
  * A preview that opens with a background-process notice reads as the event
  * (`eventPreview`), never as the raw `[IMPORTANT: …` Hermes stored as the
- * user's row.
+ * user's row. The role travels with it only when that rewrite proves one;
+ * upstream's own preview names none (`Bot.preview_role`).
  */
-function botPreview(row: Record<string, unknown> | null): string | null {
+function botPreview(row: Record<string, unknown> | null): Pick<Bot, "preview" | "preview_role"> {
   const canonical = rec(row?.canonical_session);
-  if (canonical) return eventPreview(str(canonical.preview));
-  return eventPreview(str(rec(row?.last_session)?.preview));
+  if (canonical) return eventPreviewOf(str(canonical.preview));
+  return eventPreviewOf(str(rec(row?.last_session)?.preview));
 }
 
 /**

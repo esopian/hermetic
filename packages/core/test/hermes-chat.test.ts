@@ -31,7 +31,7 @@ import type {
 } from "../src/chat/hermes/hermes-chat.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
-import { ChatFrame } from "../src/schema/index.ts";
+import { Bot, ChatFrame } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
   AGENTS_LIST_RESULT,
@@ -1930,6 +1930,40 @@ describe("hermes-chat · a notice in a preview", () => {
       sessions: [{ session_id: "s2", title: "t", preview: "why is it down?" }],
     });
     expect(plain?.preview).toBe("why is it down?");
+  });
+});
+
+describe("hermes-chat · who wrote a bot's preview", () => {
+  const roleOf = (preview: string) =>
+    mapSwarm(
+      BOX,
+      { profiles: [{ name: "default", is_default: true, canonical_session: { id: "s1", preview } }] },
+      null,
+      null,
+      null,
+    ).bots[0];
+
+  test("upstream's own preview names no role, so neither does the bot's", () => {
+    // `_latest_message_preview` selects the newest user/assistant row's
+    // content alone: a bare `No reply` could be either side's.
+    expect(roleOf("No reply")).toMatchObject({ preview: "No reply", preview_role: null });
+  });
+
+  test("a preview rewritten from a row hermetic recognised carries that row's role", () => {
+    expect(roleOf("Message from 🤖 Marshall (@scribe): NO_REPLY")).toMatchObject({
+      preview: "Marshall: NO_REPLY",
+      preview_role: "user",
+    });
+    expect(roleOf("[IMPORTANT: Background process proc_3be1c0a4d2e1 completed n...")).toMatchObject({
+      preview: "proc_3be1c0a4d2e1 completed",
+      preview_role: "system",
+    });
+  });
+
+  test("a roster row from before the field still parses", () => {
+    const [bot] = mapSwarm(BOX, LIVE_PROFILES_LIST, null, null, null).bots;
+    const { preview_role: _, ...old } = bot as NonNullable<typeof bot>;
+    expect(Bot.safeParse(old).success).toBe(true);
   });
 });
 

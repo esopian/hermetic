@@ -1,7 +1,7 @@
 /** Conversation records outlive the frame displaying them, but never their fleet provider. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatApi, ChatSelection } from "./chat-state.tsx";
-import type { ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
+import type { BotView, ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
 import { isProcessEventMessage, previewText } from "./process-events.ts";
@@ -74,11 +74,11 @@ export interface ChatArrival {
   at: string | null;
   unread: boolean;
   /**
-   * What the rail should quote under this bot's name, when this arrival is a
-   * reply the rail's own preview is now stale about. Absent leaves whatever
-   * the roster last said; see `replyArrival`.
+   * What the rail should quote under this bot's name, and who wrote it, when
+   * this arrival is a reply the rail's own preview is now stale about. Absent
+   * leaves whatever the roster last said; see `replyArrival`.
    */
-  preview?: string | null;
+  preview?: Pick<BotView, "preview" | "preview_role"> | null;
 }
 
 /**
@@ -113,7 +113,8 @@ function replyArrival(record: Conversation, live: ChatMessageView | null): ChatA
     at: recorded ? recorded.at : null,
     // A reply into the thread this turn was typed in is being read as it lands.
     unread: false,
-    preview,
+    // The row is in hand, so the rail knows whose words these are.
+    preview: { preview, preview_role: source.role },
   };
 }
 
@@ -610,8 +611,12 @@ export function useConversations(
               bot: conversation.bot,
               at: message.at,
               // The operator's own prompt is not unread, and neither is a reply
-              // landing in the thread they are looking at.
-              unread: message.role !== "user" && !open,
+              // landing in the thread they are looking at. Another bot's
+              // `message_agent` delivery rides the user role but is not the
+              // operator speaking, so it counts like a reply. Only with a
+              // handle: a legacy `Message from HR: …` signature carries none
+              // and may be the operator typing one (`core/chat/chat-activity.ts`).
+              unread: (message.role !== "user" || Boolean(message.from_bot?.handle)) && !open,
             });
           };
           // Nothing is appended to a transcript this browser has never read:

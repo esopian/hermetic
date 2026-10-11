@@ -139,7 +139,7 @@ export function BotRail({
               {/* `||`, not `??`: a box can send an empty description, and an empty
                   string would leave the row blank under the name. */}
               {/* A bare `NO_REPLY` is the bot choosing not to answer, not its words. */}
-              {isSilentPreview(bot.preview) ? (
+              {isSilentPreview(bot.preview, bot.preview_role) ? (
                 <span className="ch-conv-silent">{SILENT_LABEL}</span>
               ) : (
                 <RedactedText text={bot.preview || bot.description || bot.name} />

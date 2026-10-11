@@ -166,6 +166,8 @@ test("a finished Bot Chat turn moves its own rail row, with no roster read", asy
   await waitFor(() => expect(s.turns.length).toBe(1));
   await s.done();
   await waitFor(() => expect(s.bot.preview).toBe("Pong, and the browser is up."));
+  // The row is in hand, so the rail knows the bot wrote it (`isSilentPreview`).
+  expect(s.bot.preview_role).toBe("bot");
   // The box's stamp, never this laptop's clock.
   expect(s.bot.last_message_at).toBe(BOX_AT);
   // Reading the reply is not an unread message.

@@ -78,6 +78,10 @@ export const FOREIGN_ORIGINS: readonly SessionOrigin[] = SESSION_ORIGINS.filter(
 export const SessionKind = z.enum(["canonical", "thread", "routine"]);
 export type SessionKind = z.infer<typeof SessionKind>;
 
+/** Who wrote a message. Declared here because the roster quotes one (`Bot.preview_role`). */
+export const ChatRole = z.enum(["user", "bot", "system"]);
+export type ChatRole = z.infer<typeof ChatRole>;
+
 /* ── the roster ───────────────────────────────────────────────────────────── */
 
 export const Bot = z.object({
@@ -130,6 +134,20 @@ export const Bot = z.object({
    * a bot nobody has spoken to has nothing to preview.
    */
   preview: z.string().nullish(),
+  /**
+   * Who wrote the message `preview` quotes, when that is known.
+   *
+   * The rail reads a bare silence marker (`NO_REPLY`) as the bot staying
+   * silent, which is only true of a `bot` row: the operator typing "No reply"
+   * is the operator's words. Upstream's preview carries no role
+   * (`tui_gateway/methods_profiles.py` `_latest_message_preview` selects the
+   * newest `user`/`assistant` row's `content` alone, v2026.9.24), so it is set
+   * only where hermetic itself knows the row: a preview it rewrote from a
+   * background-process notice (`system`, as history lifts it) or another bot's
+   * delivery (`user`) — `eventPreviewOf` — or one built from a transcript row.
+   * Null is "not known", never "the operator".
+   */
+  preview_role: ChatRole.nullish(),
   unread: z.number().int().nonnegative(),
   needs_action: z.boolean(),
   muted: z.boolean(),
@@ -511,9 +529,6 @@ export const CHAT_BLOCK_KINDS = [
 ] as const;
 
 /* ── messages ─────────────────────────────────────────────────────────────── */
-
-export const ChatRole = z.enum(["user", "bot", "system"]);
-export type ChatRole = z.infer<typeof ChatRole>;
 
 export const ChatUsage = z.object({
   input_tokens: z.number().int().nonnegative().nullish(),

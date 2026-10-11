@@ -69,7 +69,20 @@ export function silentTitle(markdown: string): string {
   return `replied ${markdown.trim()} — Hermes suppresses delivery`;
 }
 
-/** A rail preview that is only a marker. */
-export function isSilentPreview(text: string | null | undefined): boolean {
+/**
+ * A rail preview that is only a marker, from a bot.
+ *
+ * The marker is silence only when the bot returned it: the operator's own
+ * "No reply" is their words, as is anything else a non-bot row says. An
+ * unknown role is the common case, not an old shape — upstream's preview
+ * names none (`BotView.preview_role`) — and the newest row of a Bot Chat that
+ * reads as a bare marker is overwhelmingly the bot's, so it still reads as
+ * silence rather than showing every silent bot's raw `NO_REPLY`.
+ */
+export function isSilentPreview(
+  text: string | null | undefined,
+  role?: ChatMessageView["role"] | null,
+): boolean {
+  if (role != null && role !== "bot") return false;
   return !!text && isIntentionalSilence(text);
 }

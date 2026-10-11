@@ -108,7 +108,7 @@ function Conv({
           `??`, because a box can send an empty string for either.
         */}
         <span className="ch-conv-prev">
-          {isSilentPreview(bot.preview) ? (
+          {isSilentPreview(bot.preview, bot.preview_role) ? (
             <span className="ch-conv-silent">{SILENT_LABEL}</span>
           ) : (
             bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)
