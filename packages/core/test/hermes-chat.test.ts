@@ -1337,6 +1337,32 @@ describe("hermes-chat · swarm", () => {
     expect(bot?.avatar_seed).toBe("fxtr0001/veronica/default");
   });
 
+  test("a bot's title follows Desktop's precedence: Bot Mode title, display name, profile name", async () => {
+    const row = (name: string, extra: Record<string, unknown>) => ({ name, ...extra });
+    const h = harness({
+      results: {
+        "profiles.list": {
+          profiles: [
+            row("scribe", {
+              display_name: "Core name",
+              ui_meta: { "hermes-bots": { title: " Marshall ", custom: true } },
+            }),
+            row("auditor", { display_name: "Core name", ui_meta: { "hermes-bots": { title: "  " } } }),
+            row("clio", { display_name: "", ui_meta: { "hermes-bots": { custom: true } } }),
+          ],
+        },
+        "groups.list": GROUPS_LIST_RESULT,
+        "agents.list": AGENTS_LIST_RESULT,
+      },
+    });
+    const swarm = await createHermesChat(h.deps).swarm(BOX);
+    expect(swarm.bots.map((b) => [b.name, b.title])).toEqual([
+      ["scribe", "Marshall"],
+      ["auditor", "Core name"],
+      ["clio", "clio"],
+    ]);
+  });
+
   test("an unreachable box is a value the rail can draw, not a thrown error", async () => {
     const h = harness({ htmlThrows: true });
     const swarm = await createHermesChat(h.deps).swarm(BOX);

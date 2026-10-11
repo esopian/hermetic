@@ -949,3 +949,119 @@ describe("Bot Mode capability certainty", () => {
     expect(g.calls.some((c) => c.includes("profile=all"))).toBe(false);
   });
 });
+
+describe("bot titles", () => {
+  /**
+   * A gateway whose `scribe` row carries Desktop's look keys beside a title, at
+   * revision 4, and which records every `profiles.configure` it is sent.
+   */
+  function titleGateway(reply: (params: Record<string, unknown>) => unknown) {
+    const sent: Record<string, unknown>[] = [];
+    const g = gateway({
+      rpc: async (method, params) => {
+        if (method === "profiles.list")
+          return {
+            profiles: [
+              {
+                name: "scribe",
+                ui_meta: {
+                  "hermes-bots": { title: "Scribe", shape: "hex", color: "#123456", custom: true },
+                  other: { kept: true },
+                },
+                ui_meta_revisions: { "hermes-bots": 4, other: 9 },
+              },
+            ],
+          };
+        if (method === "profiles.configure") {
+          sent.push(params);
+          return reply(params);
+        }
+        if (method === "profiles.describe") return { name: "scribe" };
+        throw new HermeticError("CHAT_PROTOCOL", `the double was not asked for ${method}`);
+      },
+    });
+    return { g, sent };
+  }
+  const saved = () => ({
+    ok: true,
+    applied: { ui_meta: true, ui_meta_revisions: { "hermes-bots": 5 } },
+  });
+  const REF = { instance: "atlas", bot: "scribe" };
+
+  test("a rename merges the title into the existing namespace, at the revision it read", async () => {
+    const { g, sent } = titleGateway(saved);
+    await g.bots.update({ ...REF, title: "  Marshall  " });
+    expect(sent).toEqual([
+      {
+        name: "scribe",
+        ui_meta: {
+          "hermes-bots": { title: "Marshall", shape: "hex", color: "#123456", custom: true },
+        },
+        ui_meta_expected_revisions: { "hermes-bots": 4 },
+      },
+    ]);
+  });
+
+  test("a reset deletes the title and keeps every other key", async () => {
+    for (const title of [null, "", "   "]) {
+      const { g, sent } = titleGateway(saved);
+      await g.bots.update({ ...REF, title });
+      expect(sent[0]?.ui_meta).toEqual({
+        "hermes-bots": { shape: "hex", color: "#123456", custom: true },
+      });
+    }
+  });
+
+  test("a revision conflict is a named CONFLICT, not a silent overwrite", async () => {
+    const { g } = titleGateway(() => ({
+      ok: true,
+      applied: {
+        ui_meta: false,
+        ui_meta_conflicts: { "hermes-bots": { expected: 4, actual: 5 } },
+        ui_meta_revisions: { "hermes-bots": 5 },
+      },
+    }));
+    const error = await failureOf(g.bots.update({ ...REF, title: "Marshall" }));
+    expect(error.code).toBe("CONFLICT");
+    expect(error.message).toContain("revision 4 expected, 5 found");
+  });
+
+  test("an unapplied write fails, and a gateway without the contract is unsupported", async () => {
+    const failed = titleGateway(() => ({ ok: false, applied: { ui_meta: false } }));
+    expect((await failureOf(failed.g.bots.update({ ...REF, title: "M" }))).code).toBe("CONFLICT");
+    const old = titleGateway(() => ({ ok: true }));
+    const error = await failureOf(old.g.bots.update({ ...REF, title: "M" }));
+    expect(error.code).toBe("CHAT_PROTOCOL");
+    expect(error.message).toContain("titles");
+  });
+
+  test("an update without a title never reads or writes ui_meta", async () => {
+    const { g, sent } = titleGateway(() => ({ ok: true, applied: { description: true } }));
+    await g.bots.update({ ...REF, description: "Digest" });
+    expect(sent).toEqual([{ name: "scribe", description: "Digest" }]);
+    expect(g.calls).not.toContain("profiles.list");
+  });
+
+  test("a title over 64 characters is refused before the gateway is asked", async () => {
+    const { g, sent } = titleGateway(saved);
+    expect((await failureOf(g.bots.update({ ...REF, title: "x".repeat(65) }))).code).toBe("VALIDATION");
+    expect(sent).toEqual([]);
+  });
+
+  test("in the fixture a rename changes the roster title and a reset restores the profile name", async () => {
+    const h = await fixture();
+    const scribe = async () =>
+      (await h.chat.swarms({ instance: "atlas" })).swarms[0]?.bots.find((b) => b.name === "scribe");
+    expect((await scribe())?.title).toBe("Marshall");
+    await h.bots.update({ instance: "atlas", bot: "scribe", title: "Archivist" });
+    expect((await scribe())?.title).toBe("Archivist");
+    await h.bots.update({ instance: "atlas", bot: "scribe", title: null });
+    expect((await scribe())?.title).toBe("scribe");
+    // The default profile's title is its display name, which a reset leaves alone.
+    await h.bots.update({ instance: "atlas", bot: "default", title: "Front desk" });
+    const atlas = async () => (await h.chat.swarms({ instance: "atlas" })).swarms[0]?.bots;
+    expect((await atlas())?.find((b) => b.is_default)?.title).toBe("Front desk");
+    await h.bots.update({ instance: "atlas", bot: "default", title: "" });
+    expect((await atlas())?.find((b) => b.is_default)?.title).toBe("atlas");
+  });
+});

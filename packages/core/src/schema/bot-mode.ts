@@ -25,6 +25,13 @@ export const BotCreateInput = z
 export const BotUpdateInput = z
   .object({
     ...Ref,
+    /**
+     * The friendly name a bot presents, stored as `ui_meta['hermes-bots'].title`
+     * the way Hermes Desktop's Edit profile does. `null` or an empty string
+     * clears it, so the bot falls back to its display name or profile name. It
+     * never renames the profile directory.
+     */
+    title: z.string().trim().max(64).nullable().optional(),
     description: z.string().max(1000).optional(),
     soul: Text.optional(),
     model: z.string().max(200).optional(),

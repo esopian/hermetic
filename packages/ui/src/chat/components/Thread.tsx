@@ -36,6 +36,7 @@ import type { Pin } from "../stick-to-bottom.ts";
 import type { Destination, ThreadState } from "../chat-logic.ts";
 import { Composer } from "./Composer.tsx";
 import { Face } from "./Face.tsx";
+import { BotTitleEdit } from "./BotTitleEdit.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
 
@@ -347,6 +348,7 @@ export function Thread({
   onSend,
   onAbort,
   actions,
+  onRename,
   mentions,
   mentionHint,
   sessions = [],
@@ -377,6 +379,11 @@ export function Thread({
   onSend: (text: string) => void;
   onAbort: () => void;
   actions?: ReactNode;
+  /**
+   * Rename the bot's friendly title (`null` resets it). Absent means this
+   * surface cannot, so the header offers no pencil.
+   */
+  onRename?: (title: string | null) => Promise<void>;
   mentions?: readonly MentionBot[];
   mentionHint?: string;
   /**
@@ -481,7 +488,16 @@ export function Thread({
         />
         <div>
           <div className="ch-thead-name">
-            <RedactedText text={botLabel(instance, bot, botTitle)} />
+            {onRename ? (
+              <BotTitleEdit
+                label={botLabel(instance, bot, botTitle)}
+                title={botTitle?.trim() && botTitle.trim() !== bot ? botTitle.trim() : null}
+                fallback={botLabel(instance, bot, null)}
+                onSave={onRename}
+              />
+            ) : (
+              <RedactedText text={botLabel(instance, bot, botTitle)} />
+            )}
             {bot !== "default" ? <span className="mono">{`@ ${instance}`}</span> : null}
             {isDefault ? <span className="ch-default">default bot</span> : null}
           </div>

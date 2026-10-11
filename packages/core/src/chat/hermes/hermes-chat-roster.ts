@@ -195,9 +195,7 @@ export function mapSwarm(
     bots.push({
       instance: box.instance,
       name,
-      // `display_name` is empty string far more often than it is absent, which
-      // is why this is a truthiness check and not a null check.
-      title: str(row?.display_name) || str(row?.title) || name,
+      title: profileTitle(row, name),
       description: str(row?.description) || null,
       is_default: row?.is_default === true,
       model: str(row?.model),
@@ -374,6 +372,22 @@ function botPreview(row: Record<string, unknown> | null): string | null {
   const canonical = rec(row?.canonical_session);
   if (canonical) return eventPreview(str(canonical.preview));
   return eventPreview(str(rec(row?.last_session)?.preview));
+}
+
+/**
+ * The name a profile row presents, in Hermes Desktop's precedence
+ * (`apps/desktop/src/plugins/hermes-bots/labels.ts` `displayName` at
+ * `v2026.9.24`): the Bot Mode title an operator set (`ui_meta['hermes-bots']
+ * .title`, what `bots.update` writes), then the core profile's `display_name`,
+ * then the profile name. Desktop's last two steps — "Hermes" for `default` and
+ * title-casing — are presentation, and hermetic's heads present the raw name
+ * (`botLabel`). `display_name` is the empty string far more often than it is
+ * absent, which is why every step is a trimmed truthiness check.
+ */
+export function profileTitle(row: Record<string, unknown> | null, name: string): string {
+  const meta = rec(rec(row?.ui_meta)?.["hermes-bots"]);
+  const pick = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return pick(meta?.title) || pick(row?.display_name) || pick(row?.title) || name;
 }
 
 function unreachable(box: BoxAddress, reason: string): Swarm {

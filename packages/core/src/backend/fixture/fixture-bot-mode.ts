@@ -3,10 +3,54 @@ import type { HermesChatClient, BoxAddress } from "../../chat/hermes/hermes-chat
 import type { FixtureChatActivity } from "./fixture-chat.ts";
 import type { Bot, ChatConversation, ChatMessage } from "../../schema/index.ts";
 import { HermeticError } from "../../errors.ts";
+import { profileTitle } from "../../chat/hermes/hermes-chat-roster.ts";
 
 const rec = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.map(rec) : []);
+
+/**
+ * Upstream's `_configure_ui_meta` (`tui_gateway/methods_profiles.py` at Hermes
+ * `v2026.9.24`), in memory: a top-level key is replaced whole (`null` deletes
+ * it), each written key's revision moves by one, and an expected revision that
+ * does not match the key's current one rejects the whole write with the
+ * conflicts named. Returns the `applied` fields the reply carries.
+ */
+function configureUiMeta(
+  profile: Record<string, unknown>,
+  p: Record<string, unknown>,
+): Record<string, unknown> {
+  const incoming = rec(p.ui_meta);
+  const revisions = { ...rec(profile.ui_meta_revisions) } as Record<string, number>;
+  const expected =
+    p.ui_meta_expected_revisions === undefined ? null : rec(p.ui_meta_expected_revisions);
+  const conflicts: Record<string, { expected: unknown; actual: number }> = {};
+  for (const k of expected ? Object.keys(incoming) : []) {
+    const wanted = expected?.[k],
+      actual = revisions[k] ?? 0;
+    if (wanted !== actual) conflicts[k] = { expected: wanted, actual };
+  }
+  const current = (k: string) => revisions[k] ?? 0;
+  if (Object.keys(conflicts).length > 0)
+    return {
+      ui_meta: false,
+      ui_meta_conflicts: conflicts,
+      ui_meta_revisions: Object.fromEntries(Object.keys(incoming).map((k) => [k, current(k)])),
+    };
+  const meta = { ...rec(profile.ui_meta) };
+  for (const [k, v] of Object.entries(incoming)) {
+    if (v === null) delete meta[k];
+    else meta[k] = v;
+    revisions[k] = current(k) + 1;
+  }
+  if (Object.keys(meta).length > 0) profile.ui_meta = meta;
+  else delete profile.ui_meta;
+  profile.ui_meta_revisions = revisions;
+  return {
+    ui_meta: true,
+    ui_meta_revisions: Object.fromEntries(Object.keys(incoming).map((k) => [k, current(k)])),
+  };
+}
 
 /**
  * The fixture box whose gateway is an older build.
@@ -68,6 +112,15 @@ export function withFixtureBotMode(
             toolsets: [],
             mcp_servers: [],
             is_default: b.is_default,
+            // Seeded the way a real box stores them: a non-default bot's title
+            // is the Bot Mode title an operator set (`ui_meta['hermes-bots']`,
+            // what `bots.update` rewrites and a reset deletes), and the default
+            // profile's is its core `display_name`, which no reset touches.
+            ...(b.title !== b.name && !b.is_default
+              ? { ui_meta: { "hermes-bots": { title: b.title, custom: true } } }
+              : {}),
+            ...(b.title !== b.name && b.is_default ? { display_name: b.title } : {}),
+            ui_meta_revisions: b.title !== b.name && !b.is_default ? { "hermes-bots": 1 } : {},
           },
         ]),
       );
@@ -153,20 +206,18 @@ export function withFixtureBotMode(
       case "profiles.configure": {
         const b = bots.get(name);
         if (!b) throw new HermeticError("NOT_FOUND", "Profile not found");
+        const applied: Record<string, unknown> = Object.fromEntries(
+          Object.keys(p)
+            .filter((k) => k !== "name" && k !== "ui_meta_expected_revisions")
+            .map((k) => [k, true]),
+        );
         Object.assign(b, {
           ...(p.description !== undefined ? { description: p.description } : {}),
           ...(p.soul !== undefined ? { soul: p.soul } : {}),
-          ...(p.ui_meta !== undefined ? { ui_meta: p.ui_meta } : {}),
         });
         if (p.model !== undefined) b.model = { ...rec(b.model), default: p.model };
-        return {
-          ok: true,
-          applied: Object.fromEntries(
-            Object.keys(p)
-              .filter((k) => k !== "name")
-              .map((k) => [k, true]),
-          ),
-        };
+        if (p.ui_meta !== undefined) Object.assign(applied, configureUiMeta(b, p));
+        return { ok: Object.values(applied).every((v) => v !== false), applied };
       }
       case "groups.capabilities":
         if (isLegacyGateway(box.instance))
@@ -458,7 +509,7 @@ export function withFixtureBotMode(
           ...(existing ?? original.bots[0]),
           name: String(p.name),
           instance: box.instance,
-          title: existing?.title ?? String(p.name),
+          title: profileTitle(p, String(p.name)),
           description: String(p.description ?? ""),
           model: String(rec(p.model).default ?? "Fixture"),
           is_default: p.name === "default",

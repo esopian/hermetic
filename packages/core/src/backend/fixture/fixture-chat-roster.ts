@@ -99,7 +99,9 @@ const SWARMS: Readonly<Record<string, SwarmSpec>> = {
       {
         ...QUIET,
         name: "scribe",
-        title: "Scribe",
+        // Friendly titles that are not the profile name, so a rename, a reset
+        // and an @mention by title are all distinguishable from the handle.
+        title: "Marshall",
         description: "Writes the morning digest and files it in the run log.",
         is_default: false,
         model: "claude-haiku-4-5",
@@ -111,7 +113,7 @@ const SWARMS: Readonly<Record<string, SwarmSpec>> = {
       {
         ...QUIET,
         name: "auditor",
-        title: "Auditor",
+        title: "NickQABot",
         description: "Reads the Bedrock grant and complains about it.",
         is_default: false,
         model: "us.anthropic.claude-sonnet-5",

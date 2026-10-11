@@ -437,9 +437,52 @@ export function createBotMode(
       );
     return get({ instance, bot: p.name }, opts);
   });
+  /**
+   * The `ui_meta` half of a title change: the profile's current `hermes-bots`
+   * namespace with `title` merged in (or deleted, for a reset), sent with the
+   * revision it was read at.
+   *
+   * Upstream merges `ui_meta` one top-level key at a time
+   * (`_configure_ui_meta`, `tui_gateway/methods_profiles.py` at `v2026.9.24`),
+   * so sending `{ "hermes-bots": { title } }` alone would replace the whole
+   * namespace and drop every other key Desktop keeps there. The expected
+   * revision makes the read-merge-write one compare-and-swap: if Desktop saved
+   * that namespace in between, the gateway rejects the write instead of this
+   * one silently undoing it.
+   */
+  async function titleMeta(instance: string, bot: string, title: string | null, opts: ChatOptions) {
+    const listed = record(await rpc(instance, "profiles.list", { include_sessions: false }, opts));
+    const row = records(listed.profiles).find((entry) => entry.name === bot);
+    if (!row) throw new HermeticError("NOT_FOUND", `${bot}: profile not found on ${instance}`);
+    const meta: Record<string, unknown> = { ...record(record(row.ui_meta)["hermes-bots"]) };
+    if (title) meta.title = title;
+    else delete meta.title;
+    meta.custom = true;
+    const revision = record(row.ui_meta_revisions)["hermes-bots"];
+    return {
+      ui_meta: { "hermes-bots": meta },
+      ui_meta_expected_revisions: { "hermes-bots": typeof revision === "number" ? revision : 0 },
+    };
+  }
   const update = operation(S.BotUpdateInput, async (p, opts) => {
-    const { instance, bot, ...changes } = p;
-    const r = record(await rpc(instance, "profiles.configure", { name: bot, ...changes }, opts));
+    const { instance, bot, title, ...changes } = p;
+    const meta = title === undefined ? {} : await titleMeta(instance, bot, title, opts);
+    const r = record(
+      await rpc(instance, "profiles.configure", { name: bot, ...changes, ...meta }, opts),
+    );
+    if (title !== undefined) {
+      const applied = record(r.applied);
+      const conflict = record(record(applied.ui_meta_conflicts)["hermes-bots"]);
+      if (Object.keys(conflict).length > 0)
+        throw new HermeticError(
+          "CONFLICT",
+          `${bot}: its Bot Mode settings changed elsewhere since they were read (revision ${String(conflict.expected)} expected, ${String(conflict.actual)} found). Reload before renaming again.`,
+        );
+      if (applied.ui_meta === false)
+        throw new HermeticError("CONFLICT", `${bot}: the gateway did not save the new name`);
+      if (applied.ui_meta !== true)
+        return unsupported("This gateway does not store Bot Mode titles; update Hermes");
+    }
     if (r.confirm_required === true)
       throw new HermeticError(
         "CONFIRMATION_REQUIRED",

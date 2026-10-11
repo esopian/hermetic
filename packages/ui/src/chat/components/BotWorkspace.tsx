@@ -321,6 +321,12 @@ export function BotWorkspace({
                 tailnetDetail={chat.tailnetDetail}
                 onSend={chat.send}
                 onAbort={chat.abort}
+                onRename={async (title) => {
+                  await botsUpdate({ instance: selection.instance, bot: selection.bot, title });
+                  // Forced: the operator just acted, so the roster read is not a
+                  // background poll the visibility gate should skip.
+                  await chat.refreshSwarms({ force: true });
+                }}
                 mentions={
                   selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])
                 }
