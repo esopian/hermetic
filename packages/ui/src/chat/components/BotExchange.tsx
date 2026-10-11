@@ -180,7 +180,7 @@ export function BotExchange({
   // The sender side reads the target's Bot Chat; the receiver side already has it.
   const read = useBotChat(instance, request.side === "sender" ? target.bot : null);
   // When the call was made — the stamp of its own source row, which a merged
-  // turn's (first-row) stamp is not — and when each earlier send of the same
+  // turn's (first-row) stamp is not — and when each later send of the same
   // body to the same bot was, so a repeated body pairs with its own delivery.
   const sends =
     request.side === "sender"
@@ -193,7 +193,7 @@ export function BotExchange({
     request.side === "receiver"
       ? local
       : read.state === "done"
-        ? findExchange(read.messages, bot, message, sends?.since ?? at, sends?.earlier)
+        ? findExchange(read.messages, bot, message, sends?.since ?? at, sends?.later)
         : null;
   const replies = (found?.replies ?? []).filter((m) => m.role === "bot");
   // The reply the delivery's completion notice carried back, for a target

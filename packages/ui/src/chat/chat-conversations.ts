@@ -614,8 +614,8 @@ export function useConversations(
               // landing in the thread they are looking at. Another bot's
               // `message_agent` delivery rides the user role but is not the
               // operator speaking, so it counts like a reply. Only with a
-              // handle: a legacy `Message from HR: …` signature carries none
-              // and may be the operator typing one (`core/chat/chat-activity.ts`).
+              // handle: the legacy `[Message from agent '…']` form carries none
+              // and is counted as the operator (`core/chat/chat-activity.ts`).
               unread: (message.role !== "user" || Boolean(message.from_bot?.handle)) && !open,
             });
           };

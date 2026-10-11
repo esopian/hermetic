@@ -21,6 +21,7 @@ import { RedactedText } from "./RedactedText.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { MentionBot } from "../chat-mentions.ts";
+import { recoveredDms } from "../bot-dm.ts";
 import type { DmBot } from "../bot-dm.ts";
 import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts";
 import type { Observation } from "../chat-conversations.ts";
@@ -421,6 +422,15 @@ export function Thread({
   const [density, setDensity] = useEventDensity(densityThreadKey(fleetId, instance, bot, session?.id));
   const items = threadItems(rows, eventful ? density : "compact");
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
+  // Refused DMs a later call already sent again, and the ones Retry was asked
+  // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
+  // streaming turn that changes neither does not re-render every marker.
+  const recoveredKey = useMemo(
+    () => [...recoveredDms(live ? [...messages, live] : messages, teammates)].sort().join("\n"),
+    [messages, live, teammates],
+  );
+  const recovered = useMemo(() => new Set(recoveredKey.split("\n")), [recoveredKey]);
+  const askedDms = useRef(new Set<string>());
   // One predicate for the header badge and the composer band: an empty
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
@@ -479,8 +489,10 @@ export function Thread({
         retrySender === null
           ? null
           : { send: (text: string) => sendRef.current(text), sender: retrySender },
+      recovered,
+      asked: askedDms.current,
     }),
-    [teammates, retrySender],
+    [teammates, retrySender, recovered],
   );
 
   // The log follows the bottom while a turn is arriving, and only then: a

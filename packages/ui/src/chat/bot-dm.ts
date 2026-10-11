@@ -279,8 +279,8 @@ function isDeliveryOf(row: MessageLike, sender: string, message: string, exact: 
  * (`agent/turn_tool_round.py:118-121`) and the delivery is written by the
  * process the tool starts, on the same box, so the delivery is never older on
  * a true clock; the allowance only absorbs stamps that were rounded or
- * re-based on the way here. The earlier sends of the same body (`earlier`)
- * keep it from reaching back into a previous call's delivery.
+ * re-based on the way here. A previous call's delivery is stamped before this
+ * call by more than that, so it is out of reach.
  */
 export const DELIVERY_SKEW_MS = 1_000;
 
@@ -290,24 +290,27 @@ export const DELIVERY_SKEW_MS = 1_000;
  * transcript does not hold it — the delivery has not run yet, or the Bot Chat
  * rolled over since.
  *
- * `since` is when the call was made, and `earlier` when each earlier call
- * from the same thread sent the same body to the same bot was, oldest first.
- * The same body sent twice is two deliveries, written in the order the calls
- * were made, so the calls claim them in order: each takes the earliest
- * unclaimed delivery stamped no more than `DELIVERY_SKEW_MS` before it, and
- * this call's is the last one claimed. Two calls in one turn share a stamp
- * and still get one delivery each. An earlier call whose delivery rolled out
- * of the transcript claims this call's instead, and this call finds none: the
- * exchange then says so and shows the completion notice's reply, which is
- * keyed by process and cannot be the wrong one. A row whose stamp does not
- * parse is never ruled out by it.
+ * `since` is when the call was made, and `later` when each later call from
+ * the same thread that sent the same body to the same bot was, oldest first.
+ * The same body sent twice is two deliveries, each written after its own call,
+ * so the calls claim them newest first: each takes the latest unclaimed
+ * delivery stamped no earlier than `DELIVERY_SKEW_MS` before it, and this
+ * call's is the last one claimed. A call whose delivery is missing — never
+ * written, or rolled out of the transcript — then loses only its own: every
+ * later call's window starts after it, so none reaches back into the gap. Two
+ * calls in one turn share a stamp and still get one delivery each, in order;
+ * while the second's delivery has not been written, the second claims the
+ * first's, and the first finds none until it lands. A call that finds none says
+ * so and shows the completion notice's reply, which is keyed by process and
+ * cannot be the wrong one. A row whose stamp does not parse is never ruled out
+ * by it.
  */
 export function findExchange<M extends MessageLike>(
   transcript: readonly M[],
   sender: string,
   message: string,
   since: string | null = null,
-  earlier: readonly string[] = [],
+  later: readonly string[] = [],
 ): { delivery: M; replies: M[] } | null {
   const from = since ? Date.parse(since) : Number.NaN;
   let at = -1;
@@ -324,13 +327,13 @@ export function findExchange<M extends MessageLike>(
     }
     const claimed = new Set<number>();
     const claim = (stamp: number): number => {
-      const hit = hits.find(
+      const hit = hits.findLast(
         (i) => !claimed.has(i) && !(Date.parse(transcript[i]!.at) < stamp - DELIVERY_SKEW_MS),
       );
       if (hit !== undefined) claimed.add(hit);
       return hit ?? -1;
     };
-    for (const stamp of earlier.map(Date.parse)) if (!Number.isNaN(stamp)) claim(stamp);
+    for (const stamp of later.map(Date.parse).reverse()) if (!Number.isNaN(stamp)) claim(stamp);
     at = claim(from);
     if (at >= 0) break;
   }
@@ -345,18 +348,19 @@ export function findExchange<M extends MessageLike>(
 
 /**
  * When a call was made, read off the sender's own unmerged transcript, and
- * when every earlier call that sent the same body to the same bot was (for
+ * when every later call that sent the same body to the same bot was (for
  * `findExchange`). A call is the same one by upstream's tool id, else by its
- * delivery process; `sameTarget` says which earlier calls went to the bot
- * this one did. `since` is null when the call is not in the transcript, and
- * the caller falls back to a stamp of its own.
+ * delivery process; `sameTarget` says which other calls went to the bot this
+ * one did. `since` is null when the call is not in the transcript, and the
+ * caller falls back to a stamp of its own.
  */
 export function callSends(
   transcript: readonly MessageLike[],
   call: MessageAgentCall,
   sameTarget: (other: MessageAgentCall) => boolean,
-): { since: string | null; earlier: string[] } {
-  const earlier: string[] = [];
+): { since: string | null; later: string[] } {
+  let since: string | null = null;
+  const later: string[] = [];
   const isThis = (other: MessageAgentCall) =>
     call.toolId
       ? other.toolId === call.toolId
@@ -365,13 +369,52 @@ export function callSends(
     for (const block of row.blocks) {
       const other = messageAgentCall(block);
       if (!other) continue;
-      if (isThis(other)) return { since: row.at, earlier };
+      if (since === null) {
+        if (isThis(other)) since = row.at;
+        continue;
+      }
       // Only a hand-off can have a delivery to claim.
       if (other.state === "sent" && sameBody(other.message, call.message) && sameTarget(other))
-        earlier.push(row.at);
+        later.push(row.at);
     }
   }
-  return { since: null, earlier: [] };
+  return since === null ? { since: null, later: [] } : { since, later };
+}
+
+/** Whether two calls went to the same bot: the same roster bot here, else the same name on the same machine. */
+function sameDmTarget(a: MessageAgentCall, b: MessageAgentCall, teammates: readonly DmBot[]): boolean {
+  const x = dmTarget(a, teammates);
+  const y = dmTarget(b, teammates);
+  if (x.bot || y.bot) return x.bot?.name === y.bot?.name;
+  return (
+    x.elsewhere === y.elsewhere &&
+    x.name.replace(/^@+/, "").toLowerCase() === y.name.replace(/^@+/, "").toLowerCase()
+  );
+}
+
+/**
+ * The tool ids of the refused calls in a transcript that a later call already
+ * made good: the same body to the same bot, handed off. Their Retry would ask
+ * for a message that has since been sent. A refusal with no tool id is never
+ * in it — nothing tells it apart from an identical one.
+ */
+export function recoveredDms(
+  transcript: readonly MessageLike[],
+  teammates: readonly DmBot[],
+): Set<string> {
+  const refused: MessageAgentCall[] = [];
+  const recovered = new Set<string>();
+  for (const row of transcript) {
+    for (const block of row.blocks) {
+      const call = messageAgentCall(block);
+      if (call?.state === "failed" && call.toolId) refused.push(call);
+      if (call?.state !== "sent") continue;
+      for (const failed of refused)
+        if (sameBody(failed.message, call.message) && sameDmTarget(failed, call, teammates))
+          recovered.add(failed.toolId!);
+    }
+  }
+  return recovered;
 }
 
 /**

@@ -10,7 +10,7 @@
 import { createContext, useContext, useState } from "react";
 import { dmBotName, dmTarget } from "../bot-dm.ts";
 import type { DmBot, MessageAgentCall } from "../bot-dm.ts";
-import { dmFailureReason } from "../bot-dm-reasons.ts";
+import { dmFailureReason, dmRetryable } from "../bot-dm-reasons.ts";
 import { processDomId } from "../process-events.ts";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { Face } from "./Face.tsx";
@@ -39,6 +39,13 @@ export interface BotDmContextValue {
   open: ((request: ExchangeRequest) => void) | null;
   /** Null where nothing can be sent from — a composer that cannot send, the exchange. */
   retry?: DmRetry | null;
+  /** Tool ids of refused calls a later call already sent again (`recoveredDms`): no Retry. */
+  recovered?: ReadonlySet<string>;
+  /**
+   * Tool ids whose Retry was asked, kept by the thread so a marker that
+   * remounts — a turn re-merged, a row re-read — still says it was.
+   */
+  asked?: Set<string>;
 }
 
 export const BotDmContext = createContext<BotDmContextValue>({
@@ -130,7 +137,7 @@ export function DmSentMarker({
   instance: string;
   status: AvatarStatus;
 }) {
-  const { teammates, open, retry } = useBotDm();
+  const { teammates, open, retry, recovered, asked } = useBotDm();
   const who = targetParty(call, teammates);
   const anchor = call.processId ? processDomId("start", call.processId) : undefined;
   if (call.state === "ambiguous") {
@@ -149,7 +156,16 @@ export function DmSentMarker({
     );
   }
   if (call.state === "failed")
-    return <DmFailedMarker call={call} who={who} anchor={anchor} retry={retry ?? null} />;
+    return (
+      <DmFailedMarker
+        call={call}
+        who={who}
+        anchor={anchor}
+        retry={retry ?? null}
+        recovered={Boolean(call.toolId && recovered?.has(call.toolId))}
+        remembered={asked ?? null}
+      />
+    );
   const body = (
     <>
       <span>{call.state === "pending" ? "Messaging" : "Messaged"}</span>
@@ -183,32 +199,39 @@ function validTargets(label: string, names: readonly string[] | null): string | 
  * behind it the guidance, upstream's own sentence and, when upstream sent
  * them, the targets it would have taken (`bot-dm-reasons.ts`).
  *
- * Retry is offered only for a reason a second send can fix, and only where
- * the thread can send. It does not re-run the tool: upstream's tool never
+ * Retry is offered only for a reason a second send can fix and never for a
+ * resolution error (`dmRetryable`), only where the thread can send, and not
+ * once a later call in the thread sent the same message to the same bot. It does not re-run the tool: upstream's tool never
  * retries itself, and its delivery runner has already retried a transient
  * failure once (`tools/bot_mode_dm.py:428`). What the operator can do is what
  * upstream's own sentence tells the sender bot to do — try again — so Retry
  * asks the sender, through the composer's send path, and the bot makes a fresh
- * `message_agent` call of its own. One ask per marker: the button is disabled
- * once clicked, so a double click is not two messages.
+ * `message_agent` call of its own. One ask per call: the button is disabled
+ * once clicked, so a double click is not two messages, and the thread
+ * remembers the ask by tool id, so a remounted marker does not offer it again.
  */
 function DmFailedMarker({
   call,
   who,
   anchor,
   retry,
+  recovered,
+  remembered,
 }: {
   call: MessageAgentCall;
   who: Party;
   anchor: string | undefined;
   retry: DmRetry | null;
+  recovered: boolean;
+  remembered: Set<string> | null;
 }) {
-  const [asked, setAsked] = useState(false);
+  const [asked, setAsked] = useState(() => Boolean(call.toolId && remembered?.has(call.toolId)));
   const reason = dmFailureReason(call.reason);
   const handle = call.target.replace(/^@+/, "");
   const ask = () => {
     if (asked || !retry) return;
     setAsked(true);
+    if (call.toolId) remembered?.add(call.toolId);
     retry.send(
       `Please retry your message_agent delivery to @${handle} — it failed with ${call.reason}.`,
     );
@@ -234,7 +257,7 @@ function DmFailedMarker({
           ) : null,
         )}
       </details>
-      {reason.retry && retry ? (
+      {retry && !recovered && dmRetryable(call) ? (
         <span className="ch-dm-retry">
           <button type="button" className="ch-chip" disabled={asked} onClick={ask}>
             Retry

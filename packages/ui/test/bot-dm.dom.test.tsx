@@ -106,7 +106,15 @@ function renderThread(
   messages: ChatMessageView[],
   opts: { onSend?: (text: string) => void; state?: "ready" | "stopped" } = {},
 ) {
-  return render(
+  return render(threadOf(bot_, messages, opts));
+}
+
+function threadOf(
+  bot_: string,
+  messages: ChatMessageView[],
+  opts: { onSend?: (text: string) => void; state?: "ready" | "stopped" } = {},
+) {
+  return (
     <Thread
       fleetId="fxtr0001"
       instance="atlas"
@@ -124,7 +132,7 @@ function renderThread(
       onSend={opts.onSend ?? (() => {})}
       onAbort={() => {}}
       teammates={TEAM}
-    />,
+    />
   );
 }
 
@@ -393,7 +401,9 @@ describe("the exchange", () => {
     expect(server.calls).toEqual([]);
   });
 
-  test("the same body sent twice opens the delivery its own call made", async () => {
+  test("the same body sent three times opens the delivery its own call made, one missing", async () => {
+    // E1's delivery was never written; E2's and E3's were. Each call claims
+    // newest first, so the gap drops E1 alone instead of shifting E2 onto E3's.
     server = fakeServer({
       "chat.history": {
         instance: "atlas",
@@ -402,19 +412,41 @@ describe("the exchange", () => {
         messages: [
           delivery("d0", { name: "Marshall", handle: "scribe" }, atPlus(-3_600_000)),
           bot("r0", [{ kind: "text", markdown: "An older answer." }], "auditor"),
-          delivery("d1", { name: "Marshall", handle: "scribe" }, atPlus(1_000)),
-          bot("r1", [{ kind: "text", markdown: REPLY }], "auditor"),
-          delivery("d2", { name: "Marshall", handle: "scribe" }, atPlus(600_000)),
-          bot("r2", [{ kind: "text", markdown: "A later answer." }], "auditor"),
+          delivery("d2", { name: "Marshall", handle: "scribe" }, atPlus(300_200)),
+          bot("r2", [{ kind: "text", markdown: REPLY }], "auditor"),
+          delivery("d3", { name: "Marshall", handle: "scribe" }, atPlus(600_200)),
+          bot("r3", [{ kind: "text", markdown: "A later answer." }], "auditor"),
         ],
       },
     });
-    renderThread("scribe", [bot("m1", [dmCall(QUEUED)])]);
-    fireEvent.click(screen.getByRole("button", { name: /Messaged/ }));
-    const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ NickQABot" });
-    await waitFor(() => expect(dialog.textContent).toContain(REPLY));
-    expect(dialog.textContent).not.toContain("An older answer.");
-    expect(dialog.textContent).not.toContain("A later answer.");
+    const send = (id: string, ms: number) => ({
+      ...bot(`m-${id}`, [
+        {
+          ...dmCall(JSON.stringify({ status: "queued", to: "@auditor", process_id: `proc_${id}` })),
+          tool_id: id,
+        } as ChatBlockView,
+      ]),
+      at: atPlus(ms),
+    });
+    renderThread("scribe", [send("e1", 0), send("e2", 300_000), send("e3", 600_000)]);
+    const open = async (index: number) => {
+      fireEvent.click(screen.getAllByRole("button", { name: /Messaged/ })[index]!);
+      const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ NickQABot" });
+      await waitFor(() => expect(dialog.textContent).not.toContain("Reading "));
+      const text = dialog.textContent ?? "";
+      act(() => {
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
+      });
+      return text;
+    };
+    const e2 = await open(1);
+    expect(e2).toContain(REPLY);
+    expect(e2).not.toContain("A later answer.");
+    expect(await open(2)).toContain("A later answer.");
+    const e1 = await open(0);
+    expect(e1).toContain("Not in NickQABot's Bot Chat yet.");
+    for (const answer of ["An older answer.", REPLY, "A later answer."])
+      expect(e1).not.toContain(answer);
   });
 
   test("a target that is not a bot here says so instead of 'not in its Bot Chat yet'", () => {
@@ -475,8 +507,8 @@ describe("matching a delivery to its call", () => {
     const long = `${"x".repeat(40)} and then the rest of a long message`;
     const capped = long.slice(0, 30);
     const transcript = rows(["d0", capped], ["d1", capped]);
-    expect(findExchange(transcript, "scribe", long, AT)?.delivery.id).toBe("d0");
-    expect(findExchange(transcript, "scribe", long, AT, [AT])?.delivery.id).toBe("d1");
+    expect(findExchange(transcript, "scribe", long, AT, [AT])?.delivery.id).toBe("d0");
+    expect(findExchange(transcript, "scribe", long, AT)?.delivery.id).toBe("d1");
     expect(findExchange(transcript, "scribe", long, atPlus(1_500))?.delivery.id).toBe("d1");
     expect(findExchange(transcript, "scribe", long, atPlus(5_000))).toBeNull();
   });
@@ -527,6 +559,89 @@ describe("retrying a refused DM", () => {
     }
     renderThread("scribe", [refused({ error: "Delivery failed.", reason: "flux_capacitor" })]);
     expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+  });
+
+  test("is not offered for a resolution error, whatever reason upstream's text classified it as", () => {
+    server = fakeServer({});
+    // `_err` classifies by text: a target named 'rate-limiter' reads as a rate limit.
+    renderThread("scribe", [
+      refused({
+        error:
+          "No teammate named 'rate-limiter' on this install, on a connected machine, or on a registered peer.",
+        reason: "provider_rate_limit",
+        teammates: ["auditor"],
+        peers: [],
+      }),
+    ]);
+    expect(document.querySelector(".ch-dm-mark.failed")?.textContent).toContain("Teammates: @auditor");
+    expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+    cleanup();
+    // One that carries no roster is known by upstream's sentence.
+    renderThread("scribe", [
+      refused({
+        error: "You can't message yourself. Pick a teammate from the roster.",
+        reason: "target_busy",
+      }),
+    ]);
+    expect(document.querySelector(".ch-dm-mark.failed")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+  });
+
+  test("is not offered once a later call sent the same message to the same bot", () => {
+    server = fakeServer({});
+    const call = (id: string, result: unknown, args: { target: string; message: string }) =>
+      ({ ...dmCall(result, "ok"), tool_id: id, args }) as ChatBlockView;
+    const sent = JSON.stringify({ status: "queued", to: "@auditor", process_id: "proc_2" });
+    const first = call("c1", BUSY, { target: "@auditor", message: ASK });
+    // The bot sent it again on its own, to the same bot under its title's handle.
+    renderThread("scribe", [
+      bot("m1", [first]),
+      bot("m2", [call("c2", sent, { target: "@nickqabot", message: `${ASK}\n` })]),
+    ]);
+    expect(document.querySelector(".ch-dm-mark.failed")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })?.outerHTML).toBeUndefined();
+    cleanup();
+    // A different message, a different bot, or a send before the refusal leaves it on.
+    for (const thread of [
+      [
+        bot("m1", [first]),
+        bot("m2", [call("c2", sent, { target: "@auditor", message: "Something else." })]),
+      ],
+      [
+        bot("m1", [first]),
+        bot("m2", [
+          call("c2", JSON.stringify({ status: "queued", to: "@scribe" }), {
+            target: "@scribe",
+            message: ASK,
+          }),
+        ]),
+      ],
+      [bot("m0", [call("c0", sent, { target: "@auditor", message: ASK })]), bot("m1", [first])],
+    ]) {
+      renderThread("scribe", thread);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  test("a marker that remounts still says the ask was made", () => {
+    server = fakeServer({});
+    const sent: string[] = [];
+    const opts = { onSend: (text: string) => sent.push(text) };
+    const view = render(threadOf("scribe", [refused(BUSY)], opts));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(sent).toHaveLength(1);
+    // The row leaves the thread and comes back — a history re-read — and its marker is a new one.
+    view.rerender(threadOf("scribe", [], opts));
+    expect(document.querySelector(".ch-dm-mark.failed")).toBeNull();
+    view.rerender(threadOf("scribe", [refused(BUSY)], opts));
+    const retry = screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    expect(document.querySelector(".ch-dm-mark.failed")?.textContent).toContain(
+      "Asked Marshall to retry",
+    );
+    fireEvent.click(retry);
+    expect(sent).toHaveLength(1);
   });
 
   test("is not offered where the thread cannot send", () => {
@@ -623,17 +738,29 @@ describe("pairing a call with its delivery", () => {
 
   test("two identical calls in one turn each get their own delivery, in order", () => {
     const transcript = rowsAt(["d0", 400], ["d1", 900]);
-    expect(findExchange(transcript, "scribe", ASK, AT)?.delivery.id).toBe("d0");
-    expect(findExchange(transcript, "scribe", ASK, AT, [AT])?.delivery.id).toBe("d1");
-    // A third call of the same body has nothing left to claim yet.
+    expect(findExchange(transcript, "scribe", ASK, AT, [AT])?.delivery.id).toBe("d0");
+    expect(findExchange(transcript, "scribe", ASK, AT)?.delivery.id).toBe("d1");
+    // The first of three: the two after it claim both, and its own is not written yet.
     expect(findExchange(transcript, "scribe", ASK, AT, [AT, AT])).toBeNull();
   });
 
   test("an earlier call of the same body in another turn keeps its own delivery", () => {
     const transcript = rowsAt(["d0", 300], ["d1", 60_300]);
-    expect(findExchange(transcript, "scribe", ASK, atPlus(60_000), [AT])?.delivery.id).toBe("d1");
-    // Its delivery rolled out of the transcript: it takes this call's, and this one finds none.
-    expect(findExchange(rowsAt(["d1", 60_300]), "scribe", ASK, atPlus(60_000), [AT])).toBeNull();
+    expect(findExchange(transcript, "scribe", ASK, AT, [atPlus(60_000)])?.delivery.id).toBe("d0");
+    expect(findExchange(transcript, "scribe", ASK, atPlus(60_000))?.delivery.id).toBe("d1");
+    // Its delivery rolled out of the transcript: it finds none, and the later call keeps its own.
+    const rolled = rowsAt(["d1", 60_300]);
+    expect(findExchange(rolled, "scribe", ASK, AT, [atPlus(60_000)])).toBeNull();
+    expect(findExchange(rolled, "scribe", ASK, atPlus(60_000))?.delivery.id).toBe("d1");
+  });
+
+  test("a delivery that was never written drops only its own call", () => {
+    // Three sends of one body five minutes apart; the first's delivery is missing.
+    const transcript = rowsAt(["d2", 300_200], ["d3", 600_200]);
+    const [e1, e2, e3] = [AT, atPlus(300_000), atPlus(600_000)];
+    expect(findExchange(transcript, "scribe", ASK, e2, [e3])?.delivery.id).toBe("d2");
+    expect(findExchange(transcript, "scribe", ASK, e3)?.delivery.id).toBe("d3");
+    expect(findExchange(transcript, "scribe", ASK, e1, [e2, e3])).toBeNull();
   });
 
   test("the exchange opened from the second of two identical calls shows the second reply", async () => {

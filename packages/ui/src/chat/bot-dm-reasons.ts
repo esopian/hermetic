@@ -125,3 +125,45 @@ const GENERIC: DmFailureReason = {
 export function dmFailureReason(code: string | null | undefined): DmFailureReason {
   return (code && Object.hasOwn(DM_FAILURE_REASONS, code) ? DM_FAILURE_REASONS[code] : null) ?? GENERIC;
 }
+
+/**
+ * Upstream's sentences for a refusal no second send of the same call can fix:
+ * the target or the message itself is wrong, or the session cannot message at
+ * all (`tools/bot_mode_dm.py:209-283`, Hermes v2026.9.24). `_err` classifies
+ * every refusal by its text (`classify_agent_error`, :187-195), so one of
+ * these can carry a retryable `reason` — "No teammate named 'rate-limiter'"
+ * reads as `provider_rate_limit`. Matched on upstream's own openings, so a
+ * sentence this list does not know falls back to its reason.
+ */
+const UNFIXABLE_REFUSALS: readonly RegExp[] = [
+  /^message_agent is only available in a Bot Mode 'Bot Chat' session\b/,
+  /^This install is not Bot-Mode-managed\b/,
+  /^message is required\b/,
+  /^message too long \(/,
+  /^target is required\./,
+  /^No registered peer named '/,
+  /^Invalid target: /,
+  /^You can't message yourself\./,
+  /^No teammate named '/,
+  /^'.*' exists on several connected machines — disambiguate with one of: /s,
+  /\bdo not retry\b/i,
+];
+
+/**
+ * Whether asking the sender to send a refused call again can succeed: its
+ * reason must be one a second send fixes, and the refusal must not be a
+ * resolution error. `_err` attaches the valid targets (`teammates`, `peers`)
+ * only to those, so a refusal carrying either is one whatever its reason; the
+ * rest are known by upstream's sentence (`UNFIXABLE_REFUSALS`).
+ */
+export function dmRetryable(call: {
+  reason: string | null;
+  error: string | null;
+  teammates: readonly string[] | null;
+  peers: readonly string[] | null;
+}): boolean {
+  if (!dmFailureReason(call.reason).retry) return false;
+  if (call.teammates !== null || call.peers !== null) return false;
+  const error = call.error?.trim() ?? "";
+  return !UNFIXABLE_REFUSALS.some((pattern) => pattern.test(error));
+}
