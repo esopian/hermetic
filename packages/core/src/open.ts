@@ -211,7 +211,9 @@ const FIXTURE_PREFLIGHT: Pick<HermeticDeps, "localTailscale" | "verifyTailscaleO
     cert_domains: [`fixture-laptop.${FIXTURE_TAILNET}`],
     hostname: "fixture-laptop",
     addresses: ["100.64.0.1"],
-    binary: "tailscale",
+    // A plausible resolved path, never run: the fixture terminal answers in
+    // memory, and nothing in fixture mode spawns `tailscale`.
+    binary: "/usr/local/bin/tailscale",
     problem: null,
   }),
   verifyTailscaleOauth: async () => ({

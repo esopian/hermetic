@@ -348,9 +348,13 @@ export function register(program: Command): void {
 
   inbox.addCommand(
     globals(new Cmd("settings"))
-      .description("read or change the inbox's auto-clear rules")
+      .description("read or change the inbox's auto-clear rules and terminal alerts")
       .option("--auto-clear <after>", "clear read rows after never, 1d, 7d or 30d")
       .option("--clear-resolved-on-read <on|off>", "clear a resolved condition once it is read")
+      .option(
+        "--terminal-alerts <on|off>",
+        "notify about desktop terminal sessions; off also resolves their open rows",
+      )
       .addHelpText(
         "after",
         "\nLocal to this laptop, shared with the portal. The rules run whenever the inbox\n" +
@@ -371,6 +375,8 @@ export function register(program: Command): void {
               opts["clearResolvedOnRead"] === undefined
                 ? undefined
                 : onOff(opts["clearResolvedOnRead"]),
+            terminal_alerts:
+              opts["terminalAlerts"] === undefined ? undefined : onOff(opts["terminalAlerts"]),
           }),
         );
         const result = await ctx.hermetic.notifications.settings(input);
@@ -380,7 +386,8 @@ export function register(program: Command): void {
         }
         await out(
           `auto-clear read rows after: ${result.auto_clear_read}\n` +
-            `clear resolved conditions once read: ${result.clear_resolved_on_read ? "on" : "off"}\n`,
+            `clear resolved conditions once read: ${result.clear_resolved_on_read ? "on" : "off"}\n` +
+            `terminal alerts: ${result.terminal_alerts ? "on" : "off"}\n`,
         );
       }),
   );
@@ -388,7 +395,7 @@ export function register(program: Command): void {
   inbox.addCommand(
     globals(new Cmd("mute"))
       .description("silence an agent, or a whole source, in this laptop's inbox")
-      .argument("<target>", "an agent name, or `source:operation|agent|fleet|chat|budget`")
+      .argument("<target>", "an agent name, or `source:operation|agent|fleet|chat|budget|terminal`")
       .option("--clear", "unmute instead")
       .addHelpText(
         "after",

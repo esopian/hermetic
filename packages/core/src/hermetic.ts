@@ -59,6 +59,7 @@ import {
   createNotifications,
   type NotificationDeps,
 } from "./chat/notifications.ts";
+import { registerTerminalNotices } from "./chat/terminal-notifications.ts";
 import { bwsPath, createSecrets, providerKeyPath, tsKeyPath } from "./profiles/secrets.ts";
 import { createVolumes } from "./volumes/volumes.ts";
 import { createDesktop } from "./agents/desktop.ts";
@@ -73,6 +74,7 @@ import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
@@ -238,6 +240,9 @@ export function createHermetic(deps: HermeticDeps) {
     purge: createLocalAgentPurge(purgeDeps),
     // A row the scan skipped as unparseable is not a released name (§6.7).
     unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    // A first sighting's evidence that the name changed hands unseen (§6.7).
+    releases: async (name) =>
+      (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
   });
 
   const { create, destroy, stop, start, recreate } = createLifecycle({
@@ -529,7 +534,7 @@ export function createHermetic(deps: HermeticDeps) {
     },
   });
 
-  return {
+  const hermetic = {
     ...botMode,
     init: initWithHelpers,
     config: { show: configShow },
@@ -631,4 +636,11 @@ export function createHermetic(deps: HermeticDeps) {
     /** Derived-state constants the heads render against. */
     constants: { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS },
   };
+  /**
+   * The desktop terminal's inbox source (issue #18), reached through
+   * `terminalNotices(hermetic)` rather than a member: it is not a command, so it
+   * has no place on the surface `tests/parity.test.ts` walks.
+   */
+  registerTerminalNotices(hermetic, notificationDeps.store);
+  return hermetic;
 }

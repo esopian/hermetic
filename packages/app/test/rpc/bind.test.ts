@@ -153,9 +153,14 @@ describe("the contract and the dispatch table", () => {
     expect(options.maxRequestTime).toBe(Number.POSITIVE_INFINITY);
   });
 
-  test("the page's one message is answered", async () => {
+  test("the page's messages are answered: ready, and the terminal's three", async () => {
     const { options } = await bound();
-    expect(Object.keys(options.handlers.messages ?? {})).toEqual(["page.ready"]);
+    expect(Object.keys(options.handlers.messages ?? {}).sort()).toEqual([
+      "page.ready",
+      "terminal.ack",
+      "terminal.input",
+      "terminal.view",
+    ]);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   rowTone,
 } from "../../logic/notification-logic.ts";
 import type { NotificationClassName } from "../../logic/notification-logic.ts";
+import { ReturnToast } from "./ReturnToast.tsx";
 
 function ToastCard({
   toast,
@@ -118,7 +119,9 @@ export function Toasts({ onOpenAgent }: { onOpenAgent?: (name: string) => void }
     if (toasts.length <= TOAST_VISIBLE_MAX) setExpanded(false);
     if (toasts.length === 0) setPaused(false);
   }, [toasts.length]);
-  if (toasts.length === 0) return null;
+  // The return toast (issue #18) is pinned top-centre, apart from the stack,
+  // and is up whether or not anything is stacked.
+  if (toasts.length === 0) return <ReturnToast />;
 
   // Newest first: the stack is read top-down, and the newest is the news.
   const ordered = [...toasts].reverse();
@@ -140,46 +143,49 @@ export function Toasts({ onOpenAgent }: { onOpenAgent?: (name: string) => void }
   };
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: hover only pauses the life bars; nothing is activated by it.
-    <div
-      className="nt-toasts"
-      aria-live="polite"
-      data-paused={paused ? "true" : "false"}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-    >
-      {toasts.length > 1 ? (
-        <div className="nt-tstack-head">
-          <span className="t">
-            <b>{toasts.length}</b> new
-          </span>
-          <button type="button" className="nt-hbtn" onClick={readAll}>
-            ✓ Mark read
+    <>
+      <ReturnToast />
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: hover only pauses the life bars; nothing is activated by it. */}
+      <div
+        className="nt-toasts"
+        aria-live="polite"
+        data-paused={paused ? "true" : "false"}
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+      >
+        {toasts.length > 1 ? (
+          <div className="nt-tstack-head">
+            <span className="t">
+              <b>{toasts.length}</b> new
+            </span>
+            <button type="button" className="nt-hbtn" onClick={readAll}>
+              ✓ Mark read
+            </button>
+            <button type="button" className="nt-hbtn" onClick={dismissAll}>
+              Dismiss all
+            </button>
+          </div>
+        ) : null}
+        {shown.map((t) => (
+          <ToastCard
+            key={t.key}
+            toast={t}
+            paused={paused}
+            onDismiss={dismissToast}
+            onRead={readToast}
+            onOpenAgent={onOpenAgent}
+          />
+        ))}
+        {more > 0 ? (
+          <button type="button" className="nt-tmore" onClick={() => setExpanded(true)}>
+            +{more} more · show all
           </button>
-          <button type="button" className="nt-hbtn" onClick={dismissAll}>
-            Dismiss all
+        ) : expanded && toasts.length > TOAST_VISIBLE_MAX ? (
+          <button type="button" className="nt-tmore" onClick={() => setExpanded(false)}>
+            collapse
           </button>
-        </div>
-      ) : null}
-      {shown.map((t) => (
-        <ToastCard
-          key={t.key}
-          toast={t}
-          paused={paused}
-          onDismiss={dismissToast}
-          onRead={readToast}
-          onOpenAgent={onOpenAgent}
-        />
-      ))}
-      {more > 0 ? (
-        <button type="button" className="nt-tmore" onClick={() => setExpanded(true)}>
-          +{more} more · show all
-        </button>
-      ) : expanded && toasts.length > TOAST_VISIBLE_MAX ? (
-        <button type="button" className="nt-tmore" onClick={() => setExpanded(false)}>
-          collapse
-        </button>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </>
   );
 }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,9 @@ import { drain, testHermetic } from "./helpers.ts";
 import { NO_DEVICES_SCOPE_NOTE } from "../src/fleet/preflight.ts";
 import type { ErrorCode, TailscaleOauthCheck } from "../src/schema/index.ts";
 import { FLEET_KEY } from "../src/schema/index.ts";
+import { migrate } from "../src/local/db/index.ts";
+import { SqliteNotificationStore } from "../src/local/db/notifications.ts";
+import { notifyTerminalEvent } from "../src/chat/terminal-notifications.ts";
 
 /**
  * §4.8: these walk `init --create`, so the account they describe has no fleets
@@ -977,5 +981,52 @@ describe("secrets never leak · provider profiles", () => {
     expect(redactProvidersModelsInput({ profile: "anthropic-main" })).toEqual({
       profile: "anthropic-main",
     });
+  });
+});
+
+/**
+ * Issue #18: a terminal shows whatever the box prints, and the shell
+ * integration reports the program and first argument of every command line.
+ * A row lives in the laptop's database for thirty days, so the only words of a
+ * command it may keep are a sanitized program name — never an argument, an
+ * assignment, or a first word that is itself the secret.
+ */
+describe("terminal rows never carry a secret", () => {
+  test("a secret in the command line reaches no row", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const store = new SqliteNotificationStore(db);
+    const programs = SECRETS.flatMap((secret) => [
+      secret,
+      `${secret} --flag`,
+      `sudo ${secret}`,
+      `export TOKEN=${secret}`,
+      `curl -H ${secret}`,
+      `TOKEN=${secret} make`,
+    ]);
+    let index = 0;
+    for (const program of programs) {
+      index += 1;
+      for (const exit_code of [0, 1]) {
+        notifyTerminalEvent(store, {
+          fleet_id: "fxtr0001",
+          agent: "atlas",
+          session_id: `s${index}`,
+          session_index: index,
+          event: "finished",
+          program,
+          exit_code,
+          ran_ms: 1000,
+        });
+      }
+    }
+    const dump = JSON.stringify(db.query(`SELECT * FROM notifications`).all());
+    // Rows were written — the sanitized program names, or `command` — so the
+    // assertion below is about content, not an empty table.
+    expect(dump).toContain("export failed · exit 1");
+    expect(dump).toContain("curl finished · exit 0");
+    expect(dump).toContain("command finished · exit 0");
+    expect(dump).not.toContain("FIXTURE");
+    for (const secret of SECRETS) expect(dump).not.toContain(secret);
   });
 });

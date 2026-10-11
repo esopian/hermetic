@@ -6,6 +6,10 @@
  * `auth_keys` scope — is just a different canned answer.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openHermetic } from "../src/open.ts";
 import {
   PROBE_KEY_TTL_SECONDS,
   TAILSCALE_ADMIN_DNS_URL,
@@ -224,6 +228,53 @@ describe("finding a tailscale binary", () => {
     expect(status.problem).toContain("no `tailscale` binary");
   });
 
+  /**
+   * `binary` is what the desktop terminal execs in place of `tailscale`
+   * (issue #18), so a bare candidate found on `PATH` comes back as the path it
+   * stood for, and one already absolute is left alone.
+   */
+  test("a bare candidate is reported as the path it resolved to", async () => {
+    const looked: string[] = [];
+    const status = await probeLocalTailscale({
+      binaries: ["tailscale"],
+      exec: ok,
+      which: (name) => {
+        looked.push(name);
+        return "/opt/homebrew/bin/tailscale";
+      },
+    });
+    expect(looked).toEqual(["tailscale"]);
+    expect(status.binary).toBe("/opt/homebrew/bin/tailscale");
+  });
+
+  test("a bare candidate the lookup cannot place stays bare, since it did answer", async () => {
+    const status = await probeLocalTailscale({ binaries: ["tailscale"], exec: ok, which: () => null });
+    expect(status.ok).toBe(true);
+    expect(status.binary).toBe("tailscale");
+  });
+
+  test("a failing bare candidate is resolved too, so the head names the install", async () => {
+    const status = await probeLocalTailscale({
+      binaries: ["tailscale"],
+      exec: async () => ({ code: 1, stdout: "", stderr: "daemon down\n" }),
+      which: () => "/usr/local/bin/tailscale",
+    });
+    expect(status.installed).toBe(true);
+    expect(status.binary).toBe("/usr/local/bin/tailscale");
+  });
+
+  test("no binary anywhere reports a null binary", async () => {
+    const status = await probeLocalTailscale({
+      binaries: ["tailscale", "/usr/local/bin/tailscale"],
+      exec: async () => {
+        throw new Error("ENOENT");
+      },
+      which: () => "/usr/local/bin/tailscale",
+    });
+    expect(status.installed).toBe(false);
+    expect(status.binary).toBeNull();
+  });
+
   /** A binary that exits non-zero is present; saying "not installed" would misdirect. */
   test("a binary that fails is reported as installed, with its own first line", async () => {
     const status = await probeLocalTailscale({
@@ -233,6 +284,21 @@ describe("finding a tailscale binary", () => {
     expect(status.installed).toBe(true);
     expect(status.ok).toBe(false);
     expect(status.problem).toBe("failed to connect to local tailscaled");
+  });
+});
+
+describe("the fixture's canned preflight", () => {
+  /**
+   * Fixture mode never spawns `tailscale` (AGENTS.md, Modes), so its `binary`
+   * is a canned absolute path: a head that execs it is a head that would have
+   * spawned in fixture mode, which is the bug.
+   */
+  test("names a plausible absolute binary without running one", async () => {
+    const home = mkdtempSync(join(tmpdir(), "hermetic-preflight-fixture-"));
+    const hermetic = await openHermetic({ fixture: true, home });
+    const status = await hermetic.init.localTailscale();
+    expect(status.ok).toBe(true);
+    expect(status.binary).toBe("/usr/local/bin/tailscale");
   });
 });
 

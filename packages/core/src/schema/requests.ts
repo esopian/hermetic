@@ -844,6 +844,8 @@ export type NotificationsSnoozeInput = z.infer<typeof NotificationsSnoozeInput>;
 export const NotificationsSettingsInput = z.object({
   auto_clear_read: AutoClearRead.optional(),
   clear_resolved_on_read: z.boolean().optional(),
+  /** `false` also resolves every open terminal row (issue #18). */
+  terminal_alerts: z.boolean().optional(),
 });
 export type NotificationsSettingsInput = z.infer<typeof NotificationsSettingsInput>;
 

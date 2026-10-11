@@ -65,6 +65,37 @@ export {
   installAccountDir,
 } from "../account-dirs.ts";
 export const DOCKER_GROUP = "docker";
+/** The `hermes` account's login shell; what `tailscale ssh hermes@<host>` starts. */
+const HERMES_LOGIN_SHELL = "/bin/bash";
+
+/** `usermod --shell` when the passwd entry's shell is not the login shell; true when it ran. */
+async function setLoginShell(host: Host, current: string | undefined): Promise<boolean> {
+  if (current === HERMES_LOGIN_SHELL) return false;
+  await must(host, ["usermod", "--shell", HERMES_LOGIN_SHELL, HERMES_USER]);
+  return true;
+}
+
+/**
+ * Give an existing `hermes` account its login shell, outside any apply.
+ *
+ * `ensureAccounts` re-asserts the shell, but only an apply runs it, and an apply
+ * only runs on a bootstrap or on a converge whose config hash moved. A box
+ * created with `nologin` by an older hermeticd therefore stayed `nologin` after
+ * the self-update brought it a release that knows better: the nightly update
+ * swaps the binary and restarts the service, and a rollout over an unchanged
+ * render finds the box already `current`. Its Tailscale SSH login (§9.3) kept
+ * printing "This account is currently not available" until a `recreate`.
+ *
+ * `hermeticd serve` calls this at start-up, which every self-update ends with,
+ * so the release that carries the login shell is the release that sets it.
+ * Nothing to do when the account does not exist yet: the bootstrap's apply
+ * creates it with the right shell. Returns true when it changed the shell.
+ */
+export async function ensureLoginShell(host: Host): Promise<boolean> {
+  const passwd = await host.exec(["getent", "passwd", HERMES_USER]);
+  if (passwd.code !== 0) return false;
+  return setLoginShell(host, passwd.stdout.trim().split(":")[6]);
+}
 
 /**
  * Create the `hermes` account, the `docker` group it needs to be in, its home
@@ -95,8 +126,10 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
       "--create-home",
       "--home-dir",
       HERMES_ACCOUNT_HOME,
+      // A login shell, because Tailscale SSH (§9.3) logs operators in as this
+      // account. See the re-assert below for why that is safe.
       "--shell",
-      "/usr/sbin/nologin",
+      HERMES_LOGIN_SHELL,
       "-G",
       DOCKER_GROUP,
       HERMES_USER,
@@ -127,16 +160,31 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
    * live account underneath a running gateway is not something to paper over.
    */
   const passwd = (await must(host, ["getent", "passwd", HERMES_USER])).stdout;
-  if (passwd.trim().split(":")[5] !== HERMES_ACCOUNT_HOME) {
+  const fields = passwd.trim().split(":");
+  if (fields[5] !== HERMES_ACCOUNT_HOME) {
     await must(host, ["usermod", "--home", HERMES_ACCOUNT_HOME, HERMES_USER]);
   }
   /**
-   * Give the account a user manager. `hermes` is `--system` and `nologin`, so
-   * it never logs in and systemd never starts `user@<uid>.service` for it —
-   * which upstream's system-scope gateway unit orders itself `After=`/`Wants=`
-   * (`hermes gateway install --system`). Linger is what makes that ordering
-   * satisfiable: it is what keeps a `user@<uid>.service` running for an account
-   * nobody logs into.
+   * Give the account a login shell, again for boxes created with `nologin`.
+   * Tailscale SSH (§9.3) logs operators in as this account (`SSH_LOGIN_USER`),
+   * and with `nologin` that login prints "This account is currently not
+   * available". It is not a new way in: the account has no password and the
+   * box runs no sshd, so the only path to a shell is Tailscale SSH, reachable
+   * only through the managed tailnet ACL's ssh rule.
+   *
+   * Unlike `--home` above, `usermod --shell` succeeds while the account has
+   * running processes, so this is safe on a live box with the gateway up.
+   * `ensureLoginShell` runs the same check at `hermeticd serve` start-up.
+   */
+  await setLoginShell(host, fields[6]);
+  /**
+   * Give the account a user manager. systemd only starts `user@<uid>.service`
+   * while the account has a session, and nobody is normally logged in as
+   * `hermes` (an operator's `tailscale ssh` is occasional, and the gateway is a
+   * system-scope unit, not a login). Upstream's system-scope gateway unit
+   * orders itself `After=`/`Wants=` that manager (`hermes gateway install
+   * --system`). Linger is what makes that ordering satisfiable: it keeps a
+   * `user@<uid>.service` running for an account nobody is logged into.
    *
    * Upstream would mostly cope on its own — on a missing linger it enables
    * linger itself and otherwise warns, refusing outright only under a
