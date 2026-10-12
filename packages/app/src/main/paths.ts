@@ -2,7 +2,10 @@
  * Where the bundle keeps its sidecars, and where this process keeps its state.
  *
  * The app ships `hermetic`, `hermeticd`, the version stamps and the bootstrap
- * stages beside its own executable (`scripts/app-stage.ts` puts them there).
+ * stages in `Contents/Resources/app/bin` (`scripts/app-stage.ts` stages them
+ * into `dist/bin`, and `electrobun.config.ts` copies that to `bin`). The
+ * process running this code is `Contents/MacOS/bun`, so they are *not* beside
+ * its executable and core's sibling rule cannot find them on its own.
  * Core will find them if it is told: `HERMETIC_HERMETICD` and `HERMETIC_STAGES`
  * are the first, winning lookup in `release/artifacts-release.ts`, ahead of the
  * sibling-of-`execPath` rule the CLI relies on. `main/index.ts` sets both from
@@ -19,12 +22,10 @@ import { logPathFor } from "../log.ts";
 
 export interface BundleInput {
   /**
-   * `process.execPath` — the Bun runtime inside the bundle. The sidecars are
-   * staged into `bin/` beside it, so it is the one fact the layout turns on.
-   *
-   * TODO(evan): confirm against the devkit's own `Utils.paths` once Hutch is
-   * installed; a projected SDK may name the resources directory outright
-   * rather than leaving it to be derived.
+   * `process.execPath` — the Bun runtime inside the bundle, at
+   * `Contents/MacOS/bun`. The sidecars are in `../Resources/app/bin` from
+   * there: Electrobun's own SDKs find `Resources` the same way, as a sibling
+   * of the executable's directory. It is the one fact the layout turns on.
    */
   execPath: string;
   env: Readonly<Record<string, string | undefined>>;
@@ -33,7 +34,7 @@ export interface BundleInput {
 }
 
 export interface BundlePaths {
-  /** `hermetic`, `hermeticd`, the stamps and `stages/`, staged into the bundle. */
+  /** `Contents/Resources/app/bin`: `hermetic`, `hermeticd`, the stamps and `stages/`. */
   binDir: string;
   /** The bootstrap stages, as `HERMETIC_STAGES` names them. */
   stagesDir: string;
@@ -65,7 +66,9 @@ export function homeFrom(env: BundleInput["env"]): string {
 }
 
 export function bundlePaths(input: BundleInput): BundlePaths {
-  const binDir = join(parentOf(input.execPath), "bin");
+  // `join` normalises the `..`, so the path core reports in an error is the
+  // one an operator can paste into `ls`.
+  const binDir = join(parentOf(input.execPath), "..", "Resources", "app", "bin");
   const home = homeFrom(input.env);
   return {
     binDir,
