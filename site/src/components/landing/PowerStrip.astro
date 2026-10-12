@@ -1,0 +1,244 @@
+---
+/*
+ * Landing section "Pick the power", carried over from mockup D: every size as a bar (log scale),
+ * three monthly totals and a link to the cost page. Every figure comes from data/cost.ts. With
+ * motion allowed, the bars grow in when the strip scrolls into view.
+ */
+import { agentMonth, MIN_DATA_GIB, SIZES, usd } from "../../data/cost";
+import SheetHead from "./SheetHead.astro";
+
+interface Props {
+  num: string;
+}
+
+const { num } = Astro.props;
+const prices = SIZES.map((s) => s.monthlyUsd);
+const lo = Math.log(Math.min(...prices));
+const hi = Math.log(Math.max(...prices));
+const barH = (p: number): number => Math.round(10 + (90 * (Math.log(p) - lo)) / (hi - lo));
+const total = (id: string, k: "running" | "stopped", gib?: number): number =>
+  agentMonth(id, gib).reduce((n, l) => n + l[k], 0);
+const smallest = total("micro", "running", MIN_DATA_GIB);
+const medium = total("medium", "running");
+const stopped = total("medium", "stopped");
+const cpuSizes = SIZES.filter((s) => s.gpu === undefined);
+const gpuSizes = SIZES.filter((s) => s.gpu !== undefined);
+---
+<section class="pw" id="e-power">
+  <SheetHead num={num} kicker="Sizes" note="us-east-1 list prices" title="Pick the power">
+    {/* design.md §7.1: Graviton throughout; G5g for GPU; size changes land on recreate */}
+    <p>Every size is Arm. A new size lands on the next recreate, and the memory comes with it.</p>
+  </SheetHead>
+  <div class="wrap">
+    <div class="bars-wrap">
+      <div class="bars" role="list" aria-label="Agent sizes and monthly compute price, us-east-1" data-bars>
+        <div class="grp" style={`grid-column: span ${cpuSizes.length}`}>CPU · Graviton</div>
+        <div class="grp gpu" style={`grid-column: span ${gpuSizes.length}`}>GPU · G5g</div>
+        {SIZES.map((s, k) => (
+          <div
+            class:list={["bar", { def: s.id === "medium", gpu: s.gpu !== undefined }]}
+            role="listitem"
+            title={`${s.id} · ${s.instance} · ${s.vcpu} vCPU / ${s.memGib} GiB${s.gpu ? ` · ${s.gpu}` : ""} · ${usd(s.monthlyUsd)}/mo`}
+          >
+            <div class="col"><i style={`height:${barH(s.monthlyUsd)}%;--k:${k}`}></i></div>
+            <b>{usd(s.monthlyUsd)}</b>
+            <span class="id">{s.id}{s.id === "medium" ? " ★" : ""}</span>
+            <span class="it">{s.instance}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+    {/* data/cost.ts agentMonth: instance + 20 GiB root + data volume + public IPv4 */}
+    <div class="stats">
+      <div><b>{usd(smallest)}</b><span>smallest agent, {MIN_DATA_GIB} GiB disk, running all month</span></div>
+      <div><b>{usd(medium)}</b><span>the default medium, disks included</span></div>
+      <div><b>{usd(stopped)}</b><span>a stopped agent: only its disks bill</span></div>
+      <a href="/cost/">Full price table →</a>
+    </div>
+    <p class="fine">Compute list prices, us-east-1, per month. Model usage is separate. Bar height on a log scale. ★ default.</p>
+  </div>
+</section>
+
+<style>
+  .pw {
+    border-bottom: 3px solid var(--fg);
+  }
+  .bars-wrap {
+    border: 2px solid var(--fg);
+    overflow-x: auto;
+  }
+  .bars {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(72px, 1fr));
+    gap: 0 1px;
+    background: var(--line);
+  }
+  .grp {
+    background: var(--bg);
+    padding: 10px 12px;
+    font: 700 10px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--fg3);
+    border-bottom: 1px solid var(--line);
+  }
+  .grp.gpu {
+    color: var(--acc);
+  }
+  .bar {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    min-width: 0;
+    transition: background 0.12s;
+  }
+  .col {
+    height: 140px;
+    display: flex;
+    align-items: flex-end;
+    border-bottom: 2px solid var(--fg);
+    margin-bottom: 12px;
+  }
+  .col i {
+    display: block;
+    width: 100%;
+    background: var(--fg3);
+    transform-origin: 50% 100%;
+    transition: background 0.12s;
+  }
+  .gpu .col i {
+    background: repeating-linear-gradient(135deg, var(--fg3) 0 3px, transparent 3px 7px);
+    box-shadow: inset 0 0 0 2px var(--fg3);
+  }
+  .def .col i {
+    background: var(--acc);
+  }
+  .bar:hover {
+    background: var(--sel);
+  }
+  .bar:hover .col i {
+    background: var(--fg);
+  }
+  .bar b {
+    font: 900 18px / 1 var(--sans);
+    letter-spacing: -0.02em;
+  }
+  .id {
+    font: 700 10.5px var(--mono);
+    color: var(--fg);
+    margin-top: 6px;
+    white-space: nowrap;
+  }
+  .it {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    border: 2px solid var(--fg);
+    border-top: 0;
+  }
+  .stats > div {
+    padding: 22px 24px;
+    border-right: 1px solid var(--line);
+  }
+  .stats b {
+    display: block;
+    font: 900 40px / 1 var(--sans);
+    letter-spacing: -0.04em;
+    margin-bottom: 6px;
+  }
+  .stats span {
+    color: var(--fg2);
+    font-size: 14px;
+  }
+  .stats a {
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+  }
+  .stats a:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .fine {
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 14px 0 44px;
+  }
+
+  /* Bars grow in once, staggered, when the strip arrives (the script adds .grow). */
+  @media (prefers-reduced-motion: no-preference) {
+    .bars:global(.armed) .col i {
+      transform: scaleY(0);
+    }
+    .bars:global(.grow) .col i {
+      transform: none;
+      transition:
+        transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--k) * 55ms),
+        background 0.12s;
+    }
+  }
+
+  @media (max-width: 1080px) {
+    .bars {
+      grid-template-columns: repeat(14, minmax(76px, 1fr));
+    }
+    .stats {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .stats a {
+      grid-column: 1 / -1;
+      padding: 16px 24px;
+      border-top: 1px solid var(--line);
+    }
+  }
+  @media (max-width: 640px) {
+    .stats {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .stats > div {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+      padding: 18px 16px;
+    }
+    .stats a {
+      padding: 16px;
+      border-top: 0;
+    }
+    .fine {
+      padding-bottom: 36px;
+    }
+  }
+</style>
+
+<script is:inline>
+  (() => {
+    const bars = document.querySelector("#e-power [data-bars]");
+    if (!bars || !("IntersectionObserver" in window)) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (bars.getBoundingClientRect().top < innerHeight) return;
+    bars.classList.add("armed");
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        bars.classList.add("grow");
+        bars.classList.remove("armed");
+      },
+      { threshold: 0.4 },
+    );
+    io.observe(bars);
+  })();
+</script>

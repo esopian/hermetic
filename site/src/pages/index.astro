@@ -1,0 +1,32 @@
+---
+/*
+ * The landing page: the blueprint of one sealed agent and its zoom-out story (Blueprint), a
+ * replayable zero-to-agent session in the CLI or the app (ZeroToAgent), five app screens
+ * (AppTour), the sizes (PowerStrip) and the closing call to action. Sections live in
+ * src/components/landing/.
+ */
+import EnvStrip from "../components/EnvStrip.astro";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import AppTour from "../components/landing/AppTour.astro";
+import Blueprint from "../components/landing/Blueprint.astro";
+import Closing from "../components/landing/Closing.astro";
+import PowerStrip from "../components/landing/PowerStrip.astro";
+import ZeroToAgent from "../components/landing/ZeroToAgent.astro";
+import Marketing from "../layouts/Marketing.astro";
+---
+<Marketing
+  title="Hermetic: a sealed machine for every Hermes agent"
+  description="hermetic runs each Hermes agent on its own machine in your AWS account, reachable only over your Tailscale tailnet, with memory that outlives the machine. One desktop app and one CLI."
+>
+  <EnvStrip />
+  <Header />
+  <main>
+    <Blueprint />
+    <ZeroToAgent num="04" />
+    <AppTour num="05" />
+    <PowerStrip num="06" />
+    <Closing />
+  </main>
+  <Footer />
+</Marketing>

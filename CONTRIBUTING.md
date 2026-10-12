@@ -141,9 +141,10 @@ otherwise the watcher outlives the window and keeps holding the machine-wide Ele
 and a `dev` in any other checkout waits at "Waiting for the project build lock..." until it is
 stopped (`scripts/dev-quit.ts`). Only one `dev` can run on a machine at a time. The wrappers find
 `hutch` on `PATH` or at `~/.hutch/bin`, so a shell that never sourced the installer's profile line (an
-agent's, a fresh terminal) still finds it. To inspect the page itself — DOM, styles, console, network — use Safari's Web
-Inspector: enable **Develop → Show Web Inspector** (Safari's Advanced settings expose the Develop
-menu) and attach to the running app under **Develop → ‹your Mac› → Hermetic**.
+agent's, a fresh terminal) still finds it. A dev build renders with CEF and serves Chrome DevTools at
+`http://127.0.0.1:9333` (see "Driving the dev app" below). Under `HERMETIC_RENDERER=native`, inspect the page with
+Safari's Web Inspector instead: enable **Develop → Show Web Inspector** (Safari's Advanced settings
+expose the Develop menu) and attach to the running app under **Develop → ‹your Mac› → Hermetic**.
 
 Each of the three has an `:hmr` twin — `dev:hmr`, `dev:fixture:hmr`, `dev:wizard:hmr` — which is
 Electrobun's Vite loop (its hot-reloading guide). `scripts/dev-hmr.ts` starts Vite over
@@ -156,6 +157,45 @@ honoured by a dev-channel build, only on loopback, and only if the server answer
 says why. Vite only serves in development — the shipped page is still bundled by Electrobun, so run
 the plain `dev:*` loop once before calling a UI change done. Ctrl-C (or closing the window) stops
 Vite and the app together.
+
+### Driving the dev app
+
+Dev builds and release builds use different renderers. `bun run dev*` builds the app with CEF
+(Chromium) and opens a DevTools port on `127.0.0.1:9333`, so a script or a coding agent can read and
+operate the window an operator would see. `app:build:canary` and `app:build:stable` ship the system
+WKWebView and bundle no CEF. `packages/app/renderer.ts` chooses per build, and the rules that keep
+the two renderers interchangeable are in `AGENTS.md` ("Renderers"). The first CEF dev build
+downloads Electrobun's CEF runtime into `~/.hutch` (about 300 MB, once per Electrobun version).
+
+| Variable | Effect (dev builds only) |
+| -------- | ------------------------ |
+| `HERMETIC_RENDERER=native` | Build the dev app on WKWebView with no CEF and no DevTools port: the renderer that ships |
+| `HERMETIC_CDP_PORT=<port>` | Move the DevTools port; `app:cdp` reads the same variable |
+
+`bun run app:cdp` (`scripts/app-cdp.ts`) drives the app over plain CDP, with no dependencies:
+
+```
+bun run app:cdp snapshot                  # accessibility tree, one node per line
+bun run app:cdp click "text=Chat"         # real mouse click; a CSS selector works too
+bun run app:cdp fill 'input[placeholder^="filter"]' atlas
+bun run app:cdp press Enter
+bun run app:cdp wait "text=New agent" 5000
+bun run app:cdp text main                 # innerText of a selector
+bun run app:cdp eval "location.hash"
+bun run app:cdp screenshot .context/fleet.png
+bun run app:cdp console 10                # stream console output and exceptions for 10 s
+bun run app:cdp reload
+```
+
+Playwright attaches to the same port with `chromium.connectOverCDP("http://127.0.0.1:9333")` and
+`browser.contexts()[0].pages()[0]` (no browser download: `playwright-core` is enough). Run Playwright
+scripts with Node or the repo's pinned Bun. A DevTools MCP server works too, for example
+`npx chrome-devtools-mcp --browserUrl http://127.0.0.1:9333` or
+`npx @playwright/mcp --cdp-endpoint http://127.0.0.1:9333`.
+
+CEF is only a tool for driving the app. Do the final check of any visual or input-behaviour change
+on `HERMETIC_RENDERER=native bun run dev:fixture`, and record which renderer each check ran on in the
+PR.
 
 `bun run ci` is `bun run check`, `bun run build` and `bun run audit:dependencies`, and it must be
 green before you push. GitHub Actions runs the same scripts, one per job
@@ -225,6 +265,7 @@ bun run cli -- <args>              # the CLI from source
 bun run dev:fixture                # the app against the fixture backend
 bun run dev:wizard                 # fixture backend, forced init wizard
 bun run dev:hmr                    # any of the three with `:hmr`: Vite serves the page, UI hot-reloads
+bun run app:cdp <command>          # scripts/app-cdp.ts: drive the running dev app over DevTools (CEF)
 ```
 
 Narrower than any script: `bun test packages/core` (or `cli`, `app`, `ui`, `agentd`), or a single
@@ -359,6 +400,8 @@ To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` h
 The build is unsigned today: no Apple Developer ID is configured, so `Hermetic.app` carries only an ad-hoc signature. A first launch needs `xattr -dr com.apple.quarantine /Applications/Hermetic.app` (README.md's Install section has the operator-facing version of this). Signing turns on with no other config change once `ELECTROBUN_DEVELOPER_ID`, `ELECTROBUN_APPLEID`, `ELECTROBUN_APPLEIDPASS`, and `ELECTROBUN_TEAMID` are set in the environment `bun run app:build` runs in.
 
 `bun run app:build:canary` (CI's `app` job, every push) builds the canary channel on every commit to prove the app still builds — it is verification, not distribution: nothing it produces is uploaded or published, and the canary channel is never what `release.yml` ships.
+
+A release also deploys the marketing/docs site (`.github/workflows/site.yml`, called after `publish`, which runs `site/scripts/deploy.ts --production`); one-time Cloudflare/GitHub setup is in `site/README.md`, and `bun run site:deploy` makes a verified preview deploy from a laptop.
 
 ## Running the wizard demo
 

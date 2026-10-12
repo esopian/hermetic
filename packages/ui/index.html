@@ -1,7 +1,4 @@
 <!doctype html>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>hermetic</title>
 <!--
   The app's page, copied to `views/main/index.html` beside
   what Electrobun built from `src/entry-app.tsx`. Both names below are the
@@ -16,8 +13,27 @@
 
   `fonts/` is carried by the same `build.copy`, so the relative paths in
   `fonts.css` resolve here exactly as they do under the dev server.
+
+  The html, head and body tags are written out although HTML lets them be
+  implied, because CEF (the dev renderer) is not handed the page untouched:
+  Electrobun's response filter puts its preload script straight after the
+  first literal head start tag in the bytes, and when there is none it
+  prepends a whole html-head-script prefix to the document — ahead of the
+  doctype, which puts the page in quirks mode under CEF and nowhere else.
+  WKWebView injects its preload as a user script and never sees the markup.
+  For the same reason this comment never spells the tag out: the filter does
+  not know it is inside a comment.
 -->
-<link rel="stylesheet" href="./fonts/fonts.css" />
-<link rel="stylesheet" href="./entry-app.css" />
-<div id="root"></div>
-<script type="module" src="./index.js"></script>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hermetic</title>
+    <link rel="stylesheet" href="./fonts/fonts.css" />
+    <link rel="stylesheet" href="./entry-app.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

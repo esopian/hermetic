@@ -1,0 +1,35 @@
+---
+/*
+ * A static miniature of the app's board view (docs/ui-brief.md). Illustrative data only: the
+ * fleet, account and agents are made up.
+ */
+import Kicker from "./Kicker.astro";
+import StatusSquare from "./StatusSquare.astro";
+---
+<div class="app" aria-label="Hermetic dashboard preview">
+  <div class="app-h">
+    <div class="b"><span class="sq"></span>HERMETIC</div>
+    <div class="t">
+      <div><Kicker as="span">Acting on</Kicker><span style="font-family:var(--sans);font-weight:900;text-transform:uppercase">main</span></div>
+      <div><Kicker as="span">Account</Kicker><span>123456789012</span></div>
+      <div><Kicker as="span">Region</Kicker><span>eu-west-1</span></div>
+    </div>
+    <div class="n">+ NEW AGENT</div>
+  </div>
+  {/* design.md §4.7: the target line every head shows before acting */}
+  <div class="app-env">● main — actions here affect live agents · 123456789012 · eu-west-1</div>
+  <div class="app-tb">
+    <div><Kicker style="font-size:8px">Fleet · eu-west-1</Kicker><div class="cnt">6<small>AGENTS</small></div></div>
+    <div class="legend"><span><StatusSquare kind="ok" />3 ready</span><span><StatusSquare kind="warn" />1 degraded</span><span><StatusSquare kind="acc" />1 in progress</span></div>
+    <div class="seg"><span class="on">BOARD</span><span>TABLE</span><span>TRIAGE</span></div>
+  </div>
+  <div class="board">
+    <div class="card"><div class="nm">atlas</div><div class="hn">atlas.tail7c1e.ts.net</div><div class="st" style="color:var(--ok)"><StatusSquare kind="ok" />ready</div><div class="ft"><span class="hs"><i class="ok"></i><i class="ok"></i><i class="ok"></i></span><span>0.21.3</span></div></div>
+    <div class="card w"><div class="nm">corvid</div><div class="hn">corvid.tail7c1e.ts.net</div><div class="st" style="color:var(--warn)"><StatusSquare kind="warn" />degraded</div><div class="ft"><span class="hs"><i class="ok"></i><i class="warn"></i><i class="ok"></i></span><span style="color:var(--warn)">0.21.1</span></div></div>
+    <div class="card a"><div class="nm">kestrel</div><div class="hn">kestrel.tail7c1e.ts.net</div><div class="st" style="color:var(--acc)"><StatusSquare kind="acc" pulse />bootstrapping</div><div class="ft"><span class="hs"><i class="pend"></i><i class="ok"></i><i class="pend"></i></span><span>stage 04/07</span></div></div>
+    <div class="card"><div class="nm">lumen</div><div class="hn">lumen.tail7c1e.ts.net</div><div class="st" style="color:var(--ok)"><StatusSquare kind="ok" />ready</div><div class="ft"><span class="hs"><i class="ok"></i><i class="ok"></i><i class="ok"></i></span><span>0.21.3</span></div></div>
+    <div class="card s"><div class="nm">moth</div><div class="hn">moth.tail7c1e.ts.net</div><div class="st" style="color:var(--fg3)"><StatusSquare kind="off" />stopped</div><div class="ft"><span class="hs"><i class="off"></i><i class="off"></i><i class="off"></i></span><span>0.21.3</span></div></div>
+    {/* design.md §9.1 Volumes (a destroyed agent's volume is kept), §5 (DLM snapshots of data volumes) */}
+    <div class="card tomb"><div class="nm">cinder</div><div class="hn">vol-0a91c2… · 100 GiB</div><div class="st" style="color:var(--acc)">memory kept</div><div class="ft"><span>2 snapshots</span><span style="color:var(--fg)">CREATE →</span></div></div>
+  </div>
+</div>
