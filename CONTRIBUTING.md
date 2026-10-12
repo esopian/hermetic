@@ -177,8 +177,7 @@ bun run app:cdp reload
 
 Playwright attaches to the same port with `chromium.connectOverCDP("http://127.0.0.1:9333")` and
 `browser.contexts()[0].pages()[0]` (no browser download: `playwright-core` is enough). Run Playwright
-scripts with Node, not Bun. Under the repo's pinned Bun 1.3.10, `connectOverCDP` stalls in the
-WebSocket handshake; Bun 1.4 fixes it. A DevTools MCP server works too, for example
+scripts with Node or the repo's pinned Bun. A DevTools MCP server works too, for example
 `npx chrome-devtools-mcp --browserUrl http://127.0.0.1:9333` or
 `npx @playwright/mcp --cdp-endpoint http://127.0.0.1:9333`.
 
