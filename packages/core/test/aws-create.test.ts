@@ -28,7 +28,7 @@ import { FOUNDATION_VERSION } from "../src/version.ts";
 import { SECRET_PLACEHOLDER } from "../src/backend/constants.ts";
 import { DEFAULT_ROOT_GIB, FLEET_MANIFEST_KEY, STACK_NAME } from "../src/schema/index.ts";
 import type { LocalConfig } from "../src/schema/index.ts";
-import { drain, testHermetic } from "./helpers.ts";
+import { drain, testHermetic, settle } from "./helpers.ts";
 import { callCount, inputsOf, installTestProfile, TEST_PROFILE } from "./aws-harness.ts";
 
 const profile = installTestProfile();
@@ -622,7 +622,7 @@ describe("agents.create against AwsBackend", () => {
     expect(reads.map((r) => r!.TableName)).toContain(`hermetic-${FLEET_ID}-agents`);
     expect(reads.map((r) => r!.TableName)).not.toContain("hermetic-agents");
 
-    await hermetic.artifacts.push({ bytes: new TextEncoder().encode("ELF") });
+    await settle(hermetic.artifacts.push({ bytes: new TextEncoder().encode("ELF") }));
     const manifest = JSON.parse(world.objects.get(FLEET_MANIFEST_KEY)!) as {
       resources: Record<string, unknown>;
     };
@@ -640,7 +640,7 @@ describe("agents.create against AwsBackend", () => {
     const reads = inputsOf<{ TableName: string }>(ddb, GetCommand);
     expect(reads.map((r) => r!.TableName)).toContain("hermetic-agents");
 
-    await hermetic.artifacts.push({ bytes: new TextEncoder().encode("ELF") });
+    await settle(hermetic.artifacts.push({ bytes: new TextEncoder().encode("ELF") }));
     const manifest = JSON.parse(world.objects.get(FLEET_MANIFEST_KEY)!) as {
       resources: Record<string, unknown>;
     };

@@ -8,7 +8,7 @@ import { openCtx, rawFleetFlag, readFlags } from "../context.ts";
 import type { Ctx } from "../context.ts";
 import { destructive, globals } from "../options.ts";
 import { defined, toInt, validate } from "../validate.ts";
-import { err, out, outJson } from "../io.ts";
+import { err, isInteractive, out, outJson } from "../io.ts";
 import { renderOp } from "../stream.ts";
 import { renderTable, renderTeardownReceipt } from "../table.ts";
 import { assertConfirmable, confirmTeardown } from "../confirm.ts";
@@ -26,7 +26,7 @@ import {
   TeardownInput,
   TeardownsListInput,
 } from "@hermetic/core";
-import type { DoctorReport, PendingOpStore } from "@hermetic/core";
+import type { DoctorReport, OpEvent, PendingOpStore, ReleasePushResult } from "@hermetic/core";
 
 const configShowSchema = declare("config.show", "config show", ConfigShowInput);
 const runsListSchema = declare("runs.list", "runs", RunsListInput);
@@ -216,34 +216,79 @@ export function register(program: Command): void {
   const artifacts = new Cmd("artifacts").description("the hermeticd artifact in the fleet bucket");
   artifacts.addCommand(
     globals(new Cmd("push"))
-      .description("push hermeticd to the bucket (run by init and upgrade)")
+      .description("push hermeticd to the bucket, and roll it out when the fleet auto-updates")
       .argument("[version]", "version to publish; defaults to this build's")
       .option(
         "--path <file>",
         "a compiled hermeticd to push; default finds one (HERMETIC_HERMETICD, next to this binary, or built from source)",
       )
-      .action(async (version: string | undefined, opts: { path?: string }, cmd: Command) => {
+      .option("--now", "ask every running box to take it now, even if the fleet does not auto-update")
+      .option("--no-rollout", "publish only; leave each box to its own update check")
+      .option(
+        "--rollout-wait-ms <ms>",
+        "how long to watch the boxes land before reporting stragglers (default ten minutes)",
+      )
+      .addHelpText(
+        "after",
+        "\nA fleet auto-updates hermeticd unless `hermetic settings set\n" +
+          "--no-auto-update-hermeticd` switched it off (§6.5). When it does, a push that\n" +
+          "changed the release asks every running box to take it at once and waits for\n" +
+          "each to report the new binary; a box that has not by the deadline is a\n" +
+          "warning, never a failure. With auto-update off, boxes take it at their\n" +
+          "nightly check unless --now asks them anyway.\n",
+      )
+      .action(async (version: string | undefined, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
-        const input = validate(artifactsPushSchema, defined({ version, path: opts.path }));
-        const pushed = await ctx.hermetic.artifacts.push(input);
-        if (ctx.flags.json) await outJson(pushed);
-        else await out(`pushed ${pushed.version} to ${pushed.key}\n`);
+        const input = validate(
+          artifactsPushSchema,
+          defined({
+            version,
+            path: opts["path"],
+            now: opts["now"],
+            // Commander answers `true` for an absent `--no-rollout`; only the
+            // flag itself is worth stating, since `true` means "follow the
+            // fleet's setting", which is what absence already says.
+            rollout: opts["rollout"] === false ? false : undefined,
+            rollout_wait_ms: toInt(opts["rolloutWaitMs"] as string | undefined),
+          }),
+        );
         /**
-         * §3.6: the release went up either way. This says the Hermes mirror did
-         * not, so the fleet's agents will clone Hermes from github.com at boot
-         * rather than from the bucket — a warning, never a failure.
+         * Core returns the push's result as the generator's return value,
+         * which `for await` discards; `yield*` is the one way to keep it.
          */
-        if (pushed.mirror_warning !== undefined) {
-          await err(`warning: ${pushed.mirror_warning}\n`);
+        let pushed: ReleasePushResult | undefined;
+        const stream = ctx.hermetic.artifacts.push(input, { signal: ctx.signal });
+        async function* capture() {
+          pushed = yield* stream;
         }
         /**
-         * §7.3, the same shape and a harder consequence: the browser build did
-         * not reach the bucket, so a `--browser` agent has nothing to install —
-         * still a warning, because the release itself went up.
+         * `--json` stays the document it always was — the `ReleasePushResult`,
+         * key, digest, generation and warnings — with the op's events beside it
+         * as `events`, rather than turning into an NDJSON stream a script that
+         * read `.key` would choke on.
          */
-        if (pushed.browser_warning !== undefined) {
-          await err(`warning: ${pushed.browser_warning}\n`);
+        if (ctx.flags.json) {
+          const events: OpEvent[] = [];
+          for await (const e of capture()) events.push(e);
+          await outJson({ ...pushed, events });
+          return;
         }
+        const events = await renderOp(capture(), {
+          flags: ctx.flags,
+          label: `artifacts push ${input.version ?? ""}`.trim(),
+        });
+        /**
+         * A spinner shows each line only until the next replaces it, so the
+         * ones an operator must not miss — the §3.6/§7.3 mirror warnings (the
+         * release went up either way), a rollout straggler — are said again
+         * once it stops. Piped output already carried every line.
+         */
+        if (isInteractive()) {
+          for (const e of events) {
+            if (e.level === "warn" || e.level === "error") await err(`${e.level}: ${e.message}\n`);
+          }
+        }
+        if (pushed !== undefined) await out(`pushed ${pushed.version} to ${pushed.key}\n`);
       }),
   );
   program.addCommand(artifacts);

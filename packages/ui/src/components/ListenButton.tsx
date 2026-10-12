@@ -20,7 +20,13 @@ export function ListeningSignal({ on }: { on: boolean }) {
 }
 
 /** Listening opts an instance and all of its bots into chat and alerts. */
-export function ListenButton({ instance }: { instance: string }) {
+export function ListenButton({
+  instance,
+  size = "regular",
+}: {
+  instance: string;
+  size?: "regular" | "compact";
+}) {
   const listening = useListeningIfAvailable();
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   if (!listening) return null;
@@ -39,7 +45,7 @@ export function ListenButton({ instance }: { instance: string }) {
     <button
       type="button"
       role="switch"
-      className="btn listening-toggle"
+      className={`btn listening-toggle${size === "compact" ? " compact" : ""}`}
       aria-label={`Listen to ${instance}`}
       aria-checked={on}
       aria-busy={pending}
@@ -62,7 +68,7 @@ export function ListenButton({ instance }: { instance: string }) {
   );
 }
 
-export function ListeningBand({ instance }: { instance: string }) {
+export function ListeningBand({ instance, compact = false }: { instance: string; compact?: boolean }) {
   const listening = useListeningIfAvailable();
   if (!listening) return null;
   const on = listening.instances.includes(instance);
@@ -70,7 +76,11 @@ export function ListeningBand({ instance }: { instance: string }) {
     <div className="listening-band" data-listening={on}>
       <ListeningSignal on={on} />
       <span>{on ? "Listening" : "Not listening"}</span>
-      {on && <span className="listening-band-detail">Chat + alerts</span>}
+      {compact ? (
+        <ListenButton instance={instance} size="compact" />
+      ) : (
+        on && <span className="listening-band-detail">Chat + alerts</span>
+      )}
     </div>
   );
 }

@@ -11,8 +11,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
-import { HermeticError } from "../src/errors.ts";
-import { drain, testHermetic } from "./helpers.ts";
+import { FIXTURE_HERMETICD_VERSION } from "../src/backend/fixture/memory-fixture.ts";
+import { drain, settle, testHermetic } from "./helpers.ts";
 import type { Agent, OpEvent } from "../src/schema/index.ts";
 
 /** A pin no fixture agent runs, so every render moves the hash. */
@@ -119,28 +119,39 @@ describe("upgrade --hermes V --now", () => {
     expect(events.at(-1)?.level).toBe("warn");
   });
 
-  test("with --hermeticd it is refused VALIDATION before anything is written", async () => {
+  test("beside --hermeticd it also asks every running box to take the release", async () => {
     const { backend, hermetic } = fleet();
-    const manifest = backend.objects.get("manifest.json");
-    backend.resetMutations();
+    boxesAnswer(backend);
+    // The fixture bucket's release is the only one, so republish it under a
+    // new version: a new pointer the boxes can be asked to take.
+    await settle(hermetic.artifacts.push({ version: "9.9.9", rollout: false }));
+    await drain(hermetic.upgrade({ all: true, hermeticd: FIXTURE_HERMETICD_VERSION, rollout: false }));
 
-    const thrown = await drain(
+    const events = await drain(
       hermetic.upgrade({ all: true, hermes: NEXT, hermeticd: "9.9.9", now: true }),
-    ).catch((e: unknown) => e);
+    );
 
-    expect(thrown).toBeInstanceOf(HermeticError);
-    expect((thrown as HermeticError).code).toBe("VALIDATION");
-    expect(backend.mutations).toEqual([]);
-    expect(backend.objects.get("manifest.json")).toEqual(manifest);
-    expect(backend.agents.get("atlas")?.hermes_version).not.toBe(NEXT);
+    expect(backend.agents.get("atlas")?.update_request?.hermeticd_version).toBe("9.9.9");
+    expect(backend.agents.get("atlas")?.hermes_version).toBe(NEXT);
+    expect(backend.agents.get("atlas")?.apply_request).toBeTruthy();
+    expect(events.some((e) => e.phase === "rollout" && e.kind === "start")).toBe(true);
   });
 
-  test("without --hermes it is refused by the schema", async () => {
+  test("`--no-rollout` without --hermeticd is refused by the schema", async () => {
     const { backend, hermetic } = fleet();
     backend.resetMutations();
-    await expect(drain(hermetic.upgrade({ hermeticd: "9.9.9", now: true }))).rejects.toThrow(
-      /--now .*needs --hermes/,
-    );
+    await expect(
+      drain(hermetic.upgrade({ name: "atlas", hermes: NEXT, rollout: false })),
+    ).rejects.toThrow(/need --hermeticd/);
+    expect(backend.mutations).toEqual([]);
+  });
+
+  test("`--now` with `--no-rollout` is refused by the schema", async () => {
+    const { backend, hermetic } = fleet();
+    backend.resetMutations();
+    await expect(
+      drain(hermetic.upgrade({ hermeticd: "9.9.9", now: true, rollout: false })),
+    ).rejects.toThrow(/contradict/);
     expect(backend.mutations).toEqual([]);
   });
 });

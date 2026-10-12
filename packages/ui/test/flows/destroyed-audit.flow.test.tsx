@@ -115,6 +115,6 @@ test("destroy, review the tombstone and its history, then reuse the name", async
   await user.click(within(drawer).getAllByRole("button", { name: "Create agent →" })[0] as HTMLElement);
   await screen.findByText("Agent handed off", undefined, { timeout: 10_000 });
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: new RegExp(`^${name} · `) })).toBeTruthy(),
+    expect(screen.getByRole("button", { name: `Open ${name} details` })).toBeTruthy(),
   );
 }, 45_000);

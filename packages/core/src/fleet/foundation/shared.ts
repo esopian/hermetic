@@ -31,11 +31,12 @@ export const TRANSITIONAL: readonly AgentStatus[] = [
   "destroying",
 ];
 
-/** The agents a rollout targets: up, reachable, and running a hermeticd that can take it. */
-export const ROLLOUT_STATUSES: readonly AgentStatus[] = ["ready", "degraded"];
-
-/** How often the rollout scans for boxes that have taken the new release. */
-export const ROLLOUT_POLL_MS = 10_000;
+/**
+ * Which agents a rollout targets and how often it looks, owned by the rollout
+ * every hermeticd publisher shares (`fleet/hermeticd-rollout.ts`) and
+ * re-exported here so `plan` counts exactly the boxes `update` will ask.
+ */
+export { ROLLOUT_POLL_MS, ROLLOUT_STATUSES } from "../hermeticd-rollout.ts";
 
 /** The phase boundaries, so `plan` and `update` agree about where the bar is. */
 export const PHASE = {

@@ -50,7 +50,7 @@ test("a finished create shows its card and the new count with no poll in between
   await user.click(within(drawer).getAllByRole("button", { name: "Create agent →" })[0] as HTMLElement);
 
   await screen.findByText("Agent handed off", undefined, { timeout: 10_000 });
-  await waitFor(() => expect(screen.getByRole("button", { name: /^wren · / })).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Open wren details" })).toBeTruthy());
   expect(agentCount()).toBe("12 agents");
   expect(harness.calls.some((c) => c.name === "agents.list")).toBe(true);
 }, 20_000);

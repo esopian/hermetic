@@ -83,6 +83,7 @@ export {
   pointFleetAt,
   readFleetManifest,
   recordHermesMirror,
+  republishAutoUpdate,
   withFleetLock,
   writeFleetManifest,
   type FleetLockStore,

@@ -22,6 +22,7 @@ import { redactValue } from "../redact.ts";
 import { readBootId } from "../install-lock.ts";
 import {
   clearInstallIntent,
+  installErrorRelease,
   readInstallIntent,
   writeInstallIntent,
   writeUpdateState,
@@ -99,7 +100,7 @@ export async function installRelease(deps: UpdateDeps, args: InstallArgs): Promi
   const { host, aws, name, bucket } = deps;
   const emit = deps.emit ?? (() => {});
   const say = deps.log ?? (() => {});
-  const { state, fleet, entry, target, running, installedSha256 } = args;
+  const { fleet, entry, target, running, installedSha256 } = args;
   const { binaryStale, stagesStale, pending } = args;
 
   // A resume whose binary is already in place swaps nothing and still owes the
@@ -107,14 +108,31 @@ export async function installRelease(deps: UpdateDeps, args: InstallArgs): Promi
   const restartOwed = binaryStale || pending?.restart_owed === true;
 
   // ── 1. validate the whole release ─────────────────────────────────────────
+  //
+  // Binary and stages together, under one error record: a stage that fails its
+  // digest after the binary was fetched is as stuck as a binary that fails its
+  // own, and the auto-update backstop backs off either (`last_install_error`).
   let previousSha256: string | null = pending?.previous_sha256 ?? null;
+  const validated = await recordInstallErrors(
+    deps,
+    args.state,
+    installErrorRelease(fleet),
+    async () => {
+      let outcome: InstallOutcome = { ok: true, previousSha256 };
+      if (binaryStale) {
+        emit(opEvent("fetch", 0.5, `fetching hermeticd ${target}`, host.now()));
+        outcome = await prepareBinary(deps, entry, target, fleet.hermeticd.generation);
+      }
+      if (outcome.ok && stagesStale) await verifyReleaseStages(deps, fleet);
+      return outcome;
+    },
+  );
+  // The state as `recordInstallErrors` left it, so the writes below cannot
+  // resurrect an error it has just cleared.
+  const state = validated.state;
+  const outcome = validated.outcome;
   let staged = false;
   if (binaryStale) {
-    emit(opEvent("fetch", 0.5, `fetching hermeticd ${target}`, host.now()));
-    const outcome = await recordInstallErrors(deps, state, () =>
-      prepareBinary(deps, entry, target, fleet.hermeticd.generation),
-    );
-
     if (!outcome.ok) {
       /**
        * A release that will not run here, or that there is no room to install.
@@ -152,7 +170,6 @@ export async function installRelease(deps: UpdateDeps, args: InstallArgs): Promi
     previousSha256 = outcome.previousSha256;
     staged = true;
   }
-  if (stagesStale) await verifyReleaseStages(deps, fleet);
 
   // ── 2. write down what is about to happen ─────────────────────────────────
   await writeInstallIntent(host, {
@@ -359,18 +376,23 @@ async function verifyReleaseStages(deps: UpdateDeps, fleet: FleetManifest): Prom
 async function recordInstallErrors(
   deps: UpdateDeps,
   state: UpdateState,
+  /** The release being installed — what the error is remembered against. */
+  release: string | null,
   install: () => Promise<InstallOutcome>,
-): Promise<InstallOutcome> {
+): Promise<{ readonly outcome: InstallOutcome; readonly state: UpdateState }> {
   try {
     const outcome = await install();
-    if (state.last_install_error !== null) {
-      await writeUpdateState(deps.host, {
-        ...state,
-        last_install_error: null,
-        install_error_notified: false,
-      });
+    if (state.last_install_error === null && state.last_install_error_release === null) {
+      return { outcome, state };
     }
-    return outcome;
+    const cleared = {
+      ...state,
+      last_install_error: null,
+      last_install_error_release: null,
+      install_error_notified: false,
+    };
+    await writeUpdateState(deps.host, cleared);
+    return { outcome, state: cleared };
   } catch (e) {
     const message = redactValue(e instanceof Error ? e.message : String(e));
     const repeated = state.last_install_error === message;
@@ -386,6 +408,7 @@ async function recordInstallErrors(
     await writeUpdateState(deps.host, {
       ...state,
       last_install_error: message,
+      last_install_error_release: release,
       install_error_notified: repeated || state.install_error_notified,
     });
     throw e;

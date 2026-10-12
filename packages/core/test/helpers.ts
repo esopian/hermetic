@@ -235,6 +235,18 @@ export async function drain(stream: AsyncIterable<OpEvent>): Promise<OpEvent[]> 
 }
 
 /**
+ * Run a long operation to the end and hand back what its generator *returned*
+ * — `artifacts.push`'s `ReleasePushResult` — for a test that asserts on the
+ * result rather than the events. `drain` cannot: `for await` discards it.
+ */
+export async function settle<T>(stream: AsyncGenerator<OpEvent, T>): Promise<T> {
+  for (;;) {
+    const next = await stream.next();
+    if (next.done === true) return next.value;
+  }
+}
+
+/**
  * A release's bootstrap stages, in a temp directory `HERMETIC_STAGES` points at.
  * Tests that walk a *real-mode* push need stages — a release without them boots
  * nothing — and must not depend on `packages/agentd/stages` being present, so
