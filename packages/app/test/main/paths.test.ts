@@ -10,11 +10,14 @@
 import { describe, expect, test } from "bun:test";
 import { bundlePaths, homeFrom } from "../../src/main/paths.ts";
 
-const APP = "/Applications/Hermetic.app/Contents/Resources/app/bun";
+const APP = "/Applications/Hermetic.app/Contents/MacOS/bun";
 const ENV = { HOME: "/Users/nobody" } as const;
 
 describe("the sidecars", () => {
-  test("live in `bin/` beside the running executable", () => {
+  test("live in `Resources/app/bin`, not beside the running executable", () => {
+    // The runtime is `Contents/MacOS/bun`; `electrobun.config.ts` copies the
+    // staged sidecars to `Resources/app/bin`. Deriving `MacOS/bin` instead sent
+    // `foundation update` looking for a `hermeticd` that was never there.
     const paths = bundlePaths({ execPath: APP, env: ENV, fixture: false });
     expect(paths.binDir).toBe("/Applications/Hermetic.app/Contents/Resources/app/bin");
   });
@@ -25,10 +28,12 @@ describe("the sidecars", () => {
     expect(paths.stagesDir).toBe(`${paths.binDir}/stages`);
   });
 
-  test("an executable at the root still resolves to a directory", () => {
+  test("an executable at the root still resolves to an absolute directory", () => {
     // Not a layout anybody ships, but `parentOf` deciding on a lone slash is
-    // the difference between `/bin` and a path that starts with two of them.
-    expect(bundlePaths({ execPath: "/bun", env: ENV, fixture: false }).binDir).toBe("/bin");
+    // the difference between `/Resources/…` and a path that starts with two.
+    expect(bundlePaths({ execPath: "/bun", env: ENV, fixture: false }).binDir).toBe(
+      "/Resources/app/bin",
+    );
   });
 });
 
