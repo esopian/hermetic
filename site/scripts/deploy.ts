@@ -736,7 +736,16 @@ async function main(): Promise<void> {
   const deployment = await deploy(plan);
   await verify(plan.production ? "workers.dev" : "version", deployment.url, plan.short, 90_000);
   if (plan.production && plan.siteUrl !== null && plan.siteUrl !== deployment.url)
-    await verify("production", plan.siteUrl, plan.short, 180_000);
+    await verify(
+      "production",
+      plan.siteUrl,
+      plan.short,
+      180_000,
+      // The workers.dev check above already passed, so the version is live. A domain the deploy
+      // just attached can take a few minutes to resolve, and a resolver that looked it up before
+      // the record existed keeps the "no such host" answer for a while.
+      `${deployment.url} serves this build; ${plan.siteUrl} may still be resolving. Flush the DNS cache (macOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder) and run \`bun run deploy --verify ${plan.siteUrl}\``,
+    );
   else if (deployment.alias !== null)
     await verify("preview alias", deployment.alias, plan.short, 90_000);
   summary(plan, deployment, startedAt);
