@@ -148,7 +148,7 @@ export type MachineryRequests = {
   >;
 
   /** `chat.send` under the name a socketless transport opens a turn with. */
-  "chat.turn": RpcRequest<Input<typeof chat.chatSendSchema>, { stream_id: string }>;
+  "chat.turn": RpcRequest<Input<typeof chat.chatSendBody>, { stream_id: string }>;
   "chat.turn.abort": RpcRequest<StreamRef, StreamClosed>;
   "chat.subscribe": RpcRequest<Input<typeof chat.ChatSubscribeRequest>, { stream_id: string }>;
   "chat.unsubscribe": RpcRequest<StreamRef, StreamClosed>;

@@ -754,14 +754,15 @@ async function wireBytes(client: HermesChatClient = fakeBox(), redact = true): P
       target: { ...TARGET },
     }),
     // `chat.turn`, the second transport of the same turn (`handlers/chat.ts`).
-    // It was the `EventSource` route and is now a request like any other, but
-    // it still validates a params object the page built rather than one the
-    // guard rewrote, so it is still worth grepping separately.
+    // It was the `EventSource` route and is now a request like any other, with
+    // the same §4.7 target, but it is a second dispatch name and so still worth
+    // grepping separately.
     await answerBytes(ctx, "chat.turn", {
       instance: INSTANCE,
       bot: BOT,
       message: COMPOSED,
       session: SESSION,
+      target: { ...TARGET },
     }),
   ];
   return [...bodies, ...log.lines].join("\n");
