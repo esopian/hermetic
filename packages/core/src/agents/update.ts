@@ -32,6 +32,7 @@ import {
   releaseKey,
   RerunInput as RerunInputSchema,
   UpgradeInput as UpgradeInputSchema,
+  autoUpdateHermeticd,
 } from "../schema/index.ts";
 import type {
   Agent,
@@ -52,6 +53,7 @@ import {
   createConverge,
 } from "./converge.ts";
 import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
+import { followRelease, releaseIdentityOf } from "../fleet/hermeticd-rollout.ts";
 import type { CoreContext } from "../context.ts";
 
 import { evt } from "../events.ts";
@@ -71,6 +73,14 @@ export interface UpdateDeps {
    */
   convergeTimeoutMs?: number;
   convergePollMs?: number;
+  /**
+   * How long `upgrade --hermeticd` watches the fleet take the release when the
+   * request names no `rollout_wait_ms`, and how often it looks: the same
+   * deployment values `foundation.update` uses (`FoundationDeps`), zero in
+   * fixtures and tests.
+   */
+  rolloutWaitMs?: number | undefined;
+  rolloutPollMs?: number | undefined;
 }
 
 /** What one agent's `--hermes` upgrade came to, for the run's closing tally. */
@@ -283,10 +293,13 @@ export function createUpdate(deps: UpdateDeps) {
    * §6.5. Two halves that no longer resemble each other:
    *
    * - `--hermeticd V` is **fleet-wide**. It moves one pointer — the fleet
-   *   manifest's `hermeticd.version` — and writes not a single agent row: every
-   *   box picks the new release up on its nightly update (§4.4). A name would
-   *   mean "upgrade this one box", which the fleet manifest cannot express, so
-   *   it is refused rather than silently widened.
+   *   manifest's `hermeticd.version` — and then, if the fleet auto-updates
+   *   hermeticd (or `--now` says so regardless), asks every running box to
+   *   take it at once with the `update_request` `foundation.update` writes
+   *   (`fleet/hermeticd-rollout.ts`). Otherwise, or with `--no-rollout`, each
+   *   box takes it at its own next update check. A name would mean "upgrade
+   *   this one box", which the fleet manifest cannot express, so it is refused
+   *   rather than silently widened.
    * - `--hermes V` is per-agent: the pin, the re-render and the upload. On its
    *   own that is all it does — the box goes on running the Hermes it has until
    *   something applies the new bundle, and every message says what will: the
@@ -307,20 +320,6 @@ export function createUpdate(deps: UpdateDeps) {
    */
   async function* upgrade(input: UpgradeInput, opts: OpOptions = {}): AsyncIterable<OpEvent> {
     const parsed = UpgradeInputSchema.parse(input);
-    /**
-     * Before anything is read or written: a hermeticd release reaches a box on
-     * its nightly update and has no in-place converge, so `--now` beside it
-     * would either be silently ignored for that half or read as a promise it
-     * cannot keep. Refused here rather than in the schema so it carries a
-     * typed `VALIDATION`, like the name-with-hermeticd refusal below.
-     */
-    if (parsed.now === true && parsed.hermeticd !== undefined) {
-      throw new HermeticError(
-        "VALIDATION",
-        "--now converges boxes onto a new Hermes pin; a hermeticd release reaches every box on its nightly update and cannot be applied now. Run the --hermeticd upgrade on its own.",
-        { hermeticd: parsed.hermeticd, now: true },
-      );
-    }
     const { fleet, stack } = await guardFleet();
 
     if (parsed.hermeticd !== undefined) {
@@ -349,7 +348,7 @@ export function createUpdate(deps: UpdateDeps) {
        * into that gap names a release the prune then removes. The lock is given
        * back before the per-agent `--hermes` phase, which needs it free.
        */
-      await pointFleetAt(backend.artifacts, backend.store.fleet, {
+      const moved = await pointFleetAt(backend.artifacts, backend.store.fleet, {
         fleet,
         stack,
         hermeticd,
@@ -360,13 +359,44 @@ export function createUpdate(deps: UpdateDeps) {
         updatedAt: nowIso(),
       });
       await appendEvent(FLEET_KEY, "upgrade", `hermeticd → ${parsed.hermeticd}`);
+      const alone = parsed.hermes === undefined;
       yield evt(
         "manifest",
-        parsed.hermes === undefined ? 1 : 0.4,
-        `the fleet manifest now names hermeticd ${parsed.hermeticd}; every agent takes it on its next nightly update`,
+        alone ? 0.3 : 0.25,
+        `the fleet manifest now names hermeticd ${parsed.hermeticd}`,
         nowIso(),
       );
-      if (parsed.hermes === undefined) return;
+      /**
+       * §6.5: whether the running boxes are asked to take it now — the fleet's
+       * `auto_update_hermeticd`, or `--now`/`--no-rollout` over it — decided
+       * and done by the rollout every hermeticd publisher shares. After the
+       * pointer's lock is given back, and never a failure of this command:
+       * the pointer has moved whatever the boxes do. The `--hermes` half, if
+       * any, still runs after it.
+       */
+      yield* followRelease(
+        {
+          ctx: deps.ctx,
+          waitMs: deps.rolloutWaitMs ?? 0,
+          pollMs: deps.rolloutPollMs,
+        },
+        {
+          move: {
+            before: moved.previous === null ? null : releaseIdentityOf(moved.previous),
+            after: releaseIdentityOf(hermeticd),
+          },
+          options: parsed,
+          autoUpdate: autoUpdateHermeticd(moved.fleet.settings),
+          phase: "rollout",
+          progress: alone ? [0.3, 0.99] : [0.25, 0.4],
+          nowCommand: `hermetic upgrade --hermeticd ${parsed.hermeticd} --now`,
+          signal: opts.signal,
+        },
+      );
+      if (alone) {
+        yield evt("done", 1, `the fleet's release is hermeticd ${parsed.hermeticd}`, nowIso());
+        return;
+      }
     }
 
     /**

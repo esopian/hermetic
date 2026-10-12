@@ -146,6 +146,7 @@ const BODIES: Record<string, object> = {
   /* Machinery, but the page's own send path: `chat.send` under another name. */
   "chat.turn": { instance: "ember", bot: "default", message: "hello" },
   "chat.abort": { instance: "ember", bot: "default" },
+  "chat.steer": { instance: "ember", bot: "default", text: "also check the logs" },
   /* Bot Mode (§9.2): every one of these writes to a box. */
   "chat.open": { instance: "ember", bot: "default" },
   "chat.compact": { instance: "ember", bot: "default" },

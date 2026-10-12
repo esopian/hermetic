@@ -58,7 +58,7 @@
  * | `hermes-chat-roster.ts` | profiles, rooms, warm processes → `Swarm` |
  * | `hermes-chat-sessions.ts` | the session registry → `Session` |
  * | `hermes-chat-history.ts` | the durable transcript → `ChatMessage` |
- * | `hermes-chat-turn.ts` | one live turn → `ChatFrame`, and its abort |
+ * | `hermes-chat-turn.ts` | one live turn → `ChatFrame`, its abort and steer |
  * | `hermes-chat-peer.ts` | Bot Mode's two raw transports |
  * | `hermes-chat-observe.ts` | a socket that only listens → `ChatObserveHint` |
  *
@@ -84,6 +84,7 @@ export type {
   BoxAddress,
   ChatFetch,
   ChatSocket,
+  ChatSteerStatus,
   HermesChatClient,
   HermesChatDeps,
   HermesChatOptions,
@@ -166,6 +167,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     history: history.history,
     send: turn.send,
     abort: turn.abort,
+    steer: turn.steer,
     observe: observation.observe,
     botModeRpc: peer.botModeRpc,
     botModeRest: peer.botModeRest,

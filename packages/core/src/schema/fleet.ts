@@ -10,6 +10,7 @@ export {
   isChromeRef,
   STAGE_FILE_RE,
   orderStages,
+  autoUpdateHermeticd,
 } from "../shared/release.ts";
 export { FLEET_KEY, cloudName, legacyCloudNames } from "../shared/naming.ts";
 import { FleetIdSchema, Iso, ProfileId, Region, SecretSlug, Sha256, Version } from "./common.ts";
@@ -130,6 +131,18 @@ export const FleetSettings = z.object({
    * absent, which is a fleet that has not been migrated yet.
    */
   default_profile: ProfileId.nullable().optional(),
+  /**
+   * Whether a newly published hermeticd release reaches the fleet at once
+   * (§6.5) — the laptop asking every running box to take it right after
+   * `artifacts push` or `upgrade --hermeticd`, and every box checking the fleet
+   * manifest every few minutes — rather than at each box's nightly slot.
+   *
+   * Optional, and absent reads as `true` (`autoUpdateHermeticd`): on is the
+   * default, and a `_fleet` written before the switch existed must mean the
+   * same as one that says so. Copied into the fleet manifest on every manifest
+   * write, because the box cannot read `_fleet`.
+   */
+  auto_update_hermeticd: z.boolean().optional(),
   /** Slot names and timestamps — never values (§8.3). */
   secrets: z.array(SharedSecretMeta),
   updated_at: Iso,
@@ -162,6 +175,7 @@ export function defaultFleetSettings(
     version: 1,
     defaults,
     providers: providers as FleetSettings["providers"],
+    auto_update_hermeticd: true,
     secrets: [],
     updated_at: nowIso,
     updated_by: actor,
@@ -720,6 +734,19 @@ export const FleetManifest = z.object({
       }),
     )
     .optional(),
+  /**
+   * The fleet's `settings.auto_update_hermeticd`, copied here because the box
+   * cannot read `_fleet` (§6.5). Every manifest write derives it from the
+   * `_fleet` item it was handed (`fleetManifestFrom`), and `settings.set`
+   * republishes the manifest when the switch changes.
+   *
+   * hermeticd reads it to decide whether to check this manifest every few
+   * minutes or only at its nightly slot. Absent — a manifest written before the
+   * field, or by an older laptop — reads as `true` (`autoUpdateHermeticd`), the
+   * same as the setting itself. `schema_version` stays `1`: the addition is
+   * purely additive, and an older hermeticd strips what it does not know.
+   */
+  auto_update_hermeticd: z.boolean().optional(),
   updated_at: Iso,
   updated_by: z.string(),
 });

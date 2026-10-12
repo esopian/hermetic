@@ -139,3 +139,23 @@ export function orderStages(names: readonly string[]): string[] {
   }
   return [...byOrdinal.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, name]) => name);
 }
+
+/**
+ * Whether a fleet takes a new hermeticd release as soon as it is published
+ * (§6.5), read from either place the switch is written: the fleet's shared
+ * settings (`FleetSettings.auto_update_hermeticd`) or the fleet manifest's copy
+ * of it (`FleetManifest.auto_update_hermeticd`).
+ *
+ * Absent means **on**. That is the default every new fleet is written with, and
+ * it is also what a `_fleet` item or a manifest written before the switch
+ * existed has to mean, so neither needs migrating. Here, rather than restated
+ * at each reader, because three runtimes ask the question — core when it
+ * decides whether a push nudges the fleet, hermeticd when it decides whether to
+ * poll the manifest, and the UI when it draws the toggle — and they must agree
+ * on what absent means.
+ */
+export function autoUpdateHermeticd(
+  source: { readonly auto_update_hermeticd?: boolean | undefined } | null | undefined,
+): boolean {
+  return source?.auto_update_hermeticd ?? true;
+}

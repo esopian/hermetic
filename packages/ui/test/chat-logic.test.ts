@@ -335,10 +335,9 @@ describe("the collapse rule", () => {
     }
   });
 
-  test("`unknown` and anything that failed start open", () => {
+  test("only `unknown` starts open; a failure starts shut", () => {
     expect(startsCollapsed("unknown")).toBe(false);
-    expect(startsCollapsed("ok", true)).toBe(false);
-    expect(startsCollapsed("bad", true)).toBe(false);
+    expect(startsCollapsed("bad")).toBe(true);
   });
 
   test("a running tool is accent, and a status nobody knows is unknown", () => {

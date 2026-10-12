@@ -25,6 +25,7 @@ import {
   freshFleet,
   installTestStages,
   testHermetic,
+  settle,
 } from "./helpers.ts";
 
 /**
@@ -1952,18 +1953,20 @@ describe("upgrade", () => {
     expect(events.some((e) => e.message.includes("next recreate"))).toBe(true);
   });
 
-  test("--hermeticd moves the fleet manifest's pointer and writes no agent row", async () => {
+  test("--hermeticd --no-rollout moves the fleet manifest's pointer and writes no agent row", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     const versionsBefore = (await hermetic.agents.list()).map((r) => r.version);
 
     // Push moved the pointer already; move it back so the upgrade has work.
-    await drain(hermetic.upgrade({ all: true, hermeticd: FIXTURE_HERMETICD_VERSION }));
+    // `rollout: false`: the pointer move alone. With the fleet's default
+    // auto-update it would go on to ask every running box (`upgrade-now`).
+    await drain(hermetic.upgrade({ all: true, hermeticd: FIXTURE_HERMETICD_VERSION, rollout: false }));
     expect((await readFleetManifest(backend.artifacts))!.hermeticd.version).toBe(
       FIXTURE_HERMETICD_VERSION,
     );
 
-    await drain(hermetic.upgrade({ all: true, hermeticd: "0.5.0" }));
+    await drain(hermetic.upgrade({ all: true, hermeticd: "0.5.0", rollout: false }));
     const manifest = (await readFleetManifest(backend.artifacts))!;
     expect(manifest.hermeticd.version).toBe("0.5.0");
     // The generation `describeRelease` resolved, not a key rebuilt from the
@@ -1992,7 +1995,7 @@ describe("upgrade", () => {
 
   test("--hermeticd needs no target at all: there is nothing for one to select", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     await drain(hermetic.upgrade({ hermeticd: FIXTURE_HERMETICD_VERSION }));
     expect((await readFleetManifest(backend.artifacts))!.hermeticd.version).toBe(
       FIXTURE_HERMETICD_VERSION,
@@ -2047,7 +2050,7 @@ describe("upgrade", () => {
    */
   test("--hermeticd is refused while a foundation update holds the fleet lock", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     // Through `lockFleet`, the only door onto the lock: `put` creates `_fleet`
     // and refuses a row that is already there (§4.4).
     await backend.store.fleet.lockFleet(
@@ -2078,7 +2081,7 @@ describe("upgrade", () => {
    */
   test("--hermeticd holds the fleet lock across the read and the write", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     let lockedDuringWrite: string | null = null;
     const putObject = backend.artifacts.putObject;
@@ -2108,7 +2111,7 @@ describe("upgrade", () => {
       return putObject(key, bytes);
     };
 
-    await expect(hermetic.artifacts.push({ version: "0.6.0" })).rejects.toThrow(HermeticError);
+    await expect(settle(hermetic.artifacts.push({ version: "0.6.0" }))).rejects.toThrow(HermeticError);
 
     expect(lockedDuringUpload).toBeString();
     // A failed push must not leave the fleet locked for the whole TTL (§4.4).
@@ -2123,7 +2126,7 @@ describe("upgrade", () => {
    */
   test("--hermeticd keeps the foundation block the manifest already carries", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     const manifest = (await readFleetManifest(backend.artifacts))!;
     const ahead = {
       version: (manifest.foundation?.version ?? 0) + 1,
@@ -2546,7 +2549,7 @@ describe("config.show / runs.list / artifacts.push", () => {
 
     let code: string | null = null;
     try {
-      await hermetic.artifacts.push({});
+      await settle(hermetic.artifacts.push({}));
     } catch (e) {
       code = (e as HermeticError).code;
     }
@@ -2567,7 +2570,7 @@ describe("config.show / runs.list / artifacts.push", () => {
       git: () => ({ build_number: 36, commit: "deadbee", dirty: false }),
     });
 
-    await hermetic.artifacts.push({});
+    await settle(hermetic.artifacts.push({}));
     const manifest = await readFleetManifest(backend.artifacts);
     // The number an operator reads, and the commit it resolves back to.
     expect(manifest?.hermeticd.build_number).toBe(36);
@@ -2585,7 +2588,7 @@ describe("config.show / runs.list / artifacts.push", () => {
       git: () => null,
     });
 
-    await hermetic.artifacts.push({});
+    await settle(hermetic.artifacts.push({}));
     const manifest = await readFleetManifest(backend.artifacts);
     // Absent, never `0` — `0` would order below every real release.
     expect(manifest?.hermeticd.build_number).toBeUndefined();
@@ -2609,7 +2612,7 @@ describe("config.show / runs.list / artifacts.push", () => {
       // Deliberately not `FIXTURE_HERMETICD_VERSION`: the fixture fleet already
       // carries a release at that version, and an object that was seeded would
       // read exactly like an object this push wrote.
-      await hermetic.artifacts.push({ version: "9.9.9" });
+      await settle(hermetic.artifacts.push({ version: "9.9.9" }));
     } catch (e) {
       code = (e as HermeticError).code;
     }
@@ -2633,7 +2636,7 @@ describe("config.show / runs.list / artifacts.push", () => {
         { path: join(binary, "hermeticd") },
         { bytes: new TextEncoder().encode("ELF") },
       ]) {
-        await hermetic.artifacts.push({ version: "0.5.0", ...input });
+        await settle(hermetic.artifacts.push({ version: "0.5.0", ...input }));
         const manifest = (await readFleetManifest(backend.artifacts))!;
         expect(Object.keys(manifest.hermeticd.files).sort()).toEqual([
           "hermeticd",
@@ -2649,7 +2652,9 @@ describe("config.show / runs.list / artifacts.push", () => {
 
   test("artifacts.push writes the generation key and points the fleet manifest at it", async () => {
     const { backend, hermetic } = seeded();
-    const out = await hermetic.artifacts.push({ version: "0.5.0" });
+    // `rollout: false`, so the op ends with the push: the rollout that would
+    // follow writes agent rows, which is what this test's last line is not about.
+    const out = await settle(hermetic.artifacts.push({ version: "0.5.0", rollout: false }));
     expect(out.generation).toMatch(/^[0-9a-f]{16}$/);
     expect(out.key).toBe(`artifacts/0.5.0/${out.generation}/hermeticd`);
     expect(await backend.artifacts.exists(out.key)).toBe(true);
@@ -2684,7 +2689,7 @@ describe("config.show / runs.list / artifacts.push", () => {
    */
   test("artifacts.push is refused while a foundation update holds the fleet lock", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     // Through `lockFleet`, the only door onto the lock: `put` creates `_fleet`
     // and refuses a row that is already there (§4.4).
     await backend.store.fleet.lockFleet(
@@ -2696,7 +2701,7 @@ describe("config.show / runs.list / artifacts.push", () => {
 
     let code: string | null = null;
     try {
-      await hermetic.artifacts.push({ version: FIXTURE_HERMETICD_VERSION });
+      await settle(hermetic.artifacts.push({ version: FIXTURE_HERMETICD_VERSION }));
     } catch (e) {
       code = (e as HermeticError).code;
     }
@@ -2708,7 +2713,7 @@ describe("config.show / runs.list / artifacts.push", () => {
 
   test("artifacts.push keeps the foundation block the manifest already carries", async () => {
     const { backend, hermetic } = seeded();
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     const manifest = (await readFleetManifest(backend.artifacts))!;
     const ahead = {
       version: (manifest.foundation?.version ?? 0) + 1,
@@ -2721,7 +2726,7 @@ describe("config.show / runs.list / artifacts.push", () => {
       new TextEncoder().encode(`${JSON.stringify({ ...manifest, foundation: ahead }, null, 2)}\n`),
     );
 
-    await hermetic.artifacts.push({ version: FIXTURE_HERMETICD_VERSION });
+    await settle(hermetic.artifacts.push({ version: FIXTURE_HERMETICD_VERSION }));
 
     const after = (await readFleetManifest(backend.artifacts))!;
     expect(after.hermeticd.version).toBe(FIXTURE_HERMETICD_VERSION);
@@ -2798,7 +2803,9 @@ describe("init", () => {
   test("attach never repoints a fleet backwards to an older hermeticd", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
     // The fleet has been upgraded past this build by a newer laptop.
-    await testHermetic({ backend, config: FIXTURE_CONFIG }).artifacts.push({ version: "0.9.0" });
+    await settle(
+      testHermetic({ backend, config: FIXTURE_CONFIG }).artifacts.push({ version: "0.9.0" }),
+    );
     const ahead = (await readFleetManifest(backend.artifacts))!;
     expect(ahead.hermeticd.version).toBe("0.9.0");
     backend.resetMutations();

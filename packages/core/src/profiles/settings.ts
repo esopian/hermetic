@@ -22,11 +22,13 @@
  * fleet is conditional on `attribute_not_exists`, so two laptops racing to be
  * the first cannot both win.
  */
+import { randomUUID } from "node:crypto";
 import {
   FLEET_KEY,
   PROVIDERS,
   SettingsGetInput as SettingsGetInputSchema,
   SettingsSetInput as SettingsSetInputSchema,
+  autoUpdateHermeticd,
   defaultFleetSettings,
 } from "../schema/index.ts";
 import type {
@@ -37,7 +39,9 @@ import type {
   SettingsGetInput,
   SettingsSetInput,
 } from "../schema/index.ts";
-import { HermeticError } from "../errors.ts";
+import { HermeticError, isHermeticError } from "../errors.ts";
+import { republishAutoUpdate } from "../release/artifacts-manifest.ts";
+import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
 import { resolveProfileIn, withProviderProfiles } from "./profile-migrate.ts";
 import type { Backend, StackInfo } from "../backend/types.ts";
 import type { CoreContext } from "../context.ts";
@@ -189,6 +193,14 @@ export interface SettingsResult {
   /** False when `_fleet` carries no `settings`; `settings` is then synthesized. */
   persisted: boolean;
   catalog: typeof PROVIDERS;
+  /**
+   * Set only when the settings were written but something that follows from
+   * them was not — today, only the fleet manifest republish that tells the
+   * boxes `auto_update_hermeticd` changed (§6.5). The write itself landed, so
+   * the call does not fail; this names what did not happen and the command
+   * that finishes it. Heads print it; nothing depends on it.
+   */
+  warning?: string;
 }
 
 /**
@@ -273,7 +285,10 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
 
   async function settingsSet(input: SettingsSetInput): Promise<SettingsResult> {
     const parsed = SettingsSetInputSchema.parse(input);
-    const { settings, persisted } = await read();
+    // `guardFleet` directly rather than `read()`: the manifest republish below
+    // needs the stack the guard validated, and this is the same read.
+    const { fleet, stack } = await deps.ctx.guardFleet();
+    const { settings, persisted } = settingsOf(fleet);
     checkExpected(parsed, settings, persisted);
 
     const defaults = { ...settings.defaults, ...(parsed.defaults ?? {}) };
@@ -314,6 +329,9 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       version: persisted ? settings.version + 1 : 1,
       defaults,
       ...(chosen === null ? {} : { default_profile: chosen.id }),
+      ...(parsed.auto_update_hermeticd === undefined
+        ? {}
+        : { auto_update_hermeticd: parsed.auto_update_hermeticd }),
       updated_at: now,
       updated_by: who,
     };
@@ -331,13 +349,75 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       ...(parsed.agent_defaults === undefined
         ? []
         : [agentDefaults === undefined ? "agent_defaults cleared" : "agent_defaults"]),
+      ...(parsed.auto_update_hermeticd === undefined
+        ? []
+        : [`auto_update_hermeticd ${parsed.auto_update_hermeticd ? "on" : "off"}`]),
     ];
-    return commit(
+    const result = await commit(
       next,
       expectedOf(settings, persisted),
       "settings.set",
       `${changed.join(", ")} → v${next.version}`,
     );
+    /**
+     * The box cannot read `_fleet`, so the switch reaches it through the fleet
+     * manifest (§6.5) — republished only when the *effective* value moved, so
+     * stating what absence already means writes nothing to the bucket.
+     */
+    if (autoUpdateHermeticd(settings) === autoUpdateHermeticd(next)) return result;
+    const warning = await republish(fleet, stack, autoUpdateHermeticd(next), who);
+    return warning === undefined ? result : { ...result, warning };
+  }
+
+  /**
+   * Republish the manifest after the switch has been committed, and say —
+   * rather than throw — if that could not be done.
+   *
+   * The settings write has already landed and is in the run log, so failing
+   * the call would report a change that happened as one that did not, and a
+   * retry would be refused as a no-op on the setting. The manifest is the half
+   * that can be redone on its own: `hermetic artifacts push` rewrites it from
+   * the row, which by now carries the new value. So the failure is a warning on
+   * the result naming that command, and an event on `_fleet` so the history
+   * says the boxes were not told.
+   */
+  async function republish(
+    fleet: FleetItem,
+    stack: StackInfo,
+    on: boolean,
+    who: string,
+  ): Promise<string | undefined> {
+    const state = on ? "on" : "off";
+    try {
+      const written = await republishAutoUpdate(
+        deps.ctx.backend.artifacts,
+        deps.ctx.backend.store.fleet,
+        {
+          fleet,
+          stack,
+          owner: `${who}#${randomUUID()}`,
+          ttlMs: LOCK_TTL_MS,
+          now: () => deps.ctx.backend.clock.now(),
+          updatedBy: who,
+          updatedAt: deps.ctx.nowIso(),
+        },
+      );
+      await deps.ctx.appendEvent(
+        FLEET_KEY,
+        "settings.auto_update_hermeticd",
+        written
+          ? `hermeticd auto-update ${state}; the fleet manifest now says so`
+          : `hermeticd auto-update ${state}; no fleet manifest published yet, so the next push carries it`,
+      );
+      return undefined;
+    } catch (e) {
+      const why = isHermeticError(e) ? `${e.code}: ${e.message}` : String(e);
+      const warning = `hermeticd auto-update is saved as ${state}, but the fleet manifest could not be republished (${why}); the boxes keep following the old setting until \`hermetic artifacts push\` republishes it`;
+      await deps.ctx
+        .appendEvent(FLEET_KEY, "settings.auto_update_hermeticd", warning)
+        .catch(() => undefined);
+      return warning;
+    }
   }
 
   return { settingsGet, settingsSet };

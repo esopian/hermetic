@@ -115,6 +115,31 @@ describe("the foundation reads", () => {
   });
 });
 
+/**
+ * §6.5: `artifacts.push` is a long op since it learned to roll the release out,
+ * so the bridge starts it and answers 202 with the op — the same shape as
+ * `upgrade` — rather than awaiting a result.
+ */
+describe("artifacts.push", () => {
+  test("starts the op core declares and answers with it", async () => {
+    const { ctx, ops } = await harness();
+    const { op } = (await dispatch(ctx, "artifacts.push", { version: "9.9.9" })) as {
+      op: { id: string };
+    };
+    const summary = await ops.wait(op.id);
+    expect(summary?.method).toBe("artifacts.push");
+    expect(summary?.status).toBe("ok");
+  }, 30_000);
+
+  test("--now and --no-rollout together are refused before any op starts", async () => {
+    const { ctx, ops } = await harness();
+    await expect(
+      dispatch(ctx, "artifacts.push", { version: "9.9.9", now: true, rollout: false }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(ops.list({}).ops.length).toBe(0);
+  });
+});
+
 describe("foundation.update", () => {
   test("starts the op core declares", async () => {
     const { ctx, ops } = await harness();

@@ -172,7 +172,6 @@ function Shot({ result }: { result: unknown }) {
 export function ToolBlock({ block, inline = false }: { block: ChatBlockOf<"tool">; inline?: boolean }) {
   const verdict = toolVerdict(block.status);
   const running = block.status === "running";
-  const failed = block.status === "bad";
   const text = resultText(block.result);
 
   const right = running
@@ -232,7 +231,6 @@ export function ToolBlock({ block, inline = false }: { block: ChatBlockOf<"tool"
   return (
     <Card
       verdict={verdict}
-      failed={failed}
       head={head}
       subject={subjectOf(block.args) ?? undefined}
       right={right}

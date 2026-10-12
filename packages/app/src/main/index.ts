@@ -18,6 +18,7 @@ import Electrobun, {
   ApplicationMenu,
   type ApplicationMenuItemConfig,
   BrowserView,
+  BuildConfig,
   BrowserWindow,
   Updater,
   Utils,
@@ -55,6 +56,7 @@ import { createUpdater } from "./updates.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
 import { externalUrl } from "../external-url.ts";
 import { applyMinimumSize } from "./min-size.ts";
+import { createPageGate, openOnInbound } from "./page-gate.ts";
 import { fetchProbe, resolveViewUrl } from "./view-url.ts";
 import { createWindows, DEFAULT_FRAME, MIN_FRAME, type OpenedWindow } from "./windows.ts";
 
@@ -166,11 +168,23 @@ const terminals = new TerminalHost({
   log,
 });
 
+/**
+ * The renderer this bundle was built with (`renderer.ts`), and in a dev CEF
+ * build the DevTools endpoint a driver attaches to — so the log names where
+ * to point `bun run app:cdp` or Playwright.
+ */
+const build = await BuildConfig.get();
+const devtoolsPort = build.chromiumFlags?.["remote-debugging-port"];
+
 log.line("info", "app", `starting${fixture ? " (fixture)" : ""}`, {
   home: state.home,
   initialized: state.initialized,
   fleet: state.fleetId,
   bin: paths.binDir,
+  renderer: build.defaultRenderer,
+  ...(build.defaultRenderer === "cef" && typeof devtoolsPort === "string"
+    ? { devtools: `http://127.0.0.1:${devtoolsPort}` }
+    : {}),
 });
 
 /**
@@ -380,12 +394,25 @@ const windows = createWindows({
       },
     };
     firstCtx ??= ctx;
+    /**
+     * No push reaches the page before it is live (`main/page-gate.ts`): under
+     * CEF a push before the browser exists aborts the process. Opened by the
+     * page's first request or message, or by its `dom-ready` below.
+     */
+    const gate = createPageGate((dropped) => {
+      if (dropped > 0) log.line("debug", "page-gate", "page live", { dropped });
+    });
+    const send = sendThrough(() => {
+      if (gate.isOpen) return rpc;
+      gate.dropped();
+      return null;
+    });
     const binding = createRpcBinding({
       defineRPC: (options) => {
-        rpc = BrowserView.defineRPC<HermeticRPC>(options);
+        rpc = BrowserView.defineRPC<HermeticRPC>(openOnInbound(options, gate));
         return rpc;
       },
-      send: sendThrough(() => rpc),
+      send,
       ctx,
       log,
     });
@@ -405,6 +432,7 @@ const windows = createWindows({
       rpc: binding.rpc,
     });
     applyNavigationRules(window.webview, navigationRules);
+    Electrobun.events.on(`dom-ready-${window.webviewId}`, () => gate.open());
     firstWindow ??= window;
     /**
      * What the rules refused, made useful: an http(s) link or `window.open`
@@ -423,7 +451,7 @@ const windows = createWindows({
      * every window either way.
      */
     applyMinimumSize({ window, size: MIN_FRAME, log });
-    return { window, send: sendThrough(() => rpc), close: binding.close };
+    return { window, send, close: binding.close };
   },
 });
 

@@ -32,6 +32,7 @@ import {
   fixtureChatClient,
 } from "../src/backend/fixture/fixture-chat.ts";
 import { FIXTURE_WARM_SLOTS } from "../src/backend/fixture/fixture-chat.ts";
+import { createFixtureChatStack } from "../src/backend/fixture/fixture-chat-stack.ts";
 import type { BoxAddress } from "../src/chat/hermes/hermes-chat.ts";
 import {
   CHAT_BLOCK_KINDS,
@@ -620,3 +621,41 @@ async function collect(stream: AsyncIterable<Frame>): Promise<Frame[]> {
   for await (const frame of stream) out.push(frame);
   return out;
 }
+
+describe("steer", () => {
+  test("a steer lands on the turn in flight, is written down, and is idle once it ends", async () => {
+    // Through the stack fixture mode actually builds, because the Bot Mode
+    // wrapper owns the transcript a `history` read answers from.
+    const hermes = createFixtureChatStack(true).hermes;
+    if (!hermes?.steer) throw new Error("the fixture stack must steer");
+    const where = box("atlas");
+    expect(await hermes.steer(where, "default", "too early")).toBe("idle");
+
+    const turn = hermes.send(where, "default", "start something")[Symbol.asyncIterator]();
+    await turn.next();
+    expect(await hermes.steer(where, "default", "and check the disk")).toBe("redirected");
+    for (let step = await turn.next(); !step.done; step = await turn.next()) {
+      /* drain */
+    }
+    expect(await hermes.steer(where, "default", "too late")).toBe("idle");
+
+    const texts = (await hermes.history(where, "default"))
+      .filter((m) => m.role === "user")
+      .flatMap((m) => m.blocks.flatMap((b) => (b.kind === "text" ? [b.markdown] : [])));
+    expect(texts.slice(-2)).toEqual(["start something", "and check the disk"]);
+    expect(texts).not.toContain("too early");
+    expect(texts).not.toContain("too late");
+  });
+
+  test("the base client steers only a turn it is streaming", async () => {
+    const own = fixtureChatClient({ delayMs: 0 });
+    const where = box("atlas");
+    expect(await own.steer?.(where, "default", "x")).toBe("idle");
+    const turn = own.send(where, "default", "go")[Symbol.asyncIterator]();
+    await turn.next();
+    expect(await own.steer?.(where, "default", "x")).toBe("redirected");
+    expect(await own.steer?.(where, "default", "x", { session: "not-this-one" })).toBe("idle");
+    await turn.return?.(undefined);
+    expect(await own.steer?.(where, "default", "x")).toBe("idle");
+  });
+});

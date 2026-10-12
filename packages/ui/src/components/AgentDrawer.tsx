@@ -90,6 +90,7 @@ export function AgentDrawer({
   confirmOpen,
   setConfirmOpen,
   tab = DEFAULT_AGENT_TAB,
+  initialLogSource = null,
   onTab,
   session = null,
   onSession,
@@ -117,6 +118,7 @@ export function AgentDrawer({
    * between sections; defaulted so every caller with no opinion gets Overview.
    */
   tab?: AgentTab;
+  initialLogSource?: "console" | null;
   onTab?: (tab: AgentTab) => void;
   /**
    * The Terminal section's session, from the hash (`#agent/<name>/terminal/<id>`),
@@ -499,7 +501,9 @@ export function AgentDrawer({
       );
       break;
     case "logs":
-      body = <AgentLogs agent={agent} history={history} />;
+      body = (
+        <AgentLogs agent={agent} history={history} initialSource={initialLogSource ?? "activity"} />
+      );
       break;
     case "config":
       body = (

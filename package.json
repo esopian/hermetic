@@ -41,6 +41,7 @@
     "dev:hmr": "bun scripts/dev-hmr.ts real",
     "dev:fixture:hmr": "bun scripts/dev-hmr.ts fixture",
     "dev:wizard:hmr": "bun scripts/dev-hmr.ts wizard",
+    "app:cdp": "bun scripts/app-cdp.ts",
     "cli": "bun packages/cli/src/main.ts",
     "site:dev": "cd site && bun run dev",
     "site:build": "cd site && bun run build",

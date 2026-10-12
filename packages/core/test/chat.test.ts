@@ -490,6 +490,34 @@ describe("a turn", () => {
     expect(result).toEqual({ instance: "atlas", bot: "default", aborted: true });
     expect(visits[0]?.method).toBe("abort");
   });
+
+  test("steer hands the trimmed text and the durable session to the adapter and reports its status", async () => {
+    const seen: { bot: string; text: string; session: string | undefined }[] = [];
+    const { chat } = harness({
+      steer: (_box, bot, text, opts) => {
+        seen.push({ bot, text, session: opts?.session });
+        return Promise.resolve("queued");
+      },
+    });
+    expect(
+      await chat.steer({ instance: "atlas", bot: "default", text: "  and the disk  ", session: "s-1" }),
+    ).toEqual({ instance: "atlas", bot: "default", status: "queued" });
+    expect(seen).toEqual([{ bot: "default", text: "and the disk", session: "s-1" }]);
+    // A null session is the same as none: the adapter picks the running turn.
+    await chat.steer({ instance: "atlas", bot: "default", text: "x", session: null });
+    expect(seen[1]?.session).toBeUndefined();
+  });
+
+  test("steer refuses blank text before reaching the box, and an adapter without it", async () => {
+    const { chat } = harness({ steer: () => Promise.resolve("redirected") });
+    await expect(chat.steer({ instance: "atlas", bot: "default", text: "   " })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    const bare = harness();
+    await expect(
+      bare.chat.steer({ instance: "atlas", bot: "default", text: "x" }),
+    ).rejects.toMatchObject({ code: "CHAT_PROTOCOL" });
+  });
 });
 
 describe("the name rule", () => {
@@ -869,6 +897,7 @@ describe("instance listening", () => {
     await expect(chat.sessions(target)).rejects.toThrow("listen to this instance");
     await expect(chat.history(target)).rejects.toThrow("listen to this instance");
     await expect(chat.abort(target)).rejects.toThrow("listen to this instance");
+    await expect(chat.steer({ ...target, text: "x" })).rejects.toThrow("listen to this instance");
     expect(await collect(chat.send({ ...target, message: "hello" }))).toMatchObject([
       { type: "error", code: "VALIDATION" },
     ]);

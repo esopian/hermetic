@@ -21,6 +21,7 @@ import type { Command } from "commander";
 import { Command as Cmd } from "commander";
 import {
   ChatAbortInput,
+  ChatSteerInput,
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
@@ -61,6 +62,7 @@ const sessionsSchema = declare("chat.sessions", "chat ls", ChatSessionsInput);
 const historySchema = declare("chat.history", "chat log", ChatHistoryInput);
 const sendSchema = declare("chat.send", "chat", ChatSendInput);
 const abortSchema = declare("chat.abort", "chat abort", ChatAbortInput);
+const steerSchema = declare("chat.steer", "chat steer", ChatSteerInput);
 const observeSchema = declare("chat.observe", "chat watch", ChatObserveInput);
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
@@ -453,10 +455,10 @@ export function register(program: Command): void {
 
   /**
    * `chat` both groups and acts: `hermetic chat atlas "..."` takes a turn, and
-   * `chat ls`/`chat log`/`chat abort` hang under it. Commander resolves a
-   * subcommand name before a positional argument, so an agent literally named
-   * `ls` cannot be addressed by `hermetic chat ls` — it is `chat ls/default`,
-   * and the same is true of `log` and `abort`.
+   * `chat ls`/`chat log`/`chat abort`/`chat steer` hang under it. Commander
+   * resolves a subcommand name before a positional argument, so an agent
+   * literally named `ls` cannot be addressed by `hermetic chat ls` — it is
+   * `chat ls/default`, and the same is true of `log`, `abort` and `steer`.
    */
   const chat = globals(new Cmd("chat"))
     .description("send one turn to a bot and stream the reply")
@@ -635,6 +637,32 @@ export function register(program: Command): void {
         const result = await ctx.hermetic.chat.abort(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);
         else await out(`${botAddress(result.instance, result.bot)}: turn stopped\n`);
+      }),
+  );
+
+  /** What each steer outcome reads as on a terminal. */
+  const STEER_TEXT = {
+    redirected: "message delivered into the running turn",
+    queued: "turn still starting; message queued for the next turn",
+    rejected: "the box did not apply the message",
+    idle: "no turn running; nothing sent",
+  } as const;
+
+  chat.addCommand(
+    globals(new Cmd("steer"))
+      .description("add a message to the turn a bot is in the middle of, without stopping it")
+      .argument("<target>", "`<instance>` or `<instance>/<bot>`")
+      .argument("<text...>", "the message")
+      .option("--session <id>", "the session whose turn to steer")
+      .action(async (target: string, text: string[], opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const input = validate(
+          steerSchema,
+          defined({ ...parseBotRef(target), session: opts["session"], text: text.join(" ") }),
+        );
+        const result = await ctx.hermetic.chat.steer(input, { signal: ctx.signal });
+        if (ctx.flags.json) await outJson(result);
+        else await out(`${botAddress(result.instance, result.bot)}: ${STEER_TEXT[result.status]}\n`);
       }),
   );
 

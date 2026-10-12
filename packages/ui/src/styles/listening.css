@@ -306,3 +306,40 @@
 .tbody-row.selected[data-listening="true"] {
   background: color-mix(in srgb, var(--listen) 9%, var(--sel));
 }
+
+/* The board's switch is part of its listening band. Table and manager retain the regular switch. */
+.listening-band > .listening-toggle.compact {
+  margin-left: auto;
+}
+.listening-toggle.compact.btn {
+  width: 84px;
+  height: 22px;
+  padding: 0;
+}
+.listening-toggle.compact .listening-toggle-thumb {
+  width: 16px;
+  height: 16px;
+  top: calc(50% - 8px);
+}
+.listening-toggle.compact .listening-toggle-thumb svg {
+  width: 11px;
+  height: 11px;
+}
+.listening-toggle.compact[aria-checked="true"] .listening-toggle-thumb {
+  transform: translateX(62px);
+}
+.listening-toggle.compact .listening-toggle-label {
+  left: 20px;
+  font-size: 9px;
+}
+.listening-toggle.compact[aria-checked="true"] .listening-toggle-label {
+  transform: translateX(-18px);
+}
+.card.agent-card.off[data-listening="true"] > .card-body {
+  opacity: 0.55;
+}
+.card.agent-card.off[data-listening="true"] > .card-top,
+.card.agent-card.off[data-listening="true"] > .cell-status,
+.card.agent-card.off[data-listening="true"] > .card-foot {
+  opacity: 1;
+}

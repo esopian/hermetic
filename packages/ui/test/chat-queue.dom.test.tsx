@@ -131,7 +131,7 @@ function setup() {
       enter();
     },
     rows: () => document.querySelectorAll(".ch-queue-row"),
-    foot: () => document.querySelector(".ch-queue-foot")?.textContent ?? "",
+    foot: () => document.querySelector(".ch-queue-head")?.textContent ?? "",
     send: () => document.querySelector(".ch-send") as HTMLButtonElement,
     end: async (ok = true) => {
       await act(async () => {
@@ -171,7 +171,7 @@ describe("the send queue", () => {
     await waitFor(() => expect(h.current.sending).toBe(true));
     h.type("second");
     await waitFor(() => expect(h.send().disabled).toBe(false));
-    expect(h.send().title).toBe("Queue (⌘↵ or Enter)");
+    expect(h.send().title).toBe("Queue (Enter)");
     fireEvent.click(h.send());
     await waitFor(() => expect(h.rows()).toHaveLength(1));
     expect(h.sent).toEqual(["first"]);
@@ -285,7 +285,7 @@ describe("the send queue", () => {
 
   test("a parked queue says so, and stops saying so when it is released", async () => {
     const h = await queuedBehindATurn();
-    expect(h.foot()).toContain("1 queued");
+    expect(h.foot()).toContain("Queued");
     expect(h.foot()).toContain("sends when the agent is free");
 
     fireEvent.keyDown(h.input(), { key: "Escape" });
@@ -300,6 +300,20 @@ describe("the send queue", () => {
     await waitFor(() => expect(h.current.sending).toBe(true));
     expect(h.foot()).not.toContain("paused");
     expect(h.current.queueParked).toBe(false);
+  });
+
+  test("edit puts a queued message back in the input, ahead of what was typed", async () => {
+    const h = await queuedBehindATurn();
+    h.type("draft in progress");
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    await waitFor(() => expect(h.rows()).toHaveLength(0));
+    expect(h.input().value).toBe("second\n\ndraft in progress");
+    expect(document.activeElement).toBe(h.input());
+
+    // Out of the queue means it does not go out by itself.
+    await h.end();
+    await h.settle();
+    expect(h.sent).toEqual(["first"]);
   });
 
   test("a queued message can be taken back before it goes out", async () => {

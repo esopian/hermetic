@@ -255,3 +255,86 @@ export function useFocusTrap(
     };
   }, [ref, active, modal]);
 }
+
+/**
+ * Whether `el` is somewhere the operator types: a text field, a select, an
+ * editable region, or a frame (the desktop viewer's, which is a keyboard).
+ */
+function takesText(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  if (el instanceof HTMLIFrameElement || el.isContentEditable) return true;
+  if (el instanceof HTMLInputElement) {
+    return ![
+      "button",
+      "checkbox",
+      "radio",
+      "range",
+      "color",
+      "file",
+      "submit",
+      "reset",
+      "image",
+    ].includes(el.type);
+  }
+  return false;
+}
+
+/**
+ * Coming back to the app puts the caret in `input`.
+ *
+ * The workflow this serves is copy somewhere else, switch back, paste: the
+ * window regaining focus is the operator arriving to type, and on a chat that
+ * means the composer. Without it the keystroke or the paste lands on whatever
+ * was clicked last — a rail row, the transcript — and goes nowhere.
+ *
+ * It yields to everything that has a better claim on the keyboard: a dialog or
+ * popover the input is not inside, an element that owns keys (the terminal), and any other
+ * field the operator was typing into when they left, which the browser hands
+ * focus back to by itself. A disabled or hidden input is left alone too, and
+ * so is one that already has focus, so the caret the operator left mid-draft
+ * stays where it was. Otherwise the caret goes to the end of the draft.
+ *
+ * Deferred a tick because the browser restores the previously focused element
+ * around the window's own `focus` event, and the decision has to see where it
+ * put it.
+ */
+export function useFocusOnReturn(
+  input: RefObject<HTMLTextAreaElement | HTMLInputElement | null>,
+  enabled = true,
+): void {
+  useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const claim = (): void => {
+      const el = input.current;
+      if (!el?.isConnected || el.disabled) return;
+      const active = document.activeElement;
+      if (active === el) return;
+      // Inside the topmost overlay is fine — the agent drawer's chat section
+      // is a chat interface too. Behind one is not.
+      const top = stack[stack.length - 1];
+      if (top && !top.root.contains(el)) return;
+      if (keyboardOwned() || takesText(active)) return;
+      if (isUnreachable(el) || el.getClientRects().length === 0) return;
+      el.focus({ preventScroll: true });
+      const end = el.value.length;
+      el.setSelectionRange?.(end, end);
+    };
+    const arrive = (): void => {
+      if (document.visibilityState === "hidden") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        claim();
+      }, 0);
+    };
+    window.addEventListener("focus", arrive);
+    document.addEventListener("visibilitychange", arrive);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", arrive);
+      document.removeEventListener("visibilitychange", arrive);
+    };
+  }, [input, enabled]);
+}

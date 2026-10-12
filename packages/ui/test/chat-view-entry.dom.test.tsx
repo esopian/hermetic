@@ -182,7 +182,7 @@ describe("persistent entry frames", () => {
     await waitFor(() => expect(h.calls.abort).toBe(1));
     // Stop parks the queue rather than draining it: the row stays, unsent.
     await waitFor(() =>
-      expect(container.querySelector(".ch-queue-foot")?.textContent).toContain("paused"),
+      expect(container.querySelector(".ch-queue-head")?.textContent).toContain("paused"),
     );
     expect(h.calls.send).toBe(1);
     expect(container.querySelector(".ch-dock:not(.collapsed)")).not.toBeNull();

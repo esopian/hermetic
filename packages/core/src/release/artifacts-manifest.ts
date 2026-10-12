@@ -1,8 +1,9 @@
 /**
  * The fleet manifest — `manifest.json` at the root of the bucket — and the lock
  * that serialises writers of it (§1, §4.2). `writeFleetManifest` publishes the
- * pointer, `readFleetManifest` reads it back, `pointFleetAt` and
- * `recordHermesMirror` move one block of it under the fleet lock.
+ * pointer, `readFleetManifest` reads it back, `pointFleetAt`,
+ * `recordHermesMirror` and `republishAutoUpdate` move one part of it under the
+ * fleet lock.
  *
  * The manifest is always the *last* write of a push: until it moves, every box
  * is still running the release it names, and a half-uploaded one is invisible.
@@ -13,6 +14,7 @@ import { HERMETIC_VERSION } from "../version.ts";
 import {
   FLEET_KEY,
   FLEET_MANIFEST_KEY,
+  autoUpdateHermeticd,
   FleetManifest as FleetManifestSchema,
   isReleaseObjectKey,
   stackNameFromId,
@@ -255,6 +257,13 @@ export function fleetManifestFrom(input: FleetManifestInput): FleetManifest {
     // Same rule for the browser: a fleet whose every build was pruned reads as
     // one that has no mirrored browser, not as one with an empty record of it.
     ...(input.browser && Object.keys(input.browser).length > 0 ? { browser: input.browser } : {}),
+    // Derived from the row on every write, never passed in or carried over
+    // from the bucket (§6.5): every writer of this file comes through here
+    // with the `_fleet` it holds, so every one of them publishes the switch as
+    // the fleet now has it, and none can forget it. Written even when absent
+    // on the row, as the `true` that absence means, so the box never has to
+    // know the default.
+    auto_update_hermeticd: autoUpdateHermeticd(input.fleet.settings),
     updated_at: input.updatedAt,
     updated_by: input.updatedBy,
   };
@@ -305,6 +314,11 @@ export async function writeFleetManifest(
  * and the lock that keeps a `foundation.update`'s prune from deleting the
  * release the pointer now names. The SDK is left with the sentence that says
  * what happened.
+ *
+ * Answers with the release block the pointer moved *from* — `null` when no
+ * manifest could be parsed — and the `_fleet` row read under the lock, so the
+ * caller can decide whether the move changed anything and whether the fleet
+ * wants it rolled out now (§6.5) from the same reads the write was made from.
  */
 export async function pointFleetAt(
   artifacts: Pick<ArtifactsApi, "putObject" | "getText">,
@@ -319,15 +333,16 @@ export async function pointFleetAt(
     updatedBy: string;
     updatedAt: string;
   },
-): Promise<void> {
+): Promise<{ previous: FleetManifest["hermeticd"] | null; fleet: FleetItem }> {
   const { fleet, owner, ttlMs, now } = input;
-  await withFleetLock(store, { fleet, owner, ttlMs, now }, async (locked) => {
+  return withFleetLock(store, { fleet, owner, ttlMs, now }, async (locked) => {
     /**
      * Merged, not rebuilt from `_fleet` alone: the foundation stamp lands in
      * the bucket before it lands on the row, so a rebuild taken from the row
      * inside that window silently rewinds it (`laterFoundation`).
      */
-    const published = await carriedBlocks(artifacts);
+    const manifest = await parseFleetManifest(artifacts).catch(() => null);
+    const published = blocksOf(manifest);
     const foundation = laterFoundation(manifestFoundationOf(locked), published.foundation);
     await writeFleetManifest(artifacts, {
       fleet: locked,
@@ -347,6 +362,7 @@ export async function pointFleetAt(
       // would leave every agent with no build to install (§7.3).
       ...(published.browser === undefined ? {} : { browser: published.browser }),
     });
+    return { previous: manifest?.hermeticd ?? null, fleet: locked };
   });
 }
 
@@ -403,6 +419,56 @@ export async function recordHermesMirror(
       // Carried over untouched. This write is about the Hermes mirror and has
       // nothing to say about the browser, but it rewrites the whole manifest —
       // so not naming the block would delete it (§7.3).
+      ...(published.browser === undefined ? {} : { browser: published.browser }),
+    });
+    return true;
+  });
+}
+
+/**
+ * Republish the manifest so it carries the fleet's `auto_update_hermeticd` as
+ * `_fleet` now has it, changing nothing else (§6.5). `settings.set` is the
+ * caller, right after it commits the switch: the box cannot read `_fleet`, so
+ * until this lands every box goes on following the old answer.
+ *
+ * There is nothing to *pass*: `fleetManifestFrom` derives the flag from the row
+ * it is handed, and the row handed to it here is the one re-read under the lock
+ * (`withFleetLock`), which is after the settings write. Every other block is
+ * carried across untouched, on the rules `recordHermesMirror` keeps — the
+ * release pointer as published, the later of the two foundation stamps, the
+ * mirrors as they are.
+ *
+ * A fleet with no published manifest answers `false` and writes nothing: there
+ * is no release pointer to carry, and the next push derives the flag anyway. A
+ * refused manifest throws rather than reading as absent (`nullUnlessRefused`),
+ * because copying its release pointer forward is exactly what must not happen.
+ */
+export async function republishAutoUpdate(
+  artifacts: Pick<ArtifactsApi, "putObject" | "getText">,
+  store: FleetLockStore,
+  input: {
+    fleet: FleetItem;
+    stack: StackInfo | null;
+    owner: string;
+    ttlMs: number;
+    now: () => Date;
+    updatedBy: string;
+    updatedAt: string;
+  },
+): Promise<boolean> {
+  const { fleet, owner, ttlMs, now } = input;
+  return withFleetLock(store, { fleet, owner, ttlMs, now }, async (locked) => {
+    const published = await readFleetManifest(artifacts).catch(nullUnlessRefused);
+    if (!published) return false;
+    const foundation = laterFoundation(manifestFoundationOf(locked), published.foundation);
+    await writeFleetManifest(artifacts, {
+      fleet: locked,
+      stack: input.stack,
+      hermeticd: published.hermeticd,
+      updatedBy: input.updatedBy,
+      updatedAt: input.updatedAt,
+      ...(foundation === undefined ? {} : { foundation }),
+      ...(published.hermes === undefined ? {} : { hermes: published.hermes }),
       ...(published.browser === undefined ? {} : { browser: published.browser }),
     });
     return true;
@@ -490,7 +556,11 @@ interface CarriedBlocks {
  * to be able to write over one: it is the operator's repair.
  */
 export async function carriedBlocks(artifacts: Pick<ArtifactsApi, "getText">): Promise<CarriedBlocks> {
-  const manifest = await parseFleetManifest(artifacts).catch(() => null);
+  return blocksOf(await parseFleetManifest(artifacts).catch(() => null));
+}
+
+/** `carriedBlocks` for a manifest the caller has already parsed (or failed to). */
+function blocksOf(manifest: FleetManifest | null): CarriedBlocks {
   if (manifest === null) return {};
   return {
     ...(manifest.foundation === undefined ? {} : { foundation: manifest.foundation }),
