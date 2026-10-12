@@ -415,6 +415,7 @@ const REQUIRED = [
   ".assetsignore",
   "install.sh",
   "favicon.svg",
+  "og.png",
   "docs/index.html",
   "explainer/index.html",
   "explainer/engine.js",
@@ -550,6 +551,14 @@ const CHECKS = (short: string): Check[] => [
   { path: "/explainer/", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
   { path: "/explainer/engine.js", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
   { path: "/cost/", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
+  {
+    // The link-preview image every page's og:image names (layouts/Shell.astro).
+    path: "/og.png",
+    test: (res) => {
+      if (res.status !== 200) return `HTTP ${res.status}`;
+      return (res.headers.get("content-type") ?? "").startsWith("image/png") ? null : "not image/png";
+    },
+  },
   {
     path: "/install.sh",
     test: (res, body) => {

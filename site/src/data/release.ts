@@ -1,6 +1,6 @@
 /*
- * Release facts the landing page prints: the version, the tag its download links point at, and
- * the commit it was built from. Read once at build time; nothing here runs in the browser.
+ * Release facts the landing page prints: the version, the tag it labels downloads with, and the
+ * commit it was built from. Read once at build time; nothing here runs in the browser.
  *
  * The version is the repo root's package.json, read as a file rather than imported, so the site
  * never depends on anything under packages/. `astro build` and `astro check` run from site/, so
@@ -47,4 +47,6 @@ export const version = rootVersion();
 export const tag = HERMETIC_RELEASE_TAG ?? `v${version}`;
 export const sha = shortSha();
 export const releasesUrl = `${REPO_URL}/releases`;
-export const dmgUrl = `${REPO_URL}/releases/download/${tag}/macos-arm64-Hermetic.dmg`;
+// The site's own /download redirect (public/_redirects), which GitHub resolves to the newest
+// published release, so a download link never pins the release the site was built against.
+export const dmgUrl = "/download";

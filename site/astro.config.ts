@@ -21,6 +21,15 @@ export default defineConfig({
       title: "hermetic",
       description: "Fleet manager for Hermes agents on AWS.",
       social: [{ icon: "github", label: "GitHub", href: REPO }],
+      // Starlight writes og:title/description/url and twitter:card itself; add the share image
+      // (the same public/og.png as the marketing pages, layouts/Shell.astro).
+      head: [
+        { tag: "meta", attrs: { property: "og:image", content: `${SITE}/og.png` } },
+        { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
+        { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
+        { tag: "meta", attrs: { name: "twitter:image", content: `${SITE}/og.png` } },
+        { tag: "meta", attrs: { name: "theme-color", content: "#0e0e0d" } },
+      ],
       editLink: { baseUrl: `${REPO}/edit/master/site/` },
       customCss: ["./src/styles/fonts.css", "./src/styles/tokens.css", "./src/styles/starlight.css"],
       components: {

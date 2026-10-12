@@ -142,6 +142,16 @@ prices that core also carries. `tests/site-cost.test.ts` at the repo root compar
 fails on drift, so a price or size change in core lands here in the same change. The page never
 calls a pricing API and says so; the bill is whatever AWS says it is.
 
+## Link previews
+
+Every page carries Open Graph and Twitter/X card tags (`layouts/Shell.astro` for the marketing
+pages, the `head` entries in `astro.config.ts` for the Starlight docs), with absolute URLs resolved
+against the build's site URL, so production previews name `hermeticfleet.dev`. The share image is
+`public/og.png`, 1200×630: the landing hero (`landing/Blueprint.astro`) captured at that size with
+the buttons replaced by the domain. When the hero's drawing or headline changes, recapture it (a
+headless browser at 1200×630, `prefers-reduced-motion: reduce`, env strip and header hidden) so the
+preview matches the page. The deploy checks that `/og.png` is served as `image/png`.
+
 ## Marketing copy style
 
 No em dashes or en dashes. No "not X but Y" contrast construction. No forced rule-of-three lists,

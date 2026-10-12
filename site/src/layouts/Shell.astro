@@ -14,6 +14,15 @@ interface Props {
 }
 
 const { title, description } = Astro.props;
+
+// Link previews (Open Graph, Twitter/X, Slack, iMessage, …) need absolute URLs, so these resolve
+// against the build's site URL (astro.config.ts: HERMETIC_SITE_URL in production). public/og.png
+// is the landing hero captured at 1200×630 (site/AGENTS.md "Link previews").
+const site = Astro.site ?? new URL("http://localhost:4321");
+const canonical = new URL(Astro.url.pathname, site).href;
+const image = new URL("/og.png", site).href;
+const imageAlt =
+  "An isometric drawing of one hermetic agent's machine: Hermes inside, a data volume beneath, the tailnet as the only way in. Every agent gets a sealed box.";
 ---
 <!doctype html>
 <html lang="en">
@@ -22,7 +31,24 @@ const { title, description } = Astro.props;
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content={description}>
+<link rel="canonical" href={canonical}>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#0e0e0d">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Hermetic">
+<meta property="og:title" content={title}>
+<meta property="og:description" content={description}>
+<meta property="og:url" content={canonical}>
+<meta property="og:image" content={image}>
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content={imageAlt}>
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content={title}>
+<meta name="twitter:description" content={description}>
+<meta name="twitter:image" content={image}>
+<meta name="twitter:image:alt" content={imageAlt}>
 </head>
 <body>
 <slot />
