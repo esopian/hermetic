@@ -143,11 +143,19 @@ export interface SubagentLedgerOptions {
 const SEEN_SEQ_MAX = 1024;
 
 /**
- * Finished children a ledger keeps. A ledger lives as long as its session,
- * which may delegate for days; every child still running is kept whatever
- * this says, and the oldest finished ones go first.
+ * Finished children a ledger keeps — completed, or ended unobserved. A ledger
+ * lives as long as its session, which may delegate for days; every child
+ * still running is kept whatever this says, and the oldest finished ones go
+ * first.
  */
 export const SUBAGENT_TERMINAL_MAX = 64;
+
+/**
+ * Dropped children a ledger still recognises, so a late replayed `start` for
+ * one cannot bring it back as running after its row and the `seq` that
+ * finished it have both aged out.
+ */
+export const SUBAGENT_RETIRED_MAX = 512;
 
 export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
   const rows = new Map<string, Row>();
@@ -155,6 +163,29 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
   const seen = new Set<number>();
   /** Finished children, oldest first: what is dropped past `SUBAGENT_TERMINAL_MAX`. */
   const finished: string[] = [];
+  /** Children dropped from `rows`, oldest first: never created again. */
+  const retired = new Set<string>();
+
+  /**
+   * Count a child as finished (completed, or unobserved) and drop the oldest
+   * finished rows past the cap. A row that came back to life since it was
+   * counted (an unobserved child the roster lists again) is not dropped.
+   */
+  function finish(id: string): void {
+    if (!finished.includes(id)) finished.push(id);
+    while (finished.length > SUBAGENT_TERMINAL_MAX) {
+      const oldest = finished.shift();
+      if (oldest === undefined) break;
+      const row = rows.get(oldest);
+      if (row && !row.terminal && row.block.status !== "unobserved") continue;
+      rows.delete(oldest);
+      retired.add(oldest);
+      if (retired.size > SUBAGENT_RETIRED_MAX) {
+        const stalest = retired.values().next().value;
+        if (stalest !== undefined) retired.delete(stalest);
+      }
+    }
+  }
 
   /** A defensive copy: an emitted block never changes under its holder. */
   function snapshot(block: SubagentBlock): SubagentBlock {
@@ -237,6 +268,7 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
     let row = rows.get(id);
     if (!row) {
       if (method !== "subagent.spawn_requested" && method !== "subagent.start") return null;
+      if (retired.has(id)) return null;
       row = create(params, id, method);
     } else if (row.terminal) {
       return null;
@@ -285,11 +317,7 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
       }
       case "subagent.complete": {
         row.terminal = true;
-        finished.push(id);
-        while (finished.length > SUBAGENT_TERMINAL_MAX) {
-          const oldest = finished.shift();
-          if (oldest !== undefined) rows.delete(oldest);
-        }
+        finish(id);
         const raw = str(params.status);
         // Desktop folds `cancelled` into an interruption; anything else this
         // build does not know ended the child in a way nobody can name.
@@ -336,14 +364,18 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
    * changed. A later event for the same child (a replayed `complete`) still
    * applies, because an unobserved row is not terminal.
    */
-  function markUnobserved(rosterIds: Iterable<string>): SubagentBlock[] {
+  function markUnobserved(rosterIds: Iterable<string>, watermark?: number | null): SubagentBlock[] {
     const live = new Set(rosterIds);
     const changed: SubagentBlock[] = [];
-    for (const [id, row] of rows) {
+    for (const [id, row] of [...rows]) {
       if (row.terminal || live.has(id) || row.block.status === "unobserved") continue;
+      // Heard from after the roster was read: absent only because it is newer
+      // than the snapshot, not because it ended.
+      if (typeof watermark === "number" && row.lastSeq > watermark) continue;
       row.block.status = "unobserved";
       row.block.verdict = "unknown";
       changed.push(snapshot(row.block));
+      finish(id);
     }
     return changed;
   }
@@ -415,7 +447,7 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
       block.verdict = subagentVerdict(block.status);
       changed.push(snapshot(block));
     }
-    return [...changed, ...markUnobserved(listed.keys())];
+    return [...changed, ...markUnobserved(listed.keys(), watermark)];
   }
 
   /**

@@ -52,9 +52,12 @@ interface DelegateCall {
 const CALLS_MAX = 32;
 
 /**
- * Sessions kept per client. Past it the least recently touched one goes —
- * never one a turn is attached to, nor one with a child still running, so the
- * cap may be exceeded rather than split a live ledger from its registry.
+ * Sessions kept per client. Past it the least recently touched one goes:
+ * first one with nothing running, then — when every detached session still
+ * has a child its ledger thinks is running, which a session nobody watches
+ * again would keep forever — the stalest detached one anyway. A session a
+ * turn is attached to is never evicted, so the cap is exceeded only by
+ * sessions with a turn in flight.
  */
 export const SUBAGENT_SESSIONS_MAX = 64;
 
@@ -71,11 +74,13 @@ export function createSubagentLedgers(opts: SubagentLedgersOptions = {}) {
     sessions.delete(key);
     sessions.set(key, session);
     let excess = sessions.size - SUBAGENT_SESSIONS_MAX;
-    for (const [stale, held] of sessions) {
-      if (excess <= 0) break;
-      if (stale === key || held.turns > 0 || held.ledger.pending()) continue;
-      sessions.delete(stale);
-      excess -= 1;
+    for (const idle of [true, false]) {
+      for (const [stale, held] of sessions) {
+        if (excess <= 0) return session;
+        if (stale === key || held.turns > 0 || (idle && held.ledger.pending())) continue;
+        sessions.delete(stale);
+        excess -= 1;
+      }
     }
     return session;
   }

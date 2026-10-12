@@ -18,6 +18,7 @@ import type {
 } from "../src/chat/hermes/hermes-chat.ts";
 import type { ChatObserveHint } from "../src/chat/chat-observe.ts";
 import {
+  SUBAGENT_RETIRED_MAX,
   SUBAGENT_TERMINAL_MAX,
   createSubagentLedger,
 } from "../src/chat/hermes/hermes-chat-subagent.ts";
@@ -676,5 +677,61 @@ describe("subagent ledgers: snapshots, eviction and retention", () => {
         1000 + total - 1,
       ),
     ).toMatchObject({ subagent_id: last, status: "completed" });
+  });
+});
+
+/* ── review round 3 regressions ───────────────────────────────────────────── */
+
+describe("subagent ledgers: absence, retention and expiry", () => {
+  test("a child heard from after the roster was read is not unobserved for being absent from it", () => {
+    const ledger = createSubagentLedger();
+    ledger.apply("subagent.start", child(), 21);
+    expect(ledger.replay([], 20)).toEqual([]);
+    expect(ledger.get("sa-1")?.status).toBe("running");
+    expect(ledger.replay([], 25)).toMatchObject([{ status: "unobserved", verdict: "unknown" }]);
+  });
+
+  test("unobserved children count toward the finished cap; running ones are kept", () => {
+    const ledger = createSubagentLedger();
+    const total = SUBAGENT_TERMINAL_MAX + 40;
+    for (let i = 0; i < total; i += 1)
+      ledger.apply("subagent.start", child({ subagent_id: `gone-${i}` }));
+    ledger.markUnobserved([]);
+    ledger.apply("subagent.start", child({ subagent_id: "alive" }));
+    expect(ledger.all()).toHaveLength(SUBAGENT_TERMINAL_MAX + 1);
+    expect(ledger.get("gone-0")).toBeNull();
+    expect(ledger.get("alive")?.status).toBe("running");
+  });
+
+  test("a dropped finished child is not recreated by a late replayed start", () => {
+    const ledger = createSubagentLedger();
+    ledger.apply("subagent.start", child({ subagent_id: "old" }), 1);
+    ledger.apply("subagent.complete", child({ subagent_id: "old", status: "completed" }), 2);
+    for (let i = 0; i < SUBAGENT_TERMINAL_MAX; i += 1) {
+      ledger.apply("subagent.start", child({ subagent_id: `c-${i}` }));
+      ledger.apply("subagent.complete", child({ subagent_id: `c-${i}`, status: "completed" }));
+    }
+    expect(ledger.get("old")).toBeNull();
+    // A `seq` the dedupe window no longer holds, as after a long session.
+    expect(ledger.apply("subagent.start", child({ subagent_id: "old" }), 50_000)).toBeNull();
+    expect(ledger.get("old")).toBeNull();
+    expect(SUBAGENT_RETIRED_MAX).toBeGreaterThan(SUBAGENT_TERMINAL_MAX);
+  });
+
+  test("detached sessions whose children never finished are evicted eventually", () => {
+    const ledgers = createSubagentLedgers();
+    const attached = subagentTurn(ledgers, {
+      box: BOX,
+      bot: BOT,
+      runtime: "rt-live",
+      stored: "s-live",
+    });
+    for (let i = 0; i < SUBAGENT_SESSIONS_MAX * 2; i += 1)
+      ledgers.session(BOX, BOT, `rt-${i}`, `s-${i}`).ledger.apply("subagent.start", child(), 1);
+    // The stalest stuck session went; a recent one and the attached turn's stayed.
+    expect(ledgers.existing(BOX, "rt-0")).toBeNull();
+    expect(ledgers.existing(BOX, `rt-${SUBAGENT_SESSIONS_MAX * 2 - 1}`)).not.toBeNull();
+    expect(ledgers.existing(BOX, "rt-live")).not.toBeNull();
+    attached.close();
   });
 });
