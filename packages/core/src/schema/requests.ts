@@ -1027,14 +1027,32 @@ export const ChatRespondInput = z
     request_id: z.string().min(1),
     kind: z.enum(["approval", "question"]),
     choice: z.enum(["once", "session", "always", "deny"]).optional(),
+    /** A single question's answer, or one batch question's when `question_id` names it. */
     answer: z.string().max(65536).optional(),
     question_id: z.string().min(1).optional(),
+    /** Every answer of a batch at once, keyed by the question's `id` (the gateway `qid`). */
+    answers: z.record(z.string().min(1), z.string().max(65536)).optional(),
+    /** Decline to answer: the box continues as if the operator said nothing. */
+    skip: z.literal(true).optional(),
   })
   .superRefine((input, ctx) => {
     if (input.kind === "approval" && !input.choice)
       ctx.addIssue({ code: "custom", path: ["choice"], message: "Approval choice required" });
-    if (input.kind === "question" && input.answer === undefined)
-      ctx.addIssue({ code: "custom", path: ["answer"], message: "Question answer required" });
+    if (input.kind === "question") {
+      const given = [input.answer !== undefined, input.answers !== undefined, input.skip === true];
+      if (given.filter(Boolean).length !== 1)
+        ctx.addIssue({
+          code: "custom",
+          path: ["answer"],
+          message: "Give exactly one of answer, answers or skip",
+        });
+      if (input.question_id !== undefined && input.answer === undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: ["question_id"],
+          message: "question_id names the question `answer` is for",
+        });
+    }
   });
 export type ChatRespondInput = z.infer<typeof ChatRespondInput>;
 

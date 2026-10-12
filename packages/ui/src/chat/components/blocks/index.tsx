@@ -65,7 +65,7 @@ export function Block({
     case "approval":
       return <ApprovalBlock block={block as ChatBlockOf<"approval">} now={now} />;
     case "question":
-      return <QuestionBlock block={block as ChatBlockOf<"question">} />;
+      return <QuestionBlock block={block as ChatBlockOf<"question">} now={now} />;
     case "sources":
       return <SourcesBlock block={block as ChatBlockOf<"sources">} />;
     case "hermetic":

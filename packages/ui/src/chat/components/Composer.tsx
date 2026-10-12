@@ -19,13 +19,14 @@
  * (stopped, reconnecting, destroyed) stay at the top of the thread.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
-import { useRef, useState } from "react";
+import { useContext, useRef, useState } from "react";
 import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { BotResponses } from "./BotResponses.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
 import type { Destination } from "../chat-logic.ts";
 
@@ -105,6 +106,55 @@ export function Composer({
    * running. Nothing is silently swallowed either way.
    */
   const queued = chat?.queued ?? [];
+  const respond = useContext(BotResponses);
+  /** The store and the send callback as of the latest render, for code resuming after an await. */
+  const latest = useRef({ chat, onSend });
+  latest.current = { chat, onSend };
+
+  /**
+   * Run `then` once any clarify the reply is waiting on has been skipped.
+   *
+   * Hermes Desktop's rule: writing to the agent while it waits on a question
+   * declines the question first. The turn is parked inside the clarify tool,
+   * and anything sent into it — a steer, or a queued message waiting for the
+   * turn to end — would wait behind that tool for as long as the question
+   * stays open. The question may sit in the live message or in a part of the
+   * reply an earlier steer closed off (`openRequest`).
+   *
+   * The card closes only once the box has acknowledged the skip: `ok` and
+   * `expired` both mean the request is gone. A failed call leaves the card as
+   * it was, still answerable, and the message goes out as it would have.
+   *
+   * The message belongs to the conversation it was typed in. If the operator
+   * has moved to another one by the time the skip returns, nothing is sent:
+   * the text goes back into the first conversation's draft instead.
+   */
+  const afterOpenQuestion = (then: () => void, text: string | null) => {
+    const request_id = respond && chat ? chat.openRequest() : null;
+    const target = chat?.selection ?? null;
+    if (!respond || !chat || !request_id || !target) {
+      then();
+      return;
+    }
+    const proceed = () => {
+      const now = latest.current.chat?.selection ?? null;
+      const same =
+        now !== null &&
+        now.instance === target.instance &&
+        now.bot === target.bot &&
+        now.session === target.session;
+      if (same) then();
+      else if (text !== null) latest.current.chat?.stageDraft(target, text);
+    };
+    // Through `then` so a provider that throws rather than rejects lands in
+    // the same place as one that rejects.
+    Promise.resolve()
+      .then(() => respond({ request_id, kind: "question", skip: true }))
+      .then(() => {
+        latest.current.chat?.settleRequest(request_id, "skipped", target);
+        proceed();
+      }, proceed);
+  };
   const parkedQueue = chat?.queueParked ?? false;
   const canQueue = chat !== null && sending && enabled;
 
@@ -121,11 +171,11 @@ export function Composer({
     if (sending) {
       if (!chat) return;
       setText("");
-      chat.queueMessage(body);
+      afterOpenQuestion(() => latest.current.chat?.queueMessage(body), body);
       return;
     }
     setText("");
-    onSend(body);
+    afterOpenQuestion(() => latest.current.onSend(body), body);
   };
 
   /**
@@ -140,7 +190,7 @@ export function Composer({
       return;
     }
     setText("");
-    chat.sendNow(body);
+    afterOpenQuestion(() => latest.current.chat?.sendNow(body), body);
   };
 
   /**
@@ -241,7 +291,11 @@ export function Composer({
                     className="ch-queue-act"
                     title={sending ? "Send now, into the running turn" : "Send now"}
                     aria-label="Send queued message now"
-                    onClick={() => chat?.sendQueuedNow(row.id)}
+                    // A queued row stays in its own conversation's queue if the
+                    // selection moves, so there is nothing to stage.
+                    onClick={() =>
+                      afterOpenQuestion(() => latest.current.chat?.sendQueuedNow(row.id), null)
+                    }
                   >
                     <Icon d={["M12 19V5", "M6 11l6-6 6 6"]} />
                   </button>

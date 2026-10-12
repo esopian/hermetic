@@ -63,6 +63,12 @@ import {
   usage,
 } from "./fixture-chat-catalog.ts";
 import { FIXTURE_CHAT_SESSIONS, at, specFor, swarmFor } from "./fixture-chat-roster.ts";
+import {
+  createFixtureChatRequests,
+  fixtureClarifyScript,
+  type FixtureChatRequests,
+  type FixtureClarifyRequest,
+} from "./fixture-chat-requests.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
 
 // The tables and the activity store keep their homes in the split modules; this
@@ -115,6 +121,11 @@ export interface FixtureChatOptions {
    * a real gateway that had to be killed at the right moment.
    */
   cutAfter?: number | undefined;
+  /**
+   * The open clarify requests a parked turn waits on (`fixture-chat-requests.ts`).
+   * Absent means a registry of this client's own, which `respond` answers from.
+   */
+  requests?: FixtureChatRequests | undefined;
 }
 
 /**
@@ -280,6 +291,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   const reachable = (instance: string): boolean => specFor(instance).reachable;
   const activity = opts.activity;
   const cutAfter = opts.cutAfter ?? 0;
+  const requests = opts.requests ?? createFixtureChatRequests();
 
   /**
    * The canonical session a read falls back to when the caller named none —
@@ -502,7 +514,8 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          * thinking when nobody is listening — and the cut below would then have
          * nothing to continue from.
          */
-        const log = [...turn(id)];
+        const clarify = fixtureClarifyScript(text);
+        const log = clarify ? [] : [...turn(id)];
         /** The fixture's stand-in for `session.events.since`: everything past a cursor. */
         const eventsSince = (lastSeen: number): SequencedFrame[] =>
           log.filter((frame) => frame.seq > lastSeen);
@@ -551,7 +564,27 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           },
         });
 
+        /** The clarify request this turn is parked on, if it raised one. */
+        let asked: FixtureClarifyRequest | null = null;
+
         try {
+          /**
+           * A clarify turn (`fixture-chat-requests.ts`): the question card, then
+           * a park on the request until `respond` settles it, then the rest.
+           * Its second half depends on the answer, so it cannot be materialised
+           * up front, and the simulated cut below does not apply to it.
+           *
+           * The park is an awaited promise and nothing else: the request settles
+           * `aborted` when the turn's signal fires, and the turn then ends where
+           * it is, as any other aborted fixture turn does.
+           */
+          if (clarify) {
+            asked = requests.open(clarify.questions, opts.signal);
+            yield* deliver(clarify.ask(id, asked.request_id));
+            const outcome = await asked.settled;
+            if (outcome.kind !== "aborted") yield* deliver(clarify.resume(id, outcome, cursor));
+            return;
+          }
           /**
            * The simulated cut (§9.2): the socket dies partway through, and the
            * turn is picked up from its cursor rather than started again.
@@ -578,6 +611,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             yield* deliver(log);
           }
         } finally {
+          // A turn abandoned before its question was answered leaves no request
+          // behind for a later `respond` to settle.
+          asked?.close();
           flying.splice(flying.indexOf(session), 1);
           // Also on abort: a turn the operator stopped still happened, and the
           // half of it the box had already written down is still in its
@@ -649,6 +685,20 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           close();
         }
       })();
+    },
+
+    /**
+     * Settles the clarify request a parked turn is waiting on. Only questions
+     * reach the registry: the fixture raises no approvals, so one is
+     * acknowledged and nothing more.
+     */
+    respond(_box, input) {
+      if (input.kind === "approval") return Promise.resolve({ status: "ok" as const });
+      try {
+        return Promise.resolve(requests.respond(input));
+      } catch (e) {
+        return Promise.reject(e);
+      }
     },
 
     abort(_box: BoxAddress, _bot: string, _opts?: SendOptions): Promise<void> {

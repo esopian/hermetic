@@ -252,7 +252,7 @@ describe("approval", () => {
 });
 
 describe("question", () => {
-  test("choices, not free text", () => {
+  test("with nowhere to respond, the choices are drawn for reference and nothing is typed", () => {
     const { container } = draw({
       kind: "question",
       prompt: "Which cutoff should I use?",
@@ -262,8 +262,10 @@ describe("question", () => {
     const choices = container.querySelectorAll("button.ch-prompt");
     expect(choices).toHaveLength(3);
     expect(container.querySelector("input,textarea")).toBeNull();
-    // Inert until Phase 10 rather than enabled and silently doing nothing.
+    // No responder in the tree: disabled rather than enabled and silently doing nothing.
     expect((choices[0] as HTMLButtonElement).disabled).toBe(true);
+    // Nothing here can answer it, so the head does not claim the turn waits on this card.
+    expect(screen.queryByText("turn paused")).toBeNull();
   });
 });
 

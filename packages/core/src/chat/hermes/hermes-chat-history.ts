@@ -288,6 +288,73 @@ function storedJson(value: unknown): unknown {
   }
 }
 
+/**
+ * A completed `clarify` call re-read from history, as the answered card Hermes
+ * Desktop draws from the same row (`clarify-tool.tsx`). The live request block
+ * is gone once the gateway resolves it, so without this a reloaded transcript
+ * showed only the raw tool card. The block carries no `request_id`: nothing is
+ * open to answer, and every question's `answer` is filled ("" for a skip), which
+ * is how a head tells it from a pending clarify.
+ *
+ * Upstream's result is `{responses: [...]}` for a batch, in question order, or
+ * `{question, choices_offered, user_response}` for a single question; a
+ * multi-select `user_response` is a list, kept as a JSON array string the way
+ * the live path's locked answers are. The result's own `question` and
+ * `choices_offered` are preferred over the arguments because they are what the
+ * tool actually offered after cleaning (bare, no " (Recommended)" label); the
+ * arguments fill in a blank. An error result, or one in neither shape, yields
+ * nothing, leaving the tool card alone. The question id is the gateway's
+ * `q<index>`, so a settled card keys its questions exactly as the live one did.
+ */
+function settledClarify(args: unknown, result: unknown): ChatBlock | null {
+  const outcome = rec(result);
+  if (!outcome || (outcome.error !== undefined && outcome.error !== null)) return null;
+  const asked = rec(args);
+  const batch = Array.isArray(outcome.responses);
+  if (!batch && !("user_response" in outcome)) return null;
+  const responses = batch ? arr(outcome.responses) : [outcome];
+  const argued = batch ? arr(asked?.questions) : [asked];
+  const questions: NonNullable<Extract<ChatBlock, { kind: "question" }>["questions"]> = [];
+  responses.forEach((value, index) => {
+    const response = rec(value);
+    const raw = argued[index];
+    const arg = typeof raw === "string" ? { question: raw } : rec(raw);
+    const prompt = (str(response?.question) ?? str(arg?.question) ?? "").trim();
+    if (!response || !prompt) return;
+    const choices = settledChoices(response.choices_offered ?? arg?.choices);
+    // A skip and a timeout both store "" (a timed-out batch adds a top-level
+    // `timed_out`); like Desktop's card, either reads as skipped.
+    const reply = response.user_response;
+    const answer = Array.isArray(reply)
+      ? JSON.stringify(reply.map(String))
+      : typeof reply === "string"
+        ? reply
+        : "";
+    questions.push({
+      id: `q${index}`,
+      prompt,
+      choices,
+      multi_select: choices.length > 0 && (arg?.multi_select === true || Array.isArray(reply)),
+      answer,
+    });
+  });
+  const first = questions[0];
+  if (!first) return null;
+  return {
+    kind: "question",
+    prompt: first.prompt,
+    choices: first.choices,
+    multi_select: first.multi_select,
+    questions,
+    request_id: null,
+  };
+}
+
+/** A settled clarify's choices: the non-blank strings, in the order offered. */
+function settledChoices(value: unknown): string[] {
+  return arr(value).filter((choice): choice is string => typeof choice === "string" && !!choice.trim());
+}
+
 function durableHistoryBlocks(
   row: Record<string, unknown>,
   calls: ReadonlyMap<string, Record<string, unknown>>,
@@ -299,20 +366,22 @@ function durableHistoryBlocks(
     const fn = rec(call?.function);
     const result = storedJson(row.display_content ?? row.content);
     const metadata = rec(result);
-    return [
-      toolBlock(
-        {
-          tool_id: id,
-          name: str(row.tool_name) ?? str(fn?.name) ?? "tool",
-          args: storedJson(fn?.arguments) ?? null,
-          result,
-          exit_code: metadata?.exit_code,
-          error: metadata?.error,
-          status: metadata?.status,
-        },
-        null,
-      ),
-    ];
+    const name = str(row.tool_name) ?? str(fn?.name) ?? "tool";
+    const args = storedJson(fn?.arguments) ?? null;
+    const tool = toolBlock(
+      {
+        tool_id: id,
+        name,
+        args,
+        result,
+        exit_code: metadata?.exit_code,
+        error: metadata?.error,
+        status: metadata?.status,
+      },
+      null,
+    );
+    const settled = name.toLowerCase() === "clarify" ? settledClarify(args, result) : null;
+    return settled ? [tool, settled] : [tool];
   }
   const blocks = historyBlocks(row);
   for (const value of arr(row.tool_calls)) {

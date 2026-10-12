@@ -67,6 +67,15 @@ const HOLD_KINDS = new Set(["approval", "question"]);
 const broken = (m: MessageLike): boolean => !!m.error || !!m.incomplete;
 
 /**
+ * A clarify a history read settled (`settledClarify()` in
+ * `hermes-chat-history.ts`): core appends it to the `clarify` tool row with no
+ * `request_id`, because nothing is open to answer. It is a record of the turn's
+ * work, not a hold, so it rides the tool row as filler — counting it as a hold
+ * would make that row a hard `system` break and split the turn around it.
+ */
+const settledQuestion = (block: BlockLike): boolean => block.kind === "question" && !block.request_id;
+
+/**
  * A `role: "tool"` row reaches the UI as `system` (`messageRole()`), so its
  * `authorKey()` never matches the `bot` rows either side of it. Such a row
  * carries nothing but the turn's machinery, so it joins whichever run it lands
@@ -76,7 +85,7 @@ function runFiller(m: MessageLike): boolean {
   return (
     m.role !== "user" &&
     m.blocks.length > 0 &&
-    m.blocks.every((block: BlockLike) => RUN_KINDS.has(block.kind))
+    m.blocks.every((block: BlockLike) => RUN_KINDS.has(block.kind) || settledQuestion(block))
   );
 }
 

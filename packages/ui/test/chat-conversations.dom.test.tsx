@@ -742,3 +742,158 @@ test("a rollover mid-hold leaves the rows with the session they were recorded in
   await h.choose("B");
   expect(recorded(h.current.messages)).toEqual(["400"]);
 });
+
+/**
+ * Capture only the ten-minute no-frame timer; every other timer keeps the
+ * platform clock, so React and `waitFor` are untouched. `restore` puts the
+ * platform timers back.
+ */
+function captureIdle() {
+  const IDLE = 10 * 60_000;
+  const nativeSet = globalThis.setTimeout;
+  const nativeClear = globalThis.clearTimeout;
+  const idle = new Set<{ fn: () => void }>();
+  globalThis.setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms !== IDLE) return nativeSet(fn, ms, ...rest);
+    const timer = { fn };
+    idle.add(timer);
+    return timer;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((handle: unknown) => {
+    if (!idle.delete(handle as { fn: () => void })) nativeClear(handle as never);
+  }) as typeof clearTimeout;
+  return {
+    idle,
+    /** The wall clock passes the deadline: every idle timer still armed fires. */
+    elapse: () =>
+      act(async () => {
+        for (const timer of [...idle]) {
+          idle.delete(timer);
+          timer.fn();
+        }
+      }),
+    restore: () => {
+      globalThis.setTimeout = nativeSet;
+      globalThis.clearTimeout = nativeClear;
+    },
+  };
+}
+
+test("a turn parked on a question is not cancelled for going quiet until the question closes", async () => {
+  const { idle, elapse, restore } = captureIdle();
+  try {
+    const h = setup();
+    await h.choose("A");
+    h.draft("ask A");
+    h.click("Send");
+    await waitFor(() => expect(h.turns).toHaveLength(1));
+    expect(idle.size).toBe(1);
+    await act(async () =>
+      h.turns[0]!.handlers.onFrame({
+        type: "block",
+        seq: 1,
+        message: "reply-0",
+        block: { kind: "question", request_id: "q1", prompt: "Which?", choices: ["a", "b"] },
+      } as ChatFrameView),
+    );
+    // Parked on the operator: nothing armed, so eleven minutes cancel nothing.
+    expect(idle.size).toBe(0);
+    await elapse();
+    expect(h.turns[0]!.cancelled).toBe(false);
+    expect(h.current.sending).toBe(true);
+
+    // Frames unrelated to the question — a reconnect status, an unrelated
+    // notice, more prose — are signs of life, but the question is still open,
+    // so none of them starts the clock on the operator again.
+    const block = (seq: number, b: Record<string, unknown>) =>
+      act(async () =>
+        h.turns[0]!.handlers.onFrame({
+          type: "block",
+          seq,
+          message: "reply-0",
+          block: b,
+        } as ChatFrameView),
+      );
+    await block(2, {
+      kind: "activity",
+      category: "connection",
+      key: "connection",
+      title: "Reconnecting",
+      state: "running",
+    });
+    await block(3, {
+      kind: "activity",
+      category: "notice",
+      key: "n1",
+      title: "Heads up",
+      state: "done",
+    });
+    await h.frame(0, "still thinking", 4);
+    expect(idle.size).toBe(0);
+    await elapse();
+    expect(h.turns[0]!.cancelled).toBe(false);
+    expect(h.current.sending).toBe(true);
+
+    // The box closes the question: silence from here is a dead pipe once more.
+    await block(5, {
+      kind: "activity",
+      category: "notice",
+      key: "request:q1",
+      title: "Request withdrawn",
+      state: "done",
+      request_id: "q1",
+    });
+    expect(idle.size).toBe(1);
+    await elapse();
+    expect(h.turns[0]!.cancelled).toBe(true);
+  } finally {
+    restore();
+  }
+});
+
+test("a question answered from its card frees the turn's timer and keeps the card", async () => {
+  const { idle, elapse, restore } = captureIdle();
+  try {
+    const h = setup();
+    await h.choose("A");
+    h.draft("ask A");
+    h.click("Send");
+    await waitFor(() => expect(h.turns).toHaveLength(1));
+    const question = {
+      kind: "question" as const,
+      request_id: "q1",
+      prompt: "Which?",
+      choices: ["a", "b"],
+    };
+    const send = (seq: number) =>
+      act(async () =>
+        h.turns[0]!.handlers.onFrame({
+          type: "block",
+          seq,
+          message: "reply-0",
+          block: question,
+        } as ChatFrameView),
+      );
+    await send(1);
+    expect(idle.size).toBe(0);
+    expect(h.current.openRequest()).toBe("q1");
+
+    // The gateway sends no close after an ordinary answer: releasing is the
+    // only thing that tells the turn the operator is done with the question.
+    await act(async () => h.current.releaseRequest("q1"));
+    expect(idle.size).toBe(1);
+    expect(h.current.openRequest()).toBe(null);
+    // No notice: the card stays where it was, to draw its settled summary.
+    expect(h.current.live?.blocks).toEqual([question]);
+
+    // The box sending the block again does not park the turn a second time.
+    await send(2);
+    expect(idle.size).toBe(1);
+    expect(h.current.openRequest()).toBe(null);
+
+    await elapse();
+    expect(h.turns[0]!.cancelled).toBe(true);
+  } finally {
+    restore();
+  }
+});

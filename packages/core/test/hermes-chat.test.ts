@@ -31,7 +31,7 @@ import type {
 } from "../src/chat/hermes/hermes-chat.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
-import { Bot, ChatFrame } from "../src/schema/index.ts";
+import { Bot, ChatFrame, ChatMessage } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
   AGENTS_LIST_RESULT,
@@ -2196,6 +2196,191 @@ describe("hermes-chat · history", () => {
     ]);
   });
 
+  describe("a completed clarify re-read from history", () => {
+    /** The blocks of the tool row answering one clarify call, parsed through the schema. */
+    const settled = (args: unknown, content: unknown): ChatBlock[] => {
+      const messages = mapHistory(BOX, SESSION_ID, [
+        {
+          id: 1,
+          role: "assistant",
+          tool_calls: [{ id: "c1", function: { name: "clarify", arguments: JSON.stringify(args) } }],
+        },
+        {
+          id: 2,
+          role: "tool",
+          tool_call_id: "c1",
+          tool_name: "clarify",
+          content: typeof content === "string" ? content : JSON.stringify(content),
+        },
+      ]);
+      for (const message of messages) expect(ChatMessage.safeParse(message).success).toBe(true);
+      return messages[1]?.blocks ?? [];
+    };
+
+    test("a single choice question follows its tool card as an answered question", () => {
+      const blocks = settled(
+        { question: "Which region?", choices: ["us-east-1", "eu-west-1"] },
+        {
+          question: "Which region?",
+          choices_offered: ["us-east-1", "eu-west-1"],
+          user_response: "eu-west-1",
+        },
+      );
+      expect(blocks.map((b) => b.kind)).toEqual(["tool", "question"]);
+      expect(blocks[0]).toMatchObject({ kind: "tool", tool_id: "c1", name: "clarify" });
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Which region?",
+        choices: ["us-east-1", "eu-west-1"],
+        multi_select: false,
+        questions: [
+          {
+            id: "q0",
+            prompt: "Which region?",
+            choices: ["us-east-1", "eu-west-1"],
+            multi_select: false,
+            answer: "eu-west-1",
+          },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("a multi-select answer list becomes the JSON array string the live path locks", () => {
+      const blocks = settled(
+        { question: "Which checks?", choices: ["lint", "test", "build"], multi_select: true },
+        {
+          question: "Which checks?",
+          choices_offered: ["lint", "test", "build"],
+          user_response: ["lint", "build"],
+        },
+      );
+      expect(blocks[1]).toMatchObject({
+        kind: "question",
+        multi_select: true,
+        questions: [{ id: "q0", multi_select: true, answer: '["lint","build"]' }],
+      });
+    });
+
+    test("a batch keeps the gateway's question ids and a skipped question answers blank", () => {
+      const blocks = settled(
+        {
+          questions: [
+            { question: "Name?" },
+            { question: "Size?", choices: ["small (Recommended)", "large"] },
+            { question: "Notes?" },
+          ],
+        },
+        {
+          responses: [
+            { question: "Name?", choices_offered: null, user_response: "atlas" },
+            { question: "Size?", choices_offered: ["small", "large"], user_response: "" },
+            { question: "Notes?", choices_offered: null, user_response: "none" },
+          ],
+        },
+      );
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Name?",
+        choices: [],
+        multi_select: false,
+        questions: [
+          { id: "q0", prompt: "Name?", choices: [], multi_select: false, answer: "atlas" },
+          { id: "q1", prompt: "Size?", choices: ["small", "large"], multi_select: false, answer: "" },
+          { id: "q2", prompt: "Notes?", choices: [], multi_select: false, answer: "none" },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("a skipped multi-select stays multi-select with a blank answer", () => {
+      const blocks = settled(
+        { question: "Which checks?", choices: ["lint", "test"], multi_select: true },
+        { question: "Which checks?", choices_offered: ["lint", "test"], user_response: "" },
+      );
+      expect(blocks[1]).toMatchObject({
+        multi_select: true,
+        questions: [{ id: "q0", multi_select: true, answer: "" }],
+      });
+    });
+
+    test("a timed-out batch settles with the unanswered questions blank", () => {
+      const blocks = settled(
+        { questions: [{ question: "Name?" }, { question: "Size?", choices: ["small", "large"] }] },
+        {
+          responses: [
+            { question: "Name?", choices_offered: null, user_response: "atlas" },
+            { question: "Size?", choices_offered: ["small", "large"], user_response: "" },
+          ],
+          timed_out: true,
+        },
+      );
+      expect(blocks[1]).toMatchObject({
+        request_id: null,
+        questions: [
+          { id: "q0", answer: "atlas" },
+          { id: "q1", choices: ["small", "large"], answer: "" },
+        ],
+      });
+    });
+
+    test("a one-entry questions array settles from upstream's batch result", () => {
+      const blocks = settled(
+        { questions: [{ question: "Which region?", choices: ["us-east-1", "eu-west-1"] }] },
+        {
+          responses: [
+            {
+              question: "Which region?",
+              choices_offered: ["us-east-1", "eu-west-1"],
+              user_response: "us-east-1",
+            },
+          ],
+        },
+      );
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Which region?",
+        choices: ["us-east-1", "eu-west-1"],
+        multi_select: false,
+        questions: [
+          {
+            id: "q0",
+            prompt: "Which region?",
+            choices: ["us-east-1", "eu-west-1"],
+            multi_select: false,
+            answer: "us-east-1",
+          },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("an error result leaves only the tool card", () => {
+      const blocks = settled({ question: "Which region?" }, { error: "Clarify is unavailable here." });
+      expect(blocks.map((b) => b.kind)).toEqual(["tool"]);
+    });
+
+    test("a result in neither shape leaves only the tool card", () => {
+      expect(settled({ question: "Which?" }, "not json").map((b) => b.kind)).toEqual(["tool"]);
+      expect(settled({ questions: [] }, { responses: [] }).map((b) => b.kind)).toEqual(["tool"]);
+    });
+
+    test("a call with no result row stays an unanswered tool card", () => {
+      const messages = mapHistory(BOX, SESSION_ID, [
+        {
+          id: 1,
+          role: "assistant",
+          tool_calls: [
+            { id: "c1", function: { name: "clarify", arguments: '{"question":"Which region?"}' } },
+          ],
+        },
+      ]);
+      expect(messages[0]?.blocks).toEqual([
+        expect.objectContaining({ kind: "tool", name: "clarify", status: "warn", result: null }),
+      ]);
+    });
+  });
+
   test("tool arguments survive a durable REST page boundary", async () => {
     const h = harness({
       history: [
@@ -2577,11 +2762,33 @@ describe("semantic live activity and requests", () => {
             choices: ["once", "deny"],
           },
         }),
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "srv-3",
+          method: "clarify",
+          params: {
+            session_id: SESSION_ID,
+            questions: [
+              { qid: "q1", question: "Drink?", choices: ["Coffee", "Tea"], multi_select: false },
+              { qid: "q2", question: "Why?", choices: null, multi_select: false },
+            ],
+          },
+        }),
         eventFrame("request.cancel", 4, { id: "srv-1", method: "clarify", reason: "resolved" }),
         RECORDED_MESSAGE_COMPLETE,
       ]),
     );
     const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "go"));
+    // A batch is one request, so it is one card carrying both questions.
+    const batch = blocks(frames).filter((b) => b.kind === "question" && b.request_id === "srv-3");
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toMatchObject({
+      prompt: "Drink?",
+      questions: [
+        { id: "q1", prompt: "Drink?", choices: ["Coffee", "Tea"], answer: null },
+        { id: "q2", prompt: "Why?", choices: [], answer: null },
+      ],
+    });
     expect(blocks(frames)).toContainEqual(
       expect.objectContaining({
         kind: "question",

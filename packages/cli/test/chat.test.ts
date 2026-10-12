@@ -203,6 +203,38 @@ describe.concurrent("the transcript", () => {
     ]);
   });
 
+  test("a batch question prints every question, its choices and any locked answer", () => {
+    expect(
+      blockLines({
+        kind: "question",
+        prompt: "Drink?",
+        choices: ["Coffee", "Tea"],
+        questions: [
+          {
+            id: "q1",
+            prompt: "Drink?",
+            choices: ["Coffee", "Tea"],
+            multi_select: false,
+            answer: "Coffee",
+          },
+          { id: "q2", prompt: "Snacks?", choices: ["Chips"], multi_select: true, answer: null },
+        ],
+      }),
+    ).toEqual([
+      "[question] 2 questions",
+      "  1. Drink?",
+      "     - Coffee",
+      "     - Tea",
+      "     -> answered: Coffee",
+      "  2. Snacks? (choose any)",
+      "     - Chips",
+    ]);
+    expect(blockLines({ kind: "question", prompt: "Why?", choices: ["a"] })).toEqual([
+      "[question] Why?",
+      "  1. a",
+    ]);
+  });
+
   test("a message is who said it, then its blocks indented under it", () => {
     expect(messageLines(message({ blocks: [{ kind: "text", markdown: "hi" }] }), NOW)).toEqual([
       "3h ago  bot",

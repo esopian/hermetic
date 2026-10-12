@@ -19,13 +19,21 @@ import type {
   ChatTurnHandlers,
 } from "../src/api/index.ts";
 import { Composer } from "../src/chat/components/Composer.tsx";
+import { BotResponses, closedRequests, openQuestion } from "../src/chat/components/BotResponses.tsx";
+import type { Decision } from "../src/chat/components/BotResponses.tsx";
 import { insertByStamp } from "../src/chat/chat-conversation-record.ts";
 
 afterEach(cleanup);
 
 type SteerStatus = ChatSteerResult["status"];
 
-function setup(opts: { steer?: SteerStatus | "throws" } = {}) {
+function setup(
+  opts: {
+    steer?: SteerStatus | "throws";
+    /** A responder for server requests, as `BotWorkspace` provides one. */
+    respond?: (decision: Decision) => Promise<unknown>;
+  } = {},
+) {
   let current!: Chat;
   const turns: ChatTurnHandlers[] = [];
   const sent: string[] = [];
@@ -74,6 +82,9 @@ function setup(opts: { steer?: SteerStatus | "throws" } = {}) {
         <button type="button" onClick={() => current.select("atlas", "default", null)}>
           pick
         </button>
+        <button type="button" onClick={() => current.select("atlas", "other", null)}>
+          pick other
+        </button>
         <Composer
           destination={{ state: "known", origin: "portal", detail: null }}
           placeholder="Message…"
@@ -88,7 +99,9 @@ function setup(opts: { steer?: SteerStatus | "throws" } = {}) {
 
   render(
     <ChatProvider api={api} eager={false}>
-      <Harness />
+      <BotResponses.Provider value={opts.respond ?? null}>
+        <Harness />
+      </BotResponses.Provider>
     </ChatProvider>,
   );
 
@@ -145,6 +158,17 @@ function setup(opts: { steer?: SteerStatus | "throws" } = {}) {
           seq: ++seq,
           message: `atlas:turn-${turns.length}`,
           text,
+        } as never);
+      });
+    },
+    /** One block into the running turn. */
+    block: async (block: Record<string, unknown>) => {
+      await act(async () => {
+        turns[turns.length - 1]?.onFrame({
+          type: "block",
+          seq: ++seq,
+          message: `atlas:turn-${turns.length}`,
+          block,
         } as never);
       });
     },
@@ -303,5 +327,211 @@ describe("transcript order", () => {
     // An unreadable stamp stays where it arrived.
     const odd = row("S:x", "bot", "odd", "not a time");
     expect(text(insertByStamp([prompt, ...reply], [odd])).at(-1)).toBe("odd");
+  });
+});
+
+describe("writing while a clarify waits", () => {
+  const question = { kind: "question", request_id: "q1", prompt: "Which branch?", choices: ["main"] };
+
+  /** A responder that records each decision and whether a steer had already gone out. */
+  function responder(h: () => { steered: string[] }) {
+    const log: { decision: Decision; steeredFirst: boolean }[] = [];
+    const respond = async (decision: Decision) => {
+      log.push({ decision, steeredFirst: h().steered.length > 0 });
+      return { status: "ok" };
+    };
+    return { log, respond };
+  }
+
+  test("⌘Enter skips the open question first, then steers", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+
+    h.sayNow("never mind, use main");
+    await waitFor(() => expect(h.steered).toEqual(["never mind, use main"]));
+    expect(r.log).toEqual([
+      { decision: { request_id: "q1", kind: "question", skip: true }, steeredFirst: false },
+    ]);
+  });
+
+  test("Enter skips it and queues, so the queue is not stuck behind the question", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+
+    h.say("later");
+    await waitFor(() => expect(h.rows()).toHaveLength(1));
+    expect(r.log.map((e) => e.decision)).toEqual([{ request_id: "q1", kind: "question", skip: true }]);
+    expect(h.steered).toEqual([]);
+  });
+
+  /** A responder held until released, as a slow tailnet would hold it. */
+  function held(outcome: "ok" | "throws" = "ok") {
+    let release = (): void => {};
+    const gate = new Promise<void>((done) => {
+      release = done;
+    });
+    let calls = 0;
+    const respond = async () => {
+      calls += 1;
+      await gate;
+      if (outcome === "throws") throw new Error("tailnet unreachable");
+      return { status: "ok" };
+    };
+    return {
+      respond,
+      release: () => act(async () => release()),
+      get calls() {
+        return calls;
+      },
+    };
+  }
+
+  test("the card closes once the box acknowledges the skip, and not before", async () => {
+    const r = held();
+    const h = setup({ respond: r.respond });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    expect(h.current.activity).toBe("idle");
+
+    h.sayNow("never mind, use main");
+    await waitFor(() => expect(r.calls).toBe(1));
+    // While the call is in flight the card is still the box's to close, and the
+    // steer waits on it.
+    expect(closedRequests(h.current.live?.blocks ?? []).has("q1")).toBe(false);
+    expect(openQuestion(h.current.live)).toBe("q1");
+    expect(h.steered).toEqual([]);
+    await r.release();
+    await waitFor(() => expect(h.steered).toEqual(["never mind, use main"]));
+    // The close is the same finished notice a gateway `request.cancel` lands as.
+    // The steer closed the reply off above the prompt, so the card's part is
+    // a transcript row now, and the notice went with it.
+    const notice = [...h.current.messages, ...(h.current.live ? [h.current.live] : [])]
+      .flatMap((m) => m.blocks)
+      .find((block) => block.kind === "activity" && block.key === "request:q1");
+    expect(notice).toMatchObject({
+      kind: "activity",
+      category: "notice",
+      state: "done",
+      request_id: "q1",
+      title: "Question skipped",
+    });
+    expect(h.current.openRequest()).toBe(null);
+  });
+
+  test("a skip that fails leaves the card answerable, and the message still goes out", async () => {
+    const r = held("throws");
+    const h = setup({ respond: r.respond });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+
+    h.say("later");
+    await waitFor(() => expect(r.calls).toBe(1));
+    await r.release();
+    await waitFor(() => expect(h.rows()).toHaveLength(1));
+    // Nothing closed the card: the box never let go of the request.
+    const all = [...h.current.messages, ...(h.current.live ? [h.current.live] : [])];
+    expect(all.some((m) => closedRequests(m.blocks).has("q1"))).toBe(false);
+    expect(h.current.openRequest()).toBe("q1");
+  });
+
+  test("a message typed in one conversation is not sent into another chosen during the skip", async () => {
+    const r = held();
+    const h = setup({ respond: r.respond });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+
+    h.sayNow("for atlas only");
+    await waitFor(() => expect(r.calls).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "pick other" }));
+    await waitFor(() => expect(h.current.selection?.bot).toBe("other"));
+    await r.release();
+    // Neither steered, sent nor queued — here or there.
+    expect(h.steered).toEqual([]);
+    expect(h.sent).toEqual(["first"]);
+    expect(h.rows()).toHaveLength(0);
+    expect(h.current.draft).toBe("");
+    // The words wait in the first conversation's draft, and its card is closed.
+    fireEvent.click(screen.getByRole("button", { name: "pick" }));
+    await waitFor(() => expect(h.current.selection?.bot).toBe("default"));
+    expect(h.current.draft).toBe("for atlas only");
+    expect(h.input().value).toBe("for atlas only");
+    expect(h.current.openRequest()).toBe(null);
+  });
+
+  test("a question in a part of the reply a steer closed off is still skipped", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    // A steer that reached the box without passing through this composer —
+    // the store's own call — closes the reply off with the card in it.
+    await act(async () => {
+      h.current.sendNow("aside");
+    });
+    await waitFor(() => expect(h.steered).toEqual(["aside"]));
+    expect(h.current.live).toBe(null);
+    const part = () => h.current.messages.find((m) => m.blocks.some((b) => b.kind === "question"));
+    expect(part()).toBeDefined();
+
+    h.say("later");
+    await waitFor(() => expect(h.rows()).toHaveLength(1));
+    expect(r.log.map((e) => e.decision)).toEqual([{ request_id: "q1", kind: "question", skip: true }]);
+    // Settled where the card is: in the closed-off part.
+    expect(closedRequests(part()!.blocks).has("q1")).toBe(true);
+  });
+
+  test("an expired skip still lets the message through", async () => {
+    const h = setup({ respond: async () => ({ status: "expired" }) });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    h.sayNow("go on");
+    await waitFor(() => expect(h.steered).toEqual(["go on"]));
+  });
+
+  test("a question the box already closed is not skipped", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    await h.block({
+      kind: "activity",
+      category: "notice",
+      key: "request:q1",
+      request_id: "q1",
+      state: "done",
+      title: "Request withdrawn",
+    });
+
+    h.sayNow("carry on");
+    await waitFor(() => expect(h.steered).toEqual(["carry on"]));
+    expect(r.log).toEqual([]);
   });
 });

@@ -396,6 +396,16 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         ...block,
         prompt: redactText(block.prompt),
         choices: block.choices.map(redactText),
+        ...(block.questions
+          ? {
+              questions: block.questions.map((q) => ({
+                ...q,
+                prompt: redactText(q.prompt),
+                choices: q.choices.map(redactText),
+                answer: q.answer === null ? null : redactText(q.answer),
+              })),
+            }
+          : {}),
         ...(block.payload !== undefined ? { payload: redactDeep(block.payload) } : {}),
       };
     case "sources":

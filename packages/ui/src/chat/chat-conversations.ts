@@ -10,6 +10,7 @@ import type {
 } from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
+import { openQuestion } from "./components/BotResponses.tsx";
 import { isProcessEventMessage, previewText } from "./process-events.ts";
 import type { ConversationActivity } from "./chat-activity.ts";
 import {
@@ -159,6 +160,37 @@ function answered(messages: readonly ChatMessageView[], live: ChatMessageView): 
     (m) =>
       m.id === live.id || (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
   );
+}
+
+/**
+ * Requests the operator answered from the card, per conversation. The gateway
+ * sends no close after an ordinary answer, so the card's block stays as it was
+ * (the card draws its own settled summary) and only this set says the request
+ * is no longer waiting on anyone. Ids are never reused, so it is never pruned.
+ */
+const released = new WeakMap<Conversation, Set<string>>();
+
+/**
+ * Keep `record.openRequests` in step with one frame: an approval or a clarify
+ * the box can be answered on opens its request, and a finished `notice`
+ * carrying that id (the close `closedRequests` reads) ends it. Until every
+ * open request ends the turn is silent by design, so the no-frame timer must
+ * not read the silence as a dead pipe. `true` when the set changed. A request
+ * the operator already answered from its card (`released`) stays closed even
+ * if the box sends its block again.
+ */
+function trackRequest(record: Conversation, frame: ChatFrameView): boolean {
+  if (frame.type !== "block") return false;
+  const block = frame.block;
+  if (block.kind === "approval" || block.kind === "question") {
+    const id = block.request_id;
+    if (!id || record.openRequests.has(id) || released.get(record)?.has(id)) return false;
+    record.openRequests.add(id);
+    return true;
+  }
+  if (block.kind === "activity" && block.category === "notice" && block.state === "done")
+    return !!block.request_id && record.openRequests.delete(block.request_id);
+  return false;
 }
 
 /** The blocks a part of the reply that a steer closed off can still receive. */
@@ -1008,6 +1040,7 @@ export function useConversations(
       record.turnSeed = seed;
       record.segments = [];
       record.segmentAt = at;
+      record.openRequests.clear();
       record.messages = [...record.messages, localPrompt(body, at, session)];
       changed();
       let seq = -1;
@@ -1025,8 +1058,10 @@ export function useConversations(
         settled = true;
         finish();
         record.cancel = null;
+        record.rearm = null;
         record.activity = "idle";
         record.segments = [];
+        record.openRequests.clear();
         if (!record.aborting) record.sending = false;
         // The live message stops speaking for the held rows here — including on
         // the paths that never re-read the transcript, which is the whole point
@@ -1054,8 +1089,13 @@ export function useConversations(
           });
         }
       };
+      // Arms only while nothing is open: a turn parked on an approval or a
+      // clarify is waiting on the operator, not silent, and cancelling it for
+      // that would take the turn away from someone still reading the question.
+      // There is deliberately no upper bound on how long it may stay parked.
       const tick = () => {
         finish();
+        if (record.openRequests.size > 0) return;
         idle = setTimeout(() => {
           record.cancel?.();
           end(false, null);
@@ -1068,9 +1108,14 @@ export function useConversations(
         {
           onFrame: (frame) => {
             if (!valid() || settled || terminal) return;
+            // Any frame is a sign of life, but only restarts the timer while no
+            // request is open — a reconnect status or a notice arriving while a
+            // question waits must not start the clock on the operator.
             tick();
             if (frame.type === "error") {
               terminal = true;
+              record.openRequests.clear();
+              tick();
               record.activity = "idle";
               changed();
               return;
@@ -1083,6 +1128,12 @@ export function useConversations(
             }
             seq = frame.seq;
             terminal = frame.type === "done";
+            if (terminal) {
+              record.openRequests.clear();
+              tick();
+            }
+            // Opening a request stops the clock; closing the last one restarts it.
+            else if (trackRequest(record, frame)) tick();
             record.activity = nextTurnActivity(record.activity, frame);
             if (!landOnSegment(record, frame, seed, assemble))
               record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
@@ -1096,6 +1147,9 @@ export function useConversations(
         record.cancel = () => {
           finish();
           cancel();
+        };
+        record.rearm = () => {
+          if (valid() && !settled && !terminal) tick();
         };
         tick();
       }
@@ -1156,6 +1210,117 @@ export function useConversations(
     [changed, get, permits, readHistory],
   );
 
+  /**
+   * Close a request card the box has let go of, without waiting for it to say
+   * so in the stream.
+   *
+   * The composer declines an open clarify before sending, and the gateway
+   * sends no `request.cancel` after an ordinary answer, so without this the
+   * card would stay live — choices and Confirm still drawn — with nothing ever
+   * coming to close it. The composer calls it once the box has acknowledged
+   * the skip, never before: a skip that failed leaves the card answerable.
+   *
+   * The close is the same finished `notice` a `request.cancel` lands as, folded
+   * in through `assemble` like any frame, so the card is hidden
+   * (`closedRequests`), the turn reads as thinking again (`nextTurnActivity`),
+   * and grouping treats it as the box's own close. It goes on whichever part of
+   * the reply holds the card: the live one, or one a steer closed off. `target`
+   * names the conversation when the caller captured it before an await; the
+   * current selection otherwise.
+   */
+  /**
+   * Stop counting `request_id` as one the turn is parked on, without closing
+   * its card: the operator answered it from the card itself, and the gateway
+   * sends no close after an ordinary answer. The no-frame timer may run again
+   * and `openRequest` no longer names it, but no notice is added, so the card
+   * stays on screen as its settled summary. `target` as for `settleRequest`.
+   */
+  const releaseRequest = useCallback(
+    (request_id: string, target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      const ids = released.get(record) ?? new Set<string>();
+      released.set(record, ids.add(request_id));
+      if (record.openRequests.delete(request_id)) record.rearm?.();
+    },
+    [get, permits],
+  );
+
+  const settleRequest = useCallback(
+    (request_id: string, outcome: "skipped" | "answered", target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      // The same close as the box's own notice, so the turn is no longer parked
+      // on this request and the no-frame timer may run again — whether or not
+      // the card is still on screen to fold the notice into.
+      releaseRequest(request_id, where);
+      const holds = (message: ChatMessageView | null) =>
+        !!message?.blocks.some(
+          (block) =>
+            (block.kind === "question" || block.kind === "approval") && block.request_id === request_id,
+        );
+      const frame = (message: ChatMessageView): ChatFrameView => ({
+        type: "block",
+        seq: 0,
+        message: message.id,
+        block: {
+          kind: "activity",
+          category: "notice",
+          key: `request:${request_id}`,
+          title: outcome === "skipped" ? "Question skipped" : "Answered",
+          state: "done",
+          request_id,
+          role: "work",
+        },
+      });
+      const seedOf = (message: ChatMessageView) => ({ session: message.session, at: message.at });
+      let settled: ChatFrameView | null = null;
+      if (record.live && holds(record.live)) {
+        settled = frame(record.live);
+        record.live = assemble(record.live, settled, seedOf(record.live));
+      } else {
+        const index = record.messages.findIndex((m) => record.segments.includes(m.id) && holds(m));
+        const part = index === -1 ? null : record.messages[index]!;
+        if (!part) return;
+        settled = frame(part);
+        const merged = assemble(part, settled, seedOf(part));
+        if (!merged) return;
+        const next = [...record.messages];
+        next[index] = merged;
+        record.messages = next;
+      }
+      record.activity = nextTurnActivity(record.activity, settled);
+      changed();
+    },
+    [assemble, changed, get, permits, releaseRequest],
+  );
+
+  /**
+   * The clarify the selected conversation is waiting on, if any — across the
+   * live message and the parts a steer closed off, the scope `settleRequest`
+   * closes in. Read at call time, so a caller acting on a keypress sees the
+   * record as it is rather than as the last render left it. A question
+   * answered from its card (`releaseRequest`) is not waiting on anyone.
+   */
+  const openRequest = useCallback((): string | null => {
+    if (!selected.current || !permits(selected.current.instance)) return null;
+    const record = get(selected.current);
+    const done = released.get(record);
+    const scope = (message: ChatMessageView): ChatMessageView =>
+      done?.size
+        ? {
+            ...message,
+            blocks: message.blocks.filter(
+              (block) => !(block.kind === "question" && block.request_id && done.has(block.request_id)),
+            ),
+          }
+        : message;
+    const parts = record.messages.filter((m) => record.segments.includes(m.id));
+    return openQuestion((record.live ? [...parts, record.live] : parts).map(scope));
+  }, [get, permits]);
+
   const abort = useCallback(async () => {
     if (!selected.current || !permits(selected.current.instance)) return;
     const record = get(selected.current);
@@ -1187,6 +1352,8 @@ export function useConversations(
         record.cancel = null;
         record.sending = false;
         record.segments = [];
+        record.openRequests.clear();
+        record.rearm = null;
         releaseHeld(record);
         record.activity = "idle";
         record.aborting = false;
@@ -1255,6 +1422,9 @@ export function useConversations(
     select,
     send,
     steer,
+    settleRequest,
+    releaseRequest,
+    openRequest,
     abort,
     reloadHistory,
     reloadTranscript,

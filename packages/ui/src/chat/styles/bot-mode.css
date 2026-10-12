@@ -297,16 +297,201 @@
   padding: 6px 10px;
   font-size: 11px;
 }
+/* The clarify card. Hermes Desktop's structure and density — one left edge for
+   the prompt, its lettered rows and the "Other" row, ~28px a row, the batch
+   progress on top and Skip/Confirm right under the questions — in hermetic's
+   own type, rules and inverted selection. */
+.bm-clarify .ch-card-body {
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+.bm-clarify .bm-question-progress {
+  margin: 0 0 6px;
+  font: 11px var(--mono);
+  color: var(--text-muted);
+}
+.bm-question + .bm-question {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.bm-question-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.bm-clarify .bm-question-prompt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--fg);
+}
+.bm-question-prompt strong {
+  font-weight: 600;
+}
+.bm-question-hint {
+  font: 10.5px var(--mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* `.ch-prompts`/`.ch-prompt` are the empty-state starter prompts: a centred
+   460px column of bordered buttons, 11px by 13px padding (13px by 15px in the
+   soft skin). Here the same classes are a flush list of light rows, so each of
+   those rules is undone with a selector that outranks both skins'. */
+.bm-question .ch-prompts.bm-options {
+  display: grid;
+  gap: 1px;
+  max-width: none;
+  margin: 0;
+}
+.bm-clarify .bm-question .bm-option {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg2);
+  text-align: left;
+  cursor: pointer;
+}
+/* "Other" is the row after the radiogroup, on the same 1px rhythm. */
+.bm-clarify .bm-question .bm-options + .bm-other {
+  margin-top: 1px;
+  cursor: text;
+}
+.bm-question .ch-prompt.bm-option:hover {
+  border: 0;
+  background: transparent;
+}
+.bm-question .ch-prompt.bm-option:hover:not([disabled]):not([aria-checked="true"]),
+.bm-clarify .bm-question .bm-other:hover:not(:has([disabled])) {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg);
+}
+.bm-question .ch-prompt.bm-option:focus-visible,
+.bm-other-input:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+.bm-question .ch-prompt.bm-option[aria-checked="true"] {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+/* A row nobody can press reads as such: locked while sending or expired, or
+   drawn for reference only. A settled card has no rows to dim. */
+.bm-clarify .bm-question .bm-option[disabled],
+.bm-clarify .bm-question .bm-other:has([disabled]) {
+  opacity: 0.55;
+  cursor: default;
+}
+.bm-option-label {
+  min-width: 0;
+}
+/* The letter badge. Round for one answer (a radio), square for any (a
+   checkbox, ticked when picked); filled inverted when picked, as hermetic
+   draws every selection. */
+.bm-badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 1px solid var(--line2);
+  border-radius: 50%;
+  font: 600 10px var(--mono);
+  color: var(--fg2);
+}
+.bm-options.multi .bm-badge,
+.bm-other.multi .bm-badge {
+  border-radius: 2px;
+}
+.bm-option[aria-checked="true"] .bm-badge,
+.bm-other.on .bm-badge {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+/* The "Other" row's field: light, one line, inside the row's 28px. */
+.bm-clarify .bm-question .bm-other {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.bm-other-input {
+  all: unset;
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font: 13px var(--sans);
+  color: var(--fg);
+}
+.bm-other-input::placeholder {
+  color: var(--text-muted);
+}
+.bm-other-input:focus {
+  border-color: var(--fg2);
+}
 .bm-answer {
   display: flex;
-  gap: 8px;
+}
+.bm-answer .bm-other-input {
+  height: 28px;
+}
+.bm-answer .bm-other-input[disabled] {
+  opacity: 0.55;
+}
+.bm-recommended {
+  margin-left: 6px;
+  font: 11px var(--mono);
+  color: var(--text-muted);
+}
+.bm-question-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   margin-top: 10px;
 }
-.bm-answer .wiz-input {
-  min-width: 0;
-  flex: 1;
-  font-size: 13px;
-  height: 36px;
+.bm-request-actions .btn.bm-skip {
+  color: var(--fg2);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.bm-request-actions .btn.bm-skip:hover:not([disabled]) {
+  color: var(--fg);
+}
+/* `.btn-primary` keeps its colours when disabled; here a Confirm that cannot
+   go yet has to look it. */
+.bm-question-foot .btn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.bm-clarify .bm-settled-answer,
+.bm-clarify .bm-settled-skipped {
+  margin: 2px 0 0;
+  font-weight: 400;
+}
+.bm-settled-answer {
+  color: var(--fg2);
+  white-space: pre-wrap;
+}
+.bm-settled-skipped {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.bm-clarify .bm-settled [role="status"] {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .bm-narrow-actions,
 .bm-scrim {

@@ -450,6 +450,149 @@ describe("pending decision ownership", () => {
       },
     });
   });
+
+  /** A resumed session holding one open clarify, and a double that answers locks from `locks`. */
+  function clarifyHarness(params: Record<string, unknown>, locks: unknown[] = []) {
+    const replies = [...locks];
+    return canonicalHarness(async (method) => {
+      if (method === "session.resume")
+        return {
+          session_id: "runtime",
+          open_requests: [
+            { id: "request-1", method: "clarify", params: { session_id: "runtime", ...params } },
+          ],
+        };
+      if (method === "clarify.lock") return replies.shift();
+      return { status: "ok" };
+    });
+  }
+  const BATCH = {
+    questions: [
+      { qid: "q1", question: "Drink?", choices: ["Coffee", "Tea"], multi_select: false },
+      { qid: "q2", question: "Snacks?", choices: ["Chips", "Fruit"], multi_select: true },
+    ],
+  };
+  const question = {
+    instance: "atlas",
+    bot: "research",
+    session: "stored",
+    request_id: "request-1",
+    kind: "question" as const,
+  };
+  const sent = (h: { calls: { method: string; params: Record<string, unknown> }[] }) =>
+    h.calls.filter((c) => c.method !== "session.resume");
+
+  test("a batch answer locks every question in the gateway's order and returns the last lock", async () => {
+    const h = clarifyHarness(BATCH, [
+      { status: "ok", remaining: ["q2"] },
+      { status: "ok", remaining: [] },
+    ]);
+    // Keys in the opposite order: the gateway's question order decides.
+    const answers = { q2: '["Chips","Fruit"]', q1: "Coffee" };
+    expect(await h.service.respond(box, { ...question, answers })).toEqual({
+      status: "ok",
+      remaining: [],
+    });
+    expect(sent(h)).toEqual([
+      {
+        method: "clarify.lock",
+        params: { profile: "research", request_id: "request-1", question_id: "q1", answer: "Coffee" },
+      },
+      {
+        method: "clarify.lock",
+        params: {
+          profile: "research",
+          request_id: "request-1",
+          question_id: "q2",
+          answer: '["Chips","Fruit"]',
+        },
+      },
+    ]);
+  });
+
+  test("an edit of a held lock lands before the lock that completes the batch", async () => {
+    // A stateful double of the gateway's `lock_answer`: a lock overwrites,
+    // the lock that leaves nothing open resolves the batch with every lock,
+    // and any lock after that is expired.
+    const locked: Record<string, string> = { q2: "old" };
+    const gateway: { resolved: Record<string, string> | null } = { resolved: null };
+    const h = canonicalHarness(async (method, params) => {
+      if (method === "session.resume")
+        return {
+          session_id: "runtime",
+          open_requests: [
+            {
+              id: "request-1",
+              method: "clarify",
+              params: { session_id: "runtime", ...BATCH, answers: { ...locked } },
+            },
+          ],
+        };
+      if (method !== "clarify.lock") return { status: "ok" };
+      if (gateway.resolved) return { status: "expired" };
+      locked[String(params.question_id)] = String(params.answer);
+      const remaining = ["q1", "q2"].filter((qid) => !(qid in locked));
+      if (!remaining.length) gateway.resolved = { ...locked };
+      return { status: "ok", remaining };
+    });
+    expect(await h.service.respond(box, { ...question, answers: { q1: "new1", q2: "new2" } })).toEqual({
+      status: "ok",
+      remaining: [],
+    });
+    expect(gateway.resolved).toEqual({ q1: "new1", q2: "new2" });
+    expect(sent(h).map((c) => c.params.question_id)).toEqual(["q2", "q1"]);
+  });
+
+  test("a batch answer naming an unknown question is refused before anything is locked", async () => {
+    const h = clarifyHarness(BATCH);
+    const failed = await h.service
+      .respond(box, { ...question, answers: { q1: "Coffee", q9: "?" } })
+      .catch((e: unknown) => e);
+    expect((failed as HermeticError).code).toBe("VALIDATION");
+    expect(sent(h)).toEqual([]);
+  });
+
+  test("an expired first lock stops the batch there", async () => {
+    const h = clarifyHarness(BATCH, [{ status: "expired" }]);
+    expect(await h.service.respond(box, { ...question, answers: { q1: "Coffee", q2: "[]" } })).toEqual({
+      status: "expired",
+    });
+    expect(sent(h).map((c) => c.params.question_id)).toEqual(["q1"]);
+  });
+
+  test('skipping a batch cancels it with an empty result; a single question skips with ""', async () => {
+    const batch = clarifyHarness(BATCH);
+    expect(await batch.service.respond(box, { ...question, skip: true })).toEqual({ status: "ok" });
+    expect(sent(batch)).toEqual([
+      { method: "request.answer", params: { profile: "research", id: "request-1", result: {} } },
+    ]);
+    const single = clarifyHarness({ question: "Drink?", choices: ["Coffee"] });
+    expect(await single.service.respond(box, { ...question, skip: true })).toEqual({ status: "ok" });
+    expect(sent(single)).toEqual([
+      {
+        method: "request.answer",
+        params: { profile: "research", id: "request-1", result: { answer: "" } },
+      },
+    ]);
+  });
+
+  test("a single question refuses a batch-shaped answer", async () => {
+    const h = clarifyHarness({ question: "Drink?" });
+    for (const input of [
+      { ...question, answers: { q1: "Coffee" } },
+      { ...question, answer: "Coffee", question_id: "q1" },
+    ]) {
+      const failed = await h.service.respond(box, input).catch((e: unknown) => e);
+      expect((failed as HermeticError).code).toBe("VALIDATION");
+    }
+    expect(sent(h)).toEqual([]);
+    expect(await h.service.respond(box, { ...question, answer: "Coffee" })).toEqual({ status: "ok" });
+    expect(sent(h).at(-1)?.params).toEqual({
+      profile: "research",
+      id: "request-1",
+      result: { answer: "Coffee" },
+    });
+  });
 });
 
 /**

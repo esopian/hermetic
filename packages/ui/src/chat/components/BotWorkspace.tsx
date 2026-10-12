@@ -29,6 +29,18 @@ import { BotCreateDialog, RoomCreateDialog } from "./BotModeCreate.tsx";
 import { BotResponses } from "./BotResponses.tsx";
 import { Context } from "./Context.tsx";
 
+/**
+ * Whether a `chat.respond` result leaves the request closed: `ok` with no batch
+ * question still `remaining`, or `expired` (the box was no longer waiting on
+ * it). Read structurally, since the bridge types the result loosely.
+ */
+function requestDone(result: object): boolean {
+  if (!("status" in result)) return false;
+  if (result.status === "expired") return true;
+  const remaining = "remaining" in result ? result.remaining : undefined;
+  return result.status === "ok" && !(Array.isArray(remaining) && remaining.length > 0);
+}
+
 export function BotWorkspace({
   withContext = true,
   roomPollMs,
@@ -250,6 +262,13 @@ export function BotWorkspace({
                 session,
                 ...decision,
               });
+              // An answer or a skip from the card: the gateway sends no close
+              // after either, so the turn would otherwise stay parked on the
+              // request and its no-frame timer off. The card keeps its settled
+              // summary. The composer's skip comes through here too and then
+              // settles the card itself, which releases again harmlessly; a
+              // batch answered in part (`remaining`) is still open.
+              if (requestDone(result)) chat.releaseRequest(decision.request_id, selection);
               void chat.reloadHistory();
               return result;
             }}

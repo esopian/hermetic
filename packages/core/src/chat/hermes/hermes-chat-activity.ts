@@ -217,7 +217,60 @@ export function hermesActivity(type: string, payload: Record<string, unknown>): 
   }
 }
 
-/** Server requests remain visible even though responding from this head is not implemented. */
+const RECOMMENDED = "(Recommended)";
+
+/**
+ * The choices a clarify can actually offer, filtered the way Hermes Desktop
+ * does (`store/clarify.ts` `normalizeChoices`): non-blank, single-line, and at
+ * most 200 characters before the backend's " (Recommended)" suffix. Anything
+ * else would be a dead button; an empty result means a free-text answer.
+ */
+function clarifyChoices(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((choice): choice is string => {
+    if (typeof choice !== "string" || !choice.trim() || choice.includes("\n")) return false;
+    const bare = choice.endsWith(RECOMMENDED) ? choice.slice(0, -RECOMMENDED.length).trim() : choice;
+    return bare.length <= 200;
+  });
+}
+
+type QuestionEntry = NonNullable<Extract<ChatBlock, { kind: "question" }>["questions"]>[number];
+
+/**
+ * A batch clarify's questions in the gateway's order. An entry without a
+ * string `qid` or a non-blank question cannot be answered and is dropped, and
+ * `multi_select` only counts when some choice survives. `answers` is present
+ * only when the request was replayed from `open_requests`, holding the locks
+ * the gateway already recorded.
+ */
+function clarifyQuestions(payload: Record<string, unknown>): QuestionEntry[] {
+  if (!Array.isArray(payload.questions)) return [];
+  const locked = record(payload.answers);
+  const entries: QuestionEntry[] = [];
+  for (const value of payload.questions) {
+    const row = record(value);
+    const qid = row && typeof row.qid === "string" && row.qid.trim() ? row.qid : null;
+    const prompt = row && typeof row.question === "string" ? row.question.trim() : "";
+    if (!row || !qid || !prompt) continue;
+    const choices = clarifyChoices(row.choices);
+    const answer = locked?.[qid];
+    entries.push({
+      id: qid,
+      prompt,
+      choices,
+      multi_select: row.multi_select === true && choices.length > 0,
+      answer: typeof answer === "string" ? answer : null,
+    });
+  }
+  return entries;
+}
+
+/**
+ * A gateway server request as one block. Approvals and clarifies become the
+ * cards `chat.respond` answers; a clarify is one block however many questions
+ * it carries, because the gateway keeps it open until every question is
+ * answered. Any other request stays visible as a notice pointing at Hermes.
+ */
 export function hermesRequest(
   method: string,
   id: string,
@@ -239,23 +292,36 @@ export function hermesRequest(
       },
     ];
   if (method === "clarify") {
-    const questions = Array.isArray(payload.questions) ? payload.questions : [payload];
-    const blocks: ChatBlock[] = [];
-    for (const value of questions) {
-      const question = record(value);
-      if (!question || !text(question.question)) continue;
-      blocks.push({
-        kind: "question",
-        prompt: String(question.question),
-        choices: Array.isArray(question.choices)
-          ? question.choices.filter((choice): choice is string => typeof choice === "string")
-          : [],
-        request_id: id,
-        expires_at,
-        payload: { ...payload, question: value },
-      });
+    if (Array.isArray(payload.questions)) {
+      const questions = clarifyQuestions(payload);
+      const first = questions[0];
+      if (first)
+        return [
+          {
+            kind: "question",
+            prompt: first.prompt,
+            choices: first.choices,
+            multi_select: first.multi_select,
+            questions,
+            request_id: id,
+            expires_at,
+            payload,
+          },
+        ];
+    } else if (typeof payload.question === "string" && payload.question.trim()) {
+      const choices = clarifyChoices(payload.choices);
+      return [
+        {
+          kind: "question",
+          prompt: payload.question,
+          choices,
+          ...(payload.multi_select === true && choices.length ? { multi_select: true } : {}),
+          request_id: id,
+          expires_at,
+          payload,
+        },
+      ];
     }
-    if (blocks.length) return blocks;
   }
   return [
     {

@@ -475,6 +475,31 @@ describe("chat-redact · blocks", () => {
     });
     expect(
       redactBlock({
+        kind: "question",
+        prompt: "Which?",
+        choices: [],
+        questions: [
+          { id: "q1", prompt: secret, choices: [secret, "no"], multi_select: false, answer: secret },
+          { id: "q2", prompt: "Why?", choices: [], multi_select: false, answer: null },
+        ],
+      }),
+    ).toEqual({
+      kind: "question",
+      prompt: "Which?",
+      choices: [],
+      questions: [
+        {
+          id: "q1",
+          prompt: REDACTED,
+          choices: [REDACTED, "no"],
+          multi_select: false,
+          answer: REDACTED,
+        },
+        { id: "q2", prompt: "Why?", choices: [], multi_select: false, answer: null },
+      ],
+    });
+    expect(
+      redactBlock({
         kind: "sources",
         items: [{ title: "t", href: `https://x.test/?token=${secret}`, snippet: secret }],
       }),

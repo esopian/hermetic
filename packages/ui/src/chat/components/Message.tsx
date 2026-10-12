@@ -20,6 +20,7 @@ import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { ActivityGroup, isActivity, isStatusBlock, needsAttention } from "./Activity.tsx";
 import { RedactedText } from "./RedactedText.tsx";
+import { closedRequests } from "./BotResponses.tsx";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { failureCopy } from "../chat-logic.ts";
@@ -180,23 +181,14 @@ export function Message({
         );
   const broken = !!message.error || !!message.incomplete;
   if (message.blocks.length === 0 && !broken && !message.usage) return null;
-  const closedRequests = new Set(
-    message.blocks.flatMap((block) =>
-      block.kind === "activity" &&
-      block.category === "notice" &&
-      block.state === "done" &&
-      block.request_id
-        ? [block.request_id]
-        : [],
-    ),
-  );
+  const closed = closedRequests(message.blocks);
   const blocks = message.blocks.filter(
     (block) =>
       (block.kind !== "text" || block.markdown.trim().length > 0) &&
       !(
         (block.kind === "approval" || block.kind === "question") &&
         block.request_id &&
-        closedRequests.has(block.request_id)
+        closed.has(block.request_id)
       ),
   );
   // An intentional-silence marker (`chat-silence.ts`) is never drawn as prose:
@@ -233,7 +225,11 @@ export function Message({
       </article>
     );
   }
-  const waiting = blocks.some((block) => block.kind === "approval" || block.kind === "question");
+  // Only an open request waits on the reader. Closed ones were filtered out
+  // above; a question with no `request_id` is one a history read settled.
+  const waiting = blocks.some(
+    (block) => (block.kind === "approval" || block.kind === "question") && !!block.request_id,
+  );
   // One turn's work is one group. Only something addressed to the reader —
   // prose, a question, an approval, a card — closes the run; a notice *about*
   // the run does not, so the tool call after it rejoins the group rather than

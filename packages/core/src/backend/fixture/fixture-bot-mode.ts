@@ -593,8 +593,13 @@ export function withFixtureBotMode(
       if (c?.kind === "canonical") canonical.delete(key(box, bot));
       return { instance: box.instance, bot, session, archived: true };
     },
-    async respond() {
-      return { status: "ok" };
+    /**
+     * Approvals stay acknowledged and nothing more; a question goes to the base
+     * client, which owns the clarify requests its turns are parked on.
+     */
+    async respond(box, input, respondOpts) {
+      if (input.kind === "approval" || !base.respond) return { status: "ok" };
+      return base.respond(box, input, respondOpts);
     },
   };
 }

@@ -345,10 +345,31 @@ const ApprovalBlock = z.object({
   payload: z.unknown().optional(),
 });
 
+/**
+ * One question of a batch clarify, as the gateway sends it: `id` is the
+ * gateway's `qid` (the key an answer is locked under), `answer` is the lock
+ * already recorded for it when the request was replayed from `open_requests`.
+ */
+const QuestionEntry = z.object({
+  id: z.string().min(1),
+  prompt: z.string(),
+  choices: z.array(z.string()),
+  multi_select: z.boolean(),
+  answer: z.string().nullable(),
+});
+
+/**
+ * A clarify request is one block however many questions it carries. A batch
+ * lists every question in `questions` (in the gateway's order) and mirrors the
+ * first one into `prompt`/`choices` so a renderer that predates batches still
+ * shows something; a single question leaves `questions` absent.
+ */
 const QuestionBlock = z.object({
   kind: z.literal("question"),
   prompt: z.string(),
   choices: z.array(z.string()),
+  multi_select: z.boolean().optional(),
+  questions: z.array(QuestionEntry).optional(),
   request_id: z.string().nullish(),
   expires_at: Iso.nullish(),
   payload: z.unknown().optional(),

@@ -167,6 +167,62 @@ describe("turn grouping", () => {
     expect(question).toBeLessThan(last);
   });
 
+  test("a clarify settled on its tool row rides the run instead of splitting the turn", () => {
+    // `settledClarify()` in core appends an answered question, with no
+    // `request_id`, to the `role: "tool"` row of a completed clarify call.
+    const settled: ChatBlockView = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      multi_select: false,
+      questions: [
+        { id: "q0", prompt: "Which box?", choices: ["one", "two"], multi_select: false, answer: "two" },
+      ],
+      request_id: null,
+    } as ChatBlockView;
+    const user = {
+      id: "stored:0",
+      session: "s",
+      role: "user",
+      at: AT,
+      blocks: [prose("Go")],
+    } as ChatMessageView;
+    const clarifyRow = { ...toolRow(2), blocks: [toolBlock(2), settled] } as ChatMessageView;
+    const rows = turnRows(
+      [
+        user,
+        botRow("stored:1", [prose("Let me ask.")]),
+        clarifyRow,
+        botRow("stored:3", [prose("Done")]),
+      ],
+      NOW,
+    );
+    expect(rows.map((row) => row.ids)).toEqual([["stored:0"], ["stored:1"], ["stored:2", "stored:3"]]);
+    // A tool row carrying an *open* question is still a hard break.
+    const open = {
+      ...clarifyRow,
+      blocks: [toolBlock(2), { ...settled, request_id: "r1" }],
+    } as ChatMessageView;
+    expect(turnRows([toolRow(1), open, botRow("stored:3", [prose("Done")])], NOW)).toHaveLength(3);
+  });
+
+  test("only an open request marks a streaming turn as waiting", () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+    } as ChatBlockView;
+    const meta = (request_id: string | null) => {
+      const live = botRow("live-1", [toolBlock(1), { ...question, request_id } as ChatBlockView]);
+      const { container } = thread([], live, "streaming");
+      const text = container.querySelector(".ch-msg-meta")?.textContent ?? "";
+      cleanup();
+      return text;
+    };
+    expect(meta("r1")).toContain("waiting");
+    expect(meta(null)).not.toContain("waiting");
+  });
+
   test("a broken row ends the run and stays its own message", () => {
     const { container } = thread([
       toolRow(1),

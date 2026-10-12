@@ -9,10 +9,10 @@ import { RequestActions } from "../BotResponses.tsx";
  * screen, and it does not obey the collapse rule because there is no verdict
  * yet: nothing has happened, which is the problem.
  *
- * The buttons are drawn and do nothing yet. Answering an approval is
- * `chat.respond`, which is Phase 10 and waits on a live re-probe of upstream's
- * framing (§8.2) — so this renders the decision and states where it is made,
- * rather than offering a control that would silently fail.
+ * Answering it is `chat.respond`, through `RequestActions`. Without a way to
+ * respond from here (no provider, or a request with no id) the card states
+ * where the decision is made rather than offering a control that would
+ * silently fail.
  */
 import { RedactedText } from "../RedactedText.tsx";
 import type { ChatBlockOf } from "../../../api/index.ts";

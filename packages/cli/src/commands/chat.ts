@@ -251,8 +251,19 @@ export function blockLines(block: ChatBlock): string[] {
     case "approval":
       return [`[approval] ${block.tool}: ${block.summary}`];
     case "question":
+      // A batch is one request: every question, numbered, with any answer the
+      // gateway has already locked printed under it.
+      if (block.questions)
+        return [
+          `[question] ${block.questions.length} questions`,
+          ...block.questions.flatMap((q, n) => [
+            `  ${n + 1}. ${q.prompt}${q.multi_select ? " (choose any)" : ""}`,
+            ...q.choices.map((choice) => `     - ${choice}`),
+            ...(q.answer === null ? [] : [`     -> answered: ${q.answer}`]),
+          ]),
+        ];
       return [
-        `[question] ${block.prompt}`,
+        `[question] ${block.prompt}${block.multi_select ? " (choose any)" : ""}`,
         ...block.choices.map((choice, i) => `  ${i + 1}. ${choice}`),
       ];
     case "sources":

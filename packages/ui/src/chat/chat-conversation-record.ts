@@ -380,6 +380,18 @@ export interface Conversation {
   segments: string[];
   /** When the live message's current part began: the turn's start, or the last steer. */
   segmentAt: string | null;
+  /**
+   * Server requests (approval or clarify) the streaming turn is parked on, by
+   * request id. While any is open the turn's no-frame timer stays off: the box
+   * is silent because it waits on the operator, not because the pipe died.
+   * Emptied at every turn boundary.
+   */
+  openRequests: Set<string>;
+  /**
+   * Re-run the streaming turn's no-frame timer, for a request settled outside
+   * the frame stream. `null` when no turn of this browser's is streaming.
+   */
+  rearm: (() => void) | null;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -419,5 +431,7 @@ export function fresh(target: ChatSelection): Conversation {
     turnSeed: null,
     segments: [],
     segmentAt: null,
+    openRequests: new Set(),
+    rearm: null,
   };
 }

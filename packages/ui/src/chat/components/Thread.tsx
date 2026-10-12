@@ -549,6 +549,13 @@ export function Thread({
     active: notify !== null,
   });
 
+  const originText =
+    destination.state === "known"
+      ? (destination.detail ?? destination.origin)
+      : destination.state === "pending"
+        ? "reading…"
+        : "unknown";
+
   return (
     <section className="ch-thread">
       <div className="ch-thead">
@@ -571,9 +578,13 @@ export function Thread({
                 onSave={onRename}
               />
             ) : (
-              <RedactedText text={botLabel(instance, bot, botTitle)} />
+              <span className="ch-thead-label" title={botLabel(instance, bot, botTitle)}>
+                <RedactedText text={botLabel(instance, bot, botTitle)} />
+              </span>
             )}
-            {bot !== "default" ? <span className="mono">{`@ ${instance}`}</span> : null}
+            {bot !== "default" ? (
+              <span className="mono" title={`@ ${instance}`}>{`@ ${instance}`}</span>
+            ) : null}
             {isDefault ? <span className="ch-default">default bot</span> : null}
           </div>
           <div className="ch-thead-sub">
@@ -585,20 +596,20 @@ export function Thread({
             */}
             {knownOrigin ? (
               <>
-                <span className={`ch-origin ${originClass(destination)}`}>
+                <span className={`ch-origin ${originClass(destination)}`} title={originText}>
                   <i />
-                  {destination.state === "known"
-                    ? (destination.detail ?? destination.origin)
-                    : destination.state === "pending"
-                      ? "reading…"
-                      : "unknown"}
+                  {originText}
                 </span>
                 <span>·</span>
               </>
             ) : null}
-            <span>{session?.title ?? "canonical Bot Chat"}</span>
+            <span className="ch-thead-fit" title={session?.title ?? "canonical Bot Chat"}>
+              {session?.title ?? "canonical Bot Chat"}
+            </span>
             <span>·</span>
-            <span className="mono">{agent?.tailscale_dns_name ?? instance}</span>
+            <span className="mono ch-thead-fit" title={agent?.tailscale_dns_name ?? instance}>
+              {agent?.tailscale_dns_name ?? instance}
+            </span>
           </div>
         </div>
         <div className="ch-thead-actions">

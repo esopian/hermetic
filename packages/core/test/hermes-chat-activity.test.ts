@@ -86,16 +86,54 @@ describe("pinned Hermes activity", () => {
       tool: "terminal",
       summary: "run",
     });
-    const questions = hermesRequest("clarify", "srv-2", {
+    const params = {
+      session_id: "runtime",
       questions: [
-        { qid: "a", question: "Which region?", choices: ["west", "east"] },
-        { qid: "b", question: "Why?" },
+        {
+          qid: "a",
+          question: "Which region?",
+          choices: ["west (Recommended)", "east", "two\nlines", "x".repeat(201), "  "],
+          multi_select: true,
+        },
+        { question: "No qid, so it cannot be answered" },
+        { qid: "c", question: "   " },
+        { qid: "b", question: " Why? ", choices: ["\n"], multi_select: true },
       ],
+      answers: { b: "Latency", a: 7 },
+    };
+    const batch = hermesRequest("clarify", "srv-2", params);
+    // One request is one block: the gateway keeps it open until every
+    // question is locked, so a card per question would each claim "sent".
+    expect(batch).toHaveLength(1);
+    expect(ChatBlock.parse(batch[0])).toEqual({
+      kind: "question",
+      request_id: "srv-2",
+      prompt: "Which region?",
+      choices: ["west (Recommended)", "east"],
+      multi_select: true,
+      questions: [
+        {
+          id: "a",
+          prompt: "Which region?",
+          choices: ["west (Recommended)", "east"],
+          multi_select: true,
+          answer: null,
+        },
+        { id: "b", prompt: "Why?", choices: [], multi_select: false, answer: "Latency" },
+      ],
+      expires_at: null,
+      payload: params,
     });
-    expect(questions.map((block) => ChatBlock.parse(block))).toMatchObject([
-      { kind: "question", request_id: "srv-2", prompt: "Which region?", choices: ["west", "east"] },
-      { kind: "question", request_id: "srv-2", prompt: "Why?", choices: [] },
-    ]);
+    // A 200-character choice survives once its " (Recommended)" label is discounted.
+    const long = `${"y".repeat(200)} (Recommended)`;
+    expect(
+      hermesRequest("clarify", "srv-4", { question: "Pick", choices: [long, "", "ok"] })[0],
+    ).toMatchObject({ kind: "question", prompt: "Pick", choices: [long, "ok"] });
+    expect(hermesRequest("clarify", "srv-4", { question: "Pick" })[0]).not.toHaveProperty("questions");
+    // A batch with nothing answerable is not a question card at all.
+    expect(hermesRequest("clarify", "srv-5", { questions: [{ question: "no qid" }] })[0]).toMatchObject(
+      { kind: "activity", title: "Hermes needs your attention" },
+    );
     expect(hermesRequest("vault.unlock_prompt", "srv-3", { backend: "vault" })[0]).toMatchObject({
       kind: "activity",
       state: "warning",

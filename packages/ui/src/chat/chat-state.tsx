@@ -320,6 +320,28 @@ export interface Chat {
   resumeObservation: () => Promise<void>;
   send: (text: string) => void;
   abort: () => Promise<void>;
+  /**
+   * Close a server request's card: a finished notice for `request_id` folded
+   * into the message that holds the card, as a `request.cancel` would be. The
+   * composer calls it once the box has acknowledged a declined clarify, because
+   * the gateway sends no close after an ordinary answer. `target` is the
+   * conversation the decline was made in, when the selection may have moved
+   * since. See `chat-conversations.ts`.
+   */
+  settleRequest: (request_id: string, outcome: "skipped" | "answered", target?: ChatSelection) => void;
+  /**
+   * Stop counting `request_id` as one the turn is parked on, without closing
+   * its card: the operator answered it from the card, which stays as its
+   * settled summary. Re-arms the no-frame timer; `openRequest` no longer names
+   * it. See `chat-conversations.ts`.
+   */
+  releaseRequest: (request_id: string, target?: ChatSelection) => void;
+  /**
+   * The clarify the selected conversation is waiting on, by request id, or
+   * `null` — across the live message and the parts of the reply a steer closed
+   * off, the same scope `settleRequest` closes in. Read at call time.
+   */
+  openRequest: () => string | null;
 
   /**
    * What the operator typed while this conversation's turn was in flight,
@@ -433,20 +455,18 @@ function toolKey(block: ChatBlockView): string | null {
  * identical approval card, and the operator is asked the same question twice
  * with no way to tell which one is live.
  *
- * `request_id` is the whole key for an approval: one request, one card. A
- * clarify is a *batch* — `hermesRequest` in `hermes-chat-activity.ts` emits one
- * `question` block per entry in `payload.questions`, all of them under the same
- * request id — so the id alone would collapse a three-question batch into one
- * card. The prompt is what distinguishes them, and it is stable across a
- * replay because it is the question's own text. Two questions of one batch
- * that ask the same words in the same request do collapse; that is a batch
- * asking the same thing twice, and one card for it is not the wrong answer.
+ * `request_id` is the whole key, for an approval and a clarify alike: one
+ * request, one card. A clarify *batch* is one `question` block listing every
+ * question in `questions`, and the gateway holds the turn until all of them
+ * are answered — so they are answered together, on one card. Keying a batch
+ * per question would draw a card per question that each looked answered on
+ * its own while the turn still waited for the rest.
  */
 function requestKey(block: ChatBlockView): string | null {
   if (block.kind !== "approval" && block.kind !== "question") return null;
   const id = block.request_id;
   if (typeof id !== "string" || id.length === 0) return null;
-  return block.kind === "approval" ? `approval:${id}` : `question:${id}:${block.prompt}`;
+  return `${block.kind}:${id}`;
 }
 
 /** The identity a block replaces on, or `null` for one that only ever appends. */
@@ -904,6 +924,9 @@ export function ChatProvider({
     resumeObservation,
     send,
     steer,
+    settleRequest,
+    releaseRequest,
+    openRequest,
     abort,
     reloadHistory,
     reloadTranscript,
@@ -1205,6 +1228,9 @@ export function ChatProvider({
       resumeObservation,
       send: sendMessage,
       abort: stopTurn,
+      settleRequest,
+      releaseRequest,
+      openRequest,
       queued,
       queueMessage,
       unqueue,
@@ -1252,6 +1278,9 @@ export function ChatProvider({
       resumeObservation,
       sendMessage,
       stopTurn,
+      settleRequest,
+      releaseRequest,
+      openRequest,
       queued,
       queueMessage,
       unqueue,
