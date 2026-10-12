@@ -3,7 +3,7 @@ name: create-pr
 description: Create a GitHub pull request for the current branch, with a body filled from .github/pull_request_template.md as a review guide. ALWAYS use this skill whenever a pull request is to be opened in this repo, never a bare `gh pr create`. Triggers include "open a PR", "create a PR", "make a PR", "raise/submit/send a PR", "put up a PR", "push and PR", "PR this", "ship it" or "/create-pr", a plan or workflow step that ends in opening a PR, and refreshing the body of this branch's existing PR.
 disable-model-invocation: false
 allowed-tools: Bash(git *), Bash(gh pr *), Bash(gh auth *), Bash(bun run check*), Bash(bun test *), Bash(mktemp*), Bash(rm *), Read, Glob, Grep, Write
-argument-hint: [optional PR title or issue number] [--base <branch>]
+argument-hint: "[optional PR title or issue number] [--base <branch>]"
 ---
 
 # Create Pull Request
