@@ -117,6 +117,16 @@ interface Row {
   seen: number;
   /** A `complete` arrived: later events are stale and ignored. */
   terminal: boolean;
+  /**
+   * The session's latest event `seq` when a roster snapshot last replaced
+   * this row: an event at or below it is older than the snapshot and changes
+   * nothing. Zero when no snapshot did, or the gateway named no `seq`.
+   */
+  watermark: number;
+  /** The snapshot's `tool_count`: a tool event counting fewer is older than it. */
+  floor: number;
+  /** The highest event `seq` applied to this row; zero when none named one. */
+  lastSeq: number;
 }
 
 export interface SubagentLedgerOptions {
@@ -124,8 +134,27 @@ export interface SubagentLedgerOptions {
   now?: () => string;
 }
 
+/**
+ * How many applied event sequence numbers a ledger remembers. A session's
+ * `seq` is upstream's per-session counter; the same event reaches a ledger
+ * twice when a turn socket and an observation socket both carry it, and once
+ * more on a reconnect replay.
+ */
+const SEEN_SEQ_MAX = 1024;
+
+/**
+ * Finished children a ledger keeps. A ledger lives as long as its session,
+ * which may delegate for days; every child still running is kept whatever
+ * this says, and the oldest finished ones go first.
+ */
+export const SUBAGENT_TERMINAL_MAX = 64;
+
 export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
   const rows = new Map<string, Row>();
+  /** Sequence numbers already applied, oldest first (a `Set` keeps insertion order). */
+  const seen = new Set<number>();
+  /** Finished children, oldest first: what is dropped past `SUBAGENT_TERMINAL_MAX`. */
+  const finished: string[] = [];
 
   /** A defensive copy: an emitted block never changes under its holder. */
   function snapshot(block: SubagentBlock): SubagentBlock {
@@ -146,7 +175,7 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
       origin: "live",
     };
     if (method === "subagent.start" && opts.now) block.started_at = opts.now();
-    const row: Row = { block, seen: 0, terminal: false };
+    const row: Row = { block, seen: 0, terminal: false, watermark: 0, floor: 0, lastSeq: 0 };
     rows.set(id, row);
     return row;
   }
@@ -184,17 +213,44 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
    * it, or null: not a subagent event, a child this ledger never saw spawn or
    * start (only those two create a row), or a row already terminal.
    */
-  function apply(method: string, params: Record<string, unknown>): SubagentBlock | null {
+  function apply(
+    method: string,
+    params: Record<string, unknown>,
+    seq?: number | null,
+  ): SubagentBlock | null {
     if (!EVENTS.has(method)) return null;
     const id = identity(params);
+    // An event this ledger already applied — the same frame on a second
+    // socket, or a replay — changes nothing, but its carrier still gets the
+    // child's whole current block, so either stream can render it.
+    if (typeof seq === "number" && seq > 0) {
+      if (seen.has(seq)) {
+        const known = rows.get(id);
+        return known ? snapshot(known.block) : null;
+      }
+      seen.add(seq);
+      if (seen.size > SEEN_SEQ_MAX) {
+        const oldest = seen.values().next().value;
+        if (oldest !== undefined) seen.delete(oldest);
+      }
+    }
     let row = rows.get(id);
     if (!row) {
       if (method !== "subagent.spawn_requested" && method !== "subagent.start") return null;
       row = create(params, id, method);
     } else if (row.terminal) {
       return null;
+    } else if (typeof seq === "number" && seq > 0 && seq <= row.watermark) {
+      // Older than the roster snapshot that already replaced this row.
+      return snapshot(row.block);
     }
+    if (typeof seq === "number" && seq > row.lastSeq) row.lastSeq = seq;
     const block = row.block;
+    const wireCount = nonNegativeInt(params.tool_count);
+    // A tool event counting fewer calls than the snapshot did is older than it
+    // (a gateway that names no `seq` leaves only this to go by).
+    if (method === "subagent.tool" && wireCount !== null && wireCount < row.floor)
+      return snapshot(block);
     refresh(block, params);
     switch (method) {
       case "subagent.spawn_requested":
@@ -229,6 +285,11 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
       }
       case "subagent.complete": {
         row.terminal = true;
+        finished.push(id);
+        while (finished.length > SUBAGENT_TERMINAL_MAX) {
+          const oldest = finished.shift();
+          if (oldest !== undefined) rows.delete(oldest);
+        }
         const raw = str(params.status);
         // Desktop folds `cancelled` into an interruption; anything else this
         // build does not know ended the child in a way nobody can name.
@@ -259,8 +320,9 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
         break;
       }
     }
-    const wireCount = nonNegativeInt(params.tool_count);
-    if (wireCount !== null) block.tool_count = wireCount;
+    // Monotonic: no event — late, replayed, or racing a snapshot — moves the
+    // count backwards.
+    if (wireCount !== null) block.tool_count = Math.max(block.tool_count ?? 0, wireCount);
     else if (row.seen > 0) block.tool_count = Math.max(block.tool_count ?? 0, row.seen);
     block.verdict = subagentVerdict(block.status);
     return snapshot(block);
@@ -286,6 +348,94 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
     return changed;
   }
 
+  /**
+   * Reconcile against the gateway's live roster after a reconnect
+   * (`subagent.list`: active children only, `{subagent_id, status,
+   * tool_count, last_tool, …}`), returning every row it changed.
+   *
+   * A non-terminal row on the roster becomes `origin: "replay"` with the
+   * roster's live status, the larger of the two tool counts (a snapshot older
+   * than the events already applied must not move a count backwards), and the
+   * roster's last tool when the row does not already end with it. A row off
+   * the roster goes through `markUnobserved`. Terminal rows are never touched,
+   * so a `complete` applied before the snapshot arrived stands.
+   *
+   * `watermark` is the session's latest event `seq` taken just before the
+   * roster was read: an event at or below it that arrives afterwards (one
+   * buffered on another socket while the snapshot was in flight) is older
+   * than the snapshot and leaves the replayed row alone.
+   */
+  function replay(roster: readonly unknown[], watermark?: number | null): SubagentBlock[] {
+    const listed = new Map<string, Record<string, unknown>>();
+    for (const value of roster) {
+      const entry = rec(value);
+      const id = str(entry?.subagent_id);
+      if (entry && id) listed.set(id, entry);
+    }
+    const changed: SubagentBlock[] = [];
+    for (const [id, entry] of listed) {
+      const row = rows.get(id);
+      if (!row || row.terminal) continue;
+      // An event newer than the snapshot is already applied: the snapshot has
+      // nothing to add, and its status and last tool would be a step back.
+      if (typeof watermark === "number" && row.lastSeq > watermark) continue;
+      const block = row.block;
+      block.origin = "replay";
+      const status = str(entry.status);
+      // Running never goes back to queued on a snapshot's word.
+      if (status === "running" || (status === "queued" && block.status !== "running"))
+        block.status = status;
+      else if (block.status === "unobserved") block.status = "running";
+      for (const key of ["model", "delegation_id", "parent_id"] as const) {
+        const value = str(entry[key]);
+        if (value && !block[key]) block[key] = value;
+      }
+      const count = nonNegativeInt(entry.tool_count);
+      // The roster's last tool is news only when the roster has counted more
+      // calls than this row already has: otherwise it is this row's own last
+      // tool, or an older one.
+      const last = str(entry.last_tool);
+      if (
+        last &&
+        count !== null &&
+        count > (block.tool_count ?? 0) &&
+        block.tools.at(-1)?.name !== last
+      ) {
+        row.seen += 1;
+        block.tools = [...block.tools, { name: last, preview: "" }].slice(-SUBAGENT_TOOLS_MAX);
+      }
+      if (count !== null) {
+        block.tool_count = Math.max(block.tool_count ?? 0, count);
+        row.floor = Math.max(row.floor, count);
+      }
+      if (typeof watermark === "number" && watermark > row.watermark) row.watermark = watermark;
+      const started = num(entry.started_at);
+      if (!block.started_at && started !== null && started > 0)
+        block.started_at = new Date(started * 1000).toISOString();
+      block.verdict = subagentVerdict(block.status);
+      changed.push(snapshot(block));
+    }
+    return [...changed, ...markUnobserved(listed.keys())];
+  }
+
+  /**
+   * Record the parent `delegate_task` tool block a child belongs to. Returns
+   * the whole block when that changed it, else null.
+   */
+  function link(id: string, toolId: string): SubagentBlock | null {
+    const row = rows.get(id);
+    if (!row || row.block.tool_id === toolId) return null;
+    row.block.tool_id = toolId;
+    return snapshot(row.block);
+  }
+
+  /** Whether any child is neither terminal nor already unobserved. */
+  function pending(): boolean {
+    for (const row of rows.values())
+      if (!row.terminal && row.block.status !== "unobserved") return true;
+    return false;
+  }
+
   function get(id: string): SubagentBlock | null {
     const row = rows.get(id);
     return row ? snapshot(row.block) : null;
@@ -295,7 +445,7 @@ export function createSubagentLedger(opts: SubagentLedgerOptions = {}) {
     return [...rows.values()].map((row) => snapshot(row.block));
   }
 
-  return { apply, markUnobserved, get, all };
+  return { apply, markUnobserved, replay, link, pending, get, all };
 }
 
 export type SubagentLedger = ReturnType<typeof createSubagentLedger>;

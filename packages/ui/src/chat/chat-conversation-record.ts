@@ -388,6 +388,20 @@ export interface Conversation {
    */
   openRequests: Set<string>;
   /**
+   * Requests the operator answered from the card. The gateway sends no close
+   * after an ordinary answer, so the card's block stays as it was (the card
+   * draws its own settled summary) and only this set says the request is no
+   * longer waiting on anyone. Replaced, never mutated, so a render sees it
+   * move; ids are never reused, so it is never pruned (`chat-requests.ts`).
+   */
+  released: ReadonlySet<string>;
+  /**
+   * The prompt that started each turn this browser saw fail, by the failed
+   * message's id: what its Retry sends, whatever was steered into it since.
+   * Replaced, never mutated, like `released`.
+   */
+  turnPrompts: ReadonlyMap<string, string>;
+  /**
    * Re-run the streaming turn's no-frame timer, for a request settled outside
    * the frame stream. `null` when no turn of this browser's is streaming.
    */
@@ -432,6 +446,8 @@ export function fresh(target: ChatSelection): Conversation {
     segments: [],
     segmentAt: null,
     openRequests: new Set(),
+    released: new Set(),
+    turnPrompts: new Map(),
     rearm: null,
   };
 }

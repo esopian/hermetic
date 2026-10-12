@@ -6,7 +6,11 @@
 import { describe, expect, test } from "bun:test";
 import { mapHistory } from "../src/chat/hermes/hermes-chat.ts";
 import type { BoxAddress } from "../src/chat/hermes/hermes-chat.ts";
-import { settledClarify, settledDelegation } from "../src/chat/hermes/hermes-chat-history.ts";
+import {
+  CLARIFY_TIMEOUT_RESPONSE,
+  settledClarify,
+  settledDelegation,
+} from "../src/chat/hermes/hermes-chat-history.ts";
 import { ChatBlock, ChatMessage } from "../src/schema/index.ts";
 
 const BOX: BoxAddress = {
@@ -190,9 +194,46 @@ describe("settledClarify is exported for the fixture's history", () => {
       ),
     ).toMatchObject({ kind: "question", request_id: null, questions: [{ id: "q0", answer: "Tea" }] });
   });
+
+  test("a single question nobody answered stores upstream's timeout sentinel and reads as skipped", () => {
+    expect(
+      settledClarify(
+        { question: "Drink?", choices: ["Coffee", "Tea"] },
+        {
+          question: "Drink?",
+          choices_offered: ["Coffee", "Tea"],
+          user_response: CLARIFY_TIMEOUT_RESPONSE,
+        },
+      ),
+    ).toMatchObject({ request_id: null, questions: [{ id: "q0", answer: "" }] });
+  });
 });
 
 describe("a failed turn re-read from history", () => {
+  test("an auth failure keeps the surface's provider_label", () => {
+    const [failed] = mapHistory(BOX, SESSION, {
+      messages: [
+        {
+          id: 3,
+          role: "assistant",
+          content: "",
+          error: "401",
+          error_surface: {
+            layer: "auth",
+            code: "auth",
+            retryable: false,
+            auth_kind: "oauth",
+            provider_label: "OpenAI Codex",
+          },
+        },
+      ],
+    });
+    expect(ChatMessage.parse(failed).failure?.surface).toMatchObject({
+      auth_kind: "oauth",
+      provider_label: "OpenAI Codex",
+    });
+  });
+
   test("carries its structured failure beside the error string", () => {
     const [failed, fine] = mapHistory(BOX, SESSION, {
       messages: [

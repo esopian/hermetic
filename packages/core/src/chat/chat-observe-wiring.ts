@@ -8,6 +8,8 @@ import { OBSERVE_RECONNECT_ATTEMPTS, OBSERVE_WINDOW, createChatObservation } fro
 import type { ChatObserveHint, ChatObserveOptions, ChatObserveTarget } from "./chat-observe.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
 import type { ChatDeps, ChatHistoryResult, ChatOptions } from "./chat.ts";
+import type { TranscriptMask } from "./chat-redact.ts";
+import type { SubagentBlock } from "../schema/index.ts";
 
 /** What the observation reads from the surface that built it. */
 export interface ChatObserveContext {
@@ -18,10 +20,21 @@ export interface ChatObserveContext {
   /** `chat.ts`'s `history`, so every reconcile passes the fleet guard and the listen check. */
   history: (input: unknown, opts?: ChatOptions) => Promise<ChatHistoryResult>;
   now: () => string;
+  /** The redaction door (`chat.ts`'s `mask`), for the one payload a hint carries. */
+  mask: () => TranscriptMask;
+}
+
+/**
+ * A subagent block through the door, the way a live frame carrying it goes:
+ * every text field masked with redaction on, the failure text either way.
+ */
+function maskSubagent(view: TranscriptMask, block: SubagentBlock): SubagentBlock | undefined {
+  const framed = view.frame({ type: "block", seq: 0, message: "", block });
+  return framed.type === "block" && framed.block.kind === "subagent" ? framed.block : undefined;
 }
 
 export function createChatObserveWiring(ctx: ChatObserveContext) {
-  const { deps, hermes, address, history, now } = ctx;
+  const { deps, hermes, address, history, now, mask } = ctx;
 
   /**
    * Continuous observation (§9.2), wired to the seams this module
@@ -97,7 +110,9 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
         // One hint is proof the gateway broadcasts. Whatever it did before
         // stops being evidence of anything.
         hintsBroken.delete(target.instance);
-        yield hint;
+        // The mask is taken per hint, like a read: a settings change between
+        // two child updates applies to the second.
+        yield hint.subagent ? { ...hint, subagent: maskSubagent(mask(), hint.subagent) } : hint;
       }
     } catch (error) {
       // A socket that failed before it said anything is the same evidence as

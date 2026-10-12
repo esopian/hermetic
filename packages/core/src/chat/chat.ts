@@ -302,6 +302,9 @@ export type { ChatSteerStatus };
  * What a steer did (§9.2). `redirected`, `queued` and `rejected` are the
  * gateway's answer to `session.redirect`; `idle` says no running turn was
  * found, and that nothing was sent — a steer never starts a turn of its own.
+ * A steer naming a `subagent_id` answers `queued` (the child takes it at its
+ * next tool call; not yet confirmed) or `rejected` (refused, or the child is
+ * gone or its session reset).
  */
 export interface ChatSteerResult {
   instance: string;
@@ -647,12 +650,42 @@ export function createChat(deps: ChatDeps) {
   /**
    * Steer or stop one delegated child (`subagent_id` on `chat.steer` /
    * `chat.abort`). A separate path from the turn's: it needs no running parent
-   * turn and inserts nothing into the transcript. Not wired yet — the child
-   * control path (`subagent.steer` / `subagent.interrupt` over a resumed
-   * socket, D25) replaces this refusal.
+   * turn and inserts nothing into the transcript (`subagent.steer` /
+   * `subagent.interrupt` over a resumed socket, D25,
+   * `hermes-chat-subagent-control.ts`). A child hermetic cannot reach — gone,
+   * or under a session that was reset — answers `rejected` / `aborted: false`
+   * rather than an error.
    */
-  function subagentControl(method: string): never {
-    throw new HermeticError("UNSUPPORTED", `${method} with subagent_id is not supported yet`);
+  async function abortSubagent(
+    parsed: ChatAbortInput,
+    subagentId: string,
+    opts: ChatOptions,
+  ): Promise<ChatAbortResult> {
+    const box = await address(parsed.instance);
+    if (!hermes.subagentInterrupt)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support stopping a subagent");
+    opts.signal?.throwIfAborted();
+    const aborted = await hermes.subagentInterrupt(box, parsed.bot, subagentId, {
+      signal: opts.signal,
+      ...(parsed.session !== undefined ? { session: parsed.session } : {}),
+    });
+    return { instance: parsed.instance, bot: parsed.bot, aborted };
+  }
+
+  async function steerSubagent(
+    parsed: ChatSteerInput,
+    subagentId: string,
+    opts: ChatOptions,
+  ): Promise<ChatSteerResult> {
+    const box = await address(parsed.instance);
+    if (!hermes.subagentSteer)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support steering a subagent");
+    opts.signal?.throwIfAborted();
+    const status = await hermes.subagentSteer(box, parsed.bot, subagentId, parsed.text, {
+      signal: opts.signal,
+      ...(parsed.session != null ? { session: parsed.session } : {}),
+    });
+    return { instance: parsed.instance, bot: parsed.bot, status };
   }
 
   /**
@@ -666,7 +699,7 @@ export function createChat(deps: ChatDeps) {
   async function abort(input: unknown, opts: ChatOptions = {}): Promise<ChatAbortResult> {
     const parsed = parse(ChatAbortInput, input, "chat abort");
     validateName(parsed.instance);
-    if (parsed.subagent_id !== undefined) return subagentControl("chat.abort");
+    if (parsed.subagent_id !== undefined) return abortSubagent(parsed, parsed.subagent_id, opts);
     const box = await address(parsed.instance);
     opts.signal?.throwIfAborted();
     const aborted = await hermes.abort(box, parsed.bot, {
@@ -686,7 +719,7 @@ export function createChat(deps: ChatDeps) {
   async function steer(input: unknown, opts: ChatOptions = {}): Promise<ChatSteerResult> {
     const parsed = parse(ChatSteerInput, input, "chat steer");
     validateName(parsed.instance);
-    if (parsed.subagent_id !== undefined) return subagentControl("chat.steer");
+    if (parsed.subagent_id !== undefined) return steerSubagent(parsed, parsed.subagent_id, opts);
     const box = await address(parsed.instance);
     if (!hermes.steer)
       throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support steering a turn");
@@ -698,7 +731,7 @@ export function createChat(deps: ChatDeps) {
     return { instance: parsed.instance, bot: parsed.bot, status };
   }
 
-  const observation = createChatObserveWiring({ deps, hermes, address, history, now });
+  const observation = createChatObserveWiring({ deps, hermes, address, history, now, mask });
 
   /**
    * The four reads are sealed on the way out (`redactError`); `send` is not,

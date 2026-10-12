@@ -310,6 +310,10 @@ function storedJson(value: unknown): unknown {
   }
 }
 
+/** `tools/clarify_tool.py` `TIMEOUT_RESPONSE`: what a single question stores when nobody answered. */
+export const CLARIFY_TIMEOUT_RESPONSE =
+  "The user did not provide a response within the time limit. Use your best judgement to make the choice and proceed.";
+
 /**
  * A completed `clarify` call re-read from history, as the answered card Hermes
  * Desktop draws from the same row (`clarify-tool.tsx`). The live request block
@@ -349,7 +353,7 @@ export function settledClarify(args: unknown, result: unknown): ChatBlock | null
     const reply = response.user_response;
     const answer = Array.isArray(reply)
       ? JSON.stringify(reply.map(String))
-      : typeof reply === "string"
+      : typeof reply === "string" && reply.trim() !== CLARIFY_TIMEOUT_RESPONSE
         ? reply
         : "";
     questions.push({

@@ -7,11 +7,16 @@
  * the bug. These drive the real block renderer with a recording responder.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "./dom.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "./dom.ts";
+import type { ReactNode } from "react";
 import type { ChatBlockView } from "../src/api/index.ts";
 import { Block } from "../src/chat/components/blocks/index.tsx";
 import { BotResponses } from "../src/chat/components/BotResponses.tsx";
 import type { Decision } from "../src/chat/components/BotResponses.tsx";
+import { ChatProvider, useChat } from "../src/chat/chat-state.tsx";
+import type { Chat, ChatApi } from "../src/chat/chat-state.tsx";
+import type { ClosedRequest } from "../src/chat/chat-requests.ts";
+import { ownsEscape } from "../src/lib/focus.ts";
 
 afterEach(cleanup);
 
@@ -439,5 +444,328 @@ describe("review round 1", () => {
     expect((screen.getByLabelText("Answer: When?") as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByText("turn paused")).toBeNull();
     expect(confirm().disabled).toBe(true);
+  });
+});
+
+/* ── the approval card (WI-8) ────────────────────────────────────────────── */
+
+const approval = (extra: Record<string, unknown> = {}) => ({
+  kind: "approval",
+  tool: "terminal",
+  summary: "rm -rf build/",
+  detail: "dangerous deletion",
+  pattern: "rm -rf *",
+  request_id: "a1",
+  choices: ["once", "session", "always", "deny"],
+  ...extra,
+});
+
+const buttons = () => screen.queryAllByRole("button").map((b) => b.textContent);
+
+describe("an approval", () => {
+  test("offers exactly the gateway's choices, in its order", () => {
+    const matrix: [unknown, string[]][] = [
+      [
+        ["once", "session", "always", "deny"],
+        ["Approve once", "This session", "Always allow", "Deny"],
+      ],
+      // Smart-denied, or session approval off: one-shot only.
+      [
+        ["once", "deny"],
+        ["Approve once", "Deny"],
+      ],
+      // Permanent approval off.
+      [
+        ["once", "session", "deny"],
+        ["Approve once", "This session", "Deny"],
+      ],
+      // A block stored before the field existed is the narrowest set.
+      [undefined, ["Approve once", "Deny"]],
+      // An unknown value is dropped, never drawn.
+      [
+        ["once", "all", "deny"],
+        ["Approve once", "Deny"],
+      ],
+    ];
+    for (const [choices, expected] of matrix) {
+      cleanup();
+      draw(approval({ choices }), ok);
+      expect({ choices, drawn: buttons() }).toEqual({ choices, drawn: expected });
+    }
+  });
+
+  test("each answer sends its choice and settles to what happened", async () => {
+    for (const [label, choice, outcome] of [
+      ["Approve once", "once", "Approved once"],
+      ["This session", "session", "Allowed this session"],
+      ["Deny", "deny", "Denied"],
+    ] as const) {
+      cleanup();
+      const { sent } = draw(approval(), ok);
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      await waitFor(() => expect(screen.getByRole("status").textContent).toBe(outcome));
+      expect(sent).toEqual([{ request_id: "a1", kind: "approval", choice }]);
+      // The command stays on the settled card.
+      expect(screen.getByText("rm -rf build/")).toBeDefined();
+      expect(buttons()).toEqual([]);
+    }
+  });
+
+  test("Always allow asks first, naming the pattern and the command, with focus on Cancel", async () => {
+    const { sent } = draw(approval(), ok);
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    const step = screen.getByRole("group", { name: "Always allow this command?" });
+    expect(within(step).getByText("rm -rf *")).toBeDefined();
+    expect(within(step).getByText("rm -rf build/")).toBeDefined();
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    expect(sent).toEqual([]);
+    fireEvent.click(within(step).getByRole("button", { name: "Always allow" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Always allowed"));
+    expect(sent).toEqual([{ request_id: "a1", kind: "approval", choice: "always" }]);
+  });
+
+  test("Escape in the step goes back to the buttons and goes no further", async () => {
+    const { sent } = draw(approval(), ok);
+    // A stand-in for the shell's own Escape handler (`ChatShell.tsx`): window,
+    // capture phase, ahead of the card, standing aside only for `ownsEscape`.
+    const stops: KeyboardEvent[] = [];
+    const shell = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !ownsEscape(e.target)) stops.push(e);
+    };
+    // And anything listening after the card, in the bubble phase.
+    const after: KeyboardEvent[] = [];
+    const bubble = (e: KeyboardEvent) => after.push(e);
+    window.addEventListener("keydown", shell, true);
+    window.addEventListener("keydown", bubble);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+      fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" });
+    } finally {
+      window.removeEventListener("keydown", shell, true);
+      window.removeEventListener("keydown", bubble);
+    }
+    expect(screen.queryByRole("group", { name: "Always allow this command?" })).toBeNull();
+    expect(buttons()).toEqual(["Approve once", "This session", "Always allow", "Deny"]);
+    expect(stops).toHaveLength(0);
+    expect(after).toHaveLength(0);
+    expect(sent).toEqual([]);
+    // Focus is back on the button that opened the step, not dropped on the page.
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Always allow"));
+  });
+
+  test("Cancel returns focus to Always allow; an answer leaves it on the card's outcome", async () => {
+    draw(approval(), ok);
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Always allow"));
+    const deny = screen.getByRole("button", { name: "Deny" });
+    deny.focus();
+    fireEvent.click(deny);
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Denied"));
+    expect(document.activeElement?.getAttribute("role")).toBe("status");
+  });
+
+  test("a slow answer does not take focus from wherever the operator went meanwhile", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>((done) => {
+      release = done;
+    });
+    render(
+      <>
+        <input aria-label="elsewhere" />
+        <BotResponses.Provider
+          value={async () => {
+            await gate;
+            return { status: "ok" };
+          }}
+        >
+          <Block block={approval() as unknown as ChatBlockView} now={NOW} />
+        </BotResponses.Provider>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    const elsewhere = screen.getByLabelText("elsewhere");
+    elsewhere.focus();
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Denied"));
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  test("a confirmed Always allow that fails puts focus back on Always allow", async () => {
+    render(
+      <BotResponses.Provider
+        value={async () => {
+          throw new Error("tailnet unreachable");
+        }}
+      >
+        <Block block={approval() as unknown as ChatBlockView} now={NOW} />
+      </BotResponses.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    const step = screen.getByRole("group", { name: "Always allow this command?" });
+    const confirmIt = within(step).getByRole("button", { name: "Always allow" });
+    confirmIt.focus();
+    fireEvent.click(confirmIt);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("tailnet unreachable"));
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Always allow"));
+    expect(screen.queryByRole("group", { name: "Always allow this command?" })).toBeNull();
+  });
+
+  test("a request that expired while the step was open is not answered", async () => {
+    const sent: Decision[] = [];
+    render(
+      <BotResponses.Provider
+        value={async (decision) => {
+          sent.push(decision);
+          return { status: "ok" };
+        }}
+      >
+        <Block
+          block={approval({ expires_at: new Date(Date.now() + 80).toISOString() }) as never}
+          now={Date.now()}
+        />
+      </BotResponses.Provider>,
+    );
+    // Open while the request is: the step's own check reads the clock at submit.
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    });
+    const step = screen.getByRole("group", { name: "Always allow this command?" });
+    fireEvent.click(within(step).getByRole("button", { name: "Always allow" }));
+    expect(screen.getByText("Request expired.")).toBeDefined();
+    expect(buttons()).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  test("timed out by the box, it says the command was not run and offers nothing", () => {
+    render(
+      <BotResponses.Provider value={ok}>
+        <Block
+          block={approval() as unknown as ChatBlockView}
+          now={NOW}
+          closed={{ kind: "timeout", title: "Request closed" }}
+        />
+      </BotResponses.Provider>,
+    );
+    const line = screen.getByRole("status");
+    expect(line.textContent).toBe("Approval timed out — the command was not run");
+    expect(line.className).toContain("bad");
+    expect(screen.getByText("rm -rf build/")).toBeDefined();
+    expect(buttons()).toEqual([]);
+  });
+
+  test("says how many approvals are pending when more than one is", () => {
+    const at = (pending: number) => {
+      cleanup();
+      render(
+        <BotResponses.Provider value={ok}>
+          <Block block={approval() as unknown as ChatBlockView} now={NOW} pending={pending} />
+        </BotResponses.Provider>,
+      );
+      return document.querySelector(".bm-approval-pending")?.textContent ?? null;
+    };
+    expect(at(3)).toBe("3 approvals pending");
+    expect(at(1)).toBe(null);
+  });
+});
+
+/* ── a clarify the box closed, and late answers (WI-6) ───────────────────── */
+
+const single = {
+  kind: "question",
+  request_id: "q1",
+  prompt: "Which branch?",
+  choices: ["main (Recommended)", "dev"],
+};
+
+/** A card inside a real chat store, so a late choice has a composer draft to fill. */
+function drawInChat(
+  value: Record<string, unknown>,
+  closed?: ClosedRequest,
+): { sent: Decision[]; chat: () => Chat } {
+  const sent: Decision[] = [];
+  let current!: Chat;
+  const api: ChatApi = {
+    fetchSwarms: async () => ({ swarms: [] }) as never,
+    fetchSessions: async () => ({ sessions: [] }) as never,
+    fetchHistory: async () =>
+      ({ instance: "atlas", bot: "default", session: "S", messages: [] }) as never,
+    sendTurn: () => () => {},
+    abortTurn: async () => ({ aborted: true }) as never,
+  };
+  function Harness({ children }: { children: ReactNode }) {
+    current = useChat();
+    return <>{children}</>;
+  }
+  render(
+    <ChatProvider api={api} eager={false}>
+      <BotResponses.Provider
+        value={async (decision) => {
+          sent.push(decision);
+          return { status: "ok" };
+        }}
+      >
+        <Harness>
+          <Block block={value as unknown as ChatBlockView} now={NOW} closed={closed} />
+        </Harness>
+      </BotResponses.Provider>
+    </ChatProvider>,
+  );
+  act(() => {
+    current.select("atlas", "default", null);
+  });
+  return { sent, chat: () => current };
+}
+
+describe("a clarify the box closed", () => {
+  test("timed out, it keeps the prompt under a Timed out heading, with no form", () => {
+    drawInChat(single, { kind: "timeout", title: "Request closed" });
+    expect(document.querySelector(".bm-settled-head")?.textContent).toBe("Timed out");
+    expect(screen.getByText("Which branch?")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Confirm and continue" })).toBeNull();
+    expect(screen.queryByText("turn paused")).toBeNull();
+  });
+
+  test("cancelled, it says Cancelled", () => {
+    drawInChat(single, { kind: "cancelled", title: "Request closed" });
+    expect(document.querySelector(".bm-settled-head")?.textContent).toBe("Cancelled");
+  });
+
+  test("a late choice drafts Desktop's sentence and does not call respond", async () => {
+    const { sent, chat } = drawInChat(single, { kind: "timeout", title: "Request closed" });
+    fireEvent.click(screen.getByRole("button", { name: "main (Recommended)" }));
+    await waitFor(() => expect(chat().draft).toBe('Re: "Which branch?" — my answer: main'));
+    expect(sent).toEqual([]);
+  });
+
+  test("a batch gets no late choices", () => {
+    drawInChat(batch, { kind: "timeout", title: "Request closed" });
+    expect(document.querySelector(".bm-late")).toBeNull();
+  });
+});
+
+describe("late choices on a clarify read back from history", () => {
+  const recorded = (answer: string) => ({
+    kind: "question",
+    request_id: null,
+    prompt: "Which branch?",
+    choices: ["main", "dev"],
+    questions: [
+      { id: "q0", prompt: "Which branch?", choices: ["main", "dev"], multi_select: false, answer },
+    ],
+  });
+
+  test("a skipped one offers them, and a pick only drafts", async () => {
+    const { sent, chat } = drawInChat(recorded(""));
+    expect(screen.getByText("Skipped")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "dev" }));
+    await waitFor(() => expect(chat().draft).toBe('Re: "Which branch?" — my answer: dev'));
+    expect(sent).toEqual([]);
+  });
+
+  test("an answered one does not", () => {
+    drawInChat(recorded("main"));
+    expect(document.querySelector(".bm-late")).toBeNull();
   });
 });

@@ -5,10 +5,11 @@
  *
  * **Message-level failure is one renderer, not six blocks.** Rate limited,
  * credential rejected, turn ceiling, context full, box went away, model
- * missing — six cases that differ in their words and in one
- * tone bit. They are a `ChatMessage` with `error` set and `incomplete` true, so
- * they are drawn here, from `failureCopy()`, and a seventh code gets a card with
- * the code on it rather than silence.
+ * missing — six cases that differ in their words, one tone bit and what can be
+ * done about them. They are a `ChatMessage` with `failure` (or the older
+ * `error` string) set, so they are drawn here by `FailureCard`, live and from
+ * history alike, and a seventh code gets a card with the code on it rather
+ * than silence.
  *
  * **A failed turn keeps what it had produced.** The blocks that arrived before
  * the stream stopped are rendered above the failure card, and the card says
@@ -20,10 +21,13 @@ import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { ActivityGroup, isActivity, isStatusBlock, needsAttention } from "./Activity.tsx";
 import { RedactedText } from "./RedactedText.tsx";
-import { closedRequests } from "./BotResponses.tsx";
+import { closedRequests, keepsCard, nextExpiry, openRequests } from "../chat-requests.ts";
+import type { ClosedRequest } from "../chat-requests.ts";
+import { useWakeAt } from "../use-wake-at.ts";
+import { useChatIfAvailable } from "../chat-state.tsx";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
-import { failureCopy } from "../chat-logic.ts";
+import { FailureCard, failureOf } from "./FailureCard.tsx";
 import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
@@ -32,52 +36,7 @@ import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 
-/**
- * `ChatMessage.error` is one string, and it is allowed to be either a
- * `HermeticError` code, a sentence, or — as the fixture writes it and as a box
- * plausibly would — a code with a sentence after it.
- *
- * §9.2 deliberately does not narrow the field to the `ErrorCode` enum, because
- * a box can report a code this build has never heard of. So the shape is read
- * rather than assumed: a leading SHOUTING_SNAKE token is the code and gets the
- * copy that belongs to it, whatever follows a separator is the detail, and a
- * string with no such token is a sentence and is shown as one.
- *
- * Absence with `incomplete` set is its own case: the turn stopped and nothing
- * said why, which is the dropped-stream pane.
- */
-const CODED = /^([A-Z][A-Z0-9_]{2,})(?:\s*[·:\u2014-]\s*([\s\S]*))?$/;
-
-export function splitError(error: string | null | undefined): {
-  code: string | null;
-  message: string | null;
-} {
-  if (!error) return { code: "INCOMPLETE", message: null };
-  const m = CODED.exec(error.trim());
-  if (!m) return { code: null, message: error };
-  return { code: m[1] ?? null, message: m[2]?.trim() || null };
-}
-
-/** A message-level failure, keyed off the code core or the provider reported. */
-export function FailureCard({ code, message }: { code: string | null; message: string | null }) {
-  const copy = failureCopy(code, message);
-  return (
-    <div className={`ch-card ${copy.tone}`}>
-      <div className="ch-card-head">
-        <span>{copy.head}</span>
-        <span className="right mono">{copy.right}</span>
-      </div>
-      <div className="ch-card-body">
-        <p>
-          <b>
-            <RedactedText text={copy.title} />
-          </b>{" "}
-          <RedactedText text={copy.detail} />
-        </p>
-      </div>
-    </div>
-  );
-}
+export { FailureCard, splitError } from "./FailureCard.tsx";
 
 /** The turn meter: what it cost, which an unattended fleet has to make visible. */
 function Meter({ usage }: { usage: NonNullable<ChatMessageView["usage"]> }) {
@@ -101,6 +60,20 @@ function Meter({ usage }: { usage: NonNullable<ChatMessageView["usage"]> }) {
       {usage.model ? <span className="mono">{usage.model}</span> : null}
     </div>
   );
+}
+
+/** An approval or a clarify: the cards that read expiry, against the live clock. */
+const requestCard = (block: ChatBlockView | undefined): boolean =>
+  block?.kind === "approval" || block?.kind === "question";
+
+/** How the box closed a request card's request, when it did. */
+function requestClosed(
+  block: ChatBlockView | undefined,
+  closed: ReadonlyMap<string, ClosedRequest>,
+): ClosedRequest | undefined {
+  return (block?.kind === "approval" || block?.kind === "question") && block.request_id
+    ? closed.get(block.request_id)
+    : undefined;
 }
 
 /** A text block's words; empty for any other kind. */
@@ -179,18 +152,28 @@ export function Message({
           author?.bot ?? bot,
           !author || (author.instance === instance && author.bot === bot) ? botTitle : null,
         );
-  const broken = !!message.error || !!message.incomplete;
-  if (message.blocks.length === 0 && !broken && !message.usage) return null;
+  const failure = failureOf(message);
+  const broken = !!failure || !!message.incomplete;
+  // Requests: which the box closed (and how), which the operator answered from
+  // their own card (`released`), and which are still open at this moment. The
+  // transcript clock ticks every 30 s; expiry is read against the real one, and
+  // a timer re-renders at the earliest open expiry so "waiting" ends on time.
+  const released = useChatIfAvailable()?.released;
+  const clock = Math.max(now, Date.now());
   const closed = closedRequests(message.blocks);
+  const open = openRequests(message.blocks, closed, released, clock);
+  useWakeAt(nextExpiry(open, clock));
+  if (message.blocks.length === 0 && !broken && !message.usage) return null;
   const blocks = message.blocks.filter(
     (block) =>
       (block.kind !== "text" || block.markdown.trim().length > 0) &&
       !(
         (block.kind === "approval" || block.kind === "question") &&
         block.request_id &&
-        closed.has(block.request_id)
+        !keepsCard(block, closed.get(block.request_id))
       ),
   );
+  const pending = open.filter((block) => block.kind === "approval").length;
   // An intentional-silence marker (`chat-silence.ts`) is never drawn as prose:
   // a settled one becomes a muted "stayed silent" line, and one still
   // streaming is held back behind the caret until it diverges into an answer.
@@ -225,11 +208,10 @@ export function Message({
       </article>
     );
   }
-  // Only an open request waits on the reader. Closed ones were filtered out
-  // above; a question with no `request_id` is one a history read settled.
-  const waiting = blocks.some(
-    (block) => (block.kind === "approval" || block.kind === "question") && !!block.request_id,
-  );
+  // Only an open request waits on the reader: not one closed, answered from
+  // its card or expired. A question with no `request_id` is one a history read
+  // settled.
+  const waiting = open.length > 0;
   // One turn's work is one group. Only something addressed to the reader —
   // prose, a question, an approval, a card — closes the run; a notice *about*
   // the run does not, so the tool call after it rejoins the group rather than
@@ -378,15 +360,17 @@ export function Message({
                 ) : (
                   <Block
                     block={section.blocks[0]!}
-                    now={now}
+                    now={requestCard(section.blocks[0]) ? clock : now}
                     streaming={streaming && activity === "streaming" && index === sections.length - 1}
                     mine={mine}
+                    closed={requestClosed(section.blocks[0], closed)}
+                    pending={pending}
                   />
                 )}
               </RowBoundary>
             ),
           )}
-          {broken ? <FailureCard {...splitError(message.error)} /> : null}
+          {broken ? <FailureCard failure={failure} ids={ids} at={message.at} /> : null}
           {message.usage ? <Meter usage={message.usage} /> : null}
           {fromBot ? (
             <div className="ch-dm-mark from">

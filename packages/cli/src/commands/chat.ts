@@ -673,10 +673,15 @@ export function register(program: Command): void {
         );
         const result = await ctx.hermetic.chat.abort(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);
-        else
+        else if (input.subagent_id)
+          // A child that was not found is gone or under a reset session — an
+          // outcome, not an error, and the stop of a finished child is no stop.
           await out(
-            `${botAddress(result.instance, result.bot)}: ${input.subagent_id ? `subagent ${input.subagent_id}` : "turn"} stopped\n`,
+            `${botAddress(result.instance, result.bot)}: subagent ${input.subagent_id} ${
+              result.aborted ? "stop requested" : "not found (finished, gone, or the session was reset)"
+            }\n`,
           );
+        else await out(`${botAddress(result.instance, result.bot)}: turn stopped\n`);
       }),
   );
 
@@ -687,6 +692,16 @@ export function register(program: Command): void {
     rejected: "the box did not apply the message",
     idle: "no turn running; nothing sent",
   } as const;
+
+  /**
+   * A child steer's two answers. `queued` is the gateway's word and no more:
+   * the child takes the text at its next tool call, and one that finishes
+   * first says so in its summary.
+   */
+  const SUBAGENT_STEER_TEXT: Partial<Record<keyof typeof STEER_TEXT, string>> = {
+    queued: "queued; applied at its next tool call (not yet confirmed)",
+    rejected: "not applied (refused, finished, gone, or the session was reset)",
+  };
 
   chat.addCommand(
     globals(new Cmd("steer"))
@@ -708,6 +723,12 @@ export function register(program: Command): void {
         );
         const result = await ctx.hermetic.chat.steer(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);
+        else if (input.subagent_id)
+          await out(
+            `${botAddress(result.instance, result.bot)}: subagent ${input.subagent_id} ${
+              SUBAGENT_STEER_TEXT[result.status] ?? STEER_TEXT[result.status]
+            }\n`,
+          );
         else await out(`${botAddress(result.instance, result.bot)}: ${STEER_TEXT[result.status]}\n`);
       }),
   );

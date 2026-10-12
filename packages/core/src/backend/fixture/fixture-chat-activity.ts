@@ -4,7 +4,7 @@
  * `fixtureChatClient` reads from. Split out of `fixture-chat.ts` (AGENTS.md
  * rule 5).
  */
-import type { ChatMessage } from "../../schema/index.ts";
+import type { ChatBlock, ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
 
 /* ── scripted activity, for observation ───────────────────────────────────── */
@@ -46,8 +46,19 @@ export interface FixtureChatActivity {
    * running portal passes an increasing stamp so each one is news. The default
    * stays `12:00:00`, which is after every canned message (the newest is
    * `09:32:02`) and therefore already advances the watermark once.
+   *
+   * `content` makes the row something other than a user's plain text: the bot
+   * speaking unprompted — a background delegation's results turn
+   * (`fixture-chat-subagent.ts`) — with blocks of its own. `markdown` is then
+   * only what a caller that reads text sees; the row is `content.blocks`.
    */
-  arrive(where: FixtureChatWhere, markdown: string, id?: string, at?: string): ChatMessage;
+  arrive(
+    where: FixtureChatWhere,
+    markdown: string,
+    id?: string,
+    at?: string,
+    content?: { role?: ChatMessage["role"]; blocks?: ChatBlock[] },
+  ): ChatMessage;
   /** Announce without appending: a hint for something already in the transcript. */
   hint(where: FixtureChatWhere): void;
   /** End every open hint stream for this bot, as a dashboard restart does. */
@@ -107,13 +118,13 @@ export function createFixtureChatActivity(): FixtureChatActivity {
       const ss = String(n % 60).padStart(2, "0");
       return at(`12:${mm}:${ss}`);
     },
-    arrive(where, markdown, id, when) {
+    arrive(where, markdown, id, when, content) {
       const message: ChatMessage = {
         id: id ?? `fixture-external-${++serial}`,
         session: where.session ?? "",
-        role: "user",
+        role: content?.role ?? "user",
         at: when ?? at("12:00:00"),
-        blocks: [{ kind: "text", markdown }],
+        blocks: content?.blocks ?? [{ kind: "text", markdown }],
       };
       arrivals.push({
         instance: where.instance,

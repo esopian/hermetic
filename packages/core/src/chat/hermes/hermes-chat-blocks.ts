@@ -179,6 +179,7 @@ export function errorSurface(value: unknown): ChatErrorSurface | undefined {
   const provider = str(raw.provider);
   const model = str(raw.model);
   const auth = str(raw.auth_kind);
+  const label = str(raw.provider_label);
   const resets = num(raw.resets_at);
   const message = str(raw.message);
   return {
@@ -188,6 +189,7 @@ export function errorSurface(value: unknown): ChatErrorSurface | undefined {
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
     ...(auth ? { auth_kind: auth } : {}),
+    ...(label ? { provider_label: label } : {}),
     ...(resets !== null ? { resets_at: resets } : {}),
     ...(message ? { message } : {}),
   };

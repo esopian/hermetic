@@ -274,6 +274,15 @@ describe.concurrent("the transcript", () => {
       }),
     ).toEqual(["[subagent done] Audit volumes (depth 1) — Found three"]);
     expect(blockLines({ ...sub, tools: [] })).toEqual(["[subagent running] Audit volumes"]);
+    // A watch prints a child's update as that same one line.
+    const update: ChatObserveEvent = {
+      type: "subagent",
+      instance: "atlas",
+      bot: "default",
+      session: "s1",
+      block: { ...sub, status: "unobserved", verdict: "unknown" },
+    };
+    expect(observeText(update, NOW, false)).toBe("[subagent unknown] Audit volumes — read_file\n");
   });
 
   test("a failed message prints its failure's code, message and classification", () => {
@@ -559,16 +568,22 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
     expect(result.swarms[0]?.bots.length).toBeGreaterThan(1);
   });
 
-  test("--subagent on steer and abort is validated by the same schema and reaches core", async () => {
-    for (const args of [
-      ["chat", "steer", "atlas", "look", "at", "gp3", "--subagent", "sa-1"],
-      ["chat", "abort", "atlas", "--subagent", "sa-1"],
-    ]) {
-      const { code, stderr } = await run(...args);
-      // Core's child control path is not wired yet: a clear refusal, not a turn steer.
-      expect(code).not.toBe(0);
-      expect(stderr).toContain("subagent_id is not supported yet");
-    }
+  test("--subagent on steer and abort is validated by the same schema and prints the child's answer", async () => {
+    // The fixture box this fresh process talks to is running no child sa-1
+    // (on a real box the gateway's membership check answers the same way):
+    // an outcome the operator can read, not an error, and never a turn steer.
+    const steer = await run("chat", "steer", "atlas", "look", "at", "gp3", "--subagent", "sa-1");
+    expect(steer.code).toBe(0);
+    expect(steer.stdout).toBe(
+      "default@atlas: subagent sa-1 not applied (refused, finished, gone, or the session was reset)\n",
+    );
+    const abort = await run("chat", "abort", "atlas", "--subagent", "sa-1");
+    expect(abort.code).toBe(0);
+    expect(abort.stdout).toBe(
+      "default@atlas: subagent sa-1 not found (finished, gone, or the session was reset)\n",
+    );
+    const json = await run("chat", "abort", "atlas", "--subagent", "sa-1", "--json");
+    expect(JSON.parse(json.stdout)).toEqual({ instance: "atlas", bot: "default", aborted: false });
     const empty = await run("chat", "abort", "atlas", "--subagent", "");
     expect(empty.code).not.toBe(0);
     expect(empty.stderr).toContain("subagent_id");

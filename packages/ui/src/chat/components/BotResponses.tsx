@@ -1,6 +1,7 @@
 /**
  * Answering a server request from the transcript (`chat.respond`, §9.2): the
- * approval card's four choices, and the clarify card whole.
+ * responder context and its submit lifecycle, and the clarify card whole. The
+ * approval card's choices are `ApprovalActions.tsx`.
  *
  * A clarify is one request however many questions it carries, and the gateway
  * keeps the turn parked until every one of them has an answer. So a batch is
@@ -10,8 +11,11 @@
  */
 import { createContext, useContext, useEffect, useId, useState } from "react";
 import type { ReactNode } from "react";
-import type { ChatBlockOf, ChatBlockView, ChatMessageView } from "../../api/index.ts";
+import type { ChatBlockOf } from "../../api/index.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { useChatIfAvailable } from "../chat-state.tsx";
+import type { ClosedRequest } from "../chat-requests.ts";
+import { draftInto, lateAnswer } from "../chat-recovery.ts";
 
 /** `ChatRespondInput` less the conversation, which the provider fills in. */
 export type Decision = {
@@ -33,57 +37,18 @@ export type Decision = {
 export type Respond = (decision: Decision) => Promise<unknown>;
 export const BotResponses = createContext<Respond | null>(null);
 
-const SENT = "Response sent.";
-const GONE = "Already answered or expired.";
+export const SENT = "Response sent.";
+export const GONE = "Already answered or expired.";
+
+// Where a request reads as closed or still open lives beside the store's own
+// bookkeeping; these stay importable from here, where the cards are.
+export { closedRequests, openQuestion } from "../chat-requests.ts";
 
 /**
- * The request ids a message has already closed: the box says a request is
- * over (answered elsewhere, withdrawn, expired) with a finished `notice`
- * carrying its id, and a card for it must neither draw nor be answered.
+ * One respond call's lifecycle for a card: `state` is the line it shows —
+ * `SENT`, `GONE`, or the error — and `settled` whether the request is over.
  */
-export function closedRequests(blocks: readonly ChatBlockView[]): Set<string> {
-  return new Set(
-    blocks.flatMap((block) =>
-      block.kind === "activity" &&
-      block.category === "notice" &&
-      block.state === "done" &&
-      block.request_id
-        ? [block.request_id]
-        : [],
-    ),
-  );
-}
-
-/**
- * The newest clarify in `scope` still waiting on the operator, by request id,
- * or `null`. The composer declines it before sending (`Composer.tsx`), because
- * a steer queues behind the blocked tool and would otherwise never land.
- *
- * `scope` is one message or the parts of one reply in order — the live message
- * and the parts a steer closed off (`openRequest` in `chat-conversations.ts`).
- * A close lands where it is assembled, which for a box-sent notice is the live
- * part even when the card sits in an earlier one, so the closed set is read
- * across the whole scope.
- */
-export function openQuestion(
-  scope: ChatMessageView | readonly ChatMessageView[] | null | undefined,
-  now = Date.now(),
-): string | null {
-  const parts: readonly ChatMessageView[] = !scope ? [] : "blocks" in scope ? [scope] : scope;
-  const closed = new Set(parts.flatMap((message) => [...closedRequests(message.blocks)]));
-  for (let p = parts.length - 1; p >= 0; p -= 1) {
-    const blocks = parts[p]!.blocks;
-    for (let i = blocks.length - 1; i >= 0; i -= 1) {
-      const block = blocks[i]!;
-      if (block.kind !== "question" || !block.request_id || closed.has(block.request_id)) continue;
-      if (block.expires_at && Date.parse(block.expires_at) < now) continue;
-      return block.request_id;
-    }
-  }
-  return null;
-}
-
-function useSubmit(respond: Respond | null) {
+export function useSubmit(respond: Respond | null) {
   const [state, setState] = useState(""),
     [busy, setBusy] = useState(false);
   async function submit(decision: Decision) {
@@ -106,54 +71,12 @@ function useSubmit(respond: Respond | null) {
   return { state, busy, submit, settled: state === SENT || state === GONE };
 }
 
-function Failure({ state }: { state: string }) {
+export function Failure({ state }: { state: string }) {
   return state ? (
     <p role="alert" className="bm-error">
       {state}
     </p>
   ) : null;
-}
-
-/** The approval card's choices. The clarify card is `QuestionCard`, head and all. */
-export function RequestActions({ block }: { block: ChatBlockOf<"approval"> }) {
-  const respond = useContext(BotResponses);
-  const { state, busy, submit, settled } = useSubmit(respond);
-  const expired = !!block.expires_at && Date.parse(block.expires_at) < Date.now();
-  if (!respond || !block.request_id)
-    return (
-      <p className="bm-note">Respond in Hermes. This conversation is waiting for your approval.</p>
-    );
-  const request_id = block.request_id;
-  if (settled) return <p role="status">{state}</p>;
-  return (
-    <div className="bm-request-actions">
-      {expired ? (
-        <p>Request expired.</p>
-      ) : (
-        <div className="ch-prompts">
-          {(
-            [
-              ["once", "Approve once"],
-              ["session", "This session"],
-              ["always", "Always allow"],
-              ["deny", "Deny"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              className="btn btn-secondary"
-              type="button"
-              disabled={busy}
-              key={value}
-              onClick={() => void submit({ request_id, kind: "approval", choice: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-      <Failure state={state} />
-    </div>
-  );
 }
 
 /* ── the clarify card ────────────────────────────────────────────────────── */
@@ -388,13 +311,17 @@ function Summary({
   questions,
   values,
   status,
+  heading,
 }: {
   questions: Entry[];
   values: (string | null)[] | null;
   status?: string;
+  /** Why nothing went back, when the box closed the request: "Timed out", "Cancelled". */
+  heading?: string;
 }) {
   return (
     <div className="bm-settled">
+      {heading ? <p className="bm-settled-head">{heading}</p> : null}
       {questions.map((q, i) => {
         const value = values ? (values[i] ?? null) : null;
         return (
@@ -418,6 +345,41 @@ function Summary({
 }
 
 /**
+ * A settled single question that got no answer, Hermes Desktop's way
+ * (`clarify-tool.tsx`): its choices stay offered, and picking one only drafts
+ * `Re: "<question>" — my answer: <choice>` into the composer and focuses it.
+ * Nothing is sent — the request is gone, and the operator decides whether the
+ * words still matter. Drawn only where a composer exists to take them.
+ */
+function LateChoices({ q }: { q: Entry }) {
+  const chat = useChatIfAvailable();
+  if (!chat || q.choices.length === 0) return null;
+  return (
+    <div className="bm-late">
+      <p className="bm-note">Answer anyway: a choice drafts a message, nothing is sent.</p>
+      <div className="ch-prompts">
+        {q.choices.map((choice, index) => (
+          <button
+            key={`${index}-${choice}`}
+            className="btn btn-secondary bm-late-choice"
+            type="button"
+            onClick={() => draftInto(chat.draft, chat.setDraft, lateAnswer(q.prompt, bare(choice)))}
+          >
+            <ChoiceLabel choice={choice} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The heading a box close gives the settled card. */
+const CLOSED_HEADING: Partial<Record<ClosedRequest["kind"], string>> = {
+  timeout: "Timed out",
+  cancelled: "Cancelled",
+};
+
+/**
  * The whole clarify card, head included: whether the head says "turn paused"
  * depends on the form's own state. It says so only while this card can
  * answer the request — a responder and a request id, not expired, not yet
@@ -427,10 +389,16 @@ function Summary({
 export function QuestionCard({
   block,
   now = Date.now(),
+  closed,
 }: {
   block: ChatBlockOf<"question">;
   /** The clock expiry is read against: the transcript's, so every block agrees. */
   now?: number;
+  /**
+   * How the box (or the composer's skip) closed this request, when it did
+   * (`closedRequests`). An answered close never reaches here: that card goes.
+   */
+  closed?: ClosedRequest;
 }) {
   const respond = useContext(BotResponses);
   const ids = useId();
@@ -458,8 +426,11 @@ export function QuestionCard({
   // from history: it was settled when it happened, so it reads as settled.
   const recorded = !request_id && questions.some((q) => q.answer !== null);
   const live = !!respond && !!request_id;
+  const shut = closed && closed.kind !== "answered" ? closed.kind : null;
   const expired = !!block.expires_at && Date.parse(block.expires_at) < now;
-  const paused = live && !expired && !settled;
+  const paused = live && !expired && !settled && !shut;
+  // Late choices are for one question that went back with no answer.
+  const single = questions.length === 1 ? questions[0]! : null;
 
   const form = (request_id: string) => {
     // A batch is answered whole, keyed by each question's `id`; a single question by its value.
@@ -598,12 +569,38 @@ export function QuestionCard({
   };
 
   let body: ReactNode;
-  if (recorded) body = <Summary questions={questions} values={questions.map((q) => q.answer)} />;
+  if (recorded)
+    body = (
+      <>
+        <Summary questions={questions} values={questions.map((q) => q.answer)} />
+        {single && skipped(single.answer) ? <LateChoices q={single} /> : null}
+      </>
+    );
   // Settled, the card collapses in place to what was asked and what went back,
   // and the reply carries on below it in the same message. An answer is shown
   // only when the box took it: for an expired request it never counted.
-  else if (live && settled)
-    body = <Summary questions={questions} values={state === SENT ? sent : null} status={state} />;
+  else if (live && settled) {
+    const values = state === SENT ? sent : null;
+    body = (
+      <>
+        <Summary questions={questions} values={values} status={state} />
+        {single && skipped(values?.[0] ?? null) ? <LateChoices q={single} /> : null}
+      </>
+    );
+  }
+  // Closed without an answer: a composer skip reads as the card's own Skip
+  // does; a timeout or a cancel names itself over the prompts.
+  else if (shut)
+    body = (
+      <>
+        <Summary
+          questions={questions}
+          values={shut === "skipped" ? questions.map(() => null) : null}
+          heading={CLOSED_HEADING[shut]}
+        />
+        {single ? <LateChoices q={single} /> : null}
+      </>
+    );
   else if (!live)
     body = (
       <>
@@ -632,7 +629,9 @@ export function QuestionCard({
   else body = form(request_id!);
 
   return (
-    <div className={recorded || settled ? "ch-card muted bm-clarify" : "ch-card acc bm-clarify"}>
+    <div
+      className={recorded || settled || shut ? "ch-card muted bm-clarify" : "ch-card acc bm-clarify"}
+    >
       <div className="ch-card-head">
         <span>question</span>
         {paused ? <span className="right">turn paused</span> : null}

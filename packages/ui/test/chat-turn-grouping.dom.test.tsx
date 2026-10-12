@@ -223,6 +223,95 @@ describe("turn grouping", () => {
     expect(meta(null)).not.toContain("waiting");
   });
 
+  test("a request that expires with no frame after it stops reading waiting on time", async () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+      expires_at: new Date(Date.now() + 150).toISOString(),
+    } as ChatBlockView;
+    const live = botRow("live-1", [toolBlock(1), question]);
+    const { container } = render(threadEl([], Date.now(), live, "streaming"));
+    const meta = () => container.querySelector(".ch-msg-meta")?.textContent ?? "";
+    expect(meta()).toContain("waiting");
+    // No frame, no prop change: the message's own timer is the only thing that moves.
+    await waitFor(() => expect(meta()).not.toContain("waiting"), { timeout: 1000 });
+  });
+
+  test("a request answered from its own card stops the turn waiting", async () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+    } as ChatBlockView;
+    const live = botRow("live-1", [toolBlock(1), question]);
+    let store!: Chat;
+    function Probe() {
+      store = useChat();
+      return threadEl([], NOW, live, "streaming");
+    }
+    const api = {
+      fetchSwarms: async () => ({ swarms: [] }),
+      fetchSessions: async () => ({ sessions: [] }),
+      fetchHistory: async () => ({ messages: [] }),
+      sendTurn: () => () => {},
+      abortTurn: async () => ({ aborted: true }),
+    } as unknown as ChatApi;
+    const { container } = render(
+      <ChatProvider api={api} eager={false}>
+        <Probe />
+      </ChatProvider>,
+    );
+    await act(async () => {
+      store.select("silent-crane", "default");
+    });
+    const meta = () => container.querySelector(".ch-msg-meta")?.textContent ?? "";
+    expect(meta()).toContain("waiting");
+    await act(async () => {
+      store.releaseRequest("r1");
+    });
+    expect(meta()).not.toContain("waiting");
+  });
+
+  test("a closed request no longer waits, and a cancelled card stays its own section", () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+    } as ChatBlockView;
+    const close = (reason: string) =>
+      ({
+        kind: "activity",
+        category: "notice",
+        key: "request:r1",
+        title: "Request closed",
+        state: "done",
+        request_id: "r1",
+        reason,
+      }) as ChatBlockView;
+    for (const [reason, heading] of [
+      ["interrupted", "Cancelled"],
+      ["timeout", "Timed out"],
+    ] as const) {
+      cleanup();
+      const live = botRow("live-1", [toolBlock(1), question, close(reason), toolBlock(2)]);
+      const { container } = thread([], live, "streaming");
+      expect(container.querySelector(".ch-msg-meta")?.textContent ?? "").not.toContain("waiting");
+      const card = container.querySelector(".bm-clarify");
+      expect(card?.querySelector(".bm-settled-head")?.textContent).toBe(heading);
+      // The card is a section of its own between the work around it.
+      expect(card?.closest(".ch-activity")).toBeNull();
+    }
+    // Answered — here or elsewhere — the card goes, as it always has.
+    cleanup();
+    const live = botRow("live-1", [toolBlock(1), question, close("resolved")]);
+    const { container } = thread([], live, "streaming");
+    expect(container.querySelector(".bm-clarify")).toBeNull();
+  });
+
   test("a broken row ends the run and stays its own message", () => {
     const { container } = thread([
       toolRow(1),

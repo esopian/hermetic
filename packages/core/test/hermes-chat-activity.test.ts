@@ -5,6 +5,7 @@ import {
   hermesRequest,
 } from "../src/chat/hermes/hermes-chat-activity.ts";
 import { ChatBlock } from "../src/schema/chat.ts";
+import { subagentVerdict } from "../src/chat/hermes/hermes-chat-subagent.ts";
 
 describe("pinned Hermes activity", () => {
   test("observed progress has stable replacement keys and failures stay visible", () => {
@@ -67,14 +68,11 @@ describe("pinned Hermes activity", () => {
     expect(hermesActivity("tool.generating", { other: "field" })).toBeNull();
   });
 
-  test("delegated timeout and interruption remain unsuccessful outcomes", () => {
-    expect(hermesActivity("subagent.complete", { status: "timeout", subagent_id: "a" })).toMatchObject({
-      state: "error",
-      title: "Delegated work timed out",
-    });
-    expect(
-      hermesActivity("subagent.complete", { status: "interrupted", subagent_id: "b" }),
-    ).toMatchObject({ state: "warning", title: "Delegated work was interrupted" });
+  test("delegated work is the ledger's, not an activity; timeout and interruption stay unsuccessful", () => {
+    for (const type of ["subagent.start", "subagent.tool", "subagent.complete"])
+      expect(hermesActivity(type, { status: "timeout", subagent_id: "a" })).toBeNull();
+    expect(subagentVerdict("timeout")).toBe("failed");
+    expect(subagentVerdict("interrupted")).toBe("stopped");
   });
 
   test("real request IDs, choices, batches and unknown request details survive", () => {

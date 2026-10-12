@@ -723,6 +723,8 @@ export const ChatErrorSurface = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   auth_kind: z.string().optional(),
+  /** The provider's display name, on an auth failure (`error_surface.py`). */
+  provider_label: z.string().optional(),
   resets_at: z.number().optional(),
   message: z.string().optional(),
 });

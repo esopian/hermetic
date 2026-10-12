@@ -22,6 +22,7 @@ import { Composer } from "../src/chat/components/Composer.tsx";
 import { BotResponses, closedRequests, openQuestion } from "../src/chat/components/BotResponses.tsx";
 import type { Decision } from "../src/chat/components/BotResponses.tsx";
 import { insertByStamp } from "../src/chat/chat-conversation-record.ts";
+import { Message } from "../src/chat/components/Message.tsx";
 
 afterEach(cleanup);
 
@@ -32,6 +33,8 @@ function setup(
     steer?: SteerStatus | "throws";
     /** A responder for server requests, as `BotWorkspace` provides one. */
     respond?: (decision: Decision) => Promise<unknown>;
+    /** Draw the transcript too, message by message, as `Thread` would. */
+    transcript?: boolean;
   } = {},
 ) {
   let current!: Chat;
@@ -93,6 +96,19 @@ function setup(
           onSend={current.send}
           onAbort={current.abort}
         />
+        {opts.transcript
+          ? [...current.messages, ...(current.live ? [current.live] : [])].map((message) => (
+              <Message
+                key={message.id}
+                row={{ message, continuation: false, divider: null }}
+                fleetId="f"
+                instance="atlas"
+                bot="default"
+                status="ready"
+                now={Date.now()}
+              />
+            ))
+          : null}
       </>
     );
   }
@@ -360,7 +376,7 @@ describe("writing while a clarify waits", () => {
     ]);
   });
 
-  test("Enter skips it and queues, so the queue is not stuck behind the question", async () => {
+  test("Enter queues without skipping; the card stays answerable", async () => {
     let handle!: ReturnType<typeof setup>;
     const r = responder(() => handle);
     handle = setup({ respond: r.respond });
@@ -372,8 +388,93 @@ describe("writing while a clarify waits", () => {
 
     h.say("later");
     await waitFor(() => expect(h.rows()).toHaveLength(1));
-    expect(r.log.map((e) => e.decision)).toEqual([{ request_id: "q1", kind: "question", skip: true }]);
+    // Give a skip every chance to have gone out: none did.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(r.log).toEqual([]);
     expect(h.steered).toEqual([]);
+    expect(h.current.openRequest()).toBe("q1");
+    const all = [...h.current.messages, ...(h.current.live ? [h.current.live] : [])];
+    expect(all.some((m) => closedRequests(m.blocks).has("q1"))).toBe(false);
+  });
+
+  test("while a question waits the composer says what Enter and ⌘Enter do to it", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    const hint = () => document.querySelector(".ch-composer-question")?.textContent ?? null;
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    expect(hint()).toBe(null);
+    await h.block(question);
+    await waitFor(() =>
+      expect(hint()).toBe(
+        "A question is waiting — Enter queues until it is answered · ⌘Enter skips it and steers",
+      ),
+    );
+    // Skipped by a steer, the question no longer waits, and the hint goes.
+    h.sayNow("go on");
+    await waitFor(() => expect(h.steered).toEqual(["go on"]));
+    await waitFor(() => expect(hint()).toBe(null));
+  });
+
+  test("the hint goes when the question expires, with no frame after it", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    const hint = () => document.querySelector(".ch-composer-question") !== null;
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block({ ...question, expires_at: new Date(Date.now() + 150).toISOString() });
+    await waitFor(() => expect(hint()).toBe(true));
+    await waitFor(() => expect(hint()).toBe(false), { timeout: 1_000 });
+  });
+
+  test("with no turn running, a send leaves a stale open question alone", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    // The turn ends with the card never closed: nothing is parked on it now.
+    // The re-read is held, so the card is still drawn as open.
+    h.holdReads();
+    await h.end();
+    await waitFor(() => expect(h.current.sending).toBe(false));
+    expect(h.current.openRequest()).toBe("q1");
+    h.say("next");
+    await waitFor(() => expect(h.sent).toEqual(["first", "next"]));
+    expect(r.log).toEqual([]);
+  });
+
+  test("after a composer skip the transcript keeps the question, settled as Skipped", async () => {
+    let handle!: ReturnType<typeof setup>;
+    const r = responder(() => handle);
+    handle = setup({ respond: r.respond, transcript: true });
+    const h = handle;
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.block(question);
+    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeDefined();
+
+    h.sayNow("never mind, use main");
+    await waitFor(() => expect(h.steered).toEqual(["never mind, use main"]));
+    // The card is still on screen, collapsed to what was asked, and says so.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Confirm and continue" })).toBe(null),
+    );
+    const card = document.querySelector(".bm-clarify");
+    expect(card?.textContent).toContain("Which branch?");
+    expect(card?.querySelector(".bm-settled-skipped")?.textContent).toBe("Skipped");
   });
 
   /** A responder held until released, as a slow tailnet would hold it. */
@@ -440,10 +541,10 @@ describe("writing while a clarify waits", () => {
     await waitFor(() => expect(h.current.sending).toBe(true));
     await h.block(question);
 
-    h.say("later");
+    h.sayNow("later");
     await waitFor(() => expect(r.calls).toBe(1));
     await r.release();
-    await waitFor(() => expect(h.rows()).toHaveLength(1));
+    await waitFor(() => expect(h.steered).toEqual(["later"]));
     // Nothing closed the card: the box never let go of the request.
     const all = [...h.current.messages, ...(h.current.live ? [h.current.live] : [])];
     expect(all.some((m) => closedRequests(m.blocks).has("q1"))).toBe(false);
@@ -495,8 +596,8 @@ describe("writing while a clarify waits", () => {
     const part = () => h.current.messages.find((m) => m.blocks.some((b) => b.kind === "question"));
     expect(part()).toBeDefined();
 
-    h.say("later");
-    await waitFor(() => expect(h.rows()).toHaveLength(1));
+    h.sayNow("later");
+    await waitFor(() => expect(h.steered).toEqual(["aside", "later"]));
     expect(r.log.map((e) => e.decision)).toEqual([{ request_id: "q1", kind: "question", skip: true }]);
     // Settled where the card is: in the closed-off part.
     expect(closedRequests(part()!.blocks).has("q1")).toBe(true);

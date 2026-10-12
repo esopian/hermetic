@@ -27,6 +27,7 @@ import { TextBlock } from "./Text.tsx";
 import { ToolBlock } from "./Tool.tsx";
 import { UnknownBlock } from "./Unknown.tsx";
 import { RedactedText } from "../RedactedText.tsx";
+import type { ClosedRequest } from "../../chat-requests.ts";
 
 const SUBAGENT_GLYPH: Record<ChatBlockOf<"subagent">["verdict"], string> = {
   running: "\u25CF",
@@ -60,11 +61,17 @@ export function Block({
    * kind is unaffected because only `text` runs markdown at all.
    */
   mine = false,
+  /** How the box closed this request card, when it did (`closedRequests`). */
+  closed,
+  /** Open approvals in the turn, for the approval card's "N pending" label. */
+  pending,
 }: {
   block: ChatBlockView;
   now: number;
   streaming?: boolean;
   mine?: boolean;
+  closed?: ClosedRequest;
+  pending?: number;
 }) {
   switch (blockKind(block)) {
     case "text":
@@ -82,9 +89,16 @@ export function Block({
     case "attachment":
       return <AttachmentBlock block={block as ChatBlockOf<"attachment">} />;
     case "approval":
-      return <ApprovalBlock block={block as ChatBlockOf<"approval">} now={now} />;
+      return (
+        <ApprovalBlock
+          block={block as ChatBlockOf<"approval">}
+          now={now}
+          closed={closed}
+          pending={pending}
+        />
+      );
     case "question":
-      return <QuestionBlock block={block as ChatBlockOf<"question">} now={now} />;
+      return <QuestionBlock block={block as ChatBlockOf<"question">} now={now} closed={closed} />;
     case "sources":
       return <SourcesBlock block={block as ChatBlockOf<"sources">} />;
     case "hermetic":

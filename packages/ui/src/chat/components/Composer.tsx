@@ -28,6 +28,8 @@ import { composerHint, destinationNotice, originClass, sendLabel } from "../chat
 import { RedactedText } from "./RedactedText.tsx";
 import { BotResponses } from "./BotResponses.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
+import { expiryOf } from "../chat-requests.ts";
+import { useWakeAt } from "../use-wake-at.ts";
 import type { Destination } from "../chat-logic.ts";
 
 /** A conversation the `unchosen` band offers as a chip. */
@@ -114,12 +116,16 @@ export function Composer({
   /**
    * Run `then` once any clarify the reply is waiting on has been skipped.
    *
-   * Hermes Desktop's rule: writing to the agent while it waits on a question
-   * declines the question first. The turn is parked inside the clarify tool,
-   * and anything sent into it — a steer, or a queued message waiting for the
-   * turn to end — would wait behind that tool for as long as the question
-   * stays open. The question may sit in the live message or in a part of the
-   * reply an earlier steer closed off (`openRequest`).
+   * Hermes Desktop's rule, by action (D4a): steering into the agent while it
+   * waits on a question declines the question first — the turn is parked
+   * inside the clarify tool, and a steer would wait behind that tool for as
+   * long as the question stays open. Queueing does not: a queued message is
+   * "after the current work", and the question is part of that work, so the
+   * text waits in the queue and the card stays answerable. So ⌘Enter and a
+   * queued row's send-now come through here; Enter while the agent works does
+   * not, and neither does a send with nothing running (no turn is parked on
+   * anything then). The question may sit in the live message
+   * or in a part of the reply an earlier steer closed off (`openRequest`).
    *
    * The card closes only once the box has acknowledged the skip: `ok` and
    * `expired` both mean the request is gone. A failed call leaves the card as
@@ -130,7 +136,9 @@ export function Composer({
    * the text goes back into the first conversation's draft instead.
    */
   const afterOpenQuestion = (then: () => void, text: string | null) => {
-    const request_id = respond && chat ? chat.openRequest() : null;
+    // Only a running turn is parked on a question; with none, a card still
+    // drawn as open is stale and is left alone.
+    const request_id = respond && chat?.sending ? chat.openRequest() : null;
     const target = chat?.selection ?? null;
     if (!respond || !chat || !request_id || !target) {
       then();
@@ -157,13 +165,21 @@ export function Composer({
   };
   const parkedQueue = chat?.queueParked ?? false;
   const canQueue = chat !== null && sending && enabled;
+  // Read each render: the open clarify moves with the frames that re-render
+  // this, and a render at its expiry takes the hint down with no frame at all.
+  const asking = canQueue && respond && chat ? chat.openRequest() : null;
+  useWakeAt(
+    asking && chat ? expiryOf([...chat.messages, ...(chat.live ? [chat.live] : [])], asking) : null,
+  );
 
   /**
    * Enter sends, or queues. §9.2 gives a conversation one active turn and says
    * sending waits — so a second message is *held*, not refused and not fired
-   * at a busy session. It leaves the input either way: an operator who pressed
-   * Enter is done with that text, and finding it still in the box is how the
-   * same message gets sent twice.
+   * at a busy session. A held message leaves any open question alone: it is
+   * the operator's to answer or to skip (⌘Enter), not the queue's (D4a). It
+   * leaves the input either way: an operator who pressed Enter is done with
+   * that text, and finding it still in the box is how the same message gets
+   * sent twice.
    */
   const submit = () => {
     const body = text.trim();
@@ -171,11 +187,13 @@ export function Composer({
     if (sending) {
       if (!chat) return;
       setText("");
-      afterOpenQuestion(() => latest.current.chat?.queueMessage(body), body);
+      chat.queueMessage(body);
       return;
     }
+    // Nothing is running, so nothing is parked on a question: a card still
+    // drawn as open is stale, and a plain send leaves it alone.
     setText("");
-    afterOpenQuestion(() => latest.current.onSend(body), body);
+    onSend(body);
   };
 
   /**
@@ -365,6 +383,12 @@ export function Composer({
       </div>
 
       {mentionHint ? <div className="bm-mention-hint">{mentionHint}</div> : null}
+      {asking !== null ? (
+        <div className="ch-composer-question" role="note">
+          A question is waiting — <span className="ch-kbd">Enter</span> queues until it is answered ·{" "}
+          <span className="ch-kbd">⌘Enter</span> skips it and steers
+        </div>
+      ) : null}
       <div className="ch-composer-foot">
         <span>
           <span className="ch-kbd">Enter</span> send · <span className="ch-kbd">⇧ Enter</span> newline ·{" "}

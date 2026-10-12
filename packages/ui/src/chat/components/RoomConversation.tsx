@@ -21,6 +21,7 @@ import { GatedNote } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { RedactedText } from "./RedactedText.tsx";
+import { APPROVAL_LABEL } from "./ApprovalActions.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../../lib/visibility.ts";
 import { useFocusOnReturn } from "../../lib/focus.ts";
@@ -195,6 +196,13 @@ export function RoomConversation({
   });
   const memberOf = (id_: string | null | undefined) =>
     room?.members.find((m) => m.member_id === id_) ?? null;
+  /** A member as the room's rows name it, for a line about that member. */
+  const roomMemberName = (id_: string | null | undefined): string => {
+    const member = memberOf(id_);
+    return member
+      ? memberName(instance, member.profile, member.display_name, roster) || "A room member"
+      : "A room member";
+  };
   const target = { instance, room: id };
   /**
    * The room's own detail is read once, and again only when this pane changes
@@ -493,28 +501,33 @@ export function RoomConversation({
               action.member_id &&
               action.request_id &&
               action.execution_generation !== undefined ? (
-                (["once", "session", "always", "deny"] as const).map((choice) => (
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    key={choice}
-                    disabled={busy}
-                    onClick={() =>
-                      void act(() =>
-                        roomsRespond({
-                          ...target,
-                          member_id: action.member_id!,
-                          request_id: action.request_id!,
-                          task_id: action.task_id,
-                          execution_generation: action.execution_generation!,
-                          choice,
-                        }),
-                      )
-                    }
-                  >
-                    {choice}
-                  </button>
-                ))
+                // Only what the room driver offered (D11): the room service
+                // refuses anything else, so a button it would refuse is never
+                // drawn. A driver that names none offers once/deny.
+                (action.choices?.length ? action.choices : (["once", "deny"] as const)).map(
+                  (choice) => (
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      key={choice}
+                      disabled={busy}
+                      onClick={() =>
+                        void act(() =>
+                          roomsRespond({
+                            ...target,
+                            member_id: action.member_id!,
+                            request_id: action.request_id!,
+                            task_id: action.task_id,
+                            execution_generation: action.execution_generation!,
+                            choice,
+                          }),
+                        )
+                      }
+                    >
+                      {APPROVAL_LABEL[choice]}
+                    </button>
+                  ),
+                )
               ) : action.kind === "retry" ? (
                 <button
                   className="btn btn-secondary"
@@ -528,8 +541,20 @@ export function RoomConversation({
                 >
                   Retry task
                 </button>
+              ) : action.kind === "approval" ? (
+                // An approval the driver sent without the ids an answer needs:
+                // nothing here could reach it, so no button pretends to.
+                <p>
+                  <RedactedText
+                    text={`${roomMemberName(action.member_id)} is waiting on an approval hermetic cannot answer from here; stop the task or wait for the box's timeout.`}
+                  />
+                </p>
               ) : (
-                <p>Respond in Hermes.</p>
+                <p>
+                  <RedactedText
+                    text={`${roomMemberName(action.member_id)} is waiting on input hermetic cannot answer from the room; stop the task or wait for the box's timeout.`}
+                  />
+                </p>
               )}
             </div>
           ))}

@@ -303,6 +303,10 @@ export interface Chat {
   turnActivities: ConversationActivity[];
   /** The last turn's failure, cleared when the next one starts. */
   turnError: { code: string; message: string } | null;
+  /** Requests answered from their own card, which no longer wait on anyone (`chat-requests.ts`). */
+  released: ReadonlySet<string>;
+  /** The prompt that started each turn seen failing here, by failed message id (`FailureCard`). */
+  turnPrompts: ReadonlyMap<string, string>;
   /**
    * This browser's stream to the portal dropped without a `done`, and the
    * transcript is being re-read. Core's own reconnect to the box (§9.2) never
@@ -318,7 +322,8 @@ export interface Chat {
   observation: Observation;
   /** Ask a terminated observation back, deliberately, because the operator did. */
   resumeObservation: () => Promise<void>;
-  send: (text: string) => void;
+  /** Start a turn; `false` when the store refused to, and nothing was sent. */
+  send: (text: string) => boolean;
   abort: () => Promise<void>;
   /**
    * Close a server request's card: a finished notice for `request_id` folded
@@ -506,17 +511,21 @@ function appendDelta(blocks: ChatBlockView[], text: string): ChatBlockView[] {
   return [...blocks, { kind: "text", markdown: text } as ChatBlockView];
 }
 
-/** Folds one frame into the message being assembled. `error` is handled by the caller. */
+/**
+ * Folds one frame into the message being assembled. An `error` sets the turn's
+ * `failure` — core's structured one, else its code and message — minting the
+ * message when the turn failed before saying anything, so the failure card is
+ * drawn live from the same shape history gives it (`FailureCard`).
+ */
 export function applyFrame(
   live: ChatMessageView | null,
   frame: ChatFrameView,
   seed: { session: string; at: string },
 ): ChatMessageView | null {
-  if (frame.type === "error") return live;
   const base: ChatMessageView =
     live ??
     ({
-      id: frame.message,
+      id: frame.type === "error" ? `failed:${seed.at}` : frame.message,
       session: seed.session,
       role: "bot",
       author: null,
@@ -526,6 +535,8 @@ export function applyFrame(
       error: null,
       incomplete: null,
     } as unknown as ChatMessageView);
+  if (frame.type === "error")
+    return { ...base, failure: frame.failure ?? { code: frame.code, message: frame.message } };
   if (frame.type === "block") return { ...base, blocks: mergeBlock(base.blocks, frame.block) };
   if (frame.type === "delta") return { ...base, blocks: appendDelta(base.blocks, frame.text) };
   return { ...base, usage: frame.usage ?? base.usage, incomplete: frame.incomplete ?? null };
@@ -920,6 +931,8 @@ export function ChatProvider({
     activity,
     turnActivities,
     turnError,
+    released,
+    turnPrompts,
     reconnecting,
     reconnectAttempt,
     observation,
@@ -1227,6 +1240,8 @@ export function ChatProvider({
       activity,
       turnActivities,
       turnError,
+      released,
+      turnPrompts,
       reconnecting,
       reconnectAttempt,
       observation,
@@ -1277,6 +1292,8 @@ export function ChatProvider({
       activity,
       turnActivities,
       turnError,
+      released,
+      turnPrompts,
       reconnecting,
       reconnectAttempt,
       observation,

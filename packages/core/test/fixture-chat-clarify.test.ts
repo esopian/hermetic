@@ -12,6 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openHermetic } from "../src/index.ts";
+import { CLARIFY_TIMEOUT_RESPONSE } from "../src/chat/hermes/hermes-chat-history.ts";
 import type { Hermetic } from "../src/hermetic.ts";
 import { ChatBlock, type ChatFrame } from "../src/schema/index.ts";
 
@@ -80,6 +81,25 @@ function lastText(frames: readonly ChatFrame[]): string {
     .flatMap((f) => (f.type === "delta" ? [f.text] : []))
     .join("");
 }
+
+/** The completed `clarify` tool's result, parsed: upstream's JSON shape. */
+function clarifyResult(frames: readonly ChatFrame[]): unknown {
+  const done = frames.flatMap((f) =>
+    f.type === "block" && f.block.kind === "tool" && f.block.status === "ok" ? [f.block] : [],
+  );
+  expect(done).toHaveLength(1);
+  return JSON.parse(String(done[0]?.result));
+}
+
+/** What a re-read of the conversation holds: the stored turn's blocks. */
+async function reread(hermetic: Hermetic) {
+  const read = await hermetic.chat.history({ instance: INSTANCE, bot: BOT });
+  const reply = read.messages.findLast((m) => m.blocks.some((b) => b.kind === "tool"));
+  return reply?.blocks ?? [];
+}
+
+const settledQuestion = (blocks: readonly ChatBlock[]) =>
+  blocks.flatMap((b) => (b.kind === "question" ? [b] : []));
 
 const questionBlocks = (frames: readonly ChatFrame[]) =>
   frames.flatMap((f) => (f.type === "block" && f.block.kind === "question" ? [f.block] : []));
@@ -150,12 +170,12 @@ describe("a batch clarify", () => {
         answer,
       });
 
-    expect(await lock("q0", "Coffee (Recommended)")).toEqual({ status: "ok", remaining: ["q1"] });
+    expect(await lock("q0", "Coffee")).toEqual({ status: "ok", remaining: ["q1"] });
     expect(await stillPending(turn.next)).toBe(true);
     expect(await lock("q1", "Night")).toEqual({ status: "ok", remaining: [] });
 
     const frames = await drain(turn);
-    expect(lastText(frames)).toBe("Got it: Coffee (Recommended); Night. Continuing.");
+    expect(lastText(frames)).toBe("Got it: Coffee; Night. Continuing.");
   });
 
   test("a partial `answers` map parks the turn, and a later lock replaces an earlier one", async () => {
@@ -171,7 +191,7 @@ describe("a batch clarify", () => {
         answers,
       });
 
-    expect(await answer({ q0: "Coffee (Recommended)" })).toEqual({ status: "ok", remaining: ["q1"] });
+    expect(await answer({ q0: "Coffee" })).toEqual({ status: "ok", remaining: ["q1"] });
     expect(await stillPending(turn.next)).toBe(true);
     expect(await answer({ q0: "Tea" })).toEqual({ status: "ok", remaining: ["q1"] });
     expect(await stillPending(turn.next)).toBe(true);
@@ -246,6 +266,195 @@ describe("a blocking clarify", () => {
     const frames = await drain(turn);
     expect(frames.at(-1)?.type).toBe("done");
     expect(lastText(frames)).toBe("Skipped. Continuing.");
+  });
+});
+
+describe("the clarify result and the stored turn", () => {
+  test("a batch's tool result is upstream's `{responses}` JSON, bare labels and a list for multi-select", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_BATCH_CLARIFY");
+    await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      // What the UI sends for a multi-select: a JSON array string.
+      answers: { q0: "Coffee (Recommended)", q1: JSON.stringify(["Morning", "Night"]) },
+    });
+    const frames = await drain(turn);
+    expect(clarifyResult(frames)).toEqual({
+      responses: [
+        {
+          question: "Pick a batch drink?",
+          choices_offered: ["Coffee", "Tea"],
+          user_response: "Coffee",
+        },
+        {
+          question: "Pick a batch time?",
+          choices_offered: ["Morning", "Night"],
+          user_response: ["Morning", "Night"],
+        },
+      ],
+    });
+    // The echo reads a JSON-array answer as a sentence, not as raw JSON.
+    expect(lastText(frames)).toBe("Got it: Coffee; Morning and Night. Continuing.");
+  });
+
+  test("a re-read shows the settled summary: the parked question is gone, request_id is null", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_BATCH_CLARIFY");
+    await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      answers: { q0: "Tea", q1: JSON.stringify(["Morning", "Night"]) },
+    });
+    await drain(turn);
+
+    const stored = settledQuestion(await reread(hermetic));
+    // One question block, not the live one and a settled one beside it.
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.request_id).toBeNull();
+    expect(stored[0]?.questions?.map((q) => [q.id, q.prompt, q.answer])).toEqual([
+      ["q0", "Pick a batch drink?", "Tea"],
+      ["q1", "Pick a batch time?", JSON.stringify(["Morning", "Night"])],
+    ]);
+    // Bare labels: what the tool offered, not the presentation label.
+    expect(stored[0]?.questions?.[0]?.choices).toEqual(["Coffee", "Tea"]);
+  });
+
+  test("a skipped question re-reads as an empty answer", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_BLOCKING_CLARIFY");
+    await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      skip: true,
+    });
+    const frames = await drain(turn);
+    expect(clarifyResult(frames)).toEqual({
+      question: "Keep this test turn running?",
+      choices_offered: ["Yes", "No"],
+      user_response: "",
+    });
+    const stored = settledQuestion(await reread(hermetic));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.request_id).toBeNull();
+    expect(stored[0]?.questions?.map((q) => q.answer)).toEqual([""]);
+  });
+
+  test("a single question's result is `{question, choices_offered, user_response}`", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_BLOCKING_CLARIFY");
+    await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      answer: "No",
+    });
+    expect(clarifyResult(await drain(turn))).toEqual({
+      question: "Keep this test turn running?",
+      choices_offered: ["Yes", "No"],
+      user_response: "No",
+    });
+  });
+});
+
+describe("a clarify's shape is `questions[]` or not, whatever its length", () => {
+  test("a one-question batch accepts `answers` and settles on it", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_ONE_BATCH_CLARIFY");
+    expect(turn.question.questions).toHaveLength(1);
+    const target = {
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question" as const,
+      request_id: String(turn.question.request_id),
+    };
+    // A batch has no bare `answer`: it names no question, as the gateway reads it.
+    const bare = await hermetic.chat.respond({ ...target, answer: "Tea" }).catch((e: unknown) => e);
+    expect(bare).toMatchObject({ code: "VALIDATION" });
+
+    expect(await hermetic.chat.respond({ ...target, answers: { q0: "Tea" } })).toEqual({
+      status: "ok",
+      remaining: [],
+    });
+    const frames = await drain(turn);
+    expect(clarifyResult(frames)).toEqual({
+      responses: [
+        { question: "Pick the only drink?", choices_offered: ["Coffee", "Tea"], user_response: "Tea" },
+      ],
+    });
+    expect(lastText(frames)).toBe("Got it: Tea. Continuing.");
+  });
+
+  test("a single question still refuses `answers`", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_BLOCKING_CLARIFY");
+    const failed = await hermetic.chat
+      .respond({
+        instance: INSTANCE,
+        bot: BOT,
+        session,
+        kind: "question",
+        request_id: String(turn.question.request_id),
+        answers: { q0: "Yes" },
+      })
+      .catch((e: unknown) => e);
+    expect(failed).toMatchObject({ code: "VALIDATION" });
+  });
+});
+
+describe("a clarify nobody answers", () => {
+  test("closes with reason `timeout`, and the turn carries on with a note of it", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_CLARIFY_TIMEOUT");
+    expect(turn.question.questions).toBeUndefined();
+    expect(turn.question.choices).toEqual(["Proceed (Recommended)", "Hold"]);
+
+    // Parked until the request's own wait runs out, not forever.
+    expect(await stillPending(turn.next)).toBe(true);
+    const frames = await drain(turn);
+
+    const closed = frames.flatMap((f) =>
+      f.type === "block" && f.block.kind === "activity" && f.block.reason ? [f.block] : [],
+    );
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      reason: "timeout",
+      request_id: turn.question.request_id,
+      detail: "Timed out",
+    });
+    expect(frames.at(-1)?.type).toBe("done");
+    expect(lastText(frames)).toContain("No answer came in time");
+    // A single question stores upstream's sentinel; only a batch says `timed_out`.
+    const result = clarifyResult(frames);
+    expect(result).toMatchObject({ user_response: CLARIFY_TIMEOUT_RESPONSE });
+    expect(result).not.toHaveProperty("timed_out");
+
+    // Nothing is waiting any more.
+    const late = await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      answer: "Proceed",
+    });
+    expect(late).toEqual({ status: "expired" });
+    // The stored turn keeps the settled summary and not the notice.
+    const blocks = await reread(hermetic);
+    expect(blocks.some((b) => b.kind === "activity")).toBe(false);
+    expect(settledQuestion(blocks)[0]?.questions?.map((q) => q.answer)).toEqual([""]);
   });
 });
 

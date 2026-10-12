@@ -1704,6 +1704,24 @@
 .ch-composer-foot .right {
   margin-left: auto;
 }
+/* While a clarify waits: what Enter and ⌘Enter do to it (D4a). */
+.ch-composer-question {
+  padding: 0 14px 6px;
+  font: 10.5px var(--mono);
+  color: var(--text-warn);
+}
+/* A failed turn's recovery actions, under its card's words. */
+.ch-failure-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ch-failure-actions p {
+  margin: 0;
+}
+.ch-failure-actions .bm-note {
+  padding: 0;
+}
 /* What a reply does beyond this window, after "over the tailnet · <name>". */
 .ch-composer-hint.muted {
   color: var(--fg2);

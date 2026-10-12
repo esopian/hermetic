@@ -13,6 +13,8 @@ import type {
   ChatTurnHandlers,
 } from "../src/api/index.ts";
 import { turnRows } from "../src/chat/chat-turns.ts";
+import { Thread } from "../src/chat/components/Thread.tsx";
+import { fakeServer } from "./fake-transport.ts";
 
 afterEach(cleanup);
 function message(id: string, text: string): ChatMessageView {
@@ -896,4 +898,374 @@ test("a question answered from its card frees the turn's timer and keeps the car
   } finally {
     restore();
   }
+});
+
+/* ── a failed turn, live and re-read (WI-12) ─────────────────────────────── */
+
+const RATE_LIMITED = {
+  code: "CHAT_TURN_FAILED",
+  message: "429 from the provider",
+  surface: { layer: "provider", code: "rate_limit", retryable: true },
+};
+
+function row(
+  id: string,
+  role: "user" | "bot",
+  text: string,
+  at: string,
+  extra: Partial<ChatMessageView> = {},
+): ChatMessageView {
+  return {
+    id,
+    session: "S",
+    role,
+    author: null,
+    at,
+    blocks: text ? [{ kind: "text", markdown: text }] : [],
+    usage: null,
+    error: null,
+    incomplete: null,
+    ...extra,
+  } as ChatMessageView;
+}
+
+/** A store and the real thread over it, with a transcript the test sets. */
+function failing(transcript: ChatMessageView[] = []) {
+  let current!: Chat;
+  const sent: string[] = [];
+  const turns: ChatTurnHandlers[] = [];
+  let reads = 0;
+  const api: ChatApi = {
+    fetchSwarms: async () => ({ swarms: [] }) as never,
+    fetchSessions: async () =>
+      ({
+        sessions: [
+          { id: "S", instance: "atlas", bot: "default", origin: "portal", origin_detail: null },
+        ],
+      }) as never,
+    fetchHistory: async () => {
+      reads += 1;
+      return { session: "S", messages: transcript } as never;
+    },
+    sendTurn: (_instance, _bot, text, handlers) => {
+      sent.push(text);
+      turns.push(handlers);
+      return () => {};
+    },
+    abortTurn: async () => ({ aborted: true }) as never,
+    steerTurn: async (instance, bot) => ({ instance, bot, status: "redirected" }) as never,
+  };
+  function Probe() {
+    current = useChat();
+    return (
+      <Thread
+        fleetId="fleet"
+        instance="atlas"
+        bot="default"
+        agent={null}
+        session={current.session}
+        destination={{ state: "known", origin: "portal", detail: null }}
+        state="ready"
+        messages={current.messages}
+        live={current.live}
+        sending={current.sending}
+        activity={current.activity}
+        historyError={null}
+        turnError={current.turnError}
+        now={Date.now()}
+        onSend={current.send}
+        onAbort={() => void current.abort()}
+      />
+    );
+  }
+  render(
+    <ChatProvider api={api} eager={false}>
+      <Probe />
+    </ChatProvider>,
+  );
+  return {
+    sent,
+    turns,
+    get reads() {
+      return reads;
+    },
+    get current() {
+      return current;
+    },
+    open: async () => {
+      await act(async () => {
+        current.select("atlas", "default", "S");
+      });
+      await waitFor(() => expect(current.historyRead).toBe(true));
+    },
+  };
+}
+
+test("a turn that fails before saying anything draws its failure card live, not the refusal band", async () => {
+  const h = failing();
+  await h.open();
+  await act(async () => {
+    h.current.send("hello");
+  });
+  await act(async () => {
+    h.turns[0]!.onFrame({
+      type: "error",
+      code: "CHAT_TURN_FAILED",
+      message: "429 from the provider",
+      failure: RATE_LIMITED,
+    } as ChatFrameView);
+    h.turns[0]!.onEnd(false, { code: "CHAT_TURN_FAILED", message: "429 from the provider" });
+  });
+  await waitFor(() => expect(screen.getByText("Rate limited.")).toBeDefined());
+  expect(h.current.live?.failure).toEqual(RATE_LIMITED);
+  expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  // The box got the message; "The message was not sent." would be a lie.
+  expect(screen.queryByText("The message was not sent.")).toBeNull();
+});
+
+test("an error frame with no structured failure falls back to its code and message", async () => {
+  const h = failing();
+  await h.open();
+  await act(async () => {
+    h.current.send("hello");
+  });
+  await act(async () => {
+    h.turns[0]!.onFrame({ type: "error", code: "CHAT_NO_SLOT", message: "busy" } as ChatFrameView);
+  });
+  expect(h.current.live?.failure).toEqual({ code: "CHAT_NO_SLOT", message: "busy" });
+  await waitFor(() =>
+    expect(screen.getByText("The gateway had no warm backend to give this turn.")).toBeDefined(),
+  );
+});
+
+test("Retry resends the failed turn's prompt, not a later one", async () => {
+  // The operator has written again since, with no reply yet: the failure is
+  // still the latest reply, and Retry is bound to its own prompt by id.
+  const h = failing([
+    row("u1", "user", "first question", "2026-10-12T10:00:00Z"),
+    row("b1", "bot", "", "2026-10-12T10:00:05Z", { failure: RATE_LIMITED, error: "CHAT_TURN_FAILED" }),
+    row("u2", "user", "a later one", "2026-10-12T10:05:00Z"),
+  ]);
+  await h.open();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeDefined());
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(h.sent).toEqual(["first question"]));
+});
+
+test("an older failure, overtaken by a later reply, no longer offers to send again", async () => {
+  const h = failing([
+    row("u1", "user", "first question", "2026-10-12T10:00:00Z"),
+    row("b1", "bot", "", "2026-10-12T10:00:05Z", {
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "too long",
+        surface: { layer: "gateway", code: "context_overflow", retryable: true },
+      },
+    }),
+    row("u2", "user", "a later one", "2026-10-12T10:05:00Z"),
+    row("b2", "bot", "fine", "2026-10-12T10:05:05Z"),
+  ]);
+  await h.open();
+  const card = await waitFor(() => {
+    const found = document.querySelector<HTMLElement>(".ch-failure");
+    expect(found).not.toBe(null);
+    return found!;
+  });
+  const names = () => Array.from(card.querySelectorAll("button"), (b) => b.textContent);
+  expect(names()).toEqual(["Copy details"]);
+});
+
+test("a turn that fails after a steer retries the prompt that started it, not the steer", async () => {
+  const h = failing();
+  await h.open();
+  await act(async () => {
+    h.current.send("do X");
+  });
+  await act(async () => {
+    h.turns[0]!.onFrame({
+      type: "delta",
+      seq: 1,
+      message: "m1",
+      text: "Starting on X. ",
+    } as ChatFrameView);
+  });
+  await act(async () => {
+    h.current.sendNow("actually, do Y first");
+  });
+  await waitFor(() =>
+    expect(h.current.messages.some((m) => m.id.startsWith("local:steer:"))).toBe(true),
+  );
+  await act(async () => {
+    h.turns[0]!.onFrame({
+      type: "error",
+      code: "CHAT_TURN_FAILED",
+      message: "boom",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "boom",
+        surface: { layer: "gateway", code: "loop_error", retryable: true },
+      },
+    } as ChatFrameView);
+    h.turns[0]!.onEnd(false, { code: "CHAT_TURN_FAILED", message: "boom" });
+  });
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(retry);
+  await waitFor(() => expect(h.sent).toEqual(["do X", "do X"]));
+});
+
+test("after the re-read turns the steer into an ordinary row, Retry still sends the turn's prompt", async () => {
+  const transcript: ChatMessageView[] = [];
+  const h = failing(transcript);
+  await h.open();
+  await act(async () => {
+    h.current.send("do X");
+  });
+  await act(async () => {
+    h.turns[0]!.onFrame({
+      type: "delta",
+      seq: 1,
+      message: "m1",
+      text: "Starting on X. ",
+    } as ChatFrameView);
+  });
+  await act(async () => {
+    h.current.sendNow("actually, do Y first");
+  });
+  await waitFor(() =>
+    expect(h.current.messages.some((m) => m.id.startsWith("local:steer:"))).toBe(true),
+  );
+  // The box's copy of the turn so far: the steer is a plain user row there.
+  transcript.push(
+    row("box:u1", "user", "do X", "2020-01-01T00:00:00Z"),
+    row("box:b1", "bot", "Starting on X.", "2020-01-01T00:00:01Z"),
+    row("box:u2", "user", "actually, do Y first", "2020-01-01T00:00:02Z"),
+  );
+  await act(async () => {
+    h.turns[0]!.onFrame({
+      type: "error",
+      code: "CHAT_TURN_FAILED",
+      message: "boom",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "boom",
+        surface: { layer: "gateway", code: "loop_error", retryable: true },
+      },
+    } as ChatFrameView);
+    h.turns[0]!.onEnd(false, { code: "CHAT_TURN_FAILED", message: "boom" });
+  });
+  await waitFor(() => expect(h.current.messages.some((m) => m.id === "box:u2")).toBe(true));
+  expect(h.current.messages.some((m) => m.id.startsWith("local:steer:"))).toBe(false);
+  const retry = (await screen.findByRole("button", { name: "Retry" })) as HTMLButtonElement;
+  await waitFor(() => expect(retry.disabled).toBe(false));
+  fireEvent.click(retry);
+  await waitFor(() => expect(h.sent).toEqual(["do X", "do X"]));
+});
+
+test("Start new session does not pull back an operator who moved on; the prompt waits as its draft", async () => {
+  let open = (): void => {};
+  const gate = new Promise<void>((done) => {
+    open = done;
+  });
+  const server = fakeServer({
+    "chat.open": async () => {
+      await gate;
+      return { instance: "atlas", bot: "default", session: "NEW" };
+    },
+  });
+  try {
+    const h = failing([
+      row("u1", "user", "first question", "2026-10-12T10:00:00Z"),
+      row("b1", "bot", "", "2026-10-12T10:00:05Z", {
+        failure: {
+          code: "CHAT_TURN_FAILED",
+          message: "loop",
+          surface: { layer: "gateway", code: "loop_error", retryable: true },
+        },
+      }),
+    ]);
+    await h.open();
+    fireEvent.click(await screen.findByRole("button", { name: "Start new session" }));
+    await waitFor(() => expect(server.to("chat.open")).toHaveLength(1));
+    await act(async () => {
+      h.current.select("atlas", "default", "ELSEWHERE");
+    });
+    await act(async () => open());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(h.current.selection).toEqual({ instance: "atlas", bot: "default", session: "ELSEWHERE" });
+    expect(h.sent).toEqual([]);
+    await act(async () => {
+      h.current.select("atlas", "default", "NEW");
+    });
+    expect(h.current.draft).toBe("first question");
+  } finally {
+    server.restore();
+  }
+});
+
+test("Retry held for a rate limit enables itself at the reset, and sends nothing on its own", async () => {
+  const resets = Math.ceil(Date.now() / 1000) + 1;
+  const h = failing([
+    row("u1", "user", "first question", "2026-10-12T10:00:00Z"),
+    row("b1", "bot", "", "2026-10-12T10:00:05Z", {
+      failure: { ...RATE_LIMITED, surface: { ...RATE_LIMITED.surface, resets_at: resets } },
+    }),
+  ]);
+  await h.open();
+  const retry = (await screen.findByRole("button", { name: "Retry" })) as HTMLButtonElement;
+  expect(retry.disabled).toBe(true);
+  expect(screen.getByText(/^Retry available at /)).toBeDefined();
+  await waitFor(() => expect(retry.disabled).toBe(false), { timeout: 3_000 });
+  expect(screen.queryByText(/^Retry available at /)).toBe(null);
+  expect(h.sent).toEqual([]);
+});
+
+test("Compact on an overflowing turn calls chat.compact, then re-reads", async () => {
+  const server = fakeServer({ "chat.compact": { status: "ok" } });
+  try {
+    const h = failing([
+      row("u1", "user", "summarise everything", "2026-10-12T10:00:00Z"),
+      row("b1", "bot", "", "2026-10-12T10:00:05Z", {
+        failure: {
+          code: "CHAT_TURN_FAILED",
+          message: "too long",
+          surface: { layer: "provider", code: "context_overflow", retryable: false },
+        },
+      }),
+    ]);
+    await h.open();
+    // Overflow offers no plain Retry: the same prompt would overflow again.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    const before = h.reads;
+    fireEvent.click(screen.getByRole("button", { name: "Compact" }));
+    await waitFor(() => expect(server.to("chat.compact")).toHaveLength(1));
+    expect(server.to("chat.compact")[0]!.params).toMatchObject({
+      instance: "atlas",
+      bot: "default",
+      session: "S",
+    });
+    await waitFor(() => expect(h.reads).toBeGreaterThan(before));
+    expect(h.sent).toEqual([]);
+  } finally {
+    server.restore();
+  }
+});
+
+test("Edit message puts the blocked prompt back in the composer, unsent", async () => {
+  const h = failing([
+    row("u1", "user", "write the thing", "2026-10-12T10:00:00Z"),
+    row("b1", "bot", "", "2026-10-12T10:00:05Z", {
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "blocked",
+        surface: { layer: "provider", code: "content_policy_blocked", retryable: false },
+      },
+    }),
+  ]);
+  await h.open();
+  fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+  await waitFor(() => expect(h.current.draft).toBe("write the thing"));
+  expect(h.sent).toEqual([]);
 });

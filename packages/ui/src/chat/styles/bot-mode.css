@@ -493,6 +493,49 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+/* A closed clarify names why nothing went back: "Timed out", "Cancelled". */
+.bm-settled-head {
+  margin: 0 0 6px;
+  font: 700 10px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+/* Late choices on a settled single question: they only draft, so they sit small. */
+.bm-late {
+  margin-top: 10px;
+}
+.bm-late .bm-note {
+  margin: 0 0 6px;
+  padding: 0;
+}
+.bm-late .btn {
+  font-size: 11px;
+}
+/* The approval card's settled line, its pending count, and its "Always allow" step. */
+.bm-approval-outcome {
+  margin: 0;
+  font: 12px / 1.6 var(--sans);
+  color: var(--fg2);
+}
+.bm-approval-outcome.bad {
+  color: var(--bad);
+}
+.bm-approval-pending {
+  margin: 0 0 6px;
+  font: 10px var(--mono);
+  color: var(--text-muted);
+}
+.bm-approval-confirm {
+  display: grid;
+  gap: 6px;
+}
+.bm-approval-confirm p {
+  margin: 0;
+}
+.bm-approval-confirm .ch-prompts {
+  justify-content: flex-end;
+}
 .bm-narrow-actions,
 .bm-scrim {
   display: none;

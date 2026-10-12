@@ -21,6 +21,12 @@ import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-ch
 import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
+import { isSubagentEvent } from "./hermes-chat-subagent.ts";
+import {
+  createSubagentLedgers,
+  subagentTurn,
+  type SubagentLedgers,
+} from "./hermes-chat-subagent-ledgers.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
@@ -107,6 +113,12 @@ export interface ChatTurnDeps {
    * (`chat-observe.ts`), because both are bounding the same outage.
    */
   resumeTuning?: ChatResumeTuning | undefined;
+  /**
+   * The client's per-session subagent ledgers, shared with the observation
+   * and child control so a delegation outlives the turn that started it.
+   * Absent gives this turn factory a private set.
+   */
+  subagents?: SubagentLedgers | undefined;
 }
 
 /** What a caller may tune about a turn's reconnect. */
@@ -123,6 +135,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
   // One factory per client, because the "this gateway cannot replay" memo it
   // holds has the same answer for every turn against that box.
   const continuation = createTurnResume({ connect: deps.connect, now: deps.now, ...deps.resumeTuning });
+  const subagents = deps.subagents ?? createSubagentLedgers({ now: deps.now });
 
   /**
    * One turn, as frames.
@@ -199,6 +212,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
     let active: { runtime: string; stored: string | null } | null = null;
     let pump: TurnPump | null = null;
+    let delegation: ReturnType<typeof subagentTurn> | null = null;
     const key = turnKey(box, bot);
     try {
       // Before the session exists, so the gateway already counts this socket
@@ -224,6 +238,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
         stored = str(created?.stored_session_id);
       }
       active = { runtime: session, stored };
+      // Registered now, before the prompt: a background delegation's children
+      // may first report after this turn has ended, on the observation stream,
+      // which can only attribute them to a session somebody registered.
+      delegation = subagentTurn(subagents, { box, bot, runtime: session, stored });
       const entries = activeTurns.get(key) ?? new Set();
       entries.add(active);
       activeTurns.set(key, entries);
@@ -248,10 +266,21 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // which of the three happened rather than a flat "queued" that is wrong
       // two times in three.
       yield status(message, submitState(str(submitted?.status)));
-      yield* stream(rpc, pump, session, message, opts.signal, waitMs, arrivedAtSubmit, baseline);
+      yield* stream(
+        rpc,
+        pump,
+        session,
+        message,
+        opts.signal,
+        waitMs,
+        arrivedAtSubmit,
+        baseline,
+        delegation,
+      );
     } catch (e) {
       yield errorFrame(e);
     } finally {
+      delegation?.close();
       if (active) {
         const entries = activeTurns.get(key);
         entries?.delete(active);
@@ -287,6 +316,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     deadlineMs: number,
     arrivedAtSubmit: number,
     baseline: number,
+    delegation: ReturnType<typeof subagentTurn>,
   ): AsyncIterable<ChatFrame> {
     let reasoning = "";
     let reasoningTokens: number | null = null;
@@ -512,6 +542,18 @@ export function createChatTurn(deps: ChatTurnDeps) {
           yield* emit(seq, block);
         continue;
       }
+      if (isSubagentEvent(type)) {
+        // A delegated child, on the parent session: through the session's
+        // ledger and out as the child's whole block, so a head's
+        // replace-by-key merge is the whole reducer. A progress snapshot, like
+        // an activity: it neither divides a streamed sentence nor flushes
+        // reasoning. An event for a child the ledger never saw start, or one
+        // already finished, changes nothing and emits nothing.
+        seenContent = true;
+        const child = delegation.event(type, payload, unsequenced ? 0 : seq);
+        if (child) yield { type: "block", seq, message, block: child };
+        continue;
+      }
       if (connections.stale(type, payload)) continue;
       const activity = hermesActivity(type, payload);
       if (activity) {
@@ -636,16 +678,14 @@ export function createChatTurn(deps: ChatTurnDeps) {
           };
           return;
         }
-        case "tool.start": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, toolBlock(payload, "running"));
-          break;
-        }
+        case "tool.start":
         case "tool.complete": {
           seenContent = true;
           yield* flushReasoning(seq);
-          yield* emit(seq, toolBlock(payload, null));
+          const tool = toolBlock(payload, type === "tool.start" ? "running" : null);
+          // A `delegate_task` call is what its children are matched against.
+          delegation.tool(tool);
+          yield* emit(seq, tool);
           break;
         }
         case "turn.error": {

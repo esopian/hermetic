@@ -644,7 +644,10 @@ export function Thread({
         </div>
       ) : null}
 
-      {turnError ? (
+      {turnError && !(all[all.length - 1]?.failure || all[all.length - 1]?.error) ? (
+        // A failure the box reported is drawn on the turn itself, with what to
+        // do about it (`FailureCard`); the band is for a turn refused before
+        // it got there, which has no message to carry it.
         <div className="ch-band bad" role="alert">
           <i className="dot" />
           <span>{turnErrorHeadline(turnError.code)}</span>

@@ -12,7 +12,16 @@
  */
 import type { ChatBlockOf } from "../../../api/index.ts";
 import { QuestionCard } from "../BotResponses.tsx";
+import type { ClosedRequest } from "../../chat-requests.ts";
 
-export function QuestionBlock({ block, now }: { block: ChatBlockOf<"question">; now?: number }) {
-  return <QuestionCard block={block} now={now} />;
+export function QuestionBlock({
+  block,
+  now,
+  closed,
+}: {
+  block: ChatBlockOf<"question">;
+  now?: number;
+  closed?: ClosedRequest;
+}) {
+  return <QuestionCard block={block} now={now} closed={closed} />;
 }

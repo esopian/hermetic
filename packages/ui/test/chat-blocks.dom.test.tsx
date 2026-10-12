@@ -421,7 +421,7 @@ describe("the failure card", () => {
       ["MODEL_NOT_GRANTED", "The fleet's role may not invoke this model."],
     ] as const) {
       cleanup();
-      const { container } = render(<FailureCard code={code} message={null} />);
+      const { container } = render(<FailureCard failure={{ code, message: "" }} />);
       expect(container.querySelectorAll(".ch-card")).toHaveLength(1);
       expect(screen.getByText(expected)).toBeDefined();
       expect(screen.getByText(code)).toBeDefined();
@@ -429,9 +429,43 @@ describe("the failure card", () => {
   });
 
   test("a code nobody has written copy for still gets a card with the code on it", () => {
-    render(<FailureCard code="HOLOGRAM_REFUSED" message="the box said no" />);
+    render(<FailureCard failure={{ code: "HOLOGRAM_REFUSED", message: "the box said no" }} />);
     expect(screen.getByText("HOLOGRAM_REFUSED")).toBeDefined();
     expect(screen.getByText(/the box said no/)).toBeDefined();
+  });
+
+  test("upstream's classified failure picks the words and names its own code", () => {
+    render(
+      <FailureCard
+        failure={{
+          code: "CHAT_TURN_FAILED",
+          message: "429 from the provider",
+          surface: { layer: "provider", code: "rate_limit", retryable: true },
+        }}
+      />,
+    );
+    expect(screen.getByText("Rate limited.")).toBeDefined();
+    expect(screen.getByText("rate_limit")).toBeDefined();
+    expect(screen.getByText(/429 from the provider/)).toBeDefined();
+  });
+
+  test("with no conversation to act in, only the details can be copied", () => {
+    render(
+      <FailureCard
+        failure={{
+          code: "CHAT_TURN_FAILED",
+          message: "too long",
+          surface: { layer: "provider", code: "context_overflow", retryable: false },
+        }}
+      />,
+    );
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Copy details"]);
+  });
+
+  test("a turn that only stopped offers nothing to do", () => {
+    render(<FailureCard failure={null} />);
+    expect(screen.getByText("This turn stopped before it finished.")).toBeDefined();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 });
 
@@ -599,4 +633,33 @@ test("an unrecognised hermetic card is drawn as unknown, never as a plan", () =>
   expect(screen.getByText("Additional activity")).toBeDefined();
   expect(container.querySelector<HTMLDetailsElement>(".ch-event")?.open).toBe(false);
   expect(container.querySelector(".collapsed")).toBeNull();
+});
+
+/* ── a connector connection request (WI-11) ──────────────────────────────── */
+
+describe("a connection request notice", () => {
+  test("reads as its title, with the detail and payload behind the step's disclosure", () => {
+    const { container } = draw(
+      {
+        kind: "activity",
+        category: "notice",
+        key: "connection:op-1",
+        title: "Connection request — not supported on hermetic",
+        detail: "github · connect; the agent continues after 60s",
+        state: "running",
+        role: "work",
+        payload: { op_id: "op-1", seq: 2, deadline_at: "2026-10-12T12:01:00Z" },
+      },
+      true,
+    );
+    // The group's own line names the request while it runs.
+    const summary = container.querySelector(".ch-activity > summary")?.textContent ?? "";
+    expect(summary).toContain("Connection request — not supported on hermetic");
+    expect(summary).not.toContain("op_id");
+    // The detail and the raw payload are the step's, behind a closed disclosure.
+    const step = container.querySelector<HTMLDetailsElement>(".ch-activity-step")!;
+    expect(step.open).toBe(false);
+    expect(step.textContent).toContain("github · connect; the agent continues after 60s");
+    expect(step.querySelector("summary")?.textContent).not.toContain("op_id");
+  });
 });

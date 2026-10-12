@@ -180,27 +180,9 @@ export function hermesActivity(
             String(payload.text),
           )
         : null;
-    case "subagent.spawn_requested":
-    case "subagent.start":
-    case "subagent.progress":
-    case "subagent.thinking":
-    case "subagent.tool":
-    case "subagent.complete":
-      return make(
-        "generation",
-        `subagent:${text(payload.subagent_id) ?? text(payload.delegation_id) ?? String(payload.task_index ?? "child")}`,
-        type === "subagent.complete"
-          ? payload.status === "timeout"
-            ? "Delegated work timed out"
-            : payload.status === "interrupted"
-              ? "Delegated work was interrupted"
-              : level(payload.status) === "error"
-                ? "Delegated work failed"
-                : "Delegated work finished"
-          : "Delegated work in progress",
-        type === "subagent.complete" ? level(payload.status) : "running",
-        text(payload.summary) ?? text(payload.text) ?? text(payload.goal),
-      );
+    // `subagent.*` is not an activity: the turn and the observation fold it
+    // into whole `subagent` blocks (`hermes-chat-subagent.ts`) before any
+    // event reaches this mapping.
     case "moa.reference":
       return make(
         "notice",

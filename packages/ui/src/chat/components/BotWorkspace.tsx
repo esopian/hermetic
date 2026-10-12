@@ -4,7 +4,7 @@ import { useFleetIfAvailable } from "../../state/state.tsx";
 import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { threadState } from "../chat-logic.ts";
 import { chatHash } from "../chat-routing.ts";
-import { hasOpenOverlay } from "../../lib/focus.ts";
+import { hasOpenOverlay, ownsEscape } from "../../lib/focus.ts";
 import { isVisible } from "../../lib/visibility.ts";
 import {
   botsCreate,
@@ -121,7 +121,7 @@ export function BotWorkspace({
   openPanel.current = panel;
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented || ownsEscape(event.target)) return;
       if (openPanel.current === null) return;
       if (hasOpenOverlay() || document.querySelector(".bm-overlay") !== null) return;
       event.preventDefault();
