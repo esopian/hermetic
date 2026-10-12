@@ -11,7 +11,7 @@
  */
 import { cleanup, render, screen, userEvent, waitFor } from "./dom.ts";
 import { afterEach, describe, expect, test } from "bun:test";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import type { AgentTab } from "../src/nav/agent-nav.ts";
 import type { AgentView, Meta } from "../src/api/index.ts";
 import { AgentDesktop, DESKTOP_VIEW_TAG } from "../src/components/AgentDesktop.tsx";
@@ -35,18 +35,28 @@ const DEFAULT_BROWSERS = [{ name: "default", serve_path: "/vnc" }];
  * `views://`. It records, in order, every `src` it is given and every
  * `setNavigationRules` call, and — like the real element — ignores the rules
  * until it has a `webviewId`. `readyOnConnect` decides whether that id arrives
- * the moment the element connects or only when a test hands it over.
+ * the moment the element connects or only when a test hands it over. Like the
+ * real element, it removes its native view on disconnect only if it has an id
+ * by then, and `created` keeps every instance, detached ones included.
  */
 const devkit = {
   readyOnConnect: true,
-  log: [] as Array<["src", string | null] | ["rules", string[]]>,
+  log: [] as Array<["src", string | null] | ["rules", string[]] | ["remove", number]>,
+  created: [] as FakeDevkitWebview[],
 };
 
 class FakeDevkitWebview extends HTMLElement {
   static observedAttributes = ["src"];
   webviewId: number | null = null;
+  constructor() {
+    super();
+    devkit.created.push(this);
+  }
   connectedCallback(): void {
     if (devkit.readyOnConnect) this.webviewId = 1;
+  }
+  disconnectedCallback(): void {
+    if (this.webviewId !== null) devkit.log.push(["remove", this.webviewId]);
   }
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
     if (name === "src") devkit.log.push(["src", value]);
@@ -60,6 +70,7 @@ if (!customElements.get(DESKTOP_VIEW_TAG)) customElements.define(DESKTOP_VIEW_TA
 afterEach(() => {
   devkit.readyOnConnect = true;
   devkit.log = [];
+  devkit.created = [];
 });
 
 /** The mounted viewers, and what each was created with. */
@@ -140,6 +151,46 @@ describe("AgentDesktop · one stream, and only when asked", () => {
     await waitFor(() => expect(devkit.log).toHaveLength(3));
     expect(devkit.log[1]?.[0]).toBe("rules");
     expect(devkit.log[2]?.[0]).toBe("src");
+  });
+
+  /**
+   * The devkit creates the native view a frame after the element connects,
+   * whether or not it is still in the page, and removes it on disconnect only
+   * if it already exists. An element removed in between left a blank native
+   * webview in the window's top-left corner for the rest of the session.
+   */
+  test("a view removed before the devkit created it is released once it is", async () => {
+    devkit.readyOnConnect = false;
+    const user = userEvent.setup();
+    const view = render(panel());
+    await user.click(screen.getByRole("button", { name: /Connect →/ }));
+    const [early] = frames() as unknown as FakeDevkitWebview[];
+    view.rerender(panel({ suspended: true }));
+    expect(frames()).toHaveLength(0);
+    expect(devkit.log.some(([kind]) => kind === "remove")).toBe(false);
+
+    if (early) early.webviewId = 9;
+    await waitFor(() => expect(devkit.log).toContainEqual(["remove", 9]));
+  });
+
+  test("StrictMode's discarded mount does not leave a native view behind", async () => {
+    devkit.readyOnConnect = false;
+    const user = userEvent.setup();
+    render(<StrictMode>{panel()}</StrictMode>);
+    await user.click(screen.getByRole("button", { name: /Connect →/ }));
+    expect(frames()).toHaveLength(1);
+    const discarded = devkit.created.filter((v) => !v.isConnected);
+    expect(discarded.length).toBeGreaterThan(0);
+
+    // The devkit's deferred init runs for every element it saw connect.
+    devkit.created.forEach((v, i) => {
+      v.webviewId = 20 + i;
+    });
+    const live = frames()[0] as unknown as FakeDevkitWebview;
+    await waitFor(() =>
+      expect(devkit.log.filter(([kind]) => kind === "remove")).toHaveLength(discarded.length),
+    );
+    expect(devkit.log).not.toContainEqual(["remove", live.webviewId as number]);
   });
 
   test("New tab asks the app to open the desktop, rather than opening a window itself", async () => {
