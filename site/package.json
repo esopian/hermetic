@@ -8,7 +8,7 @@
     "sync": "bun scripts/sync-docs.ts && bun scripts/cli-reference.ts",
     "build": "bun run sync && astro build",
     "check": "bun run sync && astro check && biome check . && bun scripts/sync-docs.ts --check",
-    "preview": "wrangler pages dev dist",
+    "preview": "wrangler dev",
     "deploy": "bun scripts/deploy.ts",
     "format": "biome format --write ."
   },

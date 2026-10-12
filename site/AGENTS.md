@@ -1,7 +1,7 @@
 # site — agent instructions
 
-`site/` is the marketing and docs site for hermetic (Astro + Starlight, deployed to Cloudflare
-Pages). It is its own toolchain, separate from everything under `packages/` — see the repo root
+`site/` is the marketing and docs site for hermetic (Astro + Starlight, served by a Cloudflare
+Worker with static assets). It is its own toolchain, separate from everything under `packages/` — see the repo root
 `AGENTS.md` "Layout". This file is
 `site/`'s equivalent of the root `AGENTS.md`; the root files still apply to everything
 else in the repo, but do not describe this directory.
@@ -29,8 +29,8 @@ bun install
 bun run dev        # astro dev
 bun run check       # sync + astro check + biome check + sync-docs --check
 bun run build       # sync + astro build -> site/dist
-bun run preview     # wrangler pages dev dist — the real Cloudflare runtime, incl. _headers/_redirects
-bun run deploy      # check, build, deploy a preview to Cloudflare Pages, verify it (see Deploy)
+bun run preview     # wrangler dev: dist/ on the real Workers runtime, incl. _headers/_redirects
+bun run deploy      # check, build, upload a preview version to Cloudflare, verify it (see Deploy)
 ```
 
 The root `package.json` has pass-throughs (`site:dev`, `site:build`, `site:check`, `site:deploy`)
@@ -169,31 +169,40 @@ the command through `src/components/docs/InstallCommand.astro`, so it follows th
 `scripts/deploy.ts` is the only deploy path, for a laptop and for CI alike:
 
 ```
-bun run deploy                          # preview, branch named after the current git branch
-bun run deploy --branch review-cost     # preview to a named branch
-bun run deploy --production             # production; asks you to type the project name
+bun run deploy                          # preview, aliased after the current git branch
+bun run deploy --branch review-cost     # preview under a named alias
+bun run deploy --production             # production on HERMETIC_SITE_URL; asks for the Worker name
 bun run deploy --dry-run                # every check and the build, nothing uploaded
 bun run deploy --verify <url>           # only the HTTP checks, against any URL
 ```
 
+The site is a Worker with static assets and no script (`wrangler.toml`: `dist/` as the asset
+directory, trailing-slash HTML handling, `404.html` for misses; `public/.assetsignore` keeps
+`_headers` and `_redirects` from being served as files). A preview is `wrangler versions upload
+--preview-alias <alias>`: a new version at its own URL and at `<alias>-<worker>.<subdomain>.workers.dev`,
+with production still on the version it had. Production is `wrangler deploy --domain <host>`.
+
 It runs in order and stops at the first failure: preflight, Cloudflare credentials, check, build,
-an inspection of `dist/`, `wrangler pages deploy`, then HTTP verification of the new deployment and
-of the production URL (or the preview's branch alias). Nothing is uploaded until every check before
-it has passed.
+an inspection of `dist/`, the upload, then HTTP verification of the uploaded version and of the
+production domain (or the preview alias). Nothing is uploaded until every check before it has
+passed.
 
 - Production refuses a dirty working tree, always, and a HEAD that no `v*` tag points at (or that
-  `HERMETIC_RELEASE_TAG` does not name) unless `--allow-untagged`. It asks before deploying; `--yes`
-  skips the question and is required without a terminal. A preview refuses the production branch
-  name and needs `--allow-dirty` to upload uncommitted work.
+  `HERMETIC_RELEASE_TAG` does not name) unless `--allow-untagged`. Production also needs
+  `HERMETIC_SITE_URL` (an https origin on a custom domain, never workers.dev): the build is stamped
+  with it and `--domain` keeps it attached. It asks before deploying; `--yes` skips the question and
+  is required without a terminal. A preview needs `--allow-dirty` to upload uncommitted work, and an
+  existing Worker (the first production deploy creates it).
 - Credentials: `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` when set, else `bunx wrangler login`.
-  Listing the project's deployments proves the token and the project name before the build.
+  Listing the Worker's deployments proves the token and the Worker name before the build.
 - The build is stamped with the commit (`HERMETIC_BUILD_SHA`, read by `src/data/release.ts`), and
   verification fails unless the deployed footer shows that same commit, so a stale edge or a wrong
   build cannot pass. It also checks `/docs/`, `/explainer/`, `/cost/`, the CSP header from
   `_headers`, `/install.sh` as text/plain, and the `/download` redirect. Add a path to `CHECKS` when
   a page becomes something a release must not break.
-- The production URL is `https://<project>.pages.dev` unless `HERMETIC_SITE_URL` says otherwise;
-  the Pages production branch is `main` unless `CLOUDFLARE_PRODUCTION_BRANCH` says otherwise.
+- The Worker is `hermetic-site` (`wrangler.toml`) unless `CLOUDFLARE_WORKER_NAME` or `--name` says
+  otherwise. A preview build, whose address is unknown until the upload returns it, is stamped with
+  the dev fallback in `astro.config.ts`.
 
 In CI, a pushed `v*` tag runs `release.yml`'s `publish` job, then its `site` job, which calls
 `.github/workflows/site.yml`; that runs `bun scripts/deploy.ts --production --yes` with the tag in
@@ -206,5 +215,5 @@ annotations and writes the deployed URLs to the job summary. To redeploy an alre
 gh workflow run site.yml -f ref=vX.Y.Z
 ```
 
-One-time Cloudflare/GitHub environment setup (API token, project, secrets): `site/README.md`
-"Deploy setup".
+One-time Cloudflare/GitHub environment setup (first deploy, API token, secrets, variables):
+`site/README.md` "Deploy setup".

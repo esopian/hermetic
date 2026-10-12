@@ -20,7 +20,7 @@ on:
 
 concurrency:
   # One production deploy at a time; a re-dispatch waits for the one in
-  # flight rather than racing it onto the same Cloudflare Pages project.
+  # flight rather than racing it onto the same Cloudflare Worker.
   group: site-production
   cancel-in-progress: false
 
@@ -59,7 +59,7 @@ jobs:
 
       # The same script a maintainer runs by hand (site/scripts/deploy.ts):
       # preflight (clean tree, the release tag points at HEAD, the token can
-      # reach the Pages project), check, build, deploy with the site's own
+      # reach the Worker, HERMETIC_SITE_URL is set), check, build, deploy with the site's own
       # pinned wrangler, then verify over HTTP that both the new deployment and
       # the production URL serve this commit. It reads the commit from the
       # checkout (`git rev-parse HEAD`), never from `github.sha`, which on
@@ -75,4 +75,7 @@ jobs:
           HERMETIC_RELEASE_TAG: ${{ inputs.ref }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          # The custom domain production serves: stamped into the build and attached by
+          # `wrangler deploy --domain`. Required; the deploy refuses without it.
+          HERMETIC_SITE_URL: ${{ vars.HERMETIC_SITE_URL }}

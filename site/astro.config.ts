@@ -5,8 +5,10 @@ import starlightLinksValidator from "starlight-links-validator";
 
 const REPO = "https://github.com/esopian/hermetic";
 
-// The production domain is not chosen yet; until it is, the site answers on the Pages project's own hostname.
-const SITE = process.env["HERMETIC_SITE_URL"] ?? "https://hermetic-site.pages.dev";
+// The address the site is served from, baked into the sitemap, canonical links and the install
+// command. scripts/deploy.ts requires it for production (the custom domain); an unset or empty
+// value, as in `astro dev` or a preview build, falls back to the local dev server.
+const SITE = process.env["HERMETIC_SITE_URL"] || "http://localhost:4321";
 
 export default defineConfig({
   site: SITE,

@@ -4,7 +4,7 @@ import { dmgUrl } from "../data/release";
 import Button from "./Button.astro";
 import DashboardPreview from "./DashboardPreview.astro";
 import Kicker from "./Kicker.astro";
-const installCmd = `curl -fsSL ${new URL("/install.sh", Astro.site ?? "https://hermetic-site.pages.dev").href} | bash`;
+const installCmd = `curl -fsSL ${new URL("/install.sh", Astro.site ?? "http://localhost:4321").href} | bash`;
 ---
 <section class="hero">
   <div class="wrap">

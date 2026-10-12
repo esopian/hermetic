@@ -1,15 +1,21 @@
-// Builds and deploys site/ to Cloudflare Pages, then checks that the deployment actually serves
-// this build. The one deploy path: run by hand from a laptop and by .github/workflows/site.yml.
+// Builds site/ and deploys it to Cloudflare as a Worker with static assets (wrangler.toml), then
+// checks over HTTP that the deployment serves this build. The one deploy path: run by hand from a
+// laptop and by .github/workflows/site.yml.
 //
-//   bun run deploy                         preview deploy, branch named after the current git branch
-//   bun run deploy --branch review-cost    preview deploy to a named branch
-//   bun run deploy --production            production (the project's production branch); asks first
+//   bun run deploy                         preview, aliased after the current git branch
+//   bun run deploy --branch review-cost    preview under a named alias
+//   bun run deploy --production            production on HERMETIC_SITE_URL's domain; asks first
 //   bun run deploy --production --yes      production without the prompt (CI)
 //
-// Order: preflight (git state, release tag, Cloudflare credentials, project), check and build,
-// inspect dist/, deploy with wrangler, verify the deployment over HTTP. Any failure stops the run
-// with a non-zero exit and says what to do next. Nothing is uploaded before every preflight check
-// and the build have passed.
+// A preview is `wrangler versions upload --preview-alias <alias>`: a new version reachable at its
+// own URL and at <alias>-<worker>.<subdomain>.workers.dev, while production keeps serving the
+// version it had. Production is `wrangler deploy --domain <host>`, which makes this version live
+// and keeps the custom domain attached.
+//
+// Order: preflight (git state, release tag, site URL), Cloudflare credentials, check and build,
+// inspect dist/, upload with wrangler, verify over HTTP. Any failure stops the run with a non-zero
+// exit and says what to do next. Nothing is uploaded before every preflight check and the build
+// have passed.
 //
 // Production refuses a dirty working tree and a HEAD that no `v*` release tag points at (the site
 // follows releases; site/AGENTS.md "Deploy"). `--allow-untagged` relaxes the tag rule for a
@@ -28,7 +34,6 @@ import { parseArgs } from "node:util";
 const SITE = dirname(import.meta.dir);
 const ROOT = dirname(SITE);
 const DIST = join(SITE, "dist");
-const PRODUCTION_BRANCH = process.env["CLOUDFLARE_PRODUCTION_BRANCH"] ?? "main";
 const env = process.env;
 const CI = env["CI"] === "true" || env["GITHUB_ACTIONS"] === "true";
 const GHA = env["GITHUB_ACTIONS"] === "true";
@@ -128,7 +133,7 @@ const { values: args } = parseArgs({
   options: {
     production: { type: "boolean", default: false },
     branch: { type: "string" },
-    project: { type: "string" },
+    name: { type: "string" },
     yes: { type: "boolean", short: "y", default: false },
     "skip-check": { type: "boolean", default: false },
     "allow-dirty": { type: "boolean", default: false },
@@ -141,11 +146,11 @@ const { values: args } = parseArgs({
 });
 
 if (args.help) {
-  out(`${bold("bun run deploy")} [options]   build site/ and deploy it to Cloudflare Pages
+  out(`${bold("bun run deploy")} [options]   build site/ and deploy it to Cloudflare (Workers static assets)
 
-  --production        deploy to the production branch (${PRODUCTION_BRANCH}); needs a clean tree and a v* tag at HEAD
-  --branch <name>     preview branch name (default: the current git branch)
-  --project <name>    Pages project (default: $CLOUDFLARE_PAGES_PROJECT, else wrangler.toml)
+  --production        make this build live on HERMETIC_SITE_URL; needs a clean tree and a v* tag at HEAD
+  --branch <name>     preview alias (default: the current git branch)
+  --name <worker>     Worker name (default: $CLOUDFLARE_WORKER_NAME, else wrangler.toml)
   -y, --yes           do not ask before a production deploy (required without a terminal)
   --skip-check        build without running \`bun run check\` first
   --allow-dirty       preview only: deploy a working tree with uncommitted changes
@@ -160,34 +165,55 @@ if (args.help) {
 
 interface Plan {
   production: boolean;
-  project: string;
-  branch: string;
+  worker: string;
+  /** The preview alias; unused for production. */
+  alias: string;
   commit: string;
   short: string;
   subject: string;
   dirty: boolean;
   tag: string | null;
-  productionUrl: string;
+  /** Production only: the custom domain the build is stamped with and attached to. */
+  siteUrl: string | null;
 }
 
-function projectName(): string {
-  if (args.project !== undefined) return args.project;
-  const fromEnv = env["CLOUDFLARE_PAGES_PROJECT"];
+function workerName(): string {
+  if (args.name !== undefined) return args.name;
+  const fromEnv = env["CLOUDFLARE_WORKER_NAME"];
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   const toml = readFileSync(join(SITE, "wrangler.toml"), "utf8");
   const name = toml.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
-  if (name === undefined) throw new DeployError("no Pages project: wrangler.toml has no name");
+  if (name === undefined) throw new DeployError("no Worker name: wrangler.toml has no name");
   return name;
 }
 
-/** Cloudflare's own branch alias rules: lowercase, [a-z0-9-], at most 28 characters. */
-const alias = (branch: string): string =>
+/**
+ * A preview alias from a branch name, under Cloudflare's rules: lowercase letters, digits and
+ * dashes, starting with a letter, and short enough that `<alias>-<worker>` fits one DNS label.
+ */
+const toAlias = (branch: string, worker: string): string =>
   branch
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 28)
+    .replace(/^[^a-z]+/, "")
+    .slice(0, Math.max(0, 62 - worker.length))
     .replace(/-+$/, "");
+
+/** HERMETIC_SITE_URL as an https origin with no path, or null when it is unset or empty. */
+function siteUrl(): string | null {
+  const raw = env["HERMETIC_SITE_URL"];
+  if (raw === undefined || raw.length === 0) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new DeployError(`HERMETIC_SITE_URL=${raw} is not a URL`);
+  }
+  if (url.protocol !== "https:" || url.pathname.replace(/\/$/, "") !== "") {
+    throw new DeployError(`HERMETIC_SITE_URL=${raw} must be an https origin, e.g. https://example.com`);
+  }
+  return url.origin;
+}
 
 function gitState(): Pick<Plan, "commit" | "short" | "subject" | "dirty" | "tag"> & {
   gitBranch: string | null;
@@ -222,25 +248,20 @@ function gitState(): Pick<Plan, "commit" | "short" | "subject" | "dirty" | "tag"
 async function preflight(): Promise<Plan> {
   return step("Preflight", async () => {
     const git = gitState();
-    const project = projectName();
+    const worker = workerName();
     const production = args.production;
 
-    if (production && args.branch !== undefined && args.branch !== PRODUCTION_BRANCH) {
+    if (production && args.branch !== undefined) {
+      throw new DeployError(`--production has no alias; drop --branch ${args.branch}`);
+    }
+    const branch = args.branch ?? git.gitBranch ?? `preview-${git.short}`;
+    const alias = toAlias(branch, worker);
+    if (!production && alias.length === 0) {
       throw new DeployError(
-        `--production deploys to ${PRODUCTION_BRANCH}; drop --branch ${args.branch}`,
+        `branch "${branch}" gives no usable preview alias`,
+        "pass --branch with a name that has letters in it",
       );
     }
-    const branch = production
-      ? PRODUCTION_BRANCH
-      : (args.branch ?? git.gitBranch ?? `preview-${git.short}`);
-    if (!production && alias(branch) === alias(PRODUCTION_BRANCH)) {
-      throw new DeployError(
-        `branch "${branch}" is the production branch`,
-        "use --production to deploy production, or pick another --branch for a preview",
-      );
-    }
-    if (alias(branch).length === 0)
-      throw new DeployError(`branch "${branch}" has no usable characters`);
 
     if (git.dirty) {
       if (production) {
@@ -280,17 +301,24 @@ async function preflight(): Promise<Plan> {
         warn(`tag ${git.tag} differs from package.json version ${version}`);
     }
 
-    const productionUrl = (env["HERMETIC_SITE_URL"] || `https://${project}.pages.dev`).replace(
-      /\/$/,
-      "",
-    );
-    note(`project   ${project}`);
-    note(
-      `target    ${production ? orange(`production (${PRODUCTION_BRANCH})`) : `preview (${branch})`}`,
-    );
+    const site = siteUrl();
+    if (production && site === null) {
+      throw new DeployError(
+        "HERMETIC_SITE_URL is not set",
+        "production is served on your domain: set HERMETIC_SITE_URL=https://<domain> (CI: the site-production variable)",
+      );
+    }
+    if (production && site !== null && new URL(site).hostname.endsWith(".workers.dev")) {
+      throw new DeployError(
+        `HERMETIC_SITE_URL=${site} is a workers.dev address`,
+        "set it to the custom domain production should serve",
+      );
+    }
+    note(`worker    ${worker}`);
+    note(`target    ${production ? orange(`production (${site})`) : `preview (alias ${alias})`}`);
     note(`commit    ${git.short} ${git.subject}${git.dirty ? yellow(" + uncommitted changes") : ""}`);
     note(`release   ${git.tag ?? "none"}`);
-    return { production, project, branch, productionUrl, ...git };
+    return { production, worker, alias, siteUrl: production ? site : null, ...git };
   });
 }
 
@@ -323,20 +351,26 @@ async function credentials(plan: Plan): Promise<void> {
     } else {
       note("using CLOUDFLARE_API_TOKEN");
     }
-    // Listing deployments needs the same Pages permission a deploy does, and fails on a missing
-    // project, so it catches a wrong token scope or a typo in the project name before the build.
+    // Listing the Worker's deployments needs the same Workers permission an upload does, so it
+    // catches a wrong token scope or a mistyped name before the build. A Worker that does not
+    // exist yet is fine for production (the first deploy creates it); a preview needs one, since
+    // a version can only be uploaded to an existing Worker.
     const listed = read(
       "bunx",
-      ["wrangler", "pages", "deployment", "list", "--project-name", plan.project],
+      ["wrangler", "deployments", "list", "--name", plan.worker, "--json"],
       SITE,
     );
     if (listed === null) {
-      throw new DeployError(
-        `cannot read Pages project "${plan.project}"`,
-        'check the project name and that the token has Cloudflare Pages: Edit (site/README.md "Deploy setup")',
-      );
+      if (!plan.production) {
+        throw new DeployError(
+          `cannot read Worker "${plan.worker}"`,
+          'a preview needs the Worker to exist: deploy production once first, or check the name and that the token has Workers Scripts: Edit (site/README.md "Deploy setup")',
+        );
+      }
+      warn(`Worker "${plan.worker}" not found or not readable; the deploy will create it`);
+    } else {
+      note(`Worker ${plan.worker} is reachable`);
     }
-    note(`project ${plan.project} is reachable`);
   });
 }
 
@@ -350,12 +384,12 @@ async function confirm(plan: Plan): Promise<void> {
   }
   out();
   out(
-    `  ${orange("●")} This replaces ${bold(plan.productionUrl)} with ${bold(plan.tag ?? plan.short)}.`,
+    `  ${orange("●")} This replaces ${bold(plan.siteUrl ?? "production")} with ${bold(plan.tag ?? plan.short)}.`,
   );
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`  Type the project name (${plan.project}) to continue: `);
+  const answer = await rl.question(`  Type the Worker name (${plan.worker}) to continue: `);
   rl.close();
-  if (answer.trim() !== plan.project) throw new DeployError("not confirmed; nothing was deployed");
+  if (answer.trim() !== plan.worker) throw new DeployError("not confirmed; nothing was deployed");
   out();
 }
 
@@ -367,6 +401,7 @@ const REQUIRED = [
   "404.html",
   "_headers",
   "_redirects",
+  ".assetsignore",
   "install.sh",
   "favicon.svg",
   "docs/index.html",
@@ -380,6 +415,10 @@ const STAMP = /built from <span[^>]*>([0-9a-f]{7}|unknown)<\/span>/;
 
 async function build(plan: Plan): Promise<void> {
   const buildEnv: NodeJS.ProcessEnv = { ...env, HERMETIC_BUILD_SHA: plan.commit };
+  // Production is stamped with its domain; a preview with the dev fallback (astro.config.ts),
+  // since its address is only known once the upload returns it.
+  if (plan.siteUrl !== null) buildEnv["HERMETIC_SITE_URL"] = plan.siteUrl;
+  else delete buildEnv["HERMETIC_SITE_URL"];
   if (plan.tag !== null) buildEnv["HERMETIC_RELEASE_TAG"] = plan.tag;
   if (!args["skip-check"]) {
     await step("Check (bun run check)", () =>
@@ -406,66 +445,70 @@ async function build(plan: Plan): Promise<void> {
 /* ------------------------------------------------------------------ deploy */
 
 interface Deployment {
-  id: string;
+  versionId: string;
+  /** The URL that serves exactly this version. */
   url: string;
+  /** Preview: the alias URL. Production: null (the site URL is the live address). */
   alias: string | null;
-  environment: string;
 }
 
+/** Wrangler's machine-readable record of what it did (WRANGLER_OUTPUT_FILE_PATH, ndjson). */
+function outputEntry(file: string, type: string): Record<string, unknown> | undefined {
+  if (!existsSync(file)) return undefined;
+  return readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l): unknown => JSON.parse(l))
+    .find(
+      (e): e is Record<string, unknown> =>
+        typeof e === "object" && e !== null && (e as Record<string, unknown>)["type"] === type,
+    );
+}
+
+const trimSlash = (u: unknown): string => String(u ?? "").replace(/\/$/, "");
+
 async function deploy(plan: Plan): Promise<Deployment> {
-  return step("Deploy (wrangler pages deploy)", async () => {
+  const command = plan.production ? "wrangler deploy" : "wrangler versions upload";
+  return step(`Upload (${command})`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "hermetic-deploy-"));
     const outputFile = join(dir, "wrangler-output.ndjson");
+    const message = `${plan.short}${plan.dirty ? "+dirty" : ""} ${plan.subject}`.slice(0, 100);
+    const common = ["--name", plan.worker, "--tag", plan.short, "--message", message];
     try {
-      const wranglerArgs = [
-        "wrangler",
-        "pages",
-        "deploy",
-        "dist",
-        "--project-name",
-        plan.project,
-        "--branch",
-        plan.branch,
-        "--commit-hash",
-        plan.commit,
-        "--commit-message",
-        plan.subject.slice(0, 380),
-      ];
-      if (plan.dirty) wranglerArgs.push("--commit-dirty=true");
+      const wranglerArgs = plan.production
+        ? ["wrangler", "deploy", ...common, "--domain", new URL(plan.siteUrl ?? "").hostname]
+        : ["wrangler", "versions", "upload", ...common, "--preview-alias", plan.alias];
       await run("bunx", wranglerArgs, {
         cwd: SITE,
         env: { ...env, WRANGLER_OUTPUT_FILE_PATH: outputFile },
       });
 
-      // Wrangler's machine-readable record of what it did; the printed text is for humans.
-      const entries = existsSync(outputFile)
-        ? readFileSync(outputFile, "utf8")
-            .split("\n")
-            .filter(Boolean)
-            .map((l): unknown => JSON.parse(l))
-        : [];
-      const detail = entries.find(
-        (e): e is Record<string, unknown> =>
-          typeof e === "object" &&
-          e !== null &&
-          (e as Record<string, unknown>)["type"] === "pages-deploy-detailed",
-      );
-      if (detail === undefined) throw new DeployError("wrangler reported no deployment");
-      const deployment: Deployment = {
-        id: String(detail["deployment_id"] ?? ""),
-        url: String(detail["url"] ?? "").replace(/\/$/, ""),
-        alias: typeof detail["alias"] === "string" ? detail["alias"].replace(/\/$/, "") : null,
-        environment: String(detail["environment"] ?? ""),
-      };
-      const expected = plan.production ? "production" : "preview";
-      if (deployment.environment !== expected) {
+      if (plan.production) {
+        const entry = outputEntry(outputFile, "deploy");
+        if (entry === undefined) throw new DeployError("wrangler reported no deployment");
+        const targets = Array.isArray(entry["targets"]) ? entry["targets"].map(trimSlash) : [];
+        // The workers.dev address serves the same live version; check it as well as the domain.
+        const url = targets.find((t) => t.endsWith(".workers.dev")) ?? plan.siteUrl ?? "";
+        note(`version ${String(entry["version_id"] ?? "")} is live`);
+        for (const t of targets) note(`serving ${t}`);
+        return { versionId: String(entry["version_id"] ?? ""), url, alias: null };
+      }
+      const entry = outputEntry(outputFile, "version-upload");
+      if (entry === undefined) throw new DeployError("wrangler reported no uploaded version");
+      const url = trimSlash(entry["preview_url"]);
+      const aliasUrl = trimSlash(entry["preview_alias_url"]);
+      if (url.length === 0) {
         throw new DeployError(
-          `Cloudflare made a ${deployment.environment} deployment, expected ${expected}`,
-          `the project's production branch may not be "${PRODUCTION_BRANCH}" (set CLOUDFLARE_PRODUCTION_BRANCH)`,
+          "Cloudflare returned no preview URL for this version",
+          "preview URLs need `preview_urls = true` (wrangler.toml) and a workers.dev subdomain on the account",
         );
       }
-      note(`deployment ${deployment.id} (${deployment.environment})`);
-      return deployment;
+      note(`version ${String(entry["version_id"] ?? "")} uploaded; production is unchanged`);
+      return {
+        versionId: String(entry["version_id"] ?? ""),
+        url,
+        alias: aliasUrl.length > 0 ? aliasUrl : null,
+      };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -562,25 +605,25 @@ async function verify(
 /* ------------------------------------------------------------------ main */
 
 function summary(plan: Plan, d: Deployment, startedAt: number): void {
-  const live = plan.production ? plan.productionUrl : (d.alias ?? d.url);
+  const live = plan.production ? (plan.siteUrl ?? d.url) : (d.alias ?? d.url);
   out();
   out(
     `${green("●")} ${bold(plan.production ? "Production is live" : "Preview is live")} ${dim(secs(Date.now() - startedAt))}`,
   );
   out(`  ${bold(live)}`);
-  if (live !== d.url) out(`  ${dim(`this deployment: ${d.url}`)}`);
+  if (live !== d.url) out(`  ${dim(`this version: ${d.url}`)}`);
   out(
-    `  ${dim(`commit ${plan.short}${plan.tag !== null ? ` · ${plan.tag}` : ""} · deployment ${d.id}`)}`,
+    `  ${dim(`commit ${plan.short}${plan.tag !== null ? ` · ${plan.tag}` : ""} · version ${d.versionId}`)}`,
   );
   const file = env["GITHUB_STEP_SUMMARY"];
   if (file !== undefined && file.length > 0) {
     const md = [
-      `### Site deployed: ${plan.production ? "production" : `preview (${plan.branch})`}`,
+      `### Site deployed: ${plan.production ? "production" : `preview (${plan.alias})`}`,
       "",
       `| | |`,
       `|---|---|`,
       `| URL | ${live} |`,
-      `| Deployment | ${d.url} |`,
+      `| Version | ${d.url} |`,
       `| Commit | \`${plan.short}\`${plan.tag !== null ? ` (${plan.tag})` : ""} |`,
       `| Checks | ${CHECKS(plan.short).length} paths verified |`,
       "",
@@ -620,10 +663,11 @@ async function main(): Promise<void> {
     return;
   }
   const deployment = await deploy(plan);
-  await verify("deployment", deployment.url, plan.short, 90_000);
-  if (plan.production) await verify("production", plan.productionUrl, plan.short, 180_000);
+  await verify(plan.production ? "workers.dev" : "version", deployment.url, plan.short, 90_000);
+  if (plan.production && plan.siteUrl !== null && plan.siteUrl !== deployment.url)
+    await verify("production", plan.siteUrl, plan.short, 180_000);
   else if (deployment.alias !== null)
-    await verify("branch alias", deployment.alias, plan.short, 90_000);
+    await verify("preview alias", deployment.alias, plan.short, 90_000);
   summary(plan, deployment, startedAt);
 }
 

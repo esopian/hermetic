@@ -1,6 +1,6 @@
 # site
 
-The marketing and docs site for hermetic: Astro + Starlight, deployed to Cloudflare Pages. Agent
+The marketing and docs site for hermetic: Astro + Starlight, served by Cloudflare Workers static assets. Agent
 instructions and conventions: `site/AGENTS.md` (`site/CLAUDE.md` points at it).
 
 ## Run / build / preview
@@ -10,8 +10,8 @@ bun install
 bun run dev        # astro dev, http://localhost:4321
 bun run check       # astro check + biome check + sync-docs --check
 bun run build       # sync-docs, cli-reference, astro build -> site/dist (+ pagefind index)
-bun run preview     # wrangler pages dev dist — the real Cloudflare runtime, incl. _headers/_redirects
-bun run deploy      # preview deploy to Cloudflare Pages, verified; --production for production
+bun run preview     # wrangler dev: dist/ on the real Workers runtime, incl. _headers/_redirects
+bun run deploy      # preview upload to Cloudflare, verified; --production for production
 ```
 
 `bun run deploy --help` lists every option; `site/AGENTS.md` "Deploy" says what each check does.
@@ -41,15 +41,33 @@ that dependency is a spawned process, not an import.
 One-time setup, by hand, before the first deploy works. `site.yml` (`.github/workflows/site.yml`)
 assumes all of this already exists; it creates none of it.
 
-**(a) Cloudflare Pages project.** Cloudflare dashboard → Workers & Pages → Create → Pages → Direct
-Upload (not the Git integration — this repo's own release workflow decides when production moves).
-Project name `hermetic-site`, production branch `main`.
+The site is a Cloudflare Worker with static assets and no script (`wrangler.toml`): `dist/` is the
+asset directory and `public/_headers` and `public/_redirects` apply as they did on Pages. There is
+no Pages project and no Git integration; this repo's release workflow decides when production
+moves.
 
-**(b) API token.** Cloudflare dashboard → My Profile → API Tokens → Create Custom Token. Permission
-Account → Cloudflare Pages → Edit, scoped to the one account. Note the account ID shown on the same
-page (right sidebar).
+**(a) Account and domain.** The domain's zone must be on the same Cloudflare account. The account
+needs a workers.dev subdomain (Workers & Pages → Overview shows it; the first `wrangler` deploy
+offers to register one), which previews and the deploy checks use.
 
-**(c) GitHub environment and secrets** (`gh` CLI, run once):
+**(b) First production deploy, from a laptop.** The Worker does not exist until something deploys
+it, and a preview can only upload a version to an existing Worker. From a clean checkout:
+
+```
+cd site
+bunx wrangler login
+HERMETIC_SITE_URL=https://<your-domain> bun run deploy --production --allow-untagged
+```
+
+That creates the Worker `hermetic-site`, attaches the domain (`wrangler deploy --domain`, which
+adds the DNS record and certificate) and verifies both the domain and the workers.dev address.
+From then on `bun run deploy` uploads previews without touching production.
+
+**(c) API token for CI.** Cloudflare dashboard → My Profile → API Tokens → Create Custom Token.
+Permissions: Account → Workers Scripts → Edit, and Zone → Workers Routes → Edit for the site's
+zone (custom domains). Note the account ID shown on the same page (right sidebar).
+
+**(d) GitHub environment, secrets and variables** (`gh` CLI, run once):
 
 ```
 gh api -X PUT repos/esopian/hermetic/environments/site-production \
@@ -73,10 +91,11 @@ gh api -X POST repos/esopian/hermetic/environments/site-production/deployment-br
 
 gh secret set CLOUDFLARE_API_TOKEN --env site-production
 gh secret set CLOUDFLARE_ACCOUNT_ID --env site-production
-gh variable set CLOUDFLARE_PAGES_PROJECT --env site-production --body hermetic-site
+gh variable set CLOUDFLARE_WORKER_NAME --env site-production --body hermetic-site
+gh variable set HERMETIC_SITE_URL --env site-production --body https://<your-domain>
 ```
 
-**(d) First deploy.** `site.yml` has to exist on `master` before `workflow_dispatch` can target it
+**(e) First CI deploy.** `site.yml` has to exist on `master` before `workflow_dispatch` can target it
 (dispatch only offers workflows already on the default branch), so merge this change first. Then:
 
 ```

@@ -13,7 +13,7 @@ interface Props {
 }
 
 const { args, env } = Astro.props;
-const url = new URL("/install.sh", Astro.site ?? "https://hermetic-site.pages.dev").href;
+const url = new URL("/install.sh", Astro.site ?? "http://localhost:4321").href;
 const bash = [env, "bash", args ? `-s -- ${args}` : ""].filter(Boolean).join(" ");
 const code = `curl -fsSL ${url} | ${bash}`;
 ---
