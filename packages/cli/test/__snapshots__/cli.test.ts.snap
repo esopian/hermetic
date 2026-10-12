@@ -1807,6 +1807,7 @@ exports[`--json output is a golden contract settings show 1`] = `
   },
   "persisted": true,
   "settings": {
+    "auto_update_hermeticd": true,
     "default_profile": "ant00001",
     "defaults": {
       "browser": true,

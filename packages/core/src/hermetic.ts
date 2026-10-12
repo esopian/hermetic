@@ -16,21 +16,16 @@
  * rule 3), `agent-set.ts` (§8.3), `policy.ts` (§5.2), `secrets.ts` (§8.2).
  * The deps object a head hands in is `HermeticDeps` (`hermetic-deps.ts`).
  */
-import { randomUUID } from "node:crypto";
-import { withFleetLock, findRepoRoot, type ReleasePushResult } from "./release/artifacts.ts";
+import { findRepoRoot } from "./release/artifacts.ts";
+import { createArtifactsPush } from "./release/push-op.ts";
 import { createPublisher } from "./release/publisher.ts";
 import { LOCK_TTL_MS } from "./fleet/fleet-lock.ts";
 import { gitBuildInfo, type GitBuildInfo } from "./release/git.ts";
-import type { ArtifactsPushInput, Plan, PlanRolloutInput } from "./schema/index.ts";
-import {
-  ArtifactsPushInput as ArtifactsPushInputSchema,
-  PlanRolloutInput as PlanRolloutInputSchema,
-  runTargetFor,
-} from "./schema/index.ts";
+import type { Plan, PlanRolloutInput } from "./schema/index.ts";
+import { PlanRolloutInput as PlanRolloutInputSchema, runTargetFor } from "./schema/index.ts";
 import { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS } from "./agents/state.ts";
 import { probeLocalTailscale, verifyTailscaleOauthClient } from "./fleet/preflight.ts";
 import { createInit } from "./fleet/init.ts";
-import { pushAndPublish } from "./fleet/init-release.ts";
 import { runDoctor, type DoctorReport } from "./fleet/doctor.ts";
 import { createPlans } from "./agents/plans.ts";
 import { createPolicy } from "./fleet/policy.ts";
@@ -182,17 +177,8 @@ export function createHermetic(deps: HermeticDeps) {
     notifications: notificationDeps,
     publishDeps,
   };
-  const {
-    nowIso,
-    requireConfig,
-    actor,
-    guardAccount,
-    guardFleet,
-    getAgent,
-    scanAgents,
-    renderFor,
-    fleetId,
-  } = ctx;
+  const { nowIso, requireConfig, guardAccount, guardFleet, getAgent, scanAgents, renderFor, fleetId } =
+    ctx;
 
   // ─── §8.3 profiles, and the per-agent lifecycle ────────────────────────────
 
@@ -309,6 +295,9 @@ export function createHermetic(deps: HermeticDeps) {
     ...(deps.rollout?.convergePollMs === undefined
       ? {}
       : { convergePollMs: deps.rollout.convergePollMs }),
+    // `upgrade --hermeticd` rolls out with `foundation.update`'s timings (§6.5).
+    rolloutWaitMs: deps.foundation?.rolloutWaitMs,
+    rolloutPollMs: deps.foundation?.rolloutPollMs,
   });
   const { settingsGet, settingsSet } = createSettings({ ctx });
 
@@ -429,24 +418,16 @@ export function createHermetic(deps: HermeticDeps) {
   const { set } = createAgentSet({ ctx, bindingPorts });
 
   /**
-   * §9 `artifacts push`: publish a release and point the fleet at it. Both
-   * halves, always — a release nothing names is invisible, and a manifest
-   * naming a release that is not there boots nothing. Held under the `_fleet`
-   * lock for the upload as well as the pointer move, for the reason
-   * `pointFleetAt` holds it: a release uploaded inside a `foundation.update`'s
-   * prune window is deleted out from under the boxes now fetching it.
+   * §9 `artifacts push`: publish a release, point the fleet at it, and roll it
+   * out to the running boxes when the fleet auto-updates hermeticd (§6.5) —
+   * `release/push-op.ts`. The rollout's wait is the one `foundation.update`
+   * uses, so a deployment configures it once.
    */
-  async function artifactsPush(input: ArtifactsPushInput = {}): Promise<ReleasePushResult> {
-    // The stack the guard just validated, rather than a second read of it: a
-    // `DescribeStacks` answering `null` here would land in `resources` as blanks.
-    const { fleet, stack } = await guardFleet();
-    const parsed = ArtifactsPushInputSchema.parse(input);
-    const owner = `${await actor()}#${randomUUID()}`;
-    const now = () => backend.clock.now();
-    return withFleetLock(backend.store.fleet, { fleet, owner, ttlMs: LOCK_TTL_MS, now }, (locked) =>
-      pushAndPublish(ctx, parsed, locked, stack),
-    );
-  }
+  const { push: artifactsPush } = createArtifactsPush({
+    ctx,
+    rolloutWaitMs: deps.foundation?.rolloutWaitMs,
+    rolloutPollMs: deps.foundation?.rolloutPollMs,
+  });
 
   /**
    * `init` (`init.ts`) is the call that first learns the caller's ARN, which it

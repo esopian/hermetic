@@ -33,7 +33,7 @@ import {
   MemoryBackend,
   seedFixtureFleet,
 } from "../src/backend/memory.ts";
-import { testHermetic } from "./helpers.ts";
+import { testHermetic, settle } from "./helpers.ts";
 
 const REF = "v2026.8.31";
 /** A second tag, on the commit after `REF`, so "another ref" is another tag. */
@@ -513,7 +513,7 @@ describe("the mirror block in the fleet manifest", () => {
   test("`artifacts push` mirrors this build's ref and records it", async () => {
     const mirror = stubMirror();
     const { backend, hermetic } = seeded(mirror.fn);
-    const pushed = await hermetic.artifacts.push({ version: "0.5.0" });
+    const pushed = await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     expect(mirror.refs).toEqual([BUILD_VERSIONS.hermes_ref]);
     expect(pushed.mirror_warning).toBeUndefined();
@@ -529,7 +529,7 @@ describe("the mirror block in the fleet manifest", () => {
   test("`upgrade --hermeticd` moves the pointer and keeps the mirror", async () => {
     const mirror = stubMirror();
     const { backend, hermetic } = seeded(mirror.fn);
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     expect((await readFleetManifest(backend.artifacts))!.hermes).toEqual(MIRRORED);
 
     for await (const _ of hermetic.upgrade({ all: true, hermeticd: FIXTURE_HERMETICD_VERSION }));
@@ -541,7 +541,7 @@ describe("the mirror block in the fleet manifest", () => {
   test("`foundation update` republishes the release and keeps the mirror", async () => {
     const mirror = stubMirror();
     const { backend, hermetic } = seeded(mirror.fn);
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     for await (const _ of hermetic.foundation.update({ yes: true }));
     expect((await readFleetManifest(backend.artifacts))!.hermes).toEqual(MIRRORED);
@@ -551,7 +551,7 @@ describe("the mirror block in the fleet manifest", () => {
     const mirror = stubMirror();
     const { backend, hermetic } = seeded(mirror.fn);
     // A manifest to add the block to: nothing to record onto without one.
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     backend.objects.delete(hermesBundleKey(BUILD_VERSIONS.hermes_ref));
     await backend.artifacts.putObject(
       "manifest.json",
@@ -577,7 +577,7 @@ describe("the mirror block in the fleet manifest", () => {
     });
     const { backend, hermetic } = seeded(failing);
 
-    const pushed = await hermetic.artifacts.push({ version: "0.5.0" });
+    const pushed = await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     expect(pushed.key).toBe(`artifacts/0.5.0/${pushed.generation}/hermeticd`);
     expect(pushed.mirror_warning).toContain("the remote end hung up");
     expect((await readFleetManifest(backend.artifacts))!.hermes).toBeUndefined();
@@ -608,7 +608,7 @@ describe("foundation update prunes stale hermes bundles", () => {
         status: "pushed",
       }),
     });
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     // Two bundles in the bucket, as a fleet that has been through a ref bump
     // has: the current one, and an older one still named by the manifest.
@@ -663,7 +663,7 @@ describe("foundation update prunes stale hermes bundles", () => {
         status: "pushed",
       }),
     });
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     // Two live agents, each with the config object its row names: one on this
     // build's ref, one still on an older one.
@@ -709,7 +709,7 @@ describe("foundation update prunes stale hermes bundles", () => {
         status: "pushed",
       }),
     });
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     await backend.artifacts.putObject(hermesBundleKey(STALE), new TextEncoder().encode("old bundle"));
     await nameInManifest(backend, [STALE]);
 
@@ -739,7 +739,7 @@ describe("foundation update prunes stale hermes bundles", () => {
         return { block: { ...(existing ?? {}), ...current(ref) }, status: "pushed" };
       },
     });
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     // A fleet whose manifest names only some *other* laptop's ref.
     await nameInManifest(backend, [STALE], { drop: [BUILD_VERSIONS.hermes_ref] });
 
@@ -763,7 +763,7 @@ describe("foundation update prunes stale hermes bundles", () => {
         warning: "could not mirror Hermes: the remote end hung up",
       }),
     });
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     await nameInManifest(backend, [STALE], { drop: [BUILD_VERSIONS.hermes_ref] });
 
     const messages: string[] = [];
