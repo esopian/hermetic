@@ -1106,6 +1106,111 @@ describe("hermes-chat · abort", () => {
   });
 });
 
+describe("hermes-chat · steer", () => {
+  const RUNNING = {
+    session_id: "runtime-other",
+    running: true,
+    status: "working",
+    info: {},
+  };
+
+  test("a steer into a running turn redirects it with the exact runtime and profile", async () => {
+    const h = harness({
+      results: {
+        "session.resume": RUNNING,
+        "session.redirect": { status: "redirected", text: "look at the logs too" },
+      },
+    });
+    expect(
+      await createHermesChat(h.deps).steer?.(BOX, "research", "look at the logs too", {
+        session: SESSION_ID,
+      }),
+    ).toBe("redirected");
+    const calls = h.sockets[0]?.sent ?? [];
+    expect(calls.map((call) => call.method)).toEqual(["session.resume", "session.redirect"]);
+    expect(calls[0]?.params).toMatchObject({ session_id: SESSION_ID, profile: "research", lazy: true });
+    expect(calls[1]?.params).toEqual({
+      session_id: "runtime-other",
+      profile: "research",
+      text: "look at the logs too",
+    });
+  });
+
+  test("the gateway's queued and rejected answers come back as they are; anything else is rejected", async () => {
+    for (const [answer, expected] of [
+      ["queued", "queued"],
+      ["rejected", "rejected"],
+      ["something-new", "rejected"],
+    ] as const) {
+      const h = harness({
+        results: {
+          "session.resume": RUNNING,
+          "session.redirect": { status: answer, text: "x" },
+        },
+      });
+      expect(
+        await createHermesChat(h.deps).steer?.(BOX, "research", "x", { session: SESSION_ID }),
+      ).toBe(expected);
+    }
+  });
+
+  test("an agent that cannot redirect an active turn (4010) is rejected, not thrown", async () => {
+    const h = harness({
+      results: { "session.resume": RUNNING },
+      errors: {
+        "session.redirect": { code: 4010, message: "agent does not support active-turn redirect" },
+      },
+    });
+    expect(await createHermesChat(h.deps).steer?.(BOX, "research", "x", { session: SESSION_ID })).toBe(
+      "rejected",
+    );
+  });
+
+  test("any other gateway refusal still throws", async () => {
+    const h = harness({
+      results: { "session.resume": RUNNING },
+      errors: { "session.redirect": { code: 4001, message: "session not found" } },
+    });
+    await expect(
+      createHermesChat(h.deps).steer?.(BOX, "research", "x", { session: SESSION_ID }),
+    ).rejects.toMatchObject({ code: "CHAT_PROTOCOL" });
+  });
+
+  test("an idle bot is idle, and nothing is redirected — a steer never starts a turn", async () => {
+    const h = harness({
+      results: { "session.resume": { ...RUNNING, running: false, status: "idle" } },
+    });
+    expect(await createHermesChat(h.deps).steer?.(BOX, "research", "x", { session: SESSION_ID })).toBe(
+      "idle",
+    );
+    expect(h.sockets[0]?.sent.map((call) => call.method)).toEqual(["session.resume"]);
+
+    const none = harness({ results: { "session.list": { sessions: [] } } });
+    expect(await createHermesChat(none.deps).steer?.(BOX, "default", "x")).toBe("idle");
+    expect(none.sockets[0]?.sent.map((call) => call.method)).toEqual(["session.list"]);
+  });
+
+  test("this process's own turn is steered by its runtime, without a resume", async () => {
+    const script = turnScript([]);
+    const h = harness({
+      ...script,
+      results: { ...script.results, "session.redirect": { status: "redirected" } },
+    });
+    const adapter = createHermesChat(h.deps);
+    const turn = adapter.send(BOX, "research", "hello")[Symbol.asyncIterator]();
+    await turn.next();
+    await turn.next();
+    expect(await adapter.steer?.(BOX, "research", "and then this")).toBe("redirected");
+    expect(h.sockets[1]?.sent.map(({ method, params }) => ({ method, params }))).toEqual([
+      {
+        method: "session.redirect",
+        params: { session_id: SESSION_ID, profile: "research", text: "and then this" },
+      },
+    ]);
+    await turn.return?.();
+  });
+});
+
 /* ── the token ────────────────────────────────────────────────────────────── */
 
 describe("hermes-chat · the session token", () => {

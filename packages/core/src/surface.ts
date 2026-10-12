@@ -44,6 +44,7 @@ import {
   ChatSettingsInput as ChatSettingsInputSchema,
   ChatListenInput as ChatListenInputSchema,
   ChatAbortInput as ChatAbortInputSchema,
+  ChatSteerInput as ChatSteerInputSchema,
   ChatHistoryInput as ChatHistoryInputSchema,
   ChatObserveInput as ChatObserveInputSchema,
   ChatSendInput as ChatSendInputSchema,
@@ -177,6 +178,8 @@ export const PUBLIC_METHODS = [
   "chat.history",
   "chat.send",
   "chat.abort",
+  // §9.2: a message into the running turn, without stopping it.
+  "chat.steer",
   // §9.2: a watch on one conversation, independent of any send.
   "chat.observe",
   "artifacts.push",
@@ -319,6 +322,7 @@ export const REQUEST_SCHEMAS = {
   "chat.history": ChatHistoryInputSchema,
   "chat.send": ChatSendInputSchema,
   "chat.abort": ChatAbortInputSchema,
+  "chat.steer": ChatSteerInputSchema,
   /**
    * §9.2. Like `chat.send` it returns an `AsyncIterable` and like
    * `chat.send` it is *not* in `STREAMING_METHODS`: an observation is a live

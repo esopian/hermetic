@@ -23,6 +23,7 @@ import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../../lib/visibility.ts";
+import { useFocusOnReturn } from "../../lib/focus.ts";
 
 /**
  * A submission whose delivery is not yet known: the text as it was sent and the
@@ -165,6 +166,8 @@ export function RoomConversation({
   /** The clock every stamp in this pane is rendered against, shared with the rail. */
   const now = chat?.now ?? Date.now();
   const input = useRef<HTMLTextAreaElement>(null);
+  // Switching back to the app lands the caret here, so a paste goes in.
+  useFocusOnReturn(input);
   const write = (text: string) => {
     setDraft(text);
     onDraft(text);

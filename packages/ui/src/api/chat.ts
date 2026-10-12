@@ -18,6 +18,7 @@ import type {
   ChatResumeResult,
   ChatSessionsResult,
   ChatSettingsView,
+  ChatSteerResult,
   ChatSwarmsResult,
 } from "./types.ts";
 
@@ -118,6 +119,29 @@ export function abortTurn(
   return transport().request<ChatAbortResult>("chat.abort", {
     instance,
     bot,
+    session,
+    target: target(),
+  });
+}
+
+/**
+ * `chat.steer` — put a message into the turn in flight without stopping it.
+ *
+ * `status` is the box's answer: `redirected` (folded into the running turn),
+ * `queued` (the turn was still starting; it runs next), `rejected` (not
+ * applied), or `idle` — no turn was running, and nothing was sent. The session
+ * is addressed exactly as `abortTurn` addresses it.
+ */
+export function steerTurn(
+  instance: string,
+  bot: string,
+  text: string,
+  session?: string | null,
+): Promise<ChatSteerResult> {
+  return transport().request<ChatSteerResult>("chat.steer", {
+    instance,
+    bot,
+    text,
     session,
     target: target(),
   });

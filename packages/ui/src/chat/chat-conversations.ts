@@ -1,7 +1,13 @@
 /** Conversation records outlive the frame displaying them, but never their fleet provider. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatApi, ChatSelection } from "./chat-state.tsx";
-import type { BotView, ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
+import type {
+  BotView,
+  ChatConversationView,
+  ChatFrameView,
+  ChatMessageView,
+  ChatObserveView,
+} from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
 import { isProcessEventMessage, previewText } from "./process-events.ts";
@@ -14,6 +20,7 @@ import {
   appendMissing,
   coveredByTurn,
   fresh,
+  insertByStamp,
   isLocal,
   key,
   releaseHeld,
@@ -116,6 +123,78 @@ function replyArrival(record: Conversation, live: ChatMessageView | null): ChatA
     // The row is in hand, so the rail knows whose words these are.
     preview: { preview, preview_role: source.role },
   };
+}
+
+/**
+ * What steering a running turn came to. The box's four answers (`chat.steer`),
+ * plus `refused` for a steer this store would not make at all — no selection,
+ * a box this tab may no longer talk to, nothing to say.
+ */
+export type SteerOutcome = "redirected" | "queued" | "rejected" | "idle" | "refused";
+
+/** The optimistic copy of the operator's prompt, until the box echoes it back. */
+function localPrompt(body: string, at: string, session: string | null): ChatMessageView {
+  return {
+    id: `local:${at}`,
+    session: session ?? "",
+    role: "user",
+    author: null,
+    at,
+    blocks: [{ kind: "text", markdown: body }],
+    usage: null,
+    error: null,
+    incomplete: null,
+  } as ChatMessageView;
+}
+
+/**
+ * Whether the transcript already carries the reply `live` assembled: the same
+ * id, or a row the box wrote for it — not the operator's, not a background
+ * event, and stamped no earlier than the reply began. The test `readHistory`
+ * applies when it decides a read has caught up with the live message.
+ */
+function answered(messages: readonly ChatMessageView[], live: ChatMessageView): boolean {
+  const since = Date.parse(live.at);
+  return messages.some(
+    (m) =>
+      m.id === live.id || (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
+  );
+}
+
+/** The blocks a part of the reply that a steer closed off can still receive. */
+const LANDS = new Set(["tool", "approval", "question"]);
+
+/**
+ * A `block` frame that updates a block in a part of the reply a steer closed
+ * off — a tool that was running when the operator's words went in, finishing
+ * after them — lands on that part rather than starting a copy below.
+ *
+ * Whether it does is read off `assemble` itself: a block it *replaced* leaves
+ * the part's block count where it was, and one it would only have appended is
+ * new work, which belongs to the live message.
+ */
+function landOnSegment(
+  record: Conversation,
+  frame: ChatFrameView,
+  seed: { session: string; at: string },
+  assemble: Assemble,
+): boolean {
+  if (frame.type !== "block" || record.segments.length === 0) return false;
+  // Only blocks with an identity of their own. A status snapshot also replaces
+  // by key, but it describes the turn as it is now, which is the live part.
+  if (!LANDS.has(frame.block.kind)) return false;
+  for (const id of [...record.segments].reverse()) {
+    const index = record.messages.findIndex((m) => m.id === id);
+    const part = index === -1 ? null : record.messages[index]!;
+    if (!part) continue;
+    const merged = assemble(part, frame, seed);
+    if (!merged || merged.blocks.length !== part.blocks.length) continue;
+    const next = [...record.messages];
+    next[index] = merged;
+    record.messages = next;
+    return true;
+  }
+  return false;
 }
 
 export function useConversations(
@@ -666,7 +745,7 @@ export function useConversations(
             break;
           }
           const placeholder = record.messages.findIndex((m) => isLocal(m) && accountsFor(message, m));
-          if (placeholder === -1) record.messages = [...record.messages, message];
+          if (placeholder === -1) record.messages = insertByStamp(record.messages, [message]);
           else {
             const next = [...record.messages];
             next[placeholder] = message;
@@ -897,21 +976,29 @@ export function useConversations(
     }
   }, [changed, get, permits, readHistory]);
 
+  /** Start a turn. `false` when this store refused to, and nothing was sent. */
   const send = useCallback(
-    (text: string) => {
-      if (!selected.current || !permits(selected.current.instance)) return;
+    (text: string): boolean => {
+      if (!selected.current || !permits(selected.current.instance)) return false;
       const record = get(selected.current);
       const body = text.trim();
-      if (!body || record.sending || record.aborting) return;
+      if (!body || record.sending || record.aborting) return false;
       clearReconnect(record);
       const turn = ++record.turn;
       record.dropped = false;
-      record.live = null;
       record.turnError = null;
       // Whatever the previous turn held belongs to the transcript before this
       // one arms the hold again; nothing the box wrote down is carried across
       // a turn boundary in a buffer only the previous turn could empty.
       releaseHeld(record);
+      // The previous reply stays on screen, above this prompt, until a read
+      // replaces it with the box's copy. The read the previous turn's end asked
+      // for is cancelled just above, so a message sent before it landed —
+      // every message the queue sends — used to blank the answer for the
+      // length of the new turn.
+      if (record.live && !answered(record.messages, record.live))
+        record.messages = [...record.messages, record.live];
+      record.live = null;
       record.sending = true;
       record.activity = "thinking";
       const target = record.target;
@@ -919,20 +1006,9 @@ export function useConversations(
       const at = new Date().toISOString();
       const seed = { session: session ?? "", at };
       record.turnSeed = seed;
-      record.messages = [
-        ...record.messages,
-        {
-          id: `local:${at}`,
-          session: session ?? "",
-          role: "user",
-          author: null,
-          at,
-          blocks: [{ kind: "text", markdown: body }],
-          usage: null,
-          error: null,
-          incomplete: null,
-        } as ChatMessageView,
-      ];
+      record.segments = [];
+      record.segmentAt = at;
+      record.messages = [...record.messages, localPrompt(body, at, session)];
       changed();
       let seq = -1;
       let lastDelta: string | null = null;
@@ -950,6 +1026,7 @@ export function useConversations(
         finish();
         record.cancel = null;
         record.activity = "idle";
+        record.segments = [];
         if (!record.aborting) record.sending = false;
         // The live message stops speaking for the held rows here — including on
         // the paths that never re-read the transcript, which is the whole point
@@ -1007,7 +1084,8 @@ export function useConversations(
             seq = frame.seq;
             terminal = frame.type === "done";
             record.activity = nextTurnActivity(record.activity, frame);
-            record.live = assemble(record.live, frame, seed);
+            if (!landOnSegment(record, frame, seed, assemble))
+              record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
             changed();
           },
           onEnd: end,
@@ -1021,8 +1099,61 @@ export function useConversations(
         };
         tick();
       }
+      return true;
     },
     [assemble, changed, clearReconnect, get, readHistory, readSessions, reconnect, permits],
+  );
+
+  /**
+   * Say something to the turn that is running, without stopping it (§9.2).
+   *
+   * The box takes the text into the turn in flight (`chat.steer`, upstream's
+   * `session.redirect`), so the reply that is streaming changes course rather
+   * than ending. On screen that is three things, in this order: the reply so
+   * far is closed off where it stands, the operator's words go under it, and
+   * what the turn says next starts below them. Without the split the prompt
+   * would be drawn above the whole live reply — including the part written
+   * before it was sent — or, worse, below the part written after it.
+   *
+   * Nothing is drawn until the box has said yes. A `rejected` or an `idle`
+   * comes back to the caller untouched, and the caller decides what forcing the
+   * message through means (`useSendQueue`).
+   */
+  const steer = useCallback(
+    async (text: string): Promise<SteerOutcome> => {
+      if (!selected.current || !permits(selected.current.instance)) return "refused";
+      const record = get(selected.current);
+      const body = text.trim();
+      if (!body) return "refused";
+      if (!record.sending || record.aborting) return "idle";
+      const ask = apiRef.current.steerTurn;
+      if (!ask) return "rejected";
+      const turn = record.turn;
+      const session = record.resolvedSession ?? record.target.session;
+      let status: SteerOutcome;
+      try {
+        status = (await ask(record.target.instance, record.target.bot, body, session)).status;
+      } catch {
+        return "rejected";
+      }
+      if (!alive.current || !permits(record.target.instance)) return "refused";
+      if (status !== "redirected" && status !== "queued") return status;
+      const at = new Date().toISOString();
+      if (record.turn === turn && record.sending && record.live && record.live.blocks.length > 0) {
+        const id = `${record.live.id}~${record.segments.length + 1}`;
+        record.messages = [...record.messages, { ...record.live, id }];
+        record.segments = [...record.segments, id];
+        record.live = null;
+      }
+      record.segmentAt = at;
+      record.messages = [...record.messages, localPrompt(body, at, session)];
+      changed();
+      // The turn ended while the box was answering: its re-read has already
+      // been asked for and may predate this prompt, so ask again.
+      if (!record.sending) void readHistory(record);
+      return status;
+    },
+    [changed, get, permits, readHistory],
   );
 
   const abort = useCallback(async () => {
@@ -1055,6 +1186,7 @@ export function useConversations(
         cancel?.();
         record.cancel = null;
         record.sending = false;
+        record.segments = [];
         releaseHeld(record);
         record.activity = "idle";
         record.aborting = false;
@@ -1122,6 +1254,7 @@ export function useConversations(
     selection,
     select,
     send,
+    steer,
     abort,
     reloadHistory,
     reloadTranscript,

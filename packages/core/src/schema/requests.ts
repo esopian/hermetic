@@ -1053,6 +1053,23 @@ export const ChatAbortInput = z.object({
 export type ChatAbortInput = z.infer<typeof ChatAbortInput>;
 
 /**
+ * `hermetic chat steer <instance>/<bot> <text…>` — put a message into the turn
+ * in flight without stopping it (§9.2).
+ *
+ * Addressed the way `chat abort` is, and for the same reason: the operator can
+ * see a bot that is working, not a turn id. `text` is trimmed and must say
+ * something, because the gateway refuses an empty correction (4002) and a
+ * whitespace-only one is the same mistake caught one hop sooner.
+ */
+export const ChatSteerInput = z.object({
+  instance: AgentName,
+  bot: BotName,
+  session: z.string().min(1).nullish(),
+  text: z.string().trim().min(1).max(200_000),
+});
+export type ChatSteerInput = z.infer<typeof ChatSteerInput>;
+
+/**
  * `hermetic chat watch <instance>/<bot>` — keep watching one conversation
  * (§9.2).
  *

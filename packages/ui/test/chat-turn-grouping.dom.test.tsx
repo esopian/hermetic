@@ -256,7 +256,7 @@ describe("turn grouping", () => {
     expect(after.querySelector("summary")?.textContent).toContain("2 tools");
   });
 
-  test("a failed step opens the group", () => {
+  test("a failed step marks the group without opening it", () => {
     const { container } = thread([
       toolRow(1),
       {
@@ -265,11 +265,11 @@ describe("turn grouping", () => {
       } as ChatMessageView,
     ]);
     const group = container.querySelector<HTMLDetailsElement>(".ch-activity")!;
-    expect(group.open).toBe(true);
+    expect(group.open).toBe(false);
     expect(group.querySelector("summary")?.textContent).toContain("Tool failed");
   });
 
-  test("a step names its tool and target, times it, and a failure opens itself", () => {
+  test("a step names its tool and target, times it, and a failure stays shut", () => {
     const { container } = thread([
       toolRow(1),
       {
@@ -279,7 +279,7 @@ describe("turn grouping", () => {
     ]);
     const steps = container.querySelectorAll<HTMLDetailsElement>(".ch-activity-step");
     expect(steps[0]!.open).toBe(false);
-    expect(steps[1]!.open).toBe(true);
+    expect(steps[1]!.open).toBe(false);
     expect(steps[0]!.querySelector("summary")?.textContent).toContain("terminal");
     expect(steps[0]!.querySelector(".ch-activity-target")?.textContent).toBe("printf step-1");
     expect(steps[0]!.querySelector("summary")?.textContent).toContain("1.2s");
@@ -410,7 +410,7 @@ describe("turn grouping", () => {
     expect(found).toBe(article);
   });
 
-  test("a step that fails while it is on screen opens itself, unless it was closed", () => {
+  test("a step that fails while it is on screen stays shut, and keeps the reader's choice", () => {
     const running = (status: "running" | "bad") =>
       ({
         ...toolRow(1),
@@ -420,16 +420,16 @@ describe("turn grouping", () => {
     const step = () => container.querySelector<HTMLDetailsElement>(".ch-activity-step")!;
     expect(step().open).toBe(false);
     rerender(threadEl([running("bad")], NOW));
-    expect(step().open).toBe(true);
+    expect(step().open).toBe(false);
 
     cleanup();
-    const closed = thread([running("bad")]);
-    const one = closed.container.querySelector<HTMLDetailsElement>(".ch-activity-step")!;
-    expect(one.open).toBe(true);
-    fireEvent.click(one.querySelector("summary")!);
+    const opened = thread([running("bad")]);
+    const one = opened.container.querySelector<HTMLDetailsElement>(".ch-activity-step")!;
     expect(one.open).toBe(false);
-    closed.rerender(threadEl([running("bad")], NOW + 1000));
-    expect(closed.container.querySelector<HTMLDetailsElement>(".ch-activity-step")!.open).toBe(false);
+    fireEvent.click(one.querySelector("summary")!);
+    expect(one.open).toBe(true);
+    opened.rerender(threadEl([running("bad")], NOW + 1000));
+    expect(opened.container.querySelector<HTMLDetailsElement>(".ch-activity-step")!.open).toBe(true);
   });
 
   test("an unrecognised tool never puts its arguments in the always-visible header", () => {

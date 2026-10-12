@@ -44,6 +44,7 @@ import {
   ChatArchiveInput,
   ChatRespondInput,
   ChatAbortInput,
+  ChatSteerInput,
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
@@ -74,7 +75,7 @@ import type { ChatSettings, ChatSettingsStore } from "./chat-settings.ts";
 import { observeChatActivity } from "./notifications.ts";
 import type { ChatActivity, NotificationDeps } from "./notifications.ts";
 import { CHAT_CLASSIFY_LIMIT, classifyChatActivity } from "./chat-activity.ts";
-import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
+import type { BoxAddress, ChatSteerStatus, HermesChatClient } from "./hermes/hermes-chat.ts";
 import { MemoryChatFenceStore, chatFenced } from "./chat-fence.ts";
 import type { ChatFenceStore } from "./chat-fence.ts";
 import { MemoryInstanceListeningStore } from "./instance-listening.ts";
@@ -293,6 +294,19 @@ export interface ChatAbortResult {
   instance: string;
   bot: string;
   aborted: boolean;
+}
+
+export type { ChatSteerStatus };
+
+/**
+ * What a steer did (§9.2). `redirected`, `queued` and `rejected` are the
+ * gateway's answer to `session.redirect`; `idle` says no running turn was
+ * found, and that nothing was sent — a steer never starts a turn of its own.
+ */
+export interface ChatSteerResult {
+  instance: string;
+  bot: string;
+  status: ChatSteerStatus;
 }
 
 /* ── the surface ──────────────────────────────────────────────────────────── */
@@ -650,6 +664,27 @@ export function createChat(deps: ChatDeps) {
     return { instance: parsed.instance, bot: parsed.bot, aborted: aborted ?? true };
   }
 
+  /**
+   * Put a message into the turn in flight without stopping it (§9.2).
+   *
+   * Addressed like `abort`, by bot and an optional durable session. A bot with
+   * no running turn answers `idle` and is left alone: a steer that started a
+   * turn would be a `send` the operator did not ask for.
+   */
+  async function steer(input: unknown, opts: ChatOptions = {}): Promise<ChatSteerResult> {
+    const parsed = parse(ChatSteerInput, input, "chat steer");
+    validateName(parsed.instance);
+    const box = await address(parsed.instance);
+    if (!hermes.steer)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support steering a turn");
+    opts.signal?.throwIfAborted();
+    const status = await hermes.steer(box, parsed.bot, parsed.text, {
+      signal: opts.signal,
+      ...(parsed.session != null ? { session: parsed.session } : {}),
+    });
+    return { instance: parsed.instance, bot: parsed.bot, status };
+  }
+
   const observation = createChatObserveWiring({ deps, hermes, address, history, now });
 
   /**
@@ -747,6 +782,12 @@ export function createChat(deps: ChatDeps) {
       sealed(() =>
         watched(parse(ChatAbortInput, input, "chat abort").instance, opts, (request) =>
           abort(input, request),
+        ),
+      ),
+    steer: (input: unknown, opts: ChatOptions = {}) =>
+      sealed(() =>
+        watched(parse(ChatSteerInput, input, "chat steer").instance, opts, (request) =>
+          steer(input, request),
         ),
       ),
     /**

@@ -3,8 +3,7 @@
  *
  * The design has thirty-two examples of it and one rule underneath them all:
  * the *default state* of a card is a function of its verdict, not of its type.
- * `ok`/`warn`/`bad`/`acc`/`muted` start collapsed; `unknown` and anything that
- * failed start open. That rule lives in `chat-logic.ts`; this component is what
+ * `ok`/`warn`/`bad`/`acc`/`muted` start collapsed; only `unknown` starts open. That rule lives in `chat-logic.ts`; this component is what
  * obeys it, once, so no renderer gets to have its own opinion about it.
  *
  * A collapsed card does not render its body at all, rather than hiding it with
@@ -22,7 +21,6 @@ import type { CardVerdict } from "../chat-logic.ts";
 
 export function Card({
   verdict,
-  failed = false,
   /** The head's left label: the tool's name, `Reasoning`, `agent`, `plan · destroy`. */
   head,
   /** The monospaced middle — a command, a path, a query. Optional by design. */
@@ -34,7 +32,6 @@ export function Card({
   children,
 }: {
   verdict: CardVerdict;
-  failed?: boolean;
   head: ReactNode;
   subject?: ReactNode;
   right?: ReactNode;
@@ -56,7 +53,7 @@ export function Card({
    * having clicked is the one thing more specific than the rule.
    */
   const [choice, setChoice] = useState<boolean | null>(null);
-  const collapsed = choice ?? (collapsible && startsCollapsed(verdict, failed));
+  const collapsed = choice ?? (collapsible && startsCollapsed(verdict));
   const open = !collapsible || !collapsed;
   const setCollapsed = (next: (v: boolean) => boolean) => setChoice(next(collapsed));
 

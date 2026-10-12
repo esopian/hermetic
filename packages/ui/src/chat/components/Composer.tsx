@@ -24,8 +24,9 @@ import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
-import { composerHint, destinationNotice, originClass, previewOf, sendLabel } from "../chat-logic.ts";
+import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { useFocusOnReturn } from "../../lib/focus.ts";
 import type { Destination } from "../chat-logic.ts";
 
 /** A conversation the `unchosen` band offers as a chip. */
@@ -74,6 +75,8 @@ export function Composer({
 }) {
   const [localText, setLocalText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
+  // Switching back to the app lands the caret here, so a paste goes in.
+  useFocusOnReturn(input, editable);
   const chat = useChatIfAvailable();
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
@@ -125,6 +128,37 @@ export function Composer({
     onSend(body);
   };
 
+  /**
+   * ⌘Enter while the agent works: the message goes now rather than after the
+   * turn — steered into it, or forced through by stopping it (`chat-queue.ts`).
+   * Idle, it is the same as Enter.
+   */
+  const submitNow = () => {
+    const body = text.trim();
+    if (!canQueue || !chat || body.length === 0) {
+      submit();
+      return;
+    }
+    setText("");
+    chat.sendNow(body);
+  };
+
+  /**
+   * A queued row back into the input, to be reworded and sent again. Ahead of
+   * anything already typed there, so nothing the operator wrote is lost.
+   */
+  const editQueued = (id: string, queuedText: string) => {
+    if (!chat) return;
+    chat.unqueue(id);
+    const next = text.trim() ? `${queuedText}\n\n${text}` : queuedText;
+    setText(next);
+    const el = input.current;
+    if (el) {
+      el.focus({ preventScroll: true });
+      setTimeout(() => el.setSelectionRange?.(next.length, next.length), 0);
+    }
+  };
+
   return (
     <div className="ch-composer">
       {notice ? (
@@ -161,37 +195,61 @@ export function Composer({
         </div>
       ) : null}
 
-      {queued.length > 0 ? (
-        // Above the input, in order, drained from the top. Each row is the
-        // operator's own words, so it goes through `RedactedText` like every
-        // other piece of prose in the thread.
-        <ul className="ch-queue" aria-label="Queued messages">
-          {queued.map((row) => (
-            <li className="ch-queue-row" key={row.id}>
-              <span className="ch-queue-dot" aria-hidden="true" />
-              <span className="ch-queue-text">
-                <RedactedText text={previewOf(row.text) ?? row.text} />
-              </span>
-              <button
-                type="button"
-                className="ch-queue-drop"
-                title="Remove from the queue"
-                aria-label="Remove queued message"
-                onClick={() => chat?.unqueue(row.id)}
-              >
-                {"\u2715"}
-              </button>
-            </li>
-          ))}
-          <li className="ch-queue-foot">
-            {queued.length} queued ·{" "}
-            {parkedQueue ? "paused — send a message to resume" : "sends when the agent is free"}
-          </li>
-        </ul>
-      ) : null}
-
       <div className="ch-input-wrap bm-input-wrap">
         <MentionList picker={picker} fleetId={fleetId} label="Mention a bot" />
+        {queued.length > 0 ? (
+          // Above the input and joined to it, in order, drained from the top —
+          // the shape Conductor uses. Each row is the operator's own words, so it
+          // goes through `RedactedText` like every other piece of prose in the
+          // thread.
+          <section className="ch-queue" aria-label="Queued messages">
+            <header className="ch-queue-head">
+              <span className="ch-queue-title">Queued</span>
+              <span className="ch-queue-status">
+                {parkedQueue
+                  ? "paused · ↑ sends one now, or send a message to resume"
+                  : "sends when the agent is free"}
+              </span>
+            </header>
+            <ul>
+              {queued.map((row) => (
+                <li className="ch-queue-row" key={row.id}>
+                  <span className="ch-queue-text">
+                    {/* One line, cut by the row's width rather than at a character count. */}
+                    <RedactedText text={row.text.replace(/\s*\n+\s*/g, " ")} />
+                  </span>
+                  <button
+                    type="button"
+                    className="ch-queue-act"
+                    title="Edit — back into the input"
+                    aria-label="Edit queued message"
+                    onClick={() => editQueued(row.id, row.text)}
+                  >
+                    <Icon d={["M16 3l5 5L8 21H3v-5z", "M13 6l5 5"]} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ch-queue-act"
+                    title="Remove from the queue"
+                    aria-label="Remove queued message"
+                    onClick={() => chat?.unqueue(row.id)}
+                  >
+                    <Icon d={["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"]} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ch-queue-act"
+                    title={sending ? "Send now, into the running turn" : "Send now"}
+                    aria-label="Send queued message now"
+                    onClick={() => chat?.sendQueuedNow(row.id)}
+                  >
+                    <Icon d={["M12 19V5", "M6 11l6-6 6 6"]} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <textarea
           ref={input}
           className="ch-input"
@@ -209,11 +267,13 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.defaultPrevented || e.nativeEvent.isComposing) return;
             if (picker.onKeyDown(e)) return;
-            // Enter sends, Shift+Enter is a newline, and ⌘Enter is a third
-            // spelling of the first.
+            // Enter sends — or queues, while the agent works — and Shift+Enter
+            // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
+            // when idle, past the queue when not.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              submit();
+              if (e.metaKey || e.ctrlKey) submitNow();
+              else submit();
               return;
             }
             // Esc stops the turn. `preventDefault` is load-bearing rather than
@@ -237,7 +297,7 @@ export function Composer({
             .filter(Boolean)
             .join(" ")}
           disabled={!enabled || text.trim().length === 0 || (sending && !chat)}
-          title={canQueue ? "Queue (⌘↵ or Enter)" : "Send (⌘↵ or Enter)"}
+          title={canQueue ? "Queue (Enter)" : "Send (Enter or ⌘↵)"}
           onClick={submit}
         >
           {label ? (
@@ -255,7 +315,12 @@ export function Composer({
         <span>
           <span className="ch-kbd">Enter</span> send · <span className="ch-kbd">⇧ Enter</span> newline ·{" "}
           <span className="ch-kbd">Esc</span> stop
-          {canQueue ? " · Enter queues while the agent works" : ""}
+          {canQueue ? (
+            <>
+              {" · Enter queues while the agent works · "}
+              <span className="ch-kbd">⌘ Enter</span> sends now
+            </>
+          ) : null}
         </span>
         <span className="right">
           {sending ? "turn in flight" : where ? `over the tailnet · ${where}` : ""}
@@ -267,5 +332,24 @@ export function Composer({
         </span>
       </div>
     </div>
+  );
+}
+
+/** A 14px stroked glyph, drawn like the rest of the chat's inline icons. */
+function Icon({ d }: { d: string[] }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+    >
+      {d.map((path) => (
+        <path key={path} d={path} />
+      ))}
+    </svg>
   );
 }

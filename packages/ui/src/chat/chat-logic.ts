@@ -453,14 +453,16 @@ export type CardVerdict = "ok" | "warn" | "bad" | "acc" | "muted" | "unknown";
 
 /**
  * The rule every card in the transcript obeys: a settled verdict starts
- * collapsed, an unsettled one and any error starts open.
+ * collapsed, and only `unknown` starts open.
  *
- * A green exit code was never news. A non-zero one is the whole message, and so
- * is a payload from a tool this build has no renderer for — the operator is the
- * fallback renderer in that case, and a fallback that starts shut is not one.
+ * A green exit code was never news. A failed one is news, but its `bad` tone
+ * and exit code already say so on the shut card, and an agent that retries past
+ * a failed call would otherwise push its own reply down under that call's
+ * output. A payload from a tool this build has no renderer for is different:
+ * the operator is the fallback renderer, and a fallback that starts shut is not
+ * one.
  */
-export function startsCollapsed(verdict: CardVerdict, failed = false): boolean {
-  if (failed) return false;
+export function startsCollapsed(verdict: CardVerdict): boolean {
   return verdict !== "unknown";
 }
 

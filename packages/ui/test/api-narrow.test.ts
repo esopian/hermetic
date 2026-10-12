@@ -3,6 +3,7 @@ import { FakeStream, fakeServer } from "./fake-transport.ts";
 import {
   ApiError,
   abortTurn,
+  steerTurn,
   apiErrorOf,
   fleetTarget,
   isError,
@@ -186,6 +187,39 @@ test("abortTurn names the optional durable session, and only when there is one",
     expect(server.calls[1]?.params).toEqual({
       instance: "atlas",
       bot: "research",
+      target: TARGET,
+    });
+  } finally {
+    setFleetTarget(null);
+    server.restore();
+  }
+});
+
+test("steerTurn carries the text and the fleet, and the session only when there is one", async () => {
+  const server = fakeServer({
+    "chat.steer": { instance: "atlas", bot: "research", status: "redirected" },
+  });
+  const TARGET = { account_id: "123456789012", region: "us-west-2", fleet_id: "m4in0abc" };
+  setFleetTarget(TARGET);
+  try {
+    expect(await steerTurn("atlas", "research", "check the logs too", "durable/id")).toEqual({
+      instance: "atlas",
+      bot: "research",
+      status: "redirected",
+    });
+    expect(server.calls[0]?.name).toBe("chat.steer");
+    expect(server.calls[0]?.params).toEqual({
+      instance: "atlas",
+      bot: "research",
+      text: "check the logs too",
+      session: "durable/id",
+      target: TARGET,
+    });
+    await steerTurn("atlas", "research", "and the disk");
+    expect(server.calls[1]?.params).toEqual({
+      instance: "atlas",
+      bot: "research",
+      text: "and the disk",
       target: TARGET,
     });
   } finally {
