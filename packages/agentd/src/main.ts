@@ -47,6 +47,7 @@ export type { Argv, SecretSlot } from "./cli.ts";
 export { bootContext, context, fatalMessage, log, stderrEmit } from "./context.ts";
 export type { Context, RunDeps } from "./context.ts";
 export {
+  AUTO_UPDATE_CHECK_MS,
   BUSY_UNIT_STATES,
   CONVERGE_POLL_MS,
   IDLE_UNIT_STATES,

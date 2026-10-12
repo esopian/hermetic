@@ -17,7 +17,7 @@ import { Command as Cmd } from "commander";
 import { openCtx } from "../context.ts";
 import { globals } from "../options.ts";
 import { defined, toInt, validate } from "../validate.ts";
-import { out, outJson } from "../io.ts";
+import { err, out, outJson } from "../io.ts";
 import { renderSettings } from "../table.ts";
 import { declare } from "../declare.ts";
 import { SettingsGetInput, SettingsSetInput } from "@hermetic/core";
@@ -69,6 +69,14 @@ export function register(program: Command): void {
       .option("--reasoning <effort>", "low | medium | high")
       .option("--approvals <mode>", "smart | manual | off (default off)")
       .option("--clear-agent-defaults", "drop the fleet-wide Hermes settings entirely")
+      .option(
+        "--auto-update-hermeticd",
+        "roll a newly pushed hermeticd out to running boxes at once (the default)",
+      )
+      .option(
+        "--no-auto-update-hermeticd",
+        "leave a newly pushed hermeticd to each box's nightly update",
+      )
       .option("--expected-version <n>", "refuse unless the settings are still at this version")
       .addHelpText(
         "after",
@@ -78,7 +86,10 @@ export function register(program: Command): void {
           "\nExamples:\n" +
           "  hermetic settings set --default-profile anthropic-main\n" +
           "  hermetic settings set --size large --volume-gib 200\n" +
-          "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n",
+          "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n" +
+          "  hermetic settings set --no-auto-update-hermeticd\n" +
+          "\nSwitching hermeticd auto-update republishes the fleet manifest, which is how\n" +
+          "the boxes hear about it (§6.5).\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -112,11 +123,18 @@ export function register(program: Command): void {
           // learn two ways to name the same object.
           ...defined({ default_profile: opts["defaultProfile"] }),
           ...agentDefaults,
+          // Both spellings are defined, so Commander leaves this undefined
+          // unless one of them was given.
+          ...defined({ auto_update_hermeticd: opts["autoUpdateHermeticd"] }),
           ...expected(opts),
         });
         const result = await ctx.hermetic.settings.set(input);
         if (ctx.flags.json) await outJson(result);
         else await out(`${renderSettings(result)}\n`);
+        // The write landed; this is what did not follow from it (§6.5).
+        if (result.warning !== undefined && !ctx.flags.json) {
+          await err(`warning: ${result.warning}\n`);
+        }
       }),
   );
 

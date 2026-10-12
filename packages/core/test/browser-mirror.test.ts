@@ -30,7 +30,7 @@ import { FIXTURE_CHROME_REF } from "../src/backend/fixture/memory-fixture.ts";
 import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
 import { readFleetManifest } from "../src/release/artifacts.ts";
 import { renderAgentConfig } from "../src/render/render.ts";
-import { testHermetic } from "./helpers.ts";
+import { testHermetic, settle } from "./helpers.ts";
 
 const REF = "153.0.8010.12";
 /** The bytes this test's "CDN" serves, and the pin computed from them. */
@@ -425,7 +425,7 @@ describe("foundation update prunes stale browser builds", () => {
   test("keeps this build's pin, deletes the rest, and rewrites the block", async () => {
     const backend = seedFixtureFleet(new MemoryBackend());
     const hermetic = hermeticFor(backend);
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     await nameInManifest(backend, [STALE]);
 
     const messages: string[] = [];
@@ -442,7 +442,7 @@ describe("foundation update prunes stale browser builds", () => {
   test("a build a live agent's uploaded config pins is kept", async () => {
     const backend = seedFixtureFleet(new MemoryBackend());
     const hermetic = hermeticFor(backend);
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
 
     const live = (await backend.store.agents.scan()).filter((a) => a.status !== "destroyed");
     await uploadConfig(backend, live[0]!.name, BUILD_VERSIONS.chrome_ref);
@@ -476,7 +476,7 @@ describe("foundation update prunes stale browser builds", () => {
       },
     };
     const hermetic = hermeticFor(backend);
-    await hermetic.artifacts.push({ version: "0.5.0" });
+    await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     await nameInManifest(backend, [STALE]);
 
     const guarded = testHermetic({
@@ -516,7 +516,7 @@ describe("foundation update prunes stale browser builds", () => {
         warning: "could not mirror the browser: the CDN hung up",
       }),
     });
-    await skipped.artifacts.push({ version: "0.5.0" });
+    await settle(skipped.artifacts.push({ version: "0.5.0" }));
     // The build the fleet is running: mirrored by an older laptop, on a ref this
     // checkout no longer pins, and pinned by no agent config yet.
     await nameInManifest(backend, [PINNED]);
@@ -551,7 +551,7 @@ describe("a browser mirror that could not run reaches the operator", () => {
     const backend = seedFixtureFleet(new MemoryBackend());
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG, browserMirror: failing });
 
-    const pushed = await hermetic.artifacts.push({ version: "0.5.0" });
+    const pushed = await settle(hermetic.artifacts.push({ version: "0.5.0" }));
     expect(pushed.key).toMatch(/^artifacts\/0\.5\.0\/[0-9a-f]{16}\/hermeticd$/);
     expect(pushed.browser_warning).toContain("the CDN hung up");
     // And it is not the Hermes mirror's field: the two are told apart.

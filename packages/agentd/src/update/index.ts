@@ -32,6 +32,7 @@
  * binary for exactly this — goes back.
  */
 import type { FleetManifest } from "@hermetic/core/schema";
+import { autoUpdateHermeticd } from "@hermetic/core/shared";
 import type { Aws } from "../aws.ts";
 import type { Host } from "../host.ts";
 import { cacheFleetManifest } from "../fleet.ts";
@@ -40,7 +41,7 @@ import type { Emit } from "../events.ts";
 import { opEvent } from "../events.ts";
 import { AgentdError } from "../errors.ts";
 import { INSTALL_LOCK_PATH, readInstallLock, takeInstallLock } from "../install-lock.ts";
-import { readUpdateState, writeUpdateState, type UpdateState } from "./state.ts";
+import { installErrorRelease, readUpdateState, writeUpdateState, type UpdateState } from "./state.ts";
 import { peekSwap, retryRestart, settleSwap } from "./swap.ts";
 import { installRelease, pendingIntent } from "./install.ts";
 
@@ -50,6 +51,7 @@ export {
   UPDATE_INTENT_PATH,
   UPDATE_STATE_PATH,
   clearInstallIntent,
+  installErrorRelease,
   parseInstallIntent,
   parseSwapMarker,
   parseUpdateState,
@@ -215,12 +217,49 @@ export async function stagesUpToDate(host: Host, fleet: FleetManifest): Promise<
 }
 
 export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promise<UpdateResult> {
-  const { host, aws, name, bucket } = deps;
+  const emit = deps.emit ?? (() => {});
+  emit(opEvent("manifest", 0.1, "reading the fleet manifest", deps.host.now()));
+  const fleet = await deps.aws.getFleetManifest(deps.bucket);
+  return await updateTo(deps, fleet, opts, false);
+}
+
+/**
+ * The auto-update backstop: `update`, but only when the fleet manifest says
+ * auto-update is on (`auto_update_hermeticd`, absent = on), and silent when it
+ * finds nothing to do.
+ *
+ * The service runs this every `AUTO_UPDATE_CHECK_MS` between nightly slots, so
+ * a pushed release lands within minutes even when the laptop's nudge
+ * (`update_request`) never reached this box. The switch is read from the
+ * manifest just fetched — the box has no other copy of the fleet's settings
+ * that is current — so the fetch happens either way, and `"off"` means that
+ * fetch was all it did: nothing installed, nothing cached, nothing emitted.
+ *
+ * Everything else is `update`'s own path, guards included: the install lock,
+ * the intent, the swap protocol, and the `failed_sha256` refusal, which is what
+ * keeps a release this box rolled back from being retried every five minutes.
+ */
+export async function autoUpdate(deps: UpdateDeps): Promise<UpdateResult | "off"> {
+  const fleet = await deps.aws.getFleetManifest(deps.bucket);
+  if (!autoUpdateHermeticd(fleet)) return "off";
+  return await updateTo(deps, fleet, {}, true);
+}
+
+/**
+ * Everything after the manifest fetch. `quiet` is the auto check's: it drops
+ * the events that would otherwise repeat every five minutes on a box with
+ * nothing to do — "up to date", and a refusal already reported once. Anything
+ * that changes the box still emits as it always has.
+ */
+async function updateTo(
+  deps: UpdateDeps,
+  fleet: FleetManifest,
+  opts: UpdateOptions,
+  quiet: boolean,
+): Promise<UpdateResult> {
+  const { host, aws, name } = deps;
   const emit = deps.emit ?? (() => {});
   const say = deps.log ?? (() => {});
-
-  emit(opEvent("manifest", 0.1, "reading the fleet manifest", host.now()));
-  const fleet = await aws.getFleetManifest(bucket);
 
   const running = deps.hermeticdVersion;
   const target = fleet.hermeticd.version;
@@ -264,6 +303,7 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
         failed_at: null,
         failed_notified: false,
         last_install_error: null,
+        last_install_error_release: null,
         install_error_notified: false,
       });
     }
@@ -360,7 +400,7 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
       `refusing to install hermeticd ${target} again: this box rolled back from it at ` +
       `${state.failed_at ?? "an earlier update"} and the fleet manifest still names the same ` +
       `binary. It will install whatever the manifest names next.`;
-    emit(opEvent("done", 1, detail, host.now()));
+    if (!quiet || !state.failed_notified) emit(opEvent("done", 1, detail, host.now()));
     if (!opts.check && !state.failed_notified) {
       await aws.appendEvent({ name, action: "update-failed", detail }).catch(() => undefined);
       await writeUpdateState(host, { ...state, failed_notified: true });
@@ -400,7 +440,7 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
     // The label may still have moved (a rebuild of identical bytes); the box is
     // running the right code either way.
     await cacheFleetManifest(host, fleet);
-    emit(opEvent("done", 1, `up to date at hermeticd ${target}`, host.now()));
+    if (!quiet) emit(opEvent("done", 1, `up to date at hermeticd ${target}`, host.now()));
     return {
       running,
       target,
@@ -447,6 +487,42 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
     };
   }
 
+  /**
+   * The backstop does not retry a release whose last install failed while the
+   * manifest still names that release (`installErrorRelease`): every attempt is
+   * a fresh ~100 MB download, and one every five minutes on every box is a
+   * cost, not a repair. The nightly run, a rollout request and `--force` (which
+   * clears the record) still try it. Any other release — a new binary, or a
+   * new generation over the same binary that fixes only the stages — does not
+   * match, so it installs as soon as it is published. An error recorded by a
+   * build that did not remember the release has none, and is retried once.
+   */
+  const failedRelease = state.last_install_error_release;
+  if (
+    quiet &&
+    state.last_install_error !== null &&
+    failedRelease !== null &&
+    failedRelease === installErrorRelease(fleet)
+  ) {
+    return {
+      running,
+      target,
+      installedSha256,
+      upToDate: false,
+      binaryChanged: false,
+      stagesChanged: false,
+      restarted: false,
+      restartPending: pending?.restart_owed === true,
+      rolledBack: false,
+      blocked: true,
+      blockedReason:
+        `the last install of hermeticd ${target} failed (${state.last_install_error}); ` +
+        `the auto check leaves it to the nightly run, a rollout request or --force`,
+      targetSha256: entry.sha256,
+      fleet,
+    };
+  }
+
   const lock = await takeInstallLock(host, "update", { pid: deps.pid ?? process.pid });
   if (lock === null) {
     /**
@@ -458,8 +534,12 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
     const detail =
       `another installer (${other?.holder ?? "unknown"}, pid ${other?.pid ?? "?"}) holds ` +
       `${INSTALL_LOCK_PATH}; nothing was installed`;
-    say(detail);
-    emit(opEvent("done", 1, detail, host.now(), "warn"));
+    // The backstop is back in five minutes; the bootstrap holding the lock is
+    // not news to it, and a warning every interval of a long boot would be.
+    if (!quiet) {
+      say(detail);
+      emit(opEvent("done", 1, detail, host.now(), "warn"));
+    }
     return {
       running,
       target,

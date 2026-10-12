@@ -1349,24 +1349,62 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
     expect(`${stdout}${stderr}`).toContain("1 converged, 0 skipped, 0 unconverged");
   });
 
-  test("`upgrade <name> --now` without --hermes fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "atlas", "--hermeticd", "0.5.0", "--now");
+  test("`upgrade <name> --hermes V --no-rollout` fails the schema with 2", async () => {
+    const { code, stderr } = await run("upgrade", "atlas", "--hermes", "0.99.0", "--no-rollout");
     expect(code).toBe(2);
-    expect(stderr).toContain("--now converges a box onto a new Hermes pin, so it needs --hermes");
+    expect(stderr).toContain("--no-rollout and --rollout-wait-ms are about a hermeticd release");
   });
 
-  test("`upgrade --all --hermes V --hermeticd V --now` is refused VALIDATION", async () => {
-    const { code, stdout, stderr } = await run(
-      "upgrade",
-      "--all",
-      "--hermes",
-      "0.99.0",
-      "--hermeticd",
-      "0.5.0",
-      "--now",
-    );
-    expect(code).not.toBe(0);
-    expect(`${stdout}${stderr}`).toContain("nightly update and cannot be applied now");
+  test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.6.0", "--now", "--no-rollout");
+    expect(code).toBe(2);
+    expect(stderr).toContain("--now and --no-rollout contradict each other");
+  });
+
+  test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.6.0", "--now");
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.6.0 now");
+  });
+
+  test("`artifacts push V --no-rollout` publishes and asks no box", async () => {
+    const { code, stdout, stderr } = await run("artifacts", "push", "9.9.9", "--no-rollout");
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`).toContain("not asking any box to take hermeticd 9.9.9 now");
+  });
+
+  test("`artifacts push V` on a fleet that auto-updates asks every running box", async () => {
+    const { code, stdout, stderr } = await run("artifacts", "push", "9.9.9");
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 9.9.9 now");
+  });
+
+  test("`artifacts push --json` is still the push result, with the events beside it", async () => {
+    const { code, stdout } = await run("artifacts", "push", "9.9.9", "--no-rollout", "--json");
+    expect(code).toBe(0);
+    const result = JSON.parse(stdout) as {
+      version: string;
+      key: string;
+      sha256: string;
+      generation: string;
+      events: Array<{ phase: string }>;
+    };
+    expect(result.version).toBe("9.9.9");
+    expect(result.key).toBe(`artifacts/9.9.9/${result.generation}/hermeticd`);
+    expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.events.at(-1)?.phase).toBe("done");
+  });
+
+  test("`artifacts push --now --no-rollout` fails the schema with 2", async () => {
+    const { code, stderr } = await run("artifacts", "push", "--now", "--no-rollout");
+    expect(code).toBe(2);
+    expect(stderr).toContain("--now and --no-rollout contradict each other");
+  });
+
+  test("`settings set --no-auto-update-hermeticd` switches it off and says so", async () => {
+    const { code, stdout } = await run("settings", "set", "--no-auto-update-hermeticd");
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/hermeticd auto-update\s+off/);
   });
 
   test("`upgrade --help` documents --now with an example", async () => {

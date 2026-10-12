@@ -173,7 +173,14 @@ export async function foundationUpdate(ctx: HandlerContext, params: unknown): Pr
   return accepted(op);
 }
 
-export async function artifactsPush(ctx: HandlerContext, params: unknown) {
+/**
+ * A long op since it learned to roll the release out (§6.5): the push, then —
+ * when the fleet auto-updates hermeticd or the request says `now` — every
+ * running box asked to take it, watched for up to the rollout wait. Started
+ * and answered 202 like `upgrade`, so the page follows it in the op stream.
+ */
+export async function artifactsPush(ctx: HandlerContext, params: unknown): Promise<Accepted> {
+  const { ops } = ctx;
   // A foundation update pushes its own release and then *prunes* the
   // `artifacts/<ver>/` prefixes it is not keeping (§6.6 step 4); a push racing
   // that decides which directories exist while it is being made.
@@ -187,7 +194,8 @@ export async function artifactsPush(ctx: HandlerContext, params: unknown) {
   // honoured instead of being left to believe it had been. Nothing on the
   // bridge does that yet.
   const { hermetic: h, input } = requireTarget(ctx.state, parseInput(artifactsPushBody, params));
-  return await h.artifacts.push(input);
+  const op = ops.start("artifacts.push", null, (signal) => h.artifacts.push(input, { signal }));
+  return accepted(op);
 }
 
 export async function upgrade(ctx: HandlerContext, params: unknown): Promise<Accepted> {

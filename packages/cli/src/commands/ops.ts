@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { Command as Cmd, Option } from "commander";
 import { openCtx } from "../context.ts";
 import { globals } from "../options.ts";
-import { defined, validate } from "../validate.ts";
+import { defined, toInt, validate } from "../validate.ts";
 import { err, out, outJson } from "../io.ts";
 import { renderOp } from "../stream.ts";
 import { declare } from "../declare.ts";
@@ -32,7 +32,15 @@ export function register(program: Command): void {
       .option("--all", "every agent in the fleet")
       .option(
         "--now",
-        "with --hermes: ask each running box to apply the new pin in place and wait for it to report (§6.5)",
+        "apply it to running boxes now: with --hermes, converge each box onto the pin in place; with --hermeticd, ask every box to take the release even if the fleet does not auto-update (§6.5)",
+      )
+      .option(
+        "--no-rollout",
+        "with --hermeticd: move the pointer only; leave each box to its own update check",
+      )
+      .option(
+        "--rollout-wait-ms <ms>",
+        "with --hermeticd: how long to watch the boxes land before reporting stragglers (default ten minutes)",
       )
       .addHelpText(
         "after",
@@ -40,13 +48,19 @@ export function register(program: Command): void {
           "  hermetic upgrade atlas --hermes 0.22.0             pin it; the box installs it on its next recreate\n" +
           "  hermetic upgrade atlas --hermes 0.22.0 --now       pin it and converge the running box in place\n" +
           "  hermetic upgrade --all --hermes 0.22.0 --now       the same, one agent at a time across the fleet\n" +
-          "  hermetic upgrade --hermeticd 0.6.0                 the fleet's hermeticd, on each box's nightly update\n" +
+          "  hermetic upgrade --hermeticd 0.6.0                 the fleet's hermeticd; rolled out now if the fleet auto-updates\n" +
+          "  hermetic upgrade --hermeticd 0.6.0 --now           rolled out now whatever the fleet's setting\n" +
           "\n--now writes the same converge request `hermetic plan rollout` does: hermeticd\n" +
           "reinstalls Hermes and restarts its units, and this waits up to ten minutes per\n" +
           "box for it to report the new config. A box that is not up (stopped, still\n" +
           "booting) is skipped and keeps the pin for its next boot; one that does not\n" +
           "report in time is a warning, not a failure. The box installs this build's\n" +
-          "Hermes ref, exactly as a recreate from this checkout would.\n",
+          "Hermes ref, exactly as a recreate from this checkout would.\n" +
+          "\nWith --hermeticd, a fleet that auto-updates hermeticd (the default; see\n" +
+          "`hermetic settings set --no-auto-update-hermeticd`) asks every running box to\n" +
+          "take a changed release at once and watches it land; --no-rollout skips that\n" +
+          "once, and a fleet with auto-update off waits for each box's nightly check\n" +
+          "unless --now is given.\n",
       )
       .action(async (name: string | undefined, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -58,6 +72,11 @@ export function register(program: Command): void {
             hermeticd: opts["hermeticd"],
             all: opts["all"],
             now: opts["now"],
+            // Commander answers `true` for an absent `--no-rollout`, which the
+            // schema would refuse beside `--hermes` alone; only the flag
+            // itself is worth stating.
+            rollout: opts["rollout"] === false ? false : undefined,
+            rollout_wait_ms: toInt(opts["rolloutWaitMs"] as string | undefined),
           }),
         );
         await renderOp(ctx.hermetic.upgrade(input, { signal: ctx.signal }), {
