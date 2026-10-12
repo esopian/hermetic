@@ -31,6 +31,7 @@
  */
 import {
   ChatAbortInput,
+  ChatSteerInput,
   ChatHistoryInput,
   ChatListenInput,
   ChatListeningInput,
@@ -66,6 +67,7 @@ export const chatSessionsSchema = declareRpc("chat.sessions", ChatSessionsInput)
 export const chatHistorySchema = declareRpc("chat.history", ChatHistoryInput);
 export const chatSendSchema = declareRpc("chat.send", ChatSendInput);
 export const chatAbortSchema = declareRpc("chat.abort", ChatAbortInput);
+export const chatSteerSchema = declareRpc("chat.steer", ChatSteerInput);
 /**
  * §9.2: a continuous watch on one conversation. It is a declared
  * method rather than machinery because there *is* a core method behind it, and
@@ -112,6 +114,7 @@ export const CHAT_OBSERVE_RESUME = declareMachineryRpc("chat.observe.resume");
 export const chatListenBody = withTarget(chatListenSchema);
 export const chatSendBody = withTarget(chatSendSchema);
 export const chatAbortBody = withTarget(chatAbortSchema);
+export const chatSteerBody = withTarget(chatSteerSchema);
 
 /** A subscription to the fan-in takes nothing: it is every conversation this server owns. */
 export const ChatSubscribeRequest = z.object({});
@@ -177,6 +180,12 @@ export async function history(ctx: HandlerContext, params: unknown) {
 export async function abort(ctx: HandlerContext, params: unknown) {
   const { hermetic: h, input } = requireTarget(ctx.state, parseInput(chatAbortBody, params));
   return await h.chat.abort(input, { signal: ctx.signal });
+}
+
+/** §9.2: a message into the running turn, without stopping it. Fleet-guarded like `abort`. */
+export async function steer(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(chatSteerBody, params));
+  return await h.chat.steer(input, { signal: ctx.signal });
 }
 
 /**
@@ -426,6 +435,7 @@ export const chatHandlers = {
   "chat.history": history,
   "chat.send": sendEntry,
   "chat.abort": abort,
+  "chat.steer": steer,
   "chat.observe": (ctx: HandlerContext, params: unknown, sink?: StreamSink) =>
     observe(ctx, params, requireSink(sink)),
   [CHAT_TURN]: turnEntry,

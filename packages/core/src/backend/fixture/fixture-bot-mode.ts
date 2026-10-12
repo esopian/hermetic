@@ -96,6 +96,13 @@ export function withFixtureBotMode(
    * the real path was fixed for.
    */
   const spoke = new Map<string, { at: string; session: string }>();
+  /**
+   * The turns streaming through `send` right now, per `key(box, bot)`, with the
+   * transcript each is writing to — what `steer` lands on. This wrapper owns
+   * those transcripts, so the base client's own steer could not write where a
+   * `history` read would find it.
+   */
+  const flying = new Map<string, { session: string; messages: ChatMessage[] }[]>();
   const key = (box: BoxAddress, bot: string) => `${box.fleet_id ?? ""}/${box.instance}/${bot}`;
   async function roster(box: BoxAddress) {
     let map = profiles.get(key(box, ""));
@@ -484,23 +491,49 @@ export function withFixtureBotMode(
           blocks: [{ kind: "text", markdown: text }],
         });
         transcripts.set(k, messages);
-        let answer = "";
-        for await (const frame of base.send(box, bot, text, opts)) {
-          if (frame.type === "delta") answer += frame.text;
-          if (frame.type === "done") {
-            const at = now();
-            messages.push({
-              id: frame.message,
-              session,
-              role: "bot",
-              at,
-              blocks: [{ kind: "text", markdown: answer }],
-            });
-            spoke.set(key(box, bot), { at, session });
+        const turns = flying.get(key(box, bot)) ?? [];
+        flying.set(key(box, bot), turns);
+        const turn = { session, messages };
+        turns.push(turn);
+        try {
+          let answer = "";
+          for await (const frame of base.send(box, bot, text, opts)) {
+            if (frame.type === "delta") answer += frame.text;
+            if (frame.type === "done") {
+              const at = now();
+              messages.push({
+                id: frame.message,
+                session,
+                role: "bot",
+                at,
+                blocks: [{ kind: "text", markdown: answer }],
+              });
+              spoke.set(key(box, bot), { at, session });
+            }
+            yield frame;
           }
-          yield frame;
+        } finally {
+          turns.splice(turns.indexOf(turn), 1);
         }
       })();
+    },
+    /**
+     * A steer into a turn this wrapper is streaming: `redirected`, and the
+     * correction written into that turn's transcript as the user row a real
+     * box would hold. No turn in flight is `idle`, and nothing is written.
+     */
+    steer(box, bot, text, opts = {}) {
+      const turns = flying.get(key(box, bot)) ?? [];
+      const turn = opts.session ? turns.find((t) => t.session === opts.session) : turns[0];
+      if (!turn) return Promise.resolve("idle" as const);
+      turn.messages.push({
+        id: `user-${++serial}`,
+        session: turn.session,
+        role: "user",
+        at: now(),
+        blocks: [{ kind: "text", markdown: text }],
+      });
+      return Promise.resolve("redirected" as const);
     },
     async swarm(box, opts) {
       const original = await base.swarm(box, opts),

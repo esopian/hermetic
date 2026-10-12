@@ -198,15 +198,15 @@ function stepStatus(
  * step — or opened one — keeps that choice when the turn's next block arrives
  * and re-renders the group around them.
  *
- * Until they touch it, the step follows its own status rather than the status
- * it had when it first rendered: a call that was still running at mount and
- * comes back failed opens itself, which is the whole point of opening failures.
- * Once touched, the reader's choice wins and nothing reopens it.
+ * Every step starts shut, failures included: the red glyph and the status
+ * word already say a call failed, and a turn that retries past a failed call
+ * should not push its own prose down under that call's output. The reader
+ * opens the ones they want, and nothing reopens or shuts one behind them.
  */
 function Step({ block, streaming }: { block: ChatBlockView; streaming: boolean }) {
   const state = stepStatus(block, streaming);
   const [choice, setChoice] = useState<boolean | null>(null);
-  const open = choice ?? state.tone === "bad";
+  const open = choice ?? false;
   const setOpen = (next: boolean) => setChoice(next);
   const target = block.kind === "tool" ? toolSummary(block) : "";
   const duration = "duration_ms" in block ? fmtMs(block.duration_ms) : "";
@@ -258,8 +258,8 @@ export function ActivityGroup({
   activity?: TurnActivity;
 }) {
   // The run stays on screen after it finishes, collapsed: the summary carries
-  // what is happening now, and the reader opens it for the steps. Until they
-  // touch it, a failed call opens the group; once touched, their choice wins.
+  // what is happening now, and the reader opens it for the steps. A failed call
+  // marks the summary rather than opening the group; see `Step`.
   const [choice, setChoice] = useState<boolean | null>(null);
   const rows = activityRows(blocks);
   if (rows.length === 0) return null;
@@ -291,7 +291,7 @@ export function ActivityGroup({
       : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
   const failed = tools.some((block) => block.kind === "tool" && block.status === "bad");
   const warning = tools.some((block) => block.kind === "tool" && block.status === "warn");
-  const open = choice ?? failed;
+  const open = choice ?? false;
   const setOpen = (next: boolean) => setChoice(next);
   // Collapsed and live, the summary says what the turn is doing right now: the
   // running step by name and target, else the latest status snapshot.

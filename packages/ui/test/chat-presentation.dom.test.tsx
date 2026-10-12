@@ -162,9 +162,9 @@ describe("compact conversation presentation", () => {
   test("failure is visible without expanding individual tool details", () => {
     const { container } = message([tool("bad")]);
     expect(container.querySelector(".ch-activity > summary")?.textContent).toContain("Tool failed");
-    expect(container.querySelector<HTMLDetailsElement>(".ch-activity")?.open).toBe(true);
-    // A failed step opens itself; the reason is the thing being looked for.
-    expect(container.querySelector<HTMLDetailsElement>(".ch-activity-step")?.open).toBe(true);
+    // The summary says it failed; nothing opens until the reader asks.
+    expect(container.querySelector<HTMLDetailsElement>(".ch-activity")?.open).toBe(false);
+    expect(container.querySelector<HTMLDetailsElement>(".ch-activity-step")?.open).toBe(false);
   });
   test("questions stay visible, explain where to respond, and suppress misleading thinking status", () => {
     const { container } = message(

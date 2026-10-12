@@ -260,6 +260,13 @@ describe("two sends of the same words", () => {
   });
 });
 
+/**
+ * Stamps for the rows below, so "older" is older on the box's clock too. The
+ * transcript is drawn in stamp order, not arrival order.
+ */
+const OLDER = "2026-09-16T11:00:00Z";
+const LATER = "2026-09-16T11:05:00Z";
+
 describe("a message that arrives before the transcript it belongs to", () => {
   /**
    * Core sends `snapshot` first, so this is a frame that normally cannot
@@ -275,7 +282,7 @@ describe("a message that arrives before the transcript it belongs to", () => {
 
     await deliver(
       h,
-      arrival(messageOf({ id: "early-1", blocks: [{ kind: "text", markdown: "early" }] })),
+      arrival(messageOf({ id: "early-1", at: LATER, blocks: [{ kind: "text", markdown: "early" }] })),
     );
     // Dropped on arrival, correctly — there is no transcript to append it to.
     expect(transcript(held)).toEqual([]);
@@ -283,7 +290,13 @@ describe("a message that arrives before the transcript it belongs to", () => {
     // The snapshot behind it was read before that message existed.
     await deliver(
       h,
-      snapshot([messageOf({ id: "older", blocks: [{ kind: "text", markdown: "older" }] })]),
+      snapshot([
+        messageOf({
+          id: "older",
+          at: OLDER,
+          blocks: [{ kind: "text", markdown: "older" }],
+        }),
+      ]),
     );
 
     expect(transcript(held)).toEqual(["older", "early"]);
@@ -314,7 +327,7 @@ describe("a message that arrives before the transcript it belongs to", () => {
 
     await deliver(
       h,
-      arrival(messageOf({ id: "early-3", blocks: [{ kind: "text", markdown: "early" }] })),
+      arrival(messageOf({ id: "early-3", at: LATER, blocks: [{ kind: "text", markdown: "early" }] })),
     );
     expect(transcript(held)).toEqual([]);
 
@@ -324,7 +337,13 @@ describe("a message that arrives before the transcript it belongs to", () => {
         instance,
         bot,
         session: "s1",
-        messages: [messageOf({ id: "older", blocks: [{ kind: "text", markdown: "older" }] })],
+        messages: [
+          messageOf({
+            id: "older",
+            at: OLDER,
+            blocks: [{ kind: "text", markdown: "older" }],
+          }),
+        ],
       } as unknown as ChatHistoryResult)) as ChatApi["fetchHistory"];
     await act(async () => {
       await held.store?.reloadHistory();

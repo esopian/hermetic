@@ -132,7 +132,7 @@ export function absorbEarly(
   const known = new Set(recorded.map((row) => row.id));
   const extra = record.observedEarly.filter((row) => !known.has(row.id));
   record.observedEarly = [];
-  return [...recorded, ...extra];
+  return insertByStamp(recorded, extra);
 }
 /**
  * How far behind the turn's own start a row the box recorded may be stamped and
@@ -237,12 +237,53 @@ export function takeHeld(record: Conversation, all = false): ChatMessageView[] {
   return rows.map((held) => held.message);
 }
 
-/** Append rows the transcript does not already carry, in arrival order. */
+/**
+ * Put rows into a transcript at the box's own stamps rather than at the tail.
+ *
+ * Arrival order is not transcript order. A row reaches this browser by one of
+ * several paths — the observation, the turn's hold being released, an early
+ * frame folded into a read — and each path has its own delay, so the rows of
+ * one conversation routinely arrive out of the order the box wrote them. The
+ * defect that made visible was the operator's own prompt drawn *below* the
+ * reply to it: the prompt's row came in on one path after the reply's rows had
+ * come in on another, and both were appended.
+ *
+ * So each row walks back from the tail past every row stamped later than it,
+ * and stops at the first one stamped at or before it. Equal stamps keep arrival
+ * order. An unreadable stamp, on either side, stops the walk: a row whose time
+ * cannot be read stays where it arrived rather than being moved on a guess.
+ *
+ * The walk goes past a local placeholder too, comparing this laptop's clock to
+ * the box's. That is the one comparison across clocks, and it only decides
+ * where a row lands relative to a prompt the box has not yet echoed back — the
+ * echo replaces the placeholder with the box's own stamp a moment later.
+ */
+export function insertByStamp(
+  messages: readonly ChatMessageView[],
+  rows: readonly ChatMessageView[],
+): ChatMessageView[] {
+  const next = [...messages];
+  for (const row of rows) {
+    const at = Date.parse(row.at);
+    let i = next.length;
+    if (!Number.isNaN(at)) {
+      while (i > 0) {
+        const before = Date.parse(next[i - 1]!.at);
+        if (Number.isNaN(before) || before <= at) break;
+        i -= 1;
+      }
+    }
+    next.splice(i, 0, row);
+  }
+  return next;
+}
+
+/** Add rows the transcript does not already carry, each at its own stamp. */
 export function appendMissing(record: Conversation, rows: readonly ChatMessageView[]): void {
   if (rows.length === 0) return;
   const known = new Set(record.messages.map((row) => row.id));
   const extra = rows.filter((row) => !known.has(row.id));
-  if (extra.length > 0) record.messages = [...record.messages, ...extra];
+  if (extra.length > 0) record.messages = insertByStamp(record.messages, extra);
 }
 
 /**
@@ -329,6 +370,16 @@ export interface Conversation {
   observedDuringTurn: HeldRow[];
   /** Session and start stamp of the streaming turn, for that same test. */
   turnSeed: { session: string; at: string } | null;
+  /**
+   * Ids of the parts of the streaming turn's reply that were closed off when
+   * the operator steered it (`steer` in `chat-conversations.ts`). Each sits in
+   * `messages` above the steering prompt, and a later frame that updates one
+   * of its blocks — a tool that was running when the prompt went in — lands on
+   * it rather than starting a second copy in the live message below.
+   */
+  segments: string[];
+  /** When the live message's current part began: the turn's start, or the last steer. */
+  segmentAt: string | null;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -366,5 +417,7 @@ export function fresh(target: ChatSelection): Conversation {
     observedEarly: [],
     observedDuringTurn: [],
     turnSeed: null,
+    segments: [],
+    segmentAt: null,
   };
 }

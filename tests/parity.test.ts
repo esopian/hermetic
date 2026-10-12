@@ -154,6 +154,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // turn is not an op and is never registered as one (§9.2).
   "chat.send": "chat",
   "chat.abort": "chat abort",
+  // §9.2: a message into the running turn, without stopping it.
+  "chat.steer": "chat steer",
   // §9.2: a watch on one conversation, which exists with no
   // outgoing message at all. It writes nothing — that is the property the whole
   // design rests on, and `chat watch` is named for it.

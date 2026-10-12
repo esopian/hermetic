@@ -45,6 +45,7 @@ import { CHAT_RECONNECT_BLOCK_KEY } from "../../chat/hermes/hermes-chat-types.ts
 import { OBSERVE_RECONNECT_ATTEMPTS } from "../../chat/chat-observe.ts";
 import type {
   BoxAddress,
+  ChatSteerStatus,
   HermesChatClient,
   HermesChatOptions,
   HistoryOptions,
@@ -337,6 +338,17 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   /** Turns taken against this client, so each one's reply is its own row. */
   let turns = 0;
 
+  /**
+   * The turns streaming right now, keyed `instance bot`, each with the session
+   * it is writing to — what `steer` looks for, standing in for the gateway's
+   * own `running` flag. A turn is in flight from its first frame until its
+   * generator settles, abort included.
+   */
+  const inflight = new Map<string, (string | null)[]>();
+  const flightKey = (instance: string, bot: string): string => `${instance} ${bot}`;
+  /** Steers delivered, so each one's user row has an id of its own. */
+  let steers = 0;
+
   return {
     token(box: BoxAddress, _opts?: HermesChatOptions): Promise<string> {
       // A box the roster calls unreachable refuses here too, with the code the
@@ -445,6 +457,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          */
         const id = `mx-fixture-live-${++turns}`;
         const session = opts.session ?? canonicalOf(instance, bot) ?? null;
+        const flying = inflight.get(flightKey(instance, bot)) ?? [];
+        inflight.set(flightKey(instance, bot), flying);
+        flying.push(session);
         /**
          * The reply as the transcript will hold it, folded from the same frames
          * the caller is being handed: deltas land in the text block they were
@@ -563,6 +578,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             yield* deliver(log);
           }
         } finally {
+          flying.splice(flying.indexOf(session), 1);
           // Also on abort: a turn the operator stopped still happened, and the
           // half of it the box had already written down is still in its
           // transcript when the next read comes.
@@ -641,6 +657,34 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       // post to, and answering is the honest result either way (§5's "aborted
       // says the stop was delivered, not that a turn was in flight").
       return Promise.resolve();
+    },
+
+    /**
+     * A steer lands only on a turn this client is streaming, and is then
+     * `redirected` — the gateway's answer for a correction folded into the
+     * running model turn — and written down as a user row, which is what a real
+     * box's transcript gains. The reply already in flight is not rewritten: a
+     * fixture's reply is canned, and the row is what a head can check.
+     */
+    steer(
+      box: BoxAddress,
+      bot: string,
+      text: string,
+      opts: SendOptions = {},
+    ): Promise<ChatSteerStatus> {
+      const flying = inflight.get(flightKey(box.instance, bot)) ?? [];
+      const session = opts.session ? flying.find((s) => s === opts.session) : flying[0];
+      if (session === undefined) return Promise.resolve("idle");
+      if (session !== null) {
+        sentRows(box.instance, bot, session).push({
+          id: `mx-fixture-steer-${++steers}`,
+          session,
+          role: "user",
+          at: mint(),
+          blocks: [{ kind: "text", markdown: text }],
+        });
+      }
+      return Promise.resolve("redirected");
     },
   };
 }

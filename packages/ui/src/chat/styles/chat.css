@@ -2341,61 +2341,91 @@ body:has(.app > .ch-body) {
 }
 
 /*
- * The send queue, above the composer.
+ * The send queue, above the composer and joined to it — Conductor's shape, in
+ * this app's square lines.
  *
  * Deliberately quiet — these are not messages yet. A queued row is one line of
- * the operator's own text with a way to take it back; when the turn ends the
- * top row is sent and the row disappears, which is the whole animation.
+ * the operator's own text with three ways to act on it: back into the input,
+ * away, or sent now. When the turn ends the top row is sent and disappears,
+ * which is the whole animation.
  */
+/* Inside the input's grid, over the text box's column only, so it is exactly
+   as wide as the box it sits on and the send button stays clear of it. */
+.ch-input-wrap:has(> .ch-queue) {
+  row-gap: 0;
+}
+.ch-input-wrap > .ch-queue {
+  grid-column: 1;
+  grid-row: 1;
+  /* A grid item will not shrink below its content otherwise, and a long
+     queued line would push the send button out of the composer. */
+  min-width: 0;
+}
+.ch-input-wrap:has(> .ch-queue) > .ch-input,
+.ch-input-wrap:has(> .ch-queue) > .ch-send {
+  grid-row: 2;
+}
 .ch-queue {
+  padding: 8px 8px 10px;
+  border: 1px solid var(--line2);
+  border-bottom: 0;
+  background: var(--bg2);
+}
+.ch-queue-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 4px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ch-queue-title {
+  font-weight: 700;
+  color: var(--fg);
+  opacity: 0.8;
+}
+.ch-queue-status {
+  margin-left: auto;
+  opacity: 0.8;
+}
+.ch-queue ul {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin: 0 0 6px;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 .ch-queue-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  border: 1px dashed var(--line, rgba(255, 255, 255, 0.14));
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--muted, #9aa3af);
-}
-.ch-queue-dot {
-  flex: none;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.6;
+  gap: 2px;
+  padding: 6px 6px 6px 10px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  font-size: 13px;
+  color: var(--fg);
 }
 .ch-queue-text {
   flex: 1 1 auto;
   min-width: 0;
+  margin-right: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ch-queue-drop {
+.ch-queue-act {
   flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
   border: 0;
   background: none;
-  color: inherit;
+  color: var(--text-muted);
   cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  opacity: 0.7;
 }
-.ch-queue-drop:hover {
-  opacity: 1;
-}
-.ch-queue-foot {
-  padding: 0 2px;
-  font-size: 11px;
-  opacity: 0.7;
-  color: var(--muted, #9aa3af);
+.ch-queue-act:hover,
+.ch-queue-act:focus-visible {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
