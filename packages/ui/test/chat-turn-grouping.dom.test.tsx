@@ -1012,3 +1012,109 @@ describe("a recorded turn", () => {
     expect(settled).toBe(drawn(durableOnly.container));
   });
 });
+
+/* ── delegated children (WI-14) ──────────────────────────────────────────── */
+
+describe("delegated children", () => {
+  const child = (n: number, over: Record<string, unknown> = {}): ChatBlockView =>
+    ({
+      kind: "subagent",
+      subagent_id: `child-${n}`,
+      depth: 0,
+      task_index: n,
+      task_count: 3,
+      goal: `Task ${n}`,
+      status: "completed",
+      verdict: "done",
+      duration_ms: 20_000 + n,
+      summary: `Result ${n}`,
+      tools: [],
+      tool_count: 2,
+      origin: "history",
+      tool_id: "call-delegate",
+      ...over,
+    }) as ChatBlockView;
+  const delegate = (status: "ok" | "running"): ChatBlockView =>
+    ({
+      kind: "tool",
+      name: "delegate_task",
+      tool_id: "call-delegate",
+      status,
+      args: { tasks: [{ goal: "Task 0" }, { goal: "Task 1" }, { goal: "Task 2" }] },
+      result: null,
+      render: "json",
+    }) as unknown as ChatBlockView;
+
+  test("a re-read turn keeps its children in the run: one article, one group, lines under the call", () => {
+    // History's shape: the call on the assistant row, then the tool row that
+    // closed it with the children `settledDelegation` appended, then the prose.
+    const messages = [
+      botRow("call-row", [delegate("running")]),
+      {
+        id: "tool-row",
+        session: "s",
+        role: "system",
+        at: AT,
+        blocks: [
+          delegate("ok"),
+          child(0),
+          child(1),
+          child(2, { status: "timeout", verdict: "failed" }),
+        ],
+      } as ChatMessageView,
+      botRow("prose-row", [prose("Two of three classified.")]),
+    ];
+    const { container } = thread(messages);
+    expect(counts(container)).toMatchObject({ articles: 1, groups: 1, steps: 1 });
+    expect(container.querySelectorAll(".sa-line")).toHaveLength(3);
+    const head = container.querySelector(".sa-head");
+    expect(head?.textContent).toContain("Delegated 3 tasks");
+    expect(head?.textContent).toContain("3 of 3 done");
+    // The lines sit right under the call's own step.
+    expect(
+      container.querySelector(".ch-activity-step")?.closest("li")?.nextElementSibling?.className,
+    ).toBe("sa-li");
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain("Subagent failed");
+    expect(container.querySelector(".ch-activity-count")?.textContent).toBe("1 tool · 3 subagents");
+  });
+
+  test("a live turn draws the same children in its run, with the delegation header", () => {
+    const live = botRow("live-sa", [
+      delegate("running"),
+      child(0, { origin: "live" }),
+      child(1, { origin: "live", status: "running", verdict: "running", summary: undefined }),
+    ]);
+    const { container } = thread([], live, "thinking");
+    expect(counts(container)).toMatchObject({ articles: 1, groups: 1, steps: 1 });
+    expect(container.querySelectorAll(".sa-line")).toHaveLength(2);
+    expect(container.querySelector(".sa-head")?.textContent).toContain("1 of 3 done");
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain(
+      "Waiting on 1 of 2 subagents",
+    );
+  });
+
+  test("a child still running inside a finished turn reads as running, and the group is open", () => {
+    const messages = [
+      botRow("done-turn", [
+        delegate("ok"),
+        child(0, {
+          origin: "live",
+          status: "running",
+          verdict: "running",
+          summary: undefined,
+          task_count: 1,
+        }),
+        prose("Dispatched; I will report back."),
+      ]),
+    ];
+    const { container } = thread(messages);
+    expect(counts(container).articles).toBe(1);
+    expect(container.querySelector(".sa-line")?.classList.contains("run")).toBe(true);
+    expect((container.querySelector(".ch-activity") as HTMLDetailsElement).open).toBe(true);
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain(
+      "Waiting on 1 of 1 subagent",
+    );
+    // A single child gets no header.
+    expect(container.querySelector(".sa-head")).toBeNull();
+  });
+});

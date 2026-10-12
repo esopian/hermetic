@@ -374,3 +374,34 @@ describe("background delegation stays in its conversation", () => {
     expect((await client.history(BOX, BOT)).at(-1)?.role).toBe("bot");
   });
 });
+
+describe("the background results turn in a re-read history", () => {
+  test("sorts after the prompt that started the delegation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "hermetic-fixture-subagent-order-"));
+    const hermetic = await openHermetic({ fixture: true, home });
+    await hermetic.chat.listen({ instance: INSTANCE, listening: true });
+    const { session } = await hermetic.chat.open({ instance: INSTANCE, bot: BOT });
+    await all(
+      hermetic.chat.send({ instance: INSTANCE, bot: BOT, session, message: "E2E_SUBAGENT_BACKGROUND" }),
+    );
+    const results = (m: { blocks: ChatBlock[] }) =>
+      m.blocks.some(
+        (b) => b.kind === "text" && b.markdown.startsWith("Both background tasks are done."),
+      );
+    let messages = (await hermetic.chat.history({ instance: INSTANCE, bot: BOT, session })).messages;
+    for (let i = 0; i < 50 && !messages.some(results); i += 1) {
+      await new Promise((done) => setTimeout(done, 10));
+      messages = (await hermetic.chat.history({ instance: INSTANCE, bot: BOT, session })).messages;
+    }
+    // Ordered as a head orders a re-read: by time, ties kept in place.
+    const byTime = [...messages].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    const prompt = byTime.findIndex(
+      (m) =>
+        m.role === "user" &&
+        m.blocks.some((b) => b.kind === "text" && b.markdown === "E2E_SUBAGENT_BACKGROUND"),
+    );
+    const landed = byTime.findIndex(results);
+    expect(prompt).toBeGreaterThanOrEqual(0);
+    expect(landed).toBeGreaterThan(prompt);
+  });
+});

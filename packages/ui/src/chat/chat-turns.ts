@@ -58,8 +58,13 @@ export interface TurnRow<M extends MessageLike = MessageLike> extends MessageRow
   ids: string[];
 }
 
-/** Blocks that belong inside a tool run rather than being addressed to the reader. */
-const RUN_KINDS = new Set(["tool", "reasoning", "activity"]);
+/**
+ * Blocks that belong inside a tool run rather than being addressed to the
+ * reader. A delegated child is one: live it rides the turn's frames, and on a
+ * re-read history appends it to the `delegate_task` tool row
+ * (`settledDelegation`), which must still fold into the turn.
+ */
+const RUN_KINDS = new Set(["tool", "reasoning", "activity", "subagent"]);
 
 /** Blocks that stop the turn to wait for the reader. They do not end the run. */
 const HOLD_KINDS = new Set(["approval", "question"]);

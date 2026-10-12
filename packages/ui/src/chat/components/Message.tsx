@@ -98,6 +98,7 @@ function sectionSignal(blocks: readonly ChatBlockView[]): string {
     else if (block.kind === "reasoning") text += block.text.length;
     else if (block.kind === "tool") marks.push(block.status ?? "?");
     else if (block.kind === "activity") marks.push(block.state);
+    else if (block.kind === "subagent") marks.push(block.verdict);
   }
   return `${text}/${marks.join(",")}`;
 }

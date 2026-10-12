@@ -10,6 +10,8 @@ import { CodePane } from "./Card.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { JumpLink, useProcessEvents } from "./blocks/ProcessEvent.tsx";
 import { ToolBlock } from "./blocks/Tool.tsx";
+import { SubagentGroup } from "./blocks/Subagent.tsx";
+import { dispatchedOnly, isSubagent, subagentLayout } from "../chat-subagents.ts";
 
 export function isActivity(block: ChatBlockView): boolean {
   return ["activity", "tool", "reasoning", "subagent", "unknown"].includes(block.kind);
@@ -290,7 +292,15 @@ export function ActivityGroup({
   if (rows.length === 0) return null;
   // The steps are the work: tool calls, reasoning, anything this build did not
   // recognise. Status snapshots are drawn once, as the line under them.
-  const steps = rows.filter((block) => !isStatusBlock(block));
+  // Delegated children are not steps of their own: each is a line under the
+  // `delegate_task` call that spawned it (`subagentLayout`), the loose ones at
+  // the end of the list.
+  const all = rows.filter((block) => !isStatusBlock(block));
+  const steps = all.filter((block) => block.kind !== "subagent");
+  const kids = all.filter(isSubagent);
+  const layout = subagentLayout(all);
+  const kidsRunning = kids.filter((kid) => kid.verdict === "running" && !dispatchedOnly(kid)).length;
+  const kidsFailed = kids.some((kid) => kid.verdict === "failed");
   const tools = steps.filter((block) => block.kind === "tool");
   // Whether the run's last step is still going. Its name is not read from here
   // — the step itself names it, and so does the status line under the list.
@@ -316,7 +326,10 @@ export function ActivityGroup({
       : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
   const failed = tools.some((block) => block.kind === "tool" && block.status === "bad");
   const warning = tools.some((block) => block.kind === "tool" && block.status === "warn");
-  const open = choice ?? false;
+  // A run that delegated starts open: its children's lines are the one place
+  // their progress shows, live or after the turn (Option C). The reader's own
+  // choice still wins either way.
+  const open = choice ?? kids.length > 0;
   const setOpen = (next: boolean) => setChoice(next);
   // Collapsed and live, the summary says what the turn is doing right now: the
   // running step by name and target, else the latest status snapshot.
@@ -340,27 +353,31 @@ export function ActivityGroup({
       ? "Needs attention"
       : streaming && waiting
         ? "Waiting for your response"
-        : streaming
-          ? activity === "streaming"
-            ? tools.length && tools.every((block) => block.status !== "running")
-              ? "Tools complete"
-              : "Responding…"
-            : (current ??
-              (working
-                ? "Working…"
-                : activity === "thinking"
-                  ? "Thinking…"
-                  : tools.length
-                    ? "Tools complete"
-                    : "Thinking…"))
-          : tools.some((block) => block.kind === "tool" && block.status === "running")
-            ? "Activity stopped"
-            : tools.length
-              ? "Tools complete"
-              : "Activity complete";
+        : kidsRunning
+          ? `Waiting on ${kidsRunning} of ${kids.length} subagent${kids.length === 1 ? "" : "s"}`
+          : kidsFailed
+            ? "Subagent failed"
+            : streaming
+              ? activity === "streaming"
+                ? tools.length && tools.every((block) => block.status !== "running")
+                  ? "Tools complete"
+                  : "Responding…"
+                : (current ??
+                  (working
+                    ? "Working…"
+                    : activity === "thinking"
+                      ? "Thinking…"
+                      : tools.length
+                        ? "Tools complete"
+                        : "Thinking…"))
+              : tools.some((block) => block.kind === "tool" && block.status === "running")
+                ? "Activity stopped"
+                : tools.length
+                  ? "Tools complete"
+                  : "Activity complete";
   return (
     <details
-      className={`ch-activity${failed ? " failed" : warning ? " warning" : ""}`}
+      className={`ch-activity${failed || (kidsFailed && !kidsRunning) ? " failed" : warning ? " warning" : ""}`}
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
@@ -370,9 +387,16 @@ export function ActivityGroup({
           <RedactedText text={status} />
         </span>
         <span className="ch-activity-count">
-          {tools.length
-            ? `${tools.length} tool${tools.length === 1 ? "" : "s"}`
-            : `${steps.length} step${steps.length === 1 ? "" : "s"}`}
+          {[
+            tools.length
+              ? `${tools.length} tool${tools.length === 1 ? "" : "s"}`
+              : steps.length || !kids.length
+                ? `${steps.length} step${steps.length === 1 ? "" : "s"}`
+                : null,
+            kids.length ? `${kids.length} subagent${kids.length === 1 ? "" : "s"}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
         {usage?.kind === "activity" && usage.detail ? (
           <span className="ch-activity-usage">
@@ -381,22 +405,36 @@ export function ActivityGroup({
         ) : null}
       </summary>
       <ol className="ch-activity-list">
-        {steps.map((block, index) => (
+        {steps.flatMap((block, index) => {
           // A tool call keeps its identity across renders, so its step keeps
           // whatever the reader opened; only a block with no identity at all
           // falls back to its position.
-          <li
-            key={
-              block.kind === "activity"
-                ? `activity:${block.key}`
-                : block.kind === "tool" && block.tool_id
-                  ? `tool:${block.tool_id}`
-                  : `row:${index}`
-            }
-          >
-            <Step block={block} streaming={streaming} />
+          const key =
+            block.kind === "activity"
+              ? `activity:${block.key}`
+              : block.kind === "tool" && block.tool_id
+                ? `tool:${block.tool_id}`
+                : `row:${index}`;
+          const children =
+            block.kind === "tool" && block.tool_id ? layout.byTool.get(block.tool_id) : undefined;
+          return [
+            <li key={key}>
+              <Step block={block} streaming={streaming} />
+            </li>,
+            ...(children
+              ? [
+                  <li key={`${key}:subagents`} className="sa-li">
+                    <SubagentGroup blocks={children} />
+                  </li>,
+                ]
+              : []),
+          ];
+        })}
+        {layout.loose.length ? (
+          <li key="subagents:loose" className="sa-li">
+            <SubagentGroup blocks={layout.loose} />
           </li>
-        ))}
+        ) : null}
       </ol>
       {statusLine?.kind === "activity" ? (
         <div className="ch-activity-status" aria-live="polite">

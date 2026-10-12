@@ -32,6 +32,13 @@ import {
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
+import {
+  noteSubagentFrame,
+  observeSubagent,
+  reapplySubagents,
+  takeSubagents,
+} from "./chat-subagents.ts";
+import { useSubagentControls } from "./chat-subagent-control.ts";
 
 export type { ObserveState } from "./chat-conversation-record.ts";
 
@@ -363,6 +370,9 @@ export function useConversations(
             record.dropped = false;
           } else record.live = { ...record.live, incomplete: true };
         }
+        // After the live message is retired, never before: a child placed on a
+        // live message the read then drops would be lost with it.
+        reapplySubagents(record);
         return true;
       } catch (error) {
         if (!stale()) record.historyError = error instanceof Error ? error.message : String(error);
@@ -419,6 +429,15 @@ export function useConversations(
     [get, permits],
   );
   const current = selection ? get(selection) : empty.current;
+  const subagents = useSubagentControls({
+    current,
+    selected,
+    get,
+    find: (target) => records.current.get(key(target)),
+    changed,
+    permits,
+    api: apiRef,
+  });
   useEffect(() => {
     if (!selection) return;
     const record = get(selection);
@@ -510,6 +529,8 @@ export function useConversations(
             // made; the seed stays, because the turn itself is still streaming
             // and the rows it produces from here on belong to the new session.
             appendMissing(record, takeHeld(record, true));
+            // The children belong to the conversation that recorded them.
+            const children = takeSubagents(record);
             if (retiredSession) {
               // Same shape as the `openConversation` re-key in `readHistory`:
               // the retired session's explicit alias is moved off this record
@@ -542,6 +563,7 @@ export function useConversations(
                   sessions: [...record.sessions],
                   sessionsState: record.sessionsState,
                   sessionsError: record.sessionsError,
+                  ...children,
                 });
               }
             }
@@ -632,6 +654,7 @@ export function useConversations(
             record.live = null;
             record.dropped = false;
           }
+          reapplySubagents(record);
           break;
         }
         case "message": {
@@ -726,6 +749,24 @@ export function useConversations(
             record.live = null;
             record.dropped = false;
           }
+          break;
+        }
+        case "subagent": {
+          // The one observation that is not a durable read (§9.2): a delegated
+          // child, whole, landing on its row wherever the transcript holds it.
+          // Routed by the event's own durable session, not the subscription's:
+          // a late child of a retired session goes to that session's record,
+          // if this browser keeps one, and never into the conversation that
+          // replaced it.
+          observeLive(record);
+          const owner =
+            sessionOf(record) === event.session
+              ? record
+              : event.session === null
+                ? undefined
+                : records.current.get(key({ ...record.target, session: event.session }));
+          if (owner && sessionOf(owner) === event.session)
+            observeSubagent(owner, event.block, Date.now());
           break;
         }
         case "reconnect": {
@@ -1077,8 +1118,13 @@ export function useConversations(
             // Opening a request stops the clock; closing the last one restarts it.
             else if (trackRequest(record, frame)) tick();
             record.activity = nextTurnActivity(record.activity, frame);
-            if (!landOnSegment(record, frame, seed, assemble))
-              record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
+            // A child's frame is reconciled against every copy already drawn
+            // and the observed one (`noteSubagentFrame`); `null` merges nothing.
+            const block =
+              frame.type === "block" ? noteSubagentFrame(record, frame.block, Date.now()) : null;
+            const merged = frame.type === "block" && block ? { ...frame, block } : frame;
+            if ((frame.type !== "block" || block) && !landOnSegment(record, merged, seed, assemble))
+              record.live = assemble(record.live, merged, { ...seed, at: record.segmentAt ?? seed.at });
             changed();
           },
           onEnd: end,
@@ -1319,5 +1365,6 @@ export function useConversations(
     observeDropped,
     observeTransport,
     resumeObservation,
+    subagents,
   };
 }

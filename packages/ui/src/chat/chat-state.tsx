@@ -59,7 +59,9 @@ import {
   getDoctor,
   resumeObservation,
   sendTurn,
+  steerSubagent,
   steerTurn,
+  stopSubagent,
 } from "../api/index.ts";
 import type {
   ChatBlockView,
@@ -73,6 +75,7 @@ import { useConversations } from "./chat-conversations.ts";
 import { useSendQueue } from "./chat-queue.ts";
 import type { QueuedMessage } from "./chat-queue.ts";
 export type { QueuedMessage } from "./chat-queue.ts";
+import type { SubagentControls } from "./chat-subagent-control.ts";
 import type { ChatArrival } from "./chat-conversations.ts";
 export { reconnectDelayMs } from "./chat-conversations.ts";
 export type { Observation, ObserveState } from "./chat-conversations.ts";
@@ -374,6 +377,8 @@ export interface Chat {
 
   /** A coarse clock, so every relative timestamp in one paint agrees with itself. */
   now: number;
+  /** Steer and Stop for one delegated child, and its unsent steer (`chat-subagent-control.ts`). */
+  subagents: SubagentControls;
 }
 
 /** The four calls, injectable so a DOM test can drive the provider without a fetch stub. */
@@ -386,6 +391,9 @@ export interface ChatApi {
   abortTurn: typeof abortTurn;
   /** `chat.steer`. Optional: a tree without it falls back to stopping the turn. */
   steerTurn?: typeof steerTurn;
+  /** `chat.steer`/`chat.abort` with `subagent_id`: one delegated child. Optional, like `steerTurn`. */
+  steerSubagent?: typeof steerSubagent;
+  stopSubagent?: typeof stopSubagent;
   /**
    * `doctor`, for its `local_tailscale` field and nothing else.
    *
@@ -425,6 +433,8 @@ const LIVE_API: ChatApi = {
   sendTurn,
   abortTurn,
   steerTurn,
+  steerSubagent,
+  stopSubagent,
   getDoctor,
   chatStream,
   resumeObservation,
@@ -951,6 +961,7 @@ export function ChatProvider({
     draft,
     setDraft,
     stageDraft,
+    subagents,
   } = conversations;
 
   /* ── the send queue (§9.2 "one active turn", "sending waits"), `chat-queue.ts` ── */
@@ -1258,6 +1269,7 @@ export function ChatProvider({
       sendQueuedNow,
       queueParked,
       now,
+      subagents,
     }),
     [
       activate,
@@ -1311,6 +1323,7 @@ export function ChatProvider({
       queueParked,
       now,
       chatTiming,
+      subagents,
     ],
   );
 

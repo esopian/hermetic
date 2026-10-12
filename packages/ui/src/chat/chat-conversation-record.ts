@@ -7,6 +7,7 @@
 import type { ChatSelection } from "./chat-state.tsx";
 import type { ChatFrameView, ChatMessageView, SessionView } from "../api/index.ts";
 import type { TurnActivity } from "./chat-activity.ts";
+import type { SubagentControl, SubagentTrail, SubagentView } from "./chat-subagents.ts";
 
 export type Failure = { code: string; message: string };
 
@@ -406,6 +407,16 @@ export interface Conversation {
    * the frame stream. `null` when no turn of this browser's is streaming.
    */
   rearm: (() => void) | null;
+  /**
+   * Delegated children (`chat-subagents.ts`): the latest live block of each,
+   * when its calls and notes were first seen, the operator's unsent steer per
+   * child, and what became of their steer and stop. Replaced, never mutated,
+   * and bounded.
+   */
+  subagentLive: ReadonlyMap<string, SubagentView>;
+  subagentTrail: ReadonlyMap<string, SubagentTrail>;
+  subagentDrafts: ReadonlyMap<string, string>;
+  subagentControl: ReadonlyMap<string, SubagentControl>;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -449,5 +460,9 @@ export function fresh(target: ChatSelection): Conversation {
     released: new Set(),
     turnPrompts: new Map(),
     rearm: null,
+    subagentLive: new Map(),
+    subagentTrail: new Map(),
+    subagentDrafts: new Map(),
+    subagentControl: new Map(),
   };
 }

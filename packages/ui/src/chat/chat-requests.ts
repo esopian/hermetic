@@ -174,7 +174,7 @@ export function trackRequest(record: Conversation, frame: ChatFrameView): boolea
 }
 
 /** The blocks a part of the reply that a steer closed off can still receive. */
-const LANDS = new Set(["tool", "approval", "question"]);
+const LANDS = new Set(["tool", "approval", "question", "subagent"]);
 
 /**
  * A `block` frame that updates a block in a part of the reply a steer closed

@@ -447,7 +447,14 @@ export function createFixtureSubagents(opts: FixtureSubagentOptions) {
     if (!opts.activity) return;
     const lines = finished.map((b) => `- **${b.goal}** — ${b.summary ?? b.status}`);
     const markdown = ["Both background tasks are done.", "", ...lines].join("\n");
-    opts.activity.arrive(where, markdown, `mx-fixture-delegation-${++serial}`, opts.activity.stamp(), {
+    // Stamped as it lands, after the turn that started it: the later of the
+    // fixture's moving clock (what the plain client stamps its rows with) and
+    // `now` (what the Bot Mode wrapper stamps its rows with), so a history
+    // re-read sorted by time never puts the results above their prompt.
+    const stamp = opts.activity.stamp();
+    const now = opts.now?.();
+    const at = now !== undefined && Date.parse(now) > Date.parse(stamp) ? now : stamp;
+    opts.activity.arrive(where, markdown, `mx-fixture-delegation-${++serial}`, at, {
       role: "bot",
       blocks: [{ kind: "text", markdown }],
     });

@@ -26,26 +26,8 @@ import { SourcesBlock } from "./Sources.tsx";
 import { TextBlock } from "./Text.tsx";
 import { ToolBlock } from "./Tool.tsx";
 import { UnknownBlock } from "./Unknown.tsx";
-import { RedactedText } from "../RedactedText.tsx";
+import { SubagentBlock } from "./Subagent.tsx";
 import type { ClosedRequest } from "../../chat-requests.ts";
-
-const SUBAGENT_GLYPH: Record<ChatBlockOf<"subagent">["verdict"], string> = {
-  running: "\u25CF",
-  done: "\u2713",
-  failed: "\u2715",
-  stopped: "\u25CB",
-  unknown: "?",
-};
-
-/** One delegated child as one line: glyph, goal, raw status. A placeholder for the full row. */
-function SubagentLine({ block }: { block: ChatBlockOf<"subagent"> }) {
-  return (
-    <div className={`ch-subagent-line ${block.verdict}`} title={block.goal}>
-      <span aria-hidden="true">{SUBAGENT_GLYPH[block.verdict]}</span>{" "}
-      <RedactedText text={block.goal || "Subagent"} /> <span>{block.status}</span>
-    </div>
-  );
-}
 
 export function Block({
   block,
@@ -108,7 +90,7 @@ export function Block({
       // reaches here with one; this is the same content for any other surface.
       return <ProcessEventBlock block={block as ChatBlockOf<"process_event">} />;
     case "subagent":
-      return <SubagentLine block={block as ChatBlockOf<"subagent">} />;
+      return <SubagentBlock block={block} />;
     default:
       return <UnknownBlock block={block} />;
   }
