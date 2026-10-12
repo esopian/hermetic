@@ -536,6 +536,18 @@ export const ChatUsage = z.object({
   /** USD. Null when the provider did not say and hermetic will not guess. */
   cost_usd: z.number().nonnegative().nullish(),
   model: z.string().nullish(),
+  /**
+   * The context window as of this turn's last model call, as the gateway reports
+   * it: `context_used` is the last prompt's size (the window's occupancy, not a
+   * running total), `context_max` the model's window, `context_percent` the
+   * rounded share of one in the other. All absent when the gateway said nothing,
+   * so a head shows no figure rather than a guessed one (§9.2).
+   */
+  context_used: z.number().int().nonnegative().nullish(),
+  context_max: z.number().int().positive().nullish(),
+  context_percent: z.number().min(0).max(100).nullish(),
+  /** The gateway counted locally rather than reading the provider's usage. */
+  context_estimated: z.boolean().nullish(),
 });
 export type ChatUsage = z.infer<typeof ChatUsage>;
 

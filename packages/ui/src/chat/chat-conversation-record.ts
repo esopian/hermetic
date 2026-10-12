@@ -7,6 +7,8 @@
 import type { ChatSelection } from "./chat-state.tsx";
 import type { ChatFrameView, ChatMessageView, SessionView } from "../api/index.ts";
 import type { TurnActivity } from "./chat-activity.ts";
+import { latestContextReading, newerReading } from "./context-usage.ts";
+import type { ContextReading } from "./context-usage.ts";
 
 export type Failure = { code: string; message: string };
 
@@ -380,6 +382,15 @@ export interface Conversation {
   segments: string[];
   /** When the live message's current part began: the turn's start, or the last steer. */
   segmentAt: string | null;
+  /**
+   * The newest context-window figure this browser has seen for the
+   * conversation (`context-usage.ts`): from the live turn's frames and from any
+   * row that carries one. The box's stored rows carry none, so a re-read never
+   * clears it. It belongs to the conversation, not the session id: it survives
+   * the first read naming a new conversation's session, and a rollover leaves
+   * it with the retired copy (`chat-conversations.ts`). In memory only.
+   */
+  context: ContextReading | null;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -419,5 +430,16 @@ export function fresh(target: ChatSelection): Conversation {
     turnSeed: null,
     segments: [],
     segmentAt: null,
+    context: null,
   };
+}
+
+/** Keep `reading` as the conversation's figure if it is newer than the one held. */
+export function noteContext(record: Conversation, reading: ContextReading | null): void {
+  record.context = newerReading(record.context, reading);
+}
+
+/** The same, for rows landing in the transcript: the newest figure among them. */
+export function noteRows(record: Conversation, rows: readonly ChatMessageView[]): void {
+  noteContext(record, latestContextReading(rows));
 }

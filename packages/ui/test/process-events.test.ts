@@ -13,13 +13,11 @@ import {
   eventAnchors,
   fmtSpan,
   highlightParts,
-  isProcessEventMessage,
   lastLine,
   outputLines,
   previewText,
   processDomId,
   processStarts,
-  searchableText,
   shortProcessId,
   spanMs,
   threadItems,
@@ -216,13 +214,6 @@ describe("output", () => {
 });
 
 describe("never the operator", () => {
-  test("quick jump does not search an event as a message somebody wrote", () => {
-    const event = eventMessage("e", 1, { command: "bun run build", message: "bun" });
-    expect(isProcessEventMessage(event)).toBe(true);
-    expect(searchableText(event)).toBe("");
-    expect(searchableText(kestrelEvents()[0]!)).toContain("lead-qa");
-  });
-
   test("a rail preview of an event is the event's sentence, not blank and not prose", () => {
     const failed = eventMessage("e", 1, {
       outcome: "failed",

@@ -118,11 +118,22 @@ function sumUsage(messages: readonly MessageLike[]): MessageLike["usage"] {
     return values.length ? values.reduce((a, b) => a + b, 0) : null;
   };
   const model = [...all].reverse().find((u) => u.model)?.model ?? null;
+  // The context window is occupancy, not a count: the turn's last figure, never
+  // a sum (`context-usage.ts`).
+  const latest = [...all].reverse().find((u) => typeof u.context_used === "number");
   return {
     input_tokens: add("input_tokens"),
     output_tokens: add("output_tokens"),
     cost_usd: add("cost_usd"),
     model,
+    ...(latest
+      ? {
+          context_used: latest.context_used,
+          context_max: latest.context_max,
+          context_percent: latest.context_percent,
+          context_estimated: latest.context_estimated,
+        }
+      : {}),
   };
 }
 

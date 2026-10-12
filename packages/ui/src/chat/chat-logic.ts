@@ -96,6 +96,10 @@ export interface MessageLike {
     output_tokens?: number | null;
     cost_usd?: number | null;
     model?: string | null;
+    context_used?: number | null;
+    context_max?: number | null;
+    context_percent?: number | null;
+    context_estimated?: boolean | null;
   } | null;
   error?: string | null;
   incomplete?: boolean | null;

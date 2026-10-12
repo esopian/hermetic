@@ -310,6 +310,7 @@ export function BotWorkspace({
                 state={state}
                 messages={chat.messages}
                 live={chat.live}
+                context={chat.context}
                 sending={chat.sending}
                 activity={chat.activity}
                 historyError={chat.historyError}

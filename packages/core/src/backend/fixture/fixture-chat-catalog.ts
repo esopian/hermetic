@@ -9,6 +9,7 @@
  */
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
   SCRIBE_BOT_CHAT_SESSION,
@@ -106,12 +107,7 @@ export const FIXTURE_CHAT_REPLY = md(
 
 /* ── the transcripts ──────────────────────────────────────────────────────── */
 
-export const usage = (input: number, output: number, cost: number, model: string) => ({
-  input_tokens: input,
-  output_tokens: output,
-  cost_usd: cost,
-  model,
-});
+export { usage };
 
 /**
  * Every failure this fixture draws, as the one thing they actually are:
@@ -957,7 +953,8 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         },
         { kind: "hermetic", card: "op", ref: "fxr000000002" },
       ],
-      usage: usage(11_200, 260, 0.0098, "claude-sonnet-5"),
+      // A long checklist run: the window is past the warning line (§9.2).
+      usage: usage(168_400, 260, 0.5091, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },

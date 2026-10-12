@@ -424,6 +424,10 @@ describe("hermes-chat · the recorded turn", () => {
       // price it guessed (`ChatUsage`).
       cost_usd: null,
       model: "deepseek/deepseek-v4.1-flash",
+      // The window as of the last prompt, passed through as upstream sent it.
+      context_used: 13780,
+      context_max: 1000000,
+      context_percent: 1,
     });
     expect(done.incomplete).toBeNull();
   });

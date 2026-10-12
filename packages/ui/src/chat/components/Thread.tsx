@@ -27,6 +27,8 @@ import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts
 import type { Observation } from "../chat-conversations.ts";
 import { composerState, hasKnownOrigin, originClass, railTime } from "../chat-logic.ts";
 import { turnRows } from "../chat-turns.ts";
+import { latestContextReading, newerReading } from "../context-usage.ts";
+import type { ContextReading } from "../context-usage.ts";
 import { eventAnchors, processStarts, threadItems } from "../process-events.ts";
 import { ProcessBurst, ProcessEventContext, ProcessEventRow } from "./blocks/ProcessEvent.tsx";
 import { useNotifyIfAvailable } from "../../state/notify-state.tsx";
@@ -352,6 +354,7 @@ export function Thread({
   state,
   messages,
   live,
+  context: contextHeld = null,
   sending,
   activity = sending ? "thinking" : "idle",
   historyError,
@@ -383,6 +386,8 @@ export function Thread({
   state: ThreadState;
   messages: ChatMessageView[];
   live: ChatMessageView | null;
+  /** The conversation's held context-window figure (`Chat.context`). */
+  context?: ContextReading | null;
   sending: boolean;
   activity?: TurnActivity;
   historyError: string | null;
@@ -429,6 +434,15 @@ export function Thread({
   // message never folds into the turn above it.
   const all = live ? [...messages, live] : messages;
   const rows = turnRows(all, now, { breakBefore: live?.id });
+  // The window as of the newest turn or live tick, for the composer's meter:
+  // the newer of what these rows carry and what the conversation's record holds
+  // (`Conversation.context`), since the box's stored rows carry none.
+  const context = useMemo(
+    () =>
+      newerReading(latestContextReading(live ? [...messages, live] : messages), contextHeld)?.usage ??
+      null,
+    [messages, live, contextHeld],
+  );
   // Background-process events (§9.2): folded into bursts and linked to the
   // calls that started them. One rendering, with no viewer switch: every event
   // row keeps its output collapsed, and a failure is already drawn in red.
@@ -734,6 +748,7 @@ export function Thread({
         onAbort={onAbort}
         mentions={mentions}
         mentionHint={mentionHint}
+        context={context}
       />
     </section>
   );

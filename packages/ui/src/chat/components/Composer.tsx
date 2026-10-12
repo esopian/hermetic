@@ -23,6 +23,8 @@
  * or a place. The input grows with its text up to a cap and then scrolls
  * (`autosize.ts`); its border and padding sit on the box around it, so text
  * scrolled past the cap is clipped inside the padding rather than at the edge.
+ * Before Stop sits the context meter (`ContextMeter.tsx`), when the gateway
+ * has reported the window.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { useRef, useState } from "react";
@@ -35,6 +37,8 @@ import { RedactedText } from "./RedactedText.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
 import { useAutosize } from "../autosize.ts";
 import type { Destination } from "../chat-logic.ts";
+import { ContextMeter } from "./ContextMeter.tsx";
+import type { ContextUsage } from "../context-usage.ts";
 
 /** A conversation the `unchosen` band offers as a chip. */
 export interface ComposerChoice {
@@ -63,6 +67,7 @@ export function Composer({
   mentionHint,
   choices = [],
   onChoose,
+  context = null,
 }: {
   destination: Destination;
   placeholder: string;
@@ -79,6 +84,8 @@ export function Composer({
   choices?: readonly ComposerChoice[];
   /** Select a conversation, as the rail's Sessions tab does. */
   onChoose?: (session: string) => void;
+  /** The thread's latest context-window figure; null draws no meter. */
+  context?: ContextUsage | null;
 }) {
   const [localText, setLocalText] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
@@ -346,6 +353,7 @@ export function Composer({
             </span>
           ) : null}
         </span>
+        {context ? <ContextMeter usage={context} /> : null}
         {/* Outside `.right`, so the skin's dimmed footer text never dims it. */}
         {sending ? (
           <button

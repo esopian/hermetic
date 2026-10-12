@@ -288,6 +288,40 @@ describe("persistent entry frames", () => {
     expect((await sendable(container)).value).toBe("");
   });
 
+  test("in the Chat view, quick text leads a conversation its words also match, and Enter sends it", async () => {
+    window.history.replaceState(null, "", "/#chat/atlas/atlas");
+    const h = harness({ sessions: [sessionOf({ title: "atlas hello notes" })] });
+    const { container } = mountEntry(h);
+    await sendable(container);
+    await userEvent.click(screen.getByText("Jump"));
+    const input = screen.getByRole("combobox");
+    await userEvent.type(input, "atlas hello");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    expect(screen.getAllByRole("option")[0]!.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("option")[1]!.textContent).toContain("atlas hello notes");
+    key(input, "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+    expect(h.turns[0]!.message).toBe("hello");
+  });
+
+  test("quick jump's highlight stays on its row when conversation rows arrive late", async () => {
+    window.history.replaceState(null, "", "/#chat/atlas/atlas");
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    h.sessionsMode = "hang";
+    mountEntry(h);
+    await waitFor(() => expect(h.releaseSessions).not.toBeNull());
+    await userEvent.click(screen.getByText("Jump"));
+    const input = screen.getByRole("combobox");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    key(input, "ArrowDown");
+    const highlighted = () =>
+      screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
+    await waitFor(() => expect(highlighted()?.textContent).toContain("granite"));
+    await act(async () => h.releaseSessions?.());
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    expect(highlighted()?.textContent).toContain("granite");
+  });
+
   test("foreign quick text remains beside its warning and Enter requires a deliberate composer send", async () => {
     const h = harness({ sessions: [sessionOf({ origin: "channel", origin_detail: "#acme-support" })] });
     const { container } = mountEntry(h);

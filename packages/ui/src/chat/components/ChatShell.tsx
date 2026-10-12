@@ -290,7 +290,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
           {chat.selectionError}
         </div>
       ) : null}
-      {quick ? <QuickJump onClose={() => setQuick(false)} /> : null}
+      {quick ? <QuickJump chatMode={isChatHash(hash)} onClose={() => setQuick(false)} /> : null}
     </ChatEntryContext.Provider>
   );
 }

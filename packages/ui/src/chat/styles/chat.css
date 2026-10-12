@@ -1716,6 +1716,53 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The context-window meter: a ring and a percentage, neutral until the window
+   nears full (`context-usage.ts`). Its exact figures are a tooltip above it. */
+.ch-window {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.ch-window svg {
+  display: block;
+}
+.ch-window circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.ch-window .track {
+  stroke: var(--line2);
+}
+.ch-window .arc {
+  stroke: currentColor;
+}
+.ch-window.warn {
+  color: var(--text-warn);
+}
+.ch-window.bad {
+  color: var(--bad);
+  font-weight: 700;
+}
+.ch-window:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  white-space: pre;
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 6px;
+  z-index: 5;
+  pointer-events: none;
+}
 /* Stop, while a turn runs: the footer's last word, small and red-outlined so it
    reads as the one destructive control here without competing with Send. */
 .ch-stop {
@@ -2101,6 +2148,11 @@
   padding: 10px 18px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
+}
+/* One glyph column for `>`, `#` and `↗`, so every row's name starts at the same x. */
+.qj-row > span:first-child {
+  width: 1.2em;
+  text-align: center;
 }
 .qj-row > span:nth-child(2) {
   display: block;

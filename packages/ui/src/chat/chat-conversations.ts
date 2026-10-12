@@ -23,12 +23,15 @@ import {
   insertByStamp,
   isLocal,
   key,
+  noteContext,
+  noteRows,
   releaseHeld,
   sessionOf,
   stillPending,
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
+import { frameContext } from "./context-usage.ts";
 
 export type { ObserveState } from "./chat-conversation-record.ts";
 
@@ -323,6 +326,9 @@ export function useConversations(
             const previous = { ...record, target: { ...target, session: record.resolvedSession } };
             for (const [alias, value] of records.current)
               if (value === record && alias !== key(target)) records.current.set(alias, previous);
+            // A new conversation (an archive's replacement) starts with no
+            // figure; the old one keeps its own on `previous`.
+            record.context = null;
           }
           session = opened.session;
         }
@@ -352,6 +358,7 @@ export function useConversations(
               if (candidate === loser) records.current.set(alias, winner);
             }
             if (!winner.draft) winner.draft = loser.draft;
+            noteContext(winner, loser.context);
             if (winner !== record) {
               changed();
               return true;
@@ -376,6 +383,7 @@ export function useConversations(
           });
         }
         record.messages = absorbEarly(record, result.messages);
+        noteRows(record, record.messages);
         record.resolvedSession = result.session ?? record.resolvedSession;
         record.historyRead = true;
         record.historyError = null;
@@ -571,8 +579,14 @@ export function useConversations(
                   sessions: [...record.sessions],
                   sessionsState: record.sessionsState,
                   sessionsError: record.sessionsError,
+                  context: record.context,
                 });
               }
+              // The figure stays with the conversation it described. The new
+              // session starts with none: a rollover follows a compaction or an
+              // archive, so the old figure no longer describes the window, and
+              // the turn's next tick or `done` says what does.
+              record.context = null;
             }
             record.resolvedSession = event.session;
             // A record's own `target` can name a session too — `readHistory`'s
@@ -619,6 +633,7 @@ export function useConversations(
                 // against it, so a row the box already sent here is not doubled.
                 record.observedEarly = [...record.observedEarly, ...takeHeld(existing, true)];
                 adopted = existing.messages;
+                noteContext(record, existing.context);
                 existing.historyGen += 1;
                 existing.sessionsGen += 1;
                 existing.historyController?.abort();
@@ -655,6 +670,7 @@ export function useConversations(
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
           ];
+          noteRows(record, messages);
           record.historyRead = true;
           record.historyError = null;
           if (record.live && messages.some((m) => m.id === record.live?.id)) {
@@ -720,6 +736,7 @@ export function useConversations(
           if (record.messages.some((m) => m.id === message.id)) break;
           if (record.observedDuringTurn.some((held) => held.message.id === message.id)) break;
           note();
+          noteRows(record, [message]);
           // The box records a turn as it runs, so while this browser is
           // streaming one the rows for that same reply arrive here. They are
           // held rather than appended: the live message is already drawing
@@ -1086,6 +1103,7 @@ export function useConversations(
             record.activity = nextTurnActivity(record.activity, frame);
             if (!landOnSegment(record, frame, seed, assemble))
               record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
+            noteContext(record, frameContext(frame, new Date().toISOString()));
             changed();
           },
           onEnd: end,

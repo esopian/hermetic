@@ -352,19 +352,6 @@ export function fmtSpan(ms: number): string {
 /* ── the places an event row must not read as the operator ───────────────── */
 
 /**
- * What quick jump searches a message by. An event row has no prose the
- * operator wrote, so it is not searchable as one of their messages.
- */
-export function searchableText(message: Pick<MessageLike, "blocks">): string {
-  if (isProcessEventMessage(message)) return "";
-  return message.blocks
-    .flatMap((block) =>
-      block.kind === "text" && typeof block["markdown"] === "string" ? [block["markdown"]] : [],
-    )
-    .join(" ");
-}
-
-/**
  * What the rail quotes for a message this browser just watched land: its prose,
  * or, for an event row, the one sentence every head words it with. Another
  * bot's DM delivery is quoted as that bot speaking, as core's roster preview is.

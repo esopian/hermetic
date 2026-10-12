@@ -81,6 +81,7 @@ import type { Destination, RailFilter, RailScope } from "./chat-logic.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
 import { useNotifyIfAvailable } from "../state/notify-state.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../lib/visibility.ts";
+import type { ContextReading } from "./context-usage.ts";
 
 /** How often the relative timestamps in the rail are recomputed. */
 const CLOCK_MS = 30_000;
@@ -296,6 +297,11 @@ export interface Chat {
 
   /** The turn in flight, assembled from frames. Never persisted; see the header. */
   live: ChatMessageView | null;
+  /**
+   * The conversation's newest context-window figure, held on its record
+   * because the box's stored rows carry none (`Conversation.context`).
+   */
+  context: ContextReading | null;
   sending: boolean;
   /** The selected conversation’s observed work, independent of its transport lock. */
   activity: TurnActivity;
@@ -891,6 +897,7 @@ export function ChatProvider({
     historyError,
     historyRead,
     live,
+    context,
     sending,
     activity,
     turnActivities,
@@ -1195,6 +1202,7 @@ export function ChatProvider({
       reloadHistory,
       reloadTranscript,
       live,
+      context,
       sending,
       activity,
       turnActivities,
@@ -1242,6 +1250,7 @@ export function ChatProvider({
       reloadHistory,
       reloadTranscript,
       live,
+      context,
       sending,
       activity,
       turnActivities,
