@@ -12,7 +12,15 @@
  */
 import { createHash } from "node:crypto";
 import { expect } from "bun:test";
-import type { ExecEvent, ExecOptions, ExecResult, FileStat, Host, StatfsResult } from "../src/host.ts";
+import type {
+  ExecEvent,
+  ExecOptions,
+  ExecResult,
+  FileStat,
+  FilesystemSample,
+  Host,
+  MemorySample,
+} from "../src/host.ts";
 import { stagingPathFor } from "../src/host.ts";
 
 export interface FakeFile {
@@ -186,10 +194,21 @@ export class FakeHost implements Host {
     if (!bytes) throw new Error(`AccessDenied: not authorized to perform s3:GetObject on ${key}`);
     return bytes;
   };
-  /** The answer for any path with no entry in `statfsByPath`. */
-  statfsResult: StatfsResult | null = { blockSize: 4096, blocks: 1_000_000, available: 800_000 };
-  /** Per-mount answers, consulted first; a `null` value is "statvfs failed here". */
-  readonly statfsByPath = new Map<string, StatfsResult | null>();
+  /** `cpuLoad()`'s answer; `null` is "could not measure". */
+  cpuLoadPct: number | null = 0;
+  /** How many times `cpuLoad()` was asked — the heartbeat primes it once. */
+  cpuLoadCalls = 0;
+  /** `memory()`'s answer. */
+  memorySample: MemorySample | null = { total: 4 * 1024 ** 3, available: 3 * 1024 ** 3 };
+  /** The answer for any path with no entry in `filesystemByPath`. */
+  filesystemResult: FilesystemSample | null = {
+    mount: "/",
+    size: 4_096_000_000,
+    available: 3_276_800_000,
+    usePct: 20,
+  };
+  /** Per-path answers, consulted first; a `null` value is "could not measure here". */
+  readonly filesystemByPath = new Map<string, FilesystemSample | null>();
   clock = new Date("2026-09-01T12:00:00.000Z");
   sleeps: number[] = [];
   journalLines: string[] = [];
@@ -574,7 +593,18 @@ export class FakeHost implements Host {
     return createHash("sha256").update(bytes).digest("hex");
   }
 
-  async statfs(path: string): Promise<StatfsResult | null> {
-    return this.statfsByPath.has(path) ? (this.statfsByPath.get(path) ?? null) : this.statfsResult;
+  async cpuLoad(): Promise<number | null> {
+    this.cpuLoadCalls += 1;
+    return this.cpuLoadPct;
+  }
+
+  async memory(): Promise<MemorySample | null> {
+    return this.memorySample;
+  }
+
+  async filesystem(path: string): Promise<FilesystemSample | null> {
+    return this.filesystemByPath.has(path)
+      ? (this.filesystemByPath.get(path) ?? null)
+      : this.filesystemResult;
   }
 }

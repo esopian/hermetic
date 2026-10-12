@@ -232,8 +232,8 @@ export const Metrics = z.object({
    * needs — exactly the margin an operator would be reading this number to
    * judge, and exactly where an estimate stops being good enough.
    *
-   * hermeticd already measures it: the self-update calls `statfs` on the same
-   * filesystem to decide whether it may write at all (`update.ts`). This
+   * hermeticd already measures it: the self-update reads the same filesystem
+   * (`Host.filesystem`) to decide whether it may write at all (`install.ts`). This
    * publishes what that check reads, so the dashboard and the refusal are
    * answering from one number.
    *
