@@ -169,6 +169,7 @@ export type { Heartbeat, HeartbeatDeps, HeartbeatTick } from "./heartbeat.ts";
 
 export {
   NIGHTLY_UTC_HOUR,
+  autoUpdate,
   msUntilNightly,
   nightlyMinuteFor,
   stagesUpToDate,
@@ -191,6 +192,7 @@ export {
 export type { RpcDeps, RpcHandler, Whois, WhoisResolver } from "./rpc.ts";
 
 export {
+  AUTO_UPDATE_CHECK_MS,
   HERMETICD_VERSION,
   SECRET_SLOTS,
   UPDATE_POLL_MS,

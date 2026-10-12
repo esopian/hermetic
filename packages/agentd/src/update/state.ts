@@ -6,6 +6,7 @@
  * `swap.ts`, the download and install in `install.ts`, and `update()` itself in
  * `index.ts`.
  */
+import type { FleetManifest } from "@hermetic/core/schema";
 import type { Host } from "../host.ts";
 import { STATE_DIR } from "../fleet.ts";
 
@@ -101,6 +102,18 @@ export interface UpdateState {
    * the version simply stops moving.
    */
   readonly last_install_error: string | null;
+  /**
+   * Which release `last_install_error` was thrown installing
+   * (`installErrorRelease`): the manifest's generation, or the binary digest on
+   * a manifest written before generations existed. While the manifest still
+   * names that release and the error stands, the auto-update backstop leaves it
+   * alone: retrying a failed ~100 MB download every five minutes is not a
+   * repair. The nightly run, a rollout request and `--force` still try it, and
+   * any new release — a stage-only fix included, since it is a new generation
+   * over the same binary — is not matched. `null` in a file written before this
+   * field existed, which the backstop reads as "retry once, then remember".
+   */
+  readonly last_install_error_release: string | null;
   readonly install_error_notified: boolean;
   readonly pending_events: readonly PendingEvent[];
 }
@@ -112,9 +125,21 @@ export const EMPTY_UPDATE_STATE: UpdateState = {
   failed_at: null,
   failed_notified: false,
   last_install_error: null,
+  last_install_error_release: null,
   install_error_notified: false,
   pending_events: [],
 };
+
+/**
+ * The identity a failed install is remembered against
+ * (`UpdateState.last_install_error_release`): the release generation, which is
+ * the content digest of every file in it, so a fix to the stages alone is a
+ * different release. A manifest from before generations has only the binary
+ * digest to go on.
+ */
+export function installErrorRelease(fleet: FleetManifest): string | null {
+  return fleet.hermeticd.generation ?? fleet.hermeticd.files["hermeticd"]?.sha256 ?? null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -166,6 +191,7 @@ export function parseUpdateState(text: string): UpdateState {
     failed_at: str(json["failed_at"]),
     failed_notified: json["failed_notified"] === true,
     last_install_error: str(json["last_install_error"]),
+    last_install_error_release: str(json["last_install_error_release"]),
     install_error_notified: json["install_error_notified"] === true,
     pending_events: events
       .filter((e): e is Record<string, unknown> => isRecord(e))
