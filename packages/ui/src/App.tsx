@@ -676,10 +676,13 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         <FleetBoard
           agents={visible}
           latest={fleet.latest}
+          foundation={fleet.meta?.foundation}
+          profiles={profiles.list ?? []}
           tailnet={fleet.tailnet}
           fleetId={fleetId}
           volumes={fleetVolumes}
           onSelect={nav.select}
+          onStarted={fleet.setOp}
           onCreateOnVolume={nav.openCreateOnVolume}
           onSeeVolumes={nav.openVolumes}
         />
@@ -729,6 +732,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           confirmOpen={nav.teardownOpen}
           setConfirmOpen={nav.setTeardownOpen}
           tab={nav.agentTab}
+          initialLogSource={nav.agentLogSource}
           onTab={nav.setAgentTab}
           session={nav.agentSession}
           onSession={nav.setAgentSession}

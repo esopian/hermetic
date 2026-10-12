@@ -5508,3 +5508,313 @@ button:focus-visible,
   background: var(--fg3);
   margin: 0 auto 14px;
 }
+
+/* Fleet board diagnosis card. */
+.agent-card {
+  gap: 0;
+  position: relative;
+  min-width: 0;
+}
+.agent-card .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.agent-card .card-top {
+  align-items: center;
+}
+.card-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.card-name-button {
+  all: unset;
+  cursor: pointer;
+  min-width: 0;
+}
+.card-name-button:hover .card-name {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.card-name-button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.card-size {
+  font: 700 10px / 16px var(--mono);
+  color: var(--fg2);
+  background: color-mix(in srgb, var(--fg) 13%, transparent);
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.agent-card .card-actions {
+  gap: 6px;
+}
+.card-open-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.card-open-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 5;
+  min-width: 178px;
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  box-shadow: 0 8px 20px #0005;
+}
+.card-open-menu button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.card-open-menu button:hover:not(:disabled),
+.card-open-menu button:focus-visible {
+  background: var(--fg);
+  color: var(--bg);
+}
+.card-open-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.card-open-menu small {
+  font: 10px var(--mono);
+  color: var(--fg3);
+  white-space: nowrap;
+}
+.card-status-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: -3px;
+  flex-wrap: wrap;
+}
+.card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.card-status i {
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.card-status.busy i {
+  animation: hpulse 1.2s infinite;
+}
+.card-qualifier {
+  font: 700 11px var(--mono);
+  color: var(--fg2);
+  white-space: nowrap;
+}
+.card-qualifier.bad {
+  color: var(--bad);
+}
+.card-status-tags {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.card-tag {
+  display: inline-block;
+  font: 700 9.5px / 1.2 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid currentColor;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.card-tag.warn {
+  color: var(--warn);
+}
+.card-tag.acc {
+  color: var(--acc);
+}
+.card-tag.muted {
+  color: var(--fg3);
+}
+.card-model {
+  font: 12px var(--mono);
+  color: var(--fg2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: -4px;
+}
+.agent-card.off .card-model {
+  color: var(--fg3);
+}
+.card-diagnosis {
+  min-width: 0;
+}
+.card-diagnosis.urgent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 9px 11px;
+  background: var(--bg3);
+  border-left: 2px solid var(--diagnosis-color);
+}
+.card-diagnosis.bad {
+  --diagnosis-color: var(--bad);
+}
+.card-diagnosis.warn {
+  --diagnosis-color: var(--warn);
+}
+.card-diagnosis.acc {
+  --diagnosis-color: var(--acc);
+}
+.card-diagnosis.ok {
+  --diagnosis-color: var(--ok);
+}
+.card-diagnosis.muted {
+  --diagnosis-color: var(--fg3);
+}
+.card-diagnosis.urgent .card-diagnosis-message {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.card-diagnosis-evidence {
+  font: 11px var(--mono);
+  color: var(--fg2);
+}
+.card-diagnosis.maintenance .card-diagnosis-evidence {
+  flex-basis: 100%;
+  padding-left: 17px;
+}
+.card-diagnosis-link {
+  all: unset;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--diagnosis-color);
+  padding-bottom: 1px;
+}
+.card-diagnosis-link:hover {
+  color: var(--diagnosis-color);
+}
+.card-diagnosis:not(.urgent) {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--fg2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.card-diagnosis:not(.urgent) .card-diagnosis-link {
+  margin-left: auto;
+  border-bottom-width: 1px;
+  color: var(--fg);
+}
+.card-diagnosis:not(.urgent) .card-diagnosis-link:hover {
+  color: var(--diagnosis-color);
+}
+.card-diagnosis-message i {
+  color: var(--diagnosis-color);
+  font-size: 10px;
+  font-style: normal;
+  margin-right: 7px;
+}
+.card-more {
+  color: var(--fg3);
+  font: 10px var(--mono);
+}
+.card-stages {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+}
+.card-stages i {
+  flex: 1;
+  height: 6px;
+  background: var(--line2);
+}
+.card-stages i.ok {
+  background: var(--ok);
+}
+.card-stages i.running {
+  background: var(--acc);
+  animation: hpulse 1.2s infinite;
+}
+.card-stages i.failed {
+  background: var(--bad);
+}
+.card-start-error {
+  color: var(--bad);
+  font-size: 12px;
+}
+.card-metrics {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  min-width: 0;
+}
+.card-metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.card-metric.version {
+  margin-left: auto;
+  text-align: right;
+}
+.card-metric-label {
+  min-height: 15px;
+  color: var(--fg3);
+  font: 700 9.5px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.card-metric b {
+  font: 700 13px var(--mono);
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.card-metrics.stale .card-metric b {
+  text-decoration: underline dotted var(--line2);
+  text-underline-offset: 3px;
+}
+.card-stale-note {
+  font: 10px var(--mono);
+  color: var(--fg3);
+  margin-top: -6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-status.busy i,
+  .card-stages i.running {
+    animation: none;
+  }
+}
