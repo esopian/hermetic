@@ -21,7 +21,7 @@ import type {
 } from "./types.ts";
 
 import type { MemoryBackend } from "./memory.ts";
-import { simulateRerun } from "./memory-simulation.ts";
+import { simulateConverge, simulateRerun } from "./memory-simulation.ts";
 
 /**
  * Is this TTL lock still held at `now`?
@@ -72,6 +72,10 @@ export function createMemoryStore(b: MemoryBackend): Backend["store"] {
         b.agents.set(name, next);
         // §3.2: the fixture has no box to poll the row, so it plays the runner.
         if (patch.command?.action === "rerun") simulateRerun(b, name, patch.command.id);
+        // …and, when fixture mode asks it to, the heartbeat that answers a converge.
+        if (b.simulateConverge && patch.apply_request) {
+          simulateConverge(b, name, patch.apply_request.id);
+        }
         return structuredClone(next);
       },
       scan: async (): Promise<Agent[]> =>

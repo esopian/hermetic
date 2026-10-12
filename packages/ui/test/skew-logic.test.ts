@@ -30,7 +30,12 @@ const status = (
     agents_behind: 0,
     agents_drifted: 0,
     agents_affected: 2,
-    fix: severity === "degraded" ? "hermetic foundation update" : null,
+    fix:
+      severity === "degraded"
+        ? "hermetic foundation update"
+        : severity === "drifted"
+          ? "hermetic plan rollout"
+          : null,
     ...skewOver,
   } as SkewStatusView["skew"],
   agents: [
@@ -72,6 +77,28 @@ describe("fleetBand", () => {
 
   test("pending is quiet: it resolves itself", () => {
     expect(fleetBand(status("pending"))?.tone).toBe("muted");
+    expect(fleetBand(status("pending"))?.headline).toBe("Agents are catching up · 2 agents affected");
+  });
+
+  /**
+   * The severity split out of `pending`: a config nothing is applying does not
+   * resolve itself, so it is amber like `degraded`, carries its command, and —
+   * unlike `blocked` — may still be put away for the session.
+   */
+  test("drifted is amber, dismissible, and carries the rollout", () => {
+    const band = fleetBand(status("drifted", {}, { agents_affected: 1 }));
+    expect(band?.severity).toBe("drifted");
+    expect(band?.tone).toBe("warn");
+    expect(band?.dismissible).toBe(true);
+    expect(band?.fix).toBe("hermetic plan rollout");
+    expect(band?.headline).toBe("Config not applied · 1 agent affected");
+  });
+
+  test("only blocked may not be dismissed", () => {
+    for (const severity of ["pending", "drifted", "degraded"] as const) {
+      expect(fleetBand(status(severity))?.dismissible).toBe(true);
+    }
+    expect(fleetBand(status("blocked"))?.dismissible).toBe(false);
   });
 
   test("the message is core's, verbatim — the band never writes its own", () => {
@@ -112,6 +139,17 @@ describe("agentBand", () => {
     );
   });
 
+  test("a drifted fleet is not called an old one either, and keeps its command", () => {
+    expect(agentBand(status("drifted"), "pink-otter")?.headline).toBe(
+      "Some agents have not applied their config · this agent is behind on its config",
+    );
+    expect(agentBand(status("drifted"), "lime-panther")?.headline).toBe(
+      "Some agents have not applied their config",
+    );
+    expect(agentBand(status("drifted"), "pink-otter")?.fix).toBe("hermetic plan rollout");
+    expect(agentBand(status("drifted"), "pink-otter")?.dismissible).toBe(false);
+  });
+
   test("a blocked fleet says only that: upgrading hermetic is the whole fix", () => {
     expect(agentBand(status("blocked"), "pink-otter")?.headline).toBe(
       "This fleet is ahead of your hermetic build",
@@ -128,11 +166,25 @@ describe("agentBand", () => {
     );
   });
 
-  test("a current fleet with one lagging agent says so quietly, and only there", () => {
+  test("a current fleet with one agent behind on its release says so quietly, and only there", () => {
     const s = status("none");
     expect(agentBand(s, "amber-hawk")?.tone).toBe("muted");
-    expect(agentBand(s, "pink-otter")?.tone).toBe("muted");
+    expect(agentBand(s, "amber-hawk")?.fix).toBeNull();
     expect(agentBand(s, "lime-panther")).toBeNull();
+  });
+
+  /**
+   * Was asserted `muted` alongside amber-hawk, with "it re-applies on its own"
+   * as the message — the same false promise as the fleet band's. Only a server
+   * too old to compute `drifted` sends a drifted row under no skew, and the
+   * drawer still says what it is and which command applies it.
+   */
+  test("a drifted row under no fleet skew is amber and names the rollout for it", () => {
+    const band = agentBand(status("none"), "pink-otter");
+    expect(band?.tone).toBe("warn");
+    expect(band?.headline).toBe("This agent has not applied its config");
+    expect(band?.fix).toBe("hermetic plan rollout --agent pink-otter");
+    expect(band?.dismissible).toBe(false);
   });
 });
 
@@ -171,6 +223,8 @@ describe("dismissKey", () => {
     expect(dismissKey("main", "degraded")).not.toBe(dismissKey("staging", "degraded"));
     expect(dismissKey("main", "degraded")).not.toBe(dismissKey("main", "blocked"));
     expect(dismissKey(null, "degraded")).toBe("hermetic.skew.-.degraded");
+    // Putting away "catching up" must not silence the drift it may become.
+    expect(dismissKey("main", "pending")).not.toBe(dismissKey("main", "drifted"));
   });
 });
 

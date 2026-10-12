@@ -3,9 +3,15 @@
  * reports. Pure — no backend, no clock, no fixtures.
  */
 import { describe, expect, test } from "bun:test";
-import { computeSkew, configVerdict, counts } from "../src/fleet/skew.ts";
-import type { SkewAgent } from "../src/fleet/skew.ts";
-import { SKEW_FIX, SKEW_MESSAGE } from "../src/schema/skew.ts";
+import {
+  CONVERGING_WINDOW_MS,
+  computeSkew,
+  configVerdict,
+  counts,
+  isConverging,
+} from "../src/fleet/skew.ts";
+import type { SkewAgent, SkewInput } from "../src/fleet/skew.ts";
+import { SKEW_DRIFT_FIX, SKEW_FIX, SKEW_MESSAGE, SkewSeverity } from "../src/schema/skew.ts";
 
 const agent = (over: Partial<SkewAgent> = {}): SkewAgent => ({
   status: "ready",
@@ -110,13 +116,19 @@ describe("computeSkew", () => {
     expect(skew.severity).toBe("blocked");
   });
 
+  /**
+   * The drifted agent here is one whose apply is in flight. Before `drifted`
+   * was a severity of its own, this test fed a bare drift and asserted
+   * `pending` — which is the banner that sat over a never-converging agent for
+   * hours. A drift with nothing applying it is `drifted` (below).
+   */
   test("a current fleet with agents still catching up is pending, not degraded", () => {
     const skew = computeSkew({
       fleetVersion: 2,
       expectedVersion: 2,
       toolOutdated: false,
       updateAvailable: false,
-      agents: [agent(), agent({ current: false }), agent({ config: "drifted" })],
+      agents: [agent(), agent({ current: false }), agent({ config: "drifted", converging: true })],
     });
     expect(skew.severity).toBe("pending");
     expect(skew.message).toBe(SKEW_MESSAGE.pending);
@@ -127,14 +139,15 @@ describe("computeSkew", () => {
     expect(skew.fix).toBeNull();
   });
 
-  test("an agent that is both behind and drifted is one agent, not two", () => {
+  test("an agent that is both behind and converging is one agent, not two", () => {
     const skew = computeSkew({
       fleetVersion: 2,
       expectedVersion: 2,
       toolOutdated: false,
       updateAvailable: false,
-      agents: [agent({ current: false, config: "drifted" })],
+      agents: [agent({ current: false, config: "drifted", converging: true })],
     });
+    expect(skew.severity).toBe("pending");
     expect(skew.agents_behind).toBe(1);
     expect(skew.agents_drifted).toBe(1);
     expect(skew.agents_affected).toBe(1);
@@ -269,5 +282,131 @@ describe("configVerdict declines to answer for a box that is not reporting", () 
    */
   test("a caller that names no status gets the comparison it asked for", () => {
     expect(configVerdict({ config_hash: "b", applied_config_hash: "a" })).toBe("drifted");
+  });
+});
+
+describe("drifted: a config nothing is applying", () => {
+  const current = (agents: SkewAgent[]): SkewInput => ({
+    fleetVersion: 2,
+    expectedVersion: 2,
+    toolOutdated: false,
+    updateAvailable: false,
+    agents,
+  });
+
+  /**
+   * The bug this severity exists for: a drifted agent on a current fleet was
+   * reported as "catching up", with a message promising it would re-apply on
+   * its own. A config never arrives on its own (§6.5); only a rollout, an
+   * `upgrade --now` or a recreate asks the box to apply it.
+   */
+  test("a drift with nothing applying it is drifted, and names the rollout", () => {
+    const skew = computeSkew(current([agent(), agent({ config: "drifted" })]));
+    expect(skew.severity).toBe("drifted");
+    expect(skew.message).toBe(SKEW_MESSAGE.drifted);
+    expect(skew.fix).toBe(SKEW_DRIFT_FIX);
+    expect(SKEW_DRIFT_FIX).toBe("hermetic plan rollout");
+    expect(skew.headline).toBe("foundation v2 is current · 1 agent has not applied its config");
+    expect(skew.agents_drifted).toBe(1);
+    expect(skew.agents_affected).toBe(1);
+  });
+
+  test("an agent whose apply is in flight is still catching up", () => {
+    const skew = computeSkew(current([agent({ config: "drifted", converging: true })]));
+    expect(skew.severity).toBe("pending");
+    expect(skew.fix).toBeNull();
+  });
+
+  test("behind and stuck is drifted: the release arrives on its own, the config does not", () => {
+    const skew = computeSkew(current([agent({ current: false, config: "drifted" })]));
+    expect(skew.severity).toBe("drifted");
+    expect(skew.agents_behind).toBe(1);
+    expect(skew.agents_affected).toBe(1);
+  });
+
+  test("behind only is pending, unchanged", () => {
+    const skew = computeSkew(current([agent({ current: false })]));
+    expect(skew.severity).toBe("pending");
+    expect(skew.message).toBe(SKEW_MESSAGE.pending);
+    expect(skew.fix).toBeNull();
+  });
+
+  /**
+   * The count is the stuck agents alone — the ones the rollout would act on.
+   * One merely behind on its release, or converging, needs nothing from the
+   * operator and would make "N affected" disagree with the plan.
+   */
+  test("only the stuck agents are affected, and the headline pluralises", () => {
+    const skew = computeSkew(
+      current([
+        agent({ config: "drifted" }),
+        agent({ config: "drifted" }),
+        agent({ config: "drifted", converging: true }),
+        agent({ current: false }),
+        agent({ status: "destroyed", config: "drifted" }),
+      ]),
+    );
+    expect(skew.severity).toBe("drifted");
+    expect(skew.agents_drifted).toBe(3);
+    expect(skew.agents_affected).toBe(2);
+    expect(skew.headline).toContain("2 agents have not applied their config");
+  });
+
+  test("a fleet behind this build is still degraded, drift or not", () => {
+    const skew = computeSkew({
+      ...current([agent({ config: "drifted" })]),
+      fleetVersion: 1,
+      updateAvailable: true,
+    });
+    expect(skew.severity).toBe("degraded");
+    expect(skew.fix).toBe(SKEW_FIX);
+  });
+
+  test("the severities are declared in ascending order", () => {
+    expect(SkewSeverity.options).toEqual(["none", "pending", "drifted", "degraded", "blocked"]);
+  });
+});
+
+describe("isConverging", () => {
+  const now = Date.parse("2026-10-11T12:00:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const row = (issued_at: string, request_hash = "h2", config_hash: string | null = "h2") => ({
+    config_hash,
+    apply_request: { id: "r", config_hash: request_hash, issued_at, issued_by: "laptop" },
+  });
+
+  test("a fresh request for the row's own config is in flight", () => {
+    expect(isConverging(row(ago(60_000)), now)).toBe(true);
+    expect(isConverging(row(ago(CONVERGING_WINDOW_MS)), now)).toBe(true);
+  });
+
+  /**
+   * hermeticd never clears `apply_request`, so a request that failed sits on
+   * the row for good. Without the bound it would read as converging forever —
+   * the "catching up" banner over an agent that never will.
+   */
+  test("a stale request is not", () => {
+    expect(isConverging(row(ago(CONVERGING_WINDOW_MS + 1)), now)).toBe(false);
+    expect(isConverging(row(ago(6 * 60 * 60_000)), now)).toBe(false);
+  });
+
+  test("a request for a config since superseded is not", () => {
+    expect(isConverging(row(ago(60_000), "h1", "h2"), now)).toBe(false);
+  });
+
+  test("no request, no rendered config, or an unreadable date is not", () => {
+    expect(isConverging({ config_hash: "h2" }, now)).toBe(false);
+    expect(isConverging({ config_hash: "h2", apply_request: null }, now)).toBe(false);
+    expect(isConverging(row(ago(60_000), "h2", null), now)).toBe(false);
+    expect(isConverging(row("not a date"), now)).toBe(false);
+  });
+
+  test("a request dated far in the future is held to the same bound", () => {
+    expect(isConverging(row(ago(-60_000)), now)).toBe(true);
+    expect(isConverging(row(ago(-(CONVERGING_WINDOW_MS + 1))), now)).toBe(false);
+  });
+
+  test("the window covers a Hermes upgrade plus the rollout's own wait", () => {
+    expect(CONVERGING_WINDOW_MS).toBe(15 * 60_000);
   });
 });
