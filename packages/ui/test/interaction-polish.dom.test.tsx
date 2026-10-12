@@ -72,7 +72,9 @@ for (const layout of ["board", "triage"] as const) {
         <FleetTriage {...props} selected={null} groups={triageGroups([AGENT], "1.2.0")} />
       ),
     );
-    const card = screen.getByRole("button", { name: "lumen · ready" });
+    const card = screen.getByRole("button", {
+      name: layout === "board" ? "Open lumen details" : "lumen · ready",
+    });
     card.focus();
     await user.keyboard("{Enter} ");
     expect(selected).toBe(2);
@@ -89,6 +91,7 @@ for (const layout of ["board", "triage"] as const) {
       } finally {
         write.mockRestore();
       }
+      expect(screen.getByRole("button", { name: "Open ▾" })).toBeTruthy();
     }
   });
 }

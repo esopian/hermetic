@@ -109,9 +109,17 @@ type Read =
   | { state: "ok"; lines: AgentLogLine[] }
   | { state: "error"; message: string };
 
-export function AgentLogs({ agent, history }: { agent: AgentView; history: HistoryState }) {
+export function AgentLogs({
+  agent,
+  history,
+  initialSource = "activity",
+}: {
+  agent: AgentView;
+  history: HistoryState;
+  initialSource?: string;
+}) {
   const name = agent.name;
-  const [sourceId, setSourceId] = useState("activity");
+  const [sourceId, setSourceId] = useState(initialSource);
   const [read, setRead] = useState<Read>({ state: "idle" });
   /** Only the newest read may land: a slow journal must not overwrite the console asked for after it. */
   const ticket = useRef(0);

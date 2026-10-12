@@ -46,7 +46,7 @@ test("Refresh profile, then a second guarded write, both carry the version core 
   mountPortal();
   const user = userEvent.setup();
 
-  await user.click(await screen.findByLabelText(/^atlas · /));
+  await user.click(await screen.findByRole("button", { name: "Open atlas details" }));
   const drawer = await waitFor(() => {
     const el = screen.getByRole("dialog");
     expect(el.querySelector(".detail-name")?.textContent).toBe("atlas");
