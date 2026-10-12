@@ -436,13 +436,17 @@ const P = {
   pks: [],
 };
 
-function plain(html) {
-  return html.replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, " ");
-}
+const inferredDurations = new WeakMap();
 function beatDur(b) {
   if (b.d) return b.d;
-  const n = plain(b.c || "").length;
-  return Math.max(4200, Math.min(15000, 1700 + n * 46));
+  const cached = inferredDurations.get(b);
+  if (cached !== undefined) return cached;
+  const template = document.createElement("template");
+  template.innerHTML = b.c || "";
+  const n = (template.content.textContent || "").length;
+  const duration = Math.max(4200, Math.min(15000, 1700 + n * 46));
+  inferredDurations.set(b, duration);
+  return duration;
 }
 
 const $ = (s) => document.querySelector(s);
