@@ -586,9 +586,16 @@ export function rebootAgent(name: string): Promise<AgentView> {
   return writeRow("agents.reboot", { name, target: target() });
 }
 
-/** `POST /api/upgrade` needs one of hermes/hermeticd, so the target version goes on the wire. */
-export function upgrade(name: string, hermes: string): Promise<Accepted> {
-  return transport().request<Accepted>("upgrade", { name, hermes, target: target() });
+/**
+ * `POST /api/upgrade` needs one of hermes/hermeticd, so the target version goes
+ * on the wire. `now` is the drawer's choice between its two buttons: `false`
+ * only pins the version (the box installs it on its next recreate), `true` also
+ * asks the running box to converge onto it in place — the `apply_request` a
+ * rollout writes, which reinstalls Hermes and restarts it (§6.5). It always
+ * goes on the wire, so the request says which of the two the operator pressed.
+ */
+export function upgrade(name: string, hermes: string, now = false): Promise<Accepted> {
+  return transport().request<Accepted>("upgrade", { name, hermes, now, target: target() });
 }
 
 /*

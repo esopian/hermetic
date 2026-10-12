@@ -405,6 +405,14 @@ export class MemoryBackend implements Backend {
   /** How long each step of the fixture's imaginary runner takes. */
   rerunDelayMs = 1000;
 
+  /**
+   * Whether an `apply_request` is answered as a real box would answer it
+   * (`simulateConverge`). Off by default: a test's backend is the box that
+   * never reports, and only fixture mode's open path (`open.ts`) wants one
+   * that does.
+   */
+  simulateConverge = false;
+
   /** Schedule work that must never hold a test or a dev server open. */
   later(ms: number, work: () => void): void {
     const timer = setTimeout(work, ms);

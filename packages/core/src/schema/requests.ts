@@ -246,6 +246,13 @@ export type RecreateAgentInput = z.infer<typeof RecreateAgentInput>;
  *   so it takes none — and `--hermeticd` *with* a name is refused by core with
  *   `VALIDATION`, because "upgrade hermeticd on this one box" is not a thing
  *   the fleet manifest can express.
+ *
+ * `now` asks each targeted box to converge onto the new pin in place (§6.5's
+ * `apply_request`, the same step `plan rollout` takes) instead of waiting for
+ * the next recreate. It is about the Hermes pin, so it needs `--hermes`; that
+ * much is shape and refused here. `--now` *with* `--hermeticd` is refused by
+ * core with `VALIDATION`, like the name case above: a hermeticd release moves on
+ * the nightly update, and there is no in-place converge of it to ask for.
  */
 export const UpgradeInput = z
   .object({
@@ -253,12 +260,16 @@ export const UpgradeInput = z
     hermes: z.string().optional(),
     hermeticd: z.string().optional(),
     all: z.boolean().optional(),
+    now: z.boolean().optional(),
   })
   .refine((v) => v.hermes !== undefined || v.hermeticd !== undefined, {
     message: "one of --hermes or --hermeticd is required",
   })
   .refine((v) => v.hermes === undefined || v.all === true || v.name !== undefined, {
     message: "--hermes needs an agent name or --all",
+  })
+  .refine((v) => v.now !== true || v.hermes !== undefined, {
+    message: "--now converges a box onto a new Hermes pin, so it needs --hermes",
   });
 export type UpgradeInput = z.infer<typeof UpgradeInput>;
 

@@ -31,11 +31,25 @@ import { z } from "zod";
  *   the only severity a head may not let an operator dismiss.
  * - `degraded` — the fleet is behind this build. The common case, and the one
  *   this whole module exists for: `hermetic foundation update` resolves it.
- * - `pending` — the fleet is current and some agents have not caught up yet.
- *   Their runners take the new release on their own next tick, so an operator
- *   who acts on this makes it slower, not faster. Never amber; never a block.
+ * - `drifted` — the fleet is current and some agents are holding a config that
+ *   is not the one rendered for their row, with nothing in flight to change
+ *   that. Unlike a release, a config is never taken on a box's own initiative:
+ *   it moves only when something asks the box to apply it (`hermetic plan
+ *   rollout` and `apply`, `upgrade --now`, or a recreate), so this one does not
+ *   resolve itself and says which command does. Amber, like `degraded`, and
+ *   dismissible like it.
+ * - `pending` — the fleet is current and some agents have not caught up yet:
+ *   their hermeticd is behind the release the fleet points at, which their
+ *   runners take on their own next tick, or a config apply was asked of them
+ *   moments ago and is still landing. Either way an operator who acts on this
+ *   makes it slower, not faster. Never amber; never a block.
+ *
+ * The array is in ascending order of severity — `none < pending < drifted <
+ * degraded < blocked` — so that `SkewSeverity.options.indexOf` ranks two of
+ * them, should a reader ever need to. `computeSkew` tests them most-severe
+ * first and returns the first that holds, which is the same order.
  */
-export const SkewSeverity = z.enum(["none", "pending", "degraded", "blocked"]);
+export const SkewSeverity = z.enum(["none", "pending", "drifted", "degraded", "blocked"]);
 export type SkewSeverity = z.infer<typeof SkewSeverity>;
 
 /**
@@ -47,13 +61,23 @@ export type SkewSeverity = z.infer<typeof SkewSeverity>;
  */
 export const SKEW_MESSAGE: Readonly<Record<SkewSeverity, string>> = {
   none: "",
-  pending: "agents are taking the new release; they re-apply on their own",
+  pending: "agents are taking the new release; they catch up on their own",
+  drifted:
+    "some agents are not running the config rendered for them; they converge only when it is applied",
   degraded: "some things will not behave as expected until the fleet is updated",
   blocked: "some things will not behave as expected; this build cannot update this fleet",
 };
 
 /** The command that resolves a `degraded` fleet. `blocked` has no command — see below. */
 export const SKEW_FIX = "hermetic foundation update";
+
+/**
+ * The command that resolves a `drifted` fleet: re-render every agent's config
+ * and ask the boxes that are behind to apply it (§6.5). A plan, not the apply
+ * itself — it shows which agents it would converge, and `hermetic apply` runs
+ * it. `pending` has no command, because the agents it is about need none.
+ */
+export const SKEW_DRIFT_FIX = "hermetic plan rollout";
 
 /**
  * What an agent's applied config is, relative to what the fleet rendered for it.
@@ -73,7 +97,9 @@ export type ConfigVerdict = z.infer<typeof ConfigVerdict>;
  * affected" has to mean the same thing in the portal and in the CLI, and
  * because what counts as affected depends on the severity: a `degraded`
  * foundation is a property of the *fleet*, so every live agent is affected by
- * it, while `pending` is per-agent and only the ones still catching up are.
+ * it, while `pending` and `drifted` are per-agent and only the agents each one
+ * is about are counted: the ones still catching up, or the ones whose config
+ * nothing is applying.
  */
 export const Skew = z.object({
   severity: SkewSeverity,
@@ -86,7 +112,11 @@ export const Skew = z.object({
   expected_version: z.number().int().nonnegative(),
   /** Agents whose reported hermeticd is not the release the fleet now points at. */
   agents_behind: z.number().int().nonnegative(),
-  /** Agents holding a config that is not the one rendered for their row. */
+  /**
+   * Agents holding a config that is not the one rendered for their row — all of
+   * them, including any whose apply is still landing. The severity is what
+   * tells the two apart; this is the raw count `hermetic doctor` would give.
+   */
   agents_drifted: z.number().int().nonnegative(),
   /** How many agents the operator should read the headline as being about. */
   agents_affected: z.number().int().nonnegative(),

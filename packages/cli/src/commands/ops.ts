@@ -21,12 +21,33 @@ export function register(program: Command): void {
     globals(new Cmd("upgrade"))
       .description("pin a new hermes version per agent, or move the whole fleet to a new hermeticd")
       .argument("[name]", "a single agent for --hermes; omit with --all, and always for --hermeticd")
-      .option("--hermes <version>", "hermes version to pin; takes effect on the next recreate")
+      .option(
+        "--hermes <version>",
+        "hermes version to pin; takes effect on the next recreate, or at once with --now",
+      )
       .option(
         "--hermeticd <version>",
         "hermeticd version the whole fleet moves to; rewrites the fleet manifest, takes no agent name",
       )
       .option("--all", "every agent in the fleet")
+      .option(
+        "--now",
+        "with --hermes: ask each running box to apply the new pin in place and wait for it to report (§6.5)",
+      )
+      .addHelpText(
+        "after",
+        "\nExamples:\n" +
+          "  hermetic upgrade atlas --hermes 0.22.0             pin it; the box installs it on its next recreate\n" +
+          "  hermetic upgrade atlas --hermes 0.22.0 --now       pin it and converge the running box in place\n" +
+          "  hermetic upgrade --all --hermes 0.22.0 --now       the same, one agent at a time across the fleet\n" +
+          "  hermetic upgrade --hermeticd 0.6.0                 the fleet's hermeticd, on each box's nightly update\n" +
+          "\n--now writes the same converge request `hermetic plan rollout` does: hermeticd\n" +
+          "reinstalls Hermes and restarts its units, and this waits up to ten minutes per\n" +
+          "box for it to report the new config. A box that is not up (stopped, still\n" +
+          "booting) is skipped and keeps the pin for its next boot; one that does not\n" +
+          "report in time is a warning, not a failure. The box installs this build's\n" +
+          "Hermes ref, exactly as a recreate from this checkout would.\n",
+      )
       .action(async (name: string | undefined, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
@@ -36,6 +57,7 @@ export function register(program: Command): void {
             hermes: opts["hermes"],
             hermeticd: opts["hermeticd"],
             all: opts["all"],
+            now: opts["now"],
           }),
         );
         await renderOp(ctx.hermetic.upgrade(input, { signal: ctx.signal }), {

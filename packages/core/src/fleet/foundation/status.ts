@@ -13,7 +13,7 @@ import {
 } from "../../chat/notifications.ts";
 import { settingsOf } from "../../profiles/settings.ts";
 import { HermeticError } from "../../errors.ts";
-import { computeSkew, configVerdict } from "../skew.ts";
+import { computeSkew, configVerdict, isConverging } from "../skew.ts";
 import type { FoundationCtx } from "./shared.ts";
 import { BUILD_VERSIONS } from "../../build-versions.ts";
 
@@ -84,6 +84,7 @@ export function createStatus(ctx: FoundationCtx) {
     backend,
     hermeticdVersion,
     nowIso,
+    now,
     versionOf,
     lockIsLive,
     foundationVersion,
@@ -291,6 +292,18 @@ export function createStatus(ctx: FoundationCtx) {
         last_heartbeat: a.last_heartbeat ?? null,
       }))
       .sort((a, b) => (a.name < b.name ? -1 : 1));
+    /**
+     * §6.6: which drifted agents have an apply in flight, so the skew can tell
+     * an agent still converging from one nothing is converging (`isConverging`).
+     *
+     * Kept off `agentRows`, which is the wire shape every head renders: the
+     * request is a fact about the row's recent history, its age is a reading
+     * against *this* read's clock, and the severity is where it belongs. The
+     * backend's clock rather than `Date.now()`, so a test — and the fixture,
+     * whose clock is frozen — reads the same age every time.
+     */
+    const nowMs = now().getTime();
+    const converging = new Set(agents.filter((a) => isConverging(a, nowMs)).map((a) => a.name));
     const updateAvailable =
       current.foundation_version < available.foundation_version ||
       current.template_sha256 !== available.template_sha256 ||
@@ -323,7 +336,7 @@ export function createStatus(ctx: FoundationCtx) {
         expectedVersion: available.foundation_version,
         toolOutdated,
         updateAvailable,
-        agents: agentRows,
+        agents: agentRows.map((row) => ({ ...row, converging: converging.has(row.name) })),
       }),
       /**
        * Deliberately *not* folded into `update_available` above. That flag is

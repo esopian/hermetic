@@ -160,24 +160,33 @@ export function AgentLifecycle({
 
       <div className="dr-lcg">
         {/*
-          `agents.upgrade` records the version on the row; the box installs it
-          on its next rebuild (or rerun), not now. The card says that rather
-          than the "restarts the gateway" a reader might assume, because an
-          operator who pressed Upgrade and saw nothing restart would otherwise
-          think it failed.
+          Two ways to take the new version, because they cost different things.
+          "Upgrade now" pins it and then asks the running box to converge onto
+          it in place (`upgrade --hermes V --now`, §6.5): hermeticd reinstalls
+          Hermes and restarts its units, so the disks and tailnet address stay
+          but a turn in flight is cut off — said beside the button rather than
+          left for the operator to find out. "Pin for next recreate" is the old
+          pin-only `upgrade`: it records the version and changes nothing on the
+          box until a rebuild (or a later rollout) applies it. Its rail's last
+          line says exactly that, so a press that restarts nothing does not
+          read as one that failed.
+
+          Upgrade now needs a box that can answer the converge
+          (`DrawerActions.upgradeNow`); on any other status it stays on the
+          card, dead, with the reason, and pinning remains available.
         */}
         <Card
           title="Upgrade Hermes"
           recommended={behind && !!latest}
-          pill="no downtime now"
+          pill="restarts Hermes"
           about={
             behind && latest
-              ? `${agent.hermes_version} → ${latest}. Pins the new version on this agent; the box installs it on its next rebuild.`
+              ? `${agent.hermes_version} → ${latest}. Upgrade now reinstalls Hermes on the running box and restarts it. Pinning only records the version; the box installs it on its next rebuild.`
               : `On ${agent.hermes_version}, the newest release this fleet knows.`
           }
-          keeps="everything"
-          loses="nothing"
-          down="none now · the rebuild that applies it"
+          keeps="the instance, its disks, config and tailnet address"
+          loses="in-flight turns, when upgraded now"
+          down="Hermes only, while it reinstalls · none if pinned"
           unavailable={
             behind && latest
               ? null
@@ -186,17 +195,50 @@ export function AgentLifecycle({
                 : "no newer release is known"
           }
         >
-          <button
-            type="button"
-            className={`btn btn-sm${behind && latest ? " btn-primary" : " btn-secondary"}`}
-            disabled={!behind || busy || !latest}
-            title="Record the new Hermes version on this agent; the box picks it up on its next recreate or rerun, not immediately"
-            onClick={() =>
-              latest && void onRun(`upgrade → ${latest}`, () => upgradeAgent(name, latest))
-            }
-          >
-            {behind && latest ? `Upgrade → ${latest}` : `On ${agent.hermes_version}`}
-          </button>
+          {behind && latest ? (
+            <div
+              className="dr-ask"
+              role="group"
+              aria-label="Upgrade choices"
+              style={{ marginTop: "auto" }}
+            >
+              <span className="hint" style={{ margin: 0 }}>
+                {actions.upgradeNow
+                  ? "Upgrade now restarts Hermes on the box: a turn in flight is interrupted."
+                  : `Upgrade now needs a running box; this one is ${status}. Pin it to install on the next rebuild.`}
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={busy || !actions.upgradeNow}
+                title={
+                  actions.upgradeNow
+                    ? `Pin ${latest} and reinstall Hermes on the running box now; Hermes restarts and a turn in flight is interrupted`
+                    : `Upgrade now needs a running box; this one is ${status}`
+                }
+                onClick={() =>
+                  void onRun(`upgrade now → ${latest}`, () => upgradeAgent(name, latest, true))
+                }
+              >
+                Upgrade now
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                disabled={busy}
+                title={`Record ${latest} on this agent without touching the box; it installs on the next recreate, or later with Upgrade now`}
+                onClick={() =>
+                  void onRun(`upgrade → ${latest}`, () => upgradeAgent(name, latest, false))
+                }
+              >
+                Pin for next recreate
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="btn btn-sm btn-secondary" disabled>
+              On {agent.hermes_version}
+            </button>
+          )}
         </Card>
 
         <Card

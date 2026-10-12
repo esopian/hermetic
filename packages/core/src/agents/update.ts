@@ -4,7 +4,8 @@
  * These three are one module because they are the three ways an agent is moved
  * forward *without being replaced* — a box asked to re-run its bootstrap
  * stages, a box asked to bounce its operating system, and a version pin moved
- * so the next boot picks a newer release up. None of them creates or destroys
+ * so the next boot — or, with `--now`, an in-place converge — picks a newer
+ * release up. None of them creates or destroys
  * anything, and all three share the same small vocabulary: the agent row's
  * `command` slot the resident runner polls (§4.2), the §4.4 lock they must not
  * cut across, and the fleet manifest that names the release every box installs.
@@ -44,6 +45,12 @@ import type {
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
 import { checkAbort } from "../abort.ts";
+import {
+  CONVERGE_POLL_MS,
+  HERMES_CONVERGE_TIMEOUT_MS,
+  convergeDeferral,
+  createConverge,
+} from "./converge.ts";
 import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
 import type { CoreContext } from "../context.ts";
 
@@ -57,10 +64,25 @@ export interface UpdateDeps {
   hermesRef: string;
   /** §3.6's mirror; real by default (rule 6), so an absent one is a type error. */
   hermesMirror: HermesMirrorFn;
+  /**
+   * How long `upgrade --now` waits for each box to report the new config, and
+   * how often it looks. Tests shrink both; a real fleet gets
+   * `HERMES_CONVERGE_TIMEOUT_MS` and `CONVERGE_POLL_MS` (`converge.ts`).
+   */
+  convergeTimeoutMs?: number;
+  convergePollMs?: number;
 }
+
+/** What one agent's `--hermes` upgrade came to, for the run's closing tally. */
+type UpgradeOutcome = "pinned" | "converged" | "skipped" | "unconverged";
 
 export function createUpdate(deps: UpdateDeps) {
   const { hermesRef, hermesMirror } = deps;
+  const converge = createConverge({
+    ctx: deps.ctx,
+    timeoutMs: deps.convergeTimeoutMs ?? HERMES_CONVERGE_TIMEOUT_MS,
+    pollMs: deps.convergePollMs ?? CONVERGE_POLL_MS,
+  });
   const {
     backend,
     hermeticdVersion,
@@ -265,12 +287,40 @@ export function createUpdate(deps: UpdateDeps) {
    *   box picks the new release up on its nightly update (§4.4). A name would
    *   mean "upgrade this one box", which the fleet manifest cannot express, so
    *   it is refused rather than silently widened.
-   * - `--hermes V` is per-agent: the pin, the re-render and the upload, and then
-   *   nothing, because a running Hermes is replaced by a recreate and not by an
-   *   RPC that reaches into the box.
+   * - `--hermes V` is per-agent: the pin, the re-render and the upload. On its
+   *   own that is all it does — the box goes on running the Hermes it has until
+   *   something applies the new bundle, and every message says what will: the
+   *   next recreate, `plan rollout`, or this command again with `--now`.
+   * - `--hermes V --now` goes on to ask each box to apply it in place: the
+   *   same `apply_request` a rollout writes (`converge.ts`), which hermeticd
+   *   picks up on its heartbeat and answers by reinstalling Hermes and
+   *   restarting its units. It waits for each box's own report, one agent at a
+   *   time, and a box that does not answer in time is reported unconverged,
+   *   not failed.
+   *
+   * `--now` converges toward what this build renders, and every render pins
+   * `BUILD_VERSIONS.hermes_ref` (`renderFor`, `agent-runtime.ts`): the row has
+   * no ref of its own, so a box reinstalls from this build's ref with the
+   * version it is told to assert. In place is therefore exactly as able to
+   * move a box as a recreate from this checkout is — no more. When rows gain a
+   * `hermes_ref`, both get the same fix.
    */
   async function* upgrade(input: UpgradeInput, opts: OpOptions = {}): AsyncIterable<OpEvent> {
     const parsed = UpgradeInputSchema.parse(input);
+    /**
+     * Before anything is read or written: a hermeticd release reaches a box on
+     * its nightly update and has no in-place converge, so `--now` beside it
+     * would either be silently ignored for that half or read as a promise it
+     * cannot keep. Refused here rather than in the schema so it carries a
+     * typed `VALIDATION`, like the name-with-hermeticd refusal below.
+     */
+    if (parsed.now === true && parsed.hermeticd !== undefined) {
+      throw new HermeticError(
+        "VALIDATION",
+        "--now converges boxes onto a new Hermes pin; a hermeticd release reaches every box on its nightly update and cannot be applied now. Run the --hermeticd upgrade on its own.",
+        { hermeticd: parsed.hermeticd, now: true },
+      );
+    }
     const { fleet, stack } = await guardFleet();
 
     if (parsed.hermeticd !== undefined) {
@@ -328,8 +378,9 @@ export function createUpdate(deps: UpdateDeps) {
      * There is no "refuse an unknown ref" here, which the plan for this called
      * for, because there is no ref to be unknown: every render pins
      * `BUILD_VERSIONS.hermes_ref` (see `renderFor`), so `--hermes <version>`
-     * moves the *version* an agent asserts and never the ref it checks out. When
-     * the agent row gains a `hermes_ref` of its own, this is where the refusal
+     * moves the *version* an agent asserts and never the ref it checks out —
+     * whether the box takes it on a recreate, a rollout or `--now`. When the
+     * agent row gains a `hermes_ref` of its own, this is where the refusal
      * belongs.
      */
     const mirrorProgress = parsed.hermeticd === undefined ? 0.05 : 0.45;
@@ -384,20 +435,35 @@ export function createUpdate(deps: UpdateDeps) {
       : [await getAgent(validateName(parsed.name))];
 
     const owner = `${await actor()}#${randomUUID()}`;
+    const issuedBy = await actor();
+    const version = parsed.hermes as string;
+    const now = parsed.now === true;
+    /**
+     * The command that lands a pin in place, as the no-`--now` lines name it —
+     * in the order `hermetic upgrade --help` prints its usage, target first.
+     */
+    const nowCommand = (target: string) => `\`hermetic upgrade ${target} --hermes ${version} --now\``;
 
     /**
      * One agent's hermes upgrade. It takes the agent's TTL lock (§4.4) for the
      * same reason `create` and `destroy` do: it rewrites the pin and the
      * `config_hash`, and two operators doing that at once would race the row.
+     *
+     * With `--now` the converge request is written under the same lock, then
+     * the lock is given back *before* the wait — the wait only reads the row,
+     * and holding the lock through ten minutes of a slow box would block every
+     * other operator's write for nothing.
      */
-    async function* upgradeOne(target: Agent, index: number): AsyncGenerator<OpEvent> {
+    async function* upgradeOne(target: Agent, index: number): AsyncGenerator<OpEvent, UpgradeOutcome> {
+      const progress = (index + 1) / targets.length;
       let agent = await acquireLock(target, owner);
+      let asked: string | null = null;
       try {
         checkAbort(opts.signal, "upgrade");
         agent = await backend.store.agents.update(agent.name, agent.version, {
-          hermes_version: parsed.hermes as string,
+          hermes_version: version,
         });
-        await appendEvent(agent.name, "upgrade", `hermes → ${parsed.hermes}`);
+        await appendEvent(agent.name, "upgrade", `hermes → ${version}`);
 
         const rendered = await ensureConfig(agent, fleet);
         if (agent.config_hash !== rendered.config_hash) {
@@ -406,16 +472,73 @@ export function createUpdate(deps: UpdateDeps) {
             resources: { ...agent.resources, config_key: rendered.key },
           });
         }
-        yield evt(
-          `${agent.name}:render`,
-          (index + 1) / targets.length,
-          `${agent.name} pinned to hermes ${parsed.hermes}; config ${rendered.config_hash} uploaded — it takes effect on the next recreate`,
-          nowIso(),
-        );
+        const uploaded = `${agent.name} pinned to hermes ${version}; config ${rendered.config_hash} uploaded`;
+        if (!now) {
+          yield evt(
+            `${agent.name}:render`,
+            progress,
+            `${uploaded} — it takes effect on the next recreate, or now with ` +
+              `${nowCommand(agent.name)} (or \`hermetic plan rollout --agent ${agent.name}\`)`,
+            nowIso(),
+          );
+          return "pinned";
+        }
+        yield evt(`${agent.name}:render`, progress, uploaded, nowIso());
+
+        /**
+         * The same deferral a rollout gives (`converge.ts`): a box that is not
+         * up cannot apply anything. The pin has landed regardless — it is what
+         * the agent's next boot installs — so this is a skip, not an undo.
+         */
+        const down = convergeDeferral(agent);
+        if (down !== null) {
+          yield evt(
+            `${agent.name}:skipped`,
+            progress,
+            `${agent.name} not converged — ${down}; the pin stands and takes effect when it next boots`,
+            nowIso(),
+            "warn",
+          );
+          return "skipped";
+        }
+        if (agent.applied_config_hash === rendered.config_hash) {
+          yield evt(
+            `${agent.name}:done`,
+            progress,
+            `${agent.name} already runs config ${rendered.config_hash}`,
+            nowIso(),
+          );
+          return "converged";
+        }
+        agent = await converge.request(agent, rendered.config_hash, issuedBy, "upgrade");
+        asked = rendered.config_hash;
       } finally {
         const latest = await backend.store.agents.get(agent.name);
         if (latest?.lock?.owner === owner) await releaseLock(latest);
       }
+
+      yield evt(`${agent.name}:requested`, progress, `${agent.name} asked to apply ${asked}`, nowIso());
+      const outcome = await converge.waitForConverge(agent.name, asked, opts.signal);
+      // An abort ends the wait early; it is the operator hanging up, not a box
+      // that stayed silent, and is reported as such rather than as unconverged.
+      checkAbort(opts.signal, "converge");
+      if (outcome === "converged") {
+        yield evt(
+          `${agent.name}:done`,
+          progress,
+          `${agent.name} is running hermes ${version} (config ${asked})`,
+          nowIso(),
+        );
+        return "converged";
+      }
+      yield evt(
+        `${agent.name}:unconverged`,
+        progress,
+        converge.unconvergedMessage(agent.name, asked),
+        nowIso(),
+        "warn",
+      );
+      return "unconverged";
     }
 
     /**
@@ -427,14 +550,19 @@ export function createUpdate(deps: UpdateDeps) {
      * in sequence anyway. Serial costs wall-clock on a large fleet and buys back
      * a run that can be read top to bottom, a failure that stops at a known
      * agent with the ones before it done and the ones after it untouched, and no
-     * second code path in which a partly-applied upgrade can be observed.
+     * second code path in which a partly-applied upgrade can be observed. With
+     * `--now` it is also what keeps a pin that breaks Hermes to one box.
      */
     let done = 0;
-    let skipped = 0;
+    let locked = 0;
+    let converged = 0;
+    let deferred = 0;
+    let unconverged = 0;
     for (const [index, target] of targets.entries()) {
       checkAbort(opts.signal, "upgrade");
+      let outcome: UpgradeOutcome;
       try {
-        yield* upgradeOne(target, index);
+        outcome = yield* upgradeOne(target, index);
       } catch (e) {
         /**
          * A fleet-wide `--all` must not abort because one agent is busy: a held
@@ -450,28 +578,48 @@ export function createUpdate(deps: UpdateDeps) {
             nowIso(),
             "warn",
           );
-          skipped += 1;
+          locked += 1;
           continue;
         }
         throw e;
       }
       done += 1;
-      yield evt(
-        `${target.name}:done`,
-        (index + 1) / targets.length,
-        `${target.name} upgraded`,
-        nowIso(),
-      );
+      if (outcome === "converged") converged += 1;
+      else if (outcome === "skipped") deferred += 1;
+      else if (outcome === "unconverged") unconverged += 1;
+      else {
+        yield evt(
+          `${target.name}:done`,
+          (index + 1) / targets.length,
+          `${target.name} upgraded`,
+          nowIso(),
+        );
+      }
     }
 
+    if (now) {
+      const skipped = locked + deferred;
+      yield evt(
+        "done",
+        1,
+        `pinned ${done} agent(s) to hermes ${version}: ${converged} converged, ` +
+          `${skipped} skipped, ${unconverged} unconverged`,
+        nowIso(),
+        skipped + unconverged === 0 ? undefined : "warn",
+      );
+      return;
+    }
+    const target = parsed.all ? "--all" : (parsed.name as string);
     yield evt(
       "done",
       1,
-      skipped === 0
-        ? `pinned ${done} agent(s) to hermes ${parsed.hermes}; each takes it on its next recreate`
-        : `pinned ${done} agent(s) to hermes ${parsed.hermes}; skipped ${skipped} held by another operator`,
+      locked === 0
+        ? `pinned ${done} agent(s) to hermes ${version}; each takes it on its next recreate, ` +
+            `or now with ${nowCommand(target)}`
+        : `pinned ${done} agent(s) to hermes ${version}; skipped ${locked} held by another operator; ` +
+            `each takes it on its next recreate, or now with ${nowCommand(target)}`,
       nowIso(),
-      skipped === 0 ? undefined : "warn",
+      locked === 0 ? undefined : "warn",
     );
   }
 
