@@ -71,7 +71,8 @@ const dwg = (n: number): string => (n === 1 ? "Cover" : `Dwg ${num(n)}`);
 
   <div class="bp-panels">
     {/* ---- hero ---- */}
-    <article class="pnl bp-hero" data-stage="1">
+    {/* id="download": old /#download links land on the top of the hero, buttons in view. */}
+    <article class="pnl bp-hero" data-stage="1" id="download">
       <figure class="bp-sheet static">
         <svg class="bp-fig st1 fig-w" viewBox={vb(WIDE[0])} role="img" aria-label={st(1).alt}><use href="#e-scene" /></svg>
         <svg class="bp-fig st1 fig-n" viewBox={vb(NARROW[0])} role="img" aria-label={st(1).alt}><use href="#e-scene" /></svg>
@@ -88,7 +89,7 @@ const dwg = (n: number): string => (n === 1 ? "Cover" : `Dwg ${num(n)}`);
         {/* design.md §1 (sealed inbound, Tailscale the only way in), §7.1 (one EC2 instance per agent), §2 (in the operator's account) */}
         <h1>Every agent gets a <em>sealed box</em></h1>
         <p class="bp-lede">hermetic runs each Hermes agent on its own machine, in your own AWS account. Nothing on the internet can connect to it. You reach it over your tailnet, from one desktop app.</p>
-        <div class="bp-ctas" id="download">
+        <div class="bp-ctas">
           <a class="btn btn-p" href={dmgUrl}>↓ Download for macOS</a>
           <a class="btn btn-s" href={explainer.home}>Learn how it works</a>
         </div>
@@ -559,6 +560,10 @@ const dwg = (n: number): string => (n === 1 ? "Cover" : `Dwg ${num(n)}`);
     min-height: 78vh;
     max-width: none;
     margin: 0;
+  }
+  /* A #download jump lands with the env strip and sticky header above the hero, not over it. */
+  .bp-hero {
+    scroll-margin-top: 120px;
   }
   .live .pnl.bp-hero {
     min-height: calc(100vh - 95px);

@@ -1,5 +1,6 @@
 ---
 import { explainer, repo } from "../data/links";
+import { dmgUrl } from "../data/release";
 import Button from "./Button.astro";
 ---
 <header class="top">
@@ -13,7 +14,9 @@ import Button from "./Button.astro";
       <a href={repo.home}>GitHub ↗</a>
     </nav>
     <div class="top-r">
-      <Button variant="p" small href="/#download">↓ Download</Button>
+      {/* Downloads the DMG directly, as the hero's button does. It used to jump to /#download,
+          which scrolled the landing's buttons under this sticky header and moved its pinned drawing. */}
+      <Button variant="p" small href={dmgUrl}>↓ Download</Button>
     </div>
   </div>
 </header>
