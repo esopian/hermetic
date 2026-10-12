@@ -266,7 +266,13 @@ export function SettingsShell({
             ) : null}
             {section === "policy" ? <PolicySection /> : null}
             {section === "foundation" ? (
-              <FoundationSection meta={meta} onOpenUpdate={onOpenFoundationUpdate} />
+              <FoundationSection
+                meta={meta}
+                settings={settings}
+                onSaved={onSaved}
+                onRefreshSettings={refreshSettings}
+                onOpenUpdate={onOpenFoundationUpdate}
+              />
             ) : null}
             {section === "diagnostics" ? <DiagnosticsSection /> : null}
             {section === "presets" ? <PresetsSection /> : null}
