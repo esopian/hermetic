@@ -7,7 +7,7 @@
  * stays pinned after an advisory lands against it. Nothing in `bun run check`
  * would notice. This runs the pinned bun's `bun audit` over the resolved graph
  * (workspace packages, dev dependencies and transitive dependencies included —
- * verified against Bun 1.3.10) and fails on a high or critical finding.
+ * verified against Bun 1.4.3) and fails on a high or critical finding.
  *
  * It is deliberately not part of `bun run check`: check is offline, and a lint
  * that needs a network service is a lint that fails on a plane. It is the last

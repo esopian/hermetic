@@ -92,17 +92,20 @@ describe.skipIf(!PTY_SUPPORTED)("spawnBunPty", () => {
   });
 
   test("the child sees the PATH-safe environment, not the app's", async () => {
+    // Keep the shell alive until its output is consumed. A short-lived env
+    // leader can deadlock Bun 1.4's PTY exit wait in the full test process.
     const pty = spawnBunPty(
-      ["/usr/bin/env"],
+      ["/bin/sh", "-c", "/usr/bin/env; read _"],
       { cols: 80, rows: 24, env: { HERMETIC_EXTRA: "yes" } },
       { env: { PATH: "/usr/bin:/bin", AWS_SECRET_ACCESS_KEY: "FIXTURE_SECRET", LC_ALL: "C" } },
     );
     const out = collect(pty);
-    await pty.exited;
     const text = await out.until((s) => s.includes("HERMETIC_EXTRA"));
     expect(text).toContain("TERM=xterm-256color");
     expect(text).toContain("LC_ALL=C");
     expect(text).not.toContain("FIXTURE_SECRET");
+    pty.write("\r");
+    await pty.exited;
     pty.close();
   });
 });
