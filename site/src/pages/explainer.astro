@@ -1,0 +1,95 @@
+---
+/*
+ * The explainer: an animated walkthrough of hermetic in five paths, played by
+ * public/explainer/engine.js. This page is only the player's markup; the engine renders the
+ * landing cards, the picker and every scene into it. Narration follows docs/design.md, and each
+ * beat names the section or file it rests on in its reference chips (site/AGENTS.md "Explainer").
+ *
+ * The scripts stay classic scripts loaded in order (data/explainer.ts SCRIPTS), because the path
+ * and scene files register themselves through the engine's globals.
+ */
+import { docs, repo } from "../data/links";
+import { SCRIPTS } from "../data/explainer";
+import Shell from "../layouts/Shell.astro";
+import "../styles/explainer.css";
+---
+<Shell
+  title="hermetic explained: an animated walkthrough"
+  description="An animated walkthrough of hermetic in five paths: the big picture, working with agents, standing up a fleet, the code, and the trust model."
+>
+<div id="home">
+  <div class="hwrap">
+    <div class="hhead">
+      <a class="brand" href="/" title="hermetic home"><i></i>HERMETIC</a>
+      <div class="hk">explained · pick a path</div>
+      <nav class="hnav">
+        <a href="/">Home</a>
+        <a href={docs.overview}>Docs</a>
+        <a href={repo.home}>GitHub ↗</a>
+      </nav>
+    </div>
+    {/* design.md §1 (sealed boxes, one agent or a whole fleet), §4.6/§4.8 (several fleets per account) */}
+    <h1>Run Hermes safely at any scale</h1>
+    <p class="lede">hermetic runs a fleet of sealed Hermes agents on AWS. Choose the route that matches what you need to know. Each one is a short animated walkthrough you can pause, scrub and resume.</p>
+    <div class="picker"></div>
+    <div class="cards"></div>
+    <div class="hfoot"><b>Space</b> play/pause · <b>←</b> <b>→</b> step · <b>T</b> chapters · <b>G</b> glossary · <b>H</b> back here · behaviour follows the <a href={repo.designSpec}>design spec</a></div>
+  </div>
+</div>
+
+<div id="viewport">
+  <div id="stage">
+    {/* The drawing's title block: brand, drawing number, chapter and title, the path's tally, sheet count. */}
+    <div id="hdr">
+      <div class="brand" title="All paths (H)"><i></i>HERMETIC</div>
+      <div class="dwg"></div>
+      <div class="where"><span class="chap"></span><span class="ttl"></span></div>
+      <div class="seals"><span class="lab">SEALS</span><span class="sq"></span><span class="cnt">00/20</span></div>
+      <div class="sheet"></div>
+    </div>
+    <div class="cv" id="cv"></div>
+    <div class="reg" aria-hidden="true"></div>
+    <div id="cap">
+      <div class="num"><div class="k">OF 0</div><div class="n">01</div><div class="bt"></div></div>
+      <div class="txt"><div class="say"></div><div class="refs"></div></div>
+      <div class="bar"></div>
+    </div>
+    <div id="stamp"><div class="in"><div class="k"></div><div class="n"></div><div class="w"></div></div></div>
+  </div>
+</div>
+
+<div id="ctl">
+  <div class="btns">
+    <button type="button" id="homebtn" title="All paths (H)">⌂</button>
+    <button type="button" id="prevs" title="Previous scene (Shift+←)">|◀</button>
+    <button type="button" id="prev" title="Previous beat (←)">◀</button>
+    <button type="button" id="play" class="pri" title="Play / pause (Space)">❚❚ PAUSE</button>
+    <button type="button" id="next" title="Next beat (→)">▶</button>
+    <button type="button" id="nexts" title="Next scene (Shift+→)">▶|</button>
+  </div>
+  <div id="tl"></div>
+  <div class="meta">
+    <span id="time">0:00</span>
+    <button type="button" id="speed" title="Playback speed (S)">1×</button>
+    <button type="button" id="glossbtn" title="Glossary (G)">GLOSSARY</button>
+    <button type="button" id="tocbtn" title="Chapters (T)">☰ CHAPTERS</button>
+  </div>
+</div>
+
+<div id="toc">
+  <h2>Chapters</h2>
+  <div class="sub"></div>
+  <div class="tocgrid"><div class="cols"></div><div class="other"></div></div>
+  <div class="keys"><b>Space</b> play/pause · <b>←</b> <b>→</b> beat · <b>Shift</b>+<b>←</b>/<b>→</b> scene · <b>S</b> speed · <b>T</b> chapters · <b>G</b> glossary · <b>H</b> all paths · <b>Esc</b> close · the timeline is clickable</div>
+</div>
+
+<div id="gloss">
+  <h2>Glossary</h2>
+  <div class="sub">Underlined words in the narration explain themselves on hover. Esc closes.</div>
+  <div class="cols"></div>
+</div>
+
+<svg id="measure" width="0" height="0" style="position:absolute;visibility:hidden"><title>path measurement scratch space</title></svg>
+
+{SCRIPTS.map((src) => <script is:inline src={src}></script>)}
+</Shell>

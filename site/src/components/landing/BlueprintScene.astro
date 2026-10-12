@@ -1,0 +1,628 @@
+---
+/*
+ * The blueprint drawing's contents, in scene units (blueprint-geometry.ts). Blueprint.astro renders
+ * it twice: once inside <defs>, where every static sheet is a <use> of it, and once inline as the
+ * live drawing, with `live` adding the pieces only motion needs (packet routes and pools).
+ *
+ * Layers (.L0 … .L4) fade by inherited custom properties (--l1 … --l4) that each figure sets, so
+ * one drawing serves every stage. In the live copy, `data-in` names the stage an element enters
+ * with, `data-fx` how (draw, fade, pop, drop, rise, wipe, slide, trace) and `data-d` its delay in
+ * ms; Blueprint.astro's script plays them. The static copies ignore all three.
+ */
+import {
+  ACC,
+  BLOCKED,
+  BUS_HERO,
+  BUS_REST,
+  CELL,
+  CO,
+  CORVID,
+  DIMS,
+  f,
+  FOUNDATION,
+  HERO,
+  LAP,
+  LAP_LINE,
+  LAP_STATUS,
+  PL,
+  ROUTES,
+  ROW,
+  XMARK,
+} from "./blueprint-geometry";
+
+interface Props {
+  live?: boolean;
+}
+const { live = false } = Astro.props;
+
+type Box = (typeof ROW)[number];
+/** Hero-only entrance attributes: the other boxes enter as a whole (stage 2 drop). */
+const hx = (b: Box, fx: string, d: number) =>
+  b.i === 0 ? { "data-in": "1", "data-fx": fx, "data-d": String(d) } : {};
+const fx = (stage: number, kind: string, d = 0) => ({
+  "data-in": String(stage),
+  "data-fx": kind,
+  "data-d": String(d),
+});
+const others = ROW.filter((b) => b.i !== 0);
+/* Boxes nearest the hero land first. */
+const dropDelay = (b: Box): number => (Math.abs(b.i) - 1) * 170;
+const PACKETS = 28;
+---
+<g class="scene">
+  {/* ===== Stage 3: the account and the foundation (drawn first: it is behind) ===== */}
+  {/* design.md §1 (one account, frozen at init), §4.7 (STS-verified), §5 (stack contents) */}
+  <g class="L3">
+    <rect class="acct" x={ACC.x0} y={ACC.y0} width={ACC.x1 - ACC.x0} height={ACC.y1 - ACC.y0} {...fx(3, "draw", 0)} data-dur="1300" />
+    <rect class="acct-h" x={ACC.x0} y={ACC.y0} width={ACC.x1 - ACC.x0} height="46" {...fx(3, "wipe", 300)} />
+    <text class="acct-t" x={ACC.x0 + 22} y={ACC.y0 + 32} {...fx(3, "fade", 650)}>Your AWS account</text>
+    <text class="acct-s" x={ACC.x1 - 22} y={ACC.y0 + 30} text-anchor="end" {...fx(3, "fade", 800)}>123456789012 · frozen at init</text>
+    <rect class="pl-top" x={PL.x0} y={PL.top} width={PL.x1 - PL.x0} height={PL.front - PL.top} {...fx(3, "wipe", 450)} />
+    <text class="pl-tt" x={PL.x0 + 20} y={PL.top + 27} {...fx(3, "fade", 900)}>Foundation · one CloudFormation stack per fleet</text>
+    {FOUNDATION.map(([t, s], k) => (
+      <g {...fx(3, "rise", 600 + k * 140)}>
+        <rect class="pl-cell" x={f(PL.x0 + k * CELL)} y={PL.front} width={f(CELL)} height={PL.bottom - PL.front} />
+        <text class="pl-t" x={f(PL.x0 + k * CELL + 20)} y={PL.front + 40}>{t}</text>
+        <text class="pl-s" x={f(PL.x0 + k * CELL + 20)} y={PL.front + 68}>{s}</text>
+      </g>
+    ))}
+  </g>
+
+  {/* ===== Stage 2: the fleet tag and the rest of the tailnet bus ===== */}
+  <g class="L2">
+    <g {...fx(2, "pop", 1100)}>
+      <rect class="tag-b" x={-790} y={204} width="232" height="30" />
+      <text class="tag-t" x={-778} y={225}>Fleet · 5 agents</text>
+    </g>
+    <path class="ts" d={BUS_REST} {...fx(2, "draw", 350)} data-dur="700" />
+  </g>
+
+  {/* ===== The row of boxes ===== */}
+  {ROW.map((b) => (
+    <g class="bx" data-box={b.i} {...(b.i === 0 ? {} : fx(2, "drop", dropDelay(b)))}>
+      {/* design.md §1 "volumes are precious", §7.1 data volume */}
+      <g class:list={[b.i === 0 ? "L0" : "L2", { "cv-vol": b.i === 1 }]}>
+        {b.bolts.map((t, k) => (
+          <line class="bolt" x1={f(t.a[0])} y1={f(t.a[1])} x2={f(t.b[0])} y2={f(t.b[1])} {...hx(b, "draw", 900 + k * 60)} />
+        ))}
+        <polygon class="vol vol-l" points={b.vol.left} {...hx(b, "draw", 350)} />
+        <polygon class="vol vol-r" points={b.vol.right} {...hx(b, "draw", 450)} />
+        <polygon class="vol vol-t" points={b.vol.top} {...hx(b, "draw", 550)} />
+        <text class="vol-tx" transform={b.volTx} {...hx(b, "fade", 1100)}>/data</text>
+      </g>
+      <g class:list={[b.i === 0 ? "L0" : b.i === 1 ? "L2c cv" : "L2"]}>
+        <polygon class="face f-l" points={b.body.left} {...hx(b, "draw", 0)} />
+        <polygon class="face f-r" points={b.body.right} {...hx(b, "draw", 120)} />
+        <polygon class="face f-t" points={b.body.top} {...hx(b, "draw", 240)} />
+        {/* design.md §7.1: Hermes on the metal; §7.3: a headed Chrome on every agent */}
+        <text class="hx" transform={b.hermes} {...hx(b, "fade", 900)}>Hermes</text>
+        <text class="hx-s" transform={b.hermesSub} {...hx(b, "fade", 1000)}>agent + chrome</text>
+        <polygon class="port" points={b.port} {...hx(b, "pop", 1900)} />
+        <text class="port-t" transform={b.portTx} {...hx(b, "fade", 1950)}>tailnet</text>
+        {/* design.md §2/§6.4 hermeticd; §7.1 Ubuntu 24.04 on Graviton */}
+        <text class="rx rx-b" transform={b.right[0]} {...hx(b, "fade", 1000)}>hermeticd</text>
+        <text class="rx" transform={b.right[1]} {...hx(b, "fade", 1080)}>ubuntu 24.04</text>
+        <text class="rx" transform={b.right[2]} {...hx(b, "fade", 1160)}>graviton arm64</text>
+        <polygon class="mark" points={b.mark} {...hx(b, "pop", 1000)} />
+        <text class="nm" transform={b.nameTx} {...hx(b, "fade", 1100)}>{b.name}</text>
+        {b.vents.map(([a, c], k) => (
+          <line class="vent" x1={f(a[0])} y1={f(a[1])} x2={f(c[0])} y2={f(c[1])} {...hx(b, "draw", 700 + k * 50)} />
+        ))}
+        {/* design.md §1/§7.2: outbound open */}
+        {b.arrows.map((a, k) => (
+          <g>
+            <path class="out" d={a.line} {...hx(b, "draw", 1700 + k * 90)} data-dur="500" />
+            <polygon class="out-h" points={a.head} {...hx(b, "pop", 2100 + k * 90)} />
+          </g>
+        ))}
+      </g>
+    </g>
+  ))}
+
+  {/* Recreate: corvid's machine goes, its volume stays. design.md §6.5 (recreate keeps the volume and attaches it to the new instance) */}
+  <g class="L2o">
+    <polygon class="ghost" points={CORVID.body.left} />
+    <polygon class="ghost" points={CORVID.body.right} />
+    <polygon class="ghost" points={CORVID.body.top} />
+    <rect class="gh-b" x={CORVID.mid[0] - 66} y={-28} width="132" height="76" />
+    <text class="gh-t" x={CORVID.mid[0]} y={-4} text-anchor="middle">Recreate</text>
+    <text class="gh-s" x={CORVID.mid[0]} y={20} text-anchor="middle">new machine</text>
+    <text class="gh-s" x={CORVID.mid[0]} y={38} text-anchor="middle">same volume</text>
+    <text class="kept" x={CORVID.mid[0]} y={228} text-anchor="middle">volume kept</text>
+  </g>
+
+  {/* ===== The tailnet: the hero's line is always there; the other drops arrive with the fleet ===== */}
+  {/* design.md §1 "Tailscale is the only way in", §7.2 */}
+  <g class="L2">
+    {others.map((b) => (
+      <g>
+        <path class="ts" d={b.drop} {...fx(2, "draw", 700 + dropDelay(b))} data-dur="600" />
+        <rect class="ts-j" x={b.junction[0]} y={b.junction[1]} width="10" height="10" {...fx(2, "pop", 700 + dropDelay(b))} />
+      </g>
+    ))}
+  </g>
+  <path class="ts" d={BUS_HERO} {...fx(1, "draw", 1250)} data-dur="650" />
+  <path class="ts" d={HERO.drop} {...fx(1, "draw", 1650)} data-dur="550" />
+  <rect class="ts-j" x={HERO.junction[0]} y={HERO.junction[1]} width="10" height="10" {...fx(1, "pop", 1650)} />
+
+  {/* ===== Stage 1: dimensions and numbered callouts on the hero ===== */}
+  <g class="L1">
+    {/* design.md §7.1: size table (vCPU and RAM ranges), data volume default 100 GiB gp3 */}
+    {DIMS.map((d, k) => (
+      <g>
+        <line class="dim" x1={f(d.main[0][0])} y1={f(d.main[0][1])} x2={f(d.main[1][0])} y2={f(d.main[1][1])} {...fx(1, "draw", 2000 + k * 150)} />
+        {d.ends.map(([a, e]) => (
+          <line class="dim" x1={f(a[0])} y1={f(a[1])} x2={f(e[0])} y2={f(e[1])} {...fx(1, "draw", 2000 + k * 150)} />
+        ))}
+        <text class="dim-t" transform={d.at} text-anchor="middle" {...fx(1, "fade", 2250 + k * 150)}>{d.label}</text>
+      </g>
+    ))}
+
+    {/* design.md §7.2: no inbound rules, nftables drops unsolicited inbound */}
+    <g class="x" {...fx(1, "pop", 2900)}>
+      <line x1={XMARK[0] - 10} y1={XMARK[1] - 10} x2={XMARK[0] + 10} y2={XMARK[1] + 10} />
+      <line x1={XMARK[0] + 10} y1={XMARK[1] - 10} x2={XMARK[0] - 10} y2={XMARK[1] + 10} />
+    </g>
+
+    {CO.map((c, k) => (
+      <g class="co" data-n={c.n}>
+        <path class={c.n === 6 ? "blk" : "lead"} d={c.lead} {...fx(1, c.n === 6 ? "fade" : "draw", 2350 + k * 150)} data-dur="450" />
+        {c.n !== 6 && <rect class="lead-end" x={c.to[0] - 3} y={c.to[1] - 3} width="6" height="6" {...fx(1, "pop", 2700 + k * 150)} />}
+        <g {...fx(1, "pop", 2200 + k * 150)}>
+          <rect class="num-b" x={c.sx} y={c.y} width="26" height="26" />
+          <text class="num-t" x={c.sx + 13} y={c.y + 19}>{c.n}</text>
+        </g>
+        <g class="cot" {...fx(1, "fade", 2300 + k * 150)}>
+          <text class="co-t" x={c.tx} y={c.y + 13} text-anchor={c.anchor}>{c.t}</text>
+          <text class="co-s" x={c.tx} y={c.y + 31} text-anchor={c.anchor}>{c.s}</text>
+        </g>
+      </g>
+    ))}
+  </g>
+
+  {/* ===== Stage 4: your Mac, the tailnet into the account, the direct AWS API path ===== */}
+  {/* design.md §2 (core calls AWS directly, no hermetic server), §3.4 (app and CLI share one core), §7.2 */}
+  <g class="L4">
+    <path class="ts" d={LAP_LINE} {...fx(4, "draw", 700)} data-dur="800" />
+    <g {...fx(4, "fade", 1300)}>
+      <text class="ts-t" x={f(LAP.port[0]) + 18} y={-392}>your tailnet</text>
+      <text class="ts-s" x={f(LAP.port[0]) + 18} y={-366}>the only way in</text>
+    </g>
+    <path class="api" d="M-990,-440 V335 H-806" {...fx(4, "draw", 900)} data-dur="900" />
+    <polygon class="api-h" points="-806,325 -790,335 -806,345" {...fx(4, "pop", 1750)} />
+    <g {...fx(4, "fade", 1500)}>
+      <text class="api-t" transform="translate(-1008 300) rotate(-90)">AWS API calls, direct</text>
+      <text class="api-s" transform="translate(-962 300) rotate(-90)">no hermetic server in between</text>
+    </g>
+
+    <g {...fx(4, "slide", 0)}>
+      <polygon class="lap lap-p" points={LAP.panel} />
+      <polygon class="lap-scr" points={LAP.screen} />
+      <g transform={LAP.content}>
+        <rect class="lap-mk" x="0" y="0" width="14" height="14" />
+        <text class="lap-t" x="22" y="13">Hermetic</text>
+        {LAP_STATUS.map((s, k) => (
+          <rect class={`lap-sq s-${s}`} x={k * 38} y="34" width="30" height="40" {...fx(4, "fade", 500 + k * 110)} />
+        ))}
+        <rect class="lap-bar" x="0" y="86" width="182" height="6" />
+        <rect class="lap-bar" x="0" y="100" width="120" height="6" />
+      </g>
+      <polygon class="lap lap-l" points={LAP.base.left} />
+      <polygon class="lap lap-r" points={LAP.base.right} />
+      <polygon class="lap lap-tp" points={LAP.base.top} />
+      {LAP.keys.map(([a, c]) => (
+        <line class="vent" x1={f(a[0])} y1={f(a[1])} x2={f(c[0])} y2={f(c[1])} />
+      ))}
+      <rect class="ts-j" x={f(LAP.port[0]) - 5} y={f(LAP.port[1]) - 5} width="10" height="10" />
+      <text class="lap-n" x={-1160} y={-834}>Your Mac</text>
+      <text class="lap-s" x={-1160} y={-806}>Hermetic app + hermetic CLI</text>
+    </g>
+  </g>
+
+  {/* ===== Live only: what motion needs. Routes are invisible paths the packets ride. ===== */}
+  {live && (
+    <g class="fx" aria-hidden="true">
+      {ROUTES.map((r) => (
+        <path class="route" d={r.d} data-route={r.box} data-from={r.from} data-to={r.to} />
+      ))}
+      {/* The Mac's line traced to each box in turn as stage 4 arrives. */}
+      {ROUTES.filter((r) => r.from === 4).map((r) => (
+        <path class="hl" d={r.d} {...fx(4, "trace", 1500 + Math.abs(r.box) * 260 + (r.box < 0 ? 130 : 0))} data-dur="1100" />
+      ))}
+      {Array.from({ length: PACKETS }, () => (
+        <rect class="pkt" x="-5" y="-5" width="10" height="10" />
+      ))}
+      {ROW.flatMap((b) =>
+        b.arrows.map((a) => <rect class="ob" x="-2" y="-9" width="4" height="18" data-box={b.i} data-x={a.x} data-y0={a.y0} data-y1={a.y1} />),
+      )}
+      <path class="route" d={BLOCKED} data-probe />
+      <rect class="probe" x="-6" y="-6" width="12" height="12" />
+      <rect class="ring" x={XMARK[0] - 16} y={XMARK[1] - 16} width="32" height="32" />
+    </g>
+  )}
+</g>
+
+<style>
+  /* Layers. Each figure sets the vars; they inherit into its <use> clone. */
+  .L1 {
+    opacity: var(--l1, 0);
+  }
+  .L2 {
+    opacity: var(--l2, 1);
+  }
+  .L2c {
+    opacity: var(--l2c, 1);
+  }
+  .L2o {
+    opacity: var(--l2o, 0);
+  }
+  .L3 {
+    opacity: var(--l3, 1);
+  }
+  .L4 {
+    opacity: var(--l4, 1);
+  }
+  .cot {
+    opacity: var(--cot, 1);
+  }
+  .L1,
+  .L2,
+  .L2c,
+  .L2o,
+  .L3,
+  .L4 {
+    transition: opacity 0.7s ease;
+  }
+  [data-fx="pop"],
+  [data-fx="wipe"],
+  [data-fx="drop"],
+  [data-fx="rise"] {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  [data-fx="wipe"] {
+    transform-origin: 0 50%;
+  }
+  [data-fx="drop"],
+  [data-fx="rise"] {
+    transform-origin: 50% 100%;
+  }
+
+  /* Marks */
+  .face {
+    stroke: var(--fg);
+    stroke-width: 2;
+    stroke-linejoin: miter;
+  }
+  .f-t {
+    fill: var(--bg3);
+  }
+  .f-l {
+    fill: var(--bg2);
+  }
+  .f-r {
+    fill: var(--bg);
+  }
+  .vol {
+    stroke: var(--ok);
+    stroke-width: 2;
+  }
+  .vol-t {
+    fill: var(--bg3);
+  }
+  .vol-l {
+    fill: var(--bg2);
+  }
+  .vol-r {
+    fill: var(--bg);
+  }
+  .vol-tx {
+    font: 700 15px var(--mono);
+    fill: var(--ok);
+  }
+  .bolt {
+    stroke: var(--fg2);
+    stroke-width: 3;
+  }
+  .hx {
+    font: 900 25px var(--sans);
+    letter-spacing: -0.01em;
+    text-transform: uppercase;
+    fill: var(--fg);
+  }
+  .hx-s {
+    font: 500 10.5px var(--mono);
+    fill: var(--fg2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .port {
+    fill: var(--acc);
+  }
+  .port-t {
+    font: 700 11px var(--mono);
+    fill: var(--acc);
+    text-transform: uppercase;
+  }
+  .rx {
+    font: 500 11px var(--mono);
+    fill: var(--fg3);
+  }
+  .rx-b {
+    font-weight: 700;
+    fill: var(--fg);
+    font-size: 13px;
+  }
+  .mark {
+    fill: var(--acc);
+  }
+  .nm {
+    font: 900 24px var(--sans);
+    letter-spacing: -0.02em;
+    fill: var(--fg);
+  }
+  .vent {
+    stroke: var(--line2);
+    stroke-width: 2;
+  }
+  .out {
+    stroke: var(--fg2);
+    stroke-width: 2;
+    fill: none;
+  }
+  .out-h {
+    fill: var(--fg2);
+  }
+  .ts {
+    stroke: var(--acc);
+    stroke-width: 4;
+    fill: none;
+    stroke-linejoin: miter;
+  }
+  .ts-j {
+    fill: var(--acc);
+  }
+  .ts-t {
+    font: 900 26px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    fill: var(--acc);
+  }
+  .ts-s {
+    font: 500 17px var(--mono);
+    fill: var(--acc);
+  }
+  .ghost {
+    fill: none;
+    stroke: var(--fg3);
+    stroke-width: 2;
+    stroke-dasharray: 8 6;
+  }
+  .gh-b {
+    fill: var(--bg);
+    stroke: var(--fg3);
+    stroke-width: 1.5;
+  }
+  .gh-t {
+    font: 900 22px var(--sans);
+    text-transform: uppercase;
+    fill: var(--fg2);
+  }
+  .gh-s {
+    font: 500 13px var(--mono);
+    fill: var(--fg3);
+  }
+  .kept {
+    font: 700 16px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    fill: var(--ok);
+  }
+  .dim {
+    stroke: var(--fg3);
+    stroke-width: 1.2;
+  }
+  .dim-t {
+    font: 500 12px var(--mono);
+    fill: var(--fg2);
+  }
+  .blk {
+    stroke: var(--bad);
+    stroke-width: 2.5;
+    stroke-dasharray: 8 5;
+    fill: none;
+  }
+  .x line {
+    stroke: var(--bad);
+    stroke-width: 4;
+    transition: stroke-width 0.25s;
+  }
+  .x.hit line {
+    stroke-width: 7;
+    transition: none;
+  }
+  .lead {
+    stroke: var(--fg2);
+    stroke-width: 1.2;
+    fill: none;
+  }
+  .lead-end {
+    fill: var(--fg);
+  }
+  .num-b {
+    fill: var(--acc);
+  }
+  .num-t {
+    font: 900 15px var(--sans);
+    fill: var(--acc-fg);
+    text-anchor: middle;
+  }
+  .co-t {
+    font: 900 17px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    fill: var(--fg);
+  }
+  .co-s {
+    font: 500 12px var(--mono);
+    fill: var(--fg2);
+  }
+  .co {
+    transition: opacity 0.25s;
+  }
+  .acct {
+    fill: none;
+    stroke: var(--fg);
+    stroke-width: 3;
+  }
+  .acct-h {
+    fill: var(--fg);
+  }
+  .acct-t {
+    font: 900 26px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    fill: var(--bg);
+  }
+  .acct-s {
+    font: 700 16px var(--mono);
+    fill: var(--bg);
+  }
+  .pl-top {
+    fill: var(--fg2);
+    stroke: var(--fg);
+    stroke-width: 2;
+  }
+  .pl-tt {
+    font: 900 18px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    fill: var(--bg);
+  }
+  .pl-cell {
+    fill: var(--bg2);
+    stroke: var(--fg);
+    stroke-width: 2;
+  }
+  .pl-t {
+    font: 900 24px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: -0.01em;
+    fill: var(--fg);
+  }
+  .pl-s {
+    font: 500 16px var(--mono);
+    fill: var(--fg3);
+  }
+  .tag-b {
+    fill: var(--fg);
+  }
+  .tag-t {
+    font: 900 17px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    fill: var(--bg);
+  }
+  .api {
+    stroke: var(--fg);
+    stroke-width: 3;
+    fill: none;
+  }
+  .api-h {
+    fill: var(--fg);
+  }
+  .api-t {
+    font: 900 24px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    fill: var(--fg);
+  }
+  .api-s {
+    font: 500 17px var(--mono);
+    fill: var(--fg2);
+  }
+  .lap {
+    stroke: var(--fg);
+    stroke-width: 2.5;
+  }
+  .lap-p,
+  .lap-l {
+    fill: var(--bg2);
+  }
+  .lap-r {
+    fill: var(--bg);
+  }
+  .lap-tp {
+    fill: var(--bg3);
+  }
+  .lap-scr {
+    fill: var(--bg);
+    stroke: var(--line2);
+    stroke-width: 1.5;
+  }
+  .lap-mk {
+    fill: var(--acc);
+  }
+  .lap-t {
+    font: 900 15px var(--sans);
+    text-transform: uppercase;
+    fill: var(--fg);
+  }
+  .lap-sq {
+    fill: var(--bg3);
+  }
+  .lap-sq.s-ok {
+    fill: var(--ok);
+  }
+  .lap-sq.s-acc {
+    fill: var(--acc);
+  }
+  .lap-sq.s-warn {
+    fill: var(--warn);
+  }
+  .lap-bar {
+    fill: var(--line2);
+  }
+  .lap-n {
+    font: 900 40px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+    fill: var(--fg);
+  }
+  .lap-s {
+    font: 500 18px var(--mono);
+    fill: var(--fg2);
+  }
+
+  /* Live-only marks: hidden until the script places them. */
+  .route {
+    fill: none;
+    stroke: none;
+  }
+  .hl {
+    fill: none;
+    stroke: var(--fg);
+    stroke-width: 3;
+    opacity: 0;
+  }
+  .pkt {
+    fill: var(--fg);
+    opacity: 0;
+  }
+  .ob {
+    fill: var(--fg);
+    opacity: 0;
+  }
+  .probe {
+    fill: var(--bad);
+    opacity: 0;
+  }
+  .ring {
+    fill: none;
+    stroke: var(--bad);
+    stroke-width: 2;
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+</style>

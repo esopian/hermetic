@@ -1,0 +1,46 @@
+---
+// The dashboard's wordmark (docs/ui-brief.md, "Layout": 14px orange square + HERMETIC,
+// 22px/900/uppercase), linking to the landing page rather than the docs root.
+---
+
+<a href="/" class="wordmark" translate="no">
+  <span class="mark" aria-hidden="true"></span>
+  <span class="name">hermetic</span>
+  <span class="kicker">docs</span>
+</a>
+
+<style>
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--fg);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .mark {
+    width: 14px;
+    height: 14px;
+    background: var(--acc);
+    flex: none;
+  }
+  .name {
+    font-family: var(--sans);
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .kicker {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    line-height: 1;
+  }
+  .wordmark:hover .name {
+    color: var(--acc);
+  }
+</style>
