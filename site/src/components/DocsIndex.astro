@@ -34,7 +34,7 @@ const cards = [
 const route = (href: string): string => href.replace(/\/$/, "");
 ---
 <section class="s" id="docs">
-  <SectionHead num="§05" kicker="Documentation" title="Documentation" />
+  <SectionHead num="§06" kicker="Documentation" title="Documentation" />
   <div class="docs">
     {cards.map((c) => (
       <a class="doc" href={c.href}><Kicker>{c.kicker}</Kicker><h4>{c.title}</h4><p>{c.body}</p><span class="go">{route(c.href)} →</span></a>

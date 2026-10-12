@@ -344,7 +344,7 @@ The build is unsigned today: no Apple Developer ID is configured, so `Hermetic.a
 
 `bun run app:build:canary` (CI's `app` job, every push) builds the canary channel on every commit to prove the app still builds — it is verification, not distribution: nothing it produces is uploaded or published, and the canary channel is never what `release.yml` ships.
 
-A release also deploys the marketing/docs site (`.github/workflows/site.yml`, called after `publish`); one-time Cloudflare/GitHub setup is in `site/README.md`.
+A release also deploys the marketing/docs site (`.github/workflows/site.yml`, called after `publish`, which runs `site/scripts/deploy.ts --production`); one-time Cloudflare/GitHub setup is in `site/README.md`, and `bun run site:deploy` makes a verified preview deploy from a laptop.
 
 ## Running the wizard demo
 

@@ -11,10 +11,20 @@ bun run dev        # astro dev, http://localhost:4321
 bun run check       # astro check + biome check + sync-docs --check
 bun run build       # sync-docs, cli-reference, astro build -> site/dist (+ pagefind index)
 bun run preview     # wrangler pages dev dist — the real Cloudflare runtime, incl. _headers/_redirects
+bun run deploy      # preview deploy to Cloudflare Pages, verified; --production for production
 ```
 
-From the repo root, `bun run site:dev` / `site:build` / `site:check` do the same thing without a
+`bun run deploy --help` lists every option; `site/AGENTS.md` "Deploy" says what each check does.
+The first local deploy needs `bunx wrangler login`.
+
+From the repo root, `bun run site:dev` / `site:build` / `site:check` / `site:deploy` do the same thing without a
 `cd`.
+
+## The explainer
+
+`/explainer/` is an animated walkthrough of hermetic, built from `src/pages/explainer.astro` and the
+plain scripts under `public/explainer/`. `bun run dev`, then open `http://localhost:4321/explainer/`.
+How it is put together: `site/AGENTS.md` "Explainer".
 
 ## Why not a workspace
 
@@ -72,6 +82,9 @@ gh variable set CLOUDFLARE_PAGES_PROJECT --env site-production --body hermetic-s
 ```
 gh workflow run site.yml -f ref=v0.1.6
 ```
+
+The workflow runs the same `scripts/deploy.ts` you can run locally, so a failed CI deploy
+reproduces on a laptop with `bun run deploy --production` from the tag's checkout.
 
 Any later `v*` tag pushed through the normal release flow (`CONTRIBUTING.md` "Cutting a release")
 deploys automatically once `publish` finishes.

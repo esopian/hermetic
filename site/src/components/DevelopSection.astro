@@ -1,11 +1,11 @@
 ---
-import { repo } from "../data/links";
+import { explainer, repo } from "../data/links";
 import Button from "./Button.astro";
 import Kicker from "./Kicker.astro";
 import SectionHead from "./SectionHead.astro";
 ---
 <section class="s" id="dev">
-  <SectionHead num="§06" kicker="Develop" title="TypeScript on the laptop and on the box">
+  <SectionHead num="§07" kicker="Develop" title="TypeScript on the laptop and on the box">
     {/* design.md §1 ("one language end to end") */}
     <p>Everything is built on Bun and open source under the MIT license. Build, test and contribution instructions live in the repository.</p>
   </SectionHead>
@@ -23,7 +23,7 @@ import SectionHead from "./SectionHead.astro";
       {/* Developer setup is deliberately not on the site (site/AGENTS.md "Audience"); it lives in README.md and CONTRIBUTING.md. */}
       <Kicker style="margin-bottom:12px">Build it yourself</Kicker>
       <p class="dev-note">The README covers setting up a checkout and running the app from source. CONTRIBUTING covers the toolchain, the tests and how releases are cut. The design spec is the authority on how hermetic behaves.</p>
-      <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap"><Button variant="s" small href={repo.readme}>README →</Button><Button variant="s" small href={repo.contributing}>Contributing →</Button><Button variant="s" small href={repo.architecture}>Architecture →</Button><Button variant="s" small href={repo.designSpec}>Design spec →</Button></div>
+      <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap"><Button variant="s" small href={explainer.contrib}>▶ Inside the code</Button><Button variant="s" small href={repo.readme}>README →</Button><Button variant="s" small href={repo.contributing}>Contributing →</Button><Button variant="s" small href={repo.architecture}>Architecture →</Button><Button variant="s" small href={repo.designSpec}>Design spec →</Button></div>
     </div>
   </div>
 </section>

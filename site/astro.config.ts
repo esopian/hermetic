@@ -46,10 +46,15 @@ export default defineConfig({
           },
         },
       },
-      plugins: [starlightLinksValidator()],
+      // The explainer is an Astro page outside the docs collection, so the validator cannot see it.
+      plugins: [starlightLinksValidator({ exclude: ["/explainer/", "/explainer/#*", "/cost/"] })],
       sidebar: [
         "docs/quick-start",
         { label: "Overview", link: "/docs/" },
+        // The animated walkthrough (src/pages/explainer.astro), outside the docs collection.
+        { label: "Explainer", link: "/explainer/" },
+        // The cost page (src/pages/cost.astro), also outside the docs collection.
+        { label: "Cost", link: "/cost/" },
         {
           label: "Start here",
           items: ["docs/start/install", "docs/start/first-fleet"],

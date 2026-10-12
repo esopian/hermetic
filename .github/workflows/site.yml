@@ -8,13 +8,13 @@ on:
   workflow_call:
     inputs:
       ref:
-        description: The tag (or other ref) to build and deploy.
+        description: The release tag (vX.Y.Z) to build and deploy.
         type: string
         required: true
   workflow_dispatch:
     inputs:
       ref:
-        description: The tag (or other ref) to build and deploy.
+        description: The release tag (vX.Y.Z) to build and deploy.
         type: string
         required: true
 
@@ -47,16 +47,6 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
-      # The commit-hash Wrangler records for this deploy has to be the SHA of
-      # the checked-out ref, not `github.sha` — on workflow_dispatch that
-      # would be the SHA the workflow itself runs from (the default branch),
-      # which is not what was built. Read it back from the checkout instead
-      # of trusting an input.
-      - name: Resolve the checked-out commit
-        id: commit
-        shell: bash
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
       # Installs the root workspace too: site/scripts/cli-reference.ts spawns
       # `bun ../packages/cli/src/main.ts`, so the CLI's own dependencies have
       # to be on disk. `./.github/actions/setup` already runs the root
@@ -67,23 +57,22 @@ jobs:
         working-directory: site
         run: bun install --frozen-lockfile
 
-      - name: Check and build the site
+      # The same script a maintainer runs by hand (site/scripts/deploy.ts):
+      # preflight (clean tree, the release tag points at HEAD, the token can
+      # reach the Pages project), check, build, deploy with the site's own
+      # pinned wrangler, then verify over HTTP that both the new deployment and
+      # the production URL serve this commit. It reads the commit from the
+      # checkout (`git rev-parse HEAD`), never from `github.sha`, which on
+      # workflow_dispatch names the default branch rather than the ref built.
+      # Every input reaches it through env:, never through the shell text.
+      - name: Check, build, deploy and verify
         working-directory: site
-        run: bun run check && bun run build
+        run: bun scripts/deploy.ts --production --yes
         env:
-          # Read by site/src/data/release.ts for the version badge and
-          # download links. Passed through env, never interpolated into the
-          # shell text of this run: block.
+          # Read by site/src/data/release.ts for the version badge and download
+          # links, and by the deploy script, which refuses a tag that does not
+          # point at the checked-out commit.
           HERMETIC_RELEASE_TAG: ${{ inputs.ref }}
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@4e88846969242f7752bcfdaf5511bfbb3985ca47 # v4.1.1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: site
-          command: >-
-            pages deploy dist
-            --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }}
-            --branch=main
-            --commit-hash=${{ steps.commit.outputs.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}

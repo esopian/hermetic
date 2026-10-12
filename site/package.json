@@ -9,6 +9,7 @@
     "build": "bun run sync && astro build",
     "check": "bun run sync && astro check && biome check . && bun scripts/sync-docs.ts --check",
     "preview": "wrangler pages dev dist",
+    "deploy": "bun scripts/deploy.ts",
     "format": "biome format --write ."
   },
   "dependencies": {

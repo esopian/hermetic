@@ -676,6 +676,16 @@ describe("site.yml", () => {
     expect(isRecord(deploy) && deploy["environment"]).toBe("site-production");
   });
 
+  test("deploys only through site/scripts/deploy.ts, with its checks on", () => {
+    // One deploy path for laptops and CI: the script owns the preflight
+    // (clean tree, release tag at HEAD) and the post-deploy HTTP verification,
+    // so a second path that calls wrangler directly would skip both.
+    const runs = JSON.stringify(doc).match(/"run":"[^"]*"/g) ?? [];
+    expect(runs.some((r) => r.includes("scripts/deploy.ts --production --yes"))).toBe(true);
+    expect(text.includes("wrangler-action")).toBe(false);
+    expect(/--allow-(untagged|dirty)|--skip-check|--dry-run/.test(text)).toBe(false);
+  });
+
   test("no run: step builds its shell text from ${{ inputs.* }} directly", () => {
     expect(inputInjectionProblems(doc)).toEqual([]);
   });

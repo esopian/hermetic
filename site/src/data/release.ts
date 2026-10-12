@@ -23,16 +23,22 @@ function rootVersion(): string {
   throw new Error(`${path} has no "version" string`);
 }
 
-const { GITHUB_SHA, HERMETIC_RELEASE_TAG } = process.env;
+const { GITHUB_SHA, HERMETIC_BUILD_SHA, HERMETIC_RELEASE_TAG } = process.env;
 
+// The commit this build is from. scripts/deploy.ts states it outright (HERMETIC_BUILD_SHA) and then
+// checks the deployed footer against it. Otherwise the checkout is asked, and GITHUB_SHA is the
+// last resort: on a workflow_dispatch it names the default branch the workflow ran from, not the
+// ref that was checked out and built.
 function shortSha(): string {
-  if (GITHUB_SHA !== undefined && GITHUB_SHA.length > 0) return GITHUB_SHA.slice(0, 7);
+  if (HERMETIC_BUILD_SHA !== undefined && HERMETIC_BUILD_SHA.length > 0)
+    return HERMETIC_BUILD_SHA.slice(0, 7);
   try {
     return execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
+    if (GITHUB_SHA !== undefined && GITHUB_SHA.length > 0) return GITHUB_SHA.slice(0, 7);
     return "unknown";
   }
 }

@@ -718,15 +718,12 @@ section.s {
 .dg {
   display: block;
   width: 100%;
-  min-width: 980px;
+  min-width: 820px;
   height: auto;
 }
 .dg text {
   font-family: var(--sans);
   fill: var(--fg);
-}
-.dg .m {
-  font-family: var(--mono);
 }
 .dg .zone {
   fill: none;
@@ -741,10 +738,6 @@ section.s {
   font-weight: 900;
   font-size: 13px;
   letter-spacing: 0.1em;
-}
-.dg .sub {
-  fill: var(--fg3);
-  font-size: 10.5px;
 }
 .dg .k {
   fill: var(--fg3);
@@ -774,11 +767,6 @@ section.s {
   stroke: var(--fg2);
   stroke-width: 2;
 }
-.dg .vpc {
-  fill: none;
-  stroke: var(--line2);
-  stroke-width: 2;
-}
 .dg .sg {
   fill: none;
   stroke: var(--fg3);
@@ -796,12 +784,6 @@ section.s {
   fill: var(--bg2);
   stroke: var(--ok);
   stroke-width: 2;
-}
-.dg .tomb {
-  fill: url(#hatch);
-  stroke: var(--fg3);
-  stroke-width: 2;
-  stroke-dasharray: 6 4;
 }
 .dg .api {
   stroke: var(--fg);
@@ -905,10 +887,6 @@ section.s {
   border: 2px dashed var(--acc);
   background: rgba(255, 90, 31, 0.08);
 }
-.dg-legend i.fl {
-  height: 12px;
-  border: 2px dashed var(--fg);
-}
 .dg-legend i.out {
   border-top-color: var(--ok);
 }
@@ -917,7 +895,7 @@ section.s {
 }
 .dg-steps {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   background: var(--line);
   border-top: 1px solid var(--line);

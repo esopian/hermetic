@@ -1,4 +1,5 @@
 ---
+import { explainer } from "../data/links";
 import { dmgUrl } from "../data/release";
 import Button from "./Button.astro";
 import DashboardPreview from "./DashboardPreview.astro";
@@ -16,6 +17,7 @@ const installCmd = `curl -fsSL ${new URL("/install.sh", Astro.site ?? "https://h
         <Button variant="p" href={dmgUrl}>↓ Download for macOS</Button>
         <Button variant="s" href="/docs/">Read the docs →</Button>
       </div>
+      <a class="watch" href={explainer.overview}>▶ New to hermetic? Watch the six minute overview</a>
       {/* public/install.sh: downloads the release, checks its GitHub digest, installs the app and the CLI shim (design.md §3.6) */}
       <div class="install">
         <button onclick={`navigator.clipboard&&navigator.clipboard.writeText(${JSON.stringify(installCmd)});this.textContent='copied'`}>copy</button>
@@ -34,3 +36,17 @@ const installCmd = `curl -fsSL ${new URL("/install.sh", Astro.site ?? "https://h
     </div>
   </div>
 </section>
+
+<style>
+  .watch {
+    display: inline-block;
+    margin-top: 14px;
+    font: 700 12px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--acc);
+  }
+  .watch:hover {
+    color: var(--fg);
+  }
+</style>

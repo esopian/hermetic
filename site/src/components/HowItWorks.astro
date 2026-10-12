@@ -1,4 +1,5 @@
 ---
+import { explainer } from "../data/links";
 import SectionHead from "./SectionHead.astro";
 import Terminal from "./Terminal.astro";
 ---
@@ -6,6 +7,7 @@ import Terminal from "./Terminal.astro";
   <SectionHead num="§02" kicker="How it works" title="From AWS profile to a working agent">
     {/* design.md §1 "If it isn't in core, it doesn't exist" (parity), §3.2 rule 2 (long operations stream OpEvents) */}
     <p>The app walks you through it; the CLI runs the same steps. Long operations report each phase as it runs.</p>
+    <p><a class="more" href={explainer.deploy}>Watch every step, from an empty account to teardown →</a></p>
   </SectionHead>
   <div class="how">
     <div class="steps">

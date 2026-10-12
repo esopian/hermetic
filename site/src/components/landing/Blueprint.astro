@@ -1,0 +1,954 @@
+---
+/*
+ * The landing page's opening: one blueprint of one agent's machine, shown at four zoom levels as
+ * the captions scroll past (one box, the fleet, your AWS account, your Mac on the tailnet). Carried
+ * over from mockup D, "The sealed box".
+ *
+ * On a wide screen with motion allowed, one sticky live drawing zooms between the four frames
+ * (the viewBox is tweened, never swapped) and plays each stage's entrance as it arrives: lines draw
+ * themselves, the fleet drops into place, the foundation assembles, the Mac's line traces out to
+ * every box. Between entrances packets ride the tailnet, outbound traffic leaves through the roof,
+ * inbound probes bounce off the ✕, and corvid is recreated onto its kept volume. Everywhere else
+ * (narrow screens, reduced motion, no script) each caption carries its own static sheet.
+ */
+import { DEFAULT_DATA_GIB } from "../../data/cost";
+import { explainer } from "../../data/links";
+import { dmgUrl, tag } from "../../data/release";
+import BlueprintScene from "./BlueprintScene.astro";
+import { CO, NARROW, vb, WIDE } from "./blueprint-geometry";
+
+const STAGES = [
+  {
+    n: 1,
+    sheet: "One agent",
+    alt: "Blueprint of one sealed machine: Hermes inside, a data volume bolted underneath, one orange tailnet line in, outbound arrows out, inbound traffic dropped.",
+  },
+  {
+    n: 2,
+    sheet: "One fleet",
+    alt: "A row of five sealed machines, each with its own data volume. One machine is being recreated; its volume stays.",
+  },
+  {
+    n: 3,
+    sheet: "Your account",
+    alt: "The row of machines inside your AWS account, standing on the foundation: network, agent records, bucket, fleet role and secrets.",
+  },
+  {
+    n: 4,
+    sheet: "Your Mac",
+    alt: "Your Mac outside the account, joined to every machine by the orange tailnet line, and calling the AWS API directly.",
+  },
+] as const;
+const st = (n: number) => STAGES[n - 1] as (typeof STAGES)[number];
+/** The hero's drawing is the cover sheet; the zoom-out stages are numbered from 01. */
+const num = (n: number): string => `0${n - 1}`;
+const dwg = (n: number): string => (n === 1 ? "Cover" : `Dwg ${num(n)}`);
+---
+<section class="bp" id="e-bp" aria-label="How hermetic is built, in drawings">
+  {/* The scene, drawn once. Hidden; every static sheet below is a <use> of it. */}
+  <svg class="bp-defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <g id="e-scene"><BlueprintScene /></g>
+    </defs>
+  </svg>
+
+  {/* The live drawing: wide screens with motion allowed, once the script has run. */}
+  <div class="bp-stage">
+    <div class="bp-sheet">
+      <svg class="bp-fig st1" id="e-live" aria-hidden="true" focusable="false" viewBox={vb(WIDE[0])} data-frames={JSON.stringify(WIDE)} preserveAspectRatio="xMidYMid meet">
+        <BlueprintScene live />
+      </svg>
+      <div class="bp-tb">
+        <span class="tb-b"><i></i>hermetic</span>
+        <span class="tb-c" data-tb-n>{dwg(1)}</span>
+        <span class="tb-c tb-w" data-tb-t>{st(1).sheet}</span>
+        <button type="button" class="tb-c tb-r" data-redraw aria-label="Redraw this sheet">↺ redraw</button>
+        <span class="tb-p" data-tb-p aria-hidden="true"><i></i><i></i><i></i></span>
+        <button type="button" class="tb-next" data-next aria-label="Next drawing: One fleet">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bp-panels">
+    {/* ---- hero ---- */}
+    <article class="pnl bp-hero" data-stage="1">
+      <figure class="bp-sheet static">
+        <svg class="bp-fig st1 fig-w" viewBox={vb(WIDE[0])} role="img" aria-label={st(1).alt}><use href="#e-scene" /></svg>
+        <svg class="bp-fig st1 fig-n" viewBox={vb(NARROW[0])} role="img" aria-label={st(1).alt}><use href="#e-scene" /></svg>
+        {/* Phones: the narrow sheet has no room for the callout labels, so the key spells them out. Claims as in BlueprintScene.astro's callouts (design.md §1, §2, §6.4, §7.1, §7.2). */}
+        <ol class="bp-key" aria-hidden="true">
+          {CO.map((c) => (
+            <li><b>{c.n}</b><span><strong>{c.t}</strong> {c.s}</span></li>
+          ))}
+        </ol>
+        <figcaption class="bp-tb"><span class="tb-b"><i></i>hermetic</span><span class="tb-c">{dwg(1)}</span><span class="tb-c tb-w">{st(1).sheet}</span></figcaption>
+      </figure>
+      <div class="copy">
+        <div class="kicker">For people who run Hermes agents</div>
+        {/* design.md §1 (sealed inbound, Tailscale the only way in), §7.1 (one EC2 instance per agent), §2 (in the operator's account) */}
+        <h1>Every agent gets a <em>sealed box</em></h1>
+        <p class="bp-lede">hermetic runs each Hermes agent on its own machine, in your own AWS account. Nothing on the internet can connect to it. You reach it over your tailnet, from one desktop app.</p>
+        <div class="bp-ctas" id="download">
+          <a class="btn btn-p" href={dmgUrl}>↓ Download for macOS</a>
+          <a class="btn btn-s" href={explainer.home}>Learn how it works</a>
+        </div>
+        {/* design.md §3.6 (macos-arm64 DMG); README "Status" (pre-alpha); LICENSE (MIT) */}
+        <div class="bp-meta"><span>{tag}</span><span>pre-alpha</span><span>Apple silicon</span><span>MIT</span></div>
+      </div>
+    </article>
+
+
+    {/* ---- 01: the fleet (the header's "How it works" lands here) ---- */}
+    <article class="pnl" id="how" data-stage="2">
+      <figure class="bp-sheet static">
+        <svg class="bp-fig st2 fig-w" viewBox={vb(WIDE[1])} role="img" aria-label={st(2).alt}><use href="#e-scene" /></svg>
+        <svg class="bp-fig st2 fig-n" viewBox={vb(NARROW[1])} role="img" aria-label={st(2).alt}><use href="#e-scene" /></svg>
+        <figcaption class="bp-tb"><span class="tb-b"><i></i>hermetic</span><span class="tb-c">{dwg(2)}</span><span class="tb-c tb-w">{st(2).sheet}</span></figcaption>
+      </figure>
+      <div class="copy">
+        <div class="pn"><b>{num(2)}</b><span>{dwg(2)}</span><span class="pn-k">{st(2).sheet}</span></div>
+        <h2>Memory that outlives the machine</h2>
+        {/* design.md §1 "Instances are disposable, volumes are precious"; §7.1 (daily DLM snapshot, keep 7); §6.5 (recreate keeps the volume and attaches it); §6.7 (destroy keeps it by default) */}
+        <p>What an agent learns lives on a separate data volume, snapshotted every day and kept for seven. Recreate the machine and the same volume attaches to the new one. Destroy it and the volume stays unless you ask otherwise.</p>
+        <ul class="facts">
+          {/* design.md §7.1 */}
+          <li><span class="sq ok"></span>{DEFAULT_DATA_GIB} GiB gp3 by default</li>
+          {/* design.md §7.1 */}
+          <li><span class="sq ok"></span>7 daily snapshots</li>
+          {/* design.md §3.2 rule 3 */}
+          <li><span class="sq acc"></span>Plan, then apply, for anything destructive</li>
+        </ul>
+      </div>
+    </article>
+
+    {/* ---- 02: the account ---- */}
+    <article class="pnl" data-stage="3">
+      <figure class="bp-sheet static">
+        <svg class="bp-fig st3 fig-w" viewBox={vb(WIDE[2])} role="img" aria-label={st(3).alt}><use href="#e-scene" /></svg>
+        <svg class="bp-fig st3 fig-n" viewBox={vb(NARROW[2])} role="img" aria-label={st(3).alt}><use href="#e-scene" /></svg>
+        <figcaption class="bp-tb"><span class="tb-b"><i></i>hermetic</span><span class="tb-c">{dwg(3)}</span><span class="tb-c tb-w">{st(3).sheet}</span></figcaption>
+      </figure>
+      <div class="copy">
+        <div class="pn"><b>{num(3)}</b><span>{dwg(3)}</span><span class="pn-k">{st(3).sheet}</span></div>
+        <h2>Your account, no middleman</h2>
+        {/* design.md §5 (stack contents; no always-on cost of its own in the default network mode), §1 + §4.7 (account frozen at init, re-verified against STS on every call) */}
+        <p>Everything runs in your AWS account. One CloudFormation stack per fleet holds the network, agent records, a bucket, a fleet role and secrets, and has no always-on cost of its own. The account is frozen at init and checked before every call.</p>
+        <ul class="facts">
+          {/* design.md §1 "Zero-secret minimal path" (Bedrock through the instance role) */}
+          <li><span class="sq acc"></span>Bedrock by default: no model API key</li>
+          {/* design.md §4.8 */}
+          <li><span class="sq acc"></span>Several fleets can share one account</li>
+          {/* LICENSE; design.md §2 (no hermetic server between the laptop and AWS) */}
+          <li><span class="sq acc"></span>MIT licensed, no hosted service</li>
+        </ul>
+      </div>
+    </article>
+
+    {/* ---- 03: the Mac ---- */}
+    <article class="pnl last" data-stage="4">
+      <figure class="bp-sheet static">
+        <svg class="bp-fig st4 fig-w" viewBox={vb(WIDE[3])} role="img" aria-label={st(4).alt}><use href="#e-scene" /></svg>
+        <svg class="bp-fig st4 fig-n" viewBox={vb(NARROW[3])} role="img" aria-label={st(4).alt}><use href="#e-scene" /></svg>
+        <figcaption class="bp-tb"><span class="tb-b"><i></i>hermetic</span><span class="tb-c">{dwg(4)}</span><span class="tb-c tb-w">{st(4).sheet}</span></figcaption>
+      </figure>
+      <div class="copy">
+        <div class="pn"><b>{num(4)}</b><span>{dwg(4)}</span><span class="pn-k">{st(4).sheet}</span></div>
+        <h2>A fleet you run from one app</h2>
+        {/* design.md §2 (laptop on the tailnet; core calls AWS directly), §3.4 + §1 (app and CLI share one core, enforced parity), §9.2 (chat), §7.3 (watch the browser over noVNC) */}
+        <p>Your Mac joins the same tailnet. The desktop app and the hermetic CLI share one core and call AWS directly. Chat with any agent, watch its browser, and run one agent or a whole fleet from the same window.</p>
+        {/* design.md §1 "Nothing is CLI-only or GUI-only"; agent ps is a real command (§9) */}
+        <div class="cli"><span class="pr">$</span> hermetic agent ps --json</div>
+        <a class="next" href="#e-zt">Watch one get set up ↓</a>
+      </div>
+    </article>
+  </div>
+</section>
+
+<style>
+  .bp {
+    border-bottom: 3px solid var(--fg);
+  }
+  .bp-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+  }
+
+  /* Stage switches, inherited into each figure's <use> clone (BlueprintScene.astro's layers). */
+  .st1 {
+    --l1: 1;
+    --l2: 0;
+    --l2c: 0;
+    --l2o: 0;
+    --l3: 0;
+    --l4: 0;
+  }
+  .st2 {
+    --l1: 0;
+    --l2: 1;
+    --l2c: 0;
+    --l2o: 1;
+    --l3: 0;
+    --l4: 0;
+  }
+  .st3 {
+    --l1: 0;
+    --l2: 1;
+    --l2c: 1;
+    --l2o: 0;
+    --l3: 1;
+    --l4: 0;
+  }
+  .st4 {
+    --l1: 0;
+    --l2: 1;
+    --l2c: 1;
+    --l2o: 0;
+    --l3: 1;
+    --l4: 1;
+  }
+  /* The live drawing shows corvid whole at stage 2, and its script runs the recreate beat. */
+  #e-live.st2 {
+    --l2c: 1;
+    --l2o: 0;
+  }
+  #e-live.st2.cv-gone {
+    --l2c: 0;
+    --l2o: 1;
+  }
+
+  /* ---------- sheets (the drawing frame) ---------- */
+  .bp-sheet {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid var(--fg);
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--bg2) 1px, transparent 1px), linear-gradient(90deg, var(--bg2) 1px, transparent 1px);
+    background-size: 40px 40px;
+    background-position: -1px -1px;
+    min-width: 0;
+  }
+  .bp-sheet::before,
+  .bp-sheet::after {
+    content: "";
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border: 0 solid var(--acc);
+    pointer-events: none;
+  }
+  .bp-sheet::before {
+    top: 10px;
+    left: 10px;
+    border-top-width: 3px;
+    border-left-width: 3px;
+  }
+  .bp-sheet::after {
+    top: 10px;
+    right: 10px;
+    border-top-width: 3px;
+    border-right-width: 3px;
+  }
+  .bp-fig {
+    display: block;
+    width: 100%;
+    height: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .fig-n {
+    display: none;
+  }
+  .bp-tb {
+    display: flex;
+    border-top: 2px solid var(--fg);
+    font: 700 10px / 1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg2);
+    background: var(--bg);
+  }
+  .bp-tb > span,
+  .bp-tb > button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-right: 1px solid var(--line2);
+    white-space: nowrap;
+  }
+  .bp-tb .tb-b {
+    color: var(--fg);
+    font: 900 12px / 1 var(--sans);
+    letter-spacing: 0.06em;
+  }
+  .bp-tb .tb-b i {
+    width: 10px;
+    height: 10px;
+    background: var(--acc);
+  }
+  .bp-tb .tb-w {
+    flex: 1;
+    color: var(--fg);
+  }
+  .bp-tb .tb-r {
+    background: transparent;
+    border: 0;
+    border-right: 1px solid var(--line2);
+    border-left: 1px solid var(--line2);
+    color: var(--fg2);
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+  }
+  .bp-tb .tb-r:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .bp-tb .tb-p {
+    gap: 5px;
+    border-right: 0;
+  }
+  .bp-tb .tb-p i {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--fg3);
+    transition:
+      background 0.3s,
+      border-color 0.3s;
+  }
+  .bp-tb .tb-p i.on {
+    background: var(--acc);
+    border-color: var(--acc);
+  }
+  .bp-tb .tb-next {
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    border: 0;
+    border-left: 2px solid var(--fg);
+    font: 900 12px / 1 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .bp-tb .tb-next:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .bp-tb button:focus-visible {
+    outline: 3px solid var(--fg);
+    outline-offset: -5px;
+  }
+  .bp-tb .tb-next:focus-visible {
+    outline-color: var(--acc-fg);
+  }
+
+  /* ---------- panels (static layout: each caption with its own sheet) ---------- */
+  .bp-stage {
+    display: none;
+  }
+  .pnl {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    border-bottom: 1px solid var(--line);
+    max-width: var(--max);
+    margin: 0 auto;
+  }
+  .pnl.last {
+    border-bottom: 0;
+  }
+  .pnl > .bp-sheet {
+    margin: 32px 0 32px 24px;
+  }
+  .copy {
+    padding: 44px 32px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .bp-hero h1 {
+    font-weight: 900;
+    font-size: clamp(44px, 5vw, 80px);
+    line-height: 0.88;
+    letter-spacing: -0.045em;
+    text-transform: uppercase;
+    margin: 16px 0 24px;
+  }
+  .bp-hero h1 em {
+    font-style: normal;
+    color: var(--acc);
+  }
+  .bp-lede {
+    font-size: 19px;
+    color: var(--fg2);
+    max-width: 30em;
+    margin-bottom: 28px;
+  }
+  .bp-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .bp-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 22px;
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* The panel's number tag: the callouts' orange numbered box, filled while its stage is on. */
+  .pn {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: stretch;
+    border: 2px solid var(--fg);
+    font: 700 10px / 1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    margin-bottom: 20px;
+  }
+  .pn b {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    font: 900 15px / 1 var(--sans);
+    letter-spacing: 0;
+    transition:
+      background 0.3s,
+      color 0.3s;
+  }
+  .pn span {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+  }
+  .pn .pn-k {
+    border-left: 1px solid var(--line2);
+    color: var(--fg);
+  }
+  .copy h2 {
+    font-weight: 900;
+    font-size: clamp(32px, 3.2vw, 48px);
+    line-height: 0.92;
+    letter-spacing: -0.035em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .copy p {
+    color: var(--fg2);
+    font-size: 17px;
+    max-width: 32em;
+  }
+  .facts {
+    list-style: none;
+    margin-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+  .facts li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line);
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  /* The hero's key, phones only: the callouts' labels, which the narrow sheet cannot fit. */
+  .bp-key {
+    display: none;
+    list-style: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border-top: 2px solid var(--fg);
+  }
+  .bp-key li {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--bg);
+    padding: 10px;
+    font: 500 11px / 1.35 var(--mono);
+    color: var(--fg2);
+  }
+  .bp-key b {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    font: 900 12px var(--sans);
+  }
+  .bp-key strong {
+    display: block;
+    color: var(--fg);
+    font: 900 12px / 1.2 var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .cli {
+    margin-top: 24px;
+    border-left: 3px solid var(--acc);
+    background: var(--bg2);
+    padding: 12px 16px;
+    font: 500 14px var(--mono);
+    max-width: 26em;
+  }
+  .cli .pr {
+    color: var(--acc);
+  }
+  .next {
+    align-self: flex-start;
+    margin-top: 22px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+  }
+  .next:hover {
+    color: var(--fg);
+  }
+
+  /* ---------- live: one sticky drawing on the left, the captions scroll on the right ---------- */
+  .bp.live {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(400px, 33%);
+  }
+  .live .bp-stage {
+    display: block;
+    position: sticky;
+    top: 67px;
+    height: calc(100vh - 95px);
+    min-height: 520px;
+    padding: 18px 20px 18px 24px;
+  }
+  .live .bp-stage .bp-sheet,
+  .live .bp-stage .bp-fig {
+    height: 100%;
+  }
+  .live .static {
+    display: none;
+  }
+  .live .bp-panels {
+    border-left: 2px solid var(--fg);
+  }
+  .live .pnl {
+    display: flex;
+    min-height: 78vh;
+    max-width: none;
+    margin: 0;
+  }
+  .live .pnl.bp-hero {
+    min-height: calc(100vh - 95px);
+    border-bottom: 2px solid var(--fg);
+  }
+  .live .pnl.last {
+    min-height: 92vh;
+  }
+  .live .copy {
+    padding: 40px 32px 40px 36px;
+  }
+  .live .bp-hero h1 {
+    font-size: clamp(44px, 4vw, 62px);
+  }
+  .live .bp-lede {
+    font-size: 18px;
+  }
+  .live .pnl:not(.on) .pn b {
+    background: transparent;
+    color: var(--fg3);
+    box-shadow: inset -1px 0 0 var(--line2);
+  }
+
+  /* ---------- narrow ---------- */
+  @media (max-width: 1080px) {
+    .pnl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pnl > .bp-sheet {
+      margin: 24px 24px 0;
+    }
+    .bp-hero .copy {
+      order: -1;
+      padding-bottom: 8px;
+    }
+    .copy {
+      padding: 32px 24px 44px;
+    }
+  }
+  @media (max-width: 640px) {
+    .fig-w {
+      display: none;
+    }
+    .fig-n {
+      display: block;
+      --cot: 0;
+    }
+    .pnl > .bp-sheet {
+      margin: 16px 16px 0;
+    }
+    .copy {
+      padding: 28px 16px 36px;
+    }
+    .bp-key {
+      display: grid;
+    }
+    .bp-hero .copy {
+      padding-top: 36px;
+      padding-bottom: 4px;
+    }
+    .bp-tb > span {
+      padding: 9px 10px;
+    }
+    .bp-lede {
+      font-size: 17px;
+    }
+  }
+</style>
+
+<script is:inline>
+  // The live blueprint. Runs only on a wide screen with motion allowed; otherwise the static
+  // sheets in each caption stay. Every motion is either a Web Animation on an element the scene
+  // marked with data-in / data-fx / data-d, or one requestAnimationFrame loop that places the
+  // packets, the outbound tracers and the inbound probe.
+  (() => {
+    const root = document.getElementById("e-bp");
+    const svg = document.getElementById("e-live");
+    if (!root || !svg || !("IntersectionObserver" in window) || !svg.animate) return;
+    const frames = JSON.parse(svg.dataset.frames || "[]");
+    const NAMES = ["One agent", "One fleet", "Your account", "Your Mac"];
+    const label = (n) => (n === 1 ? "Cover" : `Dwg 0${n - 1}`);
+    const nextBtn = root.querySelector("[data-next]");
+    const tbN = root.querySelector("[data-tb-n]");
+    const tbT = root.querySelector("[data-tb-t]");
+    const dots = Array.from(root.querySelectorAll("[data-tb-p] i"));
+    const panels = Array.from(root.querySelectorAll(".pnl"));
+    const mq = matchMedia("(min-width: 1081px) and (prefers-reduced-motion: no-preference)");
+    let stage = 1;
+    let cur = frames[0].slice();
+    let zraf = 0;
+    let ambientAt = 0;
+
+    /* ---- zoom: the centre moves linearly, the width scales geometrically ---- */
+    const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+    const setVB = (r) => svg.setAttribute("viewBox", r.map((v) => v.toFixed(1)).join(" "));
+    function zoom(to) {
+      const from = cur.slice();
+      const c0 = [from[0] + from[2] / 2, from[1] + from[3] / 2];
+      const c1 = [to[0] + to[2] / 2, to[1] + to[3] / 2];
+      const t0 = performance.now();
+      cancelAnimationFrame(zraf);
+      const step = (t) => {
+        const k = ease(Math.min(1, (t - t0) / 1300));
+        const w = from[2] * (to[2] / from[2]) ** k;
+        const h = from[3] * (to[3] / from[3]) ** k;
+        const cx = c0[0] + (c1[0] - c0[0]) * k;
+        const cy = c0[1] + (c1[1] - c0[1]) * k;
+        cur = [cx - w / 2, cy - h / 2, w, h];
+        setVB(cur);
+        if (k < 1) zraf = requestAnimationFrame(step);
+      };
+      zraf = requestAnimationFrame(step);
+    }
+
+    /* ---- entrances ---- */
+    const fxEls = Array.from(svg.querySelectorAll("[data-in]"));
+    const DUR = { draw: 900, trace: 1100, fade: 500, pop: 420, drop: 700, rise: 650, wipe: 700, slide: 900 };
+    function play(el, delay) {
+      const fx = el.dataset.fx;
+      const o = { duration: Number(el.dataset.dur) || DUR[fx] || 500, delay, fill: "backwards" };
+      if (fx === "draw" || fx === "trace") {
+        const L = el.getTotalLength();
+        const da = `${L} ${L}`;
+        if (fx === "draw") {
+          el.animate(
+            [
+              { strokeDasharray: da, strokeDashoffset: L, fillOpacity: 0 },
+              { strokeDasharray: da, strokeDashoffset: 0, fillOpacity: 0, offset: 0.72 },
+              { strokeDasharray: da, strokeDashoffset: 0, fillOpacity: 1 },
+            ],
+            { ...o, easing: "ease-in-out" },
+          );
+        } else {
+          el.animate(
+            [
+              { strokeDasharray: da, strokeDashoffset: L, opacity: 1 },
+              { strokeDasharray: da, strokeDashoffset: 0, opacity: 1, offset: 0.6 },
+              { strokeDasharray: da, strokeDashoffset: 0, opacity: 0 },
+            ],
+            { ...o, fill: "none", easing: "ease-out" },
+          );
+        }
+        return;
+      }
+      const K = {
+        fade: [{ opacity: 0 }, { opacity: 1 }],
+        pop: [
+          { opacity: 0, transform: "scale(0.3)" },
+          { opacity: 1, transform: "scale(1.18)", offset: 0.7 },
+          { opacity: 1, transform: "none" },
+        ],
+        drop: [
+          { opacity: 0, transform: "translateY(-120px)" },
+          { opacity: 1, transform: "translateY(5px)", offset: 0.78 },
+          { opacity: 1, transform: "none" },
+        ],
+        rise: [
+          { opacity: 0, transform: "translateY(46px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        wipe: [{ transform: "scaleX(0)" }, { transform: "none" }],
+        slide: [
+          { opacity: 0, transform: "translate(-90px, -60px)" },
+          { opacity: 1, transform: "none" },
+        ],
+      }[fx];
+      if (K) el.animate(K, { ...o, easing: fx === "drop" ? "cubic-bezier(.55,0,.6,1)" : "cubic-bezier(.2,.8,.2,1)" });
+    }
+    function enter(n, lag) {
+      for (const el of fxEls) if (el.dataset.in === String(n)) play(el, Number(el.dataset.d || 0) + lag);
+    }
+
+    /* ---- stage 2's recreate beat: the machine goes, the volume stays, a new one lands on it ---- */
+    const cv = svg.querySelector(".cv");
+    let cvT = [];
+    const cvGone = () => svg.classList.contains("cv-gone");
+    function cvCycle() {
+      svg.classList.add("cv-gone");
+      cvT.push(
+        setTimeout(() => {
+          svg.classList.remove("cv-gone");
+          if (cv)
+            cv.animate(
+              [
+                { opacity: 0, transform: "translateY(-130px)" },
+                { opacity: 1, transform: "translateY(4px)", offset: 0.8 },
+                { opacity: 1, transform: "none" },
+              ],
+              { duration: 800, easing: "cubic-bezier(.55,0,.6,1)" },
+            );
+          cvT.push(setTimeout(cvCycle, 5400));
+        }, 2600),
+      );
+    }
+    function cvStop() {
+      for (const t of cvT) clearTimeout(t);
+      cvT = [];
+      svg.classList.remove("cv-gone");
+    }
+
+    /* ---- stage changes ---- */
+    function go(n) {
+      if (n === stage) return;
+      const prev = stage;
+      svg.classList.remove(`st${prev}`);
+      stage = n;
+      svg.classList.add(`st${n}`);
+      zoom(frames[n - 1]);
+      if (n > prev) for (let k = prev + 1; k <= n; k++) enter(k, 150 + (k - prev - 1) * 350);
+      ambientAt = Math.max(ambientAt, performance.now() + 900);
+      if (tbN) tbN.textContent = label(n);
+      if (tbT) tbT.textContent = NAMES[n - 1];
+      dots.forEach((d, i) => d.classList.toggle("on", i < n - 1));
+      if (nextBtn)
+        nextBtn.setAttribute("aria-label", n < 4 ? `Next drawing: ${NAMES[n]}` : "Next section: zero to agent");
+      panels.forEach((p) => p.classList.toggle("on", Number(p.dataset.stage) === n));
+      cvStop();
+      if (n === 2) cvT.push(setTimeout(cvCycle, 2200));
+    }
+    function redraw() {
+      for (let k = 1; k <= stage; k++) enter(k, 100 + (k - 1) * 350);
+      ambientAt = performance.now() + (stage === 1 ? 3100 : 1500);
+    }
+
+    /* ---- ambient motion ---- */
+    const routes = Array.from(svg.querySelectorAll(".route[data-route]")).map((el) => ({
+      el,
+      box: Number(el.dataset.route),
+      from: Number(el.dataset.from),
+      to: Number(el.dataset.to),
+      len: 0,
+      next: 0,
+    }));
+    const pool = Array.from(svg.querySelectorAll(".pkt")).map((el) => ({ el, r: null, t0: 0, dur: 1 }));
+    const obs = Array.from(svg.querySelectorAll(".ob")).map((el) => ({
+      el,
+      box: Number(el.dataset.box),
+      x: Number(el.dataset.x),
+      y0: Number(el.dataset.y0),
+      y1: Number(el.dataset.y1),
+      ph: Math.random(),
+      on: false,
+    }));
+    const probePath = svg.querySelector(".route[data-probe]");
+    const probe = svg.querySelector(".probe");
+    const ring = svg.querySelector(".ring");
+    const xMark = svg.querySelector(".x");
+    let probeLen = 0;
+    let hit = false;
+    let raf = 0;
+    let running = false;
+
+    function frame(now) {
+      if (!running) {
+        raf = 0;
+        return;
+      }
+      const s = cur[2] / frames[0][2];
+      const on = now >= ambientAt;
+      const gone = cvGone();
+      if (on)
+        for (const r of routes) {
+          if (stage < r.from || stage > r.to || now < r.next || (r.box === 1 && gone)) continue;
+          const p = pool.find((q) => !q.r);
+          if (!p) break;
+          p.r = r;
+          p.t0 = now;
+          p.dur = (r.len / (0.4 * cur[2])) * 1000;
+          r.next = now + (stage === 1 ? 1050 : 1500 + Math.random() * 1400);
+        }
+      for (const p of pool) {
+        if (!p.r) continue;
+        const k = (now - p.t0) / p.dur;
+        if (k >= 1 || stage < p.r.from || stage > p.r.to) {
+          p.r = null;
+          p.el.style.opacity = "0";
+          continue;
+        }
+        const pt = p.r.el.getPointAtLength(k * p.r.len);
+        p.el.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)}) scale(${s.toFixed(3)})`);
+        p.el.style.opacity = String(Math.min(1, k * 14, (1 - k) * 14));
+      }
+      for (const o of obs) {
+        const vis = on && (o.box === 0 || stage >= 2) && !(o.box === 1 && gone);
+        if (!vis) {
+          if (o.on) o.el.style.opacity = "0";
+          o.on = false;
+          continue;
+        }
+        o.on = true;
+        const k = (now / 1700 + o.ph) % 1;
+        const y = o.y0 + (o.y1 - 70 - o.y0) * k;
+        o.el.setAttribute("transform", `translate(${o.x} ${y.toFixed(1)}) scale(${Math.max(1, s * 0.8).toFixed(3)})`);
+        o.el.style.opacity = String(0.85 * (k < 0.12 ? k / 0.12 : k > 0.62 ? Math.max(0, (1 - k) / 0.38) : 1));
+      }
+      if (on && stage === 1 && probeLen) {
+        const k = ((now - ambientAt) % 3000) / 3000;
+        let d = 0;
+        let op = 0;
+        if (k < 0.42) {
+          d = (k / 0.42) ** 1.6 * probeLen;
+          op = Math.min(1, k * 25);
+          hit = false;
+        } else if (k < 0.66) {
+          const b = (k - 0.42) / 0.24;
+          d = probeLen * (1 - 0.32 * Math.sin((b * Math.PI) / 2));
+          op = 1 - b;
+          if (!hit) {
+            hit = true;
+            xMark?.classList.add("hit");
+            setTimeout(() => xMark?.classList.remove("hit"), 140);
+            ring?.animate(
+              [
+                { opacity: 0.9, transform: "scale(0.4)" },
+                { opacity: 0, transform: "scale(1.9)" },
+              ],
+              { duration: 650, easing: "ease-out" },
+            );
+          }
+        }
+        const pt = probePath.getPointAtLength(d);
+        probe.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+        probe.style.opacity = String(op);
+      } else if (probe) {
+        probe.style.opacity = "0";
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    function setRunning(v) {
+      running = v && root.classList.contains("live") && !document.hidden;
+      if (running && !raf) raf = requestAnimationFrame(frame);
+    }
+
+    /* ---- wiring ---- */
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) if (e.isIntersecting) go(Number(e.target.dataset.stage));
+      },
+      { rootMargin: "-46% 0px -46% 0px" },
+    );
+    let visible = true;
+    const seen = new IntersectionObserver((entries) => {
+      visible = entries.some((e) => e.isIntersecting);
+      setRunning(visible);
+    });
+    let started = false;
+    const apply = () => {
+      if (mq.matches) {
+        root.classList.add("live");
+        for (const p of panels) io.observe(p);
+        seen.observe(root);
+        if (!started) {
+          started = true;
+          for (const r of routes) r.len = r.el.getTotalLength();
+          if (probePath) probeLen = probePath.getTotalLength();
+          panels[0]?.classList.add("on");
+          enter(1, 150);
+          ambientAt = performance.now() + 3100;
+        }
+        setRunning(visible);
+      } else {
+        root.classList.remove("live");
+        io.disconnect();
+        seen.disconnect();
+        cvStop();
+        running = false;
+      }
+    };
+    document.addEventListener("visibilitychange", () => setRunning(visible));
+    root.querySelector("[data-redraw]")?.addEventListener("click", redraw);
+    // Next: scroll the following caption to the middle of the screen (the stage observer then
+    // zooms the drawing); after the last drawing, on to the zero-to-agent section. A click made
+    // while the page is still scrolling counts from the stage already asked for.
+    let asked = 0;
+    let askedAt = 0;
+    nextBtn?.addEventListener("click", () => {
+      const from = asked > stage && performance.now() - askedAt < 1600 ? asked : stage;
+      const target = panels.find((p) => Number(p.dataset.stage) === from + 1);
+      asked = from + 1;
+      askedAt = performance.now();
+      if (target) {
+        const r = target.getBoundingClientRect();
+        const mid = Math.min(r.height, innerHeight) / 2;
+        window.scrollTo({ top: scrollY + r.top + mid - innerHeight / 2 + 34, behavior: "smooth" });
+      } else {
+        const zt = document.getElementById("e-zt");
+        if (zt) window.scrollTo({ top: scrollY + zt.getBoundingClientRect().top - 67, behavior: "smooth" });
+      }
+    });
+    mq.addEventListener("change", apply);
+    apply();
+  })();
+</script>
