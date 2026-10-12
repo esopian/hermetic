@@ -34,7 +34,12 @@ import { fleetManifestFrom, pushRelease } from "../packages/core/src/release/art
 import { MemoryBackend } from "../packages/core/src/backend/memory.ts";
 import type { FleetManifestInput } from "../packages/core/src/release/artifacts.ts";
 import type { FleetItem } from "../packages/core/src/schema/fleet.ts";
-import { hermesBundleKey, isReleaseObjectKey } from "../packages/core/src/schema/fleet.ts";
+import {
+  autoUpdateHermeticd,
+  defaultFleetSettings,
+  hermesBundleKey,
+  isReleaseObjectKey,
+} from "../packages/core/src/schema/fleet.ts";
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
 import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
@@ -236,6 +241,36 @@ describe("seam: the fleet manifest core writes is the one hermeticd reads", () =
    * resources block that lost a key would not fail here — it would fail eight
    * minutes into a first boot, as a DynamoDB call against `undefined`.
    */
+  /**
+   * §6.5: the auto-update switch lives on `_fleet`, which the box cannot read,
+   * so the manifest carries a copy derived from the row on every write — and
+   * the box decides from it whether to check for a new release every few
+   * minutes or only at its nightly slot. Both sides read absence as *on*
+   * through the one helper (`autoUpdateHermeticd`), so a manifest written by an
+   * older laptop means what the setting's default means.
+   */
+  test("the hermeticd auto-update switch reaches the box, off and default", () => {
+    const base = INPUT.fleet;
+    const settings = defaultFleetSettings(base.defaults, base.created_by, base.created_at);
+    const { auto_update_hermeticd: _drop, ...unstated } = settings;
+    const cases: Array<[FleetItem, boolean]> = [
+      [{ ...base, settings: { ...settings, auto_update_hermeticd: false } }, false],
+      [{ ...base, settings: { ...settings, auto_update_hermeticd: true } }, true],
+      [{ ...base, settings: unstated }, true],
+      [{ ...base, settings: undefined }, true],
+    ];
+    for (const [fleet, expected] of cases) {
+      const read = parseFleetManifest(JSON.stringify(fleetManifestFrom({ ...INPUT, fleet })));
+      expect(read.auto_update_hermeticd).toBe(expected);
+      expect(autoUpdateHermeticd(read)).toBe(expected);
+    }
+    // A manifest from before the field: parsed, and read as on.
+    const { auto_update_hermeticd: _absent, ...older } = fleetManifestFrom(INPUT);
+    const read = parseFleetManifest(JSON.stringify(older));
+    expect(read.auto_update_hermeticd).toBeUndefined();
+    expect(autoUpdateHermeticd(read)).toBe(true);
+  });
+
   test("the resources block the box boots from is complete", () => {
     const read = parseFleetManifest(JSON.stringify(fleetManifestFrom(INPUT)));
     for (const [key, value] of Object.entries(read.resources)) {

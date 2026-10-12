@@ -9,7 +9,11 @@
  * enough to be their own modules.
  */
 import { randomUUID } from "node:crypto";
-import { FLEET_KEY, FoundationUpdateInput as FoundationUpdateInputSchema } from "../../schema/index.ts";
+import {
+  FLEET_KEY,
+  FoundationUpdateInput as FoundationUpdateInputSchema,
+  autoUpdateHermeticd,
+} from "../../schema/index.ts";
 import type { FleetItem, FoundationUpdateInput, OpEvent } from "../../schema/index.ts";
 import { bedrockModelArns } from "../../aws/index.ts";
 import { HermeticError } from "../../errors.ts";
@@ -274,7 +278,13 @@ export function createUpdate(
       yield* recordDirectoryVersion(frozen.fleet_id, current);
 
       // ── rollout ───────────────────────────────────────────────────────────
-      yield* rollout(targetSha256, keepLock, parsed.rollout_wait_ms, opts.signal);
+      yield* rollout(
+        targetSha256,
+        keepLock,
+        parsed.rollout_wait_ms,
+        autoUpdateHermeticd(current.settings),
+        opts.signal,
+      );
 
       // ── done ──────────────────────────────────────────────────────────────
       await core.appendEvent(

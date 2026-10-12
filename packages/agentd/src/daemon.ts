@@ -11,10 +11,13 @@ import { reportBrowsers } from "./browser-health.ts";
 import { serveRpc, tailscaleWhois } from "./rpc.ts";
 import {
   SWAP_SETTLE_MS,
+  autoUpdate,
   markSwapSettled,
   msUntilNightly,
   settleAfterUptime,
   update,
+  type UpdateDeps,
+  type UpdateResult,
 } from "./update/index.ts";
 import { makeUpdateGate, type UpdateGate } from "./update-request.ts";
 import { makeRequestGate, type RequestGate } from "./request-gate.ts";
@@ -285,6 +288,7 @@ function updateLoop(host: Host, ctx: Context, gate: UpdateGate, signal: AbortSig
     name: ctx.userData.name,
     signal,
     runUpdate: () => maybeUpdate(host, deps),
+    runAutoCheck: () => maybeUpdate(host, deps, { auto: true }),
   });
 }
 
@@ -295,6 +299,14 @@ export interface UpdateLoopDeps {
   readonly name: string;
   /** `maybeUpdate` in the service; `null` from it means "not now". */
   readonly runUpdate: () => Promise<unknown>;
+  /**
+   * The auto-update backstop, every `AUTO_UPDATE_CHECK_MS` between full runs:
+   * `maybeUpdate(…, { auto: true })` in the service, which reads the fleet
+   * manifest and does nothing more when it switches auto-update off. Its result
+   * is not looked at — it never moves the nightly slot, and a deferral or a
+   * failure simply waits for the next interval. Absent: no backstop.
+   */
+  readonly runAutoCheck?: () => Promise<unknown>;
   /** The service never aborts; a test does, to get its loop back. */
   readonly signal?: AbortSignal;
   readonly log?: (message: string) => void;
@@ -303,7 +315,9 @@ export interface UpdateLoopDeps {
 /**
  * Once at start-up — a box that has been off for a week should catch up before
  * it does anything else — once per nightly slot after that, and immediately
- * whenever `foundation.update` asks for it (§6.6).
+ * whenever `foundation.update` asks for it (§6.6). In between, every
+ * `AUTO_UPDATE_CHECK_MS`, an auto check (`runAutoCheck`) installs a changed
+ * release if the fleet manifest leaves auto-update on.
  *
  * The wait at the bottom is `gate.wait`, not `host.sleep`, so a rollout request
  * does not sit out the poll interval. It is still a full sleep whenever the
@@ -312,9 +326,10 @@ export interface UpdateLoopDeps {
  * window would be a spin of `systemctl is-active` and manifest fetches.
  */
 export async function runUpdateLoop(deps: UpdateLoopDeps): Promise<void> {
-  const { host, gate, name, runUpdate, signal } = deps;
+  const { host, gate, name, runUpdate, runAutoCheck, signal } = deps;
   const say = deps.log ?? log;
   let nightlyDue = host.now().getTime() + msUntilNightly(host.now(), name);
+  let autoDue = host.now().getTime() + AUTO_UPDATE_CHECK_MS;
   let first = true;
 
   while (!signal?.aborted) {
@@ -326,6 +341,15 @@ export async function runUpdateLoop(deps: UpdateLoopDeps): Promise<void> {
       if (due && outcome === "ran") {
         first = false;
         nightlyDue = host.now().getTime() + msUntilNightly(host.now(), name);
+      }
+      if (outcome === "ran") {
+        // A full run has just read the manifest; the backstop counts from it.
+        autoDue = host.now().getTime() + AUTO_UPDATE_CHECK_MS;
+      } else if (outcome === "idle" && runAutoCheck !== undefined && host.now().getTime() >= autoDue) {
+        // Moved before the check, so one that throws or is deferred waits out
+        // the interval like one that passed, instead of retrying every poll.
+        autoDue = host.now().getTime() + AUTO_UPDATE_CHECK_MS;
+        await runAutoCheck();
       }
     } catch (e) {
       say(`update: ${redactValue(e instanceof Error ? e.message : String(e))}`);
@@ -456,15 +480,29 @@ export async function bootstrapUnitActive(host: Host): Promise<boolean> {
  */
 export async function maybeUpdate(
   host: Host,
-  deps: Parameters<typeof update>[0],
-): Promise<Awaited<ReturnType<typeof update>> | null> {
+  deps: UpdateDeps,
+  /**
+   * `auto`: the backstop check (`autoUpdate`) rather than a full `update`. It
+   * defers without a log line — it runs again in `AUTO_UPDATE_CHECK_MS`, and a
+   * bootstrap in progress is not news to it.
+   */
+  opts: { readonly auto?: boolean } = {},
+): Promise<UpdateResult | "off" | null> {
   const bootstrap = await bootstrapUnitBusy(host);
   if (bootstrap.busy) {
-    log(`${bootstrap.detail}; deferring the update`);
+    if (opts.auto !== true) log(`${bootstrap.detail}; deferring the update`);
     return null;
   }
-  return await update(deps);
+  return opts.auto === true ? await autoUpdate(deps) : await update(deps);
 }
 
 /** How often the scheduler checks whether the nightly slot has arrived. */
 export const UPDATE_POLL_MS = 60_000;
+
+/**
+ * How often the update loop checks the fleet manifest for a new release while
+ * `auto_update_hermeticd` is on — the backstop for a box the laptop's
+ * `update_request` nudge did not reach. A multiple of `UPDATE_POLL_MS`, which
+ * is the loop's resolution.
+ */
+export const AUTO_UPDATE_CHECK_MS = 5 * 60_000;

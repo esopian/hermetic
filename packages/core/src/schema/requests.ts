@@ -11,6 +11,7 @@ import { FLEET_KEY, FleetDefaults, NetworkMode } from "./fleet.ts";
 import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
 import { HermesLogFile } from "./rpc.ts";
+import { MAX_ROLLOUT_WAIT_MS } from "./foundation.ts";
 
 /**
  * The twelve digits of an AWS account id, typed back by the operator (§4.7 step
@@ -238,6 +239,41 @@ export const RecreateAgentInput = z.object({
 export type RecreateAgentInput = z.infer<typeof RecreateAgentInput>;
 
 /**
+ * How a newly published hermeticd release reaches the boxes already running
+ * (§6.5), shared by the two requests that publish one: `artifacts.push` and
+ * `upgrade --hermeticd`.
+ *
+ * Neither field set is the default and follows the fleet's
+ * `settings.auto_update_hermeticd` (on unless switched off): when the push or
+ * the pointer move actually changed the release, every running box is handed
+ * an `update_request` and the op watches it land. `now: true` does that even
+ * on a fleet that has switched it off; `rollout: false` skips it once on a fleet
+ * that has it on, leaving each box to its own check. The two contradict each
+ * other and are refused together.
+ *
+ * `rollout: false` rather than a `skip` flag so the CLI's `--no-rollout`, which
+ * Commander parses to `rollout: false` (and to `true` when absent), lands on
+ * the field as it is.
+ *
+ * `rollout_wait_ms` bounds how long the op watches boxes land, overriding the
+ * deployment default (ten minutes in real mode, zero in fixtures and tests).
+ * A box that has not landed by then is a warning, never a failure.
+ */
+export const HermeticdRolloutOptions = {
+  now: z.boolean().optional(),
+  rollout: z.boolean().optional(),
+  rollout_wait_ms: z.number().int().nonnegative().max(MAX_ROLLOUT_WAIT_MS).optional(),
+};
+
+/** `--now` and `--no-rollout` say opposite things; a request may say one. */
+function rolloutFlagsAgree(v: { now?: boolean | undefined; rollout?: boolean | undefined }): boolean {
+  return !(v.now === true && v.rollout === false);
+}
+const ROLLOUT_FLAGS_CONFLICT = {
+  message: "--now and --no-rollout contradict each other; pass one",
+};
+
+/**
  * `hermetic upgrade` (§6.5). The two halves are not symmetrical:
  *
  * - `--hermes V` is per-agent, so it needs a target — a name or `--all`.
@@ -247,12 +283,14 @@ export type RecreateAgentInput = z.infer<typeof RecreateAgentInput>;
  *   `VALIDATION`, because "upgrade hermeticd on this one box" is not a thing
  *   the fleet manifest can express.
  *
- * `now` asks each targeted box to converge onto the new pin in place (§6.5's
- * `apply_request`, the same step `plan rollout` takes) instead of waiting for
- * the next recreate. It is about the Hermes pin, so it needs `--hermes`; that
- * much is shape and refused here. `--now` *with* `--hermeticd` is refused by
- * core with `VALIDATION`, like the name case above: a hermeticd release moves on
- * the nightly update, and there is no in-place converge of it to ask for.
+ * `now` means "apply it to running boxes now" for whichever half it rides
+ * with. Beside `--hermes` it asks each targeted box to converge onto the new
+ * pin in place (§6.5's `apply_request`, the same step `plan rollout` takes)
+ * instead of waiting for the next recreate. Beside `--hermeticd` it asks every
+ * running box to take the release at once (§6.5's `update_request`), whatever
+ * the fleet's `auto_update_hermeticd` says. `rollout: false` (`--no-rollout`)
+ * is the opposite override for the hermeticd half: move the pointer and ask no
+ * box, even on a fleet that auto-updates. See `HermeticdRolloutOptions`.
  */
 export const UpgradeInput = z
   .object({
@@ -260,7 +298,7 @@ export const UpgradeInput = z
     hermes: z.string().optional(),
     hermeticd: z.string().optional(),
     all: z.boolean().optional(),
-    now: z.boolean().optional(),
+    ...HermeticdRolloutOptions,
   })
   .refine((v) => v.hermes !== undefined || v.hermeticd !== undefined, {
     message: "one of --hermes or --hermeticd is required",
@@ -268,9 +306,17 @@ export const UpgradeInput = z
   .refine((v) => v.hermes === undefined || v.all === true || v.name !== undefined, {
     message: "--hermes needs an agent name or --all",
   })
-  .refine((v) => v.now !== true || v.hermes !== undefined, {
-    message: "--now converges a box onto a new Hermes pin, so it needs --hermes",
-  });
+  .refine((v) => v.now !== true || v.hermes !== undefined || v.hermeticd !== undefined, {
+    message: "--now applies a new --hermes pin or --hermeticd release in place, so it needs one",
+  })
+  .refine(
+    (v) => (v.rollout === undefined && v.rollout_wait_ms === undefined) || v.hermeticd !== undefined,
+    {
+      message:
+        "--no-rollout and --rollout-wait-ms are about a hermeticd release, so they need --hermeticd",
+    },
+  )
+  .refine(rolloutFlagsAgree, ROLLOUT_FLAGS_CONFLICT);
 export type UpgradeInput = z.infer<typeof UpgradeInput>;
 
 /**
@@ -450,11 +496,23 @@ export const SettingsSetInput = z
      * makes that refusal happen at the version the operator actually read.
      */
     expected_version: z.number().int().positive().nullable().optional(),
+    /**
+     * Switch the fleet's hermeticd auto-update on or off (§6.5,
+     * `FleetSettings.auto_update_hermeticd`). Changing it republishes the
+     * fleet manifest, which is how the boxes hear about it.
+     */
+    auto_update_hermeticd: z.boolean().optional(),
   })
   .refine(
     (v) =>
-      v.defaults !== undefined || v.agent_defaults !== undefined || v.default_profile !== undefined,
-    { message: "name at least one of defaults, agent_defaults or default_profile" },
+      v.defaults !== undefined ||
+      v.agent_defaults !== undefined ||
+      v.default_profile !== undefined ||
+      v.auto_update_hermeticd !== undefined,
+    {
+      message:
+        "name at least one of defaults, agent_defaults, default_profile or auto_update_hermeticd",
+    },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;
 
@@ -1095,17 +1153,20 @@ export type ChatObserveInput = z.infer<typeof ChatObserveInput>;
  * What a *local* caller may push: the CLI knows a filesystem path because it is
  * running on the operator's laptop.
  */
-export const ArtifactsPushInput = z.object({
-  version: z.string().min(1).optional(),
-  /**
-   * Path of the compiled `bun build --compile --target=bun-linux-arm64` output.
-   * Core reads it, pushes the bytes, and records the digest in the fleet
-   * manifest — there is no `.sha256` sidecar (§3.6).
-   */
-  path: z.string().min(1).optional(),
-  /** Bytes of the hermeticd binary, when the caller already has them. */
-  bytes: z.instanceof(Uint8Array).optional(),
-});
+export const ArtifactsPushInput = z
+  .object({
+    version: z.string().min(1).optional(),
+    /**
+     * Path of the compiled `bun build --compile --target=bun-linux-arm64` output.
+     * Core reads it, pushes the bytes, and records the digest in the fleet
+     * manifest — there is no `.sha256` sidecar (§3.6).
+     */
+    path: z.string().min(1).optional(),
+    /** Bytes of the hermeticd binary, when the caller already has them. */
+    bytes: z.instanceof(Uint8Array).optional(),
+    ...HermeticdRolloutOptions,
+  })
+  .refine(rolloutFlagsAgree, ROLLOUT_FLAGS_CONFLICT);
 export type ArtifactsPushInput = z.infer<typeof ArtifactsPushInput>;
 
 /**
@@ -1113,9 +1174,12 @@ export type ArtifactsPushInput = z.infer<typeof ArtifactsPushInput>;
  * be able to name a path on the server's filesystem, so the route validates with
  * this and the binary comes from the build the server itself ships.
  */
-export const ArtifactsPushApiInput = z.object({
-  version: z.string().min(1).optional(),
-});
+export const ArtifactsPushApiInput = z
+  .object({
+    version: z.string().min(1).optional(),
+    ...HermeticdRolloutOptions,
+  })
+  .refine(rolloutFlagsAgree, ROLLOUT_FLAGS_CONFLICT);
 export type ArtifactsPushApiInput = z.infer<typeof ArtifactsPushApiInput>;
 
 /** `config show` takes nothing; it has its own schema so it borrows no other. */

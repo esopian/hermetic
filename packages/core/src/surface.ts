@@ -240,6 +240,7 @@ export const STREAMING_METHODS: readonly PublicMethod[] = [
   "init",
   "teardown",
   "foundation.update",
+  "artifacts.push",
   "apply",
   "upgrade",
   "agents.create",

@@ -25,6 +25,7 @@ import {
   PROVIDERS,
   agentDashboardUrl,
   agentDesktopUrl,
+  autoUpdateHermeticd,
   groupByDisposition,
   splitHermesSettings,
 } from "@hermetic/core";
@@ -693,6 +694,14 @@ export function renderSettings(result: SettingsResult): string {
     ["volume", `${settings.defaults.volume_gib} GiB`],
     ["root disk", `${settings.defaults.root_gib ?? DEFAULT_ROOT_GIB} GiB`],
     ["secrets", settings.defaults.secrets],
+    // §6.5: the effective answer, so a fleet that predates the switch reads
+    // `on` — which is what it does — rather than a blank.
+    [
+      "hermeticd auto-update",
+      autoUpdateHermeticd(settings)
+        ? "on (new releases roll out when pushed)"
+        : "off (boxes update nightly)",
+    ],
     ["agent model", settings.agent_defaults?.model ?? "-"],
     ["agent terminal", settings.agent_defaults?.terminal_backend ?? "-"],
     ["agent max turns", settings.agent_defaults?.max_turns?.toString() ?? "-"],
