@@ -84,7 +84,8 @@ export const HERMES_AGENT_VENV = HERMES_ACCOUNT_HOME + "/.venv";
  */
 export const HERMES_USER_CONFIG = HERMES_HOME + "/config.yaml";
 /**
- * The agent's own `.env`, which hermetic writes to never and reads about once.
+ * The agent's own `.env`, which hermetic writes one non-secret line into and
+ * otherwise only reads.
  *
  * It is upstream's highest-precedence *user* credential channel: `load_env()`
  * loads it with `override=True` (`hermes_cli/env_loader.py:362-365`), so its
@@ -93,7 +94,9 @@ export const HERMES_USER_CONFIG = HERMES_HOME + "/config.yaml";
  * `hermes_cli/config.py:2698-2701`). A provider key in here therefore outranks the
  * one hermetic delivers on tmpfs — which is why `verify-hermes` asserts the
  * managed provider's key variable is not named in it (`hermes-check.ts`), and
- * why nothing hermetic renders ever writes it.
+ * why hermetic never writes a key into it. The one line it does write, and only
+ * if absent, is `BROWSER_CDP_URL` — a loopback endpoint some upstream readers
+ * see only through the environment (`browserEnvSeedCommands`).
  */
 export const HERMES_USER_ENV = HERMES_HOME + "/.env";
 /**

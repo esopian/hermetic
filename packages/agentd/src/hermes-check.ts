@@ -20,18 +20,20 @@
  *   2. the agent has a model to send to it;
  *   3. a keyed provider's key actually arrived on the box;
  *   4. nothing in the agent's own `.env` shadows that key;
- *   5. on a browser agent, nothing there shadows the managed `browser.cdp_url`
- *      either (`cdp_override`, advisory — see below).
+ *   5. on a browser agent, that `.env` carries `BROWSER_CDP_URL` and it names
+ *      this box's browser (`cdp_override` — a verdict when the line is
+ *      missing, advisory when it names another endpoint; see below).
  *
  * The rest ask Hermes: `hermes config get model.default --json`, the same for
  * `approvals.mode` when the manifest states one, and on a browser agent
  * `browser.cdp_url` too. Those are the probes that see Hermes's own
  * *resolution* rather than hermetic's output.
  *
- * `cdp_override` and `approvals` are `advisory`: they are findings the operator
- * should see and not verdicts that fail a boot (`HermesCheck.advisory`). Both
- * report a value the agent or the operator may have changed on the box on
- * purpose, through a seam hermetic deliberately left open.
+ * `approvals`, and `cdp_override` when it finds an operator's endpoint, are
+ * `advisory`: findings the operator should see and not verdicts that fail a
+ * boot (`HermesCheck.advisory`). Both report a value the agent or the operator
+ * may have changed on the box on purpose, through a seam hermetic deliberately
+ * left open.
  *
  * Why both. Upstream's `hermes doctor` looks like it should cover this and
  * cannot: `_validate_model_config` reads `read_user_config_raw`
@@ -53,10 +55,12 @@
  */
 import type { AgentConfig } from "@hermetic/core/schema";
 import {
+  BROWSER_CDP_ENV,
   HERMES_MANAGED_CONFIG,
   HERMES_USER_CONFIG,
   HERMES_USER_ENV,
   PROVIDERS,
+  browserCdpUrl,
   hermesConfigGetArgv,
   providerNeedsKey,
 } from "@hermetic/core/shared";
@@ -156,6 +160,26 @@ function envDefines(env: string, name: string): boolean {
     if (assigned === name) return true;
   }
   return false;
+}
+
+/**
+ * What a dotenv-shaped file assigns to `name`, or `null` if no line does.
+ *
+ * The last assignment wins, as it does when python-dotenv loads the file, and
+ * `export` and one pair of matching quotes are stripped the way it strips them.
+ * Unlike `envHasValue`, the value leaves this function — so it is only ever
+ * asked about a variable that holds no secret.
+ */
+function envValue(env: string, name: string): string | null {
+  let found: string | null = null;
+  for (const line of env.split("\n")) {
+    if (/^\s*#/.test(line)) continue;
+    const m = /^\s*(?:export\s+)?([^=\s]+)\s*=(.*)$/.exec(line);
+    if (m?.[1] !== name) continue;
+    const raw = (m[2] ?? "").trim();
+    found = /^(["']).*\1$/.test(raw) && raw.length >= 2 ? raw.slice(1, -1) : raw;
+  }
+  return found;
 }
 
 /**
@@ -279,32 +303,46 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
   });
 
   /**
-   * The same precedence question for the browser — and the reason it is its own
+   * The browser endpoint in the agent's own `.env` — the reason it is its own
    * check rather than a second reason inside `env_shadow` (§8.1).
    *
-   * hermetic puts `browser.cdp_url` in the *managed* config so that the agent
-   * attaches to the Chrome on its own display rather than launching one of its
-   * own, and `BROWSER_CDP_URL` in the agent's `.env` beats managed config. But
-   * that is upstream's `/browser connect` seam working as designed: an operator
-   * who handed the agent a browser somewhere else meant to, and the agent is
-   * still working. Folded into `env_shadow` it was a boot failure
-   * (`HERMES_MISCONFIGURED`), which contradicted what this very check says about
-   * it — so it is `advisory`: stated in full, never the thing that puts an agent
-   * into `error`.
+   * hermetic writes `BROWSER_CDP_URL` there (`browserEnvSeedCommands`) as well
+   * as the managed `browser.cdp_url`, because the managed overlay is not read by
+   * every upstream path: `browser_exec` resolves its endpoint through
+   * `read_raw_config()`, which skips it, and with no endpoint launches its own
+   * headless Chrome. The environment variable is read first by every path, so
+   * its presence here is what makes the agent's browser the one this box runs.
+   *
+   * So a missing line is a verdict: on such a box `resolved_cdp_url` still
+   * passes (`config get` uses the merged loader) while `browser_exec` drives an
+   * invisible browser — exactly the blind spot this check closes. A line naming
+   * another endpoint is different. hermetic only seeds the variable and never
+   * overwrites it, and upstream's `/browser connect` writes that same line: an
+   * operator who handed the agent a browser somewhere else meant to, and the
+   * agent is still working. That case is `advisory` — stated in full, never the
+   * thing that puts an agent into `error`.
    */
-  const cdpShadowed = browsers.length > 0 && envDefines(dotenv, BROWSER_CDP_ENV);
   if (browsers.length > 0) {
+    const expected = expectedCdpUrl(browsers);
+    const value = envValue(dotenv, BROWSER_CDP_ENV);
+    const differs = value !== null && value !== expected;
     checks.push({
       name: "cdp_override",
-      ok: !cdpShadowed,
-      advisory: true,
-      detail: cdpShadowed
-        ? `${HERMES_USER_ENV} defines ${BROWSER_CDP_ENV}, which Hermes prefers over the managed ` +
-          `browser.cdp_url — this agent drives whatever that names rather than ` +
-          `${browserUnitName(browsers)} on its own display. Upstream's \`/browser connect\` writes ` +
-          "that line, so it may be a deliberate hand-over; remove it to put the agent back on the " +
-          "browser this box owns and the operator can watch"
-        : `${HERMES_USER_ENV} does not shadow ${BROWSER_CDP_ENV}`,
+      ok: value === expected,
+      ...(differs ? { advisory: true as const } : {}),
+      detail:
+        value === expected
+          ? `${HERMES_USER_ENV} sets ${BROWSER_CDP_ENV} to ${expected}`
+          : value === null
+            ? `${HERMES_USER_ENV} does not set ${BROWSER_CDP_ENV} — Hermes's browser_exec reads no ` +
+              `endpoint from the managed config and launches a headless Chrome of its own instead of ` +
+              `attaching to ${browserUnitName(browsers)}; the apply's post-step writes the line, so ` +
+              "re-run the apply"
+            : `${HERMES_USER_ENV} sets ${BROWSER_CDP_ENV} to ${value || "an empty value"}, not ` +
+              `${expected} — this agent drives whatever that names rather than ` +
+              `${browserUnitName(browsers)} on its own display. Upstream's \`/browser connect\` writes ` +
+              "that line, so it may be a deliberate hand-over; set it back to put the agent on the " +
+              "browser this box owns and the operator can watch",
     });
   }
 
@@ -346,8 +384,8 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
    * auto-deny rather than a second pair of eyes (§6.4). Nothing else on the box
    * would report it — the agent simply gets slower and stranger.
    *
-   * **Advisory, by design, and for the same reason `cdp_override` is.** The
-   * setting is seed-only: hermetic writes it into the agent's own config once
+   * **Advisory, by design, and for the same reason an operator's endpoint in
+   * `cdp_override` is.** The setting is seed-only: hermetic writes it into the agent's own config once
    * and then it belongs to whoever is driving the agent, who may legitimately
    * have changed it with `hermes config set approvals.mode` or from inside a
    * session. A value that no longer matches the operator's stated one is a
@@ -398,6 +436,12 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
    * no upstream source, so a test comparing hermetic's strings to hermetic's
    * constants would be a tautology; the box asking Hermes is the only witness.
    *
+   * It has a blind spot, which is why `cdp_override` is a verdict too: `config
+   * get` resolves through the merged loader, so it sees the managed key even on
+   * a box where `browser_exec` — which reads `read_raw_config()` — does not.
+   * This check proves the managed half; `cdp_override` proves the half
+   * `browser_exec` reads.
+   *
    * Fatal since 2026-09-16. It was advisory while the probe itself was an
    * assumption: nobody had watched `hermes config get
    * browser.cdp_url --json` answer for a key set in the managed overlay alone,
@@ -434,24 +478,17 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
 }
 
 /**
- * The env var upstream reads as the override for `browser.cdp_url`
- * (`browser_tool.py:581-595`). Spelled here rather than imported because core's
- * schema has no name for it: hermetic never writes it — the whole point is that
- * the managed config is hermetic's channel and this one is the operator's.
- */
-const BROWSER_CDP_ENV = "BROWSER_CDP_URL";
-
-/**
- * The CDP endpoint the managed config points Hermes at.
+ * The CDP endpoint hermetic points Hermes at, in the managed config and in
+ * the agent's `.env` alike.
  *
  * The *first* identity, which is what `render-browser.ts` writes into
- * `browser.cdp_url` — upstream resolves one endpoint per process
+ * `browser.cdp_url` and `BROWSER_CDP_URL` — upstream resolves one endpoint per process
  * (`_get_cdp_override`), so an agent with several browsers still drives one of
  * them, and it is this one.
  */
 function expectedCdpUrl(browsers: readonly { cdp_port: number }[]): string {
   const first = browsers[0];
-  return first === undefined ? "" : `http://127.0.0.1:${String(first.cdp_port)}`;
+  return first === undefined ? "" : browserCdpUrl(first.cdp_port);
 }
 
 /** The browser identity the managed `browser.cdp_url` names, for the shadow detail. */

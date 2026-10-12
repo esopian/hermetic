@@ -144,7 +144,13 @@ export {
   isReleaseObjectKey,
   orderStages,
 } from "./release.ts";
-export { CHROME_INSTALL_ROOT, chromeBinaryPath, chromeInstallDir } from "./browser.ts";
+export {
+  BROWSER_CDP_ENV,
+  CHROME_INSTALL_ROOT,
+  browserCdpUrl,
+  chromeBinaryPath,
+  chromeInstallDir,
+} from "./browser.ts";
 export {
   HERMETICD_RPC_PORT,
   RPC_CONTENT_TYPE,
