@@ -249,7 +249,8 @@ export function blockLines(block: ChatBlock): string[] {
     case "attachment":
       return [`[file] ${block.name} (${block.mime}, ${block.bytes} bytes)`];
     case "approval":
-      return [`[approval] ${block.tool}: ${block.summary}`];
+      // The offered answers, in the gateway's order: the only ones to give.
+      return [`[approval] ${block.tool}: ${block.summary}`, `  choices: ${block.choices.join(" / ")}`];
     case "question":
       // A batch is one request: every question, numbered, with any answer the
       // gateway has already locked printed under it.
@@ -274,9 +275,22 @@ export function blockLines(block: ChatBlock): string[] {
       const { head, detail } = processEventLines(block, "this bot");
       return [head, ...detail.map((line) => `  ${line}`)];
     }
+    case "subagent": {
+      const depth = block.depth > 0 ? ` (depth ${block.depth})` : "";
+      const latest = block.summary?.split("\n")[0] ?? block.tools.at(-1)?.name;
+      return [`[subagent ${block.verdict}] ${block.goal}${depth}${latest ? ` — ${latest}` : ""}`];
+    }
     case "unknown":
       return [`[${block.name}] ${JSON.stringify(block.payload)}`];
   }
+}
+
+/** A failed turn: hermetic's code and message, and upstream's classification when it sent one. */
+function failureLine(failure: NonNullable<ChatMessage["failure"]>): string {
+  const surface = failure.surface
+    ? ` (${failure.surface.layer}/${failure.surface.code}${failure.surface.retryable ? ", retryable" : ""})`
+    : "";
+  return `! ${failure.code}: ${failure.message}${surface}`;
 }
 
 /**
@@ -307,7 +321,11 @@ export function messageLines(message: ChatMessage, now: number, self = "this bot
     ...parsed.slice(1).flatMap((p) => [p.head, ...p.detail]),
     ...rest,
   ].map((line) => `  ${line}`);
-  const error = message.error == null ? [] : [`  ! ${message.error}`];
+  const error = message.failure
+    ? [`  ${failureLine(message.failure)}`]
+    : message.error == null
+      ? []
+      : [`  ! ${message.error}`];
   return [head, ...body, ...error];
 }
 
@@ -395,13 +413,20 @@ export function observeText(event: ChatObserveEvent, now: number, opening: boole
       return `${event.instance}: ${event.message} — retrying in ${Math.round(event.delay_ms / 1000)}s (attempt ${event.attempt})\n`;
     case "error":
       return "";
+    case "subagent":
+      return `${blockLines(event.block).join("\n")}\n`;
   }
 }
 
-function errorFromFrame(frame: { code: string; message: string }): HermeticError {
+function errorFromFrame(frame: {
+  code: string;
+  message: string;
+  failure?: ChatMessage["failure"];
+}): HermeticError {
   const known = (ERROR_CODES as readonly string[]).includes(frame.code);
   return new HermeticError(known ? (frame.code as ErrorCode) : "INTERNAL", frame.message, {
     chat_code: frame.code,
+    ...(frame.failure?.surface ? { surface: frame.failure.surface } : {}),
   });
 }
 
@@ -639,15 +664,19 @@ export function register(program: Command): void {
       .description("stop the turn a bot is in the middle of")
       .argument("<target>", "`<instance>` or `<instance>/<bot>`")
       .option("--session <id>", "the session whose turn to stop")
+      .option("--subagent <id>", "stop one delegated subagent instead; the turn continues")
       .action(async (target: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
           abortSchema,
-          defined({ ...parseBotRef(target), session: opts["session"] }),
+          defined({ ...parseBotRef(target), session: opts["session"], subagent_id: opts["subagent"] }),
         );
         const result = await ctx.hermetic.chat.abort(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);
-        else await out(`${botAddress(result.instance, result.bot)}: turn stopped\n`);
+        else
+          await out(
+            `${botAddress(result.instance, result.bot)}: ${input.subagent_id ? `subagent ${input.subagent_id}` : "turn"} stopped\n`,
+          );
       }),
   );
 
@@ -665,11 +694,17 @@ export function register(program: Command): void {
       .argument("<target>", "`<instance>` or `<instance>/<bot>`")
       .argument("<text...>", "the message")
       .option("--session <id>", "the session whose turn to steer")
+      .option("--subagent <id>", "steer one delegated subagent instead (applied at its next tool call)")
       .action(async (target: string, text: string[], opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
         const input = validate(
           steerSchema,
-          defined({ ...parseBotRef(target), session: opts["session"], text: text.join(" ") }),
+          defined({
+            ...parseBotRef(target),
+            session: opts["session"],
+            text: text.join(" "),
+            subagent_id: opts["subagent"],
+          }),
         );
         const result = await ctx.hermetic.chat.steer(input, { signal: ctx.signal });
         if (ctx.flags.json) await outJson(result);

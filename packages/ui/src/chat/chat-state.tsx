@@ -469,9 +469,14 @@ function requestKey(block: ChatBlockView): string | null {
   return `${block.kind}:${id}`;
 }
 
-/** The identity a block replaces on, or `null` for one that only ever appends. */
+/**
+ * The identity a block replaces on, or `null` for one that only ever appends.
+ * A delegated child is re-sent whole on every change, so it replaces by its
+ * own id (`subagent:<subagent_id>`).
+ */
 function blockKey(block: ChatBlockView): string | null {
   if (block.kind === "activity") return `activity:${block.key}`;
+  if (block.kind === "subagent") return `subagent:${block.subagent_id}`;
   return toolKey(block) ?? requestKey(block);
 }
 

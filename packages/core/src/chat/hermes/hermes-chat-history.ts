@@ -17,13 +17,22 @@ import {
   type HistoryOptions,
 } from "./hermes-chat-types.ts";
 import type { ChatConnection } from "./hermes-chat-connect.ts";
-import { mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
+import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
+import { subagentVerdict } from "./hermes-chat-subagent.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
 import { stripBotDelivery } from "./bot-delivery.ts";
 import { parseProcessNotice } from "./process-notice.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
-import type { BotRef, ChatBlock, ChatMessage, ProcessEventBlock } from "../../schema/index.ts";
+import {
+  SUBAGENT_TOOLS_MAX,
+  type BotRef,
+  type ChatBlock,
+  type ChatMessage,
+  type ProcessEventBlock,
+  type SubagentBlock,
+  type SubagentStatus,
+} from "../../schema/index.ts";
 
 /** What `createChatHistory` needs, and nothing more. */
 export interface ChatHistoryDeps {
@@ -174,11 +183,24 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
       blocks: delivery ? delivery.blocks : blocks,
       usage: mapUsage(rec(row.usage)),
       error: str(row.error),
+      ...failureOf(row),
       incomplete: row.incomplete === true ? true : null,
       ...(delivery ? { from_bot: delivery.from } : {}),
     });
   }
   return out;
+}
+
+/**
+ * A failed turn's structured failure, beside the `error` string: upstream
+ * persists the classified `error_surface` with the turn's error
+ * (`tui_gateway/session_history.py` `_fail_inflight_turn`). Omitted rather
+ * than null on every other row, so their shape is as before.
+ */
+function failureOf(row: Record<string, unknown>): Partial<Pick<ChatMessage, "failure">> {
+  const error = str(row.error);
+  if (!error) return {};
+  return { failure: chatFailure(CHAT_ERROR_CODES.TURN_FAILED, error, row.error_surface) };
 }
 
 /**
@@ -306,7 +328,7 @@ function storedJson(value: unknown): unknown {
  * nothing, leaving the tool card alone. The question id is the gateway's
  * `q<index>`, so a settled card keys its questions exactly as the live one did.
  */
-function settledClarify(args: unknown, result: unknown): ChatBlock | null {
+export function settledClarify(args: unknown, result: unknown): ChatBlock | null {
   const outcome = rec(result);
   if (!outcome || (outcome.error !== undefined && outcome.error !== null)) return null;
   const asked = rec(args);
@@ -350,6 +372,162 @@ function settledClarify(args: unknown, result: unknown): ChatBlock | null {
   };
 }
 
+const HISTORY_STATUSES: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "error",
+  "timeout",
+  "interrupted",
+]);
+
+/**
+ * A completed `delegate_task` call re-read from history, as one `subagent`
+ * block per task (`origin: "history"`), placed right after the tool block.
+ *
+ * Upstream's result is one of three envelopes:
+ *
+ * - synchronous (a nested delegation): `{results: [{task_index, status,
+ *   summary, api_calls, duration_seconds, model, exit_reason, truncated,
+ *   tokens: {input, output}, tool_trace: [{tool, input_summary, status}],
+ *   cost_usd?, error?, failure_reason?}], total_duration_seconds}`
+ *   (`tools/delegate_tool_dispatch.py` `_execute_and_aggregate`, entry from
+ *   `delegate_tool_child_run.py`);
+ * - background (the top-level default, `tools/delegate_tool.py`):
+ *   `{status: "dispatched", delegation_id, goals, units?, subagent_ids?}` —
+ *   accepted, results arriving later as their own turn, so each task is a
+ *   `dispatched` row (`_dispatched_payload`); a multi-unit handle gives each
+ *   task its own unit's delegation id.
+ *
+ * The goal comes from the call's arguments (`tasks[i].goal`, or `goal` for a
+ * single task), since the results do not repeat it. A task's id is the
+ * envelope's `subagent_ids[i]` when present, else the synthetic
+ * `hist:<tool_id>:<task_index>`. Any other shape — an error result, plain
+ * text, a future envelope — yields no rows and leaves the tool card alone.
+ */
+export function settledDelegation(
+  toolId: string | null,
+  args: unknown,
+  result: unknown,
+): SubagentBlock[] {
+  const outcome = rec(result);
+  if (!outcome) return [];
+  const asked = rec(args);
+  const tasks = arr(asked?.tasks);
+  const goalOf = (index: number): string =>
+    str(rec(tasks[index])?.goal) ?? (tasks.length === 0 ? (str(asked?.goal) ?? "") : "");
+  const ids = arr(outcome.subagent_ids);
+  const idOf = (index: number): string =>
+    str(ids[index]) ?? `hist:${toolId ?? "delegate_task"}:${index}`;
+  const base = (index: number, count: number) => ({
+    kind: "subagent" as const,
+    subagent_id: idOf(index),
+    depth: 0,
+    task_index: index,
+    task_count: Math.max(1, count),
+    goal: goalOf(index),
+    tools: [],
+    origin: "history" as const,
+    ...(toolId ? { tool_id: toolId } : {}),
+  });
+
+  if (Array.isArray(outcome.results)) {
+    const results = outcome.results.flatMap((value) => {
+      const entry = rec(value);
+      return entry ? [entry] : [];
+    });
+    const count = Math.max(results.length, tasks.length);
+    return results.map((entry, position): SubagentBlock => {
+      const index = nonNegativeIndex(entry.task_index) ?? position;
+      const raw = str(entry.status);
+      const status: SubagentStatus =
+        raw !== null && HISTORY_STATUSES.has(raw) ? (raw as SubagentStatus) : "unobserved";
+      const tokens = rec(entry.tokens);
+      const usage = {
+        ...optionalInt("input_tokens", num(tokens?.input) ?? num(tokens?.input_tokens)),
+        ...optionalInt("output_tokens", num(tokens?.output) ?? num(tokens?.output_tokens)),
+        ...optionalInt("reasoning_tokens", num(tokens?.reasoning) ?? num(tokens?.reasoning_tokens)),
+        ...optionalInt("api_calls", num(entry.api_calls)),
+      };
+      const trace = arr(entry.tool_trace).flatMap((step) => {
+        const item = rec(step);
+        const name = str(item?.tool);
+        if (!item || !name) return [];
+        const failed = item.ok === false || str(item.status) === "error";
+        return [
+          {
+            name,
+            preview: str(item.input_summary) ?? str(item.input) ?? "",
+            ...(failed ? { is_error: true } : {}),
+          },
+        ];
+      });
+      const seconds = num(entry.duration_seconds);
+      const cost = num(entry.cost_usd);
+      const resultFields = {
+        ...(cost !== null && cost >= 0 ? { cost_usd: cost } : {}),
+        ...(str(entry.failure_reason) ? { failure_reason: str(entry.failure_reason) ?? "" } : {}),
+        ...(str(entry.exit_reason) ? { exit_reason: str(entry.exit_reason) ?? "" } : {}),
+        ...(typeof entry.truncated === "boolean" ? { truncated: entry.truncated } : {}),
+        ...(str(entry.error) ? { error: str(entry.error) ?? "" } : {}),
+      };
+      const id = str(entry.subagent_id);
+      return {
+        ...base(index, count),
+        ...(id ? { subagent_id: id } : {}),
+        status,
+        verdict: subagentVerdict(status),
+        ...(str(entry.model) ? { model: str(entry.model) ?? "" } : {}),
+        ...(str(entry.summary) ? { summary: str(entry.summary) ?? "" } : {}),
+        ...(seconds !== null && seconds >= 0 ? { duration_ms: Math.round(seconds * 1000) } : {}),
+        tools: trace.slice(-SUBAGENT_TOOLS_MAX),
+        tool_count: trace.length,
+        ...(Object.keys(usage).length ? { usage } : {}),
+        ...(Object.keys(resultFields).length ? { result: resultFields } : {}),
+      };
+    });
+  }
+
+  if (outcome.status === "dispatched") {
+    const goals = arr(outcome.goals).filter((g): g is string => typeof g === "string");
+    const count = goals.length || tasks.length || 1;
+    // A multi-unit handle names each unit's own delegation id and the task
+    // indexes it carries; a single unit is the top-level `delegation_id`.
+    const unitOf = new Map<number, string>();
+    for (const value of arr(outcome.units)) {
+      const unit = rec(value);
+      const id = str(unit?.delegation_id);
+      if (!id) continue;
+      for (const index of arr(unit?.task_indexes)) {
+        const n = nonNegativeIndex(index);
+        if (n !== null) unitOf.set(n, id);
+      }
+    }
+    const top = str(outcome.delegation_id);
+    return Array.from({ length: count }, (_, index): SubagentBlock => {
+      const delegation = unitOf.get(index) ?? top;
+      return {
+        ...base(index, count),
+        goal: goals[index] ?? goalOf(index),
+        status: "dispatched",
+        verdict: subagentVerdict("dispatched"),
+        ...(delegation ? { delegation_id: delegation } : {}),
+      };
+    });
+  }
+  return [];
+}
+
+function nonNegativeIndex(value: unknown): number | null {
+  const n = num(value);
+  return n !== null && Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function optionalInt<K extends string>(key: K, value: number | null): { [P in K]?: number } {
+  return value !== null && value >= 0 ? ({ [key]: Math.floor(value) } as { [P in K]?: number }) : {};
+}
+
 /** A settled clarify's choices: the non-blank strings, in the order offered. */
 function settledChoices(value: unknown): string[] {
   return arr(value).filter((choice): choice is string => typeof choice === "string" && !!choice.trim());
@@ -380,7 +558,9 @@ function durableHistoryBlocks(
       },
       null,
     );
-    const settled = name.toLowerCase() === "clarify" ? settledClarify(args, result) : null;
+    const lower = name.toLowerCase();
+    if (lower === "delegate_task") return [tool, ...settledDelegation(id, args, result)];
+    const settled = lower === "clarify" ? settledClarify(args, result) : null;
     return settled ? [tool, settled] : [tool];
   }
   const blocks = historyBlocks(row);

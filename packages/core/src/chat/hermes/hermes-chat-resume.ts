@@ -459,6 +459,21 @@ export function createTurnResume(deps: TurnResumeDeps) {
         queued.push({ kind: "reconnected" });
         for (const value of replayed(answer?.events)) queued.push({ kind: "event", value });
         for (const value of openRequests(answer?.open_requests)) queued.push({ kind: "event", value });
+        // An open connection request is in the resume snapshot, not the event
+        // log, when its frame went out on the socket that died. Replayed as the
+        // event it was; the turn's connection gate drops it when the same or a
+        // newer operation `seq` was already shown.
+        const connection = rec(resumed?.pending_connection);
+        if (connection)
+          queued.push({
+            kind: "event",
+            value: {
+              type: "connection.request",
+              session_id: session,
+              unsequenced: true,
+              payload: connection,
+            },
+          });
       } catch (e) {
         if (signal?.aborted || isAborted(e)) {
           // The half-built socket is left open and current: it is attached if

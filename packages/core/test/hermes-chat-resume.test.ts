@@ -538,6 +538,65 @@ describe("hermes-chat · turn continuation", () => {
     expect(ids).toEqual(["r1", "r2"]);
   });
 
+  test("a pending connection request in the resume snapshot comes back as its notice, once", async () => {
+    const operation = (seq: number) => ({
+      op_id: "op1",
+      seq,
+      deadline_at: 1_760_000_000,
+      timeout_seconds: 300,
+      targets: [
+        {
+          name: "github",
+          kind: "mcp",
+          action: "connect",
+          state: "pending",
+          connect_url: "https://auth.fixture.invalid/authorize?code=FIXTURE-URL",
+        },
+      ],
+    });
+    const run = async (shown: number[], snapshot: number) => {
+      const h = harness([
+        opening([
+          eventFrame("message.delta", 41, { text: "one " }),
+          ...shown.map((seq, i) => eventFrame("connection.request", 42 + i, operation(seq))),
+        ]),
+        {
+          results: {
+            "session.resume": {
+              session_id: SESSION_ID,
+              running: true,
+              pending_connection: operation(snapshot),
+            },
+            "session.events.since": {
+              events: [],
+              latest_seq: 41 + shown.length,
+              truncated: false,
+              epoch: EPOCH,
+            },
+          },
+          after: {
+            "session.events.since": [
+              eventFrame("message.complete", 50, { text: "one ", status: "complete" }),
+            ],
+          },
+        },
+      ]);
+      const frames = await runDropping(h.deps, h.sockets, 1);
+      return blocks(frames).filter((b) => b.kind === "activity" && b.key === "connection:op1");
+    };
+
+    // Missed on the dead socket: the snapshot restores it, with no link.
+    const restored = await run([], 1);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({
+      state: "running",
+      detail: "github · connect; the agent continues after 300s",
+    });
+    expect(JSON.stringify(restored)).not.toContain("FIXTURE-URL");
+    // Already shown at the same operation seq: not shown twice.
+    expect(await run([1], 1)).toHaveLength(1);
+  });
+
   test("a replayed batch clarify is one card, shown once, with the locks already recorded", async () => {
     const questions = [
       { qid: "q1", question: "Drink?", choices: ["Coffee", "Tea"], multi_select: false },

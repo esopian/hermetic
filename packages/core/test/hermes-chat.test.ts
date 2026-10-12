@@ -2731,6 +2731,7 @@ describe("hermes-chat · durable addressing", () => {
       type: "error",
       code: "CHAT_TURN_FAILED",
       message: "provider refused this turn",
+      failure: { code: "CHAT_TURN_FAILED", message: "provider refused this turn" },
     });
     expect(frames.some((frame) => frame.type === "done")).toBe(false);
   });
@@ -2869,5 +2870,142 @@ describe("semantic live activity and requests", () => {
     ]);
     const done = frames.at(-1);
     expect(done?.type === "done" && done.usage?.input_tokens).toBeGreaterThan(4);
+  });
+});
+
+describe("hermes-chat · structured failures", () => {
+  const SURFACE = {
+    layer: "provider",
+    code: "rate_limited",
+    retryable: true,
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    resets_at: 1_760_000_000,
+    message: "Rate limit reached",
+    extra_field: "kept out",
+  };
+
+  test("message.complete's error_surface becomes the frame's failure", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("message.start", 2, {}),
+        eventFrame("message.delta", 3, { text: "partial" }),
+        eventFrame("message.complete", 4, {
+          text: "partial",
+          status: "error",
+          error: "429 Too Many Requests",
+          error_surface: SURFACE,
+        }),
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    const error = frames.at(-1);
+    expect(ChatFrame.parse(error)).toEqual({
+      type: "error",
+      code: "CHAT_TURN_FAILED",
+      message: "429 Too Many Requests",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "429 Too Many Requests",
+        surface: {
+          layer: "provider",
+          code: "rate_limited",
+          retryable: true,
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          resets_at: 1_760_000_000,
+          message: "Rate limit reached",
+        },
+      },
+    });
+  });
+
+  test("a failure with no surface, or an unreadable one, still carries code and message", async () => {
+    for (const error_surface of [undefined, { layer: "provider" }, "not an object"]) {
+      const h = harness(
+        turnScript([
+          eventFrame("message.complete", 4, { status: "error", error: "boom", error_surface }),
+        ]),
+      );
+      const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+      expect(frames.at(-1)).toEqual({
+        type: "error",
+        code: "CHAT_TURN_FAILED",
+        message: "boom",
+        failure: { code: "CHAT_TURN_FAILED", message: "boom" },
+      });
+    }
+  });
+
+  test("an error before any content is a failure frame with nothing ahead of it but status", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("turn.error", 2, {
+          code: "CHAT_TURN_FAILED",
+          message: "invalid api key",
+          error_surface: { layer: "auth", code: "invalid_key", retryable: false, auth_kind: "api_key" },
+        }),
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    expect(frames.filter((f) => f.type === "block" && f.block.kind !== "activity")).toEqual([]);
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      failure: {
+        message: "invalid api key",
+        surface: { layer: "auth", code: "invalid_key", retryable: false, auth_kind: "api_key" },
+      },
+    });
+  });
+});
+
+describe("hermes-chat · legacy request events", () => {
+  /**
+   * `approval.request` / `clarify.request` as turn *events* were a guessed
+   * vocabulary no gateway emits: requests arrive as server→client requests.
+   * One that does arrive is an event this build does not map, so it is kept
+   * whole as `unknown` rather than drawn as an answerable card.
+   */
+  test("an approval.request turn event becomes an unknown block", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("approval.request", 3, { tool: "bash", command: "rm -rf /tmp/x" }),
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const out = blocks(body(await collect(createHermesChat(h.deps).send(BOX, "d", "go"))));
+    expect(out.some((b) => b.kind === "approval")).toBe(false);
+    expect(out).toContainEqual({
+      kind: "unknown",
+      name: "approval.request",
+      payload: { tool: "bash", command: "rm -rf /tmp/x" },
+    });
+  });
+});
+
+describe("hermes-chat · connection requests in a turn", () => {
+  test("a stale connection update never reaches a head", async () => {
+    const op = (seq: number, extra: Record<string, unknown> = {}) => ({
+      op_id: "op1",
+      seq,
+      deadline_at: 1_760_000_000,
+      targets: [{ name: "github", kind: "mcp", action: "connect", state: "pending" }],
+      ...extra,
+    });
+    const h = harness(
+      turnScript([
+        eventFrame("connection.request", 2, op(1, { timeout_seconds: 300 })),
+        eventFrame("connection.update", 3, op(3)),
+        eventFrame("connection.update", 4, op(2, { settled: true })),
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const notices = blocks(await collect(createHermesChat(h.deps).send(BOX, "d", "go"))).filter(
+      (b) => b.kind === "activity" && b.key === "connection:op1",
+    );
+    expect(notices.map((b) => (b.kind === "activity" ? b.payload : null))).toEqual([
+      { op_id: "op1", seq: 1, deadline_at: 1_760_000_000 },
+      { op_id: "op1", seq: 3, deadline_at: 1_760_000_000 },
+    ]);
   });
 });

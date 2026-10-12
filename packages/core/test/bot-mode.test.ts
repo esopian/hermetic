@@ -1597,3 +1597,74 @@ describe("bot titles", () => {
     expect((await atlas())?.find((b) => b.is_default)?.title).toBe("atlas");
   });
 });
+
+describe("room approvals", () => {
+  const RESPOND = {
+    instance: "atlas",
+    room: "review",
+    member_id: "m1",
+    task_id: "t1",
+    execution_generation: 1,
+    request_id: "r1",
+  };
+
+  test("a pending action carries the member's session and the driver's offered choices", async () => {
+    const g = gateway({
+      rpc: async (method) => {
+        if (method === "groups.capabilities") return MODERN_GATEWAY;
+        if (method === "groups.state")
+          return {
+            room: { room_id: "review", name: "Review", members: [] },
+            driver_status: {
+              working: true,
+              blocked: true,
+              pending_actions: [
+                {
+                  kind: "approval",
+                  task_id: "t1",
+                  member_id: "m1",
+                  execution_generation: 1,
+                  run_id: "run-1",
+                  session_id: "sess-1",
+                  request_id: "r1",
+                  approval: { command: "rm x", choices: ["once", "all", "deny"] },
+                },
+                { kind: "approval", task_id: "t2", session_id: null },
+              ],
+            },
+          };
+        throw new HermeticError("CHAT_PROTOCOL", `the double was not asked for ${method}`);
+      },
+    });
+    const room = await g.rooms.get({ instance: "atlas", room: "review" });
+    expect(room.pending_actions[0]).toMatchObject({
+      session_id: "sess-1",
+      choices: ["once", "deny"],
+      request_id: "r1",
+    });
+    expect(room.pending_actions[1]).not.toHaveProperty("session_id");
+    expect(room.pending_actions[1]).not.toHaveProperty("choices");
+  });
+
+  test("the room service's choice refusal is VALIDATION; any other 5119 stays generic", async () => {
+    const answer = (message: string) =>
+      gateway({
+        rpc: async (method) => {
+          if (method === "groups.capabilities") return MODERN_GATEWAY;
+          throw new HermeticError("CHAT_PROTOCOL", `atlas: ${message}`, { code: 5119 });
+        },
+      });
+    const refused = await failureOf(
+      answer("room approval choice must be once or deny").rooms.respond({
+        ...RESPOND,
+        choice: "always",
+      }),
+    );
+    expect(refused.code).toBe("VALIDATION");
+    expect(refused.message).toContain("room approval choice must be once or deny");
+    const other = await failureOf(
+      answer("room approval is no longer pending").rooms.respond({ ...RESPOND, choice: "once" }),
+    );
+    expect(other.code).toBe("CHAT_PROTOCOL");
+  });
+});

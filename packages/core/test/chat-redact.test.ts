@@ -18,6 +18,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CYCLE_MARK,
   DEPTH_MARK,
+  MASKED,
   MAX_DEPTH,
   REDACTED,
   redactBlock,
@@ -26,6 +27,7 @@ import {
   redactMessage,
   redactText,
   SECRET_PATTERNS,
+  UNMASKED,
 } from "../src/chat/chat-redact.ts";
 import type { ChatBlock, ChatMessage } from "../src/schema/index.ts";
 
@@ -460,6 +462,8 @@ describe("chat-redact · blocks", () => {
         summary: `run with ${secret}`,
         detail: secret,
         expires_at: null,
+        choices: ["once", "deny"],
+        pattern: `pattern ${secret}`,
       }),
     ).toEqual({
       kind: "approval",
@@ -467,6 +471,8 @@ describe("chat-redact · blocks", () => {
       summary: `run with ${REDACTED}`,
       detail: REDACTED,
       expires_at: null,
+      choices: ["once", "deny"],
+      pattern: `pattern ${REDACTED}`,
     });
     expect(redactBlock({ kind: "question", prompt: secret, choices: [secret, "no"] })).toEqual({
       kind: "question",
@@ -603,7 +609,14 @@ test("activity and server-request payloads use the transcript redaction boundary
       state: "warning",
       payload: { nested: { api_key: "FIXTURE-VALUE" }, text: secret },
     },
-    { kind: "approval", tool: "terminal", summary: secret, payload: { command: secret } },
+    {
+      kind: "approval",
+      tool: "terminal",
+      summary: secret,
+      choices: ["once"],
+      pattern: secret,
+      payload: { command: secret },
+    },
     {
       kind: "question",
       prompt: secret,
@@ -617,4 +630,114 @@ test("activity and server-request payloads use the transcript redaction boundary
     expect(result).not.toContain("FIXTURE-VALUE");
     expect(result).toContain(REDACTED);
   }
+});
+
+describe("chat-redact · subagent blocks and failures", () => {
+  const secret = "sk-ant-api03-FIXTURESUBAGENT";
+
+  test("every text field of a subagent block is masked, and the structure kept", () => {
+    const block: ChatBlock = {
+      kind: "subagent",
+      subagent_id: "sa-1",
+      depth: 0,
+      task_index: 0,
+      task_count: 1,
+      goal: `deploy with ${secret}`,
+      status: "failed",
+      verdict: "failed",
+      summary: `failed: ${secret}`,
+      tools: [{ name: "terminal", preview: `curl -H ${secret}` }],
+      progress: `progress ${secret}`,
+      thinking: `thinking ${secret}`,
+      files_read: [`/tmp/${secret}`],
+      files_written: [`/srv/${secret}`],
+      output_tail: [{ name: "terminal", preview: secret, is_error: true }],
+      result: { failure_reason: `reason ${secret}`, error: `error ${secret}`, cost_usd: 0.5 },
+      origin: "history",
+    };
+    const out = redactBlock(block);
+    expect(JSON.stringify(out)).not.toContain(secret);
+    expect(out).toMatchObject({
+      kind: "subagent",
+      subagent_id: "sa-1",
+      goal: `deploy with ${REDACTED}`,
+      summary: `failed: ${REDACTED}`,
+      tools: [{ name: "terminal", preview: `curl -H ${REDACTED}` }],
+      progress: `progress ${REDACTED}`,
+      thinking: `thinking ${REDACTED}`,
+      files_read: [`/tmp/${REDACTED}`],
+      files_written: [`/srv/${REDACTED}`],
+      output_tail: [{ name: "terminal", preview: REDACTED, is_error: true }],
+      result: { failure_reason: `reason ${REDACTED}`, error: `error ${REDACTED}`, cost_usd: 0.5 },
+    });
+  });
+
+  test("a failure's message and surface message are masked on a frame and a message, masked or not", () => {
+    const failure = {
+      code: "CHAT_TURN_FAILED",
+      message: `401 for ${secret}`,
+      surface: { layer: "auth", code: "invalid_key", retryable: false, message: `key ${secret}` },
+    };
+    for (const mask of [MASKED, UNMASKED]) {
+      const frame = mask.frame({ type: "error", code: "CHAT_TURN_FAILED", message: "x", failure });
+      expect(JSON.stringify(frame)).not.toContain(secret);
+      expect(frame).toMatchObject({
+        failure: {
+          message: `401 for ${REDACTED}`,
+          surface: { layer: "auth", message: `key ${REDACTED}` },
+        },
+      });
+      const message = mask.message({
+        id: "m1",
+        session: "s1",
+        role: "bot",
+        at: "2026-10-12T00:00:00.000Z",
+        blocks: [],
+        error: `401 for ${secret}`,
+        failure,
+      });
+      expect(JSON.stringify(message)).not.toContain(secret);
+      expect(message.failure?.surface?.retryable).toBe(false);
+    }
+  });
+
+  test("a subagent's failure text is masked with redaction off; the rest is left whole", () => {
+    const block: ChatBlock = {
+      kind: "subagent",
+      subagent_id: "sa-2",
+      depth: 0,
+      task_index: 0,
+      task_count: 1,
+      goal: "plain goal",
+      status: "failed",
+      verdict: "failed",
+      tools: [],
+      result: { error: `error ${secret}`, failure_reason: `reason ${secret}` },
+      origin: "history",
+    };
+    const message = UNMASKED.message({
+      id: "m2",
+      session: "s1",
+      role: "bot",
+      at: "2026-10-12T00:00:00.000Z",
+      blocks: [block],
+    });
+    expect(JSON.stringify(message)).not.toContain(secret);
+    expect(message.blocks[0]).toMatchObject({ goal: "plain goal" });
+    const frame = UNMASKED.frame({ type: "block", seq: 1, message: "m2", block });
+    expect(JSON.stringify(frame)).not.toContain(secret);
+  });
+
+  test("a connection notice's detail is masked like any activity", () => {
+    const block: ChatBlock = {
+      kind: "activity",
+      category: "notice",
+      key: "connection:op1",
+      title: "Connection request — not supported on hermetic",
+      detail: `github · ${secret}`,
+      state: "running",
+      payload: { op_id: "op1", seq: 1 },
+    };
+    expect(JSON.stringify(redactBlock(block))).not.toContain(secret);
+  });
 });

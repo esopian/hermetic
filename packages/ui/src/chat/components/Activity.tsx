@@ -12,7 +12,7 @@ import { JumpLink, useProcessEvents } from "./blocks/ProcessEvent.tsx";
 import { ToolBlock } from "./blocks/Tool.tsx";
 
 export function isActivity(block: ChatBlockView): boolean {
-  return ["activity", "tool", "reasoning", "unknown"].includes(block.kind);
+  return ["activity", "tool", "reasoning", "subagent", "unknown"].includes(block.kind);
 }
 
 /**
@@ -101,6 +101,8 @@ function label(block: ChatBlockView): string {
       return block.name;
     case "reasoning":
       return "Reasoning";
+    case "subagent":
+      return block.goal || "Subagent";
     default:
       return unknownName(block);
   }
@@ -134,6 +136,14 @@ function detail(block: ChatBlockView) {
           {block.payload !== undefined ? <CodePane text={formatPayload(block.payload)} /> : null}
         </>
       );
+    case "subagent":
+      return block.summary ? (
+        <p>
+          <RedactedText text={block.summary} />
+        </p>
+      ) : (
+        <CodePane text={formatPayload(block.tools)} />
+      );
     default:
       return <CodePane text={formatPayload("payload" in block ? block.payload : block)} />;
   }
@@ -149,7 +159,9 @@ export function activityRows(blocks: ChatBlockView[]): ChatBlockView[] {
         ? `activity:${block.key}`
         : block.kind === "tool" && block.tool_id
           ? `tool:${block.tool_id}`
-          : null;
+          : block.kind === "subagent"
+            ? `subagent:${block.subagent_id}`
+            : null;
     const previous = key === null ? undefined : keys.get(key);
     if (previous !== undefined) rows[previous] = block;
     else {
@@ -188,6 +200,19 @@ function stepStatus(
       ? { word: "In progress", tone: "run", glyph: "\u25CF" }
       : { word: "", tone: "idle", glyph: "\u25CB" };
   }
+  if (block.kind === "subagent")
+    switch (block.verdict) {
+      case "done":
+        return { word: "Complete", tone: "ok", glyph: "\u2713" };
+      case "failed":
+        return { word: "Failed", tone: "bad", glyph: "\u2715" };
+      case "stopped":
+        return { word: "Stopped", tone: "idle", glyph: "\u25CB" };
+      case "running":
+        return { word: "Running", tone: "run", glyph: "\u25CF" };
+      default:
+        return { word: "Unknown", tone: "idle", glyph: "?" };
+    }
   return { word: "Details", tone: "idle", glyph: "\u00B7" };
 }
 

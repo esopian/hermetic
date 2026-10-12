@@ -1067,6 +1067,8 @@ export const ChatAbortInput = z.object({
   instance: AgentName,
   bot: BotName,
   session: z.string().min(1).optional(),
+  /** Stop one delegated child instead of the turn; the turn continues. */
+  subagent_id: z.string().min(1).optional(),
 });
 export type ChatAbortInput = z.infer<typeof ChatAbortInput>;
 
@@ -1084,6 +1086,8 @@ export const ChatSteerInput = z.object({
   bot: BotName,
   session: z.string().min(1).nullish(),
   text: z.string().trim().min(1).max(200_000),
+  /** Steer one delegated child (applied at its next tool call) instead of the turn. */
+  subagent_id: z.string().min(1).optional(),
 });
 export type ChatSteerInput = z.infer<typeof ChatSteerInput>;
 

@@ -1,5 +1,5 @@
 /** Pinned Hermes event vocabulary translated once, before either head renders it. */
-import type { ChatBlock } from "../../schema/chat.ts";
+import type { ApprovalChoice, ChatBlock, RequestCloseReason } from "../../schema/chat.ts";
 
 type Activity = Extract<ChatBlock, { kind: "activity" }>;
 const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -35,8 +35,15 @@ export function defaultRole(category: Activity["category"], key: string): "statu
   return "work";
 }
 
-/** Null means unfamiliar: the adapter must keep the original unknown block. */
-export function hermesActivity(type: string, payload: Record<string, unknown>): Activity | null {
+/**
+ * Null means unfamiliar: the adapter must keep the original unknown block.
+ * `now` (epoch ms) is read only for a connection deadline's time left.
+ */
+export function hermesActivity(
+  type: string,
+  payload: Record<string, unknown>,
+  now: () => number = Date.now,
+): Activity | null {
   const make = (
     category: Activity["category"],
     key: string,
@@ -130,17 +137,23 @@ export function hermesActivity(type: string, payload: Record<string, unknown>): 
         "warning",
         text(payload.reason),
       );
-    case "request.cancel":
+    case "request.cancel": {
+      const reason = closeReason(payload.reason);
       return {
         ...make(
           "notice",
           `request:${text(payload.id) ?? "unknown"}`,
           "Request closed",
           "done",
-          text(payload.reason),
+          CLOSE_COPY[reason] ?? text(payload.reason),
         ),
         request_id: text(payload.id),
+        reason,
       };
+    }
+    case "connection.request":
+    case "connection.update":
+      return connectionNotice(type, payload, now);
     case "browser.progress":
       return text(payload.message)
         ? make("notice", "browser", String(payload.message), level(payload.level))
@@ -217,6 +230,144 @@ export function hermesActivity(type: string, payload: Record<string, unknown>): 
   }
 }
 
+/** Upstream's `request.cancel` reason, in its own spelling; anything else is `other`. */
+function closeReason(value: unknown): RequestCloseReason {
+  return value === "timeout" ||
+    value === "interrupted" ||
+    value === "shutdown" ||
+    value === "resolved" ||
+    value === "session_closed"
+    ? value
+    : "other";
+}
+
+/**
+ * The close notice's `detail`, as copy. `other` keeps upstream's own words.
+ * `resolved` is neutral on purpose: upstream sends it after *this* laptop's
+ * own answer as well as another surface's (`tools/approval_gateway_wait.py`),
+ * so "answered elsewhere" would be wrong half the time.
+ */
+const CLOSE_COPY: Partial<Record<RequestCloseReason, string>> = {
+  timeout: "Timed out",
+  interrupted: "Cancelled when the turn stopped",
+  shutdown: "Cancelled: the gateway shut down",
+  resolved: "Answered",
+  session_closed: "Withdrawn: the session closed",
+};
+
+/**
+ * A connector connection request (`connection.request`, and its
+ * `connection.update`s), as one notice keyed `connection:<op_id>` (D14/D26).
+ *
+ * hermetic cannot answer one — the card's Skip/Continue need a Desktop-only
+ * connector catalog — so this says what was asked and that the agent carries
+ * on after the operation's deadline. The payload kept on the block is only
+ * `{op_id, seq, deadline_at}`: a target's `connect_url` is an authorization
+ * link and its `connection_id` a vendor account, and neither is ever surfaced.
+ * A stale update is dropped before this point (`createConnectionGate`).
+ */
+function connectionNotice(
+  type: string,
+  payload: Record<string, unknown>,
+  now: () => number,
+): Activity | null {
+  const op = text(payload.op_id);
+  if (!op) return null;
+  // An account-scoped operation is broadcast to every socket with an empty
+  // session id (`methods_connectors.py` `_connection_update`); it belongs to no
+  // conversation, so it is no turn's notice.
+  if (record(payload.owner)?.type === "account") return null;
+  const targets = Array.isArray(payload.targets)
+    ? payload.targets.map(record).filter((t): t is Record<string, unknown> => t !== null)
+    : [];
+  const settled = payload.settled === true || typeof payload.settled_at === "number";
+  // A request names the operation's whole budget; an update names only its
+  // deadline (epoch seconds), so the time left is read off the clock.
+  const timeout =
+    typeof payload.timeout_seconds === "number"
+      ? payload.timeout_seconds
+      : typeof payload.deadline_at === "number"
+        ? Math.max(0, payload.deadline_at - now() / 1000)
+        : null;
+  const named = (t: Record<string, unknown>) => text(t.name) ?? text(t.kind) ?? "connector";
+  const detail = settled
+    ? targets.map((t) => `${named(t)}: ${text(t.state) ?? "closed"}`).join(" · ")
+    : [
+        targets.map((t) => [named(t), text(t.action)].filter(Boolean).join(" · ")).join(", "),
+        timeout !== null ? `the agent continues after ${Math.round(timeout)}s` : null,
+      ]
+        .filter(Boolean)
+        .join("; ");
+  return {
+    kind: "activity",
+    category: "notice",
+    key: `connection:${op}`,
+    title:
+      type === "connection.update" && settled
+        ? "Connection request closed"
+        : "Connection request — not supported on hermetic",
+    state: settled ? "done" : "running",
+    detail: detail || null,
+    role: "work",
+    payload: {
+      op_id: op,
+      ...(typeof payload.seq === "number" ? { seq: payload.seq } : {}),
+      ...(typeof payload.deadline_at === "number" ? { deadline_at: payload.deadline_at } : {}),
+    },
+  };
+}
+
+/**
+ * Drops a `connection.*` event whose operation `seq` is not above the one this
+ * turn already showed for the same `op_id`, so a late or replayed update (or
+ * the resume snapshot of one already seen) cannot roll a notice back. One per
+ * turn; every other event passes.
+ */
+export function createConnectionGate() {
+  const held = new Map<string, number>();
+  return {
+    stale(type: string, payload: Record<string, unknown>): boolean {
+      if (type !== "connection.request" && type !== "connection.update") return false;
+      const op = text(payload.op_id);
+      const seq = typeof payload.seq === "number" ? payload.seq : null;
+      if (!op || seq === null) return false;
+      const last = held.get(op);
+      if (last !== undefined && seq <= last) return true;
+      held.set(op, seq);
+      return false;
+    },
+  };
+}
+
+/** Upstream's choice strings, in the gateway's order. `all` is never offered. */
+const APPROVAL_ORDER: readonly ApprovalChoice[] = ["once", "session", "always", "deny"];
+
+/**
+ * The choices an approval offers: the request's own `choices` when it sent
+ * any usable ones (unknown values dropped, its order kept), else the gateway's fill rule
+ * (`tui_gateway/server.py` `_approval_request_payload`): `once`; `session` when
+ * not `smart_denied` and `allow_session` is not false; `always` under that
+ * when `allow_permanent` is not false; then `deny`.
+ */
+export function approvalChoices(payload: Record<string, unknown>): ApprovalChoice[] {
+  if (Array.isArray(payload.choices)) {
+    const known = new Set<string>(APPROVAL_ORDER);
+    const kept = payload.choices.filter(
+      (c): c is ApprovalChoice => typeof c === "string" && known.has(c),
+    );
+    // A list with nothing usable in it is no offer at all: the fill rule
+    // decides, rather than a card with no buttons.
+    if (kept.length) return [...new Set(kept)];
+  }
+  const choices: ApprovalChoice[] = ["once"];
+  if (payload.smart_denied !== true && payload.allow_session !== false) {
+    choices.push("session");
+    if (payload.allow_permanent !== false) choices.push("always");
+  }
+  choices.push("deny");
+  return choices;
+}
+
 const RECOMMENDED = "(Recommended)";
 
 /**
@@ -288,6 +439,9 @@ export function hermesRequest(
         detail: text(payload.description),
         expires_at,
         request_id: id,
+        choices: approvalChoices(payload),
+        ...(payload.smart_denied === true ? { smart_denied: true } : {}),
+        ...(text(payload.description) ? { pattern: String(payload.description) } : {}),
         payload,
       },
     ];

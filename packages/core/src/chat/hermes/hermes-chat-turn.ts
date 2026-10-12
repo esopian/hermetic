@@ -17,8 +17,8 @@ import {
   type ChatSteerStatus,
   type SendOptions,
 } from "./hermes-chat-types.ts";
-import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
-import { approvalBlock, mapUsage, questionBlock, toolBlock } from "./hermes-chat-blocks.ts";
+import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
+import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
@@ -86,6 +86,11 @@ const SUBMIT_TITLES: Record<ChatStatusState, string> = {
 
 /** Upstream's "agent does not support active-turn redirect" (`methods_session.py`). */
 const REDIRECT_UNSUPPORTED = 4010;
+
+/** An error frame, with `failure` always filled (and its surface when upstream sent one). */
+function fail(code: string, message: string, surface?: unknown): ChatFrame {
+  return { type: "error", code, message, failure: chatFailure(code, message, surface) };
+}
 
 /** What `createChatTurn` needs, and nothing more. */
 export interface ChatTurnDeps {
@@ -293,6 +298,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // dedupe below is also the filter that keeps a replay of *this* turn from
     // dragging the previous one back onto the screen.
     let lastSeq = baseline;
+    // Connection-request notices replace by key, so an update older than the
+    // one shown (a replay, the resume snapshot) must not reach a head.
+    const connections = createConnectionGate();
 
     /**
      * Every block leaves through here, because every block that is not text
@@ -426,14 +434,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // a problem the box does not have.
         const silent =
           !pump.reconnected() && pump.current() === rpc && rpc.arrived() === arrivedAtSubmit;
-        yield {
-          type: "error",
-          code: silent ? CHAT_ERROR_CODES.NO_SLOT : CHAT_ERROR_CODES.TURN_FAILED,
-          message: silent
+        yield fail(
+          silent ? CHAT_ERROR_CODES.NO_SLOT : CHAT_ERROR_CODES.TURN_FAILED,
+          silent
             ? `no warm backend slot: the gateway sent nothing at all in ${seconds}s, ` +
-              "so the box is running its limit of concurrent bots"
+                "so the box is running its limit of concurrent bots"
             : `the box accepted the prompt but sent no content in ${seconds}s`,
-        };
+        );
         return;
       }
 
@@ -476,7 +483,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // Server requests and global notifications do not share the parent session's
       // event counter. Keep their output at the last parent seq so a head neither
       // drops these blocks nor mistakes the next parent delta for an old replay.
-      const unsequenced = type === "hermetic.server_request" || evSession === "";
+      // A resume snapshot the pump turned back into an event (`pending_connection`)
+      // is marked the same way: it is state, not a step in the session's log.
+      const unsequenced =
+        type === "hermetic.server_request" || evSession === "" || ev.unsequenced === true;
       const seq = unsequenced ? lastSeq : sourceSeq;
       // `seq` is monotonic per session and exists for reconnect catch-up
       // (upstream's `event_replay.replay_epoch`), so a frame at or below the
@@ -502,6 +512,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
           yield* emit(seq, block);
         continue;
       }
+      if (connections.stale(type, payload)) continue;
       const activity = hermesActivity(type, payload);
       if (activity) {
         if (type === "tool.generating" || type === "session.usage") seenContent = true;
@@ -607,11 +618,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
           const statusText = str(payload.status);
           const failure = str(payload.error);
           if (statusText === "error" || failure) {
-            yield {
-              type: "error",
-              code: CHAT_ERROR_CODES.TURN_FAILED,
-              message: failure ?? "the turn failed on the box",
-            };
+            // Upstream's classified surface rides beside the error text
+            // (`prompt_turn.py`), so a head can offer the recovery that fits.
+            yield fail(
+              CHAT_ERROR_CODES.TURN_FAILED,
+              failure ?? "the turn failed on the box",
+              payload.error_surface,
+            );
             return;
           }
           yield {
@@ -635,25 +648,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
           yield* emit(seq, toolBlock(payload, null));
           break;
         }
-        case "approval.request": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, approvalBlock(payload));
-          break;
-        }
-        case "clarify.request": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, questionBlock(payload));
-          break;
-        }
         case "turn.error": {
           yield* flushReasoning(seq);
-          yield {
-            type: "error",
-            code: str(payload.code) ?? CHAT_ERROR_CODES.TURN_FAILED,
-            message: str(payload.message) ?? str(payload.error) ?? "the turn failed on the box",
-          };
+          yield fail(
+            str(payload.code) ?? CHAT_ERROR_CODES.TURN_FAILED,
+            str(payload.message) ?? str(payload.error) ?? "the turn failed on the box",
+            payload.error_surface,
+          );
           return;
         }
         default: {
@@ -847,7 +848,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
   function errorFrame(e: unknown): ChatFrame {
     const code = e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL;
-    return { type: "error", code, message: describe(e) };
+    return fail(code, describe(e));
   }
   return { send, abort, steer };
 }

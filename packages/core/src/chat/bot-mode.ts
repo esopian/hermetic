@@ -23,6 +23,37 @@ const unsupported = (message: string): never => {
 };
 const NO_TITLES = "This gateway does not store Bot Mode titles; update Hermes";
 
+const ROOM_CHOICES = new Set(["once", "session", "always", "deny"]);
+/**
+ * The room service's refusal of a choice it does not accept (today only
+ * `once`/`deny`, `hosted_room_service.py` `approve_room_task`). It reaches
+ * here as `groups.approve`'s catch-all error 5119 (`methods_groups.py`), which
+ * every other failure shares, so it is recognised by code *and* the service's
+ * own message: that one is the operator's input, a `VALIDATION`; anything else
+ * under 5119 keeps the generic path.
+ */
+const ROOM_APPROVE_FAILED = 5119;
+const ROOM_CHOICE_REFUSED = "room approval choice must be once or deny";
+
+/**
+ * One driver `pending_actions` entry (`hosted_room_driver.py`
+ * `_report_pending_action`): the offered choices are lifted out of the nested
+ * `approval` (unknown values dropped, driver order kept), and a non-string
+ * `session_id` is dropped rather than failing the whole room read.
+ */
+function roomAction(v: Record<string, unknown>): Record<string, unknown> {
+  const { choices: own, session_id, ...rest } = v;
+  const offered = Array.isArray(own) ? own : record(v.approval).choices;
+  const choices = Array.isArray(offered)
+    ? offered.filter((c): c is string => typeof c === "string" && ROOM_CHOICES.has(c))
+    : null;
+  return {
+    ...rest,
+    ...(typeof session_id === "string" && session_id ? { session_id } : {}),
+    ...(choices ? { choices } : {}),
+  };
+}
+
 /**
  * The hosted-room protocol version this build speaks (`groups.capabilities`,
  * `tui_gateway/contracts/groups_bot_relay.py` at Hermes `v2026.9.14`). A
@@ -576,7 +607,7 @@ export function createBotMode(
       disbanded_at: isoOrNull(r.disbanded_at),
       working: driver.working === true,
       blocked: driver.blocked === true,
-      pending_actions: records(driver.pending_actions),
+      pending_actions: records(driver.pending_actions).map(roomAction),
     });
   }
   const roomParams = (p: { room: string }) => ({ profile: "default", room_id: p.room });
@@ -747,9 +778,24 @@ export function createBotMode(
     }),
     respond: operation(S.RoomRespondInput, async (p, o) => {
       const { instance, room: roomId, ...rest } = p;
-      const result = record(
-        await rpc(instance, "groups.approve", { profile: "default", room_id: roomId, ...rest }, o),
-      );
+      let answer: unknown;
+      try {
+        answer = await rpc(
+          instance,
+          "groups.approve",
+          { profile: "default", room_id: roomId, ...rest },
+          o,
+        );
+      } catch (error) {
+        if (
+          error instanceof HermeticError &&
+          error.details?.code === ROOM_APPROVE_FAILED &&
+          error.message.includes(ROOM_CHOICE_REFUSED)
+        )
+          throw new HermeticError("VALIDATION", error.message);
+        throw error;
+      }
+      const result = record(answer);
       if (result.approved !== true) return unsupported("Gateway did not confirm this approval");
       return { accepted: true as const };
     }),

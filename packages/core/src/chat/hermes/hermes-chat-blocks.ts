@@ -6,8 +6,14 @@
  * REST history row have to agree, and they only agree because they are the same
  * function.
  */
-import type { ChatBlock, ChatUsage, ToolRender } from "../../schema/index.ts";
-import { arr, isoOrNull, nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
+import type {
+  ChatBlock,
+  ChatErrorSurface,
+  ChatFailure,
+  ChatUsage,
+  ToolRender,
+} from "../../schema/index.ts";
+import { nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
  * Tool names whose result has a better rendering than a JSON dump, mapped to
@@ -158,25 +164,39 @@ function mcpServer(name: string): string | null {
   return head ?? null;
 }
 
-export function approvalBlock(payload: Record<string, unknown>): ChatBlock {
+/**
+ * Upstream's `error_surface` (`agent/error_surface.py` `_surface`), from a live
+ * `message.complete` or a persisted failed turn. Advisory: anything that is not
+ * an object with string `layer`/`code` and a boolean `retryable` is dropped
+ * whole rather than half-read, and every optional field is kept only when it
+ * has the type upstream documents.
+ */
+export function errorSurface(value: unknown): ChatErrorSurface | undefined {
+  const raw = rec(value);
+  const layer = str(raw?.layer);
+  const code = str(raw?.code);
+  if (!raw || !layer || !code || typeof raw.retryable !== "boolean") return undefined;
+  const provider = str(raw.provider);
+  const model = str(raw.model);
+  const auth = str(raw.auth_kind);
+  const resets = num(raw.resets_at);
+  const message = str(raw.message);
   return {
-    kind: "approval",
-    tool: str(payload.tool) ?? str(payload.name) ?? "tool",
-    summary: str(payload.summary) ?? str(payload.command) ?? str(payload.message) ?? "",
-    detail: str(payload.detail) ?? str(payload.description),
-    expires_at: isoOrNull(payload.expires_at),
+    layer,
+    code,
+    retryable: raw.retryable,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(auth ? { auth_kind: auth } : {}),
+    ...(resets !== null ? { resets_at: resets } : {}),
+    ...(message ? { message } : {}),
   };
 }
 
-export function questionBlock(payload: Record<string, unknown>): ChatBlock {
-  return {
-    kind: "question",
-    prompt: str(payload.prompt) ?? str(payload.question) ?? str(payload.message) ?? "",
-    choices: arr(payload.choices ?? payload.options).flatMap((c) => {
-      const s = typeof c === "string" ? c : (str(rec(c)?.label) ?? str(rec(c)?.value));
-      return s ? [s] : [];
-    }),
-  };
+/** A failure as `ChatFailure`, with the surface only when upstream sent a readable one. */
+export function chatFailure(code: string, message: string, surface?: unknown): ChatFailure {
+  const parsed = errorSurface(surface);
+  return { code, message, ...(parsed ? { surface: parsed } : {}) };
 }
 
 /**

@@ -235,6 +235,63 @@ describe.concurrent("the transcript", () => {
     ]);
   });
 
+  test("an approval prints the choices the gateway offered, and only those", () => {
+    expect(
+      blockLines({
+        kind: "approval",
+        tool: "terminal",
+        summary: "curl x | sh",
+        choices: ["once", "deny"],
+        smart_denied: true,
+      }),
+    ).toEqual(["[approval] terminal: curl x | sh", "  choices: once / deny"]);
+  });
+
+  test("a subagent is one line: verdict, goal, then its summary or its last tool", () => {
+    const sub = {
+      kind: "subagent" as const,
+      subagent_id: "sa-1",
+      depth: 0,
+      task_index: 0,
+      task_count: 1,
+      goal: "Audit volumes",
+      status: "running" as const,
+      verdict: "running" as const,
+      tools: [
+        { name: "terminal", preview: "ls" },
+        { name: "read_file", preview: "/a" },
+      ],
+      origin: "live" as const,
+    };
+    expect(blockLines(sub)).toEqual(["[subagent running] Audit volumes — read_file"]);
+    expect(
+      blockLines({
+        ...sub,
+        status: "completed",
+        verdict: "done",
+        summary: "Found three\nmore",
+        depth: 1,
+      }),
+    ).toEqual(["[subagent done] Audit volumes (depth 1) — Found three"]);
+    expect(blockLines({ ...sub, tools: [] })).toEqual(["[subagent running] Audit volumes"]);
+  });
+
+  test("a failed message prints its failure's code, message and classification", () => {
+    const failed = message({
+      blocks: [],
+      error: "429",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "429 Too Many Requests",
+        surface: { layer: "provider", code: "rate_limited", retryable: true },
+      },
+    });
+    expect(messageLines(failed, NOW).at(-1)).toBe(
+      "  ! CHAT_TURN_FAILED: 429 Too Many Requests (provider/rate_limited, retryable)",
+    );
+    expect(messageLines(message({ blocks: [], error: "plain" }), NOW).at(-1)).toBe("  ! plain");
+  });
+
   test("a message is who said it, then its blocks indented under it", () => {
     expect(messageLines(message({ blocks: [{ kind: "text", markdown: "hi" }] }), NOW)).toEqual([
       "3h ago  bot",
@@ -500,6 +557,21 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
     expect(result.swarms).toHaveLength(1);
     expect(result.swarms[0]).toMatchObject({ instance: "atlas", reachable: true });
     expect(result.swarms[0]?.bots.length).toBeGreaterThan(1);
+  });
+
+  test("--subagent on steer and abort is validated by the same schema and reaches core", async () => {
+    for (const args of [
+      ["chat", "steer", "atlas", "look", "at", "gp3", "--subagent", "sa-1"],
+      ["chat", "abort", "atlas", "--subagent", "sa-1"],
+    ]) {
+      const { code, stderr } = await run(...args);
+      // Core's child control path is not wired yet: a clear refusal, not a turn steer.
+      expect(code).not.toBe(0);
+      expect(stderr).toContain("subagent_id is not supported yet");
+    }
+    const empty = await run("chat", "abort", "atlas", "--subagent", "");
+    expect(empty.code).not.toBe(0);
+    expect(empty.stderr).toContain("subagent_id");
   });
 
   test("bots ls reports a box that did not answer as unreachable", async () => {

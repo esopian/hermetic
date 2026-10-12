@@ -645,6 +645,17 @@ export function createChat(deps: ChatDeps) {
   }
 
   /**
+   * Steer or stop one delegated child (`subagent_id` on `chat.steer` /
+   * `chat.abort`). A separate path from the turn's: it needs no running parent
+   * turn and inserts nothing into the transcript. Not wired yet — the child
+   * control path (`subagent.steer` / `subagent.interrupt` over a resumed
+   * socket, D25) replaces this refusal.
+   */
+  function subagentControl(method: string): never {
+    throw new HermeticError("UNSUPPORTED", `${method} with subagent_id is not supported yet`);
+  }
+
+  /**
    * Stop the turn in flight.
    *
    * It names a bot, not a turn, because that is what the operator can see: a
@@ -655,6 +666,7 @@ export function createChat(deps: ChatDeps) {
   async function abort(input: unknown, opts: ChatOptions = {}): Promise<ChatAbortResult> {
     const parsed = parse(ChatAbortInput, input, "chat abort");
     validateName(parsed.instance);
+    if (parsed.subagent_id !== undefined) return subagentControl("chat.abort");
     const box = await address(parsed.instance);
     opts.signal?.throwIfAborted();
     const aborted = await hermes.abort(box, parsed.bot, {
@@ -674,6 +686,7 @@ export function createChat(deps: ChatDeps) {
   async function steer(input: unknown, opts: ChatOptions = {}): Promise<ChatSteerResult> {
     const parsed = parse(ChatSteerInput, input, "chat steer");
     validateName(parsed.instance);
+    if (parsed.subagent_id !== undefined) return subagentControl("chat.steer");
     const box = await address(parsed.instance);
     if (!hermes.steer)
       throw new HermeticError("CHAT_PROTOCOL", "This gateway does not support steering a turn");

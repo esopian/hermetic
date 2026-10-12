@@ -390,7 +390,9 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         else if (event.type === "message") sub.snapshot = folded(sub.snapshot, event);
         // A read that arrived is a read that worked, so it is also the end of
         // whatever this subscription was last complaining about.
-        if (event.type === "snapshot" || event.type === "message") sub.health = null;
+        // A subagent update is live data arriving, so it ends a complaint too.
+        if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
+          sub.health = null;
         else sub.health = masked(event);
         if (event.type === "error") {
           log("error", "observation failed", {
