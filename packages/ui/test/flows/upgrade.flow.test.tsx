@@ -44,7 +44,7 @@ afterEach(async () => {
 /** Open `name`'s drawer on its Lifecycle section and return the Upgrade Hermes card. */
 async function upgradeCard(): Promise<{ drawer: HTMLElement; card: HTMLElement }> {
   const user = userEvent.setup();
-  await user.click(await screen.findByLabelText(new RegExp(`^${BEHIND} · `)));
+  await user.click(await screen.findByRole("button", { name: `Open ${BEHIND} details` }));
   const drawer = await waitFor(() => {
     const el = screen.getByRole("dialog");
     expect(el.querySelector(".detail-name")?.textContent).toBe(BEHIND);
@@ -152,7 +152,7 @@ test("a stopped agent can be pinned but not upgraded now, and the card says why"
   const user = userEvent.setup();
 
   // `juniper` is seeded stopped on 0.13.8: behind, with no box to answer.
-  await user.click(await screen.findByLabelText(/^juniper · /));
+  await user.click(await screen.findByRole("button", { name: "Open juniper details" }));
   const drawer = await waitFor(() => screen.getByRole("dialog"));
   await user.click(within(drawer).getByRole("tab", { name: "Lifecycle" }));
   const card = within(drawer).getByRole("region", { name: "Upgrade Hermes" });

@@ -105,8 +105,9 @@ export interface Nav {
   /** The drawer's destroy confirm, owned here so a change of agent resets it. */
   teardownOpen: boolean;
   setTeardownOpen: (open: boolean) => void;
-  /** Open an agent from the board: always on Overview, never on the last one's tab. */
-  select: (name: string) => void;
+  /** Open an agent from the board, optionally at a named section. */
+  select: (name: string, tab?: AgentTab, logSource?: "console") => void;
+  agentLogSource: "console" | null;
   /**
    * Open an agent from anywhere — a notification's action, the volumes lens's
    * "go to agent". The drawer belongs to the fleet's agents lens, so this
@@ -338,14 +339,12 @@ export function NavProvider({
     else if (v.chatOpen) setChatOpen(false);
   }, []);
 
+  const [agentLogSource, setAgentLogSource] = useState<"console" | null>(null);
   const select = useCallback(
-    (name: string) => {
+    (name: string, tab: AgentTab = DEFAULT_AGENT_TAB, logSource?: "console") => {
       setSelected(name);
-      // Opening an agent from the board always lands on Overview: the Desktop tab
-      // is a live stream, so it is somewhere an operator goes deliberately (by
-      // pressing the tab, or by following a `#agent/<name>/desktop` link) and
-      // never somewhere the last agent's tab carries them.
-      setAgentTab(DEFAULT_AGENT_TAB);
+      setAgentTab(tab);
+      setAgentLogSource(logSource ?? null);
       setTeardownOpen(false);
       setPopoverOpen(false);
     },
@@ -523,6 +522,7 @@ export function NavProvider({
       closeView,
       selected,
       agentTab,
+      agentLogSource,
       setAgentTab,
       agentSession,
       setAgentSession,
@@ -563,6 +563,7 @@ export function NavProvider({
       closeView,
       selected,
       agentTab,
+      agentLogSource,
       setAgentTab,
       agentSession,
       teardownOpen,

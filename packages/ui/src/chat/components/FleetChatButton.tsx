@@ -15,11 +15,18 @@ import { useListeningIfAvailable } from "../../state/listening-state.tsx";
  * appears — which is how this arrived looking like an enabled button that did
  * nothing when clicked.
  */
-export function FleetChatButton({ instance }: { instance: string }) {
+export function FleetChatButton({
+  instance,
+  hideWhenUnwatched = false,
+}: {
+  instance: string;
+  hideWhenUnwatched?: boolean;
+}) {
   const entry = useChatEntry();
   const listening = useListeningIfAvailable();
   if (!entry) return null;
   const watched = !listening || listening.instances.includes(instance);
+  if (hideWhenUnwatched && !watched) return null;
   const why = watched ? `Chat with ${instance}` : `Start listening to ${instance} to chat with it`;
   return (
     <span className="ch-direct" title={why}>
