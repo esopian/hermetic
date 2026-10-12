@@ -313,6 +313,7 @@ export function BotWorkspace({
                 sending={chat.sending}
                 activity={chat.activity}
                 historyError={chat.historyError}
+                turnError={chat.turnError}
                 now={chat.now}
                 fixture={fleet?.meta?.fixture}
                 reconnectAttempt={chat.reconnectAttempt}

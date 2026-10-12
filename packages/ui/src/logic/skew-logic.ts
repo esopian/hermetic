@@ -18,7 +18,7 @@
  */
 
 /** Mirrors core's `SkewSeverity`; pinned by `test/skew-logic.test.ts`. */
-export type SkewSeverity = "none" | "pending" | "degraded" | "blocked";
+export type SkewSeverity = "none" | "pending" | "drifted" | "degraded" | "blocked";
 
 /** Mirrors core's `ConfigVerdict`. */
 export type ConfigVerdict = "current" | "drifted" | "unknown";
@@ -70,6 +70,12 @@ export interface SkewStatusView {
 export type BandTone = "warn" | "bad" | "muted";
 
 export interface Band {
+  /**
+   * Which severity drew it. The band is what the dismissal is keyed on
+   * (`dismissKey`), and what decides whether its fix is a button in this app
+   * (`degraded`'s, which Settings performs) or a command to run (`drifted`'s).
+   */
+  severity: Exclude<SkewSeverity, "none">;
   tone: BandTone;
   /** The short bold line: what is wrong, in the fewest words that are still true. */
   headline: string;
@@ -85,10 +91,24 @@ export interface Band {
   dismissible: boolean;
 }
 
+/**
+ * `drifted` is amber beside `degraded`, not muted beside `pending`: it is the
+ * other severity that waits on the operator, and a quiet band over a config
+ * nothing is applying is the shape that was read as "catching up" for hours.
+ */
 const TONE: Record<Exclude<SkewSeverity, "none">, BandTone> = {
   blocked: "bad",
   degraded: "warn",
+  drifted: "warn",
   pending: "muted",
+};
+
+/** The fleet band's headline, before the affected count, per severity. */
+const HEADLINE: Record<Exclude<SkewSeverity, "none">, string> = {
+  blocked: "This fleet is ahead of your hermetic build",
+  degraded: "This fleet is behind your hermetic build",
+  drifted: "Config not applied",
+  pending: "Agents are catching up",
 };
 
 /**
@@ -108,13 +128,9 @@ export function fleetBand(status: SkewStatusView | null | undefined): Band | nul
       ? ""
       : ` · ${skew.agents_affected} agent${skew.agents_affected === 1 ? "" : "s"} affected`;
   return {
+    severity: skew.severity,
     tone: TONE[skew.severity],
-    headline:
-      skew.severity === "blocked"
-        ? `This fleet is ahead of your hermetic build${affected}`
-        : skew.severity === "degraded"
-          ? `This fleet is behind your hermetic build${affected}`
-          : `Agents are catching up${affected}`,
+    headline: `${HEADLINE[skew.severity]}${affected}`,
     message: skew.message,
     fix: skew.fix,
     dismissible: skew.severity !== "blocked",
@@ -150,13 +166,33 @@ export function agentBand(
     ...(row?.config === "drifted" ? ["its config"] : []),
   ];
   if (!base && stale.length === 0) return null;
-  if (!base) {
-    // The fleet is current; this agent alone has not caught up. That resolves
-    // itself, so it is stated in the quiet tone whatever else is true of it.
+  if (!base && row?.config === "drifted") {
+    /**
+     * No fleet skew, yet this row is drifted — a server too old to compute the
+     * `drifted` severity, which counted every drift as catching up. A config
+     * does not arrive on its own, so this is not the quiet band below: it is
+     * the drifted one, narrowed to this agent, with the command that applies it.
+     */
     return {
+      severity: "drifted",
+      tone: "warn",
+      headline: "This agent has not applied its config",
+      message: "it converges only when its config is applied",
+      // Spelled here because there is no wire `fix` to carry it: the server
+      // that sent this status predates the severity that would have.
+      fix: `hermetic plan rollout --agent ${name}`,
+      dismissible: false,
+      stale,
+    };
+  }
+  if (!base) {
+    // The fleet is current; this agent alone is behind on its release. That
+    // resolves itself, so it is stated in the quiet tone.
+    return {
+      severity: "pending",
       tone: "muted",
       headline: "This agent has not caught up with the fleet",
-      message: "it re-applies on its own; nothing to do here",
+      message: "it catches up on its own; nothing to do here",
       fix: null,
       dismissible: false,
       stale,
@@ -170,14 +206,18 @@ export function agentBand(
    * release, while `degraded` means the fleet itself is behind this build. The
    * drawer used to read tone alone and so told an operator looking at a
    * perfectly current fleet that it "was built by an older hermetic" — the one
-   * claim on the band, and false.
+   * claim on the band, and false. `drifted` shares `degraded`'s tone and is
+   * the same kind of opposite: the fleet is current, and what is behind is some
+   * agent's config.
    */
   const fleetHalf =
     status?.skew?.severity === "blocked"
       ? "This fleet is ahead of your hermetic build"
       : status?.skew?.severity === "pending"
         ? "Agents are still taking the new release"
-        : "This fleet was built by an older hermetic";
+        : status?.skew?.severity === "drifted"
+          ? "Some agents have not applied their config"
+          : "This fleet was built by an older hermetic";
   return {
     ...base,
     headline:

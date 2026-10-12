@@ -710,6 +710,7 @@ describe("drawerActions", () => {
     expect(drawerActions("destroyed")).toEqual({
       dashboard: false,
       upgrade: false,
+      upgradeNow: false,
       rerun: false,
       reboot: false,
       rebuild: false,
@@ -745,6 +746,20 @@ describe("drawerActions", () => {
     const a = drawerActions("stopping");
     expect(a.reboot).toBe(false);
     expect(a.rebuild).toBe(false);
+  });
+
+  /**
+   * Upgrade now is answered by the box's own hermeticd, so only a status core
+   * would ask (`CONVERGEABLE`) gets it; pinning stays available everywhere.
+   */
+  test("upgrade now needs a box that can answer the converge", () => {
+    for (const status of ["ready", "degraded", "error"]) {
+      expect(drawerActions(status).upgradeNow).toBe(true);
+    }
+    for (const status of ["stopped", "unreachable", "bootstrapping", "creating", "stopping"]) {
+      expect(drawerActions(status).upgradeNow).toBe(false);
+      expect(drawerActions(status).upgrade).toBe(true);
+    }
   });
 
   test("an errored agent is offered Rerun", () => {

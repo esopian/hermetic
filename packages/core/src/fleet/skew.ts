@@ -25,7 +25,7 @@
 // sibling schemas should not make itself depend on the whole of it.
 import type { AgentStatus } from "../schema/agent.ts";
 import type { ConfigVerdict, Skew } from "../schema/skew.ts";
-import { SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
+import { SKEW_DRIFT_FIX, SKEW_FIX, SKEW_MESSAGE } from "../schema/skew.ts";
 
 /**
  * Statuses that take no part in a skew count.
@@ -113,7 +113,55 @@ function reportsItsOwnConfig(status: AgentStatus): boolean {
   return counts(status) && status !== "error";
 }
 
-/** One agent, reduced to the three facts a skew is computed from. */
+/**
+ * How long after it was issued an `apply_request` still counts as an apply in
+ * flight: fifteen minutes.
+ *
+ * The bound is the whole point. hermeticd never clears `apply_request` — it
+ * acts once per distinct `id` and leaves the field where it found it
+ * (`packages/agentd/src/heartbeat.ts`) — so a request that failed, or that a
+ * box too old to know the field never acknowledged, sits on the row for good.
+ * Read without an age, it would make a drifted agent look like one that is
+ * converging forever, which is the very banner this severity was split out to
+ * stop showing: "agents are catching up" over a box that never will.
+ *
+ * Fifteen minutes is the longest an honest apply takes plus the wait around
+ * it. A converge that upgrades Hermes can spend ten minutes on the upgrade
+ * alone, and the rollout that asked for it waits five more for the box to
+ * report the hash (`CONVERGE_TIMEOUT_MS`, `rollout.ts`) before calling it
+ * unconverged. Past that, nothing that issued the request is still watching
+ * it, and the agent is drifted until something asks again.
+ */
+export const CONVERGING_WINDOW_MS = 15 * 60_000;
+
+/**
+ * Is a config apply in flight for this agent — asked for recently, and asked
+ * for the config its row now names?
+ *
+ * Both halves matter. An `apply_request` naming a different hash is a request
+ * for a config that has since been superseded by a newer render, and applying
+ * it would not end the drift. One older than `CONVERGING_WINDOW_MS` is a
+ * request nothing is still waiting on (see there). A request dated in the
+ * future by more than the window — a laptop whose clock is badly wrong — is
+ * held to the same bound in the other direction, rather than being trusted to
+ * be "fresh" until real time catches up with it.
+ */
+export function isConverging(
+  agent: {
+    config_hash?: string | null | undefined;
+    apply_request?: { config_hash: string; issued_at: string } | null | undefined;
+  },
+  nowMs: number,
+): boolean {
+  const request = agent.apply_request ?? null;
+  const desired = agent.config_hash ?? null;
+  if (request === null || desired === null || request.config_hash !== desired) return false;
+  const issued = Date.parse(request.issued_at);
+  if (Number.isNaN(issued)) return false;
+  return Math.abs(nowMs - issued) <= CONVERGING_WINDOW_MS;
+}
+
+/** One agent, reduced to the facts a skew is computed from. */
 export interface SkewAgent {
   status: AgentStatus;
   /**
@@ -123,6 +171,15 @@ export interface SkewAgent {
    */
   current: boolean | null;
   config: ConfigVerdict;
+  /**
+   * A config apply is in flight for this agent (`isConverging`). Only read when
+   * `config` is `drifted`: it is what turns a drift into an agent still
+   * catching up. Absent reads as `false` — nothing is applying it — because
+   * that is the answer that names a command, and an operator told to run a
+   * rollout that turns out to be a no-op has lost a minute, while one told to
+   * wait for a convergence that is not coming loses the day.
+   */
+  converging?: boolean | undefined;
 }
 
 export interface SkewInput {
@@ -149,9 +206,18 @@ export interface SkewInput {
  * 2. Is the fleet behind this build? Then the foundation is the skew, it is
  *    fleet-wide, and every live agent is affected by it whether or not that
  *    agent's own versions have moved yet.
- * 3. Otherwise the fleet is current, so anything still behind is an agent
- *    catching up — which resolves itself, and must not be dressed up as
+ * 3. Otherwise the fleet is current. Is some agent holding a config nothing
+ *    is applying? A config does not arrive on its own (§6.5): it lands only
+ *    when a rollout, an `upgrade --now` or a recreate asks the box to apply it,
+ *    so this is `drifted`, and it names the command that asks.
+ * 4. Otherwise anything still behind is an agent catching up — a hermeticd its
+ *    runner will update on its own, or a config apply asked for moments ago and
+ *    still landing — which resolves itself, and must not be dressed up as
  *    something the operator has failed to do.
+ *
+ * An agent that is both behind on its release and drifted with nothing in
+ * flight is counted under `drifted`: the release will arrive by itself, the
+ * config will not, and the band should name the half that needs a hand.
  */
 export function computeSkew(input: SkewInput): Skew {
   const live = input.agents.filter((a) => counts(a.status));
@@ -199,9 +265,29 @@ export function computeSkew(input: SkewInput): Skew {
     };
   }
 
+  /**
+   * Drifted with nothing applying it. `converging` is read only here: a drift
+   * an apply is already landing is the next test's business, not this one's.
+   */
+  const stuck = live.filter((a) => a.config === "drifted" && a.converging !== true).length;
+  if (stuck > 0) {
+    return {
+      ...base,
+      severity: "drifted",
+      headline: `foundation v${input.fleetVersion} is current · ${stuck === 1 ? "1 agent has not applied its config" : `${stuck} agents have not applied their config`}`,
+      message: SKEW_MESSAGE.drifted,
+      // Only the stuck ones. An agent merely behind on its release, or one
+      // whose apply is in flight, needs nothing from the operator, and counting
+      // it here would make the number disagree with the command's own plan.
+      agents_affected: stuck,
+      fix: SKEW_DRIFT_FIX,
+    };
+  }
+
   if (behind > 0 || drifted > 0) {
     // Counted once: an agent that is both behind *and* drifted is one agent
-    // that has not caught up, not two.
+    // that has not caught up, not two. Every drifted agent left by this point
+    // is converging — the test above took the rest.
     const catching = live.filter((a) => a.current === false || a.config === "drifted").length;
     return {
       ...base,

@@ -34,6 +34,10 @@
  * done. A rollout that quietly counted an unreachable box as finished would be
  * worse than one that cannot reach it.
  *
+ * The step itself — which statuses can be asked, the request write, the wait
+ * and the unconverged sentence — lives in `converge.ts`, because
+ * `upgrade --hermes V --now` asks a box the same question about one pin.
+ *
  * ## What it does not do
  *
  * It does not change status. An agent that fails to apply stays `ready` with a
@@ -45,26 +49,13 @@
  */
 import { HermeticError } from "../errors.ts";
 import { describePending, pendingApplied } from "../profiles/profile-binding.ts";
-import { abortableSleep, checkAbort } from "../abort.ts";
+import { checkAbort } from "../abort.ts";
 import { evt } from "../events.ts";
 import type { CoreContext } from "../context.ts";
 
 import type { Agent, FleetItem, OpEvent, Plan, PlanRolloutInput } from "../schema/index.ts";
 import { configVerdict } from "../fleet/skew.ts";
-
-/** How long one box gets to pick up a request and report the new hash. */
-export const CONVERGE_TIMEOUT_MS = 5 * 60_000;
-/** How often the row is re-read while waiting. The box heartbeats every 30 s. */
-export const CONVERGE_POLL_MS = 10_000;
-
-/**
- * Statuses a converge can be asked of. A box that is not up cannot apply
- * anything, and saying so per agent is more useful than a plan that pretends
- * otherwise: `stopped` is a deliberate state an operator chose, `creating` and
- * `bootstrapping` are already applying *this* config on their own, and
- * `destroyed` has no box at all.
- */
-const CONVERGEABLE: readonly Agent["status"][] = ["ready", "degraded", "error"];
+import { CONVERGE_POLL_MS, CONVERGE_TIMEOUT_MS, convergeDeferral, createConverge } from "./converge.ts";
 
 export interface RolloutDeps {
   readonly ctx: CoreContext;
@@ -104,9 +95,12 @@ export interface RolloutTarget {
 export function createRollout(deps: RolloutDeps) {
   const { ctx } = deps;
   const agents = ctx.backend.store.agents;
-  const now = () => ctx.backend.clock.now().getTime();
   const timeoutMs = deps.convergeTimeoutMs ?? CONVERGE_TIMEOUT_MS;
-  const pollMs = deps.convergePollMs ?? CONVERGE_POLL_MS;
+  const converge = createConverge({
+    ctx,
+    timeoutMs,
+    pollMs: deps.convergePollMs ?? CONVERGE_POLL_MS,
+  });
 
   /**
    * What each agent would converge to, without writing anything.
@@ -160,7 +154,8 @@ export function createRollout(deps: RolloutDeps) {
    * this, then a lock somebody else holds, then "nothing to do".
    */
   function deferralFor(agent: Agent, to: string): string | null {
-    if (!CONVERGEABLE.includes(agent.status)) return `${agent.status}`;
+    const down = convergeDeferral(agent);
+    if (down !== null) return down;
     if (agent.lock) return "locked by another operator";
     /**
      * A staged provider change is work even when the hashes already agree: the
@@ -342,15 +337,7 @@ export function createRollout(deps: RolloutDeps) {
           deferred += 1;
           continue;
         }
-        agent = await agents.update(agent.name, agent.version, {
-          apply_request: {
-            id: `${wanted_hash}-${now().toString(36)}`,
-            config_hash: wanted_hash,
-            issued_at: at(),
-            issued_by: owner,
-          },
-        });
-        await ctx.appendEvent(agent.name, "rollout", `converge requested: config ${wanted_hash}`);
+        agent = await converge.request(agent, wanted_hash, owner, "rollout");
       } finally {
         const latest = await agents.get(agent!.name);
         if (latest?.lock?.owner === owner) await ctx.releaseLock(latest);
@@ -369,7 +356,7 @@ export function createRollout(deps: RolloutDeps) {
        * operator can abort it, and a second operator is not blocked behind a
        * box that is slow to answer.
        */
-      const outcome = await waitForConverge(agent.name, wanted_hash, opts.signal);
+      const outcome = await converge.waitForConverge(agent.name, wanted_hash, opts.signal);
       if (outcome === "converged") {
         converged += 1;
         yield evt(`${agent.name}:done`, progress, `${agent.name} is running ${wanted_hash}`, at());
@@ -378,10 +365,7 @@ export function createRollout(deps: RolloutDeps) {
         yield evt(
           `${agent.name}:unconverged`,
           progress,
-          `${agent.name} has not reported config ${wanted_hash} after ` +
-            `${String(Math.round(timeoutMs / 60_000))}m — the request stays on its row, and a box ` +
-            "running a hermeticd older than converge support will never take it (`hermetic artifacts push`); " +
-            `\`hermetic agent history ${agent.name}\` has what it said`,
+          converge.unconvergedMessage(agent.name, wanted_hash),
           at(),
           "warn",
         );
@@ -390,38 +374,6 @@ export function createRollout(deps: RolloutDeps) {
 
     const tally = `${String(converged)} converged, ${String(deferred)} skipped, ${String(unconverged)} unconverged`;
     yield evt("done", 1, `rollout finished: ${tally}`, at(), unconverged > 0 ? "warn" : undefined);
-  }
-
-  /**
-   * Poll the row until the box reports the config it was asked for.
-   *
-   * `configVerdict` is not used here on purpose: it answers "is this box's
-   * applied config the one the row names", and mid-rollout the row can already
-   * name a *newer* one. The question here is narrower and exact — did the hash
-   * this run asked for actually land.
-   */
-  async function waitForConverge(
-    name: string,
-    hash: string,
-    signal?: AbortSignal,
-  ): Promise<"converged" | "timeout"> {
-    /**
-     * Counted looks rather than a wall-clock deadline, and deliberately so: the
-     * clock this module is given is the backend's, which fixture mode freezes so
-     * that rendered snapshots and heartbeat ages stay deterministic. A deadline
-     * read from a frozen clock never passes, which is a hang rather than a
-     * timeout — the loop must be bounded by the thing it actually does.
-     */
-    const looks = Math.max(1, Math.ceil(timeoutMs / pollMs));
-    for (let i = 0; i < looks; i += 1) {
-      const row = await agents.get(name).catch(() => null);
-      if (row?.applied_config_hash === hash) return "converged";
-      if (signal?.aborted === true) return "timeout";
-      await abortableSleep(pollMs, signal);
-    }
-    // One last look: the final sleep may be exactly what the box needed.
-    const row = await agents.get(name).catch(() => null);
-    return row?.applied_config_hash === hash ? "converged" : "timeout";
   }
 
   return { plan, run, targets, deferralFor, configVerdict };

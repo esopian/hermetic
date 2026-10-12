@@ -897,6 +897,26 @@ describe.concurrent("agent set · the Hermes settings", () => {
     expect(stderr).toContain("max_turns");
   });
 
+  /** `--hold` (§6.4) takes the flag spellings, `none` to clear, and refuses the rest. */
+  test("--hold maps flag spellings onto the settings it holds", async () => {
+    const held = await run("agent", "set", "atlas", "--hold", "max-turns, reasoning", "--json");
+    expect(held.code).toBe(0);
+    expect((JSON.parse(held.stdout) as { hermes_hold: string[] }).hermes_hold).toEqual([
+      "max_turns",
+      "reasoning_effort",
+    ]);
+    const none = await run("agent", "set", "atlas", "--hold", "none", "--json");
+    expect((JSON.parse(none.stdout) as { hermes_hold: string[] }).hermes_hold).toEqual([]);
+  });
+
+  test("--hold refuses a setting it cannot hold", async () => {
+    for (const name of ["approvals", "model", "nonsense"]) {
+      const { code, stderr } = await run("agent", "set", "atlas", "--hold", name);
+      expect(code).toBe(2);
+      expect(stderr).toContain(`unknown setting "${name}"`);
+    }
+  });
+
   test("--reasoning takes the three efforts and refuses a fourth", async () => {
     expect((await run("agent", "set", "atlas", "--reasoning", "high")).code).toBe(0);
     const { code, stderr } = await run("agent", "set", "atlas", "--reasoning", "maximum");
@@ -1313,6 +1333,47 @@ describe.concurrent("upgrade: hermeticd is fleet-wide", () => {
     const { code, stdout, stderr } = await run("upgrade", "atlas", "--hermeticd", "0.5.0");
     expect(code).not.toBe(0);
     expect(`${stdout}${stderr}`).toContain("fleet-wide");
+  });
+});
+
+/**
+ * §6.5: `--now` converges the box onto the new pin in place. Fixture mode's fake
+ * box answers the request, so the run ends with the agent running it; the two
+ * shapes `--now` cannot mean are refused before core writes anything.
+ */
+describe.concurrent("upgrade --now: converge the box in place", () => {
+  test("`upgrade <name> --hermes V --now` reaches core and converges", async () => {
+    const { code, stdout, stderr } = await run("upgrade", "atlas", "--hermes", "0.99.0", "--now");
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`).toContain("atlas is running hermes 0.99.0");
+    expect(`${stdout}${stderr}`).toContain("1 converged, 0 skipped, 0 unconverged");
+  });
+
+  test("`upgrade <name> --now` without --hermes fails the schema with 2", async () => {
+    const { code, stderr } = await run("upgrade", "atlas", "--hermeticd", "0.5.0", "--now");
+    expect(code).toBe(2);
+    expect(stderr).toContain("--now converges a box onto a new Hermes pin, so it needs --hermes");
+  });
+
+  test("`upgrade --all --hermes V --hermeticd V --now` is refused VALIDATION", async () => {
+    const { code, stdout, stderr } = await run(
+      "upgrade",
+      "--all",
+      "--hermes",
+      "0.99.0",
+      "--hermeticd",
+      "0.5.0",
+      "--now",
+    );
+    expect(code).not.toBe(0);
+    expect(`${stdout}${stderr}`).toContain("nightly update and cannot be applied now");
+  });
+
+  test("`upgrade --help` documents --now with an example", async () => {
+    const { code, stdout } = await run("upgrade", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("--now");
+    expect(stdout).toContain("hermetic upgrade atlas --hermes 0.22.0 --now");
   });
 });
 

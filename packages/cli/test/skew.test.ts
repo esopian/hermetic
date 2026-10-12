@@ -65,6 +65,39 @@ describe("skewReport", () => {
     expect(lines[0]?.startsWith("◦")).toBe(true);
   });
 
+  describe("drifted", () => {
+    const drifted = skew({
+      severity: "drifted",
+      headline: "foundation v2 is current · 1 agent has not applied its config",
+      message:
+        "some agents are not running the config rendered for them; they converge only when it is applied",
+      agents_affected: 1,
+      fix: "hermetic plan rollout",
+    });
+
+    test("a read gets one warning line that names the rollout", () => {
+      const lines = skewReport(drifted, { loud: false });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]?.startsWith("⚠")).toBe(true);
+      expect(lines[0]).toContain("not applied its config");
+      expect(lines[0]).toContain("hermetic plan rollout");
+    });
+
+    test("a write gets its own block, with the fix and the way to quiet it", () => {
+      const lines = skewReport(drifted, { loud: true });
+      const text = lines.join("\n");
+      expect(text).toContain("CONFIG NOT APPLIED");
+      expect(text).not.toContain("VERSION SKEW");
+      expect(text).toContain("fix   hermetic plan rollout");
+      expect(text).toContain(SKEW_QUIET_ENV);
+      expect(new Set(lines.map((l) => [...l].length)).size).toBe(1);
+    });
+
+    test("quiet silences it: only blocked is unquietable", () => {
+      expect(skewReport(drifted, { loud: true, quiet: true })).toEqual([]);
+    });
+  });
+
   test("quiet silences degraded and pending", () => {
     expect(skewReport(skew(), { loud: true, quiet: true })).toEqual([]);
     expect(skewReport(skew({ severity: "pending" }), { loud: false, quiet: true })).toEqual([]);
