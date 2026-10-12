@@ -71,14 +71,52 @@ export function desktopViewAttributes(src: string, title: string): Record<string
 }
 
 /** As much of the devkit's element as the viewer drives. */
-interface DevkitWebview extends HTMLElement {
+export interface DevkitWebview extends HTMLElement {
   webviewId?: number | null;
   setNavigationRules?: (rules: string[]) => void;
+  /** The custom element's own callback: with a `webviewId`, it removes the native view. */
+  disconnectedCallback?: () => void;
 }
 
 /** How often, and for how long, to wait for the devkit to create the native view. */
 const READY_POLL_MS = 50;
 const READY_TIMEOUT_MS = 15_000;
+
+/**
+ * Removes the native view of an element that was taken out of the page before
+ * the devkit had created it.
+ *
+ * The devkit removes a tag's native view in `disconnectedCallback`, and only if
+ * the tag already has a `webviewId`. But it creates the view on the frame
+ * after the tag connects (`connectedCallback` schedules `initWebview`), and
+ * that runs whether or not the tag is still in the page. A tag removed in
+ * between — React StrictMode's mount, cleanup, mount does exactly that on
+ * every Connect in a dev build, and leaving the tab quickly does it anywhere —
+ * gets a native view created for a detached element, at its empty rect in
+ * the window's top-left corner, that nothing ever removes: a blank webview
+ * painted over the header until the app quits.
+ *
+ * So once such an element reports its id, run its disconnect again; with the
+ * id set, that is the devkit's own removal. An element that was ready when it
+ * was removed was already handled by the devkit and is left alone.
+ */
+export function releaseWhenCreated(
+  view: DevkitWebview,
+  pollMs: number = READY_POLL_MS,
+  timeoutMs: number = READY_TIMEOUT_MS,
+): void {
+  if (typeof view.webviewId === "number") return;
+  const deadline = Date.now() + timeoutMs;
+  const check = (): void => {
+    if (view.isConnected) return;
+    if (typeof view.webviewId === "number") {
+      view.disconnectedCallback?.();
+      return;
+    }
+    if (Date.now() < deadline) setTimeout(check, pollMs);
+  };
+  setTimeout(check, pollMs);
+}
 
 /**
  * Mounts one sandboxed viewer and removes it on unmount — which is what closes
@@ -128,6 +166,7 @@ function DesktopView({ src, title }: { src: string; title: string }) {
     return () => {
       if (timer !== null) clearTimeout(timer);
       view.remove();
+      releaseWhenCreated(view);
     };
   }, [src, title]);
   return <div className="desk-view" ref={hostRef} style={{ width: "100%", height: "100%" }} />;
