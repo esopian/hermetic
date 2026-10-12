@@ -1,0 +1,16 @@
+# The hermetic site as a Cloudflare Worker with static assets and no script: every request is
+# answered from dist/, with public/_headers and public/_redirects applied. Deployed only through
+# scripts/deploy.ts (previews: `wrangler versions upload --preview-alias`, production:
+# `wrangler deploy --domain <HERMETIC_SITE_URL's host>`), from a laptop or .github/workflows/site.yml.
+name = "hermetic-site"
+compatibility_date = "2026-09-01"
+# The <name>.<account subdomain>.workers.dev address and per-version preview URLs, which previews
+# and the deploy script's checks use. Production is served on the custom domain as well.
+workers_dev = true
+preview_urls = true
+
+[assets]
+directory = "./dist"
+# /cost serves /cost/index.html; a missing path serves dist/404.html with a 404 status.
+html_handling = "auto-trailing-slash"
+not_found_handling = "404-page"

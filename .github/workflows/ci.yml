@@ -200,6 +200,66 @@ jobs:
       - run: bun run app:build:canary
       - run: ls -R packages/app/artifacts
 
+  # Builds and checks site/ (no deploy, no secrets — that is site.yml, tag- or
+  # dispatch-triggered only). This job always runs, even when site/ did not
+  # change, so the `ci` aggregate never sees it reported `skipped` (a skipped
+  # required job is a green check with a hole in it, same reasoning as the
+  # `dynamodb-local` and `app` jobs above). The `changes` step below decides
+  # whether the later steps actually do anything: a plain `if:` on the job
+  # itself would make the job report `skipped` on an unrelated PR, which is
+  # exactly the state this has to avoid.
+  site:
+    name: site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Needed to diff against the PR's base commit below; a shallow
+          # single-commit checkout has nothing to diff against.
+          fetch-depth: 0
+
+      - name: Decide whether site/ needs checking
+        id: changes
+        shell: bash
+        env:
+          # The PR's base SHA, read through env rather than interpolated into
+          # this script's text — the same rule the rest of this file follows
+          # for anything that crosses from a GitHub expression into a shell
+          # command.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            # push to master, workflow_dispatch, or anything else: always check.
+            echo "site=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA"...HEAD)
+          if echo "$changed" | grep -qE '^(site/|docs/operations\.md$|docs/architecture\.md$|CONTRIBUTING\.md$|docs/ui-brief\.md$|packages/cli/src/)'; then
+            echo "site=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "site=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Installs the root workspace too: site/scripts/cli-reference.ts spawns
+      # `bun ../packages/cli/src/main.ts`, so the CLI's own dependencies have
+      # to be on disk. `./.github/actions/setup` already runs the root
+      # `bun install --frozen-lockfile` — not duplicated here.
+      - uses: ./.github/actions/setup
+        if: steps.changes.outputs.site == 'true'
+
+      - name: Install site dependencies
+        if: steps.changes.outputs.site == 'true'
+        working-directory: site
+        run: bun install --frozen-lockfile
+
+      - name: Check and build the site
+        if: steps.changes.outputs.site == 'true'
+        working-directory: site
+        run: bun run check && bun run build
+
   # The one job that reaches the network for something other than the install
   # cache: `bun audit` asks GitHub's advisory service about the resolved tree.
   # Frozen dependencies do not stop being vulnerable, so this has to run on a
@@ -269,6 +329,7 @@ jobs:
         app,
         audit,
         gitleaks,
+        site,
       ]
     if: always()
     steps:

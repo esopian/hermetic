@@ -1,0 +1,52 @@
+---
+import { explainer } from "../data/links";
+import { dmgUrl } from "../data/release";
+import Button from "./Button.astro";
+import DashboardPreview from "./DashboardPreview.astro";
+import Kicker from "./Kicker.astro";
+const installCmd = `curl -fsSL ${new URL("/install.sh", Astro.site ?? "http://localhost:4321").href} | bash`;
+---
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-l">
+      <Kicker>For people who run Hermes agents</Kicker>
+      <h1>Sealed Agents:<br><em>Simple, Safe, Scalable</em></h1>
+      {/* design.md §1 "Sealed inbound, open outbound", §7.2 (closed to everyone but you); §4.6/§4.8 (several fleets per account). "Enterprise grade security patterns" has no design.md backing. */}
+      <p class="lede">Running autonomous agents means securing a server, managing networks, monitoring updates, and watching backups. Or you can let Hermetic do the setup for you. Each agent is closed to everyone but you and secured with enterprise grade security patterns. Easily run a solo agent or an enterprise fleet.</p>
+      <div class="ctas" id="download">
+        <Button variant="p" href={dmgUrl}>↓ Download for macOS</Button>
+        <Button variant="s" href="/docs/">Read the docs →</Button>
+      </div>
+      <a class="watch" href={explainer.overview}>▶ New to hermetic? Watch the six minute overview</a>
+      {/* public/install.sh: downloads the release, checks its GitHub digest, installs the app and the CLI shim (design.md §3.6) */}
+      <div class="install">
+        <button onclick={`navigator.clipboard&&navigator.clipboard.writeText(${JSON.stringify(installCmd)});this.textContent='copied'`}>copy</button>
+        <span class="c"># install the app and the hermetic CLI</span><br>
+        <span class="pr">$</span> {installCmd}<br>
+        <span class="pr">$</span> hermetic --version
+      </div>
+      {/* design.md §3.6: macos-arm64 DMG; update check at launch and every six hours (only once the repo is public); the app carries the hermetic CLI. MIT: LICENSE. */}
+      <div class="meta"><span>Apple silicon</span><span>·</span><span>self-updating</span><span>·</span><span>CLI bundled</span><span>·</span><span>MIT licensed</span></div>
+    </div>
+
+    <div class="hero-r">
+      <DashboardPreview />
+      {/* design.md §3.4 Heads, §1 "If it isn't in core, it doesn't exist" */}
+      <div class="caption"><span>the dashboard, board view</span><span>same core as the hermetic CLI</span></div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .watch {
+    display: inline-block;
+    margin-top: 14px;
+    font: 700 12px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--acc);
+  }
+  .watch:hover {
+    color: var(--fg);
+  }
+</style>

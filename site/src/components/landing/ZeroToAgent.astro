@@ -1,0 +1,2768 @@
+---
+/*
+ * Landing section "Zero to agent", carried over from mockup C. One session from `init --create` to
+ * a chat turn, with an elapsed clock, chapters and a progress rail, played either as the typed CLI
+ * transcript or as the desktop app's screens. The two heads share what AWS and the box take (the
+ * op events, the bootstrap stages) but not what the operator does: the CLI types commands, the app
+ * clicks through a wizard and a drawer, so each view has its own human beats, chapter times, end
+ * time and playback pacing.
+ *
+ * The transcript's line formats are the CLI's own: op events are `pct phase message` as core's
+ * fleet/init-create.ts and agents create emit them, prompts are the CLI's clack prompts
+ * (packages/cli/src/commands/init.ts, confirm.ts), `agent history` rows are what hermeticd writes
+ * (packages/agentd/src/stages.ts). Names, ids and timings are illustrative; the timings sit inside
+ * what the docs state (foundation "typically 2-4 min" in init-create.ts, an agent "about 8 minutes
+ * end to end" in docs/operations.md "Creating the first agent").
+ */
+import { DEFAULT_ROOT_GIB, GP3_USD_PER_GIB_MONTH, sizeById, usd } from "../../data/cost";
+import StatusSquare from "../StatusSquare.astro";
+import SheetHead from "./SheetHead.astro";
+
+interface Props {
+  num: string;
+}
+
+const { num } = Astro.props;
+const def = sizeById("medium");
+
+/* ---------- the transcript, and the app replica driven by the same clock ---------- */
+type Kind = "cmd" | "out" | "ans" | "gap";
+interface TLine {
+  /** Simulated seconds since the first keystroke. */
+  t: number;
+  k: Kind;
+  /** cmd/ans: plain text, typed. out/gap: trusted HTML built below. */
+  h: string;
+  /** Index into CHAPTERS when this line opens a chapter. */
+  ch?: number;
+}
+
+const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const g = (s: string): string => `<span class="g">${esc(s)}</span>`;
+const k = (s: string): string => `<span class="k">${esc(s)}</span>`;
+const w = (s: string): string => `<span class="w">${esc(s)}</span>`;
+
+const ACCT = "123456789012";
+const FLEET = "k3v9q2xa";
+const TAILNET = "tail7c1e.ts.net";
+const ARN = `arn:aws:sts::${ACCT}:assumed-role/admin/dana`;
+const HDR = `<span class="o">▸</span> ${esc(`${FLEET} · acme-prod · ${ACCT} · us-east-1 · profile acme-prod`)}`;
+const VOL = "vol-0a8c3f1e27d94b650";
+const INST = "i-0f2b8a7c41e3d9056";
+const AMI = "ami-0c4f1e9a2b7d3e816";
+const HOST = `${FLEET}-atlas.${TAILNET}`;
+const IP = "100.101.7.42";
+/* packages/core/src/build-versions.ts; shared/providers.ts (Bedrock's default model). */
+const HERMETICD = "0.5.1";
+const HERMES = "0.21.5";
+const MODEL = "zai.glm-4.7-flash";
+/*
+ * packages/core/src/shared/presets.ts: the built-in loadout, and Standard as the default preset,
+ * which is what a bare `hermetic agent create atlas` resolves to (medium, 100 GiB, 40 GiB root).
+ */
+const LOADOUT = [
+  { name: "Light", size: "small", data: 50, root: DEFAULT_ROOT_GIB },
+  { name: "Standard", size: "medium", data: 100, root: 40 },
+  { name: "Heavy", size: "large", data: 200, root: 40 },
+  { name: "GPU", size: "gpu-xsmall", data: 100, root: 40 },
+] as const;
+const PRESET = LOADOUT[1];
+const presetMonth = (p: (typeof LOADOUT)[number]): number =>
+  sizeById(p.size).monthlyUsd + (p.data + p.root) * GP3_USD_PER_GIB_MONTH;
+
+/** One op event: [t, percent, phase, message, start-kind, tone]. Both views print these. */
+type Ev = readonly [number, number, string, string, boolean?, "k"?];
+const FOUND_T = 39;
+const INIT_EVENTS: Ev[] = [
+  [34, 15, "identity", `account ${ACCT} as ${ARN}`],
+  [36, 19, "directory", "fleet directory ready in us-east-1 (0 fleet(s) in this account)"],
+  [37, 30, "preflight", `tailscale running on ${TAILNET} as dana-mbp`],
+  [
+    FOUND_T,
+    35,
+    "foundation",
+    "creating the foundation: VPC, sealed security group, agent role, bucket, 2 tables, snapshot policy",
+    true,
+  ],
+  [61, 36, "foundation", "Vpc CREATE_COMPLETE (1/22)"],
+  [79, 37, "foundation", "PublicSubnet0 CREATE_COMPLETE (3/22)"],
+  [92, 38, "foundation", "AgentSecurityGroup CREATE_COMPLETE (5/22)"],
+  [131, 39, "foundation", "AgentRole CREATE_COMPLETE (6/22)"],
+  [158, 41, "foundation", "AgentsTable CREATE_COMPLETE (8/22)"],
+  [196, 42, "foundation", "SnapshotPolicy CREATE_COMPLETE (10/22)"],
+  [227, 50, "foundation", `created stack hermetic-${FLEET} (public) in 3m08s`, false, "k"],
+  [229, 65, "tailscale", "tailscale OAuth client secret stored in SSM (client kQ7xT2bN4CNTRL)"],
+  [231, 75, "ami", `pinned Ubuntu 24.04 arm64 image ${AMI}`],
+  [233, 85, "fleet", "wrote the _fleet item"],
+  [234, 87, "directory", `registered fleet ${FLEET} in the us-east-1 directory`],
+  [
+    241,
+    92,
+    "artifacts",
+    `pushed artifacts/${HERMETICD}/3f9a1c07be52d481/hermeticd (sha256 7c2e90d14a6b…) and 7 stage(s); the fleet manifest names ${HERMETICD}`,
+  ],
+  [246, 96, "ready", `the fleet manifest names hermeticd ${HERMETICD}`],
+  [
+    247,
+    98,
+    "ready",
+    "tailscale OAuth client kQ7xT2bN4CNTRL can mint tag:hermetic keys, list devices and edit the policy file",
+  ],
+  [249, 99, "policy", "policy: hermetic entries written (ssh, acls)"],
+  [250, 100, "done", `fleet ${FLEET} created in ${ACCT} · us-east-1`, false, "k"],
+];
+const CREATE_EVENTS: Ev[] = [
+  [261, 2, "validate", "creating atlas (medium) in us-east-1"],
+  [263, 20, "secrets", "tailscale auth key minted and stored in its SSM slot"],
+  [265, 40, "render", "rendered 21 files, config_hash 9c2e71d04ab35f86"],
+  [268, 55, "volume", `data volume ${VOL} (${PRESET.data} GiB)`],
+  [271, 80, "instance", `launching a ${def.instance} on ${AMI}`, true],
+  [286, 85, "instance", `instance ${INST} recorded on the agent row`],
+  [287, 90, "instance", `attaching data volume ${VOL} to ${INST}`, true],
+  [301, 92, "instance", `data volume ${VOL} attached to ${INST}`],
+  [302, 93, "instance", "atlas handed off to its instance; hermeticd reports from here"],
+  [302, 100, "done", "atlas created", false, "k"],
+];
+/** The CLI's `pct phase message` line: right-aligned percent, padded phase, `…` on a start. */
+const evHtml = (e: Ev): string => {
+  const msg = `${e[4] ? "… " : ""}${e[3]}`;
+  return `${g(`${String(e[1]).padStart(3)}%`)} <span class="ph">${esc(e[2].padEnd(12))}</span> ${
+    e[5] === "k" ? k(msg) : esc(msg)
+  }`;
+};
+
+/* The bootstrap stages hermeticd runs (design.md §6.3), each with its simulated window. */
+const stageSecs: [string, number][] = [
+  ["00-preflight", 1.6],
+  ["01-tailscale", 22.4],
+  ["02-data-volume", 4.1],
+  ["03-config", 1.3],
+  ["04-apply", 301.7],
+  ["05-service", 2.2],
+  ["06-verify", 13.8],
+];
+/* packages/ui/src/logic/bootstrap.ts stageLabel: drop the ordinal, dashes to spaces, capitalise. */
+const stageLabel = (id: string): string => {
+  const words = id.replace(/^\d+-/, "").replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+const BOOT_AT = 348;
+let clock = BOOT_AT;
+const STAGES = stageSecs.map(([id, secs]) => {
+  const start = clock;
+  clock += secs;
+  return { id, secs, start, end: clock, label: stageLabel(id) };
+});
+const READY_AT = Math.round(clock);
+const TS_UP = STAGES[1]?.end ?? BOOT_AT;
+const DISK_UP = STAGES[2]?.end ?? BOOT_AT;
+const LISTEN_T = READY_AT + 25;
+const CHAT_T = READY_AT + 30;
+
+/* `agent history` prints newest first, in the table renderer's padded columns. */
+const T0 = Date.UTC(2026, 9, 11, 14, 0, 0);
+const iso = (t: number): string => new Date(T0 + t * 1000).toISOString();
+const hhmmss = (t: number): string => iso(t).slice(11, 19);
+const historyRows: [string, string, string, string, string][] = [
+  [iso(258), "create", "-→creating", ARN, "requested"],
+  [
+    iso(BOOT_AT),
+    "boot",
+    "creating→bootstrapping",
+    "hermeticd/atlas",
+    `running ${STAGES.length} bootstrap stage(s) from hermeticd ${HERMETICD}`,
+  ],
+  ...STAGES.map((s): [string, string, string, string, string] => [
+    iso(Math.round(s.end)),
+    "stage",
+    "-→-",
+    "hermeticd/atlas",
+    `${s.id} ok in ${s.secs.toFixed(1)}s`,
+  ]),
+  [iso(READY_AT), "ready", "bootstrapping→ready", "hermeticd/atlas", `${STAGES.length} stage(s) ok`],
+];
+historyRows.reverse();
+const cols = ["TIMESTAMP", "ACTION", "TRANSITION", "ACTOR", "DETAIL"] as const;
+const widths = cols.map((c, i) => Math.max(c.length, ...historyRows.map((r) => (r[i] ?? "").length)));
+const row = (cells: readonly string[]): string =>
+  cells.map((c, i) => (i === cells.length - 1 ? c : c.padEnd((widths[i] ?? 0) + 2))).join("");
+const historyHtml = historyRows.map((r) => {
+  const line = esc(row(r));
+  return r[1] === "ready" ? `<span class="k">${line}</span>` : line;
+});
+
+const REPLY = [
+  `/data is my ${PRESET.data} GiB data volume, 1% used. My home, memory, skills and`,
+  "this conversation live there, so they stay put if this box is replaced.",
+  `The ${PRESET.root} GiB system disk is 15% used.`,
+];
+const QUESTION = "what is on your data volume?";
+
+const LINES: TLine[] = [
+  { t: 0, k: "cmd", ch: 0, h: "hermetic init --create --profile acme-prod --region us-east-1" },
+  {
+    t: 3,
+    k: "out",
+    h: `<span class="o">▸</span> ${esc(`acme-prod · ${ACCT} · us-east-1 · profile acme-prod`)}`,
+  },
+  { t: 3, k: "out", h: g(`  caller ${ARN}`) },
+  { t: 3, k: "out", h: g("  organisation o-4kq81zt2mv") },
+  {
+    t: 4,
+    k: "out",
+    h: `<span class="k">◇</span>  type the twelve-digit account id to confirm (${ACCT})`,
+  },
+  { t: 9, k: "ans", h: ACCT },
+  { t: 10, k: "out", h: `<span class="k">◇</span>  Tailscale OAuth client secret (tskey-client-…)` },
+  { t: 31, k: "ans", h: "▪".repeat(28) },
+  { t: 32, k: "out", h: g(`  tailscale running · tailnet ${TAILNET} · this node dana-mbp`) },
+  ...INIT_EVENTS.map(
+    (e): TLine => ({ t: e[0], k: "out", h: evHtml(e), ...(e[0] === FOUND_T ? { ch: 1 } : {}) }),
+  ),
+  { t: 252, k: "out", h: "" },
+  { t: 258, k: "cmd", ch: 2, h: "hermetic agent create atlas" },
+  { t: 260, k: "out", h: HDR },
+  ...CREATE_EVENTS.map((e): TLine => ({ t: e[0], k: "out", h: evHtml(e) })),
+  {
+    t: 303,
+    k: "gap",
+    ch: 3,
+    h: `<span class="gap-l"></span><span>the box boots, joins your tailnet and runs ${STAGES.length} bootstrap stages</span><span class="gap-l"></span>`,
+  },
+  { t: READY_AT + 14, k: "cmd", h: "hermetic agent history atlas" },
+  { t: READY_AT + 15, k: "out", h: HDR },
+  { t: READY_AT + 15, k: "out", h: g(row(cols)) },
+  ...historyHtml.map((h): TLine => ({ t: READY_AT + 15, k: "out", h })),
+  { t: READY_AT + 16, k: "out", h: "" },
+  {
+    t: READY_AT + 20,
+    k: "cmd",
+    ch: 4,
+    h: "hermetic agent status atlas | grep -E '^(status|tailnet name|dashboard|desktop) '",
+  },
+  { t: READY_AT + 21, k: "out", h: HDR },
+  { t: READY_AT + 21, k: "out", h: `status             ${k("ready")}` },
+  { t: READY_AT + 21, k: "out", h: `tailnet name       ${esc(HOST)}` },
+  { t: READY_AT + 21, k: "out", h: `dashboard          <span class="u">https://${esc(HOST)}/</span>` },
+  {
+    t: READY_AT + 21,
+    k: "out",
+    h: `desktop            <span class="u">https://${esc(HOST)}/vnc/</span>`,
+  },
+  { t: LISTEN_T - 1, k: "cmd", h: "hermetic chat listen atlas" },
+  { t: LISTEN_T, k: "out", h: HDR },
+  { t: LISTEN_T, k: "out", h: "atlas: listening" },
+  { t: CHAT_T, k: "cmd", h: `hermetic chat atlas '${QUESTION}'` },
+  { t: CHAT_T + 1, k: "out", h: HDR },
+  { t: CHAT_T + 3, k: "out", h: g("(thought for 2s)") },
+  { t: CHAT_T + 3, k: "out", h: "" },
+  { t: CHAT_T + 4, k: "out", h: g("$ bash -> running") },
+  { t: CHAT_T + 5, k: "out", h: `${g("$ bash -> ")}${k("ok")}${g(" (exit 0) in 1s")}` },
+  { t: CHAT_T + 5, k: "out", h: "" },
+  ...REPLY.map((r, i): TLine => ({ t: CHAT_T + 7 + i, k: "out", h: w(r) })),
+];
+const END_T = (LINES.at(-1)?.t ?? 0) + 2;
+
+/*
+ * The app's own human beats. Up to `Open fleet` the wizard's steps sit on the transcript's prompt
+ * times; after that nobody types a command: the dashboard opens empty, the New agent drawer takes
+ * the name, and once atlas is ready the operator opens its Chat section and asks from the composer.
+ * There is no history or status command to run, so the app reaches the chat sooner than the CLI.
+ */
+const A_FLEET = 252;
+const A_DRAWER = 254;
+const A_LISTEN = READY_AT + 2;
+const A_CHAT = READY_AT + 5;
+const A_SEND = A_CHAT + 6;
+const APP_END = A_SEND + 11;
+
+const CHAPTERS = [
+  { name: "init", cli: 0, app: 0, note: "freeze the account" },
+  { name: "foundation", cli: FOUND_T, app: FOUND_T, note: "one stack per fleet" },
+  { name: "agent create", cli: 258, app: A_FLEET, note: "volume, launch, handoff" },
+  { name: "bootstrap", cli: 303, app: 303, note: "the box sets itself up" },
+  { name: "talk to it", cli: READY_AT + 20, app: A_CHAT, note: "over the tailnet" },
+] as const;
+const fmtClock = (s: number): string =>
+  `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const chapterRange = (i: number, v: "cli" | "app"): string =>
+  `${CHAPTERS[i]?.[v] ?? 0},${CHAPTERS[i + 1]?.[v] ?? (v === "cli" ? END_T : APP_END)}`;
+
+/*
+ * The app view is stateless HTML keyed to the clock. Each helper renders the finished state at
+ * APP_END (what no-JS, reduced motion and ?still show) and records the timeline the script replays:
+ *   sh(a, b)  visible while a <= t < b
+ *   at(t)     gains data-on once the clock passes t
+ *   st(steps) data-v takes the last value whose time has passed (CSS styles by it)
+ *   tx(steps) the same, as text content
+ */
+type Steps = [number, string][];
+const NEVER = 1e9;
+const pick = (p: Steps, t: number): string => {
+  let v = "";
+  for (const [at, x] of p) if (t >= at) v = x;
+  return v;
+};
+const sh = (a: number, b: number = NEVER) => ({
+  "data-show": `${a},${b}`,
+  hidden: !(APP_END >= a && APP_END < b),
+});
+const at = (t: number) => ({ "data-at": t, "data-on": APP_END >= t ? "" : undefined });
+const st = (p: Steps) => ({ "data-s": JSON.stringify(p), "data-v": pick(p, APP_END) });
+const tx = (p: Steps) => ({ "data-tx": JSON.stringify(p) });
+const fin = (p: Steps): string => pick(p, APP_END);
+const fmtDur = (secs: number): string =>
+  secs < 60
+    ? `${secs.toFixed(1)}s`
+    : `${Math.floor(secs / 60)}m${String(Math.round(secs % 60)).padStart(2, "0")}s`;
+
+/** An op's step rail: each phase pending, then current from its first event, done when the next starts. */
+function rail(events: Ev[], labels: Record<string, string>) {
+  const order: { phase: string; start: number }[] = [];
+  for (const e of events)
+    if (!order.some((o) => o.phase === e[2])) order.push({ phase: e[2], start: e[0] });
+  return order.map((o, i) => {
+    const next = order[i + 1]?.start;
+    const done = o.phase === "done" ? o.start : next;
+    const steps: Steps = [[0, "pend"]];
+    if (o.phase !== "done") steps.push([o.start, "cur"]);
+    if (done !== undefined) steps.push([done, "done"]);
+    return {
+      label: labels[o.phase] ?? o.phase,
+      state: steps,
+      time: done !== undefined && o.phase !== "done" ? ([[done, fmtDur(done - o.start)]] as Steps) : [],
+    };
+  });
+}
+/* packages/ui/src/lib/useOp.ts: PHASE_LABELS (init) and CREATE_LABELS. */
+const INIT_RAIL = rail(INIT_EVENTS, {
+  identity: "Resolve caller identity",
+  preflight: "Check this machine's tailnet",
+  foundation: "Create the CloudFormation stack",
+  tailscale: "Store the Tailscale OAuth secret",
+  ami: "Pin the Ubuntu arm64 image",
+  fleet: "Write the _fleet item",
+  artifacts: "Publish the hermeticd artifact",
+  ready: "Check the fleet can launch an agent",
+  policy: "Write hermetic's blocks into the tailnet policy",
+  done: "Done",
+});
+const CREATE_RAIL = rail(CREATE_EVENTS, {
+  validate: "Validate name and claim the row",
+  secrets: "Mint the tailscale key into SSM",
+  render: "Render config and manifest",
+  volume: "Allocate the data volume",
+  instance: "Launch the EC2 instance and attach its data volume",
+  done: "Created",
+});
+const pctSteps = (events: Ev[]): Steps => [
+  [0, "0%"],
+  ...events.map((e): [number, string] => [e[0], `${e[1]}%`]),
+];
+/* OpProgress's log pane: `[HH:MM:SS] <glyph> <phase padded to 11> <message>`. */
+const logLine = (e: Ev): string => `[${hhmmss(e[0])}] ${e[4] ? "…" : "▸"} ${e[2].padEnd(11)} ${e[3]}`;
+
+const STATUS: Steps = [
+  [0, "creating"],
+  [BOOT_AT, "bootstrapping"],
+  [READY_AT, "ready"],
+];
+const STAGE_NOW: Steps = [
+  [0, ""],
+  ...STAGES.map((s): [number, string] => [s.start, s.label]),
+  [READY_AT, ""],
+];
+const LEAD: Steps = [
+  [0, "Creating the instance."],
+  ...STAGES.map((s): [number, string] => [s.start, `Booting: ${s.label}.`]),
+  [READY_AT, "Ready and serving chats."],
+];
+const NAME_TYPED: Steps = [
+  [A_DRAWER, ""],
+  [A_DRAWER + 0.6, "a"],
+  [A_DRAWER + 1.2, "at"],
+  [A_DRAWER + 1.7, "atl"],
+  [A_DRAWER + 2.3, "atla"],
+  [A_DRAWER + 2.8, "atlas"],
+];
+/* The question typed into the chat composer, a few characters per step; the placeholder around it. */
+const COMPOSE_PH = "Message atlas…";
+const COMPOSE: Steps = [[0, COMPOSE_PH]];
+for (let i = 1, n = Math.ceil(QUESTION.length / 3); i <= n; i++)
+  COMPOSE.push([A_CHAT + 1 + ((A_SEND - A_CHAT - 1.5) * i) / n, QUESTION.slice(0, i * 3)]);
+COMPOSE.push([A_SEND, COMPOSE_PH]);
+const COMPOSE_ST: Steps = [
+  [0, ""],
+  [COMPOSE[1]?.[0] ?? A_SEND, "typed"],
+  [A_SEND, ""],
+];
+
+/*
+ * The app's playback: [simulated second, real ms] keyframes the clock tweens through, linearly
+ * within each. Human beats get reading and clicking time; AWS and bootstrap waits are compressed,
+ * but every op event and every stage gets a beat of its own, so a short stage is still seen running.
+ */
+const awaitMs = (dt: number): number => Math.round(Math.min(900, 180 * Math.sqrt(Math.max(0, dt))));
+const evBeats = (events: Ev[], from: number): [number, number][] => {
+  let prev = from;
+  return events
+    .filter((e, i) => e[0] > from && events[i + 1]?.[0] !== e[0])
+    .map((e) => {
+      const beat: [number, number] = [e[0], awaitMs(e[0] - prev)];
+      prev = e[0];
+      return beat;
+    });
+};
+const APP_BEATS: [number, number][] = [
+  [3, 1800], // the profile list; Continue
+  [9, 1800], // read the account; tick the confirmation
+  [10, 700], // Continue
+  [14, 1500], // the Tailscale checklist; start pasting the secret
+  [26, 900],
+  [31, 1300], // verifying, verified
+  [34, 900], // Initialize
+  ...evBeats(INIT_EVENTS, 34),
+  [A_FLEET, 1500], // Home bound; Open fleet
+  [A_DRAWER, 1300], // the empty fleet; Create your first agent
+  [A_DRAWER + 3, 1300], // the name
+  [260, 1700], // brain, preset, total; Create agent
+  ...evBeats(CREATE_EVENTS, 260),
+  [303, 1200], // Back to fleet; atlas's drawer opens
+  [BOOT_AT, awaitMs(BOOT_AT - 303)],
+  ...STAGES.map((s): [number, number] => [s.end, Math.round(Math.min(3500, 450 + s.secs * 10))]),
+  [A_LISTEN, 700],
+  [A_CHAT, 1100], // open Chat
+  [A_SEND, 2300], // type the question; Send
+  [A_SEND + 4, 1500], // thinking
+  [A_SEND + 5, 700], // the tool call
+  [A_SEND + 7, 800],
+  [A_SEND + 8, 450],
+  [A_SEND + 9, 450],
+  [APP_END, 600],
+];
+---
+<section class="zt" id="e-zt" data-total-cli={END_T} data-total-app={APP_END} data-beats-app={JSON.stringify(APP_BEATS)}>
+  <SheetHead num={num} kicker="Zero to agent" note="A real session, abridged" title="Zero to agent in two commands">
+    {/* design.md §4.7 (init freezes the account, creates the foundation) and §6.2 (agent create): two commands. §1 (zero-secret path: AWS credentials plus a Tailscale OAuth client). Timing: docs/operations.md "about 8 minutes" per agent; init-create.ts "typically 2-4 min" for the foundation. */}
+    <p>Bring an AWS profile and a Tailscale tailnet. <code>hermetic init</code> builds the fleet's foundation; <code>hermetic agent create</code> gives a Hermes agent its own sealed machine. About twelve minutes, most of it the box installing itself. Watch it in the terminal or in the app: the switch keeps your place.</p>
+  </SheetHead>
+      <div class="wrap hc-term">
+        <div class="tm" data-view="cli">
+          <div class="tm-bar">
+            <span class="tm-dots"><i></i><i></i><i></i></span>
+            {/* The same run, two heads: design.md §1 "If it isn't in core, it doesn't exist" (CLI and app are thin heads over one core). */}
+            <span class="vseg" role="group" aria-label="Watch the run in" data-seg hidden>
+              <button type="button" data-v="cli" aria-pressed="true">CLI</button>
+              <button type="button" data-v="app" aria-pressed="false">APP</button>
+            </span>
+            <span class="tm-title"><span class="for-cli">dana@mbp <span class="g">~</span> zsh</span><span class="for-app">Hermetic.app</span></span>
+            <span class="tm-ch" data-chlabel>{CHAPTERS[CHAPTERS.length - 1]?.name}</span>
+            <span class="tm-ctl">
+              <button type="button" data-act="replay" aria-label="Replay: choose CLI or App again">↺ replay</button>
+              <button type="button" data-act="skip">skip ⇥</button>
+            </span>
+          </div>
+          <div class="tm-main">
+          {/* The choice that starts the run. Hidden without script and under reduced motion, where the finished session shows. */}
+          <div class="pick" data-pick hidden>
+            <div class="pick-in">
+              <div class="pick-k"><i></i>A real session, abridged · two commands</div>
+              <div class="pick-opts">
+                <div class="pick-o">
+                  <button type="button" class="btn btn-p pick-b" data-play="cli">▶ Play in CLI</button>
+                  <span>The two commands typed into a terminal, with everything they print.</span>
+                </div>
+                <div class="pick-o">
+                  <button type="button" class="btn btn-s pick-b" data-play="app">▶ Play in App</button>
+                  <span>The same run in the desktop app: the setup wizard, then the New agent panel.</span>
+                </div>
+              </div>
+              <div class="pick-f">Switch with CLI | APP at any point: the run picks up at the same moment, paced for that view.</div>
+            </div>
+          </div>
+          <aside class="tm-side" aria-label="Elapsed time">
+            <div class="clk-head"><span>Elapsed</span><span class="clk-ch" data-chlabel>{CHAPTERS[CHAPTERS.length - 1]?.name}</span><span class="clk-state" data-state>done</span></div>
+            <div class="clk" data-clock>{fmtClock(END_T)}</div>
+            <ol class="chap">
+              {CHAPTERS.map((c, i) => (
+                <li data-chap={i} data-span-cli={chapterRange(i, "cli")} data-span-app={chapterRange(i, "app")} class="done">
+                  <StatusSquare kind="ok" />
+                  <span class="cn">{c.name}</span>
+                  <span class="ct"><span class="for-cli">{fmtClock(c.cli)}</span><span class="for-app">{fmtClock(c.app)}</span></span>
+                  <span class="cd">{c.note}</span>
+                </li>
+              ))}
+            </ol>
+          </aside>
+          <div class="tm-views">
+          <div class="tm-body" data-body>
+            {LINES.map((l) =>
+              l.k === "cmd" ? (
+                <div class="ln cmd" data-t={l.t} data-ch={l.ch}><span class="o">$ </span><span class="tx">{l.h}</span></div>
+              ) : l.k === "ans" ? (
+                <div class="ln ans" data-t={l.t}><span class="g">│  </span><span class="tx">{l.h}</span></div>
+              ) : l.k === "gap" ? (
+                <div class="ln gap" data-t={l.t} data-ch={l.ch} set:html={l.h} />
+              ) : (
+                <div class="ln" data-t={l.t} data-ch={l.ch} set:html={l.h} />
+              ),
+            )}
+            <div class="ln end" data-end><span class="o">$ </span><span class="cur" data-cur></span></div>
+          </div>
+
+          {/* ================= APP VIEW: replicas of packages/ui screens, docs/ui-brief.md ================= */}
+          <div class="ap-wrap" data-app hidden aria-label="The same run in the Hermetic desktop app (illustration)">
+            <div class="ap" data-stage>
+              {/* ---------- init wizard: docs/ui-brief.md "Init wizard", InitWizard.tsx ---------- */}
+              <div class="ap-scene ap-wizard" {...sh(0, A_FLEET)}>
+                <div class="ap-hd"><span class="ap-brand"><i></i>HERMETIC</span><span class="ap-hd-r">☾ dark</span></div>
+                <div class="ap-wz">
+                  <div class="ap-wz-rail">
+                    <div class="ap-k">Bind this home</div>
+                    {[
+                      ["Profile", [[0, "cur"], [3, "done"]]],
+                      ["Verify account", [[0, "pend"], [3, "cur"], [10, "done"]]],
+                      ["Foundation", [[0, "pend"], [10, "cur"], [34, "done"]]],
+                      ["Initialize", [[0, "pend"], [34, "cur"], [250, "done"]]],
+                    ].map(([label, steps], i) => (
+                      <div class="ap-step" {...st(steps as Steps)}><i></i><b>{label as string}</b><span>0{i + 1}</span></div>
+                    ))}
+                    <div class="ap-wz-foot">home: ~/.hermetic · engine: local · same core as `hermetic` CLI</div>
+                  </div>
+                  <div class="ap-wz-panel">
+                    {/* Step 1: profile list and region override, no network call */}
+                    <div class="ap-sub" {...sh(0, 3)}>
+                      <div class="ap-k">Step 01</div>
+                      <h4 class="ap-title">Choose a profile</h4>
+                      <div class="ap-prof">
+                        <div class="ap-prow on"><b>acme-prod</b><span>sso · us-east-1</span></div>
+                        <div class="ap-prow"><b>acme-dev</b><span>sso · us-west-2</span></div>
+                        <div class="ap-prow"><b>default</b><span>static keys · eu-west-1</span></div>
+                      </div>
+                      <div class="ap-k">Region override</div>
+                      <div class="ap-input">us-east-1</div>
+                      <div class="ap-foot"><span></span><span class="ap-btn ap-p">Continue →</span></div>
+                    </div>
+                    {/* Step 2: STS identity, foundation verdict, the verify toggle (design.md §4.7 steps 2 and 3) */}
+                    <div class="ap-sub" {...sh(3, 10)}>
+                      <div class="ap-k">Step 02</div>
+                      <h4 class="ap-title">Verify the account</h4>
+                      <div class="ap-conn">
+                        <div class="ap-conn-h"><i class="okq"></i><b>Connected</b><span>sts get-caller-identity · profile acme-prod · us-east-1</span></div>
+                        <div class="ap-acct">{ACCT}</div>
+                        <div class="ap-kv"><span>alias</span><b>acme-prod</b><span>caller</span><b>{ARN}</b><span>org</span><b>o-4kq81zt2mv</b><span>profile</span><b>acme-prod · sso</b></div>
+                        <div class="ap-callout">No foundation in us-east-1 → will CREATE one</div>
+                      </div>
+                      <div class="ap-verify" {...at(9)}><i></i><div><b>I verified this is the account I intend to operate: {ACCT}</b><span>hermetic freezes this home to this account. Every create, upgrade and teardown will run here.</span></div></div>
+                      <div class="ap-foot"><span class="ap-btn ap-s">Back</span><span class="ap-btn ap-p">Continue →</span></div>
+                    </div>
+                    {/* Step 3: the Tailscale errands and the network choice (§4.7, §5) */}
+                    <div class="ap-sub" {...sh(10, 34)}>
+                      <div class="ap-k">Step 03</div>
+                      <h4 class="ap-title">Create the foundation</h4>
+                      <div class="ap-ss done"><i></i><b>Tailnet</b><span class="ap-ss-d">{TAILNET} · this node dana-mbp</span><em>done</em></div>
+                      <div class="ap-ss" {...st([[10, ""], [31, "done"]])}><i></i><b>Tailnet policy</b><span class="ap-ss-d">tagOwners: tag:hermetic</span><em {...tx([[10, "waiting"], [31, "tag owned"]])}>tag owned</em></div>
+                      <div class="ap-ss" {...st([[10, ""], [31, "done"]])}><i></i><b>OAuth client</b><span class="ap-ss-d">auth_keys · devices:core · policy_file</span><em {...tx([[10, "waiting"], [31, "done"]])}>done</em></div>
+                      <div class="ap-ss done"><i></i><b>HTTPS certificates</b><span class="ap-ss-d">enabled on {TAILNET}</span><em>done</em></div>
+                      <div class="ap-ss" {...st([[10, ""], [31, "done"]])}><i></i><b>Client secret</b><span class="ap-ss-d mono" {...tx([[10, ""], [14, "▪▪▪▪▪▪▪▪"], [20, "▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪"], [26, "▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪"]])}>▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪</span><em {...tx([[10, "paste"], [27, "verifying"], [31, "verified"]])}>verified</em></div>
+                      <div class="ap-ss done"><i></i><b>Network</b><span class="ap-seg"><span class="on">public</span><span>nat</span></span><em>$3.65/mo per agent</em></div>
+                      <div class="ap-foot"><span class="ap-btn ap-s">Back</span><span class="ap-btn ap-p" {...st([[10, "off"], [31, ""]])}>Initialize →</span></div>
+                    </div>
+                    {/* Step 4: OpProgress over the init op stream (design.md §3.2 rule 2) */}
+                    <div class="ap-sub" {...sh(34, A_FLEET)}>
+                      <div class="ap-k">Step 04</div>
+                      <h4 class="ap-title" {...tx([[34, "Initializing…"], [250, "Home bound"]])}>Home bound</h4>
+                      <div class="ap-prog">
+                        <div class="ap-prog-top"><div><div class="ap-prog-name">{ACCT}</div><div class="ap-prog-sub">create · acme-prod · us-east-1 · {TAILNET}</div></div><div class="ap-pct" {...st([[34, ""], [250, "ok"]])} {...tx(pctSteps(INIT_EVENTS))}>100%</div></div>
+                        <div class="ap-bar"><i data-w={JSON.stringify(INIT_EVENTS.map((e) => [e[0], e[1]]))} style="width:100%"></i></div>
+                        <div class="ap-prog-cols">
+                          <div class="ap-steps">
+                            {INIT_RAIL.map((r) => (
+                              <div class="ap-step" {...st(r.state)}><i></i><b>{r.label}</b><span {...tx(r.time)}>{fin(r.time)}</span></div>
+                            ))}
+                          </div>
+                          <div class="ap-log" data-log>
+                            {INIT_EVENTS.map((e) => <div {...at(e[0])}>{logLine(e)}</div>)}
+                          </div>
+                        </div>
+                      </div>
+                      <div class="ap-foot">
+                        <span class="ap-note" {...tx([[34, "Safe to close: the operation continues in the engine; reopening this page reattaches to it."], [250, `Bound to acme-prod · ${ACCT} · us-east-1`]])}>Bound to acme-prod · {ACCT} · us-east-1</span>
+                        <span class="ap-btn ap-p" {...st([[34, "off"], [250, ""]])}>Open fleet →</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ---------- the dashboard: docs/ui-brief.md "Layout", Header.tsx, EnvStrip.tsx, Toolbar.tsx, FleetBoard.tsx ---------- */}
+              <div class="ap-scene ap-fleet" {...sh(A_FLEET)}>
+                <div class="ap-hd">
+                  <span class="ap-brand"><i></i>HERMETIC</span>
+                  <span class="ap-nav"><span class="on">FLEET <span class="mono" {...tx([[A_FLEET, "0"], [261, "1"]])}>1</span></span><span>CHAT</span><span>SETTINGS</span></span>
+                  <span class="ap-hd-r">☾ dark</span>
+                </div>
+                {/* design.md §4.7: the target every head shows before it acts */}
+                <div class="ap-env"><span class="ap-fbtn">FLEET {FLEET} ▾</span><span>{ACCT}</span><span>us-east-1</span><span class="ap-env-r">tailnet {TAILNET} · ● connected</span></div>
+                <div class="ap-tb">
+                  <div>
+                    <div class="ap-k">Fleet · us-east-1</div>
+                    <div class="ap-lens"><span class="on"><b {...tx([[A_FLEET, "0"], [261, "1"]])}>1</b> agents</span><span><b {...tx([[A_FLEET, "0"], [268, "1"]])}>1</b> volumes</span></div>
+                    <div class="ap-legend"><span><i class="okq"></i><b {...tx([[A_FLEET, "0"], [READY_AT, "1"]])}>1</b> ready</span><span><i class="accq"></i><b {...tx([[A_FLEET, "0"], [261, "1"], [READY_AT, "0"]])}>0</b> in progress</span><span><i class="offq"></i>0 stopped</span></div>
+                  </div>
+                  <div class="ap-tb-r"><span class="ap-seg"><span class="on">BOARD</span><span>TABLE</span><span>TRIAGE</span></span><span class="ap-btn ap-p sm">+ NEW AGENT</span></div>
+                </div>
+                <div class="ap-board">
+                  {/* docs/ui-brief.md Layout 4 "Empty": a fleet with no agents at all */}
+                  <div class="ap-empty" {...sh(A_FLEET, 261)}><b>No agents here</b><span>a fresh fleet: nothing running, nothing billing</span><span class="ap-btn ap-p">Create your first agent →</span></div>
+                  {/* design.md §4.3 creating → bootstrapping → ready; the card's status sub-line is the current stage */}
+                  <div class="ap-card" {...sh(261)} {...st(STATUS)}>
+                    <div class="ap-card-top">
+                      <div><div class="ap-card-nm">atlas <em>NEW</em></div><div class="ap-card-host">{HOST}</div><div class="ap-card-sub" {...tx([[261, "- · cpu - · mem -"], [TS_UP, `${IP} · cpu - · mem -`], [READY_AT, `${IP} · cpu 4% · mem 11%`]])}>{IP} · cpu 4% · mem 11%</div></div>
+                      <b class="ap-glyph">M</b>
+                    </div>
+                    <div class="ap-card-st"><i></i><span {...tx(STATUS)}>ready</span><span class="ap-card-stage" {...tx(STAGE_NOW)}></span></div>
+                    {/* docs/ui-brief.md Volumes: the board card's footer is the data volume line */}
+                    <div class="ap-card-ft" {...at(268)}><div class="ap-k">Data volume</div><span {...st([[268, "warn"], [301, "ok"]])} {...tx([[268, `${VOL.slice(0, 12)}… · ${PRESET.data} GiB · detached`], [301, `${VOL.slice(0, 12)}… · ${PRESET.data} GiB · attached`]])}>{VOL.slice(0, 12)}… · {PRESET.data} GiB · attached</span></div>
+                  </div>
+                </div>
+
+                <div class="ap-backdrop" {...sh(A_DRAWER)}></div>
+
+                {/* ---------- create drawer: docs/ui-brief.md "Drawers / Create", CreateDrawer.tsx ---------- */}
+                <div class="ap-dr ap-dr-create" {...sh(A_DRAWER, 303)}>
+                  <div class="ap-dr-h"><div><div class="ap-k">New agent</div><h4>Create agent</h4></div><span class="ap-x">×</span></div>
+                  <div class="ap-dr-env">Target · {FLEET} · {ACCT} · us-east-1</div>
+                  <div class="ap-dr-b" {...sh(A_DRAWER, 260)}>
+                    <div class="ap-k">Agent name</div>
+                    <div class="ap-name"><span {...tx(NAME_TYPED)}>atlas</span><i class="ap-caret"></i></div>
+                    <div class="ap-hint ap-okt" {...at(A_DRAWER + 3)}>✓ {HOST}</div>
+                    {/* design.md §1 / §8.3: Bedrock through the instance role, the fleet's default profile */}
+                    <div class="ap-k">Brain</div>
+                    <div class="ap-brain"><i class="okq"></i><b>bedrock</b><span class="mono">{MODEL}</span><em>fleet default</em><span>▾</span></div>
+                    <div class="ap-hint">IAM instance role · no stored secrets</div>
+                    <div class="ap-k">Preset</div>
+                    <div class="ap-presets">
+                      {LOADOUT.map((p) => {
+                        const sz = sizeById(p.size);
+                        return (
+                          <div class:list={["ap-pre", { on: p.name === PRESET.name }]}>
+                            <b>{p.name}</b><span>{p.size} · {p.data} GiB</span><span>{sz.vcpu} vCPU · {sz.memGib} GiB</span><strong>${Math.round(presetMonth(p))}/mo</strong>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div class="ap-cust">▸ CUSTOMIZE <span>everything at fleet default</span></div>
+                    {/* design.md §7.2 (Tailscale only, zero inbound rules, no key pairs), §7.3 (browser, noVNC) */}
+                    <div class="ap-facts"><i class="okq"></i> Tailscale only · 0 inbound rules · no SSH key · Hermes {HERMES} · Chromium · noVNC desktop</div>
+                    <div class="ap-dr-f">
+                      <div class="ap-echo">$ hermetic agent create atlas --size {PRESET.size} --volume-gib {PRESET.data} --root-gib {PRESET.root} --provider-profile bedrock</div>
+                      <div class="ap-total"><div><div class="ap-k">Total</div><b>≈{usd(presetMonth(PRESET))}/mo</b><span>~${(presetMonth(PRESET) / 730).toFixed(2)}/h · ready in ~8 min</span></div><span class="ap-btn ap-s">Cancel</span><span class="ap-btn ap-p">Create agent →</span></div>
+                    </div>
+                  </div>
+                  {/* Create → Progress: the same drawer over the create op stream */}
+                  <div class="ap-dr-b ap-cprog" {...sh(260, 303)}>
+                    <div class="ap-prog-top"><div><div class="ap-prog-name">atlas</div><div class="ap-prog-sub">{def.instance} · {PRESET.data} GB data volume · us-east-1</div></div><div class="ap-pct" {...st([[260, ""], [302, "ok"]])} {...tx(pctSteps(CREATE_EVENTS))}>100%</div></div>
+                    <div class="ap-bar"><i data-w={JSON.stringify(CREATE_EVENTS.map((e) => [e[0], e[1]]))} style="width:100%"></i></div>
+                    <div class="ap-steps">
+                      {CREATE_RAIL.map((r) => (
+                        <div class="ap-step" {...st(r.state)}><i></i><b>{r.label}</b><span {...tx(r.time)}>{fin(r.time)}</span></div>
+                      ))}
+                    </div>
+                    <div class="ap-log" data-log>
+                      {CREATE_EVENTS.map((e) => <div {...at(e[0])}>{logLine(e)}</div>)}
+                    </div>
+                    <div class="ap-dr-f row"><span class="ap-note">Safe to close: the operation continues in the engine and the row keeps updating.</span><span class="ap-btn" {...st([[260, "s"], [302, "p"]])} {...tx([[260, "Run in background"], [302, "Back to fleet"]])}>Back to fleet</span></div>
+                  </div>
+                </div>
+
+                {/* ---------- agent detail drawer: docs/ui-brief.md "Agent detail", AgentDrawer.tsx ---------- */}
+                <div class="ap-dr ap-dr-agent" {...sh(303)}>
+                  <div class="ap-ag-h">
+                    <div>
+                      <div class="ap-ag-pill" {...st(STATUS)}><i></i><span {...tx(STATUS)}>ready</span><span class="mono" {...tx([[303, HOST], [TS_UP, `${HOST} · ${IP}`]])}>{HOST} · {IP}</span></div>
+                      <h4>atlas</h4>
+                    </div>
+                    {/* design.md §7.4 (dashboard over Serve), §7.3 (noVNC desktop at /vnc/) */}
+                    <div class="ap-ag-act"><span class="ap-btn ap-s sm">Dashboard ↗</span><span class="ap-btn ap-s sm">Open desktop ↗</span><span class="ap-x">×</span></div>
+                  </div>
+                  <div class="ap-dr-env">{FLEET} · {ACCT} · us-east-1<span>{def.id} · {def.instance}</span></div>
+                  <div class="ap-ag">
+                    {/* AgentSectionNav.tsx: each entry's sub-line reads the section without opening it */}
+                    <nav class="ap-ag-nav">
+                      <div {...st([[303, "on"], [A_CHAT, ""]])}><b>Overview</b><span {...tx([[303, "no report yet"], [READY_AT, "all checks ok"]])}>all checks ok</span></div>
+                      <div {...st([[303, "dis"], [A_LISTEN, ""], [A_CHAT, "on"]])}><b>Chat</b><span {...tx([[303, "not listening"], [A_LISTEN, "listening"]])}>listening</span></div>
+                      <div><b>Desktop</b><span>not connected</span></div>
+                      <div><b>Logs</b><span>activity · journal · console</span></div>
+                      <div><b>Config</b><span>bedrock · {MODEL}</span></div>
+                      <div><b>Lifecycle</b><span>no action needed</span></div>
+                    </nav>
+                    <div class="ap-ag-body">
+                      {/* Overview: status sentence (agent-summary.ts), health chips, the bootstrap checklist (design.md §6.3) */}
+                      <div class="ap-ov" {...sh(303, A_CHAT)}>
+                        <div class="ap-k">Status</div>
+                        <div class="ap-lead" {...st([[303, "busy"], [READY_AT, "ok"]])} {...tx(LEAD)}>Ready and serving chats.</div>
+                        <div class="ap-k">Health</div>
+                        <div class="ap-health">
+                          {[
+                            ["hermes", READY_AT, HERMES],
+                            ["tailscale", TS_UP, IP],
+                            ["disk", DISK_UP, "/data 1%"],
+                            ["dashboard", READY_AT, "serving"],
+                          ].map(([n, t, d]) => (
+                            <div {...st([[303, "pend"], [t as number, "ok"]])}><i></i><b>{n}</b><span {...tx([[303, "pending"], [t as number, d as string]])}>{d}</span></div>
+                          ))}
+                        </div>
+                        <div class="ap-k">Bootstrap · {STAGES.length} stages</div>
+                        <div class="ap-stages">
+                          {STAGES.map((s) => (
+                            <div class="ap-stage" {...st([[303, "pending"], [s.start, "running"], [s.end, "ok"]])}>
+                              <i></i><b>{s.label}</b>
+                              <span class="ap-stage-s" {...tx([[303, "pending"], [s.start, "running"], [s.end, "ok"]])}>ok</span>
+                              <span class="ap-stage-t" {...tx([[s.end, fmtDur(s.secs)]])}>{fmtDur(s.secs)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {/* Chat: the drawer's chat frame over the same conversation (docs/ui-brief.md "Chat", design.md §9.2) */}
+                      <div class="ap-chat" {...sh(A_CHAT)}>
+                        <div class="ap-chat-h"><svg class="ap-av" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c5 0 9 3.6 9 9.2 0 5.7-4.3 10.8-9.6 10.8C6.2 22 3 17.9 3 12.6 3 6.4 7 2 12 2z" /></svg><b>atlas<span>/default</span></b><span class="mono">{HOST} · bedrock</span><span class="ap-btn ap-s sm">Open in dock</span></div>
+                        <div class="ap-thread">
+                          <div class="ap-msg me" {...at(A_SEND)}><span class="ap-who">You</span><p>{QUESTION}</p></div>
+                          <div class="ap-think" {...sh(A_SEND + 1, A_SEND + 4)}>thinking…</div>
+                          <div class="ap-tool" {...at(A_SEND + 4)} {...st([[A_SEND + 4, "run"], [A_SEND + 5, "ok"]])}><i></i>bash <span {...tx([[A_SEND + 4, "running"], [A_SEND + 5, "ok · exit 0 · 1s"]])}>ok · exit 0 · 1s</span></div>
+                          <div class="ap-msg bot" {...at(A_SEND + 7)}>
+                            <span class="ap-who">atlas</span>
+                            <p>{REPLY.map((r, i) => <span {...at(A_SEND + 7 + i)}>{r} </span>)}</p>
+                          </div>
+                        </div>
+                        <div class="ap-dest">→ atlas/default · in-app session</div>
+                        <div class="ap-compose"><span {...st(COMPOSE_ST)} {...tx(COMPOSE)}>{fin(COMPOSE)}</span><span class="ap-btn ap-p sm">Send ↵</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+          </div>
+          <div class="rail" aria-hidden="true">
+            {CHAPTERS.map((c, i) => (
+              <span class="rseg" style={`flex:${(CHAPTERS[i + 1]?.cli ?? END_T) - c.cli}`}><i data-fill style="width:100%"></i></span>
+            ))}
+          </div>
+        </div>
+        {/* The transcript is illustrative: line formats are the CLI's, values are made up. */}
+        <p class="tm-note">
+          Output formats are the CLI's own; account, names, ids and timings are illustrative. Abridged: the Tailscale setup notes <code>init</code> prints before the secret prompt, the tailnet confirmation and most of the 22 stack resources are cut. The <code>atlas</code> reply is an example. The APP view is an illustration of the desktop app's screens over the same run: the AWS and bootstrap timings are shared, the clicks are the app's own, so it reaches the chat sooner.
+        </p>
+      </div>
+</section>
+
+<style>
+  .zt {
+    border-bottom: 3px solid var(--fg);
+    padding-bottom: 8px;
+  }
+  .zt code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--fg);
+    background: var(--bg3);
+    padding: 1px 5px;
+  }
+  .g {
+    color: var(--fg3);
+  }
+  .tm-main {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 290px;
+  }
+
+  /* ---------- the play choice, over the whole session frame ---------- */
+  .pick {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background-color: color-mix(in srgb, var(--bg) 88%, transparent);
+    background-image:
+      linear-gradient(var(--bg2) 1px, transparent 1px), linear-gradient(90deg, var(--bg2) 1px, transparent 1px);
+    background-size: 40px 40px;
+    backdrop-filter: blur(3px);
+  }
+  .pick[hidden] {
+    display: none;
+  }
+  .pick-in {
+    width: min(760px, 100%);
+    border: 2px solid var(--fg);
+    background: var(--bg);
+    box-shadow: 10px 10px 0 var(--line2);
+  }
+  .pick-k {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--line2);
+    font: 700 10px / 1 var(--mono);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg2);
+  }
+  .pick-k i {
+    width: 10px;
+    height: 10px;
+    background: var(--acc);
+  }
+  .pick-opts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pick-o {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 22px 18px;
+  }
+  .pick-o + .pick-o {
+    border-left: 1px solid var(--line2);
+  }
+  .pick-b {
+    justify-content: center;
+    height: 64px;
+    font-size: 16px;
+  }
+  .pick-b:focus-visible {
+    outline: 3px solid var(--acc);
+    outline-offset: 3px;
+  }
+  .pick-o span {
+    font: 500 12px / 1.5 var(--mono);
+    color: var(--fg2);
+  }
+  .pick-f {
+    padding: 11px 18px;
+    border-top: 1px solid var(--line2);
+    font: 500 11px / 1.4 var(--mono);
+    color: var(--fg3);
+  }
+  .tm-side {
+    order: 2;
+    border-left: 2px solid var(--fg);
+    background: var(--bg2);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .clk-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font: 700 10px var(--mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg3);
+  }
+  .clk-ch {
+    display: none;
+    margin-left: auto;
+    margin-right: 12px;
+    color: var(--acc);
+  }
+  .ap-ss .ap-seg {
+    justify-self: start;
+  }
+  .clk-state.live {
+    color: var(--acc);
+  }
+  .clk {
+    font: 800 76px / 0.9 var(--mono);
+    letter-spacing: -0.07em;
+    color: var(--fg);
+    margin: 10px 0 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chap {
+    list-style: none;
+    border-top: 2px solid var(--fg);
+  }
+  .chap li {
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg3);
+    transition: color 0.2s;
+  }
+  .chap li :global(.sq) {
+    width: 9px;
+    height: 9px;
+    background: var(--line2);
+  }
+  .chap .cn {
+    font: 900 12px var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .chap .cd {
+    grid-column: 2 / -1;
+    font: 500 10.5px var(--mono);
+    color: var(--fg3);
+    margin-top: 2px;
+  }
+  .chap .ct {
+    font: 500 11px var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .chap li.done {
+    color: var(--fg);
+  }
+  .chap li.done :global(.sq) {
+    background: var(--ok);
+  }
+  .chap li.on {
+    color: var(--acc);
+  }
+  .chap li.on :global(.sq) {
+    background: var(--acc);
+    animation: hpulse 1.2s infinite;
+  }
+
+  .zt .hc-term {
+    padding-bottom: 24px;
+  }
+  .tm {
+    border: 2px solid var(--fg);
+    background: #0b0b0a;
+    box-shadow: 12px 12px 0 var(--line2);
+    color: #e6e3dc;
+    font: 500 12.5px / 1.7 var(--mono);
+    min-width: 0;
+  }
+  .tm-bar {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr auto;
+    align-items: center;
+    gap: 18px;
+    height: 40px;
+    padding: 0 0 0 14px;
+    border-bottom: 2px solid var(--fg);
+    background: var(--bg2);
+    font: 700 11px var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg2);
+  }
+  .tm-dots {
+    display: flex;
+    gap: 6px;
+  }
+  .tm-dots i {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--fg3);
+  }
+  .tm-dots i:first-child {
+    background: var(--acc);
+    border-color: var(--acc);
+  }
+  .tm-ch {
+    justify-self: center;
+    color: var(--acc);
+  }
+  .tm-ctl {
+    display: flex;
+    height: 100%;
+  }
+  .tm-ctl button {
+    height: 100%;
+    padding: 0 14px;
+    background: transparent;
+    border: 0;
+    border-left: 1px solid var(--line2);
+    color: var(--fg2);
+    font: 700 11px var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .tm-ctl button:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .tm-body {
+    height: 100%;
+    overflow: auto;
+    padding: 16px 18px 18px;
+    scroll-behavior: auto;
+  }
+  .ln {
+    white-space: pre;
+    min-height: 1.7em;
+  }
+  .ln.hid {
+    display: none;
+  }
+  .ln.cmd {
+    color: #f1efe9;
+    font-weight: 700;
+    margin-top: 6px;
+  }
+  .ln.cmd:first-child {
+    margin-top: 0;
+  }
+  .ln.gap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 12px 0;
+    color: var(--acc);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: normal;
+  }
+  .ln.gap.hid {
+    display: none;
+  }
+  .ln.gap :global(.gap-l) {
+    flex: 1;
+    border-top: 1px dashed var(--acc);
+  }
+  .tm-body :global(.g) {
+    color: #6b6963;
+  }
+  .tm-body :global(.o) {
+    color: #ff5a1f;
+  }
+  .tm-body :global(.k) {
+    color: #37c27f;
+  }
+  .tm-body :global(.w) {
+    color: #f1efe9;
+  }
+  .tm-body :global(.ph) {
+    color: #a8a59c;
+  }
+  .tm-body :global(.u) {
+    color: #f1efe9;
+    text-decoration: underline;
+    text-decoration-color: #3d3b35;
+    text-underline-offset: 3px;
+  }
+  .cur {
+    display: inline-block;
+    width: 8px;
+    height: 15px;
+    background: #ff5a1f;
+    vertical-align: -2px;
+    animation: blink 1s steps(1) infinite;
+  }
+  .rail {
+    display: flex;
+    gap: 2px;
+    height: 12px;
+    border-top: 2px solid var(--fg);
+    background: #0b0b0a;
+  }
+  .rseg {
+    position: relative;
+    background: var(--bg3);
+    min-width: 6px;
+  }
+  .rseg i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--acc);
+  }
+  .tm-note {
+    margin-top: 18px;
+    font: 500 11px / 1.6 var(--mono);
+    color: var(--fg3);
+    max-width: 120ch;
+  }
+  .tm-note code {
+    font-size: 11px;
+  }
+
+  /* ---------- CLI | APP toggle (the app's segmented control) ---------- */
+  .vseg {
+    display: flex;
+    border: 2px solid var(--fg);
+    height: 26px;
+  }
+  .vseg[hidden] {
+    display: none;
+  }
+  .vseg button {
+    background: transparent;
+    border: 0;
+    color: var(--fg);
+    font: 900 10.5px var(--sans);
+    letter-spacing: 0.1em;
+    padding: 0 12px;
+    cursor: pointer;
+  }
+  .vseg button[aria-pressed="true"] {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .vseg button:hover:not([aria-pressed="true"]) {
+    background: var(--bg3);
+  }
+  .tm[data-view="cli"] .for-app,
+  .tm[data-view="app"] .for-cli,
+  .tm[data-view="cli"] .ap-wrap,
+  .tm[data-view="app"] .tm-body {
+    display: none;
+  }
+  .tm-views {
+    position: relative;
+    height: 520px;
+    min-width: 0;
+  }
+  .ap-wrap {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .ap-wrap[hidden] {
+    display: none;
+  }
+
+  /* ---------- the app replica (natural size --aw, scaled to fit by the script) ---------- */
+  .ap {
+    --aw: 1100px;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--aw);
+    height: 585px;
+    transform-origin: 0 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 13px / 1.4 var(--sans);
+    overflow: hidden;
+  }
+  .ap [hidden] {
+    display: none !important;
+  }
+  .ap .mono,
+  .ap-k {
+    font-family: var(--mono);
+  }
+  .ap-k {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg3);
+  }
+  .okq,
+  .accq,
+  .offq {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    background: var(--ok);
+  }
+  .accq {
+    background: var(--acc);
+  }
+  .offq {
+    background: var(--fg3);
+  }
+  .ap-scene {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .ap-hd {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: stretch;
+    height: 46px;
+    border-bottom: 3px solid var(--fg);
+    flex: none;
+  }
+  .ap-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 18px;
+    border-right: 2px solid var(--fg);
+    font: 900 17px var(--sans);
+    letter-spacing: -0.01em;
+  }
+  .ap-brand i {
+    width: 11px;
+    height: 11px;
+    background: var(--acc);
+  }
+  .ap-hd-r {
+    grid-column: 3;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    font: 500 11px var(--mono);
+    color: var(--fg2);
+  }
+  .ap-nav {
+    display: flex;
+  }
+  .ap-nav > span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 18px;
+    font: 800 11px var(--sans);
+    letter-spacing: 0.1em;
+    border-right: 1px solid var(--line);
+  }
+  .ap-nav > span.on {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .ap-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 14px;
+    border: 2px solid var(--fg);
+    font: 900 10.5px var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .ap-btn.ap-p,
+  .ap-btn[data-v="p"] {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .ap-btn.sm {
+    height: 26px;
+    padding: 0 9px;
+    font-size: 9.5px;
+  }
+  .ap-btn[data-v="off"] {
+    opacity: 0.35;
+  }
+  .ap-seg {
+    display: inline-flex;
+    border: 2px solid var(--fg);
+    font: 800 9.5px var(--sans);
+    letter-spacing: 0.08em;
+  }
+  .ap-seg span {
+    padding: 4px 8px;
+  }
+  .ap-seg .on {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .ap-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-top: auto;
+    padding-top: 12px;
+  }
+  .ap-foot .ap-btn:only-child,
+  .ap-foot span:empty + .ap-btn {
+    margin-left: auto;
+  }
+  .ap-note {
+    font: 500 10.5px var(--mono);
+    color: var(--fg2);
+  }
+
+  /* wizard */
+  .ap-wz {
+    flex: 1;
+    min-height: 0;
+    margin: 18px 22px;
+    border: 3px solid var(--fg);
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .ap-wz-rail {
+    border-right: 3px solid var(--fg);
+    background: var(--bg2);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .ap-wz-rail .ap-k {
+    margin-bottom: 8px;
+  }
+  .ap-wz-foot {
+    margin-top: auto;
+    font: 500 9.5px / 1.5 var(--mono);
+    color: var(--fg3);
+  }
+  .ap-wz-panel {
+    position: relative;
+    padding: 18px 22px;
+    min-width: 0;
+  }
+  .ap-sub {
+    position: absolute;
+    inset: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-height: 0;
+  }
+  .ap-title {
+    font: 900 22px / 1 var(--sans);
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    margin: -4px 0 4px;
+  }
+  .ap-step {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ap-step i {
+    width: 11px;
+    height: 11px;
+    background: var(--line2);
+  }
+  .ap-step b {
+    font-weight: 700;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ap-wz-rail .ap-step b {
+    text-transform: uppercase;
+    font-size: 11.5px;
+  }
+  .ap-step span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-step[data-v="pend"] {
+    opacity: 0.5;
+  }
+  .ap-step[data-v="cur"] i {
+    background: var(--acc);
+    animation: hpulse 1.2s infinite;
+  }
+  .ap-step[data-v="done"] i {
+    background: var(--ok);
+  }
+  .ap-prof {
+    border: 2px solid var(--fg);
+  }
+  .ap-prow {
+    display: flex;
+    justify-content: space-between;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .ap-prow:last-child {
+    border-bottom: 0;
+  }
+  .ap-prow span {
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-prow.on {
+    background: var(--sel);
+    box-shadow: inset 4px 0 0 var(--acc);
+  }
+  .ap-input {
+    height: 36px;
+    border: 2px solid var(--fg);
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    font: 500 12.5px var(--mono);
+    max-width: 260px;
+  }
+  .ap-conn {
+    border: 3px solid var(--fg);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ap-conn-h {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .ap-conn-h b {
+    font: 900 14px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ap-conn-h span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-acct {
+    font: 700 30px / 1 var(--mono);
+    letter-spacing: -0.03em;
+  }
+  .ap-kv {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    gap: 3px 10px;
+    font-size: 11px;
+  }
+  .ap-kv span {
+    font: 700 9px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--fg3);
+    padding-top: 2px;
+  }
+  .ap-kv b {
+    font: 500 11px var(--mono);
+  }
+  .ap-callout {
+    border-left: 3px solid var(--acc);
+    padding: 5px 10px;
+    font: 500 11px var(--mono);
+    background: var(--bg2);
+  }
+  .ap-verify {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: 12px;
+    align-items: center;
+    border: 3px solid var(--fg);
+    padding: 10px 12px;
+  }
+  .ap-verify i {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--fg);
+  }
+  .ap-verify[data-on] i {
+    background: var(--ok);
+    border-color: var(--ok);
+  }
+  .ap-verify b {
+    display: block;
+    font-weight: 800;
+    font-size: 12.5px;
+  }
+  .ap-verify span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-ss {
+    display: grid;
+    grid-template-columns: 10px 130px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line2);
+    padding: 8px 12px;
+  }
+  .ap-ss i {
+    width: 10px;
+    height: 10px;
+    background: var(--line2);
+  }
+  .ap-ss b {
+    font-weight: 800;
+    font-size: 12px;
+  }
+  .ap-ss-d {
+    font: 500 10.5px var(--mono);
+    color: var(--fg2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ap-ss em {
+    font: 700 9.5px var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    font-style: normal;
+  }
+  .ap-ss.done,
+  .ap-ss[data-v="done"] {
+    border-left-color: var(--ok);
+  }
+  .ap-ss.done i,
+  .ap-ss[data-v="done"] i {
+    background: var(--ok);
+  }
+  .ap-ss.done em,
+  .ap-ss[data-v="done"] em {
+    color: var(--ok);
+  }
+
+  /* op progress (OpProgress.tsx) */
+  .ap-prog {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+  }
+  .ap-prog-top {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 12px;
+  }
+  .ap-prog-name {
+    font: 700 22px var(--mono);
+    letter-spacing: -0.02em;
+  }
+  .ap-prog-sub {
+    font: 500 10.5px var(--mono);
+    color: var(--fg2);
+  }
+  .ap-pct {
+    font: 900 36px / 1 var(--sans);
+    letter-spacing: -0.04em;
+    color: var(--acc);
+  }
+  .ap-pct[data-v="ok"] {
+    color: var(--ok);
+  }
+  .ap-bar {
+    height: 9px;
+    background: var(--line);
+    border: 1px solid var(--line2);
+    margin: 10px 0 8px;
+  }
+  .ap-bar i {
+    display: block;
+    height: 100%;
+    background: var(--acc);
+    transition: width 0.2s;
+  }
+  .ap-prog-cols {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 16px;
+  }
+  .ap-steps {
+    min-height: 0;
+    overflow: hidden;
+  }
+  .ap-log {
+    background: #0a0a09;
+    color: #d8d5cc;
+    border: 2px solid var(--line2);
+    font: 500 10px / 1.55 var(--mono);
+    padding: 8px 10px;
+    overflow: hidden;
+    min-height: 0;
+    white-space: pre;
+  }
+  .ap-log > div:not([data-on]),
+  .ap-msg:not([data-on]),
+  .ap-tool:not([data-on]),
+  .ap-msg p span:not([data-on]),
+  .ap-card-ft:not([data-on]),
+  .ap-hint[data-at]:not([data-on]) {
+    display: none;
+  }
+
+  /* fleet */
+  .ap-env {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 24px;
+    padding: 0 16px;
+    background: var(--acc);
+    color: #0e0e0d;
+    font: 700 10px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    flex: none;
+  }
+  .ap-fbtn {
+    border: 1.5px solid #0e0e0d;
+    padding: 1px 6px;
+  }
+  .ap-env-r {
+    margin-left: auto;
+  }
+  .ap-tb {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+  }
+  .ap-lens {
+    display: flex;
+    gap: 18px;
+    margin: 4px 0 6px;
+    font: 800 15px var(--sans);
+    text-transform: uppercase;
+    color: var(--fg3);
+  }
+  .ap-lens b {
+    font: 900 36px / 1 var(--sans);
+    letter-spacing: -0.04em;
+    margin-right: 4px;
+  }
+  .ap-lens .on {
+    color: var(--fg);
+    border-bottom: 4px solid var(--fg);
+  }
+  .ap-legend {
+    display: flex;
+    gap: 14px;
+    font: 700 9.5px var(--mono);
+    color: var(--fg2);
+    text-transform: uppercase;
+  }
+  .ap-legend span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .ap-legend i {
+    width: 8px;
+    height: 8px;
+  }
+  .ap-tb-r {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .ap-board {
+    flex: 1;
+    padding: 2px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-auto-rows: min-content;
+    gap: 2px;
+    background: var(--line);
+    position: relative;
+  }
+  .ap-empty {
+    grid-column: 1 / -1;
+    background: var(--bg);
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .ap-empty b {
+    font: 900 22px var(--sans);
+    text-transform: uppercase;
+  }
+  .ap-empty span:not(.ap-btn) {
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-card {
+    background: var(--bg);
+    padding: 12px 14px;
+    border-top: 4px solid var(--acc);
+  }
+  .ap-card[data-v="ready"] {
+    border-top-color: var(--ok);
+  }
+  .ap-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .ap-card-nm {
+    font: 900 20px var(--sans);
+    letter-spacing: -0.02em;
+  }
+  .ap-card-nm em {
+    font: 900 8.5px var(--sans);
+    font-style: normal;
+    background: var(--acc);
+    color: var(--acc-fg);
+    padding: 2px 4px;
+    vertical-align: 4px;
+    letter-spacing: 0.08em;
+  }
+  .ap-card-host,
+  .ap-card-sub {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-glyph {
+    align-self: flex-start;
+    border: 2px solid var(--fg);
+    font: 900 10px var(--sans);
+    padding: 1px 5px;
+  }
+  .ap-card-st {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 10px 0;
+    font: 800 10.5px var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--acc);
+  }
+  .ap-card-st i {
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+    animation: hpulse 1.2s infinite;
+  }
+  .ap-card[data-v="ready"] .ap-card-st {
+    color: var(--ok);
+  }
+  .ap-card[data-v="ready"] .ap-card-st i {
+    animation: none;
+  }
+  .ap-card-stage {
+    font: 500 10px var(--mono);
+    color: var(--fg2);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .ap-card-ft {
+    border-top: 1px solid var(--line);
+    padding-top: 7px;
+  }
+  .ap-card-ft > span {
+    font: 500 10px var(--mono);
+  }
+  .ap-card-ft > span[data-v="ok"] {
+    color: var(--ok);
+  }
+  .ap-card-ft > span[data-v="warn"] {
+    color: var(--warn);
+  }
+  .ap-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  /* drawers */
+  .ap-dr {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg);
+    border-left: 3px solid var(--fg);
+    display: flex;
+    flex-direction: column;
+    animation: apslide 0.18s ease-out;
+  }
+  @keyframes apslide {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+  }
+  .ap-dr-create {
+    width: 500px;
+  }
+  .ap-dr-agent {
+    width: 780px;
+  }
+  .ap-dr-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 18px;
+    border-bottom: 3px solid var(--fg);
+  }
+  .ap-dr-h h4,
+  .ap-ag-h h4 {
+    font: 900 22px / 1 var(--sans);
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+  }
+  .ap-x {
+    width: 30px;
+    height: 30px;
+    border: 2px solid var(--fg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+  .ap-dr-env {
+    display: flex;
+    justify-content: space-between;
+    background: var(--acc);
+    color: #0e0e0d;
+    font: 700 9.5px / 22px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0 18px;
+    flex: none;
+  }
+  .ap-dr-b {
+    flex: 1;
+    min-height: 0;
+    padding: 12px 18px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ap-name {
+    height: 44px;
+    border: 3px solid var(--fg);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font: 700 19px var(--mono);
+  }
+  .ap-caret {
+    width: 2px;
+    height: 22px;
+    background: var(--acc);
+    margin-left: 2px;
+    animation: blink 1s steps(1) infinite;
+  }
+  .ap-hint {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-hint.ap-okt {
+    color: var(--ok);
+  }
+  .ap-brain {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    border: 2px solid var(--fg);
+    padding: 0 12px;
+    font-size: 12.5px;
+  }
+  .ap-brain .mono {
+    font-size: 11px;
+    color: var(--fg2);
+  }
+  .ap-brain em {
+    font: 700 9px var(--mono);
+    font-style: normal;
+    border: 1px dashed var(--fg3);
+    color: var(--fg2);
+    padding: 1px 5px;
+    text-transform: uppercase;
+    margin-left: auto;
+  }
+  .ap-presets {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border: 2px solid var(--fg);
+  }
+  .ap-pre {
+    padding: 8px 9px;
+    border-right: 1px solid var(--line2);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .ap-pre:last-child {
+    border-right: 0;
+  }
+  .ap-pre b {
+    font: 900 12px var(--sans);
+    text-transform: uppercase;
+  }
+  .ap-pre span {
+    font: 500 9.5px var(--mono);
+    color: var(--fg2);
+  }
+  .ap-pre strong {
+    font: 900 17px var(--sans);
+    letter-spacing: -0.02em;
+    margin-top: 3px;
+  }
+  .ap-pre.on {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .ap-pre.on span {
+    color: var(--bg3);
+  }
+  .ap-cust {
+    border: 2px solid var(--line2);
+    padding: 7px 10px;
+    font: 900 10.5px var(--sans);
+    letter-spacing: 0.06em;
+    margin-top: 4px;
+  }
+  .ap-cust span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    letter-spacing: 0;
+    margin-left: 8px;
+  }
+  .ap-facts {
+    font: 500 10px var(--mono);
+    color: var(--fg2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ap-dr-f {
+    margin: auto -18px 0;
+    border-top: 3px solid var(--fg);
+    padding: 10px 18px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ap-dr-f.row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .ap-echo {
+    font: 500 10px var(--mono);
+    color: var(--fg2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ap-total {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .ap-total > div {
+    margin-right: auto;
+  }
+  .ap-total b {
+    display: block;
+    font: 900 22px / 1 var(--sans);
+    letter-spacing: -0.03em;
+  }
+  .ap-total span:not(.ap-btn) {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-cprog .ap-log {
+    flex: 1;
+    margin-top: 8px;
+  }
+
+  /* agent drawer */
+  .ap-ag-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 12px 18px;
+    border-bottom: 3px solid var(--fg);
+  }
+  .ap-ag-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font: 800 10px var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--acc);
+    margin-bottom: 6px;
+  }
+  .ap-ag-pill i {
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+  }
+  .ap-ag-pill .mono {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--fg3);
+  }
+  .ap-ag-pill[data-v="ready"] {
+    color: var(--ok);
+  }
+  .ap-ag-act {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .ap-ag {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1fr);
+  }
+  .ap-ag-nav {
+    border-right: 3px solid var(--fg);
+  }
+  .ap-ag-nav > div {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .ap-ag-nav b {
+    display: block;
+    font: 800 11.5px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .ap-ag-nav span {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-ag-nav > div[data-v="on"] {
+    background: var(--sel);
+    box-shadow: inset 4px 0 0 var(--acc);
+  }
+  .ap-ag-nav > div[data-v="dis"] {
+    opacity: 0.4;
+  }
+  .ap-ag-body {
+    position: relative;
+    min-width: 0;
+  }
+  .ap-ov {
+    position: absolute;
+    inset: 0;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ap-lead {
+    font: 800 16px var(--sans);
+    color: var(--acc);
+    margin-bottom: 4px;
+  }
+  .ap-lead[data-v="ok"] {
+    color: var(--ok);
+  }
+  .ap-health {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .ap-health > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--line2);
+    padding: 6px 10px;
+  }
+  .ap-health i {
+    width: 9px;
+    height: 9px;
+    background: var(--line2);
+  }
+  .ap-health b {
+    font-size: 12px;
+  }
+  .ap-health span {
+    margin-left: auto;
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .ap-health > div[data-v="ok"] i {
+    background: var(--ok);
+  }
+  .ap-health > div[data-v="ok"] span {
+    color: var(--fg2);
+  }
+  .ap-stage {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) auto 54px;
+    gap: 10px;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ap-stage i {
+    position: relative;
+    width: 12px;
+    height: 12px;
+    background: var(--line2);
+  }
+  .ap-stage b {
+    font-size: 12.5px;
+  }
+  .ap-stage-s {
+    font: 700 9.5px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg3);
+  }
+  .ap-stage-t {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    text-align: right;
+  }
+  .ap-stage[data-v="running"] i {
+    background: var(--acc);
+    animation: hpulse 1.2s infinite;
+  }
+  .ap-stage[data-v="running"] .ap-stage-s {
+    color: var(--acc);
+  }
+  .ap-stage[data-v="ok"] i {
+    background: var(--ok);
+  }
+  .ap-stage[data-v="ok"] i::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    background: var(--bg);
+  }
+  .ap-stage[data-v="ok"] .ap-stage-s {
+    color: var(--ok);
+  }
+
+  /* chat (soft skin inside the chat body, docs/ui-brief.md "Chat") */
+  .ap-chat {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .ap-chat-h {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line2);
+  }
+  .ap-chat-h b {
+    font: 800 15px var(--sans);
+  }
+  .ap-chat-h b span {
+    color: var(--fg3);
+    font-weight: 500;
+  }
+  .ap-chat-h .mono {
+    font-size: 10px;
+    color: var(--fg3);
+    margin-right: auto;
+  }
+  .ap-av {
+    width: 26px;
+    height: 26px;
+    fill: var(--acc);
+  }
+  .ap-thread {
+    flex: 1;
+    min-height: 0;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .ap-who {
+    display: block;
+    font: 700 10px var(--mono);
+    color: var(--fg3);
+    margin-bottom: 3px;
+  }
+  .ap-msg p {
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  .ap-msg.me {
+    align-self: flex-end;
+    max-width: 70%;
+    text-align: right;
+  }
+  .ap-msg.me p {
+    background: var(--bg3);
+    padding: 8px 12px;
+    text-align: left;
+  }
+  .ap-msg.bot {
+    max-width: 92%;
+  }
+  .ap-think {
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+    animation: hpulse 1.2s infinite;
+  }
+  .ap-tool {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 500 11px var(--mono);
+    border-left: 1px dashed var(--line2);
+    padding: 3px 0 3px 10px;
+  }
+  .ap-tool i {
+    width: 8px;
+    height: 8px;
+    background: var(--acc);
+  }
+  .ap-tool[data-v="ok"] i {
+    background: var(--ok);
+  }
+  .ap-tool span {
+    color: var(--fg3);
+  }
+  .ap-dest {
+    margin: 0 18px;
+    padding: 5px 10px;
+    border: 1px solid var(--line2);
+    border-bottom: 0;
+    font: 500 10px var(--mono);
+    color: var(--fg2);
+  }
+  .ap-compose {
+    margin: 0 18px 14px;
+    border: 2px solid var(--fg);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 6px 6px 12px;
+    font-size: 12.5px;
+    color: var(--fg3);
+  }
+  .ap-compose [data-v="typed"] {
+    color: var(--fg);
+  }
+
+  /* ---------- narrow ---------- */
+  @media (max-width: 1080px) {
+    .tm-main {
+      grid-template-columns: 1fr;
+    }
+    .tm-side {
+      order: 0;
+      border-left: 0;
+      border-bottom: 2px solid var(--fg);
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      column-gap: 24px;
+      align-items: center;
+      padding: 12px 16px;
+    }
+    .clk-head {
+      grid-column: 1 / -1;
+    }
+    .clk {
+      font-size: 48px;
+      margin: 6px 0 0;
+    }
+    .chap {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      border-top: 0;
+      gap: 2px;
+    }
+    .chap li {
+      grid-template-columns: 1fr;
+      row-gap: 6px;
+      border-bottom: 0;
+      border-top: 3px solid var(--line2);
+      padding: 6px 0 0;
+    }
+    .chap li.done {
+      border-top-color: var(--ok);
+    }
+    .chap li.on {
+      border-top-color: var(--acc);
+    }
+    .chap li :global(.sq),
+    .chap .cd,
+    .chap .ct {
+      display: none;
+    }
+    .chap .cn {
+      font-size: 10px;
+      line-height: 1.15;
+    }
+  }
+  @media (max-width: 640px) {
+    .pick {
+      padding: 12px;
+      align-items: flex-start;
+    }
+    .pick-opts {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pick-o {
+      padding: 16px 14px;
+      gap: 8px;
+    }
+    .pick-o + .pick-o {
+      border-left: 0;
+      border-top: 1px solid var(--line2);
+    }
+    .pick-b {
+      height: 54px;
+      font-size: 14px;
+    }
+    .tm-side {
+      grid-template-columns: 1fr;
+      row-gap: 8px;
+      padding: 12px;
+    }
+    .clk {
+      font-size: 44px;
+    }
+    .chap .cn {
+      display: none;
+    }
+    .tm-title {
+      display: none;
+    }
+    .zt .hc-term {
+      padding-bottom: 20px;
+    }
+    .tm {
+      box-shadow: 6px 6px 0 var(--line2);
+      font-size: 11px;
+    }
+    .tm-bar {
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+    }
+    .tm-ctl {
+      justify-self: end;
+    }
+    .tm-ch {
+      display: none !important;
+    }
+    .clk-ch {
+      display: inline;
+    }
+    .tm-ctl button {
+      white-space: nowrap;
+      padding: 0 9px;
+    }
+    .tm-dots {
+      display: none;
+    }
+    .tm-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tm-ctl button {
+      padding: 0 10px;
+    }
+    .tm-views {
+      height: 440px;
+    }
+    /* The replica simplifies at phone width: one column, drawers full width. */
+    .ap {
+      --aw: 440px;
+      font-size: 12px;
+    }
+    .ap-wz {
+      grid-template-columns: 1fr;
+      margin: 10px;
+    }
+    .ap-wz-rail,
+    .ap-nav,
+    .ap-hd-r,
+    .ap-env-r,
+    .ap-env > span:nth-child(3),
+    .ap-tb-r .ap-seg,
+    .ap-ss-d,
+    .ap-ss em,
+    .ap-prog-cols .ap-steps,
+    .ap-kv,
+    .ap-ag-nav,
+    .ap-ag-act .ap-btn,
+    .ap-echo,
+    .ap-facts,
+    .ap-cust,
+    .ap-chat-h .mono,
+    .ap-chat-h .ap-btn,
+    .ap-total .ap-btn.ap-s {
+      display: none;
+    }
+    .ap-sub {
+      inset: 12px 14px;
+    }
+    .ap-wz-panel {
+      padding: 12px 14px;
+    }
+    .ap-ss {
+      grid-template-columns: 10px 1fr;
+    }
+    .ap-prog-cols {
+      grid-template-columns: 1fr;
+    }
+    .ap-acct {
+      font-size: 24px;
+    }
+    .ap-board {
+      grid-template-columns: 1fr;
+    }
+    .ap-dr-create,
+    .ap-dr-agent {
+      width: 100%;
+      border-left: 0;
+    }
+    .ap-presets {
+      grid-template-columns: 1fr 1fr;
+    }
+    .ap-pre:nth-child(2) {
+      border-right: 0;
+    }
+    .ap-pre:nth-child(-n + 2) {
+      border-bottom: 1px solid var(--line2);
+    }
+    .ap-ag {
+      grid-template-columns: 1fr;
+    }
+    .ap-tb {
+      padding: 12px 12px 10px;
+    }
+    .ap-ag-h,
+    .ap-dr-h {
+      padding: 10px 12px;
+    }
+    .ap-ov {
+      padding: 10px 12px;
+    }
+
+    .tm-body {
+      padding: 12px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cur,
+    .chap li.on :global(.sq) {
+      animation: none;
+    }
+  }
+</style>
+
+<script is:inline>
+  // Two players over one simulated clock. The CLI view types each command and prints its output,
+  // paced line by line; the APP view is stateless markup whose data-show / data-at / data-s /
+  // data-tx / data-w attributes say what it looks like at any second, paced by its own keyframes
+  // (data-beats-app). Each view has its own chapter times and end time. Switching mid-run hands
+  // the current second to the other player. Without script, or with reduced motion (or ?still),
+  // the server-rendered finished state is what shows.
+  (() => {
+    const root = document.getElementById("e-zt");
+    if (!root) return;
+    const totals = { cli: Number(root.dataset.totalCli), app: Number(root.dataset.totalApp) };
+    const appBeats = JSON.parse(root.dataset.beatsApp);
+    const tm = root.querySelector(".tm");
+    const body = root.querySelector("[data-body]");
+    const lines = Array.from(body.querySelectorAll(".ln:not(.end)"));
+    const lineT = lines.map((l) => Number(l.dataset.t));
+    const end = body.querySelector("[data-end]");
+    const cur = body.querySelector("[data-cur]");
+    const clockEl = root.querySelector("[data-clock]");
+    const stateEl = root.querySelector("[data-state]");
+    const chLabels = Array.from(root.querySelectorAll("[data-chlabel]"));
+    const chaps = Array.from(root.querySelectorAll("[data-chap]"));
+    const segs = Array.from(root.querySelectorAll(".rseg"));
+    const fills = Array.from(root.querySelectorAll("[data-fill]"));
+    const names = chaps.map((c) => c.querySelector(".cn").textContent);
+    const texts = lines.map((l) => {
+      const tx = l.querySelector(".tx");
+      return tx ? tx.textContent : null;
+    });
+    const pad = (n) => String(n).padStart(2, "0");
+    const fmt = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
+    let run = 0;
+    let view = "cli";
+    let mode = "done"; // "ready" behind the choice, "live" while playing, "done" when finished
+    const total = () => totals[view];
+    let now = totals.cli;
+
+    /* ---- the app view's timeline ---- */
+    const wrap = root.querySelector("[data-app]");
+    const stage = root.querySelector("[data-stage]");
+    const pick = (steps, t, fallback) => {
+      let v = fallback;
+      for (const [at, x] of steps) if (t >= at) v = x;
+      return v;
+    };
+    const shows = Array.from(root.querySelectorAll("[data-show]")).map((el) => {
+      const [a, b] = el.dataset.show.split(",").map(Number);
+      return { el, a, b };
+    });
+    const ats = Array.from(root.querySelectorAll("[data-at]")).map((el) => ({ el, t: Number(el.dataset.at) }));
+    const sts = Array.from(root.querySelectorAll("[data-s]")).map((el) => ({ el, p: JSON.parse(el.dataset.s) }));
+    const txs = Array.from(root.querySelectorAll("[data-tx]")).map((el) => ({ el, p: JSON.parse(el.dataset.tx) }));
+    const ws = Array.from(root.querySelectorAll("[data-w]")).map((el) => ({ el, p: JSON.parse(el.dataset.w) }));
+    const logs = Array.from(root.querySelectorAll("[data-log]"));
+
+    function applyApp(t) {
+      for (const s of shows) {
+        const off = !(t >= s.a && t < s.b);
+        if (s.el.hidden !== off) s.el.hidden = off;
+      }
+      for (const a of ats) a.el.toggleAttribute("data-on", t >= a.t);
+      for (const s of sts) {
+        const v = pick(s.p, t, "");
+        if (s.el.dataset.v !== v) s.el.dataset.v = v;
+      }
+      for (const x of txs) {
+        const v = pick(x.p, t, "");
+        if (x.el.textContent !== v) x.el.textContent = v;
+      }
+      for (const x of ws) x.el.style.width = `${pick(x.p, t, 0)}%`;
+      for (const l of logs) l.scrollTop = l.scrollHeight;
+    }
+
+    function fit() {
+      if (wrap.hidden || tm.dataset.view !== "app") return;
+      const aw = parseFloat(getComputedStyle(stage).getPropertyValue("--aw")) || 1100;
+      const s = wrap.clientWidth / aw;
+      stage.style.transform = `scale(${s})`;
+      stage.style.height = `${wrap.clientHeight / s}px`;
+    }
+
+    /* Each view's chapter ranges, as rendered in data-span-cli / data-span-app. */
+    const range = (c) => c.dataset[view === "app" ? "spanApp" : "spanCli"].split(",").map(Number);
+
+    function setClock(s) {
+      now = s;
+      clockEl.textContent = fmt(s);
+      let at = 0;
+      chaps.forEach((c, i) => {
+        const [from, to] = range(c);
+        c.classList.toggle("done", s >= to);
+        c.classList.toggle("on", s >= from && s < to);
+        if (s >= from) at = i;
+        const f = fills[i];
+        if (f) f.style.width = `${Math.max(0, Math.min(1, (s - from) / (to - from))) * 100}%`;
+      });
+      for (const l of chLabels) l.textContent = names[at];
+      if (view === "app") applyApp(s);
+    }
+
+    function setState(m) {
+      mode = m;
+      stateEl.textContent = m;
+      stateEl.classList.toggle("live", m === "live");
+    }
+
+    /* The transcript as it stands at second s: every line due by then, fully typed (none at 0). */
+    function showLines(s) {
+      lines.forEach((l, i) => {
+        l.classList.toggle("hid", s <= 0 || lineT[i] > s);
+        if (texts[i] !== null) l.querySelector(".tx").textContent = texts[i];
+      });
+      end.appendChild(cur);
+      body.scrollTop = s > 0 ? body.scrollHeight : 0;
+    }
+
+    function finish() {
+      run++;
+      setState("done");
+      showLines(totals.cli);
+      end.classList.remove("hid");
+      setClock(total());
+      body.scrollTop = body.scrollHeight;
+    }
+
+    function tween(from, to, ms, id, done) {
+      if (ms <= 0 || to <= from) {
+        setClock(Math.max(from, to));
+        done();
+        return;
+      }
+      const t0 = performance.now();
+      const step = (stamp) => {
+        if (id !== run) return;
+        const p = Math.min(1, (stamp - t0) / ms);
+        setClock(from + (to - from) * p);
+        if (p < 1) requestAnimationFrame(step);
+        else done();
+      };
+      requestAnimationFrame(step);
+    }
+
+    function type(el, text, perChar, id, done) {
+      const tx = el.querySelector(".tx");
+      tx.textContent = "";
+      tx.after(cur);
+      let i = 0;
+      const tick = () => {
+        if (id !== run) return;
+        i++;
+        tx.textContent = text.slice(0, i);
+        if (i < text.length) setTimeout(tick, perChar + (Math.random() * perChar) / 2);
+        else setTimeout(done, 260);
+      };
+      setTimeout(tick, 320);
+    }
+
+    // The CLI's pace between two lines. Lines printed together stream out at once; a short gap is
+    // the operator or the agent at human scale; a long one (a stack, the bootstrap) is compressed,
+    // and the wait before a typed command is a fixed beat.
+    function cliWait(l, dt) {
+      if (dt > 200) return 3000;
+      if (l.classList.contains("cmd")) return 500;
+      if (dt === 0) return 40;
+      return Math.min(900, 180 * Math.sqrt(dt));
+    }
+
+    function playCli(s, id) {
+      let i = s > 0 ? lineT.findIndex((t) => t > s) : 0;
+      if (i < 0) i = lines.length;
+      let at = s;
+      const next = () => {
+        if (id !== run) return;
+        if (i >= lines.length) {
+          tween(at, total(), 400, id, finish);
+          return;
+        }
+        const idx = i++;
+        const l = lines[idx];
+        const t = lineT[idx];
+        tween(at, t, cliWait(l, Math.max(0, t - at)), id, () => {
+          at = t;
+          l.classList.remove("hid");
+          body.scrollTop = body.scrollHeight;
+          if (texts[idx] !== null) {
+            type(l, texts[idx], l.classList.contains("ans") ? 22 : 30, id, next);
+          } else {
+            next();
+          }
+        });
+      };
+      next();
+    }
+
+    function playApp(s, id) {
+      let j = appBeats.findIndex(([t]) => t > s);
+      if (j < 0) j = appBeats.length;
+      let at = s;
+      const next = () => {
+        if (id !== run) return;
+        if (j >= appBeats.length) {
+          tween(at, total(), 400, id, finish);
+          return;
+        }
+        const [t, ms] = appBeats[j];
+        const prev = j > 0 ? appBeats[j - 1][0] : 0;
+        j++;
+        // Joining mid-segment (after a switch) plays only what is left of it.
+        const left = t > prev ? ms * Math.min(1, (t - at) / (t - prev)) : ms;
+        tween(at, t, left, id, () => {
+          at = t;
+          next();
+        });
+      };
+      next();
+    }
+
+    function play(s) {
+      const id = ++run;
+      setState("live");
+      const from = Math.min(s, total());
+      showLines(from);
+      end.classList.add("hid");
+      setClock(from);
+      (view === "app" ? playApp : playCli)(from, id);
+    }
+
+    /* ---- CLI | APP: one switch; a live run carries on from the same second ---- */
+    const seg = root.querySelector("[data-seg]");
+    const segBtns = Array.from(seg.querySelectorAll("button"));
+    function setView(v) {
+      view = v;
+      tm.dataset.view = v;
+      segBtns.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+      try {
+        localStorage.setItem("hermetic-landing-view", v);
+      } catch {}
+      chaps.forEach((c, i) => {
+        const [from, to] = range(c);
+        if (segs[i]) segs[i].style.flex = String(to - from);
+      });
+      fit();
+    }
+    segBtns.forEach((b) =>
+      b.addEventListener("click", () => {
+        if (b.dataset.v === view) return;
+        setView(b.dataset.v);
+        if (mode === "live") play(now);
+        else if (mode === "done") finish();
+        else setClock(0);
+      }),
+    );
+    seg.hidden = false;
+    wrap.hidden = false;
+    let saved = null;
+    try {
+      saved = localStorage.getItem("hermetic-landing-view");
+    } catch {}
+    const q = new URLSearchParams(location.search);
+    setView(q.get("view") === "app" || (q.get("view") === null && saved === "app") ? "app" : "cli");
+    window.addEventListener("resize", fit);
+
+    /* ---- the choice: the run waits at 00:00 behind it; replay comes back to it ---- */
+    const pickEl = root.querySelector("[data-pick]");
+    const playBtns = Array.from(root.querySelectorAll("[data-play]"));
+    function prime() {
+      run++;
+      setState("ready");
+      showLines(0);
+      end.classList.remove("hid");
+      setClock(0);
+      applyApp(0);
+      pickEl.hidden = false;
+    }
+    playBtns.forEach((b) =>
+      b.addEventListener("click", () => {
+        pickEl.hidden = true;
+        setView(b.dataset.play);
+        play(0);
+      }),
+    );
+    root.querySelector('[data-act="replay"]').addEventListener("click", () => {
+      prime();
+      playBtns[0]?.focus({ preventScroll: true });
+    });
+    root.querySelector('[data-act="skip"]').addEventListener("click", () => {
+      pickEl.hidden = true;
+      finish();
+    });
+
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches || q.has("still");
+    if (still) {
+      finish();
+      // ?still&at=<seconds> freezes the view at one moment, for review screenshots.
+      if (q.has("at")) {
+        const s = Math.min(total(), Number(q.get("at")) || 0);
+        showLines(s);
+        end.classList.toggle("hid", s < total());
+        setClock(s);
+      }
+      return;
+    }
+    prime();
+  })();
+</script>
