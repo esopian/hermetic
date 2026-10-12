@@ -1,0 +1,11 @@
+---
+import { dmgUrl, tag } from "../data/release";
+import Button from "./Button.astro";
+---
+<section class="band">
+  <div class="wrap">
+    {/* design.md §3.6 (macos-arm64 DMG, unsigned builds). "Pre-alpha": README.md "Status". */}
+    <div><h2>Run your first<br>Hermes agent</h2><div style="font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;margin-top:14px">Pre-alpha · Apple silicon · unsigned build</div></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap"><Button variant="p" href={dmgUrl}>↓ Download {tag}</Button><Button variant="s" href="/docs/quick-start/">Getting started →</Button></div>
+  </div>
+</section>

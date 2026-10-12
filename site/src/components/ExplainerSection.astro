@@ -1,0 +1,48 @@
+---
+import { explainer } from "../data/links";
+import { PATHS, pathHref } from "../data/explainer";
+import Button from "./Button.astro";
+import Kicker from "./Kicker.astro";
+import SectionHead from "./SectionHead.astro";
+---
+<section class="s" id="explainer">
+  <SectionHead num="§04" kicker="Explainer" title="Watch it work, one path at a time">
+    {/* The explainer's narration follows docs/design.md; each beat cites its section (site/AGENTS.md "Explainer"). */}
+    <p>An animated walkthrough of hermetic, narrated beat by beat. Pick the path that matches what you need to know. Every path can be paused and stepped through, and picks up where you left off.</p>
+  </SectionHead>
+  <div class="paths">
+    {PATHS.map((p) => (
+      <a class="doc" href={pathHref(p.id)}><Kicker>{p.audience}</Kicker><h4>{p.title}</h4><p>{p.tagline}</p><span class="go">▶ {p.minutes} min</span></a>
+    ))}
+  </div>
+  <div class="paths-foot"><Button variant="s" small href={explainer.home}>All paths and a picker →</Button></div>
+</section>
+
+<style>
+  .paths {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 1px;
+    background: var(--line);
+  }
+  .paths-foot {
+    padding: 20px 24px;
+    border-top: 1px solid var(--line);
+  }
+  @media (max-width: 1080px) {
+    .paths {
+      grid-template-columns: 1fr 1fr;
+    }
+    .paths a:last-child {
+      grid-column: 1 / -1;
+    }
+  }
+  @media (max-width: 640px) {
+    .paths {
+      grid-template-columns: 1fr;
+    }
+    .paths a:last-child {
+      grid-column: auto;
+    }
+  }
+</style>

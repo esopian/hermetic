@@ -1,0 +1,45 @@
+---
+slug: docs/concepts/principles
+title: Principles
+description: The design rules hermetic is built on.
+sidebar:
+  order: 1
+---
+
+These are the rules the rest of the design follows. The full statement is §1 of [`docs/design.md`](https://github.com/esopian/hermetic/blob/master/docs/design.md). {/* design.md §1 */}
+
+## Sealed inbound, open outbound
+
+Agents have no inbound ports. Tailscale is the only way in, and it is required. The security group has zero inbound rules and nftables on the box drops unsolicited traffic, so the seal does not depend on the subnet being private. {/* design.md §1, §7.2 */}
+
+Outbound is open, because agents need the web for search and browser tools. It leaves from each agent's own public IP by default, or through a NAT instance in `nat` mode. {/* design.md §1, §7.2 "Egress model" */}
+
+hermetic's own code is never fetched from a package manager. `hermeticd` and each agent's config come only from the fleet's S3 bucket. Standard packages such as Ubuntu, Docker, Tailscale and Hermes install from their public sources. {/* design.md §1 */}
+
+## Instances are disposable, volumes are precious
+
+What an agent learns lives on a separate EBS data volume that outlives the instance. Rebuilding the instance with `agent recreate` is routine; the volume is reattached to the new one. `agent destroy` keeps the volume unless you pass `--delete-volume`. {/* design.md §1; docs/operations.md "Stop / start / recreate / destroy semantics" */}
+
+## A working agent needs no extra secrets
+
+With the default Bedrock provider, an agent authenticates as its instance role. The only credentials you supply are AWS access for yourself and a Tailscale OAuth client. Other model providers and Bitwarden are opt-in. {/* design.md §1 "Zero-secret minimal path", §8.1 */}
+
+## If it isn't in core, it doesn't exist
+
+All logic lives in one SDK. The CLI and the desktop app are thin heads over it, and a test fails the build if a command exists in one and not the other. The daemon on each box, `hermeticd`, is built from the same repository and validates the same schemas. {/* design.md §1, §3.2 rule 4 */}
+
+## Imperative operations, declarative foundation
+
+The one-time AWS foundation is a CloudFormation stack. Everything per agent is an SDK call recorded in DynamoDB. There is no general-purpose infrastructure-as-code engine. {/* design.md §1 */}
+
+## Light
+
+Two binaries and one app: the `hermetic` CLI, the desktop app, and `hermeticd` on each box. DynamoDB and S3 are the only cloud state and are read directly. SQLite on your laptop holds only what that laptop knows. There is no Packer, no Terraform, and no daemon the CLI depends on. {/* design.md §1 "Light" */}
+
+## One home, one account, frozen
+
+`init` binds a hermetic home to a single AWS account, verified against STS, and every later call verifies it again before touching AWS. Running against the wrong account fails with `ACCOUNT_MISMATCH` before anything is changed. {/* design.md §1, §4.7; README.md "Safety model" */}
+
+## Plan, then apply
+
+Destructive operations produce a plan first. You review it and confirm; the most destructive ones, such as `teardown` and `init --reset`, need the twelve-digit account id typed back. {/* design.md §3.2 rule 3; docs/operations.md "The typed confirmation" */}

@@ -1,0 +1,1636 @@
+---
+/*
+ * Landing section "The app", carried over from mockup B's tour: five panels, each a replica of one
+ * desktop-app surface (fleet views, chat, the New agent panel, the agent's desktop, a kept volume
+ * reused). Every agent name, account id, hostname and chat line is illustrative. Look and
+ * layout follow docs/ui-brief.md; product claims cite docs/design.md beside them.
+ */
+import {
+  DEFAULT_DATA_GIB,
+  DEFAULT_ROOT_GIB,
+  GP3_USD_PER_GIB_MONTH,
+  sizeById,
+  usd,
+} from "../../data/cost";
+import SheetHead from "./SheetHead.astro";
+
+interface Props {
+  num: string;
+}
+
+const { num } = Astro.props;
+const looseVolMonth = usd(DEFAULT_DATA_GIB * GP3_USD_PER_GIB_MONTH);
+
+/*
+ * Screen 3, the New agent panel (packages/ui/src/components/CreateDrawer.tsx and create/*). The
+ * preset strip is the built-in loadout (packages/core/src/shared/presets.ts BUILTIN_LOADOUT, with
+ * Standard the default it opens on); each card's price is the instance plus its data volume and
+ * system disk at the gp3 rate (ui logic/create-presets.ts machineMonthlyUsd), from data/cost.ts.
+ */
+const LOADOUT = [
+  { id: "light", name: "Light", size: "small", data: 50, root: DEFAULT_ROOT_GIB },
+  { id: "standard", name: "Standard", size: "medium", data: 100, root: 40 },
+  { id: "heavy", name: "Heavy", size: "large", data: 200, root: 40 },
+  { id: "gpu", name: "GPU", size: "gpu-xsmall", data: 100, root: 40 },
+].map((p) => {
+  const sz = sizeById(p.size);
+  const month = sz.monthlyUsd + (p.data + p.root) * GP3_USD_PER_GIB_MONTH;
+  return { ...p, sz, month, cli: `--size ${p.size} --volume-gib ${p.data} --root-gib ${p.root}` };
+});
+const FROM = LOADOUT[1] as (typeof LOADOUT)[number];
+const TO = LOADOUT[2] as (typeof LOADOUT)[number];
+const NEW_NAME = "heron";
+const TAILNET = "tail7c1e.ts.net";
+const HOURS = 730;
+const money = (n: number): string => `$${Math.round(n)}`;
+const echo = (name: string, p: (typeof LOADOUT)[number]): string =>
+  `hermetic agent create ${name} ${p.cli} --provider-profile bedrock`;
+/* What the script needs to replay the panel: the two presets' totals and CLI tails. */
+const CREATE_DATA = JSON.stringify({
+  name: NEW_NAME,
+  from: { id: FROM.id, month: FROM.month, echo: echo("<name>", FROM) },
+  to: { id: TO.id, month: TO.month, echo: echo(NEW_NAME, TO) },
+  hours: HOURS,
+});
+---
+<section class="b-tour" id="e-tour">
+  <SheetHead num={num} kicker="The app" note="Five screens" title="Five screens you will use every day">
+    {/* design.md §1 "Nothing is CLI-only or GUI-only": each screen below names its CLI twin. */}
+    <p>The desktop app and the <code>hermetic</code> CLI share one core. Each screen here has a command that does the same thing.</p>
+  </SheetHead>
+    {/* 01 · fleet views */}
+    <div class="b-stop">
+      <div class="wrap b-stop-in">
+        <div class="b-say">
+          <div class="b-num"><b>1</b><span>Screen 1 of 5</span><span class="b-num-k">The fleet</span></div>
+          <h3>See every agent at a glance</h3>
+          {/* docs/ui-brief.md Layout 4 (board, table, triage); design.md §4.3 statuses, §4.3 derived `unreachable` */}
+          <p>Board, table and triage show the same live fleet three ways, so a degraded agent or a stalled boot stands out before you go looking.</p>
+          {/* design.md §9 `agent ps` (fleet table) */}
+          <div class="b-cli"><span>$</span> hermetic agent ps</div>
+        </div>
+        <div class="b-rep" role="group" aria-label="Fleet views replica">
+          <div class="b-rep-bar">
+            <span class="kicker">Fleet · us-east-1 · 5 agents</span>
+            <div class="b-seg b-seg-live" role="group" aria-label="Fleet view" data-tour-views>
+              <button type="button" class="on" aria-pressed="true" data-v="board">BOARD</button>
+              <button type="button" aria-pressed="false" data-v="table">TABLE</button>
+              <button type="button" aria-pressed="false" data-v="triage">TRIAGE</button>
+            </div>
+          </div>
+          <div class="b-view on" data-pane="board">
+            <div class="b-mboard">
+              <div class="b-mc" data-st="ok"><b>atlas</b><span>ready</span><em>0.21.3</em></div>
+              <div class="b-mc" data-st="warn"><b>corvid</b><span>degraded</span><em class="b-warn">0.21.1</em></div>
+              <div class="b-mc" data-st="ok"><b>kestrel</b><span>ready</span><em>0.21.3</em></div>
+              <div class="b-mc" data-st="ok"><b>lumen</b><span>ready</span><em>0.21.3</em></div>
+              <div class="b-mc" data-st="off"><b>moth</b><span>stopped</span><em>0.21.3</em></div>
+              <div class="b-mc" data-st="bad"><b>wren</b><span>unreachable</span><em>0.21.3</em></div>
+            </div>
+          </div>
+          <div class="b-view" data-pane="table">
+            <div class="b-scroll">
+              <table class="b-tbl">
+                <thead><tr><th>Agent</th><th>Status</th><th>Health</th><th>Version</th><th>Size</th><th>Mem</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="b-ix">01</span> atlas</td><td data-st="ok"><i></i>ready</td><td><span class="b-hs"><i data-h="ok"></i><i data-h="ok"></i><i data-h="ok"></i></span></td><td>0.21.3</td><td><span class="b-glyph">M</span> t4g.2xlarge</td><td>38%</td></tr>
+                  <tr><td><span class="b-ix">02</span> corvid</td><td data-st="warn"><i></i>degraded</td><td><span class="b-hs"><i data-h="ok"></i><i data-h="ok"></i><i data-h="warn"></i></span></td><td class="b-warn">0.21.1</td><td><span class="b-glyph">S</span> r8g.large</td><td>22%</td></tr>
+                  <tr><td><span class="b-ix">03</span> kestrel</td><td data-st="ok"><i></i>ready</td><td><span class="b-hs"><i data-h="ok"></i><i data-h="ok"></i><i data-h="ok"></i></span></td><td>0.21.3</td><td><span class="b-glyph">M</span> t4g.2xlarge</td><td>17%</td></tr>
+                  <tr><td><span class="b-ix">04</span> lumen</td><td data-st="ok"><i></i>ready</td><td><span class="b-hs"><i data-h="ok"></i><i data-h="ok"></i><i data-h="ok"></i></span></td><td>0.21.3</td><td><span class="b-glyph">M</span> t4g.2xlarge</td><td>61%</td></tr>
+                  <tr class="b-dim"><td><span class="b-ix">05</span> moth</td><td data-st="off"><i></i>stopped</td><td><span class="b-hs"><i data-h="off"></i><i data-h="off"></i><i data-h="off"></i></span></td><td>0.21.3</td><td><span class="b-glyph">S</span> r8g.large</td><td>—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="b-view" data-pane="triage">
+            <div class="b-tri">
+              <div class="b-trig" data-st="warn"><div class="b-tril"><span class="kicker">Attention</span><b>2</b><small>degraded, unreachable or behind</small></div><div class="b-trir"><div><i></i>corvid <span>degraded · 0.21.1</span></div><div><i data-x="bad"></i>wren <span>unreachable · last heartbeat 6m</span></div></div></div>
+              <div class="b-trig" data-st="ok"><div class="b-tril"><span class="kicker">Healthy</span><b>3</b><small>ready and on latest</small></div><div class="b-trir"><div><i></i>atlas <span>0.21.3</span></div><div><i></i>kestrel <span>0.21.3</span></div><div><i></i>lumen <span>0.21.3</span></div></div></div>
+              <div class="b-trig" data-st="off"><div class="b-tril"><span class="kicker">Stopped</span><b>1</b><small>disks only</small></div><div class="b-trir"><div><i></i>moth <span>stopped 2d</span></div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 02 · chat */}
+    <div class="b-stop b-flip">
+      <div class="wrap b-stop-in">
+        <div class="b-say">
+          <div class="b-num"><b>2</b><span>Screen 2 of 5</span><span class="b-num-k">Chat</span></div>
+          <h3>Talk to any agent, on any box</h3>
+          {/* design.md §9 `chat log` (transcript on the box's data volume, hermetic keeps no copy), §9.2 (rail of bots in instance buckets) */}
+          <p>Every bot on every box you listen to sits in one rail. The transcript lives on the agent's data volume, and hermetic keeps no copy.</p>
+          {/* design.md §9 `hermetic chat <instance>/<bot> [message]` */}
+          <div class="b-cli"><span>$</span> hermetic chat atlas/default "status?"</div>
+        </div>
+        <div class="b-rep b-chat" role="img" aria-label="Chat view replica: a rail of bots grouped by instance, and a thread with a background command event">
+          <div class="b-rail-l">
+            <div class="b-rsearch">search bots…</div>
+            <div class="kicker">atlas</div>
+            <div class="b-rrow on"><i></i>default<span>Two items moved…</span></div>
+            <div class="b-rrow"><i></i>research<span>Draft is in /data…</span></div>
+            <div class="kicker">corvid</div>
+            <div class="b-rrow"><i data-x="warn"></i>default<em>2</em><span>Disk is at 91%…</span></div>
+            <div class="kicker">lumen</div>
+            <div class="b-rrow"><i></i>default<span>■ pytest exited 0</span></div>
+          </div>
+          <div class="b-thr">
+            <div class="b-thead"><b>atlas / default</b><span>Bot Chat · in app</span></div>
+            {/* docs/ui-brief.md Chat "Background-process events": one mono row, collapsed output */}
+            <div class="b-ev"><i></i><span>pytest -q</span><span>exited 0 · 41s</span></div>
+            <div class="b-evo">output · 212 lines · last line: 212 passed</div>
+            <div class="b-tm"><div class="b-who">atlas</div><p>↳ responding to pytest. All 212 tests pass on the new parser. I pushed the branch and left the summary in the PR description.</p></div>
+            <div class="b-tm b-me"><div class="b-who">you</div><p>Ship it after the 14:00 scrape.</p></div>
+            <div class="b-tcomp">Message atlas/default<span>SEND ↵</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 03 · a new agent */}
+    <div class="b-stop">
+      <div class="wrap b-stop-in">
+        <div class="b-say">
+          <div class="b-num"><b>3</b><span>Screen 3 of 5</span><span class="b-num-k">New agent</span></div>
+          <h3>Start an agent from one panel</h3>
+          {/* design.md §6.2 (agent create), §4.6 (create presets: the machine comes from this laptop's loadout), §8.3 (a create picks a provider profile and never asks for a key); the monthly total and the CLI line are the panel's footer (packages/ui create/CreateFooter.tsx) */}
+          <p>Name it, pick a machine, and read the monthly price before anything launches. The panel also prints the command that makes the same agent, so the next one can be a script.</p>
+          {/* design.md §9 `agent create <name> [--preset <id|name>]` */}
+          <div class="b-cli"><span>$</span> hermetic agent create {NEW_NAME} --preset {TO.id}</div>
+        </div>
+        <div class="b-rep b-cr" role="img" aria-label="New agent panel replica: a name typed, the Heavy preset picked, the monthly total updated, and Create pressed" data-tour-create={CREATE_DATA}>
+          <div class="b-cr-h">
+            <div>
+              <div class="kicker" data-cr-kicker>New agent</div>
+              <b data-cr-title>Create agent</b>
+            </div>
+            <span class="b-cr-x">×</span>
+          </div>
+          {/* design.md §4.7: every head shows the target it acts on */}
+          <div class="b-cr-env"><span>Target</span>main · 123456789012 · us-east-1</div>
+          <div class="b-cr-bar"><i data-cr-bar></i></div>
+          <div class="b-cr-form" data-cr-form>
+            <div class="kicker">Agent name</div>
+            <div class="b-cr-name"><span class="b-cr-typed" data-cr-name>{NEW_NAME}</span><i class="b-caret"></i><span class="b-cr-ph" data-cr-ph hidden>e.g. corvid-2</span><span class="b-cr-dice" aria-hidden="true">⚄</span></div>
+            <div class="b-cr-hint"><span data-cr-ok><b>✓</b> {NEW_NAME}.{TAILNET}</span><span data-cr-idle hidden>lowercase, digits, dashes · becomes the EC2 tag, SSM path and tailnet hostname</span></div>
+            {/* design.md §1 / §8.3: Bedrock through the instance role, the fleet's default profile */}
+            <div class="kicker">Brain</div>
+            <div class="b-cr-brain"><i></i><b>bedrock</b><span>zai.glm-4.7-flash</span><em>fleet default</em></div>
+            <div class="b-cr-lbl"><span class="kicker">Preset</span><span>size + data volume + system disk</span></div>
+            <div class="b-cr-pre">
+              {LOADOUT.map((p) => (
+                <div class="b-cr-p" data-cr-p={p.id} aria-pressed={p.id === TO.id ? "true" : "false"}>
+                  <b>{p.name}</b>
+                  <span>{p.size} · {p.data} GiB</span>
+                  <span>{p.sz.gpu ? "T4G · " : ""}{p.sz.vcpu} vCPU · {p.sz.memGib} GiB</span>
+                  <strong>{money(p.month)}<small>/mo</small></strong>
+                </div>
+              ))}
+            </div>
+            <div class="b-cr-cust">▸ Customize <span data-cr-from>from {TO.name}</span></div>
+          </div>
+          <div class="b-cr-foot">
+            <div class="b-cr-echo" data-cr-echo>$ {echo(NEW_NAME, TO)}</div>
+            <div class="b-cr-cost">
+              <span class="kicker">Total</span>
+              <b><span data-cr-total>≈{money(TO.month)}</span><small>/mo</small></b>
+              <span data-cr-sub>~${(TO.month / HOURS).toFixed(2)}/h · ready in ~8 min</span>
+            </div>
+            <span class="b-cr-cancel">Cancel</span>
+            <span class="b-cr-go" data-cr-go>Create agent →</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 04 · desktop */}
+    <div class="b-stop b-flip">
+      <div class="wrap b-stop-in">
+        <div class="b-say">
+          <div class="b-num"><b>4</b><span>Screen 4 of 5</span><span class="b-num-k">Desktop</span></div>
+          <h3>Watch its browser, or take the wheel</h3>
+          {/* design.md §7.3 (one headed Chrome per agent on Xvfb, noVNC over Tailscale Serve, the operator and the agent share one window) */}
+          <p>Every agent runs one headed Chrome on its own display. You see the window it drives, so you can get it past a login wall and hand it straight back.</p>
+          {/* design.md §9 `agent status` prints the dashboard URL and the desktop URL */}
+          <div class="b-cli"><span>$</span> hermetic agent status atlas</div>
+        </div>
+        <div class="b-rep b-desk" role="img" aria-label="Agent drawer replica on its Desktop section: the agent's Chrome window, with a cursor accepting a cookie banner">
+          <div class="b-dkh">
+            <div><div class="b-pill"><i></i>READY</div><span class="b-dkhost">atlas.tail7c1e.ts.net · 100.101.7.12</span></div>
+            <b>atlas</b>
+            <div class="b-dkbtns"><span>Dashboard ↗</span><span>Open desktop ↗</span></div>
+          </div>
+          <div class="b-dkbody">
+            {/* docs/ui-brief.md "Agent detail" left nav order */}
+            <div class="b-dknav">
+              <div>Overview<small>all checks ok</small></div>
+              <div>Chat<small>listening</small></div>
+              <div class="on">Desktop<small>connected</small></div>
+              <div>Logs<small>activity · journal · console</small></div>
+              <div>Config<small>bedrock · default</small></div>
+              <div>Lifecycle<small>stop · reboot · rebuild</small></div>
+            </div>
+            <div class="b-dkmain">
+              <div class="b-chrome">
+                <div class="b-ctabs"><span class="on">Supplier portal</span><span>Orders</span></div>
+                <div class="b-curl">https://supplier.example/account</div>
+                <div class="b-page">
+                  <div class="b-plogo"></div>
+                  <div class="b-ph1"></div>
+                  <div class="b-pline"></div>
+                  <div class="b-pline s"></div>
+                  <div class="b-pgrid"><span></span><span></span><span></span></div>
+                  <div class="b-cookie"><span>This site uses cookies.</span><b>Accept</b></div>
+                  <svg class="b-cursor" width="16" height="22" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1v17l4.5-4.2 3 7 2.6-1.1-3-6.8H14z" fill="#f1efe9" stroke="#0e0e0d" stroke-width="1.2"></path></svg>
+                </div>
+              </div>
+              <div class="b-dkhint">click the frame to send keys and clicks · click outside the frame, then Esc closes the drawer</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* 05 · volumes */}
+    <div class="b-stop">
+      <div class="wrap b-stop-in">
+        <div class="b-say">
+          <div class="b-num"><b>5</b><span>Screen 5 of 5</span><span class="b-num-k">Volumes</span></div>
+          <h3>Rebuild the box, keep the memory</h3>
+          {/* design.md §1 "Instances are disposable, volumes are precious", §7.1 (separate gp3 data volume, daily DLM snapshot, keep 7), §6.7 (destroy keeps it), §9.1 (`agent create <name> --volume <id>`) */}
+          <p>What an agent learns lives on its own EBS volume with seven daily snapshots. Destroy the agent and the volume stays, ready to give to a new one.</p>
+          <div class="b-cli"><span>$</span> hermetic agent create cinder-2 --volume vol-0a91c2…</div>
+        </div>
+        <div class="b-rep b-vols" role="img" aria-label="Volumes replica: a destroyed agent's kept volume, and the create drawer reusing it for a new agent">
+          {/* docs/ui-brief.md Volumes "Volume lanes": no agent lane, claim card */}
+          <div class="b-lane">
+            <div class="b-lanel"><span class="kicker">No agent</span><b>1</b><small>destroyed, memory kept</small></div>
+            <div class="b-claim">
+              <div class="b-claim-id">vol-0a91c2e47d</div>
+              <div class="b-claim-ag">agent <b>cinder</b> · destroyed 3d ago</div>
+              <dl>
+                <dt>size</dt><dd>100 GiB gp3</dd>
+                <dt>snapshots</dt><dd>7 daily</dd>
+                <dt>cost</dt><dd>{looseVolMonth}/mo</dd>
+              </dl>
+              <div class="b-claim-f"><span>CREATE AGENT →</span></div>
+            </div>
+          </div>
+          {/* docs/ui-brief.md "Create drawer, entered from a volume": locked row, name cinder-2, CLI echo */}
+          <div class="b-cdraw">
+            <div class="kicker">New agent</div>
+            <b class="b-cdt">CREATE AGENT</b>
+            <div class="b-cname">cinder-2</div>
+            <div class="b-chint">✓ cinder-2.tail7c1e.ts.net</div>
+            <div class="b-locked"><span class="kicker">Data volume · locked</span><code>vol-0a91c2e47d</code><small>100 GiB · us-east-1b · 7 snapshots</small></div>
+            <div class="b-cecho">$ hermetic agent create cinder-2 --volume vol-0a91c2e47d</div>
+          </div>
+        </div>
+      </div>
+    </div>
+</section>
+
+<style>
+  .b-tour {
+    border-bottom: 3px solid var(--fg);
+  }
+  .b-tour code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--fg);
+    background: var(--bg3);
+    padding: 1px 5px;
+  }
+  .b-stop {
+    border-bottom: 1px solid var(--line);
+  }
+  .b-stop .b-stop-in {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 56px;
+    align-items: center;
+    padding-top: 56px;
+    padding-bottom: 56px;
+  }
+  .b-flip .b-say {
+    order: 2;
+  }
+  /* The stop's number tag: the same orange numbered box the blueprint's callouts use. */
+  .b-num {
+    display: inline-flex;
+    align-items: stretch;
+    border: 2px solid var(--fg);
+    font: 700 10px / 1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    margin-bottom: 18px;
+  }
+  .b-num b {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    font: 900 15px / 1 var(--sans);
+    letter-spacing: 0;
+  }
+  .b-num span {
+    display: flex;
+    align-items: center;
+    padding: 9px 12px;
+  }
+  .b-num .b-num-k {
+    border-left: 1px solid var(--line2);
+    color: var(--fg);
+  }
+  .b-say h3 {
+    font-weight: 900;
+    font-size: clamp(24px, 2.4vw, 32px);
+    letter-spacing: -0.025em;
+    line-height: 1;
+    text-transform: uppercase;
+    margin: 8px 0 14px;
+  }
+  .b-say p {
+    color: var(--fg2);
+    font-size: 16px;
+    max-width: 30em;
+  }
+  .b-cli {
+    margin-top: 20px;
+    border-left: 3px solid var(--acc);
+    background: var(--bg2);
+    padding: 10px 14px;
+    font: 500 12.5px / 1.7 var(--mono);
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+  .b-cli span {
+    color: var(--acc);
+  }
+  .b-rep {
+    border: 2px solid var(--fg);
+    background: var(--bg);
+    box-shadow: 10px 10px 0 var(--line2);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* 01 views */
+  .b-rep-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .b-seg-live button {
+    background: transparent;
+    border: 0;
+    color: var(--fg);
+    font: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+  }
+  .b-seg-live button.on {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .b-seg-live button:not(.on):hover {
+    background: var(--sel);
+  }
+  .b-view {
+    display: none;
+    min-height: 236px;
+  }
+  .b-view.on {
+    display: block;
+    animation: bfade 0.25s;
+  }
+  @keyframes bfade {
+    from {
+      opacity: 0;
+    }
+  }
+  .b-mboard {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    padding: 2px;
+    background: var(--line);
+  }
+  .b-mc {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: var(--bg);
+    border-top: 4px solid var(--ok);
+    padding: 12px 12px 14px;
+    min-height: 110px;
+    min-width: 0;
+  }
+  .b-mc b {
+    font: 900 18px var(--sans);
+    letter-spacing: -0.02em;
+  }
+  .b-mc span {
+    font: 800 9.5px var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ok);
+    margin-top: 6px;
+  }
+  .b-mc em {
+    font: 500 10px var(--mono);
+    font-style: normal;
+    color: var(--fg2);
+    margin-top: auto;
+    border-top: 1px solid var(--line);
+    padding-top: 6px;
+  }
+  .b-mc[data-st="warn"] {
+    border-top-color: var(--warn);
+  }
+  .b-mc[data-st="warn"] span {
+    color: var(--warn);
+  }
+  .b-mc[data-st="off"] {
+    border-top-color: var(--fg3);
+  }
+  .b-mc[data-st="off"] span {
+    color: var(--fg3);
+  }
+  .b-mc[data-st="bad"] {
+    border-top-color: var(--bad);
+  }
+  .b-mc[data-st="bad"] span {
+    color: var(--bad);
+  }
+  .b-scroll {
+    overflow-x: auto;
+  }
+  .b-tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font: 500 11.5px var(--mono);
+  }
+  .b-tbl th {
+    font: 700 9px var(--sans);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    text-align: left;
+    padding: 9px 10px;
+    border-bottom: 2px solid var(--fg);
+  }
+  .b-tbl td {
+    padding: 0 10px;
+    height: 40px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .b-tbl td:first-child {
+    font: 800 13.5px var(--sans);
+  }
+  .b-ix {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    margin-right: 4px;
+  }
+  .b-tbl td[data-st] {
+    font: 800 10.5px var(--sans);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ok);
+  }
+  .b-tbl td[data-st] i {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: currentColor;
+    margin-right: 6px;
+  }
+  .b-tbl td[data-st="warn"] {
+    color: var(--warn);
+  }
+  .b-tbl td[data-st="off"] {
+    color: var(--fg3);
+  }
+  .b-tbl .b-hs i {
+    width: 12px;
+    height: 12px;
+  }
+  .b-dim {
+    opacity: 0.55;
+  }
+  .b-tri {
+    display: flex;
+    flex-direction: column;
+  }
+  .b-trig {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    border-bottom: 1px solid var(--line);
+    box-shadow: inset 4px 0 0 var(--ok);
+  }
+  .b-trig[data-st="warn"] {
+    box-shadow: inset 4px 0 0 var(--warn);
+  }
+  .b-trig[data-st="off"] {
+    box-shadow: inset 4px 0 0 var(--fg3);
+  }
+  .b-tril {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 14px 10px 18px;
+    border-right: 1px solid var(--line);
+  }
+  .b-tril b {
+    font: 900 30px / 1 var(--sans);
+    letter-spacing: -0.04em;
+    margin: 2px 0;
+  }
+  .b-tril small {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+  }
+  .b-trir div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+    font: 800 13px var(--sans);
+    min-width: 0;
+  }
+  .b-trir div:last-child {
+    border-bottom: 0;
+  }
+  .b-trir span {
+    font: 500 10.5px var(--mono);
+    color: var(--fg3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-trir i,
+  .b-rrow i,
+  .b-ev i {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    background: var(--ok);
+  }
+  .b-trig[data-st="warn"] .b-trir i {
+    background: var(--warn);
+  }
+  .b-trig[data-st="off"] .b-trir i {
+    background: var(--fg3);
+  }
+  [data-x="bad"] {
+    background: var(--bad) !important;
+  }
+  [data-x="warn"] {
+    background: var(--warn) !important;
+  }
+  [data-x="ok"] {
+    background: var(--ok) !important;
+  }
+
+  /* 02 chat */
+  .b-chat {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+  .b-rail-l {
+    background: color-mix(in srgb, var(--bg2) 55%, var(--bg));
+    border-right: 1px solid var(--line);
+    padding: 12px 0;
+    min-width: 0;
+  }
+  .b-rail-l .kicker {
+    padding: 12px 14px 4px;
+  }
+  .b-rsearch {
+    margin: 0 12px;
+    border: 1px solid var(--line2);
+    padding: 6px 8px;
+    font: 500 10.5px var(--mono);
+    color: var(--fg3);
+  }
+  .b-rrow {
+    display: grid;
+    grid-template-columns: 8px 1fr auto;
+    align-items: center;
+    column-gap: 8px;
+    padding: 6px 14px;
+    font: 700 12.5px var(--sans);
+  }
+  .b-rrow span {
+    grid-column: 2 / 4;
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-rrow em {
+    font: 700 9px var(--mono);
+    font-style: normal;
+    background: var(--acc);
+    color: var(--acc-fg);
+    padding: 1px 5px;
+  }
+  .b-rrow.on {
+    background: var(--sel);
+    box-shadow: inset 3px 0 0 var(--acc);
+  }
+  .b-thr {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .b-thead {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .b-thead b {
+    font: 700 16px var(--sans);
+  }
+  .b-thead span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .b-ev {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 14px 18px 0;
+    padding-left: 12px;
+    border-left: 1px dashed var(--line2);
+    font: 500 11px var(--mono);
+    color: var(--fg2);
+  }
+  .b-ev span:last-child {
+    color: var(--fg3);
+  }
+  .b-evo {
+    margin: 0 18px;
+    padding: 4px 0 4px 30px;
+    border-left: 1px dashed var(--line2);
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .b-tm {
+    padding: 12px 18px 0;
+  }
+  .b-tm p {
+    font-size: 13px;
+    line-height: 1.6;
+    color: color-mix(in srgb, var(--fg) 92%, var(--fg2));
+  }
+  .b-tm.b-me p {
+    background: color-mix(in srgb, var(--sel) 70%, var(--bg));
+    border-left: 2px solid var(--line2);
+    padding: 8px 11px;
+  }
+  .b-tcomp {
+    display: flex;
+    justify-content: space-between;
+    margin: auto 14px 14px;
+    margin-top: 16px;
+    border: 1px solid var(--line2);
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--fg3);
+  }
+  .b-tcomp span {
+    font: 900 10px var(--sans);
+    color: var(--fg2);
+    letter-spacing: 0.06em;
+  }
+
+  /* 03 new agent: packages/ui/src/styles/create.css, at tour scale */
+  .b-cr-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 14px 18px 12px;
+  }
+  .b-cr-h b {
+    display: block;
+    font: 900 22px var(--sans);
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+  .b-cr-x {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--fg);
+    font: 700 14px var(--sans);
+  }
+  .b-cr-env {
+    display: flex;
+    gap: 10px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    font: 700 10px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 18px;
+  }
+  .b-cr-env span {
+    opacity: 0.7;
+  }
+  .b-cr-bar {
+    height: 3px;
+    background: var(--bg2);
+  }
+  .b-cr-bar i {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--acc);
+  }
+  .b-cr-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 18px 12px;
+    transition: opacity 0.3s;
+  }
+  .b-cr-form.busy {
+    opacity: 0.4;
+  }
+  .b-cr-form .kicker {
+    margin-top: 6px;
+  }
+  .b-cr-name {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 42px;
+    border: 3px solid var(--fg);
+    padding: 0 12px;
+    font: 700 17px var(--mono);
+  }
+  .b-cr-ph {
+    color: var(--fg3);
+    font-weight: 500;
+  }
+  .b-cr-ph[hidden] {
+    display: none;
+  }
+  .b-cr-dice {
+    margin-left: auto;
+    color: var(--fg3);
+    font-size: 18px;
+  }
+  .b-cr-hint {
+    font: 500 10.5px var(--mono);
+    color: var(--fg3);
+    min-height: 15px;
+  }
+  .b-cr-hint [hidden] {
+    display: none;
+  }
+  .b-cr-hint b {
+    color: var(--ok);
+  }
+  .b-cr-brain {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 2px solid var(--line2);
+    padding: 7px 10px;
+    font: 500 11px var(--mono);
+    color: var(--fg2);
+  }
+  .b-cr-brain i {
+    width: 8px;
+    height: 8px;
+    background: var(--ok);
+  }
+  .b-cr-brain b {
+    font: 800 12px var(--sans);
+    color: var(--fg);
+  }
+  .b-cr-brain em {
+    margin-left: auto;
+    font-style: normal;
+    font-size: 9.5px;
+    border: 1px dashed var(--line2);
+    padding: 1px 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .b-cr-lbl {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .b-cr-lbl .kicker {
+    margin-top: 0;
+  }
+  .b-cr-lbl > span:last-child {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .b-cr-pre {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 2px solid var(--fg);
+  }
+  .b-cr-p {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px;
+    border-right: 1px solid var(--line2);
+    min-width: 0;
+    transition:
+      background 0.2s,
+      color 0.2s;
+  }
+  .b-cr-p:last-child {
+    border-right: 0;
+  }
+  .b-cr-p b {
+    font: 900 12.5px var(--sans);
+    text-transform: uppercase;
+  }
+  .b-cr-p span {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+    overflow-wrap: anywhere;
+  }
+  .b-cr-p strong {
+    font: 900 19px var(--sans);
+    letter-spacing: -0.02em;
+    margin-top: 6px;
+  }
+  .b-cr-p strong small {
+    font-size: 10px;
+    opacity: 0.6;
+  }
+  .b-cr-p.hov {
+    background: var(--bg2);
+  }
+  .b-cr-p[aria-pressed="true"] {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .b-cr-p[aria-pressed="true"] span {
+    color: var(--bg);
+    opacity: 0.75;
+  }
+  .b-cr-cust {
+    border: 1px solid var(--line2);
+    padding: 7px 10px;
+    font: 900 10px var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+  .b-cr-cust span {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    letter-spacing: 0;
+    text-transform: none;
+    margin-left: 8px;
+  }
+  .b-cr-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px 12px;
+    border-top: 2px solid var(--fg);
+    padding: 12px 18px 16px;
+  }
+  .b-cr-echo {
+    grid-column: 1 / -1;
+    font: 500 10.5px var(--mono);
+    color: var(--fg2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-cr-cost {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .b-cr-cost b {
+    font: 900 24px / 1.05 var(--sans);
+    letter-spacing: -0.02em;
+  }
+  .b-cr-cost b small {
+    font-size: 11px;
+    color: var(--fg3);
+  }
+  .b-cr-cost > span:last-child {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+  }
+  .b-cr-cancel,
+  .b-cr-go {
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 14px;
+    border: 2px solid var(--fg);
+    font: 900 11px var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .b-cr-go {
+    background: var(--fg);
+    color: var(--bg);
+    transition:
+      transform 0.12s,
+      background 0.12s,
+      opacity 0.2s;
+  }
+  .b-cr-go.off {
+    opacity: 0.35;
+  }
+  .b-cr-go.press {
+    background: var(--acc);
+    border-color: var(--acc);
+    color: var(--acc-fg);
+    transform: translateY(2px);
+  }
+
+  /* 04 desktop */
+  .b-dkh {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 14px;
+    padding: 12px 18px;
+    border-bottom: 3px solid var(--fg);
+  }
+  .b-dkh > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .b-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: 800 10px var(--sans);
+    letter-spacing: 0.06em;
+    color: var(--ok);
+  }
+  .b-pill i {
+    width: 8px;
+    height: 8px;
+    background: var(--ok);
+  }
+  .b-dkhost {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-dkh > b {
+    grid-row: 2;
+    font: 900 22px var(--sans);
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+  }
+  .b-dkbtns {
+    grid-row: 1 / 3;
+    grid-column: 2;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .b-dkbtns span {
+    border: 2px solid var(--fg);
+    font: 900 9.5px var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+  .b-dkbody {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+  .b-dknav {
+    border-right: 3px solid var(--fg);
+  }
+  .b-dknav div {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    font: 800 11.5px var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .b-dknav small {
+    display: block;
+    font: 500 9px var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--fg3);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .b-dknav .on {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .b-dknav .on small {
+    color: var(--bg);
+    opacity: 0.7;
+  }
+  .b-dkmain {
+    padding: 14px;
+    min-width: 0;
+  }
+  .b-chrome {
+    border: 1px solid var(--line2);
+    background: #d9d6ce;
+    overflow: hidden;
+  }
+  .b-ctabs {
+    display: flex;
+    gap: 2px;
+    background: #2a2925;
+    padding: 5px 6px 0;
+  }
+  .b-ctabs span {
+    font: 500 9.5px var(--sans);
+    color: #a8a59c;
+    padding: 5px 12px;
+  }
+  .b-ctabs .on {
+    background: #3a3833;
+    color: #f1efe9;
+  }
+  .b-curl {
+    background: #3a3833;
+    color: #d8d5cc;
+    font: 500 9.5px var(--mono);
+    padding: 5px 10px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .b-page {
+    position: relative;
+    height: 200px;
+    background: #ece9e2;
+    padding: 18px 22px;
+    overflow: hidden;
+  }
+  .b-plogo {
+    width: 70px;
+    height: 12px;
+    background: #2a2925;
+    margin-bottom: 18px;
+  }
+  .b-ph1 {
+    width: 55%;
+    height: 14px;
+    background: #57554f;
+    margin-bottom: 10px;
+  }
+  .b-pline {
+    width: 80%;
+    height: 7px;
+    background: #b9b6ac;
+    margin-bottom: 6px;
+  }
+  .b-pline.s {
+    width: 60%;
+  }
+  .b-pgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .b-pgrid span {
+    height: 42px;
+    background: #dedbd2;
+    border: 1px solid #cfccc3;
+  }
+  .b-cookie {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 22px;
+    background: #2a2925;
+    color: #f1efe9;
+    font: 500 11px var(--sans);
+    animation: bcookie 7s infinite;
+  }
+  .b-cookie b {
+    background: #ff5a1f;
+    color: #0e0e0d;
+    font: 800 10px var(--sans);
+    padding: 5px 12px;
+  }
+  .b-cursor {
+    position: absolute;
+    left: 30%;
+    top: 30%;
+    animation: bcursor 7s infinite;
+  }
+  @keyframes bcursor {
+    0% {
+      left: 30%;
+      top: 25%;
+    }
+    35% {
+      left: 88%;
+      top: 82%;
+    }
+    40% {
+      left: 88%;
+      top: 82%;
+      transform: scale(0.85);
+    }
+    45% {
+      left: 88%;
+      top: 82%;
+      transform: none;
+    }
+    80% {
+      left: 45%;
+      top: 50%;
+    }
+    100% {
+      left: 30%;
+      top: 25%;
+    }
+  }
+  @keyframes bcookie {
+    0%,
+    41% {
+      transform: none;
+      opacity: 1;
+    }
+    46%,
+    92% {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+    100% {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  .b-dkhint {
+    font: 500 9.5px var(--mono);
+    color: var(--fg3);
+    margin-top: 8px;
+  }
+
+  /* 05 volumes */
+  .b-vols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .b-lane {
+    display: flex;
+    flex-direction: column;
+    border-right: 3px solid var(--fg);
+  }
+  .b-lanel {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .b-lanel b {
+    font: 900 40px / 1 var(--sans);
+    letter-spacing: -0.04em;
+    color: var(--acc);
+  }
+  .b-lanel small {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .b-claim {
+    margin: 14px;
+    border-top: 4px solid var(--acc);
+    background: repeating-linear-gradient(135deg, transparent 0 8px, var(--bg2) 8px 10px);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 14px;
+  }
+  .b-claim-id {
+    font: 700 13px var(--mono);
+  }
+  .b-claim-ag {
+    font: 500 10.5px var(--mono);
+    color: var(--fg3);
+    margin: 2px 0 10px;
+  }
+  .b-claim-ag b {
+    color: var(--fg2);
+  }
+  .b-claim dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 14px;
+    font: 500 10.5px var(--mono);
+  }
+  .b-claim dt {
+    color: var(--fg3);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    align-self: center;
+  }
+  .b-claim-f {
+    border-top: 1px solid var(--line);
+    margin-top: 12px;
+    padding-top: 10px;
+  }
+  .b-claim-f span {
+    display: inline-block;
+    background: var(--fg);
+    color: var(--bg);
+    font: 900 10px var(--sans);
+    letter-spacing: 0.06em;
+    padding: 7px 10px;
+    animation: bnudge 3s infinite;
+  }
+  @keyframes bnudge {
+    0%,
+    70%,
+    100% {
+      background: var(--fg);
+    }
+    80%,
+    90% {
+      background: var(--acc);
+    }
+  }
+  .b-cdraw {
+    padding: 16px 18px;
+    min-width: 0;
+    background: var(--bg);
+  }
+  .b-cdt {
+    display: block;
+    font: 900 22px var(--sans);
+    letter-spacing: -0.02em;
+    margin: 2px 0 12px;
+  }
+  .b-cname {
+    height: 44px;
+    border: 3px solid var(--fg);
+    font: 700 18px / 38px var(--mono);
+    padding: 0 10px;
+  }
+  .b-chint {
+    font: 500 10.5px var(--mono);
+    color: var(--ok);
+    margin: 5px 0 12px;
+  }
+  .b-locked {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 2px solid var(--line2);
+    background: var(--bg2);
+    padding: 9px 12px;
+  }
+  .b-locked code {
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .b-locked small {
+    font: 500 10px var(--mono);
+    color: var(--fg3);
+  }
+  .b-cecho {
+    margin-top: 12px;
+    border-top: 3px solid var(--fg);
+    padding-top: 10px;
+    font: 500 10.5px var(--mono);
+    color: var(--fg2);
+    overflow-wrap: anywhere;
+  }
+  .b-caret {
+    display: inline-block;
+    width: 7px;
+    height: 13px;
+    background: var(--acc);
+    vertical-align: -2px;
+    margin-left: 1px;
+    animation: blink 1s steps(1) infinite;
+  }
+  .b-glyph {
+    display: inline-block;
+    border: 2px solid var(--fg);
+    font: 900 9px var(--sans);
+    padding: 0 4px;
+    line-height: 13px;
+  }
+  .b-seg {
+    display: flex;
+    border: 2px solid var(--fg);
+    font: 800 9.5px var(--sans);
+    letter-spacing: 0.08em;
+  }
+  .b-seg button {
+    padding: 7px 8px;
+  }
+  .b-hs {
+    display: inline-flex;
+    gap: 2px;
+    flex: none;
+  }
+  .b-hs i {
+    display: block;
+    width: 16px;
+    height: 7px;
+    background: var(--line2);
+  }
+  .b-hs [data-h="ok"] {
+    background: var(--ok);
+  }
+  .b-hs [data-h="warn"] {
+    background: var(--warn);
+  }
+  .b-hs [data-h="off"] {
+    background: var(--fg3);
+  }
+  .b-warn {
+    color: var(--warn);
+  }
+  .b-who {
+    font: 700 12px var(--sans);
+    margin-bottom: 4px;
+  }
+
+  /* ── narrow widths ──────────────────────────────────────────── */
+  @media (max-width: 1080px) {
+    .b-stop .b-stop-in {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 28px;
+    }
+    .b-flip .b-say {
+      order: 0;
+    }
+  }
+  @media (max-width: 640px) {
+    .b-stop .b-stop-in {
+      padding-top: 40px;
+      padding-bottom: 44px;
+    }
+    .b-rep {
+      box-shadow: 6px 6px 0 var(--line2);
+    }
+    .b-mboard {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .b-trig {
+      grid-template-columns: 110px minmax(0, 1fr);
+    }
+    .b-chat {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .b-rail-l {
+      display: none;
+    }
+    .b-cr-pre {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .b-cr-p:nth-child(2) {
+      border-right: 0;
+    }
+    .b-cr-p:nth-child(-n + 2) {
+      border-bottom: 1px solid var(--line2);
+    }
+    .b-cr-foot {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .b-cr-cancel {
+      display: none;
+    }
+    .b-cr-h,
+    .b-cr-form,
+    .b-cr-foot {
+      padding-left: 14px;
+      padding-right: 14px;
+    }
+    .b-dkbody {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .b-dknav {
+      display: flex;
+      overflow: hidden;
+      border-right: 0;
+      border-bottom: 3px solid var(--fg);
+    }
+    .b-dknav div {
+      flex: none;
+      border-bottom: 0;
+      border-right: 1px solid var(--line);
+    }
+    .b-dknav small {
+      display: none;
+    }
+    .b-dkbtns span:first-child {
+      display: none;
+    }
+    .b-page {
+      height: 170px;
+    }
+    .b-vols {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .b-lane {
+      border-right: 0;
+      border-bottom: 3px solid var(--fg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .b-caret,
+    .b-cursor,
+    .b-cookie,
+    .b-claim-f span,
+    .b-view.on {
+      animation: none;
+    }
+    .b-cursor {
+      left: 86%;
+      top: 80%;
+    }
+  }
+</style>
+
+<script is:inline>
+  // The tour's two live bits: the fleet view switcher cycles board, table and triage until a
+  // click takes over, and the New agent panel fills itself in and presses Create.
+  // Both only run while their panel is on screen. Illustrative only.
+  (() => {
+    const root = document.getElementById("e-tour");
+    if (!root) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const onScreen = (el, cb) => {
+      if (!("IntersectionObserver" in window)) return cb(true);
+      new IntersectionObserver((es) => cb(es.some((e) => e.isIntersecting)), { threshold: 0.2 }).observe(el);
+    };
+
+    // Screen 1: board / table / triage
+    const views = root.querySelector("[data-tour-views]");
+    if (views) {
+      const btns = Array.from(views.querySelectorAll("button"));
+      const panes = Array.from(root.querySelectorAll(".b-view"));
+      let idx = 0;
+      let auto = !reduce;
+      let seen = false;
+      const pick = (i) => {
+        idx = i;
+        btns.forEach((b, j) => {
+          b.classList.toggle("on", j === i);
+          b.setAttribute("aria-pressed", String(j === i));
+        });
+        panes.forEach((p) => p.classList.toggle("on", p.dataset.pane === btns[i].dataset.v));
+      };
+      btns.forEach((b, i) =>
+        b.addEventListener("click", () => {
+          auto = false;
+          pick(i);
+        }),
+      );
+      onScreen(views.closest(".b-rep"), (v) => (seen = v));
+      setInterval(() => {
+        if (auto && seen && !document.hidden) pick((idx + 1) % btns.length);
+      }, 3600);
+    }
+
+    // Screen 3: the New agent panel. A name is typed, Heavy is picked and the total follows,
+    // Create is pressed and the drawer starts streaming; then it starts over. The markup holds
+    // the finished form, which is what reduced motion keeps.
+    const cr = root.querySelector("[data-tour-create]");
+    if (cr && !reduce) {
+      const D = JSON.parse(cr.dataset.tourCreate);
+      const q = (k) => cr.querySelector(`[data-cr-${k}]`);
+      const name = q("name");
+      const ph = q("ph");
+      const okHint = q("ok");
+      const idleHint = q("idle");
+      const total = q("total");
+      const sub = q("sub");
+      const echoEl = q("echo");
+      const go = q("go");
+      const form = q("form");
+      const bar = q("bar");
+      const kick = q("kicker");
+      const title = q("title");
+      const from = q("from");
+      const cards = Array.from(cr.querySelectorAll("[data-cr-p]"));
+      const fmt = (n) => `≈$${Math.round(n)}`;
+      const subOf = (m) => `~$${(m / D.hours).toFixed(2)}/h · ready in ~8 min`;
+      const press = (id) => cards.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.crP === id)));
+      let timers = [];
+      let seen = false;
+      let busy = false;
+      const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+      const reset = () => {
+        name.textContent = "";
+        ph.hidden = false;
+        okHint.hidden = true;
+        idleHint.hidden = false;
+        press(D.from.id);
+        cards.forEach((c) => c.classList.remove("hov"));
+        total.textContent = fmt(D.from.month);
+        sub.textContent = subOf(D.from.month);
+        echoEl.textContent = `$ ${D.from.echo}`;
+        from.textContent = "from Standard";
+        go.classList.add("off");
+        go.classList.remove("press");
+        form.classList.remove("busy");
+        bar.style.transition = "none";
+        bar.style.width = "0";
+        kick.textContent = "New agent";
+        title.textContent = "Create agent";
+      };
+      const cycle = () => {
+        timers.forEach(clearTimeout);
+        timers = [];
+        if (!seen) {
+          busy = false;
+          return;
+        }
+        busy = true;
+        reset();
+        const N = D.name;
+        for (let k = 1; k <= N.length; k++)
+          at(700 + k * 170, () => {
+            ph.hidden = true;
+            name.textContent = N.slice(0, k);
+            echoEl.textContent = `$ ${D.from.echo.replace("<name>", N.slice(0, k))}`;
+          });
+        at(700 + N.length * 170 + 200, () => {
+          okHint.hidden = false;
+          idleHint.hidden = true;
+          go.classList.remove("off");
+        });
+        const toCard = cards.find((c) => c.dataset.crP === D.to.id);
+        at(2700, () => toCard?.classList.add("hov"));
+        at(3100, () => {
+          toCard?.classList.remove("hov");
+          press(D.to.id);
+          from.textContent = "from Heavy";
+          echoEl.textContent = `$ ${D.to.echo}`;
+          sub.textContent = subOf(D.to.month);
+          const t0 = performance.now();
+          const tick = (t) => {
+            const k = Math.min(1, (t - t0) / 550);
+            total.textContent = fmt(D.from.month + (D.to.month - D.from.month) * (1 - (1 - k) ** 3));
+            if (k < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+        at(4700, () => go.classList.add("press"));
+        at(5000, () => {
+          go.classList.remove("press");
+          kick.textContent = "Creating · streaming from engine";
+          title.textContent = "Creating…";
+          form.classList.add("busy");
+          bar.style.transition = "width 3.2s cubic-bezier(.2,.8,.2,1)";
+          bar.style.width = "55%";
+        });
+        at(9600, cycle);
+      };
+      onScreen(cr, (v) => {
+        seen = v;
+        if (v && !busy) cycle();
+      });
+    }
+  })();
+</script>

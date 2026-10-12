@@ -1,0 +1,332 @@
+---
+/*
+ * The cost page: what a fleet bills, where, and the design choices that keep the fixed part small.
+ * Every price is a us-east-1 on-demand list price from data/cost.ts (which mirrors core and is
+ * checked by tests/site-cost.test.ts); every claim about hermetic names its design.md section.
+ */
+import Button from "../components/Button.astro";
+import CtaBand from "../components/CtaBand.astro";
+import EnvStrip from "../components/EnvStrip.astro";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import Kicker from "../components/Kicker.astro";
+import SectionHead from "../components/SectionHead.astro";
+import StatusSquare from "../components/StatusSquare.astro";
+import {
+  agentMonth,
+  DEFAULT_DATA_GIB,
+  DEFAULT_ROOT_GIB,
+  GP3_USD_PER_GIB_MONTH,
+  IPV4_USD_PER_MONTH,
+  MIN_DATA_GIB,
+  SIZES,
+  usd,
+} from "../data/cost";
+import { docs, repo } from "../data/links";
+import Marketing from "../layouts/Marketing.astro";
+
+const examples = [
+  {
+    id: "medium",
+    dataGib: undefined,
+    title: "Default agent",
+    note: "medium · t4g.2xlarge · 8 vCPU / 32 GiB",
+  },
+  {
+    id: "micro",
+    dataGib: MIN_DATA_GIB,
+    title: "Smallest agent",
+    note: `micro · t4g.micro · 2 vCPU / 1 GiB · ${MIN_DATA_GIB} GiB memory`,
+  },
+].map((e) => {
+  const lines = agentMonth(e.id, e.dataGib);
+  const sum = (k: "running" | "stopped"): number => lines.reduce((n, l) => n + l[k], 0);
+  return { ...e, lines, running: sum("running"), stopped: sum("stopped") };
+});
+const [standard, smallest] = examples;
+const cpu = SIZES.filter((s) => s.gpu === undefined);
+const gpu = SIZES.filter((s) => s.gpu !== undefined);
+const cheapest = cpu[0]?.monthlyUsd ?? 0;
+const dearest = cpu[cpu.length - 1]?.monthlyUsd ?? 0;
+---
+<Marketing
+  title="Cost: what a hermetic fleet bills | Hermetic"
+  description="hermetic is free and runs in your AWS account. The foundation costs close to nothing at rest; each agent is billed by the hour for the size you pick, from a few dollars a month to GPU machines."
+>
+  <EnvStrip />
+  <Header />
+
+  <section class="cost-head">
+    <div class="wrap">
+      <Kicker>Cost</Kicker>
+      <h1>What it costs to run<br><em>your own fleet</em></h1>
+      {/* design.md §2 (no hermetic server; core calls AWS directly), README.md (MIT) */}
+      <p class="lede">hermetic is free, and it has no hosted service to pay for. Everything it builds lives in your AWS account and bills there at AWS's own prices. The fixed part of a fleet stays close to zero, so the bill follows the agents you run and the size you give each one.</p>
+      <div class="facts">
+        {/* MIT: LICENSE; design.md §2 */}
+        <div><b>$0</b><span>for hermetic itself</span></div>
+        {/* design.md §5 ("In the default network mode the foundation has no always-on cost of its own"), §4.8 (PAY_PER_REQUEST) */}
+        <div><b>≈$0</b><span>foundation at rest</span></div>
+        {/* data/cost.ts agentMonth("micro", MIN_DATA_GIB): the smallest size with the smallest data volume create accepts */}
+        <div><b>{usd(smallest?.running ?? 0)}</b><span>smallest agent, smallest disk, running all month</span></div>
+        {/* design.md §7.1 (stopped: no compute, auto-assigned IPv4 released); gp3 volumes keep billing */}
+        <div><b>{usd(standard?.stopped ?? 0)}</b><span>any agent, stopped, default disks</span></div>
+      </div>
+      <p class="fine">us-east-1 on-demand list prices, rounded. hermetic makes no Cost Explorer call; your bill is whatever AWS says it is.</p>
+    </div>
+  </section>
+
+  <section class="s" id="where">
+    <SectionHead num="§01" kicker="The bill" title="Where the money goes">
+      <p>Six lines, and only some of them grow with the fleet. All of them except hermetic land on your AWS invoice, or with a model provider you pick.</p>
+    </SectionHead>
+    <div class="grid">
+      {/* LICENSE (MIT); design.md §2 (laptop app and CLI call AWS directly) */}
+      <div class="p"><div class="top"><span class="ix">$0</span><StatusSquare kind="ok" /></div><h3>hermetic itself</h3><p>MIT licensed. The app and the CLI run on your laptop and talk to AWS directly, so there is no subscription and no per-agent fee.</p></div>
+      {/* design.md §5 (one stack per fleet; no always-on cost in public mode), §4.8 (PAY_PER_REQUEST), §7.2 (S3 and DynamoDB through gateway endpoints) */}
+      <div class="p"><div class="top"><span class="ix">≈$0</span><StatusSquare kind="ok" /></div><h3>The foundation</h3><p>One CloudFormation stack per fleet. Its tables bill per request, its bucket holds a few builds, and S3 and DynamoDB traffic goes through gateway endpoints. In the default network mode nothing in it runs all the time.</p></div>
+      {/* design.md §7.1 (Graviton sizes and ~$/mo), §9 (`agent stop|start`) */}
+      <div class="p"><div class="top"><span class="ix">{usd(cheapest)}+</span><StatusSquare kind="acc" /></div><h3>Each agent's machine</h3><p>One EC2 instance per agent, on Arm (Graviton). It bills by the hour while it runs, from {usd(cheapest)} to {usd(dearest)} a month on CPU sizes, and nothing for compute while it is stopped.</p></div>
+      {/* design.md §7.1 (gp3 root default 20 GiB, data default 100 GiB, 7 daily snapshots via DLM); core GP3_USD_PER_GIB_MONTH */}
+      <div class="p"><div class="top"><span class="ix">${GP3_USD_PER_GIB_MONTH.toFixed(2)}</span><StatusSquare kind="acc" /></div><h3>Each agent's disks</h3><p>Per GiB-month of gp3: a {DEFAULT_ROOT_GIB} GiB root volume and a {DEFAULT_DATA_GIB} GiB data volume by default, both sizeable per agent. The data volume holds the agent's memory and bills whether the machine runs or not. Seven daily snapshots are kept.</p></div>
+      {/* design.md §7.1 (auto-assigned public IPv4, changes on stop/start), §5 (nat: fck-nat on t4g.nano plus an Elastic IP), core EIP_USD_PER_MONTH */}
+      <div class="p"><div class="top"><span class="ix">${IPV4_USD_PER_MONTH.toFixed(2)}</span><StatusSquare color="var(--fg2)" /></div><h3>Network</h3><p>Per running agent in the default public mode: AWS bills each public IPv4 address, and a stopped agent gives its address back. A fleet in nat mode pays for one small NAT instance and one Elastic IP instead.</p></div>
+      {/* design.md §1 "Zero-secret minimal path" (Bedrock through the instance role), §8.3 (provider profiles), §7.2 (OpenRouter, Nous Portal, Anthropic) */}
+      <div class="p"><div class="top"><span class="ix">per token</span><StatusSquare color="var(--fg)" /></div><h3>The model</h3><p>The default provider is Amazon Bedrock, reached through the fleet's own role and billed on your AWS invoice. A provider profile can point agents at Anthropic, OpenRouter or another provider instead, billed by them.</p></div>
+    </div>
+  </section>
+
+  <section class="s" id="month">
+    <SectionHead num="§02" kicker="By the month" title="One agent, running and stopped">
+      {/* design.md §9 (`agent stop|start`), §7.1 (public IPv4 released on stop), §1 (volumes outlive instances) */}
+      <p>A running agent pays for its machine, its disks and its address. Stop it and only the disks keep billing, with its memory intact for the next start. The smallest agent here also takes the smallest data volume hermetic will create, {MIN_DATA_GIB} GiB. Model usage comes on top and depends on what you ask the agent to do.</p>
+    </SectionHead>
+    <div class="months">
+      {examples.map((e) => (
+        <div class="month">
+          <Kicker>{e.note}</Kicker>
+          <h3>{e.title}</h3>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <tr><th>Per month</th><th class="r">Running</th><th class="r">Stopped</th></tr>
+              {e.lines.map((l) => (
+                <tr><td>{l.label}</td><td class="r">{usd(l.running)}</td><td class="r">{l.stopped === 0 ? "$0" : usd(l.stopped)}</td></tr>
+              ))}
+              <tr class="total"><td>Total, before model usage</td><td class="r">{usd(e.running)}</td><td class="r">{usd(e.stopped)}</td></tr>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section class="s" id="sizes">
+    <SectionHead num="§03" kicker="Power" title="Pick the power per agent">
+      {/* design.md §7.1 (named profiles, --instance-type), §9 (`settings set --size`, `agent set --size` takes effect on rerun or recreate; `agent recreate`: new instance, same volume) */}
+      <p>Every agent in a fleet picks its own size, so a light chat agent and a GPU agent can sit side by side. Set the fleet's default with <code>hermetic settings set --size</code>. Change one agent with <code>hermetic agent set --size</code> and a recreate, which keeps its memory. <code>--instance-type</code> takes any other Arm instance type.</p>
+    </SectionHead>
+    <div class="sizes">
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <tr><th>Size</th><th>Instance</th><th class="r">vCPU</th><th class="r">RAM</th><th class="r">≈ / month</th><th>Fits</th></tr>
+          {cpu.map((s) => (
+            <tr class:list={{ def: s.id === "medium" }}><td class="nm">{s.id}</td><td>{s.instance}</td><td class="r">{s.vcpu}</td><td class="r">{s.memGib} GiB</td><td class="r">{usd(s.monthlyUsd)}</td><td class="fit">{s.fit}</td></tr>
+          ))}
+        </table>
+      </div>
+      {/* design.md §7.1 (G5g GPU profiles on the same arm64 AMI) */}
+      <Kicker style="margin:28px 0 8px">GPU sizes · NVIDIA T4G on G5g, same Arm image</Kicker>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <tr><th>Size</th><th>Instance</th><th>GPU</th><th class="r">vCPU</th><th class="r">RAM</th><th class="r">≈ / month</th></tr>
+          {gpu.map((s) => (
+            <tr><td class="nm">{s.id}</td><td>{s.instance}</td><td>{s.gpu}</td><td class="r">{s.vcpu}</td><td class="r">{s.memGib} GiB</td><td class="r">{usd(s.monthlyUsd)}</td></tr>
+          ))}
+        </table>
+      </div>
+      <p class="fine">Running all month, compute only. Disks and the public address add about {usd(DEFAULT_ROOT_GIB * GP3_USD_PER_GIB_MONTH + DEFAULT_DATA_GIB * GP3_USD_PER_GIB_MONTH + IPV4_USD_PER_MONTH)} at the defaults.</p>
+    </div>
+  </section>
+
+  <section class="s" id="upkeep">
+    <SectionHead num="§04" kicker="Upkeep" title="Built to keep upkeep low">
+      <p>Running agents is the part you choose to pay for. The design keeps the rest small, in dollars and in the time it takes to look after a fleet.</p>
+    </SectionHead>
+    <div class="grid">
+      {/* design.md §5 (no always-on cost in public mode; fck-nat instead of the managed NAT gateway), §4.8 (PAY_PER_REQUEST) */}
+      <div class="p"><div class="top"><span class="ix">01</span><StatusSquare kind="ok" /></div><h3>Nothing idles in the foundation</h3><p>In the default network mode there is no NAT gateway and no server left running, and the tables bill per request. A fleet with every agent stopped costs little more than its disks.</p></div>
+      {/* design.md §9 (`agent stop|start`), §7.1 (public IPv4 released on stop) */}
+      <div class="p"><div class="top"><span class="ix">02</span><StatusSquare kind="ok" /></div><h3>Stop what you are not using</h3><p><code>hermetic agent stop</code> ends the machine and address charges and keeps the memory. <code>start</code> brings the same agent back.</p></div>
+      {/* design.md §9.1 (`volume ls` groups volumes and shows what unattached memory costs; `agent ps` trailer) */}
+      <div class="p"><div class="top"><span class="ix">03</span><StatusSquare kind="warn" /></div><h3>Forgotten disks show up</h3><p>Destroying an agent keeps its memory on purpose. <code>hermetic volume ls</code> lists every volume nothing is reading and what it costs, and <code>agent ps</code> mentions them too.</p></div>
+      {/* design.md §6.6 (artifacts pruned to three versions; one archived foundation version), §7.1 (snapshots keep 7), §4.8 (7-day recovery window) */}
+      <div class="p"><div class="top"><span class="ix">04</span><StatusSquare kind="acc" /></div><h3>Storage that does not pile up</h3><p>Old builds are pruned to three versions, foundation archives keep one previous version, and backups stop at seven days.</p></div>
+      {/* design.md §6.5 (`hermetic upgrade --hermeticd`, fleet-wide; `plan rollout` / `apply`), §6.6 (`foundation update`) */}
+      <div class="p"><div class="top"><span class="ix">05</span><StatusSquare kind="acc" /></div><h3>Upgrades in one command</h3><p>One upgrade moves the whole fleet to a new <code>hermeticd</code>, and each box installs it itself. Configuration changes roll out with a plan, without rebuilding anything.</p></div>
+      {/* design.md §4.6 teardown receipt (removed / retained / manual, which flag would remove it; Elastic IP listed) */}
+      <div class="p"><div class="top"><span class="ix">06</span><StatusSquare color="var(--fg2)" /></div><h3>Teardown leaves a receipt</h3><p>When a fleet goes, hermetic records what it removed and what it kept, such as volumes or an Elastic IP, and which flag would have removed each one, where one exists.</p></div>
+    </div>
+  </section>
+
+  <section class="s" id="tradeoffs">
+    <SectionHead num="§05" kicker="Trade-offs" title="Choices that move the bill">
+      <p>The defaults suit a small fleet. Each of these can change later.</p>
+    </SectionHead>
+    <div class="docs trade">
+      {/* design.md §7.2 "Why public is the default" (direct connections; cheaper below about two agents), §5 (nat: fck-nat on t4g.nano, Elastic IP; `plan network --to`) */}
+      <div class="doc"><Kicker>Network</Kicker><h4>Public or nat</h4><p>Public mode gives each agent its own address and direct tailnet connections, and is cheaper below about two agents. nat mode puts agents behind one small NAT instance with a fixed egress IP. Switch with <code>plan network</code>.</p></div>
+      {/* design.md §7.1 (t4g burst credits at $0.04/vCPU-hour above the 40% baseline; r8g.xlarge ~$172/mo alternative) */}
+      <div class="doc"><Kicker>CPU</Kicker><h4>Burstable or steady</h4><p>The default <code>t4g</code> size is burstable, with a 40% CPU baseline and credits billed above it. An agent that runs hot all day is cheaper on <code>r8g.xlarge</code>: the same 32 GiB, about $172 a month.</p></div>
+      {/* design.md §7.1 (--root-gib 8–500, --volume-gib), §9 (`settings set --volume-gib --root-gib`) */}
+      <div class="doc"><Kicker>Disks</Kicker><h4>Size the memory</h4><p>Root and data volumes are set per agent or as a fleet default with <code>--root-gib</code> and <code>--volume-gib</code>. Disks are the one line that bills while an agent is stopped.</p></div>
+      {/* design.md §1 (Bedrock through the instance role), §8.3 (provider profiles; keys typed once) */}
+      <div class="doc"><Kicker>Model</Kicker><h4>Bedrock or your own keys</h4><p>Bedrock needs no key and keeps model spend on the AWS invoice. A provider profile uses your own account with another provider, so you can match model and price per agent.</p></div>
+    </div>
+    <div class="trade-foot">
+      <Button variant="s" small href={docs.operations}>Operations runbook →</Button>
+      <Button variant="s" small href={repo.designSpec}>Design spec →</Button>
+    </div>
+  </section>
+
+  <CtaBand />
+  <Footer />
+</Marketing>
+
+<style>
+  .cost-head {
+    border-bottom: 3px solid var(--fg);
+  }
+  .cost-head .wrap {
+    padding-top: 72px;
+    padding-bottom: 48px;
+  }
+  .cost-head h1 {
+    font-weight: 900;
+    font-size: clamp(40px, 5.2vw, 80px);
+    line-height: 0.9;
+    letter-spacing: -0.045em;
+    text-transform: uppercase;
+    margin: 18px 0 28px;
+  }
+  .cost-head h1 em {
+    font-style: normal;
+    color: var(--acc);
+  }
+  .lede {
+    font-size: 19px;
+    color: var(--fg2);
+    max-width: 44em;
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin-top: 40px;
+  }
+  .facts div {
+    background: var(--bg);
+    padding: 22px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .facts b {
+    font: 900 40px / 1 var(--sans);
+    letter-spacing: -0.03em;
+  }
+  .facts span {
+    font: 700 11px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg3);
+  }
+  .fine {
+    font: 500 11px var(--mono);
+    color: var(--fg3);
+    margin-top: 14px;
+  }
+  .p .ix {
+    color: var(--fg);
+    font-weight: 900;
+  }
+  .months {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border-top: 1px solid var(--line);
+  }
+  .month {
+    min-width: 0;
+    background: var(--bg);
+    padding: 28px 24px;
+  }
+  .month h3,
+  .sizes h3 {
+    font-weight: 900;
+    font-size: 26px;
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+    margin: 6px 0 14px;
+  }
+  .tbl .r {
+    text-align: right;
+  }
+  .tbl tr.total td {
+    font-weight: 800;
+    color: var(--fg);
+    border-bottom: 2px solid var(--fg);
+  }
+  .tbl tr.def td {
+    color: var(--acc);
+  }
+  .tbl td.fit {
+    color: var(--fg2);
+    white-space: normal;
+    min-width: 18em;
+  }
+  .sizes {
+    padding: 28px 24px 32px;
+    border-top: 1px solid var(--line);
+  }
+  .trade .doc {
+    min-height: 0;
+  }
+  .trade .doc code {
+    font-size: 12px;
+    color: var(--fg);
+  }
+  .trade-foot {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 20px 24px;
+    border-top: 1px solid var(--line);
+  }
+  @media (max-width: 1080px) {
+    .facts {
+      grid-template-columns: 1fr 1fr;
+    }
+    .months {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 640px) {
+    .cost-head .wrap {
+      padding-top: 44px;
+      padding-bottom: 32px;
+    }
+    .lede {
+      font-size: 17px;
+    }
+    .facts b {
+      font-size: 30px;
+    }
+    .month,
+    .sizes {
+      padding: 22px 16px;
+    }
+  }
+</style>

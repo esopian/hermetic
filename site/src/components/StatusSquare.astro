@@ -1,0 +1,11 @@
+---
+/* The square status mark. `kind` picks a token color; `color` overrides it with any CSS color. */
+interface Props {
+  kind?: "ok" | "warn" | "bad" | "acc" | "off" | "pend";
+  color?: string;
+  pulse?: boolean;
+}
+
+const { kind, color, pulse = false } = Astro.props;
+---
+<i class:list={["sq", kind, { pulse }]} style={color === undefined ? undefined : `background:${color}`}></i>

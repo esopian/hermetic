@@ -31,3 +31,10 @@ packages/app/dist/
 
 # graft writes this ripgrep override (re-admits graft/ to search); local only.
 /.ignore
+
+# site/ has its own .gitignore for its own toolchain; restated here so a root
+# `git status`/`git clean` never surfaces its build output either.
+site/dist/
+site/.astro/
+site/.wrangler/
+site/src/content/docs/_synced/

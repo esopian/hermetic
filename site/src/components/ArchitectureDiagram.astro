@@ -1,0 +1,135 @@
+---
+/*
+ * The architecture diagram, kept to the rough structure: the laptop app, one fleet in the AWS
+ * account (its foundation and a few agents), the tailnet joining laptop and agents, and the network
+ * policy around them. One inline SVG whose colors all come from the tokens, its legend, and the
+ * four numbered steps the diagram's orange markers refer to. The SVG keeps a fixed min-width and
+ * scrolls inside .dg-wrap on narrow screens.
+ */
+import SectionHead from "./SectionHead.astro";
+---
+<section class="s" id="arch">
+  <SectionHead num="§03" kicker="Architecture" title="No hosted service in the middle">
+    {/* design.md §1 (Tailscale the only way in; outbound open), §2 System overview (core calls AWS directly, no server), §4.6/§4.8 and §5 (fleet_id on every resource; several fleets per account) */}
+    <p>Your laptop and every agent sit inside your Tailscale tailnet, and that is the only way to reach an agent. Agents can reach the internet outbound; nothing on the internet can connect in. The app and CLI manage the fleet through AWS API calls straight to your account, with no hermetic server in between.</p>
+  </SectionHead>
+  {/* Diagram labels: design.md §2 (laptop/AWS topology), §3.1 (one core behind app and CLI), §4.8 (fleets share an account), §5 (foundation stack: agents/events tables, bucket, fleet IAM role, VPC), §5.1 (SSM secrets), §5.2 (tailnet policy), §6.3 (hermeticd installs Hermes, heartbeats), §7.2 (0 inbound rules, nftables, WireGuard), §1 (volumes outlive instances). */}
+  <div class="dg-wrap">
+<svg class="dg" viewBox="0 0 1200 660" role="img" aria-labelledby="dg-t dg-d">
+<title id="dg-t">How hermetic fits together</title>
+<desc id="dg-d">Your laptop runs the Hermetic app and CLI, which call your AWS account directly. In the account, one fleet has a foundation (agent records, a config bucket, an IAM role, secrets and a network) and a number of agents. Each agent is its own machine running Hermes and hermeticd, with its memory on a separate data volume. hermeticd reads its config from the foundation and reports health back. Your laptop and the agents share a Tailscale tailnet, which is the only way to reach an agent. The network policy has no inbound ports, so the internet cannot connect in, while agents can still reach out.</desc>
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg)"/></marker>
+<marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg2)"/></marker>
+<marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ok)"/></marker>
+</defs>
+
+<!-- Tailnet: the laptop and the agents. The foundation sits outside it. -->
+<path class="tnet" d="M8,118 H330 V290 H1124 V510 H330 V446 H8 Z"/>
+<rect x="8" y="96" width="322" height="22" style="fill:var(--acc)"/>
+<text x="18" y="111" style="fill:var(--acc-fg);font-weight:900;font-size:11.5px;letter-spacing:.1em">YOUR TAILNET · THE ONLY WAY IN</text>
+
+<!-- Laptop -->
+<rect class="zone" x="20" y="134" width="290" height="296"/>
+<rect class="zone-h" x="20" y="134" width="290" height="30"/>
+<text class="zone-t" x="34" y="154">YOUR LAPTOP</text>
+<rect class="box hl" x="38" y="184" width="254" height="84" style="stroke-width:2"/>
+<text class="nt" x="52" y="208" style="font-size:15px">Hermetic app + CLI</text>
+<text class="ns" x="52" y="228">dashboard · chat · commands</text>
+<text class="ns" x="52" y="246">one core, talks to AWS directly</text>
+<rect class="box" x="38" y="334" width="254" height="50" style="stroke:var(--acc);stroke-width:2"/>
+<rect class="tsq" x="52" y="352" width="14" height="14"/>
+<text class="nt" x="76" y="358">Tailscale</text>
+<text class="ns" x="76" y="374">your device on the tailnet</text>
+
+<!-- AWS account and the fleet -->
+<rect class="zone" x="360" y="40" width="820" height="524"/>
+<rect class="zone-h" x="360" y="40" width="820" height="30"/>
+<text class="zone-t" x="374" y="60">YOUR AWS ACCOUNT</text>
+<path class="fleet" d="M376,84 H1164 V548 H376 Z"/>
+<rect x="376" y="84" width="74" height="20" style="fill:var(--fg)"/>
+<text x="386" y="98" style="fill:var(--bg);font-weight:900;font-size:11px;letter-spacing:.1em">FLEET</text>
+<text class="ns" x="460" y="98" style="fill:var(--fg2)">one id on every resource · several fleets can share an account</text>
+
+<!-- Foundation -->
+<rect class="grp" x="396" y="118" width="748" height="94"/>
+<text class="k" x="408" y="136">FOUNDATION · ONE CLOUDFORMATION STACK, BUILT BY INIT</text>
+<rect class="box" x="408" y="146" width="136" height="54"/><text class="nt" x="420" y="168">Agent records</text><text class="ns" x="420" y="186">DynamoDB</text>
+<rect class="box" x="556" y="146" width="136" height="54"/><text class="nt" x="568" y="168">Config + builds</text><text class="ns" x="568" y="186">S3 bucket</text>
+<rect class="box" x="704" y="146" width="136" height="54"/><text class="nt" x="716" y="168">Fleet role</text><text class="ns" x="716" y="186">IAM</text>
+<rect class="box" x="852" y="146" width="136" height="54"/><text class="nt" x="864" y="168">Secrets</text><text class="ns" x="864" y="186">SSM</text>
+<rect class="box" x="1000" y="146" width="136" height="54"/><text class="nt" x="1012" y="168">Network</text><text class="ns" x="1012" y="186">VPC</text>
+
+<!-- Network policy around the agents -->
+<rect class="sg" x="396" y="240" width="748" height="300"/>
+<text class="k" x="408" y="532" style="fill:var(--fg2)">NETWORK POLICY · NO INBOUND PORTS · HOST FIREWALL ON</text>
+
+<!-- Tailnet links: laptop to each agent -->
+<path class="ts" d="M292,359 H344 V312 H1082"/>
+<text class="ns" x="900" y="304" style="fill:var(--acc)">encrypted, laptop to agent</text>
+
+<g>
+<rect class="ec2" x="430" y="328" width="210" height="172"/>
+<rect class="ec2-h" x="432" y="330" width="206" height="24"/>
+<text class="k" x="442" y="346" style="fill:var(--fg2)">AGENT</text><text class="ns" x="490" y="346" style="fill:var(--fg)">atlas</text>
+<rect class="tsq" x="614" y="334" width="16" height="16"/>
+<line class="ts-thin" x1="622" y1="312" x2="622" y2="334"/>
+<rect class="box" x="442" y="364" width="186" height="30"/><text x="452" y="384" style="font-size:13px;font-weight:800">Hermes</text><text class="ns" x="618" y="383" text-anchor="end">the agent itself</text>
+<rect class="box hl" x="442" y="400" width="186" height="30"/><text x="452" y="420" style="font-size:13px;font-weight:800">hermeticd</text><text class="ns" x="618" y="419" text-anchor="end">node agent</text>
+<rect class="vol" x="442" y="440" width="186" height="46"/><text x="452" y="459" style="font-size:12px;font-weight:800">Data volume</text><text class="ns" x="452" y="476" style="fill:var(--ok)">memory, survives a rebuild</text>
+</g>
+<g>
+<rect class="ec2" x="660" y="328" width="210" height="172"/>
+<rect class="ec2-h" x="662" y="330" width="206" height="24"/>
+<text class="k" x="672" y="346" style="fill:var(--fg2)">AGENT</text><text class="ns" x="720" y="346" style="fill:var(--fg)">corvid</text>
+<rect class="tsq" x="844" y="334" width="16" height="16"/>
+<line class="ts-thin" x1="852" y1="312" x2="852" y2="334"/>
+<rect class="box" x="672" y="364" width="186" height="30"/><text x="682" y="384" style="font-size:13px;font-weight:800">Hermes</text><text class="ns" x="848" y="383" text-anchor="end">the agent itself</text>
+<rect class="box hl" x="672" y="400" width="186" height="30"/><text x="682" y="420" style="font-size:13px;font-weight:800">hermeticd</text><text class="ns" x="848" y="419" text-anchor="end">node agent</text>
+<rect class="vol" x="672" y="440" width="186" height="46"/><text x="682" y="459" style="font-size:12px;font-weight:800">Data volume</text><text class="ns" x="682" y="476" style="fill:var(--ok)">memory, survives a rebuild</text>
+</g>
+<g>
+<rect class="ec2" x="890" y="328" width="210" height="172"/>
+<rect class="ec2-h" x="892" y="330" width="206" height="24"/>
+<text class="k" x="902" y="346" style="fill:var(--fg2)">AGENT</text><text class="ns" x="950" y="346" style="fill:var(--fg)">kestrel</text>
+<rect class="tsq" x="1074" y="334" width="16" height="16"/>
+<line class="ts-thin" x1="1082" y1="312" x2="1082" y2="334"/>
+<rect class="box" x="902" y="364" width="186" height="30"/><text x="912" y="384" style="font-size:13px;font-weight:800">Hermes</text><text class="ns" x="1078" y="383" text-anchor="end">the agent itself</text>
+<rect class="box hl" x="902" y="400" width="186" height="30"/><text x="912" y="420" style="font-size:13px;font-weight:800">hermeticd</text><text class="ns" x="1078" y="419" text-anchor="end">node agent</text>
+<rect class="vol" x="902" y="440" width="186" height="46"/><text x="912" y="459" style="font-size:12px;font-weight:800">Data volume</text><text class="ns" x="912" y="476" style="fill:var(--ok)">memory, survives a rebuild</text>
+</g>
+
+<!-- Laptop to AWS, outside the tailnet -->
+<path class="api" d="M292,210 H344 V172 H394" marker-end="url(#ah)"/>
+<!-- hermeticd reads config from the foundation and reports back -->
+<path class="pull" d="M456,326 V214" marker-end="url(#ahg)" marker-start="url(#ahg)"/>
+<text class="ns" x="464" y="236" style="fill:var(--fg2)">config in · health out</text>
+
+<!-- Internet -->
+<rect x="560" y="596" width="440" height="50" style="fill:var(--bg);stroke:var(--fg2);stroke-width:2"/>
+<text x="578" y="626" style="font-weight:900;font-size:13px;letter-spacing:.1em">PUBLIC INTERNET</text>
+<text class="ns" x="984" y="626" text-anchor="end">web · model APIs · packages</text>
+<path class="out" d="M960,502 V594" marker-end="url(#aho)"/>
+<text class="ns" x="968" y="584" style="fill:var(--ok)">outbound only</text>
+<path class="blk" d="M640,596 V534"/>
+<path d="M630,570 L650,590 M650,570 L630,590" style="stroke:var(--bad);stroke-width:3.5"/>
+<text class="ns" x="624" y="586" text-anchor="end" style="fill:var(--bad)">inbound: dropped</text>
+
+<g class="num"><rect x="333" y="161" width="22" height="22"/><text x="344" y="176">1</text></g>
+<g class="num"><rect x="445" y="268" width="22" height="22"/><text x="456" y="283">2</text></g>
+<g class="num"><rect x="333" y="324" width="22" height="22"/><text x="344" y="339">3</text></g>
+<g class="num"><rect x="652" y="546" width="22" height="22"/><text x="663" y="561">4</text></g>
+</svg>
+  </div>
+  <div class="dg-legend"><span><i></i>AWS API call</span><span><i class="pull"></i>agent reads and reports</span><span><i class="tn"></i>tailnet</span><span><i class="ts"></i>tailnet link</span><span><i class="out"></i>outbound from an agent</span><span><i class="blk"></i>inbound, dropped</span></div>
+  <div class="dg-steps">
+    {/* design.md §2 (no hermetic server), §4.7 (init builds the foundation), §6.2 Create */}
+    <div><b>1</b><h4>Manage</h4><p>The app or CLI calls your AWS account directly. It builds the fleet's foundation once, then launches each agent on its own machine.</p></div>
+    {/* design.md §6.3 First boot, §2 (heartbeat to DynamoDB) */}
+    <div><b>2</b><h4>Boot</h4><p>On each agent, <code>hermeticd</code> pulls its config and secrets from the foundation, installs Hermes and reports health back.</p></div>
+    {/* design.md §5.2 (tailnet policy entries: who may reach tag:hermetic, on which ports), §7.2 (Tailscale SSH, Serve) */}
+    <div><b>3</b><h4>Reach</h4><p>Agents join your tailnet. Chat, logs, SSH and the agent's desktop travel over it, and a tailnet policy rule decides who may connect.</p></div>
+    {/* design.md §7.2 (no inbound SG rules, nftables host firewall; Tailscale connects outbound), §1 */}
+    <div><b>4</b><h4>Stay sealed</h4><p>Agents have no inbound ports. Nothing on the internet can open a connection to one, while the agent can still reach the web and model APIs.</p></div>
+  </div>
+</section>
