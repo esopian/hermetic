@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AgentConfig,
+  HermesHold,
   HermesSettings,
   Provider,
   RenderedFile,
@@ -110,6 +111,12 @@ export interface RenderInput {
    * what those rows have always rendered.
    */
   seed?: HermesSettings | null | undefined;
+  /**
+   * Which settings hermetic holds (`Agent.hermes_hold`). Absent is a row from
+   * before `--hold`, which holds every key `hermes` states — see
+   * `splitHermesSettings`, the one place either reading is decided.
+   */
+  hermes_hold?: HermesHold | null | undefined;
   /**
    * The instance secret slot hermeticd materialises this agent's provider key
    * from (§8.3). Absent renders `provider-key`, which is the slot every agent
@@ -281,7 +288,7 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
    * said nothing: the answer that reaches the box is the fleet's seed or
    * `HERMES_DEFAULTS`, and an expectation the box checks has to be the value it
    * was actually sent (`splitHermesSettings`). `render-hermes.ts` splits again
-   * for the files it writes — the split is a pure function of the same three
+   * for the files it writes — the split is a pure function of the same four
    * inputs, so the two agree by construction, and threading one result through
    * every renderer would couple them for no gain.
    */
@@ -289,6 +296,7 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
     input.hermes,
     PROVIDERS[input.provider].default_model,
     input.seed,
+    input.hermes_hold,
   );
 
   const files: RenderedFile[] = [

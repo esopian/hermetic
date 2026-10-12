@@ -1,11 +1,11 @@
 /**
  * The redaction door, as the chat surface's methods use it (§9.2): input
- * validation that never echoes a value, the structural masks for a roster and
- * a session list, the shape of a box that did not answer, and `sealed`, which
- * masks a thrown error on its way out. Every read in `chat.ts` goes through
+ * validation that never echoes a value, the structural mask for a roster, the
+ * shape of a box that did not answer, and `sealed`, which masks a thrown error
+ * on its way out. Every read in `chat.ts` goes through
  * these; nothing below the surface does its own.
  */
-import type { Session, Swarm } from "../schema/index.ts";
+import type { Swarm } from "../schema/index.ts";
 import { redactDeep, redactText } from "./chat-redact.ts";
 import { CHAT_ERROR_CODES, WARM_SLOTS_PER_GATEWAY } from "./hermes/hermes-chat.ts";
 import { HermeticError } from "../errors.ts";
@@ -25,7 +25,8 @@ export function parse<T>(
 }
 
 /**
- * Every string a bot can influence, masked on the way out (§9.2).
+ * Every string a bot can influence, masked on the way out (§9.2). A session
+ * list takes the same walk, as `TranscriptMask.deep`.
  *
  * `redactDeep` rather than a field-by-field pass, and that is the whole point:
  * a roster and a session list look like metadata and are not. Hermes titles a
@@ -39,10 +40,6 @@ export function parse<T>(
  * arrays key for key and only ever replaces a string with another string, so
  * the shape it returns is the shape it was given.
  */
-export function redactSessions(sessions: readonly Session[]): Session[] {
-  return redactDeep(sessions) as Session[];
-}
-
 export function redactSwarm(swarm: Swarm): Swarm {
   return redactDeep(swarm) as Swarm;
 }

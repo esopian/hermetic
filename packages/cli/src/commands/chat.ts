@@ -27,6 +27,7 @@ import {
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
+  ChatSettingsInput,
   ChatSwarmsInput,
   DEFAULT_BOT,
   ERROR_CODES,
@@ -48,11 +49,13 @@ import { openCtx } from "../context.ts";
 import { globals } from "../options.ts";
 import { defined, toInt, validate } from "../validate.ts";
 import { err, out, outJson } from "../io.ts";
+import { onOff } from "./inbox.ts";
 import { formatAge, renderTable } from "../table.ts";
 import { declare } from "../declare.ts";
 
 const listeningSchema = declare("chat.listening", "chat listening", ChatListeningInput);
 const listenSchema = declare("chat.listen", "chat listen", ChatListenInput);
+const settingsSchema = declare("chat.settings", "chat settings", ChatSettingsInput);
 const swarmsSchema = declare("chat.swarms", "bots ls", ChatSwarmsInput);
 const sessionsSchema = declare("chat.sessions", "chat ls", ChatSessionsInput);
 const historySchema = declare("chat.history", "chat log", ChatHistoryInput);
@@ -659,6 +662,27 @@ export function register(program: Command): void {
         const result = await ctx.hermetic.chat.listen(input);
         if (ctx.flags.json) await outJson(result);
         else await out(`${instance}: ${input.listening ? "listening" : "not listening"}\n`);
+      }),
+  );
+  chat.addCommand(
+    globals(new Cmd("settings"))
+      .description("read or change this laptop's chat settings")
+      .option("--redact <on|off>", "mask secrets in transcripts (rosters, sessions, history, turns)")
+      .addHelpText(
+        "after",
+        "\nLocal to this laptop, shared with the portal. Redaction is off by default: a\n" +
+          "transcript shows what the box wrote, secrets included. With it on, every read\n" +
+          "and every live turn is masked before it leaves core. Errors are masked either way.\n",
+      )
+      .action(async (opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const input = validate(
+          settingsSchema,
+          defined({ redact: opts["redact"] === undefined ? undefined : onOff(opts["redact"]) }),
+        );
+        const result = await ctx.hermetic.chat.settings(input);
+        if (ctx.flags.json) await outJson(result);
+        else await out(`redact transcripts: ${result.redact ? "on" : "off"}\n`);
       }),
   );
   program.addCommand(chat);

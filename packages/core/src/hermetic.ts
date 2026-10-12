@@ -52,6 +52,7 @@ import { createAgentLogs } from "./agents/agent-logs.ts";
 import { MemoryInstanceListeningStore } from "./chat/instance-listening.ts";
 import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/chat.ts";
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
+import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
 import {
   MemoryNotificationStore,
@@ -469,9 +470,18 @@ export function createHermetic(deps: HermeticDeps) {
 
   const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
   const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
-  const botMode = createBotMode({ guardFleet, getAgent, instanceListening, hermes: hermesChat });
+  // §9.2: whether transcript content is masked, read by every chat read as it starts.
+  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  const botMode = createBotMode({
+    guardFleet,
+    getAgent,
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
   const chat = createChat({
     instanceListening,
+    chatSettings,
     fleet: () => deps.config?.fleet_id ?? null,
     guardFleet,
     // Chat reads rows without the fleet list, and its sessions, fence and

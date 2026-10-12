@@ -496,3 +496,45 @@ export function redactFrame(frame: ChatFrame): ChatFrame {
       return { ...frame, message: redactText(frame.message) };
   }
 }
+
+/* ── the switch (§9.2) ────────────────────────────────────────────────────── */
+
+/**
+ * What the door does with transcript content, chosen once per read from this
+ * laptop's chat settings (`chat.settings`'s `redact`, off by default).
+ *
+ * One object rather than an `if` at every call site: a read takes the mask
+ * when it starts and hands the same one to every path it feeds, so a roster
+ * and the history read beside it can never disagree about what they show.
+ *
+ * Errors are not content and are masked either way. An `error` frame, a
+ * message's `error` field and a thrown error (`chat-seal.ts`'s `sealed`) are
+ * what `portal.log`, the CLI and the inbox print, and none of them is the
+ * transcript the operator chose to see whole.
+ */
+export interface TranscriptMask {
+  readonly redact: boolean;
+  message(message: ChatMessage): ChatMessage;
+  frame(frame: ChatFrame): ChatFrame;
+  /** A value of any shape — a roster, a session list, a Bot Mode answer. */
+  deep<T>(value: T): T;
+}
+
+export const MASKED: TranscriptMask = {
+  redact: true,
+  message: redactMessage,
+  frame: redactFrame,
+  deep: <T>(value: T): T => redactDeep(value) as T,
+};
+
+export const UNMASKED: TranscriptMask = {
+  redact: false,
+  message: (message) =>
+    typeof message.error === "string" ? { ...message, error: redactText(message.error) } : message,
+  frame: (frame) => (frame.type === "error" ? redactFrame(frame) : frame),
+  deep: <T>(value: T): T => value,
+};
+
+export function transcriptMask(redact: boolean): TranscriptMask {
+  return redact ? MASKED : UNMASKED;
+}

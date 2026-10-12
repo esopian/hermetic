@@ -168,6 +168,12 @@ export { disposeChatRequestPools } from "./chat/hermes/hermes-chat.ts";
  */
 export { redactText } from "./chat/chat-redact.ts";
 /**
+ * §9.2's chat settings — whether transcript content is masked — and the
+ * in-process store, so a test or a head wiring its own can state them.
+ */
+export { DEFAULT_CHAT_SETTINGS, MemoryChatSettingsStore } from "./chat/chat-settings.ts";
+export type { ChatSettings, ChatSettingsStore } from "./chat/chat-settings.ts";
+/**
  * The size of one observation's read, which is also the size of its
  * deduplication window.
  *

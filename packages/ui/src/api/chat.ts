@@ -17,6 +17,7 @@ import type {
   ChatHistoryResult,
   ChatResumeResult,
   ChatSessionsResult,
+  ChatSettingsView,
   ChatSwarmsResult,
 } from "./types.ts";
 
@@ -43,6 +44,14 @@ export async function setInstanceListening(
   // The write is the newer truth; no reader may be handed the pre-write answer.
   invalidateFetchCache(FETCH_KEYS.listening);
   return result;
+}
+
+/**
+ * `chat.settings`: this laptop's chat settings. An empty patch reads; a stated
+ * field writes it. Local, so no fleet target.
+ */
+export function chatSettings(input: Partial<ChatSettingsView> = {}): Promise<ChatSettingsView> {
+  return transport().request<ChatSettingsView>("chat.settings", { ...input });
 }
 
 /**

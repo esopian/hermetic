@@ -68,6 +68,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryInstanceListeningStore } from "../packages/core/src/chat/instance-listening.ts";
 import { createChat } from "../packages/core/src/chat/chat.ts";
+import { MemoryChatSettingsStore } from "../packages/core/src/chat/chat-settings.ts";
 import { REDACTED, SECRET_PATTERNS } from "../packages/core/src/chat/chat-redact.ts";
 import type { HermesChatClient } from "../packages/core/src/chat/hermes/hermes-chat.ts";
 import { openHermetic } from "../packages/core/src/open.ts";
@@ -657,7 +658,7 @@ afterAll(() => {
  * a real `hermetic-fixture.db`, and a suite must not read whatever a dev
  * session left in the operator's own.
  */
-async function harness(client: HermesChatClient = fakeBox()) {
+async function harness(client: HermesChatClient = fakeBox(), redact = true) {
   const home = mkdtempSync(join(tmpdir(), "hermetic-chat-redaction-"));
   homes.push(home);
   const base = await openHermetic({ fixture: true, home });
@@ -674,6 +675,9 @@ async function harness(client: HermesChatClient = fakeBox()) {
       listAgents: () => Promise.resolve(agents),
       hermes: client,
       instanceListening,
+      // Redaction is off by default (§9.2); every test here but the off-path
+      // ones states it on, which is the switch the file is about.
+      chatSettings: new MemoryChatSettingsStore({ redact }),
     }),
   };
   const log = memoryLog();
@@ -735,8 +739,8 @@ async function answerBytes(
  * file: a secret that survived in a field nobody thought to check is still in
  * the string being grepped.
  */
-async function wireBytes(client: HermesChatClient = fakeBox()): Promise<string> {
-  const { ctx, log } = await harness(client);
+async function wireBytes(client: HermesChatClient = fakeBox(), redact = true): Promise<string> {
+  const { ctx, log } = await harness(client, redact);
   const bodies = [
     await answerBytes(ctx, "chat.swarms", {}),
     await answerBytes(ctx, "chat.swarms", { instance: INSTANCE }),
@@ -942,5 +946,56 @@ describe("chat redaction, from the box to the wire", () => {
   test("a bare bitwarden token does not reach the wire", async () => {
     const bytes = await wireBytes();
     expect(bytes).not.toInclude(FIXTURE_BWS_TOKEN);
+  });
+});
+
+/**
+ * The switch off (§9.2): this laptop chose to see transcripts whole. Content
+ * arrives as the box wrote it; a failure is still masked, because an error is
+ * what the log and the CLI print, not the transcript the operator opted into.
+ */
+describe("chat redaction switched off", () => {
+  test("the transcript arrives whole", async () => {
+    const bytes = await wireBytes(fakeBox(), false);
+    expect(bytes).toInclude(FIXTURE_BWS_TOKEN);
+    expect(bytes).toInclude(v("anthropic-key"));
+  });
+
+  test("an unreachable box's reason is still masked", async () => {
+    const { ctx, log } = await harness(
+      fakeBox({ swarm: () => Promise.reject(new Error(`dial failed: ${s("bearer-token")}`)) }),
+      false,
+    );
+    const answer = await answerBytes(ctx, "chat.swarms", { instance: INSTANCE });
+    const bytes = [answer, ...log.lines].join("\n");
+    expect(bytes).toInclude("dial failed");
+    expect(bytes).not.toInclude(v("bearer-token"));
+    expect(bytes).toInclude(REDACTED);
+  });
+
+  test("an error frame in a turn is still masked", async () => {
+    const { ctx } = await harness(
+      fakeBox({
+        send: () =>
+          (async function* () {
+            yield { type: "delta", seq: 0, message: "msg-9", text: "working on it" } as const;
+            yield {
+              type: "error",
+              code: "CHAT_UNREACHABLE",
+              message: `gateway said ${s("bearer-token")}`,
+            } as const;
+          })(),
+      }),
+      false,
+    );
+    const bytes = await answerBytes(ctx, "chat.send", {
+      instance: INSTANCE,
+      bot: BOT,
+      message: "hello",
+      target: { ...TARGET },
+    });
+    expect(bytes).toInclude("working on it");
+    expect(bytes).toInclude("gateway said");
+    expect(bytes).not.toInclude(v("bearer-token"));
   });
 });

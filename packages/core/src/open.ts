@@ -55,6 +55,7 @@ import {
   openTeardownStore,
   openRunStore,
   SqliteChatFenceStore,
+  SqliteChatSettingsStore,
   SqliteIncarnationStore,
   SqliteLocalChatSessions,
   SqliteInstanceListeningStore,
@@ -355,6 +356,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       localSessions: new SqliteLocalChatSessions(local.db),
       chatFence: new SqliteChatFenceStore(local.db),
       instanceListening: new SqliteInstanceListeningStore(local.db),
+      chatSettings: new SqliteChatSettingsStore(local.db),
       incarnations: new SqliteIncarnationStore(local.db),
       // §4.6's create presets: a laptop preference, so the fixture database's.
       presets: new SqlitePresetStore(local.db),
@@ -445,6 +447,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     /** The fence the portal and the CLI share; see `chat-fence.ts`. */
     chatFence: new SqliteChatFenceStore(local.db),
     instanceListening: new SqliteInstanceListeningStore(local.db),
+    /** §9.2: this laptop's chat settings — transcript redaction — in `prefs`. */
+    chatSettings: new SqliteChatSettingsStore(local.db),
     /** §6.7: which incarnation of each name the tables above describe. */
     incarnations: new SqliteIncarnationStore(local.db),
     /** §4.6: this laptop's create presets, one `prefs` row. */

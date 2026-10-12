@@ -75,10 +75,11 @@ export function createAgentSet(deps: SetDeps) {
     if (parsed.hermes_version !== undefined) patch["hermes_version"] = parsed.hermes_version;
     /**
      * A merge, not a replacement (`SetAgentInput.hermes`): `--max-turns N`
-     * states one field and must leave the others alone. Setting a field is also
-     * what moves it from the seeded half to the managed half — see
-     * `splitHermesSettings` — so this is the line that decides hermetic now
-     * holds that setting on this agent.
+     * states one field and must leave the others alone. Stating a field moves
+     * the agent's starting value, and on a seeded key the next apply re-asserts
+     * it on the box (`seedCommands`); whether hermetic *holds* it is `hold`'s
+     * question, below — except on a row from before `--hold`, which holds every
+     * key it states (`splitHermesSettings`).
      */
     const hermesPatch: HermesSettings = { ...(agent.hermes ?? {}), ...(parsed.hermes ?? {}) };
     // The SDK/HTTP shape can carry the model inside `hermes` (the CLI's `set`
@@ -89,6 +90,9 @@ export function createAgentSet(deps: SetDeps) {
       assertModelGranted(agent.provider, parsed.hermes.model, fleet);
     }
     if (parsed.hermes !== undefined) patch["hermes"] = hermesPatch;
+    // A replacement, not a merge (`SetAgentInput.hold`). Sent to a row from
+    // before `--hold`, it is also what moves that row onto the new rule.
+    if (parsed.hold !== undefined) patch["hermes_hold"] = [...new Set(parsed.hold)];
 
     /**
      * §8.3: a provider change is *staged*, not applied.
