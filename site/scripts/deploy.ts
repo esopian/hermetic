@@ -25,7 +25,15 @@
 // `wrangler login` stored. The token is never printed or passed on a command line.
 
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -140,6 +148,7 @@ const { values: args } = parseArgs({
     "allow-untagged": { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
     verify: { type: "string" },
+    bootstrap: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
   strict: true,
@@ -157,6 +166,8 @@ if (args.help) {
   --allow-untagged    production only: deploy a commit no v* tag points at
   --dry-run           run every check and the build, upload nothing
   --verify <url>      only run the HTTP checks against <url>, expecting HEAD's build
+  --bootstrap         create the Worker with a placeholder page on workers.dev (no domain), so
+                      previews can be uploaded before the first production deploy
   -h, --help          this text`);
   process.exit(0);
 }
@@ -632,7 +643,67 @@ function summary(plan: Plan, d: Deployment, startedAt: number): void {
   }
 }
 
+/**
+ * Creates the Worker when it does not exist yet. Cloudflare refuses to upload a version to a
+ * Worker that was never deployed, so a first preview needs a Worker to exist; this deploys a
+ * one-page placeholder to its workers.dev address only (no custom domain), which the first real
+ * `--production` deploy later replaces. Refuses when the Worker already exists.
+ */
+async function bootstrap(): Promise<void> {
+  const worker = workerName();
+  out(`${orange("■")} ${bold("hermetic site bootstrap")}`);
+  out();
+  await step("Cloudflare credentials", () => {
+    const who = read("bunx", ["wrangler", "whoami"], SITE);
+    if (who === null || /not authenticated/i.test(who)) {
+      throw new DeployError("wrangler is not logged in", "run `bunx wrangler login` in site/");
+    }
+    if (read("bunx", ["wrangler", "deployments", "list", "--name", worker, "--json"], SITE) !== null) {
+      throw new DeployError(
+        `Worker "${worker}" already exists`,
+        "nothing to bootstrap: `bun run deploy` uploads previews to it",
+      );
+    }
+    note(`Worker ${worker} does not exist yet`);
+  });
+  const url = await step("Create the Worker (placeholder on workers.dev)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hermetic-bootstrap-"));
+    const outputFile = join(dir, "wrangler-output.ndjson");
+    const assets = join(dir, "assets");
+    try {
+      const page = (title: string): string =>
+        `<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>${title}</title><p>${title}</p>\n`;
+      mkdirSync(assets, { recursive: true });
+      writeFileSync(join(assets, "index.html"), page("hermetic: not published yet"));
+      writeFileSync(join(assets, "404.html"), page("Not found"));
+      await run(
+        "bunx",
+        [
+          "wrangler",
+          "deploy",
+          "--name",
+          worker,
+          "--assets",
+          assets,
+          "--message",
+          "bootstrap placeholder",
+        ],
+        { cwd: SITE, env: { ...env, WRANGLER_OUTPUT_FILE_PATH: outputFile } },
+      );
+      const entry = outputEntry(outputFile, "deploy");
+      const targets = Array.isArray(entry?.["targets"]) ? entry["targets"].map(trimSlash) : [];
+      return targets.find((t) => t.endsWith(".workers.dev")) ?? "";
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  out();
+  out(`${green("●")} ${bold("Worker created")} ${url !== "" ? dim(url) : ""}`);
+  out("  It serves a placeholder; `bun run deploy` now uploads previews of the real site.");
+}
+
 async function main(): Promise<void> {
+  if (args.bootstrap) return bootstrap();
   const startedAt = Date.now();
   if (args.verify !== undefined) {
     const short = read("git", ["rev-parse", "--short=7", "HEAD"]) ?? "unknown";
