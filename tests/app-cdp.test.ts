@@ -32,7 +32,6 @@ describe("DevTools port", () => {
 
 describe("packages/ui/index.html under CEF", () => {
   const html = readFileSync(join(ROOT, "packages/ui/index.html"), "utf8");
-  const withoutComments = html.replace(/<!--[\s\S]*?-->/g, "");
 
   test("opens with the doctype", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);
@@ -40,7 +39,9 @@ describe("packages/ui/index.html under CEF", () => {
 
   test("has exactly one literal head start tag, and it is real markup", () => {
     expect(html.split("<head>").length - 1).toBe(1);
-    expect(withoutComments).toContain("<head>");
+    // Not inside a comment: every comment opened before the tag is closed before it.
+    const before = html.slice(0, html.indexOf("<head>"));
+    expect(before.lastIndexOf("<!--")).toBeLessThanOrEqual(before.lastIndexOf("-->"));
   });
 });
 
@@ -78,5 +79,13 @@ describe("snapshot formatting", () => {
     expect(appCdp.findExpression('button[aria-label="x"]')).toBe(
       'document.querySelector("button[aria-label=\\"x\\"]")',
     );
+  });
+
+  test("a target cannot close a script element or break the line", () => {
+    const expression = appCdp.findExpression("text=</script> ");
+    expect(expression).not.toContain("</script>");
+    expect(expression).not.toContain(" ");
+    expect(appCdp.jsStringLiteral("</a> ")).toBe('"\\u003C\\u002Fa\\u003E\\u2028"');
+    expect(JSON.parse(appCdp.jsStringLiteral('a</b>\n \\"'))).toBe('a</b>\n \\"');
   });
 });

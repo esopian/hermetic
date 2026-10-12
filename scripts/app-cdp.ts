@@ -199,13 +199,38 @@ export function formatAxTree(nodes: AxNode[]): string {
   return lines.join("\n");
 }
 
+const UNSAFE_CHARS: Record<string, string> = {
+  "<": "\\u003C",
+  ">": "\\u003E",
+  "/": "\\u002F",
+  "\\": "\\\\",
+  "\b": "\\b",
+  "\f": "\\f",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\0": "\\0",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+/**
+ * A string as a JavaScript string literal safe to splice into evaluated code:
+ * JSON, with the characters JSON leaves bare (`<`, `>`, `/`, the line
+ * separators) escaped too.
+ */
+export function jsStringLiteral(value: string): string {
+  return JSON.stringify(value).replace(/[<>/\b\f\n\r\t\0\u2028\u2029]/g, (c) => UNSAFE_CHARS[c] ?? c);
+}
+
 /**
  * The page-side lookup for a <target>, as an expression yielding an Element
- * or null. Serialised with JSON so the selector or text never needs escaping.
+ * or null. Serialised as a string literal so the selector or text never needs
+ * escaping.
  */
 export function findExpression(target: string): string {
-  if (!target.startsWith("text=")) return `document.querySelector(${JSON.stringify(target)})`;
-  const text = JSON.stringify(target.slice("text=".length).trim());
+  if (!target.startsWith("text=")) return `document.querySelector(${jsStringLiteral(target)})`;
+  const text = jsStringLiteral(target.slice("text=".length).trim());
   return `(() => {
     const want = ${text};
     const candidates = [...document.querySelectorAll('button, a, [role], summary, label, input[type="button"], input[type="submit"]')];
