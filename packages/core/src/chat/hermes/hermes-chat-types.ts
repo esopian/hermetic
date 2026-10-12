@@ -223,7 +223,22 @@ export interface HermesChatClient {
   observe?(box: BoxAddress, bot: string, opts?: ObserveOptions): AsyncIterable<ChatObserveHint>;
   // biome-ignore lint/suspicious/noConfusingVoidType: Existing injected adapters return Promise<void>; the live adapter additionally reports an idle no-op without breaking those implementations.
   abort(box: BoxAddress, bot: string, opts?: SendOptions): Promise<boolean | void>;
+  /**
+   * Deliver `text` into the turn in flight without stopping it (§9.2): the
+   * gateway's `session.redirect`. Optional, because an injected adapter that
+   * predates it is still a whole client for everything else; `chat.ts` refuses
+   * with `CHAT_PROTOCOL` when it is absent rather than pretending to steer.
+   */
+  steer?(box: BoxAddress, bot: string, text: string, opts?: SendOptions): Promise<ChatSteerStatus>;
 }
+
+/**
+ * What became of a steer (§9.2). The first three are the gateway's own answer
+ * to `session.redirect`: folded into the running model turn, queued because
+ * the turn was still being built, or not applied. `idle` is hermetic's: no
+ * running turn was found to steer, and none was started.
+ */
+export type ChatSteerStatus = "redirected" | "queued" | "rejected" | "idle";
 
 /* ── constants that encode something upstream decided ─────────────────────── */
 

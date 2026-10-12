@@ -107,8 +107,8 @@ describe("tool", () => {
     expect(screen.queryByText(/Use% 91%/)).toBeNull();
   });
 
-  test("a failed call starts expanded — that one is the whole message", () => {
-    draw({
+  test("a failed call starts shut: the head says it failed, the output waits", async () => {
+    const { container } = draw({
       kind: "tool",
       name: "terminal",
       args: { command: "ncdu -x /data" },
@@ -116,6 +116,10 @@ describe("tool", () => {
       status: "bad",
       exit_code: 127,
     });
+    expect(container.querySelector(".ch-card.bad.collapsed")).not.toBeNull();
+    expect(screen.getByText("exit 127")).toBeDefined();
+    expect(screen.queryByText(/ncdu: not found/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /terminal/ }));
     expect(screen.getByText(/ncdu: not found/)).toBeDefined();
   });
 
@@ -197,7 +201,7 @@ describe("tool", () => {
       name: "hologram",
       args: {},
       result: "projected",
-      status: "bad",
+      status: "quantum",
       render: "hologram",
     });
     expect(screen.getByText("projected")).toBeDefined();

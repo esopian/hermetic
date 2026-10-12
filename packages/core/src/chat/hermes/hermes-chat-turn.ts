@@ -14,6 +14,7 @@ import {
   chatError,
   WARM_SLOTS_PER_GATEWAY,
   type BoxAddress,
+  type ChatSteerStatus,
   type SendOptions,
 } from "./hermes-chat-types.ts";
 import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
@@ -82,6 +83,9 @@ const SUBMIT_TITLES: Record<ChatStatusState, string> = {
   redirected: "Redirecting the running turn",
   steered: "Steering the running turn",
 };
+
+/** Upstream's "agent does not support active-turn redirect" (`methods_session.py`). */
+const REDIRECT_UNSUPPORTED = 4010;
 
 /** What `createChatTurn` needs, and nothing more. */
 export interface ChatTurnDeps {
@@ -668,21 +672,37 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
   /* ── abort ──────────────────────────────────────────────────────────────── */
 
-  async function abort(box: BoxAddress, bot: string, opts: SendOptions = {}): Promise<boolean> {
-    checkAbort(opts.signal, "chat.abort");
+  /**
+   * The runtime session of the turn in flight on `bot`, on a socket the caller
+   * then owns, or null when nothing is running there.
+   *
+   * Shared by `abort` and `steer`, because both must find the same turn the
+   * same way: this process's own turn map first, and only then a lazy
+   * profile-scoped resume of the durable session — a separate CLI process has
+   * no turn map, and a lazy resume attaches without warming a backend.
+   */
+  async function runningTurn(
+    box: BoxAddress,
+    bot: string,
+    method: string,
+    opts: SendOptions,
+  ): Promise<{ rpc: Rpc; runtime: string } | null> {
     const entries = [...(activeTurns.get(turnKey(box, bot)) ?? [])];
     const matches = opts.session ? entries.filter((entry) => entry.stored === opts.session) : entries;
     if (matches.length > 1)
-      throw new HermeticError("VALIDATION", "chat.abort needs an unambiguous session");
+      throw new HermeticError("VALIDATION", `${method} needs an unambiguous session`);
     const stored = matches[0]?.runtime
       ? undefined
       : (opts.session ?? (await deps.conversation(box, bot, opts))?.session);
-    if (!matches[0]?.runtime && !stored) return false;
+    if (!matches[0]?.runtime && !stored) return null;
     const rpc = await deps.connect(box, opts.signal);
     try {
       let runtime = matches[0]?.runtime;
       if (!runtime) {
-        if (!stored) return false;
+        if (!stored) {
+          rpc.close();
+          return null;
+        }
         // A separate CLI process has no local turn map. Lazy profile-scoped
         // resume can attach to its durable session without warming a backend.
         // Only an explicitly running, non-watch runtime may then be stopped:
@@ -722,7 +742,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
               CHAT_ERROR_CODES.PROTOCOL,
               `${box.instance}: resume did not report whether the session is running`,
             );
-          if (!result.running) return false;
+          if (!result.running) {
+            rpc.close();
+            return null;
+          }
           if (rec(result.info)?.lazy === true)
             throw new HermeticError(
               "VALIDATION",
@@ -736,10 +759,64 @@ export function createChatTurn(deps: ChatTurnDeps) {
             `${box.instance}: resume named no runtime session`,
           );
       }
-      await rpc.request("session.interrupt", { session_id: runtime, profile: bot });
+      return { rpc, runtime };
+    } catch (e) {
+      rpc.close();
+      throw e;
+    }
+  }
+
+  async function abort(box: BoxAddress, bot: string, opts: SendOptions = {}): Promise<boolean> {
+    checkAbort(opts.signal, "chat.abort");
+    const found = await runningTurn(box, bot, "chat.abort", opts);
+    if (!found) return false;
+    try {
+      await found.rpc.request("session.interrupt", { session_id: found.runtime, profile: bot });
       return true;
     } finally {
-      rpc.close();
+      found.rpc.close();
+    }
+  }
+
+  /* ── steer ──────────────────────────────────────────────────────────────── */
+
+  /**
+   * Put `text` into the turn in flight without stopping it: upstream's
+   * `session.redirect` (`methods_session.py`), which cancels the current model
+   * request and rebuilds the turn with the correction, keeping the work done,
+   * or waits for the running tool. A turn still being built is answered
+   * `queued` — the gateway holds the text for the next turn.
+   *
+   * A bot with no running turn is `idle` and nothing is sent: a redirect into
+   * an idle session would start one. 4010 (this agent cannot redirect an active
+   * turn) is `rejected` rather than a throw, because to the operator it is the
+   * same outcome as the gateway declining — the text was not applied — and the
+   * head offers the same next step for both.
+   */
+  async function steer(
+    box: BoxAddress,
+    bot: string,
+    text: string,
+    opts: SendOptions = {},
+  ): Promise<ChatSteerStatus> {
+    checkAbort(opts.signal, "chat.steer");
+    const found = await runningTurn(box, bot, "chat.steer", opts);
+    if (!found) return "idle";
+    try {
+      const reply = rec(
+        await found.rpc.request("session.redirect", {
+          session_id: found.runtime,
+          profile: bot,
+          text,
+        }),
+      );
+      const status = str(reply?.status);
+      return status === "redirected" || status === "queued" ? status : "rejected";
+    } catch (e) {
+      if (e instanceof HermeticError && e.details?.code === REDIRECT_UNSUPPORTED) return "rejected";
+      throw e;
+    } finally {
+      found.rpc.close();
     }
   }
 
@@ -772,5 +849,5 @@ export function createChatTurn(deps: ChatTurnDeps) {
     const code = e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL;
     return { type: "error", code, message: describe(e) };
   }
-  return { send, abort };
+  return { send, abort, steer };
 }
