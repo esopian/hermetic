@@ -24,6 +24,9 @@ packages/app/dist/
 /.claude/helpers/
 /.claude/skills/graft/
 /.claude/settings.local.json
+/.agents/skills/graft
+/.codex/config.toml
+/.codex/hooks.json
 /.mcp.json
 /opencode.json
 /CLAUDE.md

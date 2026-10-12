@@ -52,10 +52,11 @@ opencode), and it makes those agents cheaper and better informed:
 
 - [graft](https://github.com/trailhq/Graft) — a context graph of the repo in `graft/`: every symbol,
   its `file:line` span, and who calls what, served to the agent as CLI commands (`graft ask`,
-  `graft callers`, `graft skeleton`), an MCP server, a Claude Code skill and hooks that keep the graph
-  fresh as files change. An agent that queries it reads far less source than one that greps.
+  `graft callers`, `graft skeleton`), an MCP server, a shared Claude Code/Codex skill and Claude
+  hooks that keep the graph fresh as files change. An agent that queries it reads far less source
+  than one that greps.
 - [rtk](https://github.com/rtk-ai/rtk) — a proxy in front of the agent's shell commands (a Claude
-  Code `PreToolUse` hook) that condenses their output; behavior and exit codes are unchanged.
+  Code and Codex `PreToolUse` hook) that condenses their output; behavior and exit codes are unchanged.
 - caveman — a terse-prose mode for the agent's replies to you, vendored in `.claude/skills/caveman/`
   (MIT). Off unless you opt in.
 
@@ -65,12 +66,13 @@ bun run agent-setup -- --caveman    # the same, plus caveman full mode for every
 bun run agent-setup:check           # report only, change nothing, exit 1 if anything is off
 ```
 
-Without the flag, `/caveman full` turns caveman on for one session.
+Without the flag, `/caveman full` in Claude Code or `$caveman` in Codex turns caveman on for one session.
 
 `scripts/agent-setup.sh` installs the two binaries (graft through `npm install -g`, rtk through its
 checksum-verifying installer into `~/.local/bin`) and then writes only git-ignored files in this
 checkout: graft's skill, hook shims and graph, `.mcp.json` and `opencode.json` for the MCP server,
-and every hook, env var and permission in `.claude/settings.local.json`. The tracked
+the `.agents/skills/graft` symlink and `.codex/config.toml` for Codex, and hooks in
+`.claude/settings.local.json` and `.codex/hooks.json`. The tracked
 `.claude/settings.json` holds tool-neutral settings only, so a fresh clone without either tool runs
 no hooks and reports no errors. When `graft init` writes its hooks into the tracked settings file, as
 it insists on doing, the script moves them to `settings.local.json`, restores the tracked file, and
@@ -83,13 +85,23 @@ machine-wide — `~/.claude/settings.json` hooks, `~/.claude.json` MCP entries, 
 so the script passes the suppressing flag on every call, then warns if a machine-wide entry turns up
 regardless. If you want either tool globally, run its own installer yourself.
 
+Codex loads repo skills from `.agents/skills/`. Small `caveman` and `create-pr` entrypoints read
+the Claude workflows. Codex has a separate `orchestrator-mode` skill because subagent controls
+differ. The generated graft symlink, MCP config and rtk hook stay
+local to each checkout. Trust the project config and review the rtk hook with `/hooks` in Codex
+before it can run. The rtk hook rewrites Bash commands and returns an allow decision, so inspect it
+before trusting it. Restart Codex after setup to pick up the MCP server and hook. The `--caveman`
+setup flag configures Claude Code's default only; invoke `$caveman` in a Codex session to enable
+that style.
+
 Conductor runs `bun install && bun run setup && bun run agent-setup` as a workspace's setup script
 (`.conductor/settings.toml`), so a new worktree arrives wired and with its own graft graph built
 (`graft/` is git-ignored, so each worktree needs one). After big changes, refresh it with
 `graft build`.
 
-To remove it: delete `.claude/helpers/`, `.claude/skills/graft/`, `graft/`, `.mcp.json` and
-`opencode.json`, and drop the graft, rtk and `CAVEMAN_DEFAULT_MODE` entries from
+To remove it: delete `.claude/helpers/`, `.claude/skills/graft/`, `.agents/skills/graft`,
+`.codex/config.toml`, `.codex/hooks.json`, `graft/`, `.mcp.json` and `opencode.json`,
+and drop the graft, rtk and `CAVEMAN_DEFAULT_MODE` entries from
 `.claude/settings.local.json`. `npm uninstall -g @nanonets/graft` and `rm ~/.local/bin/rtk` remove the
 binaries. A machine-wide install made by hand is undone with `graft uninstall -y` and
 `rtk init -g --uninstall` (repeat with `--codex` and `--opencode`).

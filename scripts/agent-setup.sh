@@ -14,12 +14,12 @@
 #
 # Scope rule: nothing tracked by git and nothing outside this repository is
 # configured. Every hook, env var and permission lands in the git-ignored
-# .claude/settings.local.json; anything a tool writes into a tracked file is
-# moved there and the tracked file restored, and the run fails if a tracked
-# file is left modified. Both tools default to machine-wide agent config
-# (~/.claude/settings.json, ~/.claude.json, ~/.codex/); every call passes the
-# flag that suppresses that, and `step_no_global_leak` warns if one shows up
-# anyway. The two binaries are the one exception — a CLI has to be installed
+# .claude/settings.local.json or git-ignored .codex/ files; anything a tool
+# writes into a tracked file is moved there and the tracked file restored.
+# The run fails if a tracked file is left modified. Both tools default to
+# machine-wide agent config (~/.claude/settings.json, ~/.claude.json, ~/.codex/);
+# every call passes the suppressing flag. `step_no_global_leak` warns if one
+# shows up anyway. The two binaries are the one exception — a CLI has to be installed
 # somewhere — and they change no agent's behaviour until a repo wires them in.
 set -uo pipefail
 
@@ -82,6 +82,7 @@ TOOL_MARKS='graft-hooks|graft-statusline|rtk hook|CAVEMAN_'
 #   env <local> <KEY> <VALUE>      set env.KEY in <local>
 #   hook <local> <EVENT> <MATCHER> <COMMAND>  add a command hook to <local>
 #   mcp-opencode <file>            register graft's MCP server in opencode.json
+#   hook-codex <file>              register rtk's compatible PreToolUse hook
 # Every write merges into what is there; nothing is replaced wholesale.
 SETTINGS_JS='
 const fs = require("node:fs");
@@ -136,6 +137,11 @@ if (cmd === "relocate") {
 } else if (cmd === "mcp-opencode") {
   const out = read(a[0]);
   out.mcp = { ...(out.mcp ?? {}), graft: { type: "local", command: ["graft", "mcp"], enabled: true } };
+  write(a[0], out);
+} else if (cmd === "hook-codex") {
+  const out = read(a[0]);
+  const entry = { matcher: "Bash", hooks: [{ type: "command", command: "rtk hook claude" }] };
+  out.hooks = { ...(out.hooks ?? {}), PreToolUse: addAll(out.hooks?.PreToolUse, [entry]) };
   write(a[0], out);
 } else {
   throw new Error(`unknown subcommand ${cmd}`);
@@ -301,6 +307,40 @@ step_graft_opencode() {
   fi
 }
 
+# Codex discovers repo skills under .agents/skills and follows symlinks. Keep
+# graft's generated skill in its original location so both hosts use one copy.
+# Project MCP config is local because the server exists only after setup.
+step_graft_codex() {
+  have graft || return
+  if [ ! -f .claude/skills/graft/SKILL.md ]; then
+    fail "graft skill was not generated — run 'bun run agent-setup' again"
+    return
+  fi
+  local link=".agents/skills/graft" target="../../.claude/skills/graft"
+  if [ "$(readlink "$link" 2>/dev/null)" = "$target" ]; then
+    ok "graft skill available to Codex"
+  elif [ -e "$link" ] || [ -L "$link" ]; then
+    fail "$link already exists — leave it intact and resolve the conflict by hand"
+  elif ! would_fix; then
+    warn "graft skill not available to Codex"
+  else
+    mkdir -p .agents/skills
+    ln -s "$target" "$link"
+    fixed "linked graft skill for Codex"
+  fi
+
+  local config=".codex/config.toml"
+  if grep -Eq '^\[mcp_servers\.graft\]$' "$config" 2>/dev/null; then
+    ok "graft MCP server in $config"
+  elif ! would_fix; then
+    warn "graft MCP server not in $config"
+  else
+    mkdir -p .codex
+    printf '\n[mcp_servers.graft]\ncommand = "graft"\nargs = ["mcp"]\n' >> "$config"
+    fixed "registered graft MCP server for Codex"
+  fi
+}
+
 step_graft_graph() {
   have graft || return
   if [ ! -f "$ROOT/graft/INDEX.md" ]; then
@@ -363,6 +403,25 @@ step_rtk_wire() {
     fixed "added the rtk PreToolUse hook to $LOCAL_SETTINGS"
   else
     fail "$LOCAL_SETTINGS is not valid JSON — fix it by hand, then rerun"
+  fi
+}
+
+# rtk's Claude hook uses the same PreToolUse input and rewrite output that
+# Codex accepts. Keep it in a repo-local hook file, subject to Codex trust.
+step_rtk_codex() {
+  have rtk || return
+  local hooks=".codex/hooks.json"
+  if grep -q 'rtk hook claude' "$hooks" 2>/dev/null; then
+    ok "rtk PreToolUse hook in $hooks"
+  elif ! would_fix; then
+    warn "no rtk hook in $hooks"
+  else
+    mkdir -p .codex
+    if settings_js hook-codex "$hooks"; then
+      fixed "added the rtk PreToolUse hook to $hooks"
+    else
+      fail "$hooks is not valid JSON — fix it by hand, then rerun"
+    fi
   fi
 }
 
@@ -489,11 +548,13 @@ section "graft — repo context graph"
 step_graft_install
 step_graft_wire
 step_graft_opencode
+step_graft_codex
 step_graft_graph
 
 section "rtk — output compression"
 step_rtk_install
 step_rtk_wire
+step_rtk_codex
 step_rtk_bypass_docs
 
 section "caveman — opt-in terse prose"

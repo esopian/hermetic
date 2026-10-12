@@ -3,6 +3,9 @@
 Skills and subagents checked into this repo so they work without any
 plugin installed. Claude Code loads `.claude/skills/` and `.claude/agents/`
 automatically for anyone who clones the repo.
+Codex loads `.agents/skills/`: `caveman` and `create-pr` have small entrypoints
+that read the Claude workflows. `orchestrator-mode` has a Codex-specific entrypoint.
+`bun run agent-setup` also links the generated graft skill there.
 
 | Path | What | Origin |
 |---|---|---|
