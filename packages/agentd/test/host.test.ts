@@ -219,3 +219,76 @@ describe("a followed `execLines` does not outlive its reader", () => {
     expect(lines).toEqual(["one"]);
   });
 });
+
+describe("readFile reads the whole file, whatever stat said", () => {
+  test("absent, under a file, or a directory is null; a file is its content", async () => {
+    const path = join(dir, "present");
+    await writeFile(path, "hello\n");
+
+    expect(await host.readFile(path)).toBe("hello\n");
+    expect(await host.readBytes(path)).toEqual(new TextEncoder().encode("hello\n"));
+    expect(await host.readFile(join(dir, "absent"))).toBeNull();
+    expect(await host.readFile(join(path, "child"))).toBeNull();
+    expect(await host.readFile(dir)).toBeNull();
+    expect(await host.readBytes(join(dir, "absent"))).toBeNull();
+  });
+
+  // procfs files stat at size 0. A stat'ed `BunFile` trusted that and read "",
+  // which is how every box reported 0% CPU and 0% memory. Linux only: there is
+  // no procfs to read anywhere else, and CI runs here.
+  test.skipIf(process.platform !== "linux")("procfs files read back non-empty", async () => {
+    const stat = await host.readFile("/proc/stat");
+    const meminfo = await host.readFile("/proc/meminfo");
+
+    expect(stat).toMatch(/^cpu /);
+    expect(meminfo).toMatch(/^MemTotal:/);
+  });
+});
+
+describe("the OS readings come from systeminformation", () => {
+  /**
+   * No canned answers here: the real library against whatever kernel runs the
+   * suite. The procfs-reads-empty bug lived exactly where no test looked.
+   *
+   * In a child process, not this one. The UI's DOM tests install happy-dom's
+   * globals into the shared test process, and Bun's `os.cpus()` sizes its array
+   * from `navigator.hardwareConcurrency` — happy-dom's, not the machine's — so
+   * on a runner with fewer cores than happy-dom claims the array has holes and
+   * `currentLoad()` throws. hermeticd never has a DOM; the child is the
+   * environment it actually runs in.
+   */
+  test("cpu, memory and the filesystem holding a path all measure", async () => {
+    const hostModule = join(import.meta.dir, "../src/host.ts");
+    const script = `
+      const { realHost } = await import(${JSON.stringify(hostModule)});
+      const host = realHost();
+      const readings = {
+        cpu: await host.cpuLoad(),
+        mem: await host.memory(),
+        fs: await host.filesystem(${JSON.stringify(dir)}),
+      };
+      process.stdout.write(JSON.stringify(readings));
+    `;
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    const { cpu, mem, fs } = JSON.parse(stdout) as {
+      cpu: number | null;
+      mem: { total: number; available: number } | null;
+      fs: { mount: string; size: number; usePct: number } | null;
+    };
+
+    expect(cpu).not.toBeNull();
+    expect(cpu as number).toBeGreaterThanOrEqual(0);
+    expect(cpu as number).toBeLessThanOrEqual(100);
+    expect(mem?.total ?? 0).toBeGreaterThan(0);
+    expect(mem?.available ?? -1).toBeGreaterThanOrEqual(0);
+    expect(fs?.size ?? 0).toBeGreaterThan(0);
+    expect(fs?.mount.startsWith("/")).toBe(true);
+    expect(fs?.usePct ?? -1).toBeGreaterThanOrEqual(0);
+  });
+});

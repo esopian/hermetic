@@ -53,22 +53,22 @@ describe("tombstones: what a volume has to be to reach the fleet board", () => {
       volume({ volume_id: "vol-amb", group: "ambiguous" }),
       volume({ volume_id: "vol-stray", group: "unmanaged", managed: false }),
     ];
-    expect(tombstones(rows, [], false).map((v) => v.volume_id)).toEqual(["vol-loose"]);
+    expect(tombstones(rows, []).map((v) => v.volume_id)).toEqual(["vol-loose"]);
   });
 
   test("an ambiguous volume is never a tombstone, because a tombstone names an agent", () => {
     const rows = [volume({ volume_id: "vol-amb", group: "ambiguous", ambiguous_with: ["vol-x"] })];
-    expect(tombstones(rows, [], false)).toEqual([]);
+    expect(tombstones(rows, [])).toEqual([]);
   });
 
-  test("suppressed when the destroyed toggle put its own agent on screen", () => {
+  test("drawn whenever no live agent owns it; suppressed beside its live owner's card", () => {
     const rows = [volume({ volume_id: "vol-oriole", agent: "oriole" })];
+    // A legacy destroyed row is never on screen, so the volume is all there is.
     const gone = [agent({ name: "oriole", display_status: "destroyed", volume_id: "vol-oriole" })];
-    // Hidden: the destroyed row is off screen, so the volume is all there is.
-    expect(tombstones(rows, gone, false).length).toBe(1);
-    // Shown: the destroyed agent's own card carries the volume, and a tombstone
-    // beside it would be the same thing rendered twice.
-    expect(tombstones(rows, gone, true).length).toBe(0);
+    expect(tombstones(rows, gone).length).toBe(1);
+    // A live agent under the same name carries the volume on its own card.
+    const live = [agent({ name: "oriole", display_status: "ready", volume_id: "vol-oriole" })];
+    expect(tombstones(rows, live).length).toBe(0);
   });
 
   test("newest-free first, so the cap keeps what still matters", () => {
@@ -76,7 +76,7 @@ describe("tombstones: what a volume has to be to reach the fleet board", () => {
       volume({ volume_id: "vol-old", agent: "a", free_for_ms: 90 * 86_400_000 }),
       volume({ volume_id: "vol-new", agent: "b", free_for_ms: 60_000 }),
     ];
-    expect(tombstones(rows, [], false).map((v) => v.volume_id)).toEqual(["vol-new", "vol-old"]);
+    expect(tombstones(rows, []).map((v) => v.volume_id)).toEqual(["vol-new", "vol-old"]);
   });
 });
 
@@ -85,7 +85,7 @@ describe("boardVolumes", () => {
     const rows = Array.from({ length: TOMBSTONE_CAP + 3 }, (_, i) =>
       volume({ volume_id: `vol-${i}`, agent: `a${i}`, free_for_ms: i * 1000, size_gib: 100 }),
     );
-    const board = boardVolumes(rows, [], false);
+    const board = boardVolumes(rows, []);
     expect(board.shown.length).toBe(TOMBSTONE_CAP);
     expect(board.overflow.count).toBe(3);
     expect(board.overflow.gib).toBe(300);
@@ -97,7 +97,7 @@ describe("boardVolumes", () => {
       volume({ volume_id: "vol-b", group: "unmanaged", managed: false }),
       volume({ volume_id: "vol-c", group: "attached", attached: true }),
     ];
-    expect(boardVolumes(rows, [], false).hiddenElsewhere).toBe(2);
+    expect(boardVolumes(rows, []).hiddenElsewhere).toBe(2);
   });
 });
 
@@ -181,6 +181,16 @@ describe("settleVolumes", () => {
     expect(going.changed).toBe(false);
     s = going.next;
     expect(settleVolumes(s, [row("brown-wolf", "destroyed")]).changed).toBe(true);
+  });
+
+  test("a destroy that deleted the row is a change: the name leaves the fleet", () => {
+    let s = settleVolumes(null, [row("brown-wolf", "ready"), row("atlas", "ready")]).next;
+    s = settleVolumes(s, [row("brown-wolf", "destroying"), row("atlas", "ready")]).next;
+    const gone = settleVolumes(s, [row("atlas", "ready")]);
+    expect(gone.changed).toBe(true);
+    expect([...gone.next.keys()]).toEqual(["atlas"]);
+    // Once forgotten, the absence is not a change a second time.
+    expect(settleVolumes(gone.next, [row("atlas", "ready")]).changed).toBe(false);
   });
 
   test("a new agent reaching ready is a change", () => {

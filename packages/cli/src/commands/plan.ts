@@ -62,13 +62,10 @@ export function register(program: Command): void {
     globals(new Cmd("destroy"))
       .description("the plan `agent destroy` would execute")
       .argument("<name>", "agent name")
-      .option("--delete-volume", "include deleting the data volume")
+      .option("--keep-volume", "plan keeping the data volume (default: it is deleted)")
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
-        const input = validate(
-          planDestroySchema,
-          defined({ name, delete_volume: opts["deleteVolume"] }),
-        );
+        const input = validate(planDestroySchema, defined({ name, keep_volume: opts["keepVolume"] }));
         const result = await ctx.hermetic.plan.destroy(input);
         if (ctx.flags.json) await outJson(result);
         else await out(`${renderPlan(result)}\n`);

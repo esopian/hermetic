@@ -293,7 +293,7 @@ describe("directory.status", () => {
 
 /**
  * §4.8 through the door every head uses. Fixture mode has two fleets for the
- * same reason the fixture has twelve agents: so the switcher, the second board
+ * same reason the fixture has eleven agents: so the switcher, the second board
  * and the "update available" badge all have something real to render offline.
  */
 describe("fixture mode", () => {

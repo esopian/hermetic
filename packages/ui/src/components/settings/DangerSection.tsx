@@ -35,16 +35,16 @@ export function DangerSection({
           undone.
         </p>
         {/*
-          "Refused while any agent exists" read as "refused while any row
-          exists", which is not what core checks: §4.3 keeps a destroyed
-          agent's row forever, and a fleet of nothing but tombstones tears
-          down fine. The distinction matters because the alternative reading
-          suggests deleting history to unblock a teardown.
+          "Refused while any agent exists" could read as "refused while any
+          record exists", which is not what core checks: a destroy deletes the
+          row and leaves a tombstone (§6.7), and a fleet of nothing but
+          tombstones tears down fine. The distinction matters because the
+          alternative reading suggests deleting history to unblock a teardown.
         */}
         <p className="danger-copy">
           Refused while any agent is still <b>live</b> (<span className="mono">AGENTS_EXIST</span>).
-          Destroyed agents do not block it: their rows are a record, not a machine, and they go with the
-          fleet&apos;s tables. Their data volumes are kept unless{" "}
+          Destroyed agents do not block it: their names are released, and their tombstones and history
+          go with the fleet&apos;s tables. Their data volumes are kept unless{" "}
           <span className="mono">--delete-volumes</span> is ticked in the drawer.
         </p>
         <button type="button" className="btn btn-teardown" onClick={onOpenTeardown}>

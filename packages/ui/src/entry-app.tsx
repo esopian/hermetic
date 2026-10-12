@@ -32,6 +32,9 @@ import { FleetProvider } from "./state/state.tsx";
 // fonts it references are bundled with it (§3.6: the app is one bundle and
 // never fetches a stylesheet or a face over the network).
 import "katex/dist/katex.min.css";
+// xterm's own rules (the screen's layers, the hidden textarea that takes the
+// keys); the Terminal section's dress is `drawer.css`'s `.term*`, after it.
+import "@xterm/xterm/css/xterm.css";
 import "./styles/polish.css";
 // After polish.css, which pulls in styles.css: the chat rules are overrides of
 // the app's own, and chat-soft.css is an override of chat.css. Deleting the
@@ -41,6 +44,8 @@ import "./chat/styles/chat-soft.css";
 import "./chat/styles/chat-activity-status.css";
 // Background-process event rows, the burst fold and the DM reply card.
 import "./chat/styles/chat-events.css";
+// Bot-to-bot DM markers and the exchange panel.
+import "./chat/styles/bot-dm.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.
 import "./chat/styles/chat-markdown.css";
 import "./chat/styles/bot-mode.css";

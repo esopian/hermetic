@@ -16,6 +16,14 @@ import { chatRefHash } from "../chat/chat-routing.ts";
  * `chat.cron`) that core will only start emitting in a later phase.
  */
 import { settingsHash } from "../nav/settings-nav.ts";
+import {
+  DEFAULT_TERMINAL_TRIGGER,
+  isTerminalTrigger,
+  isWatchingTerminalSession,
+  terminalActionHash,
+  terminalTriggerAllows,
+} from "./terminal-notify.ts";
+import type { TerminalTrigger } from "./terminal-notify.ts";
 
 /* ── the record, as the rules see it ─────────────────────────────────────── */
 
@@ -76,11 +84,18 @@ export type Delivery = "off" | "inbox" | "toast";
 export const DELIVERIES: readonly Delivery[] = ["off", "inbox", "toast"];
 
 /**
- * The six rules the settings section edits. Grouped by what an operator would
+ * The seven rules the settings section edits. Grouped by what an operator would
  * silence as one thing, not by `source` — "approvals" and "messages" share a
  * source and are wanted at completely different volumes.
  */
-export type PrefGroup = "approvals" | "messages" | "operations" | "health" | "scheduled" | "advisories";
+export type PrefGroup =
+  | "approvals"
+  | "messages"
+  | "terminal"
+  | "operations"
+  | "health"
+  | "scheduled"
+  | "advisories";
 
 export interface PrefGroupSpec {
   id: PrefGroup;
@@ -99,6 +114,11 @@ export const PREF_GROUPS: readonly PrefGroupSpec[] = [
     id: "messages",
     label: "Agent messages",
     what: "A reply in a thread you are not looking at.",
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    what: "A session you are not looking at printed, finished, may want input, rang or dropped.",
   },
   {
     id: "operations",
@@ -131,6 +151,7 @@ export function groupOf(n: { kind: string }): PrefGroup {
   if (n.kind === "chat.approval" || n.kind === "chat.question") return "approvals";
   if (n.kind === "chat.message") return "messages";
   if (n.kind === "chat.cron") return "scheduled";
+  if (n.kind.startsWith("terminal.")) return "terminal";
   return "operations";
 }
 
@@ -146,6 +167,11 @@ export interface NotificationPrefs {
   /** A desktop notification only ever accompanies a toast; see `desktopAllowed`. */
   desktop: Record<PrefGroup, boolean>;
   quiet: QuietHours;
+  /**
+   * The Terminal group's extra choice (`terminal-notify.ts`): whether new
+   * output interrupts, or only finished, input, bell and disconnected do.
+   */
+  terminalTrigger: TerminalTrigger;
 }
 
 /**
@@ -158,6 +184,7 @@ export function defaultPrefs(): NotificationPrefs {
     delivery: {
       approvals: "toast",
       messages: "toast",
+      terminal: "toast",
       operations: "toast",
       health: "toast",
       scheduled: "inbox",
@@ -166,12 +193,14 @@ export function defaultPrefs(): NotificationPrefs {
     desktop: {
       approvals: true,
       messages: false,
+      terminal: true,
       operations: true,
       health: false,
       scheduled: false,
       advisories: false,
     },
     quiet: { enabled: false, start: "22:00", end: "08:00" },
+    terminalTrigger: DEFAULT_TERMINAL_TRIGGER,
   };
 }
 
@@ -292,16 +321,26 @@ export function isWatchingThread(
 /** How long a dismissable toast stays, and the length of its life bar. */
 export const TOAST_DWELL_MS = 4000;
 
-/** At most four at once; the oldest dismissable one is evicted to make room. */
-export const TOAST_STACK_MAX = 4;
+/**
+ * How many toasts the stack *holds*; the oldest dismissable one is evicted to
+ * make room. Only `TOAST_VISIBLE_MAX` are drawn at once — the rest wait behind
+ * a `+N more · show all` control, so a burst is counted rather than lost.
+ */
+export const TOAST_STACK_MAX = 20;
+
+/** How many toasts are drawn before the stack collapses into `+N more`. */
+export const TOAST_VISIBLE_MAX = 3;
 
 /**
- * Whether this row may interrupt. Five gates, in order: a row whose condition
+ * Whether this row may interrupt. Seven gates, in order: a row whose condition
  * has already cleared never does, because interrupting somebody about a problem
  * that no longer exists is the worst thing this stack can do with their
  * attention; a muted row never does (that is what muting is); a row about the
- * conversation already on screen and in focus never does (`isWatchingThread`);
- * a group set to `off` or `inbox` never does; quiet hours hold everything
+ * conversation already on screen and in focus never does (`isWatchingThread`),
+ * and nor does a row about the terminal session on screen and in focus
+ * (`isWatchingTerminalSession`, `terminal` being that session's id); a group
+ * set to `off` or `inbox` never does; terminal output under the `important`
+ * trigger never does (`terminalTriggerAllows`); quiet hours hold everything
  * *except* an approval, because a paused agent is holding an EC2 instance and a
  * model context open either way (the approvals-ignore-quiet-hours rule).
  *
@@ -316,11 +355,14 @@ export function shouldToast(
   quiet: QuietHours = prefs.quiet,
   now: Date = new Date(),
   watched: WatchedThread | null = null,
+  terminal: string | null = null,
 ): boolean {
   if (isResolved(n)) return false;
   if (n.muted) return false;
   if (isWatchingThread(n, watched)) return false;
+  if (isWatchingTerminalSession(n, terminal)) return false;
   if (prefs.delivery[groupOf(n)] !== "toast") return false;
+  if (!terminalTriggerAllows(n, prefs.terminalTrigger)) return false;
   if (n.class !== "needs_action" && inQuietHours(now, quiet)) return false;
   return true;
 }
@@ -332,8 +374,9 @@ export function shouldDesktop(
   quiet: QuietHours = prefs.quiet,
   now: Date = new Date(),
   watched: WatchedThread | null = null,
+  terminal: string | null = null,
 ): boolean {
-  return shouldToast(n, prefs, quiet, now, watched) && prefs.desktop[groupOf(n)];
+  return shouldToast(n, prefs, quiet, now, watched, terminal) && prefs.desktop[groupOf(n)];
 }
 
 /**
@@ -425,6 +468,9 @@ export function actionHash(action: NotificationActionLike): string | null {
     // Chat refs address a bot and may also name a session and message.
     case "chat":
       return chatRefHash(action.ref);
+    // `<agent>/<session_id>` → the agent's Terminal section, on that session.
+    case "terminal":
+      return terminalActionHash(action.ref);
     default:
       return null;
   }
@@ -596,6 +642,7 @@ export function normalizePrefs(raw: unknown): NotificationPrefs {
     base.quiet.start = quiet["start"];
   if (typeof quiet["end"] === "string" && minutesOf(quiet["end"]) !== null)
     base.quiet.end = quiet["end"];
+  if (isTerminalTrigger(o["terminalTrigger"])) base.terminalTrigger = o["terminalTrigger"];
   return base;
 }
 
@@ -652,7 +699,9 @@ export interface NotificationGroup<T> {
 }
 
 /**
- * Fold *consecutive* rows about one conversation into one card.
+ * Fold *consecutive* rows about one conversation into one card. `keyOf` widens
+ * what counts as "one thing" — the inbox also folds a run of finished
+ * operations (`coalesceKeyOf` in `inbox-logic.ts`).
  *
  * §4.9 keys a `chat.message` row on its timestamp deliberately — two heads
  * reading one roster write one row, and a row per message is what makes the
@@ -667,11 +716,12 @@ export interface NotificationGroup<T> {
  */
 export function groupNotifications<T extends NotificationLike & { id: string; at: string }>(
   list: readonly T[],
+  keyOf: (n: T) => string | null = conversationKeyOf,
 ): NotificationGroup<T>[] {
   const groups: NotificationGroup<T>[] = [];
   let runKey: string | null = null;
   for (const row of list) {
-    const key = conversationKeyOf(row);
+    const key = keyOf(row);
     const last = groups[groups.length - 1];
     if (key !== null && key === runKey && last) {
       last.rows.push(row);

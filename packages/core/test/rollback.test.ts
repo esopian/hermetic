@@ -119,6 +119,7 @@ function depsOf(w: Fake): RollbackDeps {
           availability_zone: "us-west-2a",
           created_at: null,
           agent: tag.agent,
+          former_agent: null,
           managed: true,
           role_data: tag.role_data,
           tags: {},
@@ -149,12 +150,12 @@ function depsOf(w: Fake): RollbackDeps {
       },
     },
     artifacts: {
-      deleteByPrefix: async (prefix: string): Promise<string[]> => {
+      purgeByPrefix: async (prefix: string): Promise<number> => {
         boom(w, "config");
         w.calls.push(`config:${prefix}`);
         const hits = w.objects.filter((k) => k.startsWith(prefix));
         w.objects = w.objects.filter((k) => !k.startsWith(prefix));
-        return hits;
+        return hits.length;
       },
     },
     store: {
@@ -527,7 +528,7 @@ describe("rollbackCreate", () => {
 
     const text = JSON.stringify(events);
     expect(text).toContain("removed 2 SSM parameter(s)");
-    expect(text).toContain("removed 1 config object(s)");
+    expect(text).toContain("removed 1 config object version(s) and delete marker(s)");
     expect(events.every((e) => e.phase === "rollback")).toBe(true);
     expect(events.every((e) => e.progress === 0.8)).toBe(true);
   });

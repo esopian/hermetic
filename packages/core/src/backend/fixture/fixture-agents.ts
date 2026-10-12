@@ -1,9 +1,9 @@
 /**
  * The fixture fleet's agent rows, as data.
  *
- * Twelve agents for `main` and two for `staging`, each chosen to put one state
+ * Eleven agents for `main` and two for `staging`, each chosen to put one state
  * a reader has to handle on screen: a failed bootstrap stage, a drifted config,
- * a node the tailnet renamed, a destroyed row that still owns a volume. They
+ * a node the tailnet renamed, a stopped box waiting on a rerun. They
  * live here rather than in `memory.ts` because they are a *table* — nothing
  * about them is behaviour — and `memory.ts` is the file in this package that
  * keeps running into the 2500-line limit (AGENTS.md rule 5).
@@ -19,7 +19,7 @@ export interface SeedSpec {
   name: string;
   status: Agent["status"];
   size: Agent["size"];
-  /** null once the agent has no instance to be reachable on (destroyed). */
+  /** null when the agent has no tailnet address to be reachable on. */
   ip: string | null;
   hermes: string;
   hermeticd: string;
@@ -316,28 +316,16 @@ export const SEEDS: readonly SeedSpec[] = [
      */
     provider: "nous",
   },
-  // Destroyed: the row survives (§6.6) with its data volume, and nothing else.
-  {
-    name: "oriole",
-    status: "destroyed",
-    size: "small",
-    ip: null,
-    hermes: "0.14.2",
-    hermeticd: "0.4.0",
-    cpu: 0,
-    mem: 0,
-    disk: 0,
-    created_at: "2026-07-30T09:20:00.000Z",
-    heartbeat_age_min: null,
-    health: null,
-  },
+  // No destroyed seed: a destroy deletes the row (§6.7). The fixture's
+  // destroyed agent, `oriole`, is a tombstone and a kept volume
+  // (`seedFixtureTombstones` in `memory-fixture.ts`), never a row.
 ];
 
 /**
  * The `staging` fixture fleet: two agents, one of each of the two states a
  * second fleet has to have for the switcher to be worth looking at — one live
  * and one stopped. It is small on purpose. Nothing about a fleet switch is
- * clearer for the second fleet also having twelve agents, and a demo that
+ * clearer for the second fleet also having eleven agents, and a demo that
  * takes a second to tell apart is a demo that hides the switch.
  */
 export const STAGING_SEEDS: readonly SeedSpec[] = [

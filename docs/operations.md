@@ -113,7 +113,7 @@ hermetic agent set atlas --model us.anthropic.claude-haiku-4-5-20251001-v1:0
 
 The model id is spelled the way the *provider* spells it, and hermetic does not translate: `claude-sonnet-5` on the Anthropic API, `anthropic/claude-sonnet-5` on OpenRouter or the Nous Portal, a `us.`-prefixed inference-profile id on Bedrock. A Bedrock model must also be one the fleet's role may invoke — the foundation policy grants `DEFAULT_BEDROCK_MODEL_IDS` and nothing else.
 
-`agent set` re-renders and re-uploads the agent's config, so the change is carried by the next `agent rerun` or `agent recreate`. There is still no converge; nothing reaches a running box on its own.
+`agent set` re-renders and re-uploads the agent's config, but nothing reaches a running box on its own: until it is applied, the agent reads as config-`drifted`. Apply it in place with a rollout (`hermetic plan rollout --agent atlas --json > rollout.json`, then `hermetic apply rollout.json`), or let the next `agent rerun` or `agent recreate` carry it.
 
 ### The agent boots but the first message fails
 
@@ -136,7 +136,7 @@ hermetic agent rerun atlas          # resume a failed bootstrap from its first f
 
 `--file` is how you read Hermes rather than systemd: Hermes writes its own errors to `$HERMES_HOME/logs/errors.log` and leaves the journal carrying only its startup banner and uvicorn noise, so a failed agent turn is `hermetic logs atlas --file errors`, not `hermetic logs atlas hermes-gateway`. Stage and bootstrap failures stay on the journal path below. `--file` takes one of `agent`, `errors`, `gateway` and is exclusive with both a `[unit]` argument and `--console` — the CLI refuses the combination rather than silently preferring one.
 
-There is no `converge`. A config change made with `agent set` (secrets mode, provider, size intent, Hermes settings) is re-rendered and re-uploaded immediately, but takes effect on the agent's next `rerun` or `recreate` — not on a schedule and not on demand. `agent rerun` is for a stuck bootstrap only — the agent must be in `error`; it writes a `command` on the row that `hermeticd` picks up on its own poll and resumes from the failed stage. `rerun` answers `409 CONFLICT` instead of queuing if a previous rerun `command` on that row is still unacknowledged, or `409 LOCKED` if another operator currently holds the agent's lock — retry once whichever is holding it clears.
+There is no *automatic* converge. A config change made with `agent set` (secrets mode, provider, size intent, Hermes settings) is re-rendered and re-uploaded immediately, but nothing on a schedule pushes it to the box. It takes effect when you ask for it — `hermetic plan rollout [--agent <name>...]` writes the plan and `hermetic apply` converges each box in place, one at a time, waiting for it to report the new config — or on the agent's next `rerun` or `recreate`. `agent rerun` is for a stuck bootstrap only — the agent must be in `error`; it writes a `command` on the row that `hermeticd` picks up on its own poll and resumes from the failed stage. `rerun` answers `409 CONFLICT` instead of queuing if a previous rerun `command` on that row is still unacknowledged, or `409 LOCKED` if another operator currently holds the agent's lock — retry once whichever is holding it clears.
 
 ### Bootstrap failed on a stage
 
@@ -151,10 +151,10 @@ An agent stuck in `error` failed somewhere in bootstrap — a stage script, or a
 
 ```
 hermetic upgrade --hermeticd <ver>              # fleet-wide only: no name, no --all; rewrites the fleet manifest pointer
-hermetic upgrade --hermes <ver> [--all]
+hermetic upgrade --hermes <ver> [<name>|--all] [--now]
 ```
 
-`--hermeticd` is fleet-wide by definition — it takes no `<name>` and no `--all`, and there's no RPC to any box; it only rewrites the fleet manifest's version pointer. Each agent's own nightly update tick — a minute in the 03:00–03:59 UTC window picked from a hash of its name, so the fleet doesn't hit S3 in the same minute — notices the rollout by comparing the sha256 of its installed binary against the manifest's, not by comparing version labels; a digest mismatch downloads the new binary first, then the stages, then restarts `hermeticd.service` last, while a stage-only change skips the restart. `hermeticd update --check` on the box reports without writing anything. `--hermes` bumps the pinned version in the render and re-uploads the agent manifest — one agent, or `--all` for the whole fleet, upgraded one at a time — and takes effect on that agent's next `recreate`, same as any other config change. Hermes memory and skills survive either kind of upgrade because they live on `/data`, never the root volume. hermeticd itself has exactly one version, the laptop package's own version compiled in at build time — there's no separate hand-maintained agent-daemon version to keep in sync.
+`--hermeticd` is fleet-wide by definition — it takes no `<name>` and no `--all`, and there's no RPC to any box; it only rewrites the fleet manifest's version pointer. Each agent's own nightly update tick — a minute in the 03:00–03:59 UTC window picked from a hash of its name, so the fleet doesn't hit S3 in the same minute — notices the rollout by comparing the sha256 of its installed binary against the manifest's, not by comparing version labels; a digest mismatch downloads the new binary first, then the stages, then restarts `hermeticd.service` last, while a stage-only change skips the restart. `hermeticd update --check` on the box reports without writing anything. `--hermes` bumps the pinned version in the render and re-uploads the agent manifest — one agent, or `--all` for the whole fleet, upgraded one at a time. On its own that is all it does: the box keeps running the Hermes it has, and the pin takes effect on the agent's next `recreate`, same as any other config change (the agent reads as config-`drifted` until then, and `hermetic plan rollout --agent <name>` applies it too). Add `--now` to apply it in place: hermetic writes the same converge request a rollout does and waits — up to ten minutes per agent — for the box to report the new config. On the box, hermeticd stops the Hermes gateway and dashboard, checks out the pinned ref, reinstalls the venv and restarts them; the instance, its disks and its tailnet address stay, but **a turn in flight is interrupted**. A box that is not `ready`, `degraded` or `error` keeps the pin and is reported skipped, and one that does not answer in time is reported unconverged rather than failed — `hermetic agent history <name>` shows what its apply did. The app's Lifecycle card offers both: **Upgrade now** is `--now`, **Pin for next recreate** is the pin alone. `--now` cannot be combined with `--hermeticd`. Hermes memory and skills survive either kind of upgrade because they live on `/data`, never the root volume. hermeticd itself has exactly one version, the laptop package's own version compiled in at build time — there's no separate hand-maintained agent-daemon version to keep in sync.
 
 **Knowing when to bump Hermes.** hermetic never bumps Hermes for you — the pin is per agent, and which agent goes first is your call. What it does do is tell you there is something to decide: `hermetic foundation status` prints a `hermes` line, and the app's Settings → Foundation card shows the same thing with a badge, comparing the tag this build pins (`hermes_ref`, e.g. `v2026.9.24`) against the tag on upstream's latest GitHub release. The check is advisory and best effort — unauthenticated (GitHub allows 60 requests an hour per IP), five-second ceiling, cached for six hours, and nothing polls it on a timer. When it cannot answer it says "could not check" and why; it never reports "up to date" for a check that did not happen, and it never blocks or fails the command it rides on. Acting on it is one agent at a time:
 
@@ -164,11 +164,13 @@ hermetic foundation status                      # ... hermes  pinned 0.21.1 (v20
 # and BUILD_VERSIONS.hermes_ref (the tag — v2026.9.4 in this example output; the ref
 # this build actually pins is v2026.9.24) together, and rebuild.
 hermetic artifacts push                         # mirrors the new ref into the fleet bucket
-hermetic upgrade atlas --hermes <new semver>    # one agent first
-hermetic agent recreate atlas --yes             # the pin takes effect on the next recreate
+hermetic upgrade atlas --hermes <new semver> --now   # one agent first, reinstalled in place
+# or pin it and let the next rebuild install it:
+hermetic upgrade atlas --hermes <new semver>
+hermetic agent recreate atlas --yes
 ```
 
-The two-step is not ceremony. Upstream's *tags* are dates and its `pyproject` version is a semver, and neither derives from the other — so the ref the box checks out lives in `BUILD_VERSIONS.hermes_ref` and no flag moves it, while `--hermes` pins what `hermes --version` must then report. Bumping only the flag gives you a box that checks out the old ref and fails its own version assertion, which is the apply refusing to ship a version nobody asked for.
+The two-step is not ceremony, and `--now` does not shorten it: an agent row has no ref of its own, every render pins this build's `BUILD_VERSIONS.hermes_ref`, so an in-place upgrade — like a recreate from this checkout — can only reach the ref this build pins. Upstream's *tags* are dates and its `pyproject` version is a semver, and neither derives from the other — so the ref the box checks out lives in `BUILD_VERSIONS.hermes_ref` and no flag moves it, while `--hermes` pins what `hermes --version` must then report. Bumping only the flag gives you a box that checks out the old ref and fails its own version assertion, which is the apply refusing to ship a version nobody asked for.
 
 A bump also has to reach the fleet bucket, because a box does not clone github.com when the manifest offers it something better. `hermetic artifacts push` — and `init`, and `upgrade --hermes` — builds `hermes/<ref>.bundle` from a bare mirror it keeps on the laptop at `$HERMETIC_HOME/mirror/hermes-agent.git`, uploads it, and records its digest and size in the fleet manifest's `hermes` block (§3.6). Only tags are mirrored: a `hermes_ref` naming a branch is skipped with a warning rather than pinned to a moving target. The step fails soft — a laptop that cannot reach GitHub reports a `mirror_warning` on `artifacts push` and leaves the manifest's `hermes` block as it was, and any box whose ref has no bundle falls back to the direct clone it always used. The fleet must be on **foundation v7** for boxes to read the bundle at all (the agent role's `hermes/*` S3 grant): run `hermetic foundation update` on a fleet created before it, or every agent quietly takes the fallback path.
 
@@ -179,9 +181,15 @@ A bump also has to reach the fleet bucket, because a box does not clone github.c
 | `agent stop <name>` | EC2 `StopInstances`; heartbeat stops, status → `stopped` | kept (attached, not billed for compute) |
 | `agent start <name>` | EC2 `StartInstances` on the existing instance; public IP changes (not an Elastic IP — nothing depends on it, Tailscale's address is what matters) | kept |
 | `agent recreate <name> --yes` | Terminates the instance, keeps the volume, re-runs the create sequence against the same volume — a from-scratch box, same data. Clears the row's `bootstrap` and `command` (a fresh bootstrap, not a resumed one) and sets `hermeticd_version` from the fleet manifest's current pointer | kept, reattached |
-| `agent destroy <name> --yes [--delete-volume]` | Terminates the instance, deletes SSM parameters and S3 config, marks the row `destroyed`. Events are never deleted. | **kept by default** — pass `--delete-volume` to actually remove it |
+| `agent destroy <name> --yes [--keep-volume]` | Terminates the instance, deletes its tailnet devices, SSM parameters and S3 config, deletes the data volume, waits for the instance to reach `terminated`, then releases the name: a tombstone is written and the agent row is deleted. Events are never deleted. The name is reusable at once, and a `create` of it is a brand-new agent. | **deleted by default** — pass `--keep-volume` to keep it. A kept volume is released from the name (`agent=<name>` becomes `hermetic:former_agent=<name>`), so a later `create` of the same name starts on a fresh disk; hand the old one over on purpose with `agent create <name> --volume vol-…` |
 
-`recreate` and `destroy` both refuse without `--yes` (`CONFIRMATION_REQUIRED`) and both go through `plan.recreate`/`plan.destroy` first if you want to see the steps before committing — `hermetic plan` prints what a destructive command would do without doing it.
+`recreate` and `destroy` both refuse without `--yes` (`CONFIRMATION_REQUIRED`) and both go through `plan.recreate`/`plan.destroy` first if you want to see the steps before committing — `hermetic plan` prints what a destructive command would do without doing it. `plan destroy` takes the same `--keep-volume`, and its volume step reads `delete` or `keep` accordingly.
+
+Destroy waits for the instance to be `terminated` before it releases the name, and the wait has no time limit; a slow EC2 termination shows as the `instance` phase sitting there, with the agent's lock renewed, and finishes when EC2 does. A destroy that died partway is finished by running it again.
+
+### Reviewing destroyed agents
+
+A destroyed agent has no row, so it is absent from `agent ps` and the dashboard's Agents lens. `hermetic agent destroyed [name] [--limit <n>] [--json]` lists what was destroyed, newest first: when, by whom, how long it lived, and whether its volume was kept or deleted (with the id). The dashboard's **Destroyed** lens, beside Agents and Volumes, shows the same table; a row opens a read-only panel with that incarnation's history. When a name has been reused, `hermetic agent history <name>` shows every incarnation back to back — pass a tombstone's `created_at` and `destroyed_at` (`agent destroyed <name> --json`) as `--since`/`--until` to read one life alone. Agents destroyed before tombstones existed appear as `legacy` entries; running `agent destroy <name>` (or `agent create <name>`) on one releases it, and its volume, if it still names one, is kept and released from the name, never deleted. A kept volume shows in `hermetic volume ls` under `no_agent`, *retained by* the former agent's name.
 
 ## Teardown
 
@@ -189,7 +197,7 @@ Deletes the whole CloudFormation foundation (VPC, subnets, security group, IAM r
 
 ### Prerequisite: destroy every agent first
 
-Teardown's first phase, `agents_check`, throws `AGENTS_EXIST` if any agent row is not `destroyed`. Run `hermetic agent destroy <name> --yes [--delete-volume]` for each agent (or accept the default of keeping their EBS volumes) before touching teardown at all — there is no flag that skips this check.
+Teardown's first phase, `agents_check`, throws `AGENTS_EXIST` if any agent row is left (a legacy `destroyed` row does not count). Run `hermetic agent destroy <name> --yes` for each agent — it deletes the agent's EBS volume unless you pass `--keep-volume`, and a kept one is what `--delete-volumes` below sweeps — before touching teardown at all; there is no flag that skips this check.
 
 ### See the plan first
 
@@ -211,7 +219,7 @@ hermetic teardown --yes [--confirm-account-id <12 digits>] \
 | `--yes` | required | gates the destructive command at all (`assertConfirmable`); does **not** by itself stand in for the account-id confirmation below |
 | `--no-purge` | purge on | skip deleting the SSM parameters under `/hermetic/` and `/hermes/` |
 | `--delete-snapshots` | off | also delete DLM snapshots tagged `hermetic:role=data` |
-| `--delete-volumes` | off | also delete leftover EBS volumes tagged `hermetic:managed=true` — **destroys any agent memory/skills left on them**, since they normally survive `agent destroy` |
+| `--delete-volumes` | off | also delete leftover EBS volumes tagged `hermetic:managed=true` — **destroys any agent memory/skills left on them**, i.e. the volumes of agents destroyed with `--keep-volume` (and of any destroyed before delete became the default) |
 | `--no-reset-local` | reset on | keep this home's frozen `config` row instead of clearing it back to uninitialized; the local run log is archived either way |
 | `--confirm-account-id <digits>` | none | supplies the typed-confirmation value non-interactively; without it, an interactive terminal prompts for the twelve digits, and a non-interactive one fails `CONFIRMATION_REQUIRED` |
 

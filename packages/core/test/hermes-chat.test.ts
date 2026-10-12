@@ -31,7 +31,7 @@ import type {
 } from "../src/chat/hermes/hermes-chat.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
-import { ChatFrame } from "../src/schema/index.ts";
+import { Bot, ChatFrame } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
   AGENTS_LIST_RESULT,
@@ -321,6 +321,35 @@ describe("hermes-chat · prompt capability", () => {
     const sent = h.sockets[0]?.sent ?? [];
     expect(sent[0]).toMatchObject({ method: "client.capabilities", params: { server_requests: true } });
     expect(sent[1]?.method).toBe("session.create");
+  });
+
+  /**
+   * Upstream stores an explicit `source` verbatim and lists it back on every
+   * `session.list` row; with none, every websocket client is stamped `tui` and
+   * hermetic's sessions read as the box's own terminal. Both doors into a
+   * session carry it.
+   */
+  test("session.create and session.resume both carry source: hermetic", async () => {
+    const created = harness(turnScript(RECORDED_TURN));
+    await collect(createHermesChat(created.deps).send(BOX, "default", "hi"));
+    const create = created.sockets[0]?.sent.find((call) => call.method === "session.create");
+    expect(create?.params).toMatchObject({ profile: "default", source: "hermetic" });
+
+    const resumed = harness({
+      results: {
+        "session.resume": { session_id: "runtime-1", running: false, info: {} },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    const turn = createHermesChat(resumed.deps)
+      .send(BOX, "default", "again", { session: "durable-1" })
+      [Symbol.asyncIterator]();
+    await turn.next();
+    await turn.next();
+    await turn.return?.();
+    const resume = resumed.sockets[0]?.sent.find((call) => call.method === "session.resume");
+    expect(resume?.params).toMatchObject({ session_id: "durable-1", source: "hermetic" });
+    expect(resumed.sockets[0]?.sent.some((call) => call.method === "session.create")).toBe(false);
   });
 
   test("a gateway that predates the method still runs the turn", async () => {
@@ -1005,6 +1034,7 @@ describe("hermes-chat · abort", () => {
       expect(calls[0]?.params).toEqual({
         session_id: SESSION_ID,
         profile: "research",
+        source: "hermetic",
         lazy: true,
         omit_messages: true,
       });
@@ -1305,6 +1335,32 @@ describe("hermes-chat · swarm", () => {
     expect(bot?.title).toBe("default");
     // §9.2: seeded from fleet/instance/bot, never from the display name.
     expect(bot?.avatar_seed).toBe("fxtr0001/veronica/default");
+  });
+
+  test("a bot's title follows Desktop's precedence: Bot Mode title, display name, profile name", async () => {
+    const row = (name: string, extra: Record<string, unknown>) => ({ name, ...extra });
+    const h = harness({
+      results: {
+        "profiles.list": {
+          profiles: [
+            row("scribe", {
+              display_name: "Core name",
+              ui_meta: { "hermes-bots": { title: " Marshall ", custom: true } },
+            }),
+            row("auditor", { display_name: "Core name", ui_meta: { "hermes-bots": { title: "  " } } }),
+            row("clio", { display_name: "", ui_meta: { "hermes-bots": { custom: true } } }),
+          ],
+        },
+        "groups.list": GROUPS_LIST_RESULT,
+        "agents.list": AGENTS_LIST_RESULT,
+      },
+    });
+    const swarm = await createHermesChat(h.deps).swarm(BOX);
+    expect(swarm.bots.map((b) => [b.name, b.title])).toEqual([
+      ["scribe", "Marshall"],
+      ["auditor", "Core name"],
+      ["clio", "clio"],
+    ]);
   });
 
   test("an unreachable box is a value the rail can draw, not a thrown error", async () => {
@@ -1671,6 +1727,13 @@ describe("hermes-chat · the captured roster", () => {
         { id: "h", source: "portal" },
         { id: "i", origin: "portal" },
         { id: "j" },
+        // What hermetic itself stamps on create/resume: some hermetic opened
+        // it, which is foreign — not *this* laptop's `portal`.
+        { id: "k", source: "hermetic" },
+        // The gateway's Platform enum: the box's own CLI, and two channels.
+        { id: "l", source: "local" },
+        { id: "m", source: "matrix" },
+        { id: "n", source: "api_server" },
       ],
     });
     expect(spread.map((row) => row.origin)).toEqual([
@@ -1684,6 +1747,10 @@ describe("hermes-chat · the captured roster", () => {
       "cli",
       "cli",
       "cli",
+      "hermetic",
+      "cli",
+      "channel",
+      "channel",
     ]);
     expect(spread.some((row) => row.origin === "portal")).toBe(false);
   });
@@ -1863,6 +1930,40 @@ describe("hermes-chat · a notice in a preview", () => {
       sessions: [{ session_id: "s2", title: "t", preview: "why is it down?" }],
     });
     expect(plain?.preview).toBe("why is it down?");
+  });
+});
+
+describe("hermes-chat · who wrote a bot's preview", () => {
+  const roleOf = (preview: string) =>
+    mapSwarm(
+      BOX,
+      { profiles: [{ name: "default", is_default: true, canonical_session: { id: "s1", preview } }] },
+      null,
+      null,
+      null,
+    ).bots[0];
+
+  test("upstream's own preview names no role, so neither does the bot's", () => {
+    // `_latest_message_preview` selects the newest user/assistant row's
+    // content alone: a bare `No reply` could be either side's.
+    expect(roleOf("No reply")).toMatchObject({ preview: "No reply", preview_role: null });
+  });
+
+  test("a preview rewritten from a row hermetic recognised carries that row's role", () => {
+    expect(roleOf("Message from 🤖 Marshall (@scribe): NO_REPLY")).toMatchObject({
+      preview: "Marshall: NO_REPLY",
+      preview_role: "user",
+    });
+    expect(roleOf("[IMPORTANT: Background process proc_3be1c0a4d2e1 completed n...")).toMatchObject({
+      preview: "proc_3be1c0a4d2e1 completed",
+      preview_role: "system",
+    });
+  });
+
+  test("a roster row from before the field still parses", () => {
+    const [bot] = mapSwarm(BOX, LIVE_PROFILES_LIST, null, null, null).bots;
+    const { preview_role: _, ...old } = bot as NonNullable<typeof bot>;
+    expect(Bot.safeParse(old).success).toBe(true);
   });
 });
 
@@ -2269,6 +2370,7 @@ describe("hermes-chat · durable addressing", () => {
         params: {
           session_id: "durable-research",
           profile: "research",
+          source: "hermetic",
           defer_history: true,
           omit_messages: true,
         },
@@ -2299,7 +2401,7 @@ describe("hermes-chat · durable addressing", () => {
     const turn = adapter.send(BOX, "research", "hello")[Symbol.asyncIterator]();
     await turn.next();
     await turn.next();
-    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research" });
+    expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research", source: "hermetic" });
     expect(await adapter.abort(BOX, "research")).toBe(true);
     expect(h.sockets[1]?.sent[0]?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
     await turn.return?.();

@@ -10,7 +10,7 @@ the app against a fake fleet. An AWS account (and Tailscale) only matter for rea
 - [`uv`/`uvx`](https://docs.astral.sh/uv/) — needed by `bun run lint:cfn` and `lint:sh`, and so by `bun run check`/`bun run ci`.
 - An AWS profile in `~/.aws/config` for the account you want to target (only needed for real mode — `bun run dev:fixture` needs no AWS at all).
 - The Tailscale CLI and a Tailscale OAuth client, for real mode — see [`docs/operations.md`'s Prerequisites section](docs/operations.md#prerequisites) for the exact scopes.
-- [Hutch](https://hutch.blackboard.sh), pinned in `.hutch-version` (0.26.0) — it builds and runs the
+- [Hutch](https://hutch.blackboard.sh), pinned in `.hutch-version` (0.27.1) — it builds and runs the
   desktop app. Install the pinned version without touching your shell profile:
 
   ```
@@ -286,6 +286,10 @@ unnoticed.
 ## Commit messages
 
 Conventional commits, imperative mood, subject ≤50 chars: `fix: refuse create when SG has inbound rules`, `feat(cli): add agent recreate`. Body explains why, not what, when the diff isn't self-explanatory.
+
+## Pull requests
+
+The repo squash-merges, so a PR's title becomes the commit subject on `master` and follows the rules above. The body follows `.github/pull_request_template.md`, which GitHub pre-fills: a review guide (TL;DR, how it works, review stops, acceptance tests, rollout) whose test table lists only checks that were actually run. In Claude Code, `/create-pr` (`.claude/skills/create-pr/`) fills it from the branch and opens the PR; agents open every PR through it.
 
 ## Adding a CLI command or RPC handler
 

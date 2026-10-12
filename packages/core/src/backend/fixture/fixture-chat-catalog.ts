@@ -9,6 +9,11 @@
  */
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import {
+  AUDITOR_DM_ROWS,
+  SCRIBE_BOT_CHAT_SESSION,
+  SCRIBE_BOT_CHAT_TRANSCRIPT,
+} from "./fixture-chat-dms.ts";
 import { KESTREL_EVENTS_SESSION, KESTREL_EVENTS_TRANSCRIPT } from "./fixture-chat-process-events.ts";
 
 /* ── prose the transcripts are made of ────────────────────────────────────── */
@@ -521,6 +526,37 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
     },
   ],
 
+  /** A colleague's hermetic opened this; nothing at the composer says so. */
+  "sx-atlas-hermetic": [
+    {
+      id: "mx-atlas-hermetic-1",
+      session: "sx-atlas-hermetic",
+      role: "user",
+      author: null,
+      at: at("07:41:20"),
+      blocks: [{ kind: "text", markdown: "How many granite snapshots are past the 14-day retention?" }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-atlas-hermetic-2",
+      session: "sx-atlas-hermetic",
+      role: "bot",
+      author: { instance: "atlas", bot: "default" },
+      at: at("07:44:09"),
+      blocks: [
+        {
+          kind: "text",
+          markdown: "Six, the oldest from Aug 30. None are tagged `keep`, so all six can go.",
+        },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+  ],
+
   /** The turn ceiling, hit from the CLI where nobody was watching. */
   "sx-atlas-cli": [
     {
@@ -592,6 +628,8 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
 
   /** The model the fleet's role may not invoke. `atlas` is on Bedrock. */
   "sx-atlas-auditor-portal": [
+    // NickQABot's DMs with Marshall come first (`fixture-chat-dms.ts`).
+    ...AUDITOR_DM_ROWS,
     {
       id: "mx-atlas-auditor-1",
       session: "sx-atlas-auditor-portal",
@@ -926,6 +964,31 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
   ],
 
   "sx-kestrel-portal": [
+    // An intentional-silence turn (§9.2): the bot answers with upstream's bare
+    // `NO_REPLY` marker, which Hermes keeps in the transcript and suppresses on
+    // delivery. The thread draws it as "stayed silent", never as the token.
+    {
+      id: "mx-kestrel-portal-fyi",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("08:51:00"),
+      blocks: [{ kind: "text", markdown: "FYI only, no reply needed: deploy finished." }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-kestrel-portal-silent",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("08:51:04"),
+      blocks: [{ kind: "text", markdown: "NO_REPLY" }],
+      usage: usage(2100, 4, 0.0008, "claude-sonnet-5"),
+      error: null,
+      incomplete: null,
+    },
     {
       id: "mx-kestrel-portal-1",
       session: "sx-kestrel-portal",
@@ -975,4 +1038,5 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
   // Background-process events (§9.2), built from upstream's notice text in
   // their own module so the parse is the one the history reader runs.
   [KESTREL_EVENTS_SESSION]: KESTREL_EVENTS_TRANSCRIPT,
+  [SCRIBE_BOT_CHAT_SESSION]: SCRIBE_BOT_CHAT_TRANSCRIPT,
 };

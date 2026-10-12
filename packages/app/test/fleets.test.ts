@@ -243,7 +243,7 @@ describe("fleets.use", () => {
 describe("fleets.switch", () => {
   test("repoints the head: the fleet board, the header and meta all move", async () => {
     const { ctx, state, log } = await harness();
-    expect(await agentNames(ctx)).toHaveLength(12);
+    expect(await agentNames(ctx)).toHaveLength(11);
 
     const body = (await dispatch(ctx, "fleets.switch", { fleet: "staging" })) as {
       fleet_id: string | null;
@@ -426,7 +426,7 @@ describe("booting with no fleet selected", () => {
     expect(state.initialized).toBe(true);
     expect(state.fleetId).toBe(MAIN_ID);
     expect((await meta(ctx)).fleet_error).toBeNull();
-    expect(await agentNames(ctx)).toHaveLength(12);
+    expect(await agentNames(ctx)).toHaveLength(11);
   });
 
   test("init stays reachable: a home that named no fleet may still attach one", async () => {

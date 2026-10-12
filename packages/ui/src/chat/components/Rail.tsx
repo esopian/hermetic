@@ -25,6 +25,7 @@ import { activityFor } from "../chat-activity.ts";
 import type { ConversationActivity, TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
 import { useState } from "react";
 import type { BotView, SessionView, SwarmView } from "../../api/index.ts";
 import {
@@ -107,7 +108,11 @@ function Conv({
           `??`, because a box can send an empty string for either.
         */}
         <span className="ch-conv-prev">
-          {bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)}
+          {isSilentPreview(bot.preview, bot.preview_role) ? (
+            <span className="ch-conv-silent">{SILENT_LABEL}</span>
+          ) : (
+            bot.preview || bot.description || botLabel(bot.instance, bot.name, bot.title)
+          )}
         </span>
       </span>
       <span className="ch-conv-right">
@@ -334,8 +339,8 @@ export function Rail({
                       at all: a bot's conversations are where the origins live,
                       and without a row to click, every `cli`, `routine`, `peer`,
                       `room` and `channel` session on the fleet is unreachable —
-                      which would make the destination banner a feature that
-                      almost never fires. Only the selected bot's, because the
+                      which would make the composer's destination restatement
+                      (send label and footer) a feature that almost never fires. Only the selected bot's, because the
                       session list is read one bot at a time.
                     */}
                     {open && sessions.length > 0 ? (

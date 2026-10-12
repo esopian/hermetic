@@ -3,14 +3,17 @@ import {
   APT_LOCK_TIMEOUT_SECONDS,
   AgentConfig,
   type ApprovalsMode,
+  type HermesHold,
   type HermesSettings,
   Provider,
   SecretsMode,
+  HERMES_SEED_CONFIG,
   Size,
   hermesConfigGetArgv,
   hermesConfigSetArgv,
 } from "../src/schema/index.ts";
 import { assertFullyRendered, renderAgentConfig, serveCommands } from "../src/render/render.ts";
+import { HERMETIC_PLATFORM_HINT } from "../src/render/render-hermes.ts";
 import { HermeticError } from "../src/errors.ts";
 
 /**
@@ -59,6 +62,7 @@ function render(
   c: (typeof COMBINATIONS)[number] & {
     hermes?: HermesSettings | undefined;
     seed?: HermesSettings | undefined;
+    hermes_hold?: HermesHold | undefined;
   },
 ) {
   return renderAgentConfig({
@@ -71,6 +75,9 @@ function render(
     // snapshot combination leaves it undefined, which is what a row written
     // before fleet settings existed carries — it uses the current catalog default.
     seed: c.seed,
+    // Absent on every snapshot combination: a row from before `--hold`, which
+    // holds every key it states (`splitHermesSettings`).
+    hermes_hold: c.hermes_hold,
     tailnet: "hermetic.ts.net",
     // No fleet identifier of any kind. The one field that ever wanted one —
     // `TailscaleServe.hostname` — is not emitted, so nothing rendered names the
@@ -231,6 +238,35 @@ describe("renderAgentConfig", () => {
     expect(index).toContain("autoconnect=true");
     expect(index).toContain("resize=scale");
     expect(index).toContain("reconnect=true");
+  });
+
+  /**
+   * Sessions hermetic opens are stamped `source: "hermetic"`, which Hermes uses
+   * as the platform key for its system-prompt hint and has no built-in entry
+   * for. The managed scope supplies one, where the agent's own config cannot
+   * shadow it — and it has to survive `yamlString` quoting intact, quotes,
+   * backticks, em dashes and all.
+   */
+  test("the managed config carries the hermetic platform hint, intact", () => {
+    const stated = render({
+      size: "large",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes: { max_turns: 40, terminal_backend: "local" },
+    });
+    for (const out of [browserOn(), stated]) {
+      const managed = fileAt(out, "/etc/hermes/config.yaml");
+      expect(managed).toMatch(/^platform_hints:\n {2}hermetic:\n {4}replace: "/m);
+      expect(managed).toContain(
+        "MEDIA:/path tags are NOT intercepted here (they print as literal text)",
+      );
+      const parsed = Bun.YAML.parse(managed) as {
+        platform_hints?: { hermetic?: { replace?: unknown } };
+      };
+      expect(parsed.platform_hints?.hermetic?.replace).toBe(HERMETIC_PLATFORM_HINT);
+    }
+    // Managed, never seeded: the agent's own file must not carry a copy to shadow.
+    expect(fileAt(browserOn(), HERMES_SEED_CONFIG)).not.toContain("platform_hints");
   });
 
   /**
@@ -766,6 +802,95 @@ describe("the approvals mode", () => {
       render({ size: "small", provider: "bedrock", secrets_mode: "none", hermes: { approvals_mode } })
         .config_hash;
     expect(new Set([of("off"), of("smart"), of("manual")]).size).toBe(3);
+  });
+});
+
+/**
+ * `--hold` (§6.4): a stated value is a starting value the box then owns, and
+ * hermetic manages a key only when told to hold it. A stated value hermetic
+ * does not hold is re-asserted on change, behind a marker, because a seed alone
+ * lands only on first boot. A row from before `--hold` (no list at all) holds
+ * every key it states, and renders exactly what it rendered before.
+ */
+describe("held and seeded settings", () => {
+  const base = { size: "small", provider: "bedrock", secrets_mode: "none" } as const;
+  const markerFor = (out: ReturnType<typeof render>, key: string) =>
+    out.manifest.commands.find((c) => c.includes(`/etc/hermetic/asserted/${key}`));
+
+  test("a stated, unheld value is seeded and re-asserted through Hermes on change", () => {
+    const out = render({ ...base, hermes: { max_turns: 600 }, hermes_hold: [] });
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).toContain("max_turns: 600");
+    expect(fileAt(out, "/etc/hermes/config.yaml")).not.toContain("max_turns");
+    expect(markerFor(out, "max_turns")).toBe(
+      'test "$(cat /etc/hermetic/asserted/max_turns 2>/dev/null)" = "600" || { ' +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        "config set agent.max_turns '600' >/dev/null && " +
+        "systemctl try-restart hermes-dashboard.service hermes-gateway.service && " +
+        "install -d -m 0755 /etc/hermetic/asserted && " +
+        "printf '%s' '600' > /etc/hermetic/asserted/max_turns; }",
+    );
+  });
+
+  test("each re-asserted key writes its own Hermes leaf", () => {
+    const out = render({
+      ...base,
+      hermes: { terminal_backend: "docker", reasoning_effort: "high" },
+      hermes_hold: [],
+    });
+    expect(markerFor(out, "terminal_backend")).toContain("config set terminal.backend 'docker'");
+    expect(markerFor(out, "reasoning_effort")).toContain("config set agent.reasoning_effort 'high'");
+    expect(markerFor(out, "max_turns")).toBeUndefined();
+  });
+
+  /** Asserting the fleet's default would overwrite whatever the agent chose. */
+  test("an unstated value is never re-asserted, whatever the fleet says", () => {
+    const out = render({ ...base, seed: { max_turns: 42 }, hermes_hold: [] });
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).toContain("max_turns: 42");
+    expect(markerFor(out, "max_turns")).toBeUndefined();
+  });
+
+  test("a held key is managed and needs no marker", () => {
+    const out = render({ ...base, hermes: { max_turns: 600 }, hermes_hold: ["max_turns"] });
+    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain("max_turns: 600");
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).not.toContain("max_turns");
+    expect(markerFor(out, "max_turns")).toBeUndefined();
+  });
+
+  /** `--hold max_turns` on its own pins the value the agent resolves to now. */
+  test("holding an unstated key manages the value it resolves to", () => {
+    const out = render({ ...base, seed: { max_turns: 42 }, hermes_hold: ["max_turns"] });
+    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain("max_turns: 42");
+  });
+
+  /** Existing agents: no behaviour change until `agent set --hold`. */
+  test("a row from before --hold holds every key it states, with no marker", () => {
+    const out = render({ ...base, hermes: { max_turns: 600, terminal_backend: "docker" } });
+    const managed = fileAt(out, "/etc/hermes/config.yaml");
+    expect(managed).toContain("max_turns: 600");
+    expect(managed).toContain('backend: "docker"');
+    expect(markerFor(out, "max_turns")).toBeUndefined();
+    expect(markerFor(out, "terminal_backend")).toBeUndefined();
+  });
+
+  /** The model of a profile-bound agent is held whatever `hold` says (§8.3). */
+  test("a stated model is managed under an empty hold", () => {
+    const out = render({ ...base, hermes: { model: "stated-model" }, hermes_hold: [] });
+    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain('default: "stated-model"');
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).not.toContain("stated-model");
+  });
+
+  /** A default create renders the same bytes whether or not the row has a list. */
+  test("an empty hold with nothing stated but the model renders as a legacy row does", () => {
+    const hermes = { model: "stated-model" } as const;
+    expect(render({ ...base, hermes, hermes_hold: [] }).config_hash).toBe(
+      render({ ...base, hermes }).config_hash,
+    );
+  });
+
+  test("changing a stated, unheld value moves the config_hash", () => {
+    const of = (max_turns: number) =>
+      render({ ...base, hermes: { max_turns }, hermes_hold: [] }).config_hash;
+    expect(of(600)).not.toBe(of(700));
   });
 });
 

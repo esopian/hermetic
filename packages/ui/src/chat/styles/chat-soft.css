@@ -227,6 +227,10 @@
 [data-skin="soft"] .ch-band.acc {
   border-left-width: 3px;
 }
+[data-skin="soft"] .ch-band.slim {
+  padding: 5px 26px;
+  font-size: 12px;
+}
 
 /* ── 5 · messages ───────────────────────────────────────────────────────────
    No rule between rows. Turns are separated by space, and a run of messages
@@ -240,7 +244,7 @@
 [data-skin="soft"] .ch-msg {
   border-bottom: 0;
   padding: 16px 26px;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: 14px;
   animation: chrise 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -354,7 +358,7 @@
 [data-skin="soft"] .ch-event {
   border-bottom: 0;
   padding: 7px 26px;
-  grid-template-columns: 36px 1fr auto;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   gap: 14px;
   font-size: 11px;
   color: var(--text-muted);
@@ -574,6 +578,18 @@
   background: var(--acc);
   border-color: var(--acc);
   color: var(--acc-fg);
+}
+[data-skin="soft"] .ch-send.warn {
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  border-color: var(--warn);
+  color: var(--text-warn);
+  font-size: 12.5px;
+}
+[data-skin="soft"] .ch-send.warn:hover,
+[data-skin="soft"] .ch-send.warn.ready {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: var(--bg);
 }
 /* Stop is still destructive in either skin. */
 [data-skin="soft"] .ch-send.stop {

@@ -4,7 +4,7 @@
  * Every decision the chat view makes that is not layout lives in
  * `chat-logic.ts`, and all of it is checked here without mounting anything.
  * Three of these are not style rules and are worth naming: which origins oblige
- * the composer to restate a destination (a reply into a `channel` session
+ * the composer to say what sending does (a reply into a `channel` session
  * leaves the tailnet), the collapse rule (a green exit code was never news),
  * and the block-kind fallthrough (a `hermes_ref` bump can never blank a
  * transcript).
@@ -14,6 +14,7 @@ import {
   blockKind,
   compareBots,
   compareBuckets,
+  composerHint,
   composerState,
   dayDivider,
   destinationNotice,
@@ -24,13 +25,13 @@ import {
   hasKnownOrigin,
   messageRows,
   originClass,
-  originNotice,
   ORIGIN_NAMES,
   railBuckets,
   railFooter,
   safeHref,
   safeImageSrc,
   railTime,
+  sendLabel,
   startsCollapsed,
   threadState,
   threadTime,
@@ -143,71 +144,103 @@ test("durations and sizes read in a consistent, compact format", () => {
   expect(fmtBytes(900)).toBe("900 B");
 });
 
-/* ── the origin banner ───────────────────────────────────────────────────── */
+/* ── where a reply goes ──────────────────────────────────────────────────── */
 
-describe("the destination banner", () => {
-  test("only `portal` is silent — every other origin restates the destination", () => {
-    expect(originNotice("portal", null)).toBeNull();
-    for (const origin of ORIGIN_NAMES.filter((o) => o !== "portal")) {
-      expect(originNotice(origin, null)).not.toBeNull();
+const known = (origin: string, detail: string | null = null) =>
+  ({ state: "known", origin, detail }) as const;
+
+describe("what the composer says about a known destination", () => {
+  test("a known destination never draws a band — bands are for a blocked composer", () => {
+    for (const origin of [...ORIGIN_NAMES, "hologram"]) {
+      expect(destinationNotice(known(origin, "x"))).toBeNull();
     }
+  });
+
+  test("`portal`, `hermetic` and `cli` say nothing at all at the composer", () => {
+    // `hermetic` and `cli` mean only "no local record of sending into it",
+    // which is too often this operator's own session to be worth a warning.
+    for (const origin of ["portal", "hermetic", "cli"]) {
+      for (const detail of [null, "something"]) {
+        expect(sendLabel(known(origin, detail))).toBeNull();
+        expect(composerHint(known(origin, detail))).toBeNull();
+      }
+    }
+  });
+
+  test("a desktop session gets a muted footer fragment and a plain button", () => {
+    expect(sendLabel(known("desktop"))).toBeNull();
+    expect(composerHint(known("desktop", "operator laptop"))).toEqual({
+      text: "also open in Hermes Desktop",
+      tone: "muted",
+    });
+  });
+
+  test("a room reply names the room it posts into, or says the room", () => {
+    expect(sendLabel(known("room", "#disk-triage"))).toBeNull();
+    expect(composerHint(known("room", "#disk-triage"))).toEqual({
+      text: "posts to #disk-triage",
+      tone: "muted",
+    });
+    expect(composerHint(known("room"))?.text).toBe("posts to the room");
+  });
+
+  test("a routine reply says on the button that it starts a new session", () => {
+    expect(sendLabel(known("routine", "nightly-digest"))).toEqual({
+      label: "Send · new session",
+      tone: "warn",
+    });
+    expect(sendLabel(known("routine"))?.label).toBe("Send · new session");
+    expect(composerHint(known("routine", "nightly-digest"))).toEqual({
+      text: "the routine will not see this",
+      tone: "warn",
+    });
+    expect(composerHint(known("routine"))?.text).toBe("the routine will not see this");
+  });
+
+  test("a peer reply says on the button that it answers a robot", () => {
+    expect(sendLabel(known("peer", "granite@atlas"))).toEqual({
+      label: "Reply to granite@atlas",
+      tone: "warn",
+    });
+    expect(sendLabel(known("peer"))?.label).toBe("Reply to another bot");
+    expect(composerHint(known("peer", "granite@atlas"))).toBeNull();
+  });
+
+  test("a channel reply names the channel on the button and leaves the tailnet in the footer", () => {
+    expect(sendLabel(known("channel", "#acme-support"))).toEqual({
+      label: "Send to #acme-support",
+      tone: "warn",
+    });
+    expect(sendLabel(known("channel"))?.label).toBe("Send to the channel");
+    expect(composerHint(known("channel", "#acme-support"))).toEqual({
+      text: "leaves the tailnet",
+      tone: "warn",
+    });
+  });
+
+  test("a blank detail reads as no detail", () => {
+    expect(sendLabel(known("channel", "  "))?.label).toBe("Send to the channel");
   });
 
   test("an origin this build has never heard of is foreign, not `portal`", () => {
     // The failure this gate prevents is silent, so the default has to be "warn".
     // Labelling an unrecognised origin as local by omission is the bug.
-    const notice = originNotice("hologram", null);
-    expect(notice).not.toBeNull();
-    expect(notice?.tone).toBe("warn");
-    expect(notice?.headline).toContain("hologram");
+    expect(sendLabel(known("hologram"))).toEqual({ label: "Send to hologram", tone: "warn" });
   });
 
-  test("a channel reply is named as leaving the tailnet", () => {
-    const notice = originNotice("channel", "#acme-support");
-    expect(notice?.tone).toBe("warn");
-    expect(notice?.badge).toBe("#acme-support");
-    expect(notice?.detail).toContain("leaves the tailnet");
+  test("a destination that is not known has no send label and no footer fragment", () => {
+    for (const dest of [
+      { state: "pending" } as const,
+      { state: "unchosen", count: 2 } as const,
+      { state: "unknown", reason: "r" } as const,
+    ]) {
+      expect(sendLabel(dest)).toBeNull();
+      expect(composerHint(dest)).toBeNull();
+    }
   });
 
-  test("a peer reply says it is answering a robot", () => {
-    const notice = originNotice("peer", "granite@atlas");
-    expect(notice?.headline).toContain("granite@atlas");
-    expect(notice?.detail).toContain("robot");
-  });
-
-  test("a routine reply says it starts a new session the routine will not read", () => {
-    expect(originNotice("routine", "nightly")?.detail).toContain("new session");
-  });
-
-  test("a room reply names the room it posts into", () => {
-    expect(originNotice("room", "#disk-triage")?.detail).toContain("#disk-triage");
-  });
-
-  test('a cli reply is softened to "another client", not just a shell', () => {
-    // Upstream Hermes stamps every websocket client `source: \"tui\"`, including
-    // its own CLI/TUI and this portal's own canonical-session client, so `cli`
-    // means "a client this portal did not record", not specifically a shell.
-    const notice = originNotice("cli", null);
-    expect(notice?.headline).toContain("another client");
-    expect(notice?.headline).not.toContain("command line");
-  });
-
-  test("a cli origin on an empty canonical session shows no banner", () => {
-    // A freshly created, empty canonical Bot Chat also reads `cli` (same
-    // upstream `tui` stamping), and the banner over \"Nothing said yet\" would
-    // contradict itself. Suppressed only for this specific, harmless case.
-    expect(originNotice("cli", null, true)).toBeNull();
-  });
-
-  test("a cli origin on a non-empty session still restates the destination", () => {
-    expect(originNotice("cli", null, false)).not.toBeNull();
-  });
-
-  // The header badge is the same claim as the banner, in four characters, so it
-  // is decided by the same predicate rather than by a second copy of it.
   test("an empty canonical session has no origin to name", () => {
     expect(hasKnownOrigin({ kind: "canonical" }, 0)).toBe(false);
-    expect(originNotice("cli", null, !hasKnownOrigin({ kind: "canonical" }, 0))).toBeNull();
   });
 
   test("a canonical session with messages in it has an origin", () => {
@@ -228,9 +261,9 @@ describe("the destination banner", () => {
 
 describe("the destination, which is what the composer actually takes", () => {
   test("a destination that is not yet known is never silent and never sendable", () => {
-    // The whole point. `portal` is the one value that suppresses the band, so
-    // anything short of a session that was read must show something and must
-    // hold the send — a bare `origin ?? \"portal\"` showed nothing and sent.
+    // The whole point. Silence is what `portal` looks like, so anything short
+    // of a session that was read must show a band and must hold the send — a
+    // bare `origin ?? \"portal\"` showed nothing and sent.
     for (const dest of [
       { state: "pending" } as const,
       { state: "unchosen", count: 2 } as const,
@@ -242,9 +275,29 @@ describe("the destination, which is what the composer actually takes", () => {
     }
   });
 
-  test("a read `portal` is the only thing that silences the band", () => {
+  test("the three blocked states are slim bands: a headline and a badge", () => {
+    expect(destinationNotice({ state: "pending" })).toEqual({
+      tone: "acc",
+      badge: "reading",
+      headline: "Reading which conversation this is.",
+    });
+    expect(destinationNotice({ state: "unchosen", count: 2 })).toEqual({
+      tone: "warn",
+      badge: "choose",
+      headline: "Reply into",
+    });
+    const unknown = destinationNotice({ state: "unknown", reason: "The box refused." });
+    expect(unknown?.tone).toBe("bad");
+    expect(unknown?.badge).toBe("unknown");
+    expect(unknown?.headline).toBe("hermetic could not read where a reply would go.");
+    // The reason is the band's hover text, not a second line.
+    expect(unknown?.title).toContain("The box refused.");
+  });
+
+  test("a read `portal` composes plainly and is sendable", () => {
     const portal = { state: "known", origin: "portal", detail: null } as const;
     expect(destinationNotice(portal)).toBeNull();
+    expect(sendLabel(portal)).toBeNull();
     expect(composerState("ready", portal).enabled).toBe(true);
     expect(originClass(portal)).toBe("portal");
   });
@@ -254,20 +307,14 @@ describe("the destination, which is what the composer actually takes", () => {
     // no canonical session. There is no portal conversation to fall into, and
     // the two that exist go to different places.
     const dest = { state: "unchosen", count: 2 } as const;
-    expect(destinationNotice(dest)?.headline).toContain("2 conversations");
-    expect(destinationNotice(dest)?.detail).toContain("leave the tailnet");
+    expect(destinationNotice(dest)?.tone).toBe("warn");
     expect(composerState("ready", dest).placeholder).toContain("pick a conversation");
   });
 
-  test("a known foreign origin passes straight through to the origin copy", () => {
-    const dest = { state: "known", origin: "channel", detail: "#acme-support" } as const;
-    expect(destinationNotice(dest)?.detail).toContain("leaves the tailnet");
-    expect(originClass(dest)).toBe("channel");
-  });
-
-  test("`emptyCanonical` on a known `cli` destination silences the band", () => {
-    const dest = { state: "known", origin: "cli", detail: null, emptyCanonical: true } as const;
-    expect(destinationNotice(dest)).toBeNull();
+  test("a known `hermetic` destination is sendable and keeps its own badge class", () => {
+    const dest = known("hermetic");
+    expect(composerState("ready", dest).enabled).toBe(true);
+    expect(originClass(dest)).toBe("hermetic");
   });
 
   test("a healthy thread with no destination is still not sendable", () => {

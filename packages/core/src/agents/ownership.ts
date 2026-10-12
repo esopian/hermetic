@@ -26,13 +26,14 @@
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
+  FORMER_AGENT_TAG,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
   ROLE_DATA,
   ROLE_TAG,
 } from "../backend/constants.ts";
 import { HermeticError } from "../errors.ts";
-import type { ComputeApi, InstanceRef, VolumeStatus } from "../backend/types.ts";
+import type { ComputeApi, InstanceRef, OwnedVolumeStatus } from "../backend/types.ts";
 
 /** The identity a by-id mutation claims the resource has. */
 export interface ResourceOwner {
@@ -94,6 +95,9 @@ export function assertResourceOwned(
         [AGENT_TAG]: tags[AGENT_TAG] ?? null,
         [FLEET_ID_TAG]: tags[FLEET_ID_TAG] ?? null,
         [ROLE_TAG]: tags[ROLE_TAG] ?? null,
+        // Not part of the check: what a release reads to tell a volume it
+        // already moved off this name from one that is somebody else's.
+        [FORMER_AGENT_TAG]: tags[FORMER_AGENT_TAG] ?? null,
       },
     },
   );
@@ -120,6 +124,6 @@ export async function assertOwnedVolume(
   compute: ComputeApi,
   owner: ResourceOwner,
   volumeId: string,
-): Promise<VolumeStatus | null> {
+): Promise<OwnedVolumeStatus | null> {
   return await compute.describeOwnedVolume(volumeId, owner);
 }

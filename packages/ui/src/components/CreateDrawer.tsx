@@ -59,9 +59,9 @@ export function CreateDrawer({
   /**
    * §9's reclaim path: build this agent on a volume that already exists. The
    * volume becomes a locked row, no preset or field can change it, and the name
-   * is prefilled from the volume's own `agent` tag — or from the next free
-   * variant of it, because §4.3 keeps a destroyed agent's row forever and its
-   * name is therefore never free again.
+   * is prefilled from the volume's `agent` tag, or the former owner's name a
+   * destroy released (`retained_by`, §6.7) — or the next free variant of it,
+   * when a live agent has since taken that name.
    */
   onVolume?: VolumeView | null;
   onStart: (op: CreateOp) => void;

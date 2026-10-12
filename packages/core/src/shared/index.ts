@@ -41,6 +41,10 @@ export type { FleetTarget } from "./target.ts";
 // --- Inbox listening rule (§4.6) ------------------------------------------
 export { INSTANCE_NOTIFICATION_SOURCES, hiddenByListening } from "./notifications.ts";
 
+// --- Session origins (§9.2) ---------------------------------------------
+export { SESSION_ORIGIN_NAMES } from "./session-origins.ts";
+export type { SessionOriginName } from "./session-origins.ts";
+
 // --- Background-process events in chat (§9.2) ----------------------------
 export {
   PROCESS_COMMAND_MAX,
@@ -49,6 +53,17 @@ export {
   shortCommand,
 } from "./process-event.ts";
 export type { ProcessEventLike } from "./process-event.ts";
+
+// --- Intentional silence (§9.2) ------------------------------------------
+// Upstream's `NO_REPLY`/`[SILENT]` matcher: core keeps a silent reply out of
+// the inbox, the UI draws it as a marker and holds back a streamed prefix.
+export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "./silence.ts";
+
+// --- Bot handles and @-mentions (§9.2) -----------------------------------
+// The composer's mention picker and core's `message_agent` target mapping
+// must agree on which tag names which bot.
+export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "./bot-handles.ts";
+export type { BotIdentity } from "./bot-handles.ts";
 
 // --- Providers (§8.1) ----------------------------------------------------
 export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./providers.ts";
@@ -131,3 +146,14 @@ export {
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
 } from "./rpc.ts";
+
+// --- Terminal shell integration (issue #18) --------------------------------
+export {
+  DETACHABLE_PROGRAMS,
+  SHELL_INTEGRATION_SCRIPT,
+  SHELL_MARKER_OSC,
+  SSH_LOGIN_USER,
+  parseShellMarker,
+  sanitizeProgramName,
+} from "./shell-markers.ts";
+export type { ShellMarker } from "./shell-markers.ts";

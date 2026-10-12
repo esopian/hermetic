@@ -90,6 +90,16 @@ export function skewReport(
   // themselves, so the loudest it gets is a line an operator can ignore.
   if (skew.severity === "pending") return [`◦ ${where} — ${skew.message}`];
 
+  /**
+   * `drifted` is drawn like `degraded`: a line on a read, the block on a write.
+   * It is the other severity an operator has to act on — a config nothing is
+   * applying stays unapplied — and a write is exactly when a stale config on
+   * the box is most likely to surprise. The line carries the command too,
+   * because unlike `degraded` there is no Settings button to find it behind.
+   */
+  if (!opts.loud && skew.severity === "drifted") {
+    return [`⚠ skew: ${where} — ${skew.message}${skew.fix ? ` (${skew.fix})` : ""}`];
+  }
   if (!opts.loud && skew.severity === "degraded") return [`⚠ skew: ${where} — ${skew.message}`];
 
   const body = [where, `${skew.message}.`, ""];
@@ -101,5 +111,12 @@ export function skewReport(
     body.push("this build cannot update this fleet — upgrade hermetic on this laptop");
   }
   if (skew.severity !== "blocked") body.push(`hide  ${SKEW_QUIET_ENV}=1`);
-  return box(skew.severity === "blocked" ? "VERSION SKEW · BLOCKED" : "VERSION SKEW", body);
+  return box(
+    skew.severity === "blocked"
+      ? "VERSION SKEW · BLOCKED"
+      : skew.severity === "drifted"
+        ? "CONFIG NOT APPLIED"
+        : "VERSION SKEW",
+    body,
+  );
 }

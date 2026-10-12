@@ -9,8 +9,9 @@ import { checkAbort } from "../../abort.ts";
 import type { BoxAddress, HermesChatOptions } from "./hermes-chat-types.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
 import { arr, isoOrNull, num, rec, str } from "./hermes-chat-wire.ts";
+import { botDeliveryPreview } from "./bot-delivery.ts";
 import { processNoticePreview } from "./process-notice.ts";
-import type { Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
+import type { ChatRole, Session, SessionKind, SessionOrigin } from "../../schema/index.ts";
 
 /** What `createChatSessions` needs, and nothing more. */
 export interface ChatSessionsDeps {
@@ -120,8 +121,10 @@ function sessionKind(raw: string | null): SessionKind {
  * can identify it. Two reasons, and the second is the one that settles it.
  *
  * Upstream has no notion of hermetic's portal — it is a gateway being driven
- * over `/api/ws`, and a session hermetic opens is indistinguishable at this
- * layer from one the box's own Ink TUI opened. And upstream *does* use the word
+ * over `/api/ws`. The `source` hermetic stamps names a kind of client, not an
+ * installation: every operator's hermetic writes the same string, so a row
+ * saying `hermetic` means *a* hermetic opened it, never that *this* laptop
+ * did, and it maps to the foreign `hermetic` origin. And upstream *does* use the word
  * `portal`, for something else entirely: `GET /api/portal` answers
  * `{"logged_in": …, "provider": "vercel"}`. Passing a `source` of `"portal"`
  * through would hand the safety-critical value to a string that means Vercel.
@@ -131,16 +134,39 @@ function sessionKind(raw: string | null): SessionKind {
  * since the enum has no "unknown". Which sessions this portal actually started
  * is local state (§9.2), known to `chat.ts` and its SQLite, not to the box.
  *
- * Only `tui` has been observed live (every row of the captured `session.list`).
- * The rest are read from upstream's own vocabulary and are here so that a
- * value this build has never seen is still classified rather than defaulted.
+ * What upstream actually sends (Hermes v2026.9.24, the pinned `hermes_ref`):
+ * `session.create` and `session.resume` accept a `source`. The session's DB
+ * `source` is written only by `_insert_session_row`
+ * (`hermes_state_sessions.py:298`), an `ON CONFLICT DO UPDATE` that keeps the
+ * stored `source` unless it is the literal placeholder `'unknown'`; nothing
+ * else updates that column. So the value given when the session's row is first
+ * written — in practice, at `session.create` — is the one every `session.list`
+ * row carries for good, and a `source` on `session.resume` only sets the
+ * runtime record (the agent's platform, hence its system-prompt hint), never
+ * the stored origin: a resume cannot relabel a Slack session `hermetic`. With
+ * no `source`, a websocket client is stamped `tui` — which is why every session
+ * hermetic opened read as the box's own TUI until it began stamping `hermetic`
+ * (`HERMETIC_SESSION_SOURCE`, `hermes-chat-wire.ts`).
+ * The values upstream itself writes are `tui`, `desktop`, `cli`, `cron`,
+ * `subagent`, `bot_room` and `relay`, plus the gateway's Platform enum for
+ * messaging channels. A `session.list` row carries no chat or job name, so
+ * `origin_detail` is null from a real box whatever the origin.
+ *
+ * The remaining keys are tolerated synonyms, so that a value this build has
+ * never seen is still classified rather than defaulted.
  */
 const UPSTREAM_ORIGINS: Record<string, SessionOrigin> = {
-  // The Ink terminal UI on the box — the only value the capture contains.
+  // Some hermetic opened it — this one or another operator's. Foreign, never
+  // `portal`: whether *this* laptop sent into it is the local record's call.
+  hermetic: "hermetic",
+  // The Ink terminal UI on the box, and every websocket client that names no
+  // source.
   tui: "cli",
   cli: "cli",
   terminal: "cli",
   shell: "cli",
+  // The Platform enum's `local`: the box's own command line.
+  local: "cli",
   web: "desktop",
   dashboard: "desktop",
   desktop: "desktop",
@@ -159,15 +185,30 @@ const UPSTREAM_ORIGINS: Record<string, SessionOrigin> = {
   room: "room",
   bot_room: "room",
   channel: "channel",
+  // The gateway's Platform enum: every messaging integration leaves the tailnet.
   slack: "channel",
   discord: "channel",
   telegram: "channel",
   imessage: "channel",
   signal: "channel",
   whatsapp: "channel",
+  whatsapp_cloud: "channel",
   sms: "channel",
   email: "channel",
   webhook: "channel",
+  msgraph_webhook: "channel",
+  mattermost: "channel",
+  matrix: "channel",
+  homeassistant: "channel",
+  dingtalk: "channel",
+  api_server: "channel",
+  feishu: "channel",
+  wecom: "channel",
+  wecom_callback: "channel",
+  weixin: "channel",
+  bluebubbles: "channel",
+  qqbot: "channel",
+  yuanbao: "channel",
 };
 
 function sessionOrigin(raw: string | null): SessionOrigin {
@@ -177,9 +218,27 @@ function sessionOrigin(raw: string | null): SessionOrigin {
 
 /**
  * A preview as the rail shows it: an injected notice (`process-notice.ts`)
- * becomes its one-line sentence, anything else passes through untouched.
+ * becomes its one-line sentence, another bot's DM delivery reads `Name: body`
+ * (`bot-delivery.ts`), anything else passes through untouched.
  */
 export function eventPreview(preview: string | null): string | null {
-  if (preview === null) return null;
-  return processNoticePreview(preview) ?? preview;
+  return eventPreviewOf(preview).preview;
+}
+
+/**
+ * `eventPreview`, with the role of the row it quotes when the rewrite proves
+ * one (`Bot.preview_role`): a notice is the `system` row history lifts it to,
+ * a delivery is the `user` row Hermes stored it on. Anything else is upstream's
+ * text alone, which names no role, so the role is null.
+ */
+export function eventPreviewOf(preview: string | null): {
+  preview: string | null;
+  preview_role: ChatRole | null;
+} {
+  if (preview === null) return { preview: null, preview_role: null };
+  const notice = processNoticePreview(preview);
+  if (notice !== null) return { preview: notice, preview_role: "system" };
+  const delivery = botDeliveryPreview(preview);
+  if (delivery !== null) return { preview: delivery, preview_role: "user" };
+  return { preview, preview_role: null };
 }

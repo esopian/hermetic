@@ -12,6 +12,7 @@ export * from "./pending.ts";
 export * from "./notifications.ts";
 export * from "./chat.ts";
 export * from "./presets.ts";
+export * from "./incarnations.ts";
 
 /**
  * §4.6: the SQLite file holds only what this laptop knows — the frozen config,

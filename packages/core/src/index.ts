@@ -93,10 +93,13 @@ export type { FleetsDeps } from "./fleet/fleets.ts";
  * §4.9: the operator's inbox. The store contract and the
  * in-process fallback are exported because a head opens the store — the CLI and
  * the portal each open the local database themselves — and because the fixture
- * seed writes rows into one. The three methods themselves stay behind
+ * seed writes rows into one. The methods themselves stay behind
  * `hermetic.ts`, like every other module of this shape.
  */
 export type {
+  NotificationAckWrite,
+  NotificationClearWrite,
+  NotificationCounts,
   NotificationDeps,
   NotificationInsert,
   NotificationStore,
@@ -111,6 +114,22 @@ export {
   notifyOpSettled,
   opVerb,
 } from "./chat/notifications.ts";
+/**
+ * The desktop terminal's inbox source (issue #18), on the `notifyOpSettled`
+ * pattern: the head says what a session did, core writes the row. Not public
+ * methods — `terminalNotices(hermetic)` is how a head holding only a `Hermetic`
+ * reaches them.
+ */
+export {
+  notifyTerminalEvent,
+  resolveTerminalSession,
+  terminalNotices,
+} from "./chat/terminal-notifications.ts";
+export type {
+  TerminalEventInput,
+  TerminalNotices,
+  TerminalResolveInput,
+} from "./chat/terminal-notifications.ts";
 /**
  * §9.2: the chat surface's result shapes and its deps object. The five
  * methods themselves stay behind `hermetic.ts`, like every other module of this
@@ -148,6 +167,12 @@ export { disposeChatRequestPools } from "./chat/hermes/hermes-chat.ts";
  * with.
  */
 export { redactText } from "./chat/chat-redact.ts";
+/**
+ * §9.2's chat settings — whether transcript content is masked — and the
+ * in-process store, so a test or a head wiring its own can state them.
+ */
+export { DEFAULT_CHAT_SETTINGS, MemoryChatSettingsStore } from "./chat/chat-settings.ts";
+export type { ChatSettings, ChatSettingsStore } from "./chat/chat-settings.ts";
 /**
  * The size of one observation's read, which is also the size of its
  * deduplication window.

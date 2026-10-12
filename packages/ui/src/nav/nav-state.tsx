@@ -26,12 +26,17 @@ import { fleetIdOf, isInitialized } from "../api/index.ts";
 import type { VolumeView } from "../api/index.ts";
 import { DEFAULT_AGENT_TAB, agentHash, parseAgentHash } from "./agent-nav.ts";
 import type { AgentTab } from "./agent-nav.ts";
-import { FLEET_VOLUMES_HASH, LEGACY_VOLUMES_HASH, parseFleetLensHash } from "./fleet-nav.ts";
+import {
+  FLEET_VOLUMES_HASH,
+  LEGACY_VOLUMES_HASH,
+  fleetLensHash,
+  parseFleetLensHash,
+} from "./fleet-nav.ts";
 import type { FleetLens } from "./fleet-nav.ts";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { isChatHash } from "../chat/chat-routing.ts";
 import type { View } from "../components/ViewNav.tsx";
-import { hasOpenOverlay } from "../lib/focus.ts";
+import { hasOpenOverlay, keyboardOwned } from "../lib/focus.ts";
 import { DEFAULT_SETTINGS_SECTION, parseSettingsHash, settingsHash } from "./settings-nav.ts";
 import type { SettingsSection } from "./settings-nav.ts";
 import { shortcutAllowed } from "./shortcuts.ts";
@@ -87,6 +92,16 @@ export interface Nav {
   selected: string | null;
   agentTab: AgentTab;
   setAgentTab: (tab: AgentTab) => void;
+  /**
+   * The terminal session the hash names (`#agent/<name>/terminal/<id>`), or
+   * `null`. Held here so the one hash writer spells it back rather than
+   * stripping it; the Terminal section reads it to pick the session a
+   * notification's `Open session` asked for, and writes it as the operator
+   * moves between sessions. Meaningless on any other section, and cleared by
+   * every move off Terminal (`setAgentTab`).
+   */
+  agentSession: string | null;
+  setAgentSession: (session: string | null) => void;
   /** The drawer's destroy confirm, owned here so a change of agent resets it. */
   teardownOpen: boolean;
   setTeardownOpen: (open: boolean) => void;
@@ -169,9 +184,17 @@ export function NavProvider({
   const [selected, setSelected] = useState<string | null>(
     () => parseAgentHash(currentHash())?.name ?? null,
   );
-  const [agentTab, setAgentTab] = useState<AgentTab>(
+  const [agentTab, setAgentTabState] = useState<AgentTab>(
     () => parseAgentHash(currentHash())?.tab ?? DEFAULT_AGENT_TAB,
   );
+  const [agentSession, setAgentSession] = useState<string | null>(
+    () => parseAgentHash(currentHash())?.session ?? null,
+  );
+  /** A session belongs to the Terminal section; any other section drops it. */
+  const setAgentTab = useCallback((tab: AgentTab) => {
+    setAgentTabState(tab);
+    if (tab !== "terminal") setAgentSession(null);
+  }, []);
   const [teardownOpen, setTeardownOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createOnVolume, setCreateOnVolume] = useState<VolumeView | null>(null);
@@ -289,18 +312,20 @@ export function NavProvider({
     setSettingsOpen(v === "settings");
     if (v !== "settings") setProvidersNew(false);
   }, []);
-  const openVolumes = useCallback(() => {
+  /** Volumes or Destroyed: a lens that is not the agents one closes the drawer. */
+  const openOtherLens = useCallback((lens: Exclude<FleetLens, "agents">) => {
     setSettingsOpen(false);
     setChatOpen(false);
     // The drawer belongs to the agents lens; see the hash writer below.
     setSelected(null);
     setTeardownOpen(false);
-    setFleetLens("volumes");
+    setFleetLens(lens);
   }, []);
-  /** The toolbar's `N AGENTS | N VOLUMES` switch. */
+  const openVolumes = useCallback(() => openOtherLens("volumes"), [openOtherLens]);
+  /** The toolbar's `N AGENTS | N VOLUMES | DESTROYED` switch. */
   const chooseFleetLens = useCallback(
-    (lens: FleetLens) => (lens === "volumes" ? openVolumes() : setFleetLens("agents")),
-    [openVolumes],
+    (lens: FleetLens) => (lens === "agents" ? setFleetLens("agents") : openOtherLens(lens)),
+    [openOtherLens],
   );
 
   // Read through a ref: Escape reaches this from a window listener that `App`
@@ -313,16 +338,19 @@ export function NavProvider({
     else if (v.chatOpen) setChatOpen(false);
   }, []);
 
-  const select = useCallback((name: string) => {
-    setSelected(name);
-    // Opening an agent from the board always lands on Overview: the Desktop tab
-    // is a live stream, so it is somewhere an operator goes deliberately (by
-    // pressing the tab, or by following a `#agent/<name>/desktop` link) and
-    // never somewhere the last agent's tab carries them.
-    setAgentTab(DEFAULT_AGENT_TAB);
-    setTeardownOpen(false);
-    setPopoverOpen(false);
-  }, []);
+  const select = useCallback(
+    (name: string) => {
+      setSelected(name);
+      // Opening an agent from the board always lands on Overview: the Desktop tab
+      // is a live stream, so it is somewhere an operator goes deliberately (by
+      // pressing the tab, or by following a `#agent/<name>/desktop` link) and
+      // never somewhere the last agent's tab carries them.
+      setAgentTab(DEFAULT_AGENT_TAB);
+      setTeardownOpen(false);
+      setPopoverOpen(false);
+    },
+    [setAgentTab],
+  );
   const openAgent = useCallback(
     (name: string) => {
       setSettingsOpen(false);
@@ -388,7 +416,8 @@ export function NavProvider({
       const route = parseAgentHash(window.location.hash);
       if (route) {
         setSelected(route.name);
-        setAgentTab(route.tab);
+        setAgentTabState(route.tab);
+        setAgentSession(route.session ?? null);
         // Same reset `select()` does: back/forward onto another agent must not
         // land on the previous one's open teardown confirm, which names a
         // different agent and is a destructive step.
@@ -398,8 +427,10 @@ export function NavProvider({
         window.location.hash === "#" ||
         // The drawer lives on the agents lens. Back from `#agent/<name>` to
         // `#fleet/volumes` has to close it, or the writer would push the
-        // agent's hash straight back and trap the operator on it.
-        lens === "volumes"
+        // agent's hash straight back and trap the operator on it. The
+        // destroyed lens is the same: its detail panel is its own, not the drawer.
+        lens === "volumes" ||
+        lens === "destroyed"
       ) {
         setSelected(null);
         setTeardownOpen(false);
@@ -425,17 +456,15 @@ export function NavProvider({
           ? window.location.hash
           : "#chat"
         : selected
-          ? agentHash(selected, agentTab)
-          : fleetLens === "volumes"
-            ? FLEET_VOLUMES_HASH
-            : "";
+          ? agentHash(selected, agentTab, agentSession)
+          : fleetLensHash(fleetLens);
     if (window.location.hash === wants) return;
     if (wants) {
       window.location.hash = wants;
     } else {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab]);
+  }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab, agentSession]);
 
   /**
    * §4.8: a fleet switch replaces every agent on the board, so anything on
@@ -495,6 +524,8 @@ export function NavProvider({
       selected,
       agentTab,
       setAgentTab,
+      agentSession,
+      setAgentSession,
       teardownOpen,
       setTeardownOpen,
       select,
@@ -532,6 +563,8 @@ export function NavProvider({
       closeView,
       selected,
       agentTab,
+      setAgentTab,
+      agentSession,
       teardownOpen,
       select,
       openAgent,
@@ -583,6 +616,7 @@ export function useNavKeys({
   filterRef,
   toggleShortcuts,
   openInbox,
+  openInboxDrawer,
 }: {
   /** Nothing but `?` fires before this home is bound, or while the wizard is up. */
   enabled: boolean;
@@ -594,10 +628,14 @@ export function useNavKeys({
   toggleShortcuts: () => void;
   /** Opens the notification centre; `null` where this tree has no inbox. */
   openInbox: RefObject<((open: boolean) => void) | null>;
+  /** Opens the full inbox drawer (`⇧I`); absent or `null` where there is no inbox. */
+  openInboxDrawer?: RefObject<(() => void) | null>;
 }): void {
   const { openCreate, openSettings, closeView } = useNav();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The terminal's screen owns the keyboard while focused (`keyboardOwned`).
+      if (keyboardOwned()) return;
       if (
         e.defaultPrevented ||
         e.isComposing ||
@@ -605,7 +643,7 @@ export function useNavKeys({
         e.ctrlKey ||
         e.metaKey ||
         e.altKey ||
-        (e.shiftKey && e.key !== "?")
+        (e.shiftKey && e.key !== "?" && e.key !== "I")
       )
         return;
       const target = e.target as HTMLElement | null;
@@ -653,6 +691,12 @@ export function useNavKeys({
         e.preventDefault();
         openInbox.current?.(true);
       }
+      // `⇧I` for the full inbox. Shift is the only modifier let through for
+      // it; the drawer is an overlay, so a second press is refused like `i`.
+      if (e.key === "I") {
+        e.preventDefault();
+        openInboxDrawer?.current?.();
+      }
       if (e.key === ",") {
         e.preventDefault();
         openSettings();
@@ -660,5 +704,15 @@ export function useNavKeys({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openCreate, openSettings, closeView, enabled, overlay, filterRef, toggleShortcuts, openInbox]);
+  }, [
+    openCreate,
+    openSettings,
+    closeView,
+    enabled,
+    overlay,
+    filterRef,
+    toggleShortcuts,
+    openInbox,
+    openInboxDrawer,
+  ]);
 }

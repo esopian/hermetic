@@ -1,10 +1,10 @@
-// @hutch cli=0.26.0 cottontail=0.6.0
+// @hutch cli=0.27.1 cottontail=0.6.0
 /**
  * The Hutch project file for the desktop app.
  *
  * The pragma on the first line is what the `hutch` launcher reads before it
  * reads anything else: it pins the CLI this project is built with, so a
- * developer whose global Hutch is newer still builds with 0.26.0, and it names
+ * developer whose global Hutch is newer still builds with 0.27.1, and it names
  * the paired `cottontail` WebKit runtime that `hutch electrobun prepare`
  * resolved. `.hutch-version` at the repo root holds the CLI number for the
  * installer and `.hutch/dependencies.lock` records the runtime;

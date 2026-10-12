@@ -1,6 +1,6 @@
 /**
- * The chat view, driven (§9.2): the rail, the banners and the
- * states.
+ * The chat view, driven (§9.2): the rail, what the composer says about where
+ * a reply goes, and the states.
  *
  * `chat-logic.test.ts` owns the rules and `chat-blocks.dom.test.tsx` owns the
  * nine renderers; this and its two siblings own the wiring. The turn and the
@@ -8,9 +8,13 @@
  * frames and their keyboard order in `chat-view-entry.dom.test.tsx`. Two of
  * the behaviours here are called out by the plan by name:
  *
- * **The origin banner fires on every foreign origin.** A reply into a `channel`
- * session leaves the tailnet and lands in somebody's Slack; the composer has to
- * say so above the input, undismissibly.
+ * **The composer says what sending does where it has a consequence.** A reply
+ * into a `channel` session leaves the tailnet and lands in somebody's Slack, so
+ * the send button reads "Send to #channel" in warn and the footer adds "leaves
+ * the tailnet"; `peer` and `routine` relabel the button the same way, and
+ * `desktop` and `room` get a muted footer fragment. A composer that cannot send
+ * yet — session read in flight, no conversation chosen, read failed — gets a
+ * slim one-line band instead; `portal`, `hermetic` and `cli` get nothing.
  *
  * **An unreachable box keeps its bucket, read-only.** It does not vanish, and
  * its header is not a control that pretends to open.
@@ -295,51 +299,121 @@ describe("the rail", () => {
   });
 });
 
-/* ── the origin banner ───────────────────────────────────────────────────── */
+/* ── where a reply goes ──────────────────────────────────────────────────── */
 
-describe("the destination banner", () => {
-  test("a portal session says nothing above the input", async () => {
+/** The composer's send button, whatever it currently says. */
+const sendButton = (container: HTMLElement) =>
+  container.querySelector(".ch-composer .ch-send") as HTMLButtonElement;
+
+describe("the composer's destination", () => {
+  test("a portal session says nothing at the composer", async () => {
     const h = harness();
     const { container } = mount(h);
     await waitFor(() => expect(h.calls.sessions).toBeGreaterThan(0));
     await waitFor(() => expect(container.querySelector(".ch-composer")).not.toBeNull());
-    expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
+    await waitFor(() => expect(container.querySelector(".ch-composer .ch-band")).toBeNull());
+    expect(container.querySelector(".ch-composer-hint")).toBeNull();
+    expect(sendButton(container).textContent).toBe("↵");
   });
 
-  test("a channel session restates the destination, above the input, undismissibly", async () => {
+  test.each(["cli", "hermetic"])(
+    "a %s session says nothing at the composer; only the header badge names it",
+    async (origin) => {
+      const h = harness({ sessions: [sessionOf({ origin, kind: "thread" } as never)] });
+      const { container } = mount(h);
+      await waitFor(() =>
+        expect(container.querySelector(`.ch-thead .ch-origin.${origin}`)?.textContent).toBe(origin),
+      );
+      expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
+      expect(container.querySelector(".ch-composer-hint")).toBeNull();
+      expect(sendButton(container).textContent).toBe("↵");
+      expect(sendButton(container).classList.contains("warn")).toBe(false);
+    },
+  );
+
+  test("a channel session puts the destination on the send button, with no band", async () => {
     const h = harness({
       sessions: [sessionOf({ origin: "channel", origin_detail: "#acme-support" })],
     });
     const { container } = mount(h);
-    // Waiting for the band to *exist* is not enough: the composer draws one
-    // while the session read is still in flight ("reading which conversation
-    // this is"), so a bare existence check can win the race against the read it
-    // is waiting for. Wait for the band this test is about.
-    const band = await waitFor(() => {
-      const node = container.querySelector(".ch-composer .ch-band");
-      expect(node?.textContent ?? "").toContain("leaves the tailnet");
-      return node as HTMLElement;
-    });
-    expect(band.textContent).toContain("#acme-support");
-    // Undismissible by construction: there is no control in it to dismiss with.
-    expect(within(band).queryAllByRole("button")).toHaveLength(0);
+    // The composer draws a band while the session read is in flight, so wait
+    // for the read to land rather than for the band to go.
+    await waitFor(() => expect(sendButton(container).textContent).toContain("Send to #acme-support"));
+    expect(sendButton(container).classList.contains("warn")).toBe(true);
+    expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
+    const hint = container.querySelector(".ch-composer-hint.warn");
+    expect(hint?.textContent).toContain("leaves the tailnet");
   });
 
-  test("a peer session says the reply answers a robot", async () => {
+  test("a peer session's send button says it replies to a robot", async () => {
     const h = harness({ sessions: [sessionOf({ origin: "peer", origin_detail: "granite@atlas" })] });
     const { container } = mount(h);
+    await waitFor(() => expect(sendButton(container).textContent).toContain("Reply to granite@atlas"));
+    expect(container.querySelector(".ch-composer-hint")).toBeNull();
+  });
+
+  test("a desktop session gets a muted footer fragment and a plain button", async () => {
+    const h = harness({ sessions: [sessionOf({ origin: "desktop", origin_detail: "laptop" })] });
+    const { container } = mount(h);
     await waitFor(() =>
-      expect(container.querySelector(".ch-composer .ch-band")?.textContent).toContain("robot"),
+      expect(container.querySelector(".ch-composer-hint.muted")?.textContent).toContain(
+        "also open in Hermes Desktop",
+      ),
     );
+    expect(sendButton(container).textContent).toBe("↵");
+  });
+
+  test("an unchosen destination offers its sessions as chips, and a chip selects one", async () => {
+    const h = harness({
+      sessions: [
+        sessionOf({
+          id: "s-room",
+          origin: "room",
+          origin_detail: "#triage",
+          title: "Triage",
+          kind: "thread",
+        }),
+        sessionOf({
+          id: "s-slack",
+          origin: "channel",
+          origin_detail: "#acme-support",
+          title: "Acme",
+          kind: "thread",
+        }),
+      ],
+    });
+    // The box names no session it answered from: no canonical one to fall into.
+    const history = h.api.fetchHistory;
+    h.api.fetchHistory = (async (...args: Parameters<typeof history>) => ({
+      ...(await history(...args)),
+      session: null,
+    })) as typeof history;
+    const { container } = mount(h);
+    const band = await waitFor(() => {
+      const node = container.querySelector(".ch-composer .ch-band.slim.warn");
+      expect(node?.textContent ?? "").toContain("Reply into");
+      return node as HTMLElement;
+    });
+    const chips = within(band).getAllByRole("button");
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "Triage · #triage",
+      "Acme · #acme-support · leaves tailnet",
+    ]);
+    expect((container.querySelector(".ch-input") as HTMLTextAreaElement).disabled).toBe(true);
+
+    await userEvent.click(chips[1]!);
+    await waitFor(() => expect(sendButton(container).textContent).toContain("Send to #acme-support"));
+    expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
+    expect((container.querySelector(".ch-input") as HTMLTextAreaElement).disabled).toBe(false);
   });
 });
 
-describe("the banner during and after a failed session read", () => {
+describe("the composer during and after a failed session read", () => {
   test("the composer is not sendable while the session read is still open", async () => {
     // Asserted *against the pending promise*, which is the window the defect
-    // lived in: `session` is null, and a bare `origin ?? \"portal\"` rendered no
-    // band over an enabled composer. Every other banner test waits for the read
-    // to land and so cannot see this.
+    // lived in: `session` is null, and a bare `origin ?? \"portal\"` rendered a
+    // plain, enabled composer. Every other test here waits for the read to
+    // land and so cannot see this.
     const h = harness({ sessions: [sessionOf({ origin: "channel", origin_detail: "#acme-support" })] });
     h.sessionsMode = "hang";
     const { container } = mount(h);
@@ -352,17 +426,16 @@ describe("the banner during and after a failed session read", () => {
     expect((screen.getByTitle(/Send/) as HTMLButtonElement).disabled).toBe(true);
     expect(h.calls.send).toBe(0);
     // And it does not claim to be a portal session while it does not know.
-    expect(container.querySelector(".ch-composer .ch-band")).not.toBeNull();
+    const band = container.querySelector(".ch-composer .ch-band.slim.acc");
+    expect(band?.textContent).toContain("Reading which conversation this is.");
+    expect(band?.querySelector(".sub")).toBeNull();
     expect(container.querySelector(".ch-origin.portal")).toBeNull();
 
     await act(async () => {
       h.releaseSessions?.();
     });
-    await waitFor(() =>
-      expect(container.querySelector(".ch-composer .ch-band")?.textContent).toContain(
-        "leaves the tailnet",
-      ),
-    );
+    await waitFor(() => expect(sendButton(container).textContent).toContain("Send to #acme-support"));
+    expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
     expect((container.querySelector(".ch-input") as HTMLTextAreaElement).disabled).toBe(false);
   });
 
@@ -373,12 +446,15 @@ describe("the banner during and after a failed session read", () => {
     const h = harness();
     h.sessionsMode = "reject";
     const { container } = mount(h);
-    await waitFor(() => expect(container.querySelector(".ch-composer .ch-band.bad")).not.toBeNull());
+    await waitFor(() =>
+      expect(container.querySelector(".ch-composer .ch-band.slim.bad")).not.toBeNull(),
+    );
     expect(container.querySelector(".ch-origin.portal")).toBeNull();
     expect((container.querySelector(".ch-input") as HTMLTextAreaElement).disabled).toBe(true);
-    expect(container.querySelector(".ch-composer .ch-band")?.textContent).toContain(
-      "could not read where a reply would go",
-    );
+    const band = container.querySelector(".ch-composer .ch-band") as HTMLElement;
+    expect(band.textContent).toContain("could not read where a reply would go");
+    // The reason does not fit on one line, so it is the band's hover text.
+    expect(band.getAttribute("title")).toContain("the box refused the roster");
   });
 });
 
@@ -586,12 +662,13 @@ describe("the states", () => {
 /* ── the origin badge in the thread header ───────────────────────────────── */
 
 /**
- * The badge next to the bot's name is the banner's claim in four characters.
- * Upstream Hermes stamps every websocket client `source: "tui"`, so the portal
- * creating the canonical Bot Chat reads back as `cli`; on a session where
- * nothing has been said that names a client which does not exist. The banner
- * was already silenced for it; the badge is silenced by the same predicate
- * (`hasKnownOrigin`).
+ * The badge next to the bot's name is the one place a `cli` or `hermetic`
+ * origin is named at all: the composer adds no band and no footer fragment for
+ * either. A canonical Bot Chat with nothing said in it has no origin worth naming —
+ * the box still reports its `source` (`cli` from a build that stamped none),
+ * and a badge over "Nothing said yet" names a client that does not exist. The
+ * badge is silenced by `hasKnownOrigin`; the composer says nothing for `cli`
+ * whatever the session holds.
  */
 describe("the origin badge", () => {
   const CLI: Destination = { state: "known", origin: "cli", detail: null };
@@ -614,7 +691,7 @@ describe("the origin badge", () => {
       <Thread {...base} state="empty" session={sessionOf({ origin: "cli" })} messages={[]} />,
     );
     expect(container.querySelector(".ch-thead .ch-origin")).toBeNull();
-    // And the composer says nothing either — one predicate, both surfaces.
+    // And the composer says nothing either.
     expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
     // The rest of the sub-line is still there; only the chip and its separator go.
     expect(container.querySelector(".ch-thead-sub")?.textContent).toContain("Bot Chat");
@@ -630,7 +707,9 @@ describe("the origin badge", () => {
       />,
     );
     expect(container.querySelector(".ch-thead .ch-origin.cli")).not.toBeNull();
-    expect(container.querySelector(".ch-composer .ch-band")?.textContent).toContain("another client");
+    // `cli` is a badge and nothing more: no band, no footer fragment.
+    expect(container.querySelector(".ch-composer .ch-band")).toBeNull();
+    expect(container.querySelector(".ch-composer-hint")).toBeNull();
   });
 
   test("an empty session that is not the canonical one keeps the chip", () => {

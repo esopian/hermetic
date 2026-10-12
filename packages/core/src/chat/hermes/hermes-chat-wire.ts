@@ -13,6 +13,23 @@
 import { HermeticError } from "../../errors.ts";
 
 /**
+ * The `source` hermetic stamps on every `session.create` and `session.resume`.
+ *
+ * Upstream stores the `source` a session's row is first written with as its DB
+ * `source` and lists it back on every `session.list` row, so a session this
+ * portal (or any hermetic) created is distinguishable from one the box's own
+ * TUI opened — without it, every websocket client is stamped `tui`. On
+ * `session.resume` it only sets the runtime record (the agent's platform, so
+ * its system-prompt hint); the stored `source` is never overwritten unless it is
+ * the placeholder `'unknown'` (`_insert_session_row`, `hermes_state_sessions.py:298`),
+ * so a resume cannot relabel another client's session. It does not replace the
+ * local record of which sessions this laptop sent into (`claimLocal`,
+ * `chat.ts`): `hermetic` maps to a foreign origin, and that local record stays
+ * the only thing that grants `portal`.
+ */
+export const HERMETIC_SESSION_SOURCE = "hermetic";
+
+/**
  * `JSON.parse`, answering `undefined` rather than throwing.
  *
  * `undefined` and not `null` because `null` is a document a JSON-RPC peer may

@@ -1,5 +1,5 @@
 /**
- * The fleet page's lens: agents or volumes.
+ * The fleet page's lens: agents, volumes, or the destroyed-agent audit.
  *
  * Volumes used to be a top-level view (`#volumes`). It is now the second half
  * of the fleet page — the toolbar headline switches between `N AGENTS` and
@@ -11,10 +11,23 @@
  * owns the state and the one hash writer, this module owns only the spelling.
  */
 
-export type FleetLens = "agents" | "volumes";
+export type FleetLens = "agents" | "volumes" | "destroyed";
 
 /** Where the volumes lens lives. */
 export const FLEET_VOLUMES_HASH = "#fleet/volumes";
+
+/**
+ * Where the destroyed-agent audit lives (§6.7). A destroy deletes the row, so
+ * a destroyed agent is not on the agents lens at all; its tombstone is here.
+ */
+export const FLEET_DESTROYED_HASH = "#fleet/destroyed";
+
+/** The hash a lens is addressed by; the agents lens is the fleet's empty hash. */
+export function fleetLensHash(lens: FleetLens): string {
+  if (lens === "volumes") return FLEET_VOLUMES_HASH;
+  if (lens === "destroyed") return FLEET_DESTROYED_HASH;
+  return "";
+}
 
 /**
  * The address of the old Volumes view. Bookmarks and notification links still
@@ -34,6 +47,7 @@ export const LEGACY_VOLUMES_HASH = "#volumes";
  */
 export function parseFleetLensHash(hash: string): FleetLens | null {
   if (hash === FLEET_VOLUMES_HASH || hash === LEGACY_VOLUMES_HASH) return "volumes";
+  if (hash === FLEET_DESTROYED_HASH) return "destroyed";
   const raw = hash.startsWith("#") ? hash.slice(1) : hash;
   if (raw === "settings" || raw.startsWith("settings/")) return null;
   if (raw === "chat" || raw.startsWith("chat/")) return null;

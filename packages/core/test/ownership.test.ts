@@ -136,9 +136,7 @@ describe("destroy refuses a resource the row does not own", () => {
     await poison(backend, "granite", { volume_id: foreign });
     backend.resetMutations();
 
-    const code = await codeOf(
-      drain(hermetic.agents.destroy({ name: "granite", yes: true, delete_volume: true })),
-    );
+    const code = await codeOf(drain(hermetic.agents.destroy({ name: "granite", yes: true })));
 
     expect(code).toBe("RESOURCE_NOT_OWNED");
     expect(backend.volumes.has(foreign)).toBe(true);
@@ -163,9 +161,7 @@ describe("destroy refuses a resource the row does not own", () => {
     });
     await poison(backend, "granite", { volume_id: root });
 
-    const code = await codeOf(
-      drain(hermetic.agents.destroy({ name: "granite", yes: true, delete_volume: true })),
-    );
+    const code = await codeOf(drain(hermetic.agents.destroy({ name: "granite", yes: true })));
 
     expect(code).toBe("RESOURCE_NOT_OWNED");
     expect(backend.volumes.has(root)).toBe(true);
@@ -175,8 +171,8 @@ describe("destroy refuses a resource the row does not own", () => {
   test("an untampered row still destroys", async () => {
     const { backend, hermetic } = seeded();
     const volumeId = (await backend.store.agents.get("corvid"))!.resources.volume_id!;
-    await drain(hermetic.agents.destroy({ name: "corvid", yes: true, delete_volume: true }));
-    expect((await backend.store.agents.get("corvid"))!.status).toBe("destroyed");
+    await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
+    expect(await backend.store.agents.get("corvid")).toBeNull();
     expect(backend.volumes.has(volumeId)).toBe(false);
   });
 });
@@ -314,6 +310,48 @@ describe("Ec2Compute ownership lookups", () => {
       size_gib: 100,
       state: "available",
       attachments: [],
+      former_agent: null,
+    });
+  });
+
+  /**
+   * §6.7: a release that keeps the volume sets `former_agent` before it removes
+   * `agent`. Both halves of that state must be readable — the answer while
+   * `agent` is still there, the refusal's `found` once it is gone.
+   */
+  test("describeOwnedVolume reports former_agent, in the answer and in a refusal", async () => {
+    const tags = [
+      { Key: "hermetic:managed", Value: "true" },
+      { Key: "hermetic:fleet_id", Value: TEST_FLEET_ID },
+      { Key: "hermetic:role", Value: "data" },
+      { Key: "hermetic:former_agent", Value: "atlas" },
+    ];
+    ec2.on(DescribeVolumesCommand).resolves({
+      Volumes: [
+        {
+          VolumeId: "vol-1",
+          Size: 100,
+          State: "available",
+          Tags: [...tags, { Key: "agent", Value: "atlas" }],
+        },
+      ],
+    });
+    expect((await compute().describeOwnedVolume("vol-1", owner))?.former_agent).toBe("atlas");
+
+    ec2.reset();
+    ec2.on(DescribeVolumesCommand).resolves({
+      Volumes: [{ VolumeId: "vol-1", Size: 100, State: "available", Tags: tags }],
+    });
+    let refusal: HermeticError | null = null;
+    try {
+      await compute().describeOwnedVolume("vol-1", owner);
+    } catch (e) {
+      refusal = e as HermeticError;
+    }
+    expect(refusal!.code).toBe("RESOURCE_NOT_OWNED");
+    expect(refusal!.details?.["found"]).toMatchObject({
+      agent: null,
+      "hermetic:former_agent": "atlas",
     });
   });
 

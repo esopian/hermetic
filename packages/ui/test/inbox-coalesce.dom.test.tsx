@@ -4,8 +4,8 @@
  * One conversation moved forty times is forty rows in the store and one card in
  * the drawer. `inbox-coalesce.test.ts` owns the fold itself; this owns the
  * wiring — that the card is drawn once with its count, that acking it clears
- * every row behind it rather than the one on screen, and that the drawer's
- * `needs you` is the same number the bell is showing.
+ * every row behind it rather than the one on screen, and that the `needs you`
+ * tab counts what it lists while the header keeps the bell's number.
  */
 import { cleanup, render, screen, userEvent, waitFor } from "./dom.ts";
 import { afterEach, expect, test } from "bun:test";
@@ -47,8 +47,11 @@ function chatRow(
   } as unknown as NotificationView;
 }
 
-function harness(rows: NotificationView[], needsAction = 0) {
-  const acks: Array<{ id?: string; all?: true }> = [];
+function harness(seed: NotificationView[], needsAction = 0) {
+  const acks: Array<{ id?: string; ids?: string[]; all?: true }> = [];
+  // The server's copy: an ack lands here as core would apply it, because a read
+  // settles with a fresh list and that list has to carry the read.
+  let rows = seed;
   const api: NotifyApi = {
     fetchNotifications: () =>
       Promise.resolve({
@@ -58,7 +61,11 @@ function harness(rows: NotificationView[], needsAction = 0) {
         mutes: [],
       } as never),
     ackNotification: (input) => {
-      acks.push(input as { id?: string });
+      const ack = input as { id?: string; ids?: string[]; all?: true };
+      acks.push(ack);
+      const named = new Set(ack.ids ?? (ack.id === undefined ? [] : [ack.id]));
+      const at = "2026-09-19T11:00:00.000Z";
+      rows = rows.map((r) => (!r.read_at && (ack.all || named.has(r.id)) ? { ...r, read_at: at } : r));
       return Promise.resolve({ acked: 1 } as never);
     },
     muteNotification: () => Promise.resolve({ mutes: [] } as never),
@@ -114,8 +121,9 @@ test("acking the card acks every row behind it", async () => {
 
   await userEvent.click(hit);
 
-  await waitFor(() => expect(h.acks.length).toBe(3));
-  expect(h.acks.map((a) => a.id).sort()).toEqual(["a", "b", "c"]);
+  // One gesture, one batch write — not one request per row behind the card.
+  await waitFor(() => expect(h.acks.length).toBe(1));
+  expect([...(h.acks[0]?.ids ?? [])].sort()).toEqual(["a", "b", "c"]);
   expect(document.querySelector(".nt-item")?.getAttribute("data-unread")).toBe("false");
 });
 
@@ -125,13 +133,16 @@ test("a card is unread while any row behind it is, however new the top one is", 
   expect(document.querySelector(".nt-item")?.getAttribute("data-unread")).toBe("true");
 });
 
-test("`needs you` in the drawer is the count the bell is showing", async () => {
-  // Four outstanding in the whole inbox; this page of it holds one.
+test("the `needs you` tab counts what it lists; the header keeps the bell's count", async () => {
+  // Four outstanding in the whole inbox; this page of it holds one. The tab
+  // says what pressing it shows, and the header says what the bell says, so
+  // a read demand still pinned under the tab never reads as "Needs you 0".
   harness([chatRow("a", 3, { class: "needs_action", kind: "chat.approval" })], 4);
   await screen.findByText("veronica has a new message");
 
   const tabs = [...document.querySelectorAll(".nt-tabs button")] as HTMLButtonElement[];
-  expect(tabs[1]?.textContent).toBe("Needs you 4");
+  expect(tabs[0]?.textContent).toBe("Needs you 1");
+  expect(document.querySelector(".ph-count")?.textContent).toContain("4 need you");
 });
 
 test("acking a card moves the badge by the number of rows it cleared, once", async () => {
@@ -175,7 +186,7 @@ test("`showing latest` is the first read's answer, not the length of the list", 
   // A short inbox never claims to be a page of a longer one.
   harness([chatRow("a", 3), chatRow("b", 2)]);
   await screen.findByText("veronica has a new message");
-  expect(document.querySelector(".nt-retention")?.textContent).toContain("shared with the CLI");
+  expect(document.querySelector(".nt-retention")).toBeNull();
 
   cleanup();
 

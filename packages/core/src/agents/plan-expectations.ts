@@ -29,6 +29,13 @@ import { HermeticError } from "../errors.ts";
 export interface ExpectedResources {
   instance_id?: string | null;
   volume_id?: string | null;
+  /**
+   * The incarnation the plan was made for (`PlanOptions.created_at`): compared,
+   * because a name freed by a destroy (§6.7) can be claimed again by a row
+   * whose ids are as null as the planned one's were. `undefined` is a plan
+   * that said nothing — never a destroy plan, which `apply` refuses without it.
+   */
+  created_at?: string;
   /** Carried for the refusal's details, never compared — see `assertUnmoved`. */
   agent_version: number;
 }
@@ -36,17 +43,23 @@ export interface ExpectedResources {
 /**
  * Refuse unless the row still names what the plan named.
  *
- * The ids are compared and the version is not, for the reason `plans.ts` spells
- * out at length: `hermeticd` bumps the version from the box on every
- * `ready → degraded` and back, and taking the lock bumps it once more, so an
- * equality on it would refuse every plan for the flapping agent somebody is
- * trying to destroy. The version is carried for the refusal's details, where it
- * says how far the row travelled; what the plan actually promised is the ids.
+ * The ids and the incarnation (`created_at`) are compared and the version is
+ * not, for the reason `plans.ts` spells out at length: `hermeticd` bumps the
+ * version from the box on every `ready → degraded` and back, and taking the
+ * lock bumps it once more, so an equality on it would refuse every plan for
+ * the flapping agent somebody is trying to destroy. The version is carried for
+ * the refusal's details, where it says how far the row travelled; what the
+ * plan actually promised is the ids, on the incarnation of the name it showed.
  */
 export function assertUnmoved(agent: Agent, expected: ExpectedResources): void {
   const instanceId = agent.resources.instance_id ?? agent.instance_id ?? null;
   const volumeId = agent.resources.volume_id ?? agent.volume_id ?? null;
   const moved: string[] = [];
+  if (expected.created_at !== undefined && expected.created_at !== agent.created_at) {
+    moved.push(
+      `the plan was made for the ${agent.name} created at ${expected.created_at} and the row now is one created at ${agent.created_at}`,
+    );
+  }
   if (expected.instance_id !== undefined && expected.instance_id !== instanceId) {
     moved.push(
       `the plan named instance ${expected.instance_id ?? "(none)"} and the row now names ${instanceId ?? "(none)"}`,
@@ -70,6 +83,8 @@ export function assertUnmoved(agent: Agent, expected: ExpectedResources): void {
       observed_instance_id: instanceId,
       planned_volume_id: expected.volume_id ?? null,
       observed_volume_id: volumeId,
+      planned_created_at: expected.created_at ?? null,
+      observed_created_at: agent.created_at,
     },
   );
 }

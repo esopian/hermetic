@@ -99,19 +99,22 @@ const SWARMS: Readonly<Record<string, SwarmSpec>> = {
       {
         ...QUIET,
         name: "scribe",
-        title: "Scribe",
+        // Friendly titles that are not the profile name, so a rename, a reset
+        // and an @mention by title are all distinguishable from the handle.
+        title: "Marshall",
         description: "Writes the morning digest and files it in the run log.",
         is_default: false,
         model: "claude-haiku-4-5",
         section: "Team",
-        last_message_at: at("06:00:12"),
+        // Its Bot Chat (`fixture-chat-dms.ts`), which is newer than the digest.
+        last_message_at: at("08:06:00"),
         warm: true,
         unread: 2,
       },
       {
         ...QUIET,
         name: "auditor",
-        title: "Auditor",
+        title: "NickQABot",
         description: "Reads the Bedrock grant and complains about it.",
         is_default: false,
         model: "us.anthropic.claude-sonnet-5",
@@ -329,14 +332,14 @@ export function swarmFor(box: BoxAddress): Swarm {
  *
  * Flat rather than nested under its bot because the assertions worth making are
  * fleet-wide — "every origin appears somewhere" is the one the composer's
- * destination banner depends on, and it is a filter over one array rather than
+ * destination handling depends on, and it is a filter over one array rather than
  * a walk over three levels of map.
  *
- * All seven `SessionOrigin` values are present, and that is the point of the
- * list's shape: six of them are *foreign*, meaning a reply typed into the
- * portal's composer leaves the portal — into somebody's Slack, into a robot,
- * into a cron job's log. The banner that says so has to have something to fire
- * on before anybody can tell whether it fires.
+ * All eight `SessionOrigin` values are present, and that is the point of the
+ * list's shape: seven of them are *foreign*, and three of those — a reply into
+ * somebody's Slack, into a robot, into a cron job's log — change what the
+ * composer's send button says. The composer has to have something of each kind
+ * to react to before anybody can tell whether it does.
  */
 export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
   {
@@ -376,6 +379,20 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     turn_count: 4,
   },
   {
+    // Opened by a hermetic — a colleague's — and never sent into from this
+    // laptop. Detail-less, because a real `session.list` row never carries one.
+    id: "sx-atlas-hermetic",
+    instance: "atlas",
+    bot: "default",
+    kind: "thread",
+    origin: "hermetic",
+    origin_detail: null,
+    title: "Snapshot retention for granite",
+    last_message_at: at("07:44:09"),
+    unread: 0,
+    turn_count: 3,
+  },
+  {
     id: "sx-atlas-scribe-routine",
     instance: "atlas",
     bot: "scribe",
@@ -388,6 +405,19 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     turn_count: 1,
   },
   {
+    // Marshall's Bot Chat: the DMs with NickQABot (`fixture-chat-dms.ts`).
+    id: "sx-atlas-scribe-bot-chat",
+    instance: "atlas",
+    bot: "scribe",
+    kind: "canonical",
+    origin: "portal",
+    origin_detail: null,
+    title: "Bot Chat",
+    last_message_at: at("08:06:00"),
+    unread: 0,
+    turn_count: 4,
+  },
+  {
     id: "sx-atlas-auditor-portal",
     instance: "atlas",
     bot: "auditor",
@@ -397,7 +427,7 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     title: "Bedrock grant audit",
     last_message_at: at("08:14:03"),
     unread: 1,
-    turn_count: 3,
+    turn_count: 6,
   },
   {
     id: "sx-atlas-clio-channel",

@@ -1,4 +1,11 @@
-import type { Agent, AgentEvent, FleetItem, NetworkMode, RpcHealth } from "../schema/index.ts";
+import type {
+  Agent,
+  AgentEvent,
+  AgentTombstone,
+  FleetItem,
+  NetworkMode,
+  RpcHealth,
+} from "../schema/index.ts";
 import { FLEET_KEY, RPC_PROTOCOL_VERSION, browserIdentities, stackNameFor } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import { parseHujson } from "../fleet/hujson.ts";
@@ -116,6 +123,9 @@ const FIXTURE_POLICY = `// Tailnet policy for hermetic.ts.net.
  * demos need no AWS account.
  */
 
+/** The `instance-state-name` values `Ec2Compute.listInstancesByTag` asks for. */
+const LISTED_INSTANCE_STATES = new Set(["pending", "running", "stopping", "stopped"]);
+
 export class MemoryBackend implements Backend {
   /**
    * The fake account this backend stands in (§4.8) — its fleet directory.
@@ -145,6 +155,8 @@ export class MemoryBackend implements Backend {
   /** §9.1's reservations, by volume id — the real store's `_volume:<id>` rows. */
   readonly claims = new Map<string, VolumeClaim>();
   readonly events: AgentEvent[] = [];
+  /** The `_destroyed` partition of the events table (§6.7), keyed by `tombstoneSortKey`. */
+  readonly tombstones = new Map<string, AgentTombstone>();
   fleetItem: FleetItem | null = null;
   readonly params = new Map<string, string>();
   readonly objects = new Map<string, Uint8Array>();
@@ -177,6 +189,11 @@ export class MemoryBackend implements Backend {
       fleet_id?: string | null;
       /** The display `Name` tag, `<fleet id>-<agent>-data` since v4. */
       name_tag?: string | null;
+      /**
+       * The `hermetic:former_agent` tag a destroy that keeps the volume leaves
+       * (§6.7). Absent and `null` are the same: no such tag.
+       */
+      former_agent?: string | null;
       attached_to?: string | null;
       /**
        * `false` models a volume with no `hermetic:managed` tag: one hermetic did
@@ -387,6 +404,14 @@ export class MemoryBackend implements Backend {
 
   /** How long each step of the fixture's imaginary runner takes. */
   rerunDelayMs = 1000;
+
+  /**
+   * Whether an `apply_request` is answered as a real box would answer it
+   * (`simulateConverge`). Off by default: a test's backend is the box that
+   * never reports, and only fixture mode's open path (`open.ts`) wants one
+   * that does.
+   */
+  simulateConverge = false;
 
   /** Schedule work that must never hold a test or a dev server open. */
   later(ms: number, work: () => void): void {
@@ -692,9 +717,15 @@ export class MemoryBackend implements Backend {
     return out;
   }
 
+  /**
+   * `listInstancesByTag`, with `Ec2Compute`'s state filter: `pending`,
+   * `running`, `stopping`, `stopped`. A box already `shutting-down` is as
+   * invisible here as it is to that `DescribeInstances`, so a test cannot pass
+   * on a stray the real account would never have returned.
+   */
   liveByTag(name: string): InstanceRef[] {
     return [...this.instances.values()]
-      .filter((i) => i.agent === name && i.state !== "terminated" && this.inFleet(i))
+      .filter((i) => i.agent === name && LISTED_INSTANCE_STATES.has(i.state) && this.inFleet(i))
       .map((i) => ({ instance_id: i.instance_id, state: i.state, public_ip: i.public_ip }));
   }
 

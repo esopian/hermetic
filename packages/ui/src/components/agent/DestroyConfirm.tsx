@@ -12,8 +12,8 @@ export function DestroyConfirm({
   plan,
   planError,
   armed,
-  deleteVolume,
-  setDeleteVolume,
+  keepVolume,
+  setKeepVolume,
   typed,
   setTyped,
   retryPlan,
@@ -25,8 +25,8 @@ export function DestroyConfirm({
   planError: string | null;
   /** The plan the button applies, or `null` while nothing may be applied. */
   armed: Plan | null;
-  deleteVolume: boolean;
-  setDeleteVolume: (on: boolean) => void;
+  keepVolume: boolean;
+  setKeepVolume: (on: boolean) => void;
   typed: string;
   setTyped: (typed: string) => void;
   retryPlan: () => void;
@@ -66,34 +66,38 @@ export function DestroyConfirm({
         </div>
       ) : null}
       {/*
-        Two named choices rather than one checkbox, so the default — keep —
-        is something the operator reads and not only the absence of a tick.
+        Two named choices rather than one checkbox, so the default — delete —
+        is something the operator reads and not only the absence of a tick
+        (§6.7: a destroyed agent releases everything but its history).
         Changing it re-reads the plan (`useDestroyFlow`), and the button stays
         dead until the new one lands.
       */}
       <div className="dr-vol" role="radiogroup" aria-label="Data volume">
-        <label className={deleteVolume ? undefined : "on"}>
+        <label className={keepVolume ? undefined : "on"}>
           <input
             type="radio"
             name={`destroy-volume-${agent.name}`}
-            checked={!deleteVolume}
-            onChange={() => setDeleteVolume(false)}
+            checked={!keepVolume}
+            onChange={() => setKeepVolume(false)}
           />
           <span>
-            <b>Keep data volume</b> <span className="dim">(default)</span>
-            <small>{agent.volume_id ?? "the volume"} stays · attach it to a new agent later</small>
+            <b>Delete volume</b> <span className="dim">(default)</span>
+            <small>{agent.volume_gib} GiB of chats, files and memory · irreversible</small>
           </span>
         </label>
-        <label className={deleteVolume ? "on" : undefined}>
+        <label className={keepVolume ? "on" : undefined}>
           <input
             type="radio"
             name={`destroy-volume-${agent.name}`}
-            checked={deleteVolume}
-            onChange={() => setDeleteVolume(true)}
+            checked={keepVolume}
+            onChange={() => setKeepVolume(true)}
           />
           <span>
-            <b>Delete data volume</b>
-            <small>{agent.volume_gib} GiB of chats, files and memory · irreversible</small>
+            <b>Keep volume</b>
+            <small>
+              {agent.volume_id ?? "the volume"} is released from the name · adoptable later with
+              --volume
+            </small>
           </span>
         </label>
       </div>

@@ -7,11 +7,14 @@
  * appears in the lifecycle path.
  */
 import type {
+  Agent,
   AgentEvent,
+  AgentTombstone,
   AgentView,
   FleetSettings,
   HistoryInput,
   ListAgentsInput,
+  ListDestroyedInput,
   LocalConfig,
   Run,
   RunsListInput,
@@ -28,6 +31,8 @@ import {
 } from "./chat/notifications.ts";
 import type { CoreContext } from "./context.ts";
 import type { ConfigStore, RunStore, TeardownStore } from "./hermetic-deps.ts";
+import type { ReconcileIncarnations } from "./local/incarnations.ts";
+import { legacyDestruction } from "./agents/lifecycle/release-name.ts";
 
 export interface ReadsDeps {
   ctx: CoreContext;
@@ -36,6 +41,8 @@ export interface ReadsDeps {
   configStore?: ConfigStore | undefined;
   runs?: RunStore | undefined;
   teardowns?: TeardownStore | undefined;
+  /** `local/incarnations.ts`: purge a reused name's stale local state (§6.7). Never throws. */
+  reconcileIncarnations?: ReconcileIncarnations | undefined;
 }
 
 export function createReads(deps: ReadsDeps) {
@@ -51,7 +58,13 @@ export function createReads(deps: ReadsDeps) {
 
   async function list(input: ListAgentsInput = {}): Promise<AgentView[]> {
     await guardAccount();
-    const rows = await backend.store.agents.scan();
+    // §6.7: a destroy now deletes the row, so a `destroyed` row is a legacy
+    // one from before tombstones existed. It is history, not fleet — it lives
+    // in `agents.destroyed` with the rest of the dead, never in `ps`.
+    const rows = (await backend.store.agents.scan()).filter((a) => a.status !== "destroyed");
+    // Before `observeHealth`: a reused name's old watermark must be gone before
+    // the new box's status is diffed against it (§6.7, `local/incarnations.ts`).
+    await deps.reconcileIncarnations?.(rows, { complete: true });
     const settings = await settingsForView();
     const views = rows.map((a) => view(a, settings)).sort((a, b) => (a.name < b.name ? -1 : 1));
     /**
@@ -81,6 +94,9 @@ export function createReads(deps: ReadsDeps) {
     return input.status ? views.filter((a) => a.display_status === input.status) : views;
   }
 
+  // Deliberately unfiltered: `agent show <name>` on a legacy `destroyed` row
+  // still answers with it, so the record is reachable by name until the next
+  // destroy or create of that name releases it (§6.7).
   async function get(name: string): Promise<AgentView> {
     validateName(name);
     await guardAccount();
@@ -94,7 +110,77 @@ export function createReads(deps: ReadsDeps) {
     // `validateName` everywhere an agent is meant.
     if (input.name !== FLEET_KEY) validateName(input.name);
     await guardAccount();
-    return backend.store.events.query(input.name, input.limit);
+    if (input.since === undefined && input.until === undefined) {
+      return backend.store.events.query(input.name, input.limit);
+    }
+    // §6.7: one incarnation's window, inclusive at both ends. The store keys
+    // events by name alone, so the window is applied here — over the whole
+    // log, with `limit` after it, or a limit that landed on the newer life
+    // would hide every event of the older one.
+    const { since, until } = input;
+    const inWindow = (await backend.store.events.query(input.name)).filter(
+      (e) =>
+        (since === undefined || e.timestamp >= since) && (until === undefined || e.timestamp <= until),
+    );
+    return input.limit === undefined ? inWindow : inWindow.slice(0, input.limit);
+  }
+
+  /**
+   * §6.7: every agent this fleet has destroyed, newest first. Two sources,
+   * one shape: the `_destroyed` partition a destroy now writes, and the
+   * legacy `destroyed` rows a fleet kept before tombstones existed — the
+   * latter synthesised here (`legacy: true`) rather than migrated, and
+   * converging on their own as each name is destroyed or created again.
+   *
+   * The name filter and `limit` apply after the merge, so a legacy row can
+   * never be pushed out of a page by the store's own cap.
+   */
+  async function destroyed(input: ListDestroyedInput = {}): Promise<AgentTombstone[]> {
+    if (input.name !== undefined) validateName(input.name);
+    await guardAccount();
+    const fleetId = requireConfig().fleet_id;
+    const [tombstones, rows] = await Promise.all([
+      backend.store.events.queryTombstones(input.name === undefined ? {} : { name: input.name }),
+      backend.store.agents.scan(),
+    ]);
+    const legacy = await Promise.all(
+      rows
+        .filter((a) => a.status === "destroyed" && (input.name === undefined || a.name === input.name))
+        .map((a) => legacyTombstone(a, fleetId)),
+    );
+    const merged = [...tombstones, ...legacy].sort((a, b) =>
+      a.destroyed_at < b.destroyed_at ? 1 : a.destroyed_at > b.destroyed_at ? -1 : 0,
+    );
+    return input.limit === undefined ? merged : merged.slice(0, input.limit);
+  }
+
+  /**
+   * A pre-tombstone `destroyed` row read as the record a destroy writes now.
+   * When and by whom it was destroyed come from the name's history
+   * (`legacyDestruction`, shared with the release, so the tombstone a later
+   * release writes tells the same story). Nothing on the row says whether the
+   * volume was kept, so a `volume_id` it still names is read as kept — the old
+   * destroy cleared the field when it deleted the disk.
+   */
+  async function legacyTombstone(a: Agent, fleetId: string): Promise<AgentTombstone> {
+    const destruction = legacyDestruction(a, await backend.store.events.query(a.name));
+    return {
+      name: a.name,
+      fleet_id: fleetId,
+      created_at: a.created_at,
+      created_by: a.created_by,
+      destroyed_at: destruction.at,
+      destroyed_by: destruction.by,
+      size: a.size,
+      region: a.region,
+      provider: a.provider,
+      profile_id: a.profile_id ?? null,
+      instance_id: a.instance_id ?? null,
+      volume_id: a.volume_id ?? null,
+      volume_kept: Boolean(a.volume_id),
+      hermes_version: a.hermes_version,
+      legacy: true,
+    };
   }
 
   /**
@@ -151,5 +237,5 @@ export function createReads(deps: ReadsDeps) {
     return deps.teardowns.list(TeardownsListInputSchema.parse(input));
   }
 
-  return { list, get, history, configShow, runsList, teardownsList };
+  return { list, get, history, destroyed, configShow, runsList, teardownsList };
 }

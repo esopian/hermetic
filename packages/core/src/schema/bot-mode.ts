@@ -1,21 +1,56 @@
 /** Bot Mode's allowlisted, profile-scoped management surface. No arbitrary RPC or paths. */
 import { z } from "zod";
+import { botHandle } from "../shared/bot-handles.ts";
 import { AgentName, BotName } from "./requests.ts";
-const Id = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[a-zA-Z0-9_.:-]+$/)
-  .refine((v) => v !== "." && v !== "..", "A concrete identifier is required");
+const identifier = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[a-zA-Z0-9_.:-]+$/)
+    .refine((v) => v !== "." && v !== "..", "A concrete identifier is required");
+const Id = identifier(200);
+/**
+ * Upstream's hosted-room identifier rule, exactly: `IDENTIFIER_RE`
+ * (`gateway/hosted_rooms_common.py:19` at Hermes v2026.9.24), applied to room
+ * ids, event ids and `cancel_id` (`gateway/hosted_rooms.py:206-208,1032`), each
+ * capped at 128 (`MAX_ROOM_ID_CHARS`, `MAX_EVENT_ID_CHARS`). It must start with
+ * a letter or digit, which the looser `identifier` above does not require.
+ * Upstream strips surrounding whitespace before matching; this rule refuses it
+ * instead, so the id sent is the id stored.
+ */
+const hostedRoomId = () =>
+  z
+    .string()
+    .max(128)
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9._:-]*$/,
+      "starts with a letter or digit; then letters, digits, . _ : -",
+    );
+const RoomId = hostedRoomId();
+const EventId = hostedRoomId();
 const Text = z.string().max(100_000);
 const Ref = { instance: AgentName, bot: BotName };
-const RoomRef = { instance: AgentName, room: Id };
+const RoomRef = { instance: AgentName, room: RoomId };
+/**
+ * Upstream reserves these mention handles (`validate_roster`,
+ * `gateway/hosted_room_discussion.py:263` at v2026.9.24). A member's handle is
+ * `botHandle(bot)`: its profile name, `hermes` for the default profile.
+ */
+const RESERVED_HANDLES = new Set(["all", "everyone"]);
 export const BotCapabilitiesInput = z.object({ instance: AgentName }).strict();
 export const BotProfileInput = z.object(Ref).strict();
 export const BotCreateInput = z
   .object({
     instance: AgentName,
     name: BotName,
+    /**
+     * The friendly name the bot presents, as Hermes Desktop's create dialog
+     * takes it ("Title", `apps/desktop/src/plugins/hermes-bots/create-dialog.tsx`
+     * at v2026.9.24): written to `ui_meta['hermes-bots'].title` beside the Bot
+     * Mode marker. Same rule as `BotUpdateInput.title`; empty means none.
+     */
+    title: z.string().trim().max(64).optional(),
     description: z.string().max(1000).optional(),
     soul: Text.optional(),
     model: z.string().max(200).optional(),
@@ -25,6 +60,13 @@ export const BotCreateInput = z
 export const BotUpdateInput = z
   .object({
     ...Ref,
+    /**
+     * The friendly name a bot presents, stored as `ui_meta['hermes-bots'].title`
+     * the way Hermes Desktop's Edit profile does. `null` or an empty string
+     * clears it, so the bot falls back to its display name or profile name. It
+     * never renames the profile directory.
+     */
+    title: z.string().trim().max(64).nullable().optional(),
     description: z.string().max(1000).optional(),
     soul: Text.optional(),
     model: z.string().max(200).optional(),
@@ -47,17 +89,25 @@ export const RoomGetInput = z.object(RoomRef).strict();
 export const RoomCreateInput = z
   .object({
     instance: AgentName,
-    room: Id,
+    room: RoomId,
     name: z.string().trim().min(1).max(120),
     members: z.array(z.object(Ref).strict()).min(2).max(6),
   })
   .strict()
   .refine(
-    (v) => new Set(v.members.map((m) => `${m.instance}/${m.bot}`)).size === v.members.length,
+    (v) => !v.members.some((m) => RESERVED_HANDLES.has(m.bot.toLowerCase())),
+    "A room member cannot be named all or everyone",
+  )
+  // Upstream compares handles case-insensitively, so `Scribe` and `scribe` collide —
+  // and so do `default` and a legacy profile directory named `hermes`, which share `@hermes`.
+  .refine(
+    (v) =>
+      new Set(v.members.map((m) => `${m.instance}/${botHandle(m.bot)}`.toLowerCase())).size ===
+      v.members.length,
     "Room members must be unique",
   );
 export const RoomRenameInput = z
-  .object({ ...RoomRef, name: z.string().trim().min(1).max(120), event_id: Id })
+  .object({ ...RoomRef, name: z.string().trim().min(1).max(120), event_id: EventId })
   .strict();
 export const RoomDeleteInput = z.object({ ...RoomRef, confirm: z.literal(true) }).strict();
 export const RoomHistoryInput = z
@@ -67,7 +117,7 @@ export const RoomHistoryInput = z
     limit: z.number().int().min(1).max(500).optional(),
   })
   .strict();
-export const RoomSendInput = z.object({ ...RoomRef, text: Text.min(1), event_id: Id }).strict();
+export const RoomSendInput = z.object({ ...RoomRef, text: Text.min(1), event_id: EventId }).strict();
 export const RoomControlInput = z
   .object({ ...RoomRef, action: z.enum(["stop", "retry"]), task_id: Id.optional() })
   .strict()

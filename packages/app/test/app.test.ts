@@ -157,7 +157,8 @@ describe("the reads", () => {
   test("agents.list returns the fixture fleet with derived state", async () => {
     const { ctx } = await harness();
     const agents = (await dispatch(ctx, "agents.list", {})) as Array<Record<string, unknown>>;
-    expect(agents.length).toBe(12);
+    // Eleven rows: `oriole` is destroyed, and a destroy deletes the row (§6.7).
+    expect(agents.length).toBe(11);
     expect(agents.map((a) => a["name"])).toContain("atlas");
     // `unreachable` is derived from heartbeat age, never stored (§4.3).
     expect(agents.find((a) => a["name"] === "lumen")?.["display_status"]).toBe("unreachable");
@@ -338,19 +339,20 @@ describe("the reads", () => {
     expect(await codeOf(dispatch(ctx, "agents.history", { name: "atlas", limit: "lots" }))).toBe(
       "VALIDATION",
     );
-    expect(await dispatch(ctx, "plan.destroy", { name: "atlas", delete_volume: true })).toBeDefined();
-    expect(await codeOf(dispatch(ctx, "plan.destroy", { name: "atlas", delete_volume: "maybe" }))).toBe(
+    expect(await dispatch(ctx, "plan.destroy", { name: "atlas", keep_volume: true })).toBeDefined();
+    expect(await codeOf(dispatch(ctx, "plan.destroy", { name: "atlas", keep_volume: "maybe" }))).toBe(
       "VALIDATION",
     );
     expect(await codeOf(dispatch(ctx, "runs.list", { limit: "nope" }))).toBe("VALIDATION");
   });
 
-  test("`delete_volume: true` reaches the plan", async () => {
+  test("`keep_volume: true` reaches the plan; the default deletes the volume", async () => {
     const { ctx } = await harness();
-    const plan = (await dispatch(ctx, "plan.destroy", { name: "atlas", delete_volume: true })) as {
-      steps: Array<{ id: string; destructive: boolean }>;
-    };
-    expect(plan.steps.find((s) => s.id === "volume")?.destructive).toBe(true);
+    type Steps = { steps: Array<{ id: string; destructive: boolean }> };
+    const byDefault = (await dispatch(ctx, "plan.destroy", { name: "atlas" })) as Steps;
+    expect(byDefault.steps.find((s) => s.id === "volume")?.destructive).toBe(true);
+    const kept = (await dispatch(ctx, "plan.destroy", { name: "atlas", keep_volume: true })) as Steps;
+    expect(kept.steps.find((s) => s.id === "volume")?.destructive).toBe(false);
   });
 });
 

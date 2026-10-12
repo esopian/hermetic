@@ -71,8 +71,22 @@ describe("listManagedVolumes", () => {
     });
 
     expect(await compute().listManagedVolumes()).toEqual([
-      { volume_id: "vol-one", size_gib: 100, agent: "atlas", state: "available" },
-      { volume_id: "vol-untagged", size_gib: 200, agent: null, state: "available" },
+      {
+        volume_id: "vol-one",
+        size_gib: 100,
+        agent: "atlas",
+        former_agent: null,
+        state: "available",
+        created_at: null,
+      },
+      {
+        volume_id: "vol-untagged",
+        size_gib: 200,
+        agent: null,
+        former_agent: null,
+        state: "available",
+        created_at: null,
+      },
     ]);
 
     const [input] = inputsOf<Filters>(ec2, DescribeVolumesCommand);

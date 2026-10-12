@@ -8,7 +8,16 @@ export { AgentdError, EXIT_ERROR, EXIT_MANIFEST_REFUSED, EXIT_OK, exitCodeFor } 
 export type { AgentdErrorCode } from "./errors.ts";
 
 export { EXEC_ENV_ALLOWLIST, execEnv, must, realHost } from "./host.ts";
-export type { ExecEvent, ExecOptions, ExecResult, FileStat, Host, StatfsResult } from "./host.ts";
+export type {
+  ExecEvent,
+  ExecOptions,
+  ExecResult,
+  FileStat,
+  FilesystemSample,
+  Host,
+  MemorySample,
+} from "./host.ts";
+export { mountFor } from "./sysinfo.ts";
 
 export { collector, opEvent } from "./events.ts";
 export type { Emit } from "./events.ts";
@@ -151,12 +160,10 @@ export {
   HEARTBEAT_INTERVAL_MS,
   RECOVER_AFTER_TICKS,
   HERMES_HEALTH_URL,
-  cpuPercent,
   dashboardUrl,
-  diskPercent,
+  freeMib,
   makeHeartbeat,
-  parseMeminfo,
-  parseProcStat,
+  memoryPercent,
 } from "./heartbeat.ts";
 export type { Heartbeat, HeartbeatDeps, HeartbeatTick } from "./heartbeat.ts";
 

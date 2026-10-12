@@ -14,19 +14,13 @@ import type { ExpectedResources } from "../plan-expectations.ts";
 import { attachAgentVolume } from "../attach.ts";
 import { abandoned, checkAbort } from "../../abort.ts";
 import { evt } from "../../events.ts";
-import type { createTailnetCleanup } from "../../fleet/tailnet-devices.ts";
 import { pendingApplied } from "../../profiles/profile-binding.ts";
 import type { OpOptions } from "../../hermetic.ts";
 import type { LifecycleDeps } from "../lifecycle.ts";
 import type { ReleaseLookup } from "./release.ts";
+import { createRetireNodes } from "./retire-nodes.ts";
 
-export function createRecreateOp(
-  deps: LifecycleDeps,
-  shared: {
-    release: ReleaseLookup;
-    removeTailnetDevices: ReturnType<typeof createTailnetCleanup>["removeTailnetDevices"];
-  },
-) {
+export function createRecreateOp(deps: LifecycleDeps, shared: { release: ReleaseLookup }) {
   const { applyPending, tsKeyPath } = deps;
   const {
     acquireLock,
@@ -46,7 +40,7 @@ export function createRecreateOp(
     unwind,
   } = deps.ctx;
   const { currentRelease, userDataFor } = shared.release;
-  const { removeTailnetDevices } = shared;
+  const { retireNodes } = createRetireNodes(deps.ctx);
 
   /** §6.5: new instance, same volume. Memory and skills were never on the root volume. */
   async function* recreate(
@@ -110,6 +104,14 @@ export function createRecreateOp(
 
     const owner = `${await actor()}#${randomUUID()}`;
     agent = await acquireLock(agent, owner);
+    /** The TTL lock, renewed on every poll of every wait below (§4.4). */
+    const keepLock = lockKeeper(
+      () => agent,
+      (next) => {
+        agent = next;
+      },
+      owner,
+    );
 
     /** See `abandoned`. */
     let done = false;
@@ -171,13 +173,107 @@ export function createRecreateOp(
         agent = await transition(agent, "stopping", "recreate: draining the old instance");
       }
       /**
-       * Read *before* the transition below clears it. It is the FQDN the box we
+       * Read before anything below can change it. It is the FQDN the box we
        * are terminating reported for itself, and it is the only thing that
-       * identifies that box's tailnet device exactly — the sweep a few lines
-       * down needs it, and by then the row no longer has it.
+       * identifies that box's tailnet device exactly — the sweep below needs
+       * it, and the `stopped` transition after the sweep clears it from the
+       * row.
        */
       const reportedNode = agent.tailscale_dns_name ?? null;
-      if (oldInstance && owned) await backend.compute.terminate(oldInstance);
+      if (oldInstance && owned) {
+        await backend.compute.terminate(oldInstance);
+        yield evt(
+          "instance",
+          0.35,
+          owned.state === "terminated"
+            ? `instance ${oldInstance} is already terminated`
+            : `terminating instance ${oldInstance}`,
+          nowIso(),
+        );
+      }
+
+      /**
+       * Reality-first, but *not* create's find-or-launch: a recreate whose whole
+       * point is a new instance must never adopt a surviving one. Anything still
+       * tagged for this agent — a box the row lost the id of, or one a recreate
+       * that died before recording its launch left behind — is terminated here,
+       * and the new instance below is launched unconditionally. There can be
+       * more than one: two recreates racing leave two boxes for one agent, and
+       * the next recreate must sweep both rather than the first it happens to
+       * see.
+       *
+       * Here, with the old instance, rather than just before the launch: every
+       * one of these boxes runs a node that joins the tailnet under this
+       * agent's hostname, and any of them still online when the replacement
+       * joins pushes it onto `<name>-2`. Terminated together, the one wait and
+       * sweep below covers all of them. Nothing can add a box between here and
+       * the launch short of another operation ignoring this run's lock, which
+       * this run renews throughout.
+       *
+       * `shutting-down` boxes are listed too, as `destroy` lists them: one
+       * already going is not terminated again, but it is waited on, because
+       * its node is online until it is `terminated`. The old instance is
+       * listed again while it shuts down, and is skipped — it is already
+       * terminating and already waited on.
+       */
+      const going = oldInstance && owned ? [oldInstance] : [];
+      for (const stray of await backend.compute.listInstancesByTag(agent.name, {
+        shuttingDown: true,
+      })) {
+        if (stray.instance_id === oldInstance) continue;
+        going.push(stray.instance_id);
+        if (stray.state === "shutting-down") {
+          yield evt(
+            "instance",
+            0.36,
+            `instance ${stray.instance_id} is still tagged for ${agent.name} and already shutting down; waiting for it before launching the replacement`,
+            nowIso(),
+            "warn",
+          );
+          continue;
+        }
+        yield evt(
+          "instance",
+          0.36,
+          `instance ${stray.instance_id} is still tagged for ${agent.name}; terminating it before launching the replacement`,
+          nowIso(),
+          "warn",
+        );
+        await backend.compute.terminate(stray.instance_id);
+      }
+
+      /**
+       * Before the fresh auth key is minted, and so before the new node tries
+       * to join: the replacement is only admitted as `<name>` if nothing else
+       * in the tailnet still holds it (§6.5). Doing this after the mint would
+       * be a race the old device usually wins — and so would sweeping straight
+       * after the terminate request, when the old node still reads online and
+       * the sweep must pass over it. So every box terminated above is waited
+       * on until `terminated`, the tailnet is given a bounded time to notice,
+       * and only then are the agent's devices swept; what is still online at
+       * the deadline is named in one `warn`, and the replacement is launched
+       * anyway (`retire-nodes.ts`, the sequence `destroy` runs before its
+       * release).
+       */
+      yield* retireNodes(
+        {
+          name: agent.name,
+          fleetId: fleet.fleet_id,
+          dnsName: () => reportedNode,
+          instanceIds: going,
+          heartbeat: keepLock,
+          tailnet: true,
+          progress: { terminated: { waiting: 0.38, done: 0.4 }, offline: 0.42, sweep: 0.44 },
+        },
+        opts,
+      );
+
+      /**
+       * After the wait, so that `stopped` — and this transition's message —
+       * says what is true: the box is `terminated`, not merely asked to be. It
+       * also clears whatever the dying box's hermeticd wrote while it was still
+       * `shutting-down`.
+       */
       if (drains) {
         agent = await transition(
           agent,
@@ -201,16 +297,7 @@ export function createRecreateOp(
           { health: null },
         );
       }
-      yield evt("instance", 0.35, "old instance terminated", nowIso());
-
-      /**
-       * Before the fresh auth key is minted, and so before the new node tries to
-       * join: the replacement is only admitted as `<name>` if nothing else in the
-       * tailnet still holds it (§6.5). Doing this after the mint would be a race
-       * the old device usually wins.
-       */
-      checkAbort(opts.signal, "tailnet");
-      yield* removeTailnetDevices(agent.name, fleet.fleet_id, reportedNode, "tailnet", 0.4, opts);
+      yield evt("instance", 0.46, "old instance terminated", nowIso());
 
       checkAbort(opts.signal, "volume");
       // Discovery and creation are for the row that records no volume: an agent
@@ -273,26 +360,6 @@ export function createRecreateOp(
       // fetch and the version the row claims cannot then disagree.
       const release = await currentRelease();
 
-      /**
-       * Reality-first, but *not* create's find-or-launch: a recreate whose whole
-       * point is a new instance must never adopt a surviving one. Anything still
-       * tagged for this agent — a box the row lost the id of, or one whose
-       * terminate above never went through — is terminated here, and then a new
-       * instance is launched unconditionally. There can be more than one: two
-       * recreates racing leave two boxes for one agent, and the next recreate
-       * must sweep both rather than the first it happens to see.
-       */
-      const strays = await backend.compute.listInstancesByTag(agent.name);
-      for (const stray of strays) {
-        yield evt(
-          "instance",
-          0.72,
-          `instance ${stray.instance_id} is still tagged for ${agent.name}; terminating it before launching the replacement`,
-          nowIso(),
-          "warn",
-        );
-        await backend.compute.terminate(stray.instance_id);
-      }
       yield evt(
         "instance",
         0.8,
@@ -332,13 +399,7 @@ export function createRecreateOp(
 
       yield* attachAgentVolume(attachDeps(), instance.instance_id, volume.volume_id, {
         ...(opts.signal ? { signal: opts.signal } : {}),
-        heartbeat: lockKeeper(
-          () => agent,
-          (next) => {
-            agent = next;
-          },
-          owner,
-        ),
+        heartbeat: keepLock,
         progress: { waiting: 0.9, done: 0.92 },
       });
 

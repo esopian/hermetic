@@ -128,6 +128,10 @@ export type NotificationMuteView = NotificationsResult["mutes"][number];
 export type NotificationActionView = NotificationView["actions"][number];
 /** The `source` enum, read back off the row rather than re-declared here. */
 export type NotificationSourceView = NotificationView["source"];
+/** Which slice of the inbox `notifications.list` reads: the inbox itself by default. */
+export type NotificationListView = "inbox" | "snoozed" | "history" | "all";
+/** Core's auto-clear rule (`notifications.settings`), shared with the CLI. */
+export type NotificationSettingsView = BridgeResult<"notifications.settings">;
 
 /**
  * §9.2's chat wire types, read back off the bridge for the same
@@ -182,6 +186,8 @@ export type SettingsSetInput = Omit<BridgeInput<"settings.set">, "target">;
  * the write carries no fleet envelope.
  */
 export type PresetsResult = BridgeResult<"presets.get">;
+/** This laptop's chat settings (`chat.settings`), shared with the CLI. */
+export type ChatSettingsView = BridgeResult<"chat.settings">;
 export type PresetsSetInput = BridgeInput<"presets.set">;
 
 /**
@@ -280,6 +286,13 @@ export interface LastTeardown {
 }
 
 export type AgentEvent = BridgeResult<"agents.history">[number];
+/** One destroyed incarnation (§6.7): the audit record that outlives the agent's row. */
+export type AgentTombstone = BridgeResult<"agents.destroyed">[number];
+/** `agents.history`'s window: one incarnation's `created_at`/`released_at ?? destroyed_at`, inclusive. */
+export interface HistoryWindow {
+  since?: string;
+  until?: string;
+}
 export type Plan = BridgeResult<"plan.destroy">;
 export type Doctor = BridgeResult<"doctor">;
 export type Run = BridgeResult<"runs.list">[number];

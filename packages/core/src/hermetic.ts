@@ -52,12 +52,14 @@ import { createAgentLogs } from "./agents/agent-logs.ts";
 import { MemoryInstanceListeningStore } from "./chat/instance-listening.ts";
 import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/chat.ts";
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
+import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
 import {
   MemoryNotificationStore,
   createNotifications,
   type NotificationDeps,
 } from "./chat/notifications.ts";
+import { registerTerminalNotices } from "./chat/terminal-notifications.ts";
 import { bwsPath, createSecrets, providerKeyPath, tsKeyPath } from "./profiles/secrets.ts";
 import { createVolumes } from "./volumes/volumes.ts";
 import { createDesktop } from "./agents/desktop.ts";
@@ -71,6 +73,9 @@ import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
+import { createLocalAgentPurge } from "./local/purge-agent.ts";
+import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
+import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
 
 /**
@@ -206,10 +211,45 @@ export function createHermetic(deps: HermeticDeps) {
     ttlMs: LOCK_TTL_MS,
   });
 
+  // Shared with the roster read below and, for the purge, with §6.7's release.
+  const localSessions = deps.localSessions ?? new MemoryLocalChatSessions();
+  const chatFence = deps.chatFence ?? new MemoryChatFenceStore();
+  const incarnations = deps.incarnations ?? new MemoryIncarnationStore();
+  const purgeDeps = {
+    notifications: notificationDeps.store,
+    instanceListening,
+    localSessions,
+    chatFence,
+  };
+  const purgeLocalAgent = createLocalAgentPurge({ ...purgeDeps, incarnations });
+  /**
+   * §6.7: the other half of the purge. The release purges this laptop's state
+   * for the name it frees; a laptop that did not run it purges when a read
+   * hands it a row with a different `created_at` than the one it recorded
+   * (`local/incarnations.ts`). Called by the fleet list and by chat's row reads.
+   *
+   * Its purge leaves the incarnation record alone. The reconciler claims the
+   * new `created_at` *before* purging, and owns the record through
+   * compare-and-set alone; the release's purge forgetting it unconditionally
+   * would drop that claim the moment it was won, leaving the name unrecorded
+   * for a concurrent scan to adopt its own, possibly older, value.
+   */
+  const reconcileIncarnations = createIncarnationReconciler({
+    store: incarnations,
+    fleet: () => deps.config?.fleet_id ?? null,
+    purge: createLocalAgentPurge(purgeDeps),
+    // A row the scan skipped as unparseable is not a released name (§6.7).
+    unparseable: () => backend.store.agents.unparseable?.() ?? [],
+    // A first sighting's evidence that the name changed hands unseen (§6.7).
+    releases: async (name) =>
+      (await backend.store.events.queryTombstones({ name })).map(incarnationEnd),
+  });
+
   const { create, destroy, stop, start, recreate } = createLifecycle({
     ctx,
     volumeClaims,
     applyPending,
+    purgeLocal: purgeLocalAgent,
     tsKeyPath: (name) => tsKeyPath(fleetId(), name),
     providerKeyPath: (name) => providerKeyPath(fleetId(), name),
     agentSlotPath: (name, slot) => agentParamPath(fleetId(), name, slot),
@@ -254,10 +294,21 @@ export function createHermetic(deps: HermeticDeps) {
     );
   }
 
+  /**
+   * `upgrade --now` is §6.5's converge for one pin, so the test knob that
+   * shrinks a rollout's wait shrinks this one too; unset, it waits
+   * `HERMES_CONVERGE_TIMEOUT_MS` (`converge.ts`), twice a rollout's budget.
+   */
   const { rerun, reboot, upgrade } = createUpdate({
     ctx,
     hermesRef: BUILD_VERSIONS.hermes_ref,
     hermesMirror,
+    ...(deps.rollout?.convergeTimeoutMs === undefined
+      ? {}
+      : { convergeTimeoutMs: deps.rollout.convergeTimeoutMs }),
+    ...(deps.rollout?.convergePollMs === undefined
+      ? {}
+      : { convergePollMs: deps.rollout.convergePollMs }),
   });
   const { settingsGet, settingsSet } = createSettings({ ctx });
 
@@ -367,9 +418,10 @@ export function createHermetic(deps: HermeticDeps) {
 
   // ─── reads (`reads.ts`) ────────────────────────────────────────────────────
 
-  const { list, get, history, configShow, runsList, teardownsList } = createReads({
+  const { list, get, history, destroyed, configShow, runsList, teardownsList } = createReads({
     ctx,
     settingsForView,
+    reconcileIncarnations,
     configStore: deps.configStore,
     runs: deps.runs,
     teardowns: deps.teardowns,
@@ -418,20 +470,39 @@ export function createHermetic(deps: HermeticDeps) {
 
   const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
   const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
-  const botMode = createBotMode({ guardFleet, getAgent, instanceListening, hermes: hermesChat });
-  const chat = createChat({
-    instanceListening,
-    fleet: () => deps.config?.fleet_id ?? null,
+  // §9.2: whether transcript content is masked, read by every chat read as it starts.
+  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  const botMode = createBotMode({
     guardFleet,
     getAgent,
-    listAgents: () => backend.store.agents.scan(),
+    instanceListening,
+    hermes: hermesChat,
+    chatSettings,
+  });
+  const chat = createChat({
+    instanceListening,
+    chatSettings,
+    fleet: () => deps.config?.fleet_id ?? null,
+    guardFleet,
+    // Chat reads rows without the fleet list, and its sessions, fence and
+    // opt-ins are most of what a reused name would carry over (§6.7).
+    getAgent: async (name) => {
+      const agent = await getAgent(name);
+      await reconcileIncarnations([agent], { complete: false });
+      return agent;
+    },
+    listAgents: async () => {
+      const rows = await backend.store.agents.scan();
+      await reconcileIncarnations(rows, { complete: true });
+      return rows;
+    },
     hermes: hermesChat,
     // §4.9: the roster read raises `chat.message`, a failed turn
     // raises `chat.error`. Core owns the row and its wording; no head is involved.
     notifications: notificationDeps,
     now: nowIso,
-    localSessions: deps.localSessions ?? new MemoryLocalChatSessions(),
-    chatFence: deps.chatFence ?? new MemoryChatFenceStore(),
+    localSessions,
+    chatFence,
   });
   const desktop = createDesktop({ guardFleet, getAgent, hermes: hermesChat });
 
@@ -474,7 +545,7 @@ export function createHermetic(deps: HermeticDeps) {
     },
   });
 
-  return {
+  const hermetic = {
     ...botMode,
     init: initWithHelpers,
     config: { show: configShow },
@@ -508,6 +579,8 @@ export function createHermetic(deps: HermeticDeps) {
       recreate,
       destroy,
       history,
+      /** §6.7: the tombstones a destroy leaves, plus legacy `destroyed` rows. */
+      destroyed,
       rerun,
       reboot,
       probe: probes.probe,
@@ -574,4 +647,11 @@ export function createHermetic(deps: HermeticDeps) {
     /** Derived-state constants the heads render against. */
     constants: { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS },
   };
+  /**
+   * The desktop terminal's inbox source (issue #18), reached through
+   * `terminalNotices(hermetic)` rather than a member: it is not a command, so it
+   * has no place on the surface `tests/parity.test.ts` walks.
+   */
+  registerTerminalNotices(hermetic, notificationDeps.store);
+  return hermetic;
 }

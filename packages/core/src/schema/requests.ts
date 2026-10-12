@@ -2,11 +2,11 @@ import { z } from "zod";
 import { AGENT_NAME_RE } from "../shared/naming.ts";
 export { AGENT_NAME_RE } from "../shared/naming.ts";
 import { Iso, ProfileId, Region, SecretSlug } from "./common.ts";
-import { NotificationSource } from "./notification.ts";
+import { AutoClearRead, NotificationSource, NotificationView } from "./notification.ts";
 import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
 import { ProfileName } from "./profile.ts";
-import { HermesSettings } from "./hermes.ts";
+import { HermesHold, HermesSettings } from "./hermes.ts";
 import { FLEET_KEY, FleetDefaults, NetworkMode } from "./fleet.ts";
 import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
@@ -103,8 +103,17 @@ export const CreateAgentInput = z
      * Everything here is optional; what is left unsaid comes from
      * `HERMES_DEFAULTS` and the provider's `default_model` at render time, so a
      * create that names nothing still produces a usable agent.
+     *
+     * Stating a value here seeds it; it does not hold it (§6.4). `hold` names
+     * the settings hermetic should hold in the managed scope instead.
      */
     hermes: HermesSettings.optional(),
+    /**
+     * The Hermes settings hermetic holds on this agent (`--hold`, §6.4). Absent
+     * holds nothing: every stated setting is a starting value the agent's own
+     * dashboard can change. The model of a profile-bound agent is held anyway.
+     */
+    hold: HermesHold.optional(),
   })
   .refine((v) => v.volume_id === undefined || v.volume_gib === undefined, {
     message: "--volume takes the volume as it is; --volume-gib would have to resize it",
@@ -193,13 +202,28 @@ export const SetAgentInput = z.object({
    * row already carries.
    */
   hermes: HermesSettings.optional(),
+  /**
+   * Which Hermes settings hermetic holds (`--hold`, §6.4). A *replacement*,
+   * not a merge, unlike `hermes` beside it: the list is the whole answer, and
+   * an empty one holds nothing. Absent leaves the row's list alone — including
+   * the absent list of an agent created before `--hold`, which goes on holding
+   * every setting its operator stated until this is sent.
+   */
+  hold: HermesHold.optional(),
 });
 export type SetAgentInput = z.infer<typeof SetAgentInput>;
 
 export const DestroyAgentInput = z.object({
   name: AgentName,
   yes: z.boolean(),
-  delete_volume: z.boolean().optional(),
+  /**
+   * §6.7: destroy deletes the data volume by default, because a destroyed
+   * agent releases everything but its history. `keep_volume` leaves the disk
+   * behind, released from the name — retagged `former_agent=<name>` so a later
+   * `create` of the same name cannot adopt it by accident, adoptable on purpose
+   * with `agent create <x> --volume vol-…` (§9.1).
+   */
+  keep_volume: z.boolean().optional(),
 });
 export type DestroyAgentInput = z.infer<typeof DestroyAgentInput>;
 
@@ -222,6 +246,13 @@ export type RecreateAgentInput = z.infer<typeof RecreateAgentInput>;
  *   so it takes none — and `--hermeticd` *with* a name is refused by core with
  *   `VALIDATION`, because "upgrade hermeticd on this one box" is not a thing
  *   the fleet manifest can express.
+ *
+ * `now` asks each targeted box to converge onto the new pin in place (§6.5's
+ * `apply_request`, the same step `plan rollout` takes) instead of waiting for
+ * the next recreate. It is about the Hermes pin, so it needs `--hermes`; that
+ * much is shape and refused here. `--now` *with* `--hermeticd` is refused by
+ * core with `VALIDATION`, like the name case above: a hermeticd release moves on
+ * the nightly update, and there is no in-place converge of it to ask for.
  */
 export const UpgradeInput = z
   .object({
@@ -229,12 +260,16 @@ export const UpgradeInput = z
     hermes: z.string().optional(),
     hermeticd: z.string().optional(),
     all: z.boolean().optional(),
+    now: z.boolean().optional(),
   })
   .refine((v) => v.hermes !== undefined || v.hermeticd !== undefined, {
     message: "one of --hermes or --hermeticd is required",
   })
   .refine((v) => v.hermes === undefined || v.all === true || v.name !== undefined, {
     message: "--hermes needs an agent name or --all",
+  })
+  .refine((v) => v.now !== true || v.hermes !== undefined, {
+    message: "--now converges a box onto a new Hermes pin, so it needs --hermes",
   });
 export type UpgradeInput = z.infer<typeof UpgradeInput>;
 
@@ -706,6 +741,15 @@ export const HistoryInput = z.object({
    */
   name: SecretsTargetName,
   limit: z.number().int().min(1).max(1000).optional(),
+  /**
+   * One incarnation's window (§6.7). Events are keyed by name alone and are
+   * never deleted, so once a destroyed name is reused its log holds two lives
+   * back to back. A tombstone's `created_at` and `released_at ?? destroyed_at`
+   * bound the old one; pass them as `since`/`until` (inclusive) to read only
+   * that life.
+   */
+  since: Iso.optional(),
+  until: Iso.optional(),
 });
 export type HistoryInput = z.infer<typeof HistoryInput>;
 
@@ -732,27 +776,106 @@ export type RunsListInput = z.infer<typeof RunsListInput>;
  * `hermetic inbox` (§4.9): the local notification log, read newest
  * first. `since` is what a poller passes — rows strictly newer than a timestamp
  * it already delivered — so a reconnecting client is not handed its own inbox
- * a second time.
+ * a second time. `view` picks the slice (`NotificationView`); absent is
+ * `inbox`, the rows still in front of the operator.
  */
 export const NotificationsListInput = z.object({
   unread: z.boolean().optional(),
   limit: z.number().int().min(1).max(500).default(100),
   since: Iso.optional(),
+  view: NotificationView.optional(),
 });
 export type NotificationsListInput = z.infer<typeof NotificationsListInput>;
 
+/** The most rows one inbox write may name, so a batch is one bounded statement. */
+export const NOTIFICATION_BATCH_MAX = 500;
+
+const NotificationIds = z.array(z.string().min(1)).min(1).max(NOTIFICATION_BATCH_MAX);
+
+/** How many of a request's selectors are present; every inbox write wants exactly one. */
+function selectorCount(...present: boolean[]): number {
+  return present.filter(Boolean).length;
+}
+
 /**
- * `hermetic inbox ack <id>` / `--all`. Exactly one, for the reason
- * `FleetsAliasInput` insists on exactly one: "mark everything read" is a
- * different instruction from "mark this read", and a request carrying both says
- * neither.
+ * `hermetic inbox ack <id...>` / `--all`, optionally `--unread`. Exactly one
+ * selector, for the reason `FleetsAliasInput` insists on exactly one: "mark
+ * everything read" is a different instruction from "mark these read", and a
+ * request carrying both says neither.
+ *
+ * `unread` reverses the write — it clears `read_at` — and is refused with
+ * `all`: "mark everything unread" is not a thing anybody asks for, and a
+ * mistyped one would bury the inbox's only record of what was already seen.
  */
 export const NotificationsAckInput = z
-  .object({ id: z.string().min(1).optional(), all: z.boolean().optional() })
-  .refine((v) => (v.all === true) !== (v.id !== undefined), {
-    message: "provide a notification id or --all",
+  .object({
+    id: z.string().min(1).optional(),
+    ids: NotificationIds.optional(),
+    all: z.boolean().optional(),
+    unread: z.boolean().optional(),
+  })
+  .refine((v) => selectorCount(v.id !== undefined, v.ids !== undefined, v.all === true) === 1, {
+    message: "provide notification ids or --all, not both",
+  })
+  .refine((v) => !(v.all === true && v.unread === true), {
+    message: "--unread takes notification ids, not --all",
   });
 export type NotificationsAckInput = z.infer<typeof NotificationsAckInput>;
+
+/**
+ * `hermetic inbox clear <id...>` / `--read` / `--resolved`, optionally
+ * `--restore`. Clearing takes rows out of the inbox and into History, where
+ * they stay until retention deletes them (§4.9).
+ *
+ * `read` and `resolved` address the inbox view in the caller's scope — the
+ * rows the operator can see, not the whole table. `restore` puts named rows
+ * back (clearing both `cleared_at` and `snoozed_until`), which is what an undo
+ * sends; it takes ids only, because "restore everything I have ever cleared"
+ * would resurrect a month of history in one keystroke.
+ */
+export const NotificationsClearInput = z
+  .object({
+    ids: NotificationIds.optional(),
+    read: z.boolean().optional(),
+    resolved: z.boolean().optional(),
+    restore: z.boolean().optional(),
+  })
+  .refine((v) => selectorCount(v.ids !== undefined, v.read === true, v.resolved === true) === 1, {
+    message: "provide notification ids, --read or --resolved — exactly one",
+  })
+  .refine((v) => !(v.restore === true && v.ids === undefined), {
+    message: "--restore takes notification ids",
+  });
+export type NotificationsClearInput = z.infer<typeof NotificationsClearInput>;
+
+/**
+ * `hermetic inbox snooze <id...> --until <iso>` / `--clear`. Either a moment
+ * to hide the rows until, or `clear` to bring them back now — never both. The
+ * moment has to be in the future; that is checked against core's clock when the
+ * request runs, not here, because a schema has no clock worth trusting.
+ */
+export const NotificationsSnoozeInput = z
+  .object({
+    ids: NotificationIds,
+    until: Iso.optional(),
+    clear: z.boolean().optional(),
+  })
+  .refine((v) => (v.until !== undefined) !== (v.clear === true), {
+    message: "provide --until or --clear, not both",
+  });
+export type NotificationsSnoozeInput = z.infer<typeof NotificationsSnoozeInput>;
+
+/**
+ * `hermetic inbox settings [--auto-clear …] [--clear-resolved-on-read …]`.
+ * A patch: each stated field replaces its value, and an empty request reads.
+ */
+export const NotificationsSettingsInput = z.object({
+  auto_clear_read: AutoClearRead.optional(),
+  clear_resolved_on_read: z.boolean().optional(),
+  /** `false` also resolves every open terminal row (issue #18). */
+  terminal_alerts: z.boolean().optional(),
+});
+export type NotificationsSettingsInput = z.infer<typeof NotificationsSettingsInput>;
 
 /**
  * `hermetic inbox mute <agent>` / `mute source:<source>` / `--clear`. The two
@@ -782,6 +905,17 @@ export const ChatListeningInput = z.object({});
 export type ChatListeningInput = z.infer<typeof ChatListeningInput>;
 export const ChatListenInput = z.object({ instance: AgentName, listening: z.boolean() });
 export type ChatListenInput = z.infer<typeof ChatListenInput>;
+
+/**
+ * `hermetic chat settings [--redact on|off]` — this laptop's chat preferences,
+ * one `prefs` row each (§4.6, §9.2). Empty reads; a stated field writes it.
+ *
+ * `redact` masks transcript content — rosters, session lists, history reads,
+ * live frames — on its way out of core. Off by default. Errors are masked
+ * whichever way it is set.
+ */
+export const ChatSettingsInput = z.object({ redact: z.boolean().optional() });
+export type ChatSettingsInput = z.infer<typeof ChatSettingsInput>;
 
 export const DEFAULT_BOT = "default";
 
@@ -1071,7 +1205,8 @@ export type PlanRolloutInput = z.infer<typeof PlanRolloutInput>;
 
 export const PlanDestroyInput = z.object({
   name: AgentName,
-  delete_volume: z.boolean().optional(),
+  /** See `DestroyAgentInput.keep_volume`. */
+  keep_volume: z.boolean().optional(),
 });
 export type PlanDestroyInput = z.infer<typeof PlanDestroyInput>;
 

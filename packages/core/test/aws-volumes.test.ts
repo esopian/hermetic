@@ -78,6 +78,9 @@ describe("findVolumeByTag", () => {
       // return (§5).
       "tag:hermetic:fleet_id",
     ]);
+    // §6.7: selection is on `agent=` alone; `hermetic:former_agent` is never a
+    // way to find a volume by name.
+    expect(query!.Filters.map((f) => f.Name)).not.toContain("tag:hermetic:former_agent");
   });
 
   test("labels an adopted volume so the next lookup and the DLM policy see it", async () => {
@@ -172,6 +175,93 @@ describe("findVolumeByTag", () => {
   });
 });
 
+/**
+ * §6.7: a release asks which disks still carry `agent=<name>` and moves each
+ * off the name. It must see every one, decide nothing, and write nothing —
+ * the shapes `findVolumeByTag` labels or refuses are the ones it cleans up.
+ */
+describe("listVolumesByAgentTag", () => {
+  type Filters = { Filters?: Array<{ Name?: string; Values?: string[] }>; NextToken?: string };
+
+  test("filters on agent, managed and fleet only, pages to the end, and tags nothing", async () => {
+    ec2
+      .on(DescribeVolumesCommand)
+      .resolvesOnce({
+        Volumes: [
+          // A lone untagged match: `findVolumeByTag` would label it role=data.
+          {
+            VolumeId: "vol-1",
+            Size: 100,
+            State: "available",
+            Tags: [{ Key: "agent", Value: "atlas" }],
+          },
+          { VolumeId: "vol-going", Size: 100, State: "deleting", Tags: [DATA_TAG] },
+        ],
+        NextToken: "page2",
+      })
+      .resolvesOnce({
+        Volumes: [
+          {
+            VolumeId: "vol-2",
+            Size: 50,
+            State: "in-use",
+            CreateTime: new Date("2026-09-01T12:00:00.000Z"),
+            Tags: [
+              DATA_TAG,
+              { Key: "agent", Value: "atlas" },
+              { Key: "hermetic:former_agent", Value: "atlas" },
+            ],
+          },
+        ],
+      });
+
+    expect(await compute().listVolumesByAgentTag("atlas")).toEqual([
+      {
+        volume_id: "vol-1",
+        size_gib: 100,
+        agent: "atlas",
+        former_agent: null,
+        state: "available",
+        created_at: null,
+      },
+      // EC2's `CreateTime`, which the release's sweep compares to its run's start.
+      {
+        volume_id: "vol-2",
+        size_gib: 50,
+        agent: "atlas",
+        former_agent: "atlas",
+        state: "in-use",
+        created_at: "2026-09-01T12:00:00.000Z",
+      },
+    ]);
+
+    const inputs = inputsOf<Filters>(ec2, DescribeVolumesCommand);
+    expect(inputs).toHaveLength(2);
+    for (const input of inputs) {
+      expect(input.Filters).toEqual([
+        { Name: "tag:agent", Values: ["atlas"] },
+        { Name: "tag:hermetic:managed", Values: ["true"] },
+        { Name: "tag:hermetic:fleet_id", Values: [TEST_FLEET_ID] },
+      ]);
+    }
+    expect(inputs[0]!.NextToken).toBeUndefined();
+    expect(inputs[1]!.NextToken).toBe("page2");
+    expect(callCount(ec2, CreateTagsCommand)).toBe(0);
+    expect(callCount(ec2, DeleteTagsCommand)).toBe(0);
+  });
+
+  test("several role=data matches are listed, not refused", async () => {
+    ec2.on(DescribeVolumesCommand).resolves({
+      Volumes: [
+        { VolumeId: "vol-a", Size: 100, State: "available", Tags: [DATA_TAG] },
+        { VolumeId: "vol-b", Size: 100, State: "available", Tags: [DATA_TAG] },
+      ],
+    });
+    const listed = await compute().listVolumesByAgentTag("atlas");
+    expect(listed.map((v) => v.volume_id)).toEqual(["vol-a", "vol-b"]);
+  });
+});
+
 describe("createVolume", () => {
   test("tags the new volume as the data disk", async () => {
     ec2.on(CreateVolumeCommand).resolves({ VolumeId: "vol-new", Size: 100, State: "creating" });
@@ -232,6 +322,63 @@ describe("retagVolume", () => {
 
     const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
     expect(removed!.Tags.map((t) => t.Key).sort()).toEqual(["agent", "hermetic:role"]);
+  });
+
+  /** §6.7: the release moves the name from `agent` to `hermetic:former_agent`. */
+  test("a release removes the agent tag and sets former_agent, keeping role and Name", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", null, { formerAgent: "atlas" });
+
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags).toContainEqual({ Key: "hermetic:former_agent", Value: "atlas" });
+    expect(set!.Tags).toContainEqual(DATA_TAG);
+    expect(set!.Tags.map((t) => t.Key)).not.toContain("agent");
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
+    // The display Name is not touched: absent `name` leaves it alone.
+    expect(removed!.Tags.map((t) => t.Key)).toEqual(["agent"]);
+    // The promise to keep lands before the name comes off: a crash between the
+    // two calls leaves `former_agent` set, which a retry reads as "keep".
+    expect(ec2.calls().map((c) => c.args[0].constructor.name)).toEqual([
+      "CreateTagsCommand",
+      "DeleteTagsCommand",
+    ]);
+  });
+
+  /**
+   * §6.7: the release's `DeleteTags` names the value it expects, so EC2 removes
+   * `agent` only while it still says `<name>`. A disk another agent adopted
+   * between the release's read and this write keeps its new owner's tag.
+   */
+  test("expectedAgent makes removing the agent tag conditional on its value", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", null, { formerAgent: "atlas", expectedAgent: "atlas" });
+
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string; Value?: string }> }>(
+      ec2,
+      DeleteTagsCommand,
+    );
+    expect(removed!.Tags).toEqual([{ Key: "agent", Value: "atlas" }]);
+  });
+
+  test("an adoption with formerAgent null removes the former_agent tag", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    ec2.on(DeleteTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", "bravo", { formerAgent: null });
+
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags).toContainEqual({ Key: "agent", Value: "bravo" });
+    const [removed] = inputsOf<{ Tags: Array<{ Key: string }> }>(ec2, DeleteTagsCommand);
+    expect(removed!.Tags.map((t) => t.Key)).toEqual(["hermetic:former_agent"]);
+  });
+
+  test("an absent formerAgent leaves the tag alone", async () => {
+    ec2.on(CreateTagsCommand).resolves({});
+    await compute().retagVolume("vol-1", "bravo");
+    const [set] = inputsOf<{ Tags: Array<{ Key: string; Value: string }> }>(ec2, CreateTagsCommand);
+    expect(set!.Tags.map((t) => t.Key)).not.toContain("hermetic:former_agent");
+    expect(callCount(ec2, DeleteTagsCommand)).toBe(0);
   });
 
   test("a volume that carried no Name before has none put back", async () => {

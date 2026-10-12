@@ -18,11 +18,13 @@ import type { AgentView } from "../../api/index.ts";
 import type { RerunState } from "../../logic/bootstrap.ts";
 import { isOff } from "../../logic/format.ts";
 import { profileById } from "../../logic/provider-logic.ts";
+import { terminalSubline } from "../../logic/terminal-logic.ts";
 import { AGENT_TABS, AGENT_TAB_LABELS } from "../../nav/agent-nav.ts";
 import type { AgentTab } from "../../nav/agent-nav.ts";
 import type { ProfilesState } from "../../state/state.tsx";
 import { ListenButton } from "../ListenButton.tsx";
 import { lifecycleSubline, overviewSubline } from "./agent-summary.ts";
+import type { TerminalSessions } from "./useTerminalSession.ts";
 
 export function AgentSectionNav({
   agent,
@@ -32,6 +34,7 @@ export function AgentSectionNav({
   section,
   onSection,
   chat,
+  terminal,
 }: {
   agent: AgentView;
   latest: string | null;
@@ -45,6 +48,8 @@ export function AgentSectionNav({
    * when there is no listening state to gate on, and then there is no switch.
    */
   chat: { available: boolean; watched: boolean; listening: boolean };
+  /** The agent's terminal sessions (`useTerminalSessions`); absent reads as none. */
+  terminal?: Pick<TerminalSessions, "sessions" | "problem">;
 }) {
   const refs = useRef<Partial<Record<AgentTab, HTMLButtonElement | null>>>({});
   const off = isOff(agent);
@@ -52,6 +57,11 @@ export function AgentSectionNav({
   const model = agent.hermes?.model ?? bound?.model ?? null;
   const life = lifecycleSubline(agent, latest, rerun);
   const browsers = agent.browsers ?? [];
+  const term = terminalSubline({
+    status: agent.display_status,
+    sessions: terminal?.sessions ?? [],
+    problem: terminal?.problem ?? null,
+  });
 
   const chatDisabled = !chat.available || !chat.watched;
   const sub: Record<AgentTab, string> = {
@@ -62,10 +72,14 @@ export function AgentSectionNav({
       : browsers.length === 0
         ? "no browser on this box"
         : "not connected",
+    terminal: term.text,
     logs: "activity · journal · console",
     config: [bound?.name ?? agent.provider, model].filter(Boolean).join(" · "),
     lifecycle: life.text,
   };
+
+  /** Entries whose sub-line is the `●` form, in `--acc`. */
+  const accent: Partial<Record<AgentTab, boolean>> = { lifecycle: life.accent, terminal: term.accent };
 
   const enabled = AGENT_TABS.filter((t) => !(t === "chat" && chatDisabled));
 
@@ -106,11 +120,8 @@ export function AgentSectionNav({
               onKeyDown={(e) => onKey(e, t)}
             >
               <span id={`agent-tab-${t}-label`}>{AGENT_TAB_LABELS[t]}</span>
-              <small
-                id={`agent-tab-${t}-sub`}
-                className={t === "lifecycle" && life.accent ? "acc" : undefined}
-              >
-                {t === "lifecycle" && life.accent ? "● " : ""}
+              <small id={`agent-tab-${t}-sub`} className={accent[t] ? "acc" : undefined}>
+                {accent[t] ? "● " : ""}
                 {sub[t]}
               </small>
             </button>
@@ -125,10 +136,11 @@ export function AgentSectionNav({
           ) : null}
         </div>
       ) : null}
+      {/* The CLI echo: what the section is, typed. */}
       <div className="dr-snav-foot mono">
-        $ hermetic {section === "logs" ? "logs" : "agent"}
+        $ hermetic {section === "logs" ? "logs" : section === "terminal" ? "ssh" : "agent"}
         <br />
-        &nbsp;&nbsp;{section === "logs" ? agent.name : `status ${agent.name}`}
+        &nbsp;&nbsp;{section === "logs" || section === "terminal" ? agent.name : `status ${agent.name}`}
       </div>
     </nav>
   );

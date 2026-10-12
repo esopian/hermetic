@@ -8,12 +8,15 @@
  * The write itself is unconditional — the heartbeat must never lose a race with
  * the operator — while the status change is guarded on the current status, so a
  * heartbeat cannot resurrect a `destroying` agent (§4.3).
+ *
+ * The readings themselves — CPU, memory, filesystem — come from `Host`, which
+ * takes them with `systeminformation` (`sysinfo.ts`); nothing here parses procfs.
  */
 import type { Agent, ApplyRequest, Health, Metrics, UpdateRequest } from "@hermetic/core/schema";
 import { HERMES_DASHBOARD_PORT, HERMES_HOME } from "@hermetic/core/shared";
 import { HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT } from "@hermetic/core/shared";
 import type { Aws } from "./aws.ts";
-import type { Host } from "./host.ts";
+import type { Host, MemorySample } from "./host.ts";
 import { DATA_MOUNT } from "./disk.ts";
 import { STATE_DIR } from "./fleet.ts";
 import { readAppliedConfigHash } from "./manifest.ts";
@@ -120,11 +123,11 @@ export function dashboardUrl(dnsName: string): string {
 }
 
 /**
- * Where the two counters a tick compares *against* are kept between processes.
+ * Where the counter a tick compares *against* is kept between processes.
  *
- * Both are deltas — systemd's `NRestarts` summed over the Hermes units, and
- * the cumulative jiffies in `/proc/stat` — so each is only ever as good as the
- * sample before it. Held in memory alone, that sample died with the process,
+ * It is a delta — systemd's `NRestarts` summed over the Hermes units — so it is
+ * only ever as good as the sample before it. Held in memory alone, that sample
+ * died with the process,
  * and hermeticd restarts itself every time it takes a release (§6.5): a Hermes
  * that had been crash-looping all night was handed a clean sheet by the nightly
  * update, reported `h+` for the tick after it, and the very check written to
@@ -136,22 +139,16 @@ export function dashboardUrl(dnsName: string): string {
  */
 export const BASELINE_PATH = `${STATE_DIR}/heartbeat.json`;
 
-/**
- * How often the baseline is refreshed when nothing about it has changed —
- * every fourth tick, so about every two minutes. See `baselineDue`.
- */
-export const BASELINE_WRITE_EVERY = 4;
-
 /** The previous tick's readings, as the next process picks them up. */
 export interface HeartbeatBaseline {
   /** `NRestarts` summed over `HERMES_UNITS`; `null` when systemd said nothing. */
   readonly restarts: number | null;
-  readonly cpu: CpuSample | null;
 }
 
 /**
  * `null` for anything that is not a baseline this build wrote — including a
- * file truncated by a power cut. A baseline is an optimisation, never a fact
+ * file truncated by a power cut. A `cpu` field an older build wrote is ignored:
+ * the CPU delta now lives in `systeminformation` (`sysinfo.ts`). A baseline is an optimisation, never a fact
  * worth failing a heartbeat over: losing one costs exactly what the old
  * in-memory behaviour cost, one tick with no delta.
  */
@@ -165,20 +162,8 @@ export function parseBaseline(text: string): HeartbeatBaseline | null {
   if (typeof json !== "object" || json === null) return null;
   const record = json as Record<string, unknown>;
   const restarts = record["restarts"];
-  const cpu = record["cpu"];
-  const sample =
-    typeof cpu === "object" &&
-    cpu !== null &&
-    typeof (cpu as Record<string, unknown>)["total"] === "number" &&
-    typeof (cpu as Record<string, unknown>)["idle"] === "number"
-      ? ({
-          total: (cpu as Record<string, number>)["total"] as number,
-          idle: (cpu as Record<string, number>)["idle"] as number,
-        } satisfies CpuSample)
-      : null;
   return {
     restarts: typeof restarts === "number" && Number.isFinite(restarts) ? restarts : null,
-    cpu: sample,
   };
 }
 
@@ -275,7 +260,11 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
   const { host, aws, name } = deps;
   const doFetch = deps.fetchImpl ?? fetch;
   const dashboardTimeoutMs = deps.dashboardTimeoutMs ?? DASHBOARD_TIMEOUT_MS;
-  let previousCpu: CpuSample | null = null;
+  // `cpuLoad` is busy percent since its previous call, and the first call in a
+  // process answers "since boot". Taking that call now, while the daemon is
+  // still starting its listener, makes the first tick's reading a recent window
+  // instead of the box's lifetime average. Unawaited: nothing waits on it.
+  void host.cpuLoad().catch(() => null);
   /**
    * `NRestarts`, summed over `HERMES_UNITS`, as of the previous tick. A *delta*
    * is what matters, so a process with no previous sample has no delta to
@@ -300,7 +289,6 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
     const baseline = text === null ? null : parseBaseline(text);
     if (baseline === null) return;
     previousRestarts = baseline.restarts;
-    previousCpu = baseline.cpu;
   }
 
   /**
@@ -309,7 +297,7 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
    * is alive, and it has already happened by the time this runs.
    */
   async function saveBaseline(): Promise<void> {
-    const baseline: HeartbeatBaseline = { restarts: previousRestarts, cpu: previousCpu };
+    const baseline: HeartbeatBaseline = { restarts: previousRestarts };
     try {
       if (!stateDirReady) {
         await host.mkdir(STATE_DIR, "0755");
@@ -327,15 +315,13 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
    * an fsync'd write per tick is 2,880 writes a day to a root volume, for a
    * file whose only reader is the next process.
    *
-   * Two rules cover what the file is for. The restart counter is written the
-   * moment it changes, because *that* is the value a crash loop turns on and
-   * losing one increment loses the signal; the CPU sample is refreshed
-   * periodically, because losing it costs one tick reporting 0% and nothing
-   * else. The first tick always writes, so a fresh box has a baseline
-   * immediately rather than two minutes in.
+   * The restart counter is written the moment it changes, because that is the
+   * value a crash loop turns on and losing one increment loses the signal, and
+   * otherwise never: an unchanged counter is already on disk. The first tick
+   * always writes, so a fresh box has a baseline immediately.
    */
   function baselineDue(): boolean {
-    return ticks === 1 || ticks % BASELINE_WRITE_EVERY === 0 || previousRestarts !== persistedRestarts;
+    return ticks === 1 || previousRestarts !== persistedRestarts;
   }
   let consecutiveFailing = 0;
   let consecutivePassing = 0;
@@ -594,11 +580,16 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
       deps.onApplyRequest?.(applyRequest);
     }
 
-    const diskPct = await diskPercent(host, DATA_MOUNT);
-    // `null`, not `0`, when neither statvfs nor `df` would answer: an unmeasured
-    // root disk is omitted from the row rather than reported as empty.
-    const rootDiskPct = await diskPercentOrNull(host, ROOT_MOUNT);
-    const rootFreeMib = await freeMibOrNull(host, ROOT_MOUNT);
+    const data = await host.filesystem(DATA_MOUNT);
+    // `/data` unmeasured stays `0`: `disk_pct` is required on the row, and the
+    // disk check has always read an unmeasurable data volume as "not full"
+    // rather than refusing to decide.
+    const diskPct = data === null ? 0 : clampPct(data.usePct);
+    // `null`, not `0`, for the root disk: an unmeasured root disk is omitted
+    // from the row rather than reported as empty.
+    const root = await host.filesystem(ROOT_MOUNT);
+    const rootDiskPct = root === null ? null : clampPct(root.usePct);
+    const rootFreeMib = root === null ? null : freeMib(root.available);
     // One `tailscale status` per tick: it answers both "are we online" and
     // "what name are we published under", and the dashboard probe needs the
     // second before it can run at all.
@@ -615,14 +606,11 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
       dashboard,
     };
 
-    const cpuSample = await readCpuSample(host);
-    const cpu_pct = cpuPercent(previousCpu, cpuSample);
-    if (cpuSample) previousCpu = cpuSample;
-    // Both counters as this tick leaves them, for whoever runs the next one.
+    // The restart counter as this tick leaves it, for whoever runs the next one.
     if (baselineDue()) await saveBaseline();
     const metrics: Metrics = {
-      cpu_pct,
-      mem_pct: await memoryPercent(host),
+      cpu_pct: clampPct((await host.cpuLoad()) ?? 0),
+      mem_pct: memoryPercent(await host.memory()),
       disk_pct: diskPct,
       ...(rootDiskPct === null ? {} : { root_disk_pct: rootDiskPct }),
       ...(rootFreeMib === null ? {} : { root_free_mib: rootFreeMib }),
@@ -910,104 +898,24 @@ function describeRestart(state: GatewayState | null): string {
   return `a hermes unit restarted since the last tick (${cause})`;
 }
 
-export interface CpuSample {
-  readonly total: number;
-  readonly idle: number;
-}
-
-/** First line of `/proc/stat`: `cpu user nice system idle iowait irq softirq steal …`. */
-export function parseProcStat(text: string): CpuSample | null {
-  const line = text.split("\n").find((l) => l.startsWith("cpu "));
-  if (!line) return null;
-  const fields = line.trim().split(/\s+/).slice(1).map(Number);
-  if (fields.length < 5 || fields.some((n) => !Number.isFinite(n))) return null;
-  const total = fields.reduce((a, b) => a + b, 0);
-  const idle = (fields[3] ?? 0) + (fields[4] ?? 0);
-  return { total, idle };
-}
-
-async function readCpuSample(host: Host): Promise<CpuSample | null> {
-  const text = await host.readFile("/proc/stat");
-  return text === null ? null : parseProcStat(text);
-}
-
-/** Busy fraction between two samples; 0 on the very first tick, which has no delta. */
-export function cpuPercent(previous: CpuSample | null, current: CpuSample | null): number {
-  if (!previous || !current) return 0;
-  const total = current.total - previous.total;
-  const idle = current.idle - previous.idle;
-  if (total <= 0) return 0;
-  return clampPct(((total - idle) / total) * 100);
-}
-
-export function parseMeminfo(text: string): number {
-  const values = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    const match = /^(\w+):\s+(\d+)/.exec(line);
-    if (match?.[1] && match[2]) values.set(match[1], Number(match[2]));
-  }
-  const total = values.get("MemTotal") ?? 0;
-  const available = values.get("MemAvailable") ?? values.get("MemFree") ?? 0;
-  if (total <= 0) return 0;
-  return clampPct(((total - available) / total) * 100);
-}
-
-async function memoryPercent(host: Host): Promise<number> {
-  const text = await host.readFile("/proc/meminfo");
-  return text === null ? 0 : parseMeminfo(text);
+/** Used share of memory the kernel could not hand out without swapping. */
+export function memoryPercent(mem: MemorySample | null): number {
+  if (mem === null || mem.total <= 0) return 0;
+  return clampPct(((mem.total - mem.available) / mem.total) * 100);
 }
 
 /**
- * statvfs on a mount point; `df` is the fallback where statfs is unavailable.
- * `null` when neither would answer — "we did not measure this", which is not
- * the same claim as "this filesystem is empty".
- */
-export async function diskPercentOrNull(host: Host, path: string): Promise<number | null> {
-  const fs = await host.statfs(path);
-  if (fs && fs.blocks > 0) {
-    return clampPct(((fs.blocks - fs.available) / fs.blocks) * 100);
-  }
-  const df = await host.exec(["df", "-kP", path]);
-  if (df.code !== 0) return null;
-  const line = df.stdout.trim().split("\n")[1];
-  const pct = line ? /(\d+)%/.exec(line)?.[1] : undefined;
-  return pct ? clampPct(Number(pct)) : null;
-}
-
-/**
- * The same reading for `/data`, where an unknowable answer stays `0`: `disk_pct`
- * is required on the row, and the disk *check* it feeds has always read an
- * unmeasurable data volume as "not full" rather than refusing to decide.
- */
-export async function diskPercent(host: Host, path: string): Promise<number> {
-  return (await diskPercentOrNull(host, path)) ?? 0;
-}
-
-/**
- * Free space on the filesystem holding `path`, in MiB; `null` when unmeasurable.
+ * Free bytes as whole MiB, for `Metrics.root_free_mib`.
  *
  * Reported alongside the percentage rather than instead of it because the two
  * answer different questions, and only this one answers the question the root
  * disk actually raises: a self-update needs *bytes* for the new binary and its
  * backup, and 90% of 8 GiB and 90% of 500 GiB are the same percentage with
  * opposite verdicts. It cannot be derived on the reading end either — the
- * volume is not the filesystem (`Metrics.root_free_mib`).
- *
- * `df -kP` reports 1K blocks, so its "available" column is already KiB; statfs
- * gives blocks and a block size. Both land in MiB.
+ * volume is not the filesystem.
  */
-export async function freeMibOrNull(host: Host, path: string): Promise<number | null> {
-  const fs = await host.statfs(path);
-  if (fs && fs.blockSize > 0) {
-    return Math.floor((fs.available * fs.blockSize) / (1024 * 1024));
-  }
-  const df = await host.exec(["df", "-kP", path]);
-  if (df.code !== 0) return null;
-  const line = df.stdout.trim().split("\n")[1];
-  // `Filesystem 1024-blocks Used Available Capacity Mounted`: the fourth column.
-  const available = line?.trim().split(/\s+/)[3];
-  if (available === undefined || !/^\d+$/.test(available)) return null;
-  return Math.floor(Number(available) / 1024);
+export function freeMib(bytes: number): number {
+  return Math.max(0, Math.floor(bytes / (1024 * 1024)));
 }
 
 function clampPct(n: number): number {

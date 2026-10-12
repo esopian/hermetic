@@ -4,6 +4,7 @@
  */
 import type {
   AgentEvent,
+  AgentTombstone,
   AgentView,
   DesktopAttach,
   ProbeLayer,
@@ -190,8 +191,8 @@ function tailnetName(a: AgentView, fleetId?: string, fleetName?: string): string
  * The value is always knowable — an unstated setting is not unset, it is the
  * fleet default (or the provider's default model) that hermetic seeded — so all
  * of them are printed, and what varies is the owner. `managed` means hermetic
- * holds it: it is in `/etc/hermes/config.yaml`, rewritten on every apply, and
- * `agent set` is what moves it. `seeded` means it was written into the agent's
+ * holds it (`--hold`, or the profile's model): it is in `/etc/hermes/config.yaml`,
+ * rewritten on every apply, and `agent set` is what moves it. `seeded` means it was written into the agent's
  * own config once and belongs to whoever is driving the agent since; the row
  * records what was asked for at create time, not what the box currently reads,
  * which is why the line says so rather than presenting it as current fact.
@@ -210,7 +211,12 @@ function tailnetName(a: AgentView, fleetId?: string, fleetName?: string): string
  * of this split, resolved the same way from the same two row fields.
  */
 function hermesRows(a: AgentView): Array<[string, string]> {
-  const { managed, seed } = splitHermesSettings(a.hermes, PROVIDERS[a.provider].default_model, a.seed);
+  const { managed, seed } = splitHermesSettings(
+    a.hermes,
+    PROVIDERS[a.provider].default_model,
+    a.seed,
+    a.hermes_hold,
+  );
   const labels: Array<[string, keyof typeof managed]> = [
     ["model", "model"],
     ["terminal", "terminal_backend"],
@@ -219,12 +225,15 @@ function hermesRows(a: AgentView): Array<[string, string]> {
   ];
   const rows: Array<[string, string]> = labels.map(([label, key]) => {
     const held = managed[key];
-    const value = held ?? seed[key];
+    if (held !== undefined) return [label, `${String(held)} (managed)`];
+    // A value the operator stated but hermetic does not hold is re-asserted
+    // when the stated answer moves (`seedCommands`); an unstated one never is.
+    const stated = a.hermes?.[key] !== undefined;
     return [
       label,
-      held === undefined
-        ? `${String(value)} (seeded — the agent's to change)`
-        : `${String(value)} (managed)`,
+      stated
+        ? `${String(seed[key])} (seeded — the agent's to change; re-asserted when \`agent set\` moves it)`
+        : `${String(seed[key])} (seeded — the agent's to change)`,
     ];
   });
   /*
@@ -424,6 +433,40 @@ export function renderHistory(events: readonly AgentEvent[]): string {
     );
   }
   return blocks.length === 0 ? table : `${table}\n${blocks.join("\n")}`;
+}
+
+/** `3h ago · 2026-09-29T10:00:00.000Z`: the age for scanning, the instant for grepping. */
+function whenCell(at: string, now: number): string {
+  const ms = now - Date.parse(at);
+  return Number.isFinite(ms) ? `${formatAge(Math.max(0, ms))} ago · ${at}` : at;
+}
+
+/** What became of the data volume: kept (released from the name) or deleted. */
+function tombstoneVolume(t: AgentTombstone): string {
+  if (t.volume_id === null) return "-";
+  return `${t.volume_id} ${t.volume_kept ? "kept" : "deleted"}`;
+}
+
+/**
+ * §9 `agent destroyed`: one row per incarnation, newest first as core returns
+ * them. A destroyed agent has no row in `agent ps`; this is where it is
+ * reviewed. `legacy` marks a record synthesised from a pre-tombstone
+ * `destroyed` row.
+ */
+export function renderDestroyed(
+  tombstones: readonly AgentTombstone[],
+  now: number = Date.now(),
+): string {
+  if (tombstones.length === 0) return "no destroyed agents";
+  const rows = tombstones.map((t) => [
+    t.name,
+    whenCell(t.destroyed_at, now),
+    t.destroyed_by,
+    t.created_at,
+    tombstoneVolume(t),
+    t.legacy ? "legacy" : "",
+  ]);
+  return renderTable(rows, ["NAME", "DESTROYED", "BY", "CREATED", "VOLUME", ""]);
 }
 
 /**

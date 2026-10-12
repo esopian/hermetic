@@ -32,7 +32,7 @@ function BandBody({
   const [dismissed, setDismissed] = useState(() => {
     if (!band.dismissible) return false;
     try {
-      return sessionStorage.getItem(dismissKey(fleetId, "degraded")) === "1";
+      return sessionStorage.getItem(dismissKey(fleetId, band.severity)) === "1";
     } catch {
       return false;
     }
@@ -41,7 +41,7 @@ function BandBody({
   const dismiss = () => {
     setDismissed(true);
     try {
-      sessionStorage.setItem(dismissKey(fleetId, "degraded"), "1");
+      sessionStorage.setItem(dismissKey(fleetId, band.severity), "1");
     } catch {
       /* A browser refusing storage is not a reason to keep the band up. */
     }
@@ -64,12 +64,29 @@ function BandBody({
     );
   }
 
+  /**
+   * Only `degraded`'s fix is something this app performs — Settings' foundation
+   * update. `drifted`'s is a command (`hermetic plan rollout`) that no button
+   * here runs, so it is named in the band rather than hidden behind an
+   * "Update foundation…" that would open the wrong thing.
+   */
+  const fixButton = band.severity === "degraded" && band.fix !== null && onFix !== undefined;
+  const fixCommand = band.severity === "drifted" ? band.fix : null;
+
   return (
     <div className={`skew-band ${band.tone}`} role="status">
       <i className={`sq skew-dot ${band.tone}`} />
       <div className="skew-text">
         <b>{band.headline}</b>
-        <p>{band.message}.</p>
+        <p>
+          {band.message}.
+          {fixCommand ? (
+            <>
+              {" "}
+              <span className="mono">{fixCommand}</span>
+            </>
+          ) : null}
+        </p>
       </div>
       <div className="skew-acts">
         {band.dismissible ? (
@@ -83,7 +100,7 @@ function BandBody({
             ✕
           </button>
         ) : null}
-        {band.fix && onFix ? (
+        {fixButton ? (
           <button type="button" className="btn btn-primary skew-btn" onClick={onFix}>
             Update foundation…
           </button>

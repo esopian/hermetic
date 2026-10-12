@@ -57,34 +57,30 @@ describe("countsOf", () => {
       agent({ name: "f", display_status: "creating" }),
       agent({ name: "g", display_status: "bootstrapping" }),
     ];
-    // `total` is the fleet you are running: six live rows, the destroyed one
-    // carried by `destroyed` alone.
+    // `total` is the fleet you are running: six live rows. A legacy destroyed
+    // row is a record, counted nowhere (§6.7).
     expect(countsOf(agents)).toEqual({
       total: 6,
       ready: 1,
       degraded: 1,
       unreachable: 1,
       stopped: 1,
-      destroyed: 1,
       busy: 2,
     });
   });
 
-  test("destroyed lands in its own bucket, never in stopped, and is out of total", () => {
+  test("a legacy destroyed row is never stopped and is out of total", () => {
     const c = countsOf([
       agent({ name: "a", display_status: "stopped" }),
       agent({ name: "b", display_status: "destroyed" }),
       agent({ name: "c", display_status: "destroyed" }),
     ]);
     expect(c.stopped).toBe(1);
-    expect(c.destroyed).toBe(2);
     expect(c.total).toBe(1);
   });
 
-  test("a fleet of nothing but tombstones has a total of zero", () => {
-    const c = countsOf([agent({ display_status: "destroyed" })]);
-    expect(c.total).toBe(0);
-    expect(c.destroyed).toBe(1);
+  test("a fleet of nothing but legacy destroyed rows has a total of zero", () => {
+    expect(countsOf([agent({ display_status: "destroyed" })]).total).toBe(0);
   });
 
   test("empty fleet", () => {
@@ -95,7 +91,6 @@ describe("countsOf", () => {
       busy: 0,
       stopped: 0,
       unreachable: 0,
-      destroyed: 0,
     });
   });
 });
@@ -124,63 +119,48 @@ describe("withoutDestroyed", () => {
     expect(byDestroyed.map((a) => a.name)).toEqual(["off"]);
   });
 
-  test("showing destroyed agents leaves the text filter free to match them", () => {
-    expect(filterAgents(agents, "gone").map((a) => a.name)).toEqual(["gone", "also-gone"]);
+  test("a query for a legacy destroyed row finds nothing on the grid", () => {
     expect(filterAgents(withoutDestroyed(agents), "gone")).toEqual([]);
   });
 });
 
 describe("emptyHint", () => {
   test("an empty fleet points at the create shortcut", () => {
-    expect(emptyHint({ total: 0, query: "", hiddenDestroyed: 0 })).toContain("no agents in this fleet");
-    expect(emptyHint({ total: 0, query: "zzz", hiddenDestroyed: 3 })).toContain(
-      "no agents in this fleet",
-    );
+    expect(emptyHint({ total: 0, query: "" })).toContain("no agents in this fleet");
+    expect(emptyHint({ total: 0, query: "zzz" })).toContain("no agents in this fleet");
   });
 
-  test("a fleet that is only hidden tombstones points at the toolbar", () => {
-    expect(emptyHint({ total: 2, query: "", hiddenDestroyed: 2 })).toBe(
-      "2 destroyed agents hidden — use the toolbar to show them",
-    );
-    expect(emptyHint({ total: 1, query: "  ", hiddenDestroyed: 1 })).toBe(
-      "1 destroyed agent hidden — use the toolbar to show them",
-    );
-  });
-
-  test("a query that only a hidden destroyed agent matches says so (§6.6)", () => {
-    expect(emptyHint({ total: 12, query: "oriole", hiddenDestroyed: 1 })).toBe(
-      "nothing matches “oriole” among live agents · 1 destroyed agent matches — use the toolbar to show them",
-    );
-    expect(emptyHint({ total: 12, query: "gone", hiddenDestroyed: 3 })).toBe(
-      "nothing matches “gone” among live agents · 3 destroyed agents match — use the toolbar to show them",
-    );
-  });
-
-  test("a query nothing at all matches keeps the plain message", () => {
-    expect(emptyHint({ total: 5, query: "zzz", hiddenDestroyed: 0 })).toBe("nothing matches “zzz”");
+  test("a query nothing matches says so", () => {
+    expect(emptyHint({ total: 5, query: "zzz" })).toBe("nothing matches “zzz”");
   });
 });
 
 describe("shouldDeselect", () => {
-  test("only the toggle closing over a destroyed agent deselects", () => {
-    expect(shouldDeselect(true, false, "destroyed")).toBe(true);
+  const byName = new Map([
+    ["atlas", agent({ name: "atlas" })],
+    ["old", agent({ name: "old", display_status: "destroyed" })],
+  ]);
+
+  test("a selected agent the fleet no longer holds deselects: a destroy released the row (§6.7)", () => {
+    expect(shouldDeselect(true, "granite", byName)).toBe(true);
   });
 
-  test("an agent that becomes destroyed with the toggle steady stays selected", () => {
-    // The row flips to `destroyed` before `destroy` emits `done`; closing the
-    // drawer here would take the progress bar and any late failure with it.
-    expect(shouldDeselect(false, false, "destroyed")).toBe(false);
-    expect(shouldDeselect(true, true, "destroyed")).toBe(false);
+  test("a selected agent still in the fleet stays selected, mid-destroy included", () => {
+    expect(shouldDeselect(true, "atlas", byName)).toBe(false);
+    const destroying = new Map([["atlas", agent({ name: "atlas", display_status: "destroying" })]]);
+    expect(shouldDeselect(true, "atlas", destroying)).toBe(false);
   });
 
-  test("closing the toggle over a live agent, or over nothing, changes nothing", () => {
-    expect(shouldDeselect(true, false, "ready")).toBe(false);
-    expect(shouldDeselect(true, false, "stopped")).toBe(false);
-    expect(shouldDeselect(true, false, null)).toBe(false);
+  test("a legacy destroyed row a hash names keeps its read-only drawer", () => {
+    expect(shouldDeselect(true, "old", byName)).toBe(false);
   });
 
-  test("opening the toggle never deselects", () => {
-    expect(shouldDeselect(false, true, "destroyed")).toBe(false);
+  test("before the first scan, absence means unread, not gone", () => {
+    expect(shouldDeselect(false, "granite", new Map())).toBe(false);
+  });
+
+  test("nothing selected, nothing to do", () => {
+    expect(shouldDeselect(true, null, byName)).toBe(false);
   });
 });
 
@@ -263,33 +243,15 @@ describe("triageGroups", () => {
     expect(byKey.stopped).toEqual(["stopped"]);
   });
 
-  test("destroyed agents get their own last group and stay out of stopped", () => {
+  test("a legacy destroyed row lands in no group, stopped included (§6.7)", () => {
     const stopped = agent({ name: "stopped", display_status: "stopped" });
     const gone = agent({ name: "gone", display_status: "destroyed" });
-    const groups = triageGroups([stopped, gone], null, true);
+    const groups = triageGroups([stopped, gone], null);
 
-    expect(groups.map((g) => g.key)).toEqual([
-      "attention",
-      "progress",
-      "healthy",
-      "stopped",
-      "destroyed",
-    ]);
+    expect(groups.map((g) => g.key)).toEqual(["attention", "progress", "healthy", "stopped"]);
     const byKey = Object.fromEntries(groups.map((g) => [g.key, g.items.map((a) => a.name)]));
     expect(byKey.stopped).toEqual(["stopped"]);
-    expect(byKey.destroyed).toEqual(["gone"]);
-    expect(byKey.attention).toEqual([]);
-  });
-
-  test("the destroyed group follows the toggle, not the contents", () => {
-    const live = [agent({ display_status: "ready" })];
-    // On: present even with nothing in it, so it renders `— none —` like the
-    // other four instead of appearing and vanishing under a live fleet.
-    const shown = triageGroups(live, null, true);
-    expect(shown.map((g) => g.key)).toContain("destroyed");
-    expect(shown.find((g) => g.key === "destroyed")!.items).toEqual([]);
-    // Off: absent entirely.
-    expect(triageGroups(live, null, false).map((g) => g.key)).not.toContain("destroyed");
+    expect(groups.flatMap((g) => g.items.map((a) => a.name))).not.toContain("gone");
   });
 
   test("a busy-but-behind agent counts as in-progress, not attention", () => {
@@ -313,7 +275,7 @@ describe("triageGroups", () => {
     for (const g of groups) expect(g.items).toEqual([]);
   });
 
-  test("the destroyed group is absent by default", () => {
+  test("there is no destroyed group: destroyed agents are the Destroyed lens's", () => {
     const groups = triageGroups([agent({ display_status: "ready" })], null);
     expect(groups.find((g) => g.key === "destroyed")).toBeUndefined();
   });

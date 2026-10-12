@@ -28,7 +28,7 @@ import {
 import { HermeticError } from "../../errors.ts";
 import { advertiseServerRequests, nextEvent, type Rpc } from "./hermes-chat-rpc.ts";
 import { CHAT_ERROR_CODES, CHAT_RECONNECT_BLOCK_KEY, type BoxAddress } from "./hermes-chat-types.ts";
-import { num, rec, str } from "./hermes-chat-wire.ts";
+import { HERMETIC_SESSION_SOURCE, num, rec, str } from "./hermes-chat-wire.ts";
 import type { ChatBlock } from "../../schema/index.ts";
 
 /** JSON-RPC's "method not found", which is how an older gateway says no. */
@@ -401,7 +401,13 @@ export function createTurnResume(deps: TurnResumeDeps) {
         const resumed = rec(
           await fresh.request(
             "session.resume",
-            { session_id: session, profile: bot, defer_history: true, omit_messages: true },
+            {
+              session_id: session,
+              profile: bot,
+              source: HERMETIC_SESSION_SOURCE,
+              defer_history: true,
+              omit_messages: true,
+            },
             undefined,
             { signal },
           ),

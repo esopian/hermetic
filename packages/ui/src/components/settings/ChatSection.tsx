@@ -1,8 +1,25 @@
-/** Chat preferences change the viewer's browser, never an agent or fleet setting. */
+/**
+ * Chat preferences change this laptop, never an agent or fleet setting. The
+ * avatar style is kept in this browser; transcript redaction is core's
+ * (`chat.settings`, a `prefs` row), because core is what masks a transcript and
+ * the CLI on this machine has to agree.
+ */
+import { useEffect, useState } from "react";
 import { setChatAvatarStyle, useChatAvatarStyle } from "../../chat/chat-appearance.ts";
 import { Avatar } from "../../chat/components/avatar/Avatar.tsx";
 import type { AvatarStyle } from "../../chat/components/avatar/Avatar.tsx";
-import { Block, PageFoot, SavedTick, SettingsPage, useSavedTick } from "./Section.tsx";
+import { chatSettings } from "../../api/chat.ts";
+import type { ChatSettingsView } from "../../api/types.ts";
+import {
+  Block,
+  Callout,
+  PageFoot,
+  RowNote,
+  SavedTick,
+  SettingRow,
+  SettingsPage,
+  useSavedTick,
+} from "./Section.tsx";
 import "./ChatSection.css";
 
 const STYLES: { value: AvatarStyle; label: string; description: string }[] = [
@@ -11,6 +28,82 @@ const STYLES: { value: AvatarStyle; label: string; description: string }[] = [
   { value: "sigil", label: "Sigil", description: "Mirrored geometric marks" },
 ];
 
+/**
+ * The redaction switch (§9.2). Off by default, so the warning is drawn
+ * whenever it is off, not only after it is switched: an operator who never
+ * opened this page is the one most in need of reading it.
+ */
+function RedactionBlock() {
+  const [settings, setSettings] = useState<ChatSettingsView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ticked, flash] = useSavedTick();
+
+  useEffect(() => {
+    let live = true;
+    // Through a promise, so a transport that refuses synchronously is an
+    // error on the block rather than a throw out of the effect.
+    Promise.resolve()
+      .then(() => chatSettings())
+      .then(
+        (read) => {
+          if (live) setSettings(read);
+        },
+        (e: unknown) => {
+          if (live) setError(e instanceof Error ? e.message : String(e));
+        },
+      );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  async function save(redact: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      setSettings(await chatSettings({ redact }));
+      flash();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Block title="Privacy" right={<SavedTick on={ticked} />}>
+      <SettingRow
+        label="Redact secrets"
+        desc="Mask keys, tokens and passwords in transcripts before they reach this screen."
+        htmlFor="chat-redact"
+        field="redact"
+        state={settings === null ? null : <RowNote>{settings.redact ? "masking" : "showing"}</RowNote>}
+      >
+        <label className="st-check">
+          <input
+            id="chat-redact"
+            type="checkbox"
+            checked={settings?.redact ?? false}
+            disabled={settings === null || busy}
+            onChange={(e) => void save(e.target.checked)}
+            aria-label="Redact secrets in transcripts"
+          />
+          on
+        </label>
+      </SettingRow>
+      {settings !== null && !settings.redact ? (
+        <Callout tone="warn">
+          Redaction is off. Transcripts show exactly what the box wrote — a key a bot echoed, a token in
+          a tool result — here and in <code>hermetic chat</code> on this laptop. Turn it on before
+          sharing your screen. Errors are masked either way.
+        </Callout>
+      ) : null}
+      {error !== null ? <Callout tone="bad">{error}</Callout> : null}
+    </Block>
+  );
+}
+
 export function ChatSection() {
   const selected = useChatAvatarStyle();
   const [ticked, flash] = useSavedTick();
@@ -18,7 +111,7 @@ export function ChatSection() {
     <SettingsPage
       section="chat"
       scope="laptop"
-      desc="How chat looks on this laptop. Changes apply at once and are kept in this browser."
+      desc="How chat looks on this laptop. Changes apply at once; the avatar style is kept in this browser."
     >
       <Block title="Appearance" right={<SavedTick on={ticked} />}>
         <fieldset className="chat-avatar-options">
@@ -55,7 +148,8 @@ export function ChatSection() {
           </div>
         </fieldset>
       </Block>
-      <PageFoot>saves as you change it · this browser only</PageFoot>
+      <RedactionBlock />
+      <PageFoot>saves as you change it · this laptop only</PageFoot>
     </SettingsPage>
   );
 }

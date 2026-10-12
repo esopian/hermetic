@@ -11,17 +11,21 @@ import { transport } from "./transport.ts";
 import type {
   Accepted,
   AgentEvent,
+  AgentTombstone,
   AgentView,
   BridgeInput,
   BridgeResult,
   CreateAgentInput,
   DesktopAttach,
   Doctor,
+  HistoryWindow,
   Meta,
   FoundationPlan,
   NetworkMode,
   NetworkPlan,
   NetworkReport,
+  NotificationListView,
+  NotificationSettingsView,
   NotificationSourceView,
   NotificationsResult,
   OpEvent,
@@ -70,12 +74,30 @@ export function desktopAttach(name: string): Promise<DesktopAttach> {
   return transport().request<DesktopAttach>("agents.desktop", { name });
 }
 
-export function history(name: string, limit = 40): Promise<AgentEvent[]> {
-  return transport().request<AgentEvent[]>("agents.history", { name, limit });
+export function history(name: string, limit = 40, window?: HistoryWindow): Promise<AgentEvent[]> {
+  return transport().request<AgentEvent[]>("agents.history", {
+    name,
+    limit,
+    ...(window?.since ? { since: window.since } : {}),
+    ...(window?.until ? { until: window.until } : {}),
+  });
 }
 
-export function planDestroy(name: string, deleteVolume: boolean): Promise<Plan> {
-  return transport().request<Plan>("plan.destroy", { name, delete_volume: deleteVolume });
+/**
+ * `agents.destroyed` (§6.7): tombstones, newest first. Not cached — the
+ * Destroyed lens reads it on entry and after a destroy settles, and a stale
+ * answer there would hide the agent the operator just destroyed.
+ */
+export function destroyed(name?: string, limit?: number): Promise<AgentTombstone[]> {
+  return transport().request<AgentTombstone[]>("agents.destroyed", {
+    ...(name ? { name } : {}),
+    ...(limit ? { limit } : {}),
+  });
+}
+
+/** `keepVolume` is the opt-out: a destroy deletes the data volume unless asked not to (§6.7). */
+export function planDestroy(name: string, keepVolume: boolean): Promise<Plan> {
+  return transport().request<Plan>("plan.destroy", { name, keep_volume: keepVolume });
 }
 
 /* ── volumes (§9) ────────────────────────────────────────────────────────── */
@@ -564,13 +586,20 @@ export function rebootAgent(name: string): Promise<AgentView> {
   return writeRow("agents.reboot", { name, target: target() });
 }
 
-/** `POST /api/upgrade` needs one of hermes/hermeticd, so the target version goes on the wire. */
-export function upgrade(name: string, hermes: string): Promise<Accepted> {
-  return transport().request<Accepted>("upgrade", { name, hermes, target: target() });
+/**
+ * `POST /api/upgrade` needs one of hermes/hermeticd, so the target version goes
+ * on the wire. `now` is the drawer's choice between its two buttons: `false`
+ * only pins the version (the box installs it on its next recreate), `true` also
+ * asks the running box to converge onto it in place — the `apply_request` a
+ * rollout writes, which reinstalls Hermes and restarts it (§6.5). It always
+ * goes on the wire, so the request says which of the two the operator pressed.
+ */
+export function upgrade(name: string, hermes: string, now = false): Promise<Accepted> {
+  return transport().request<Accepted>("upgrade", { name, hermes, now, target: target() });
 }
 
 /*
- * There is deliberately no `destroy(name, deleteVolume)` here.
+ * There is deliberately no `destroy(name, keepVolume)` here.
  *
  * `DELETE /api/agents/<name>` recomputes what to destroy from the name at the
  * moment it runs, so a portal calling it would terminate whatever the row
@@ -598,19 +627,56 @@ export async function listOps(
  * page cannot count what it did not fetch.
  */
 export function fetchNotifications(
-  input: { unread?: boolean; limit?: number; since?: string } = {},
+  input: { unread?: boolean; limit?: number; since?: string; view?: NotificationListView } = {},
 ): Promise<NotificationsResult> {
   return transport().request<NotificationsResult>("notifications.list", { ...input });
 }
 
-/** `POST /api/notifications/ack` — one row by id, or every unread row. */
+/**
+ * Marks rows read — one id, a batch of ids in one write, or every unread row —
+ * or, with `unread: true`, marks them unread again (not with `all`).
+ */
 export function ackNotification(
-  input: { id: string } | { all: true },
+  input: { id: string; unread?: boolean } | { ids: string[]; unread?: boolean } | { all: true },
 ): Promise<BridgeResult<"notifications.ack">> {
   return transport().request<BridgeResult<"notifications.ack">>("notifications.ack", {
     ...input,
     target: target(),
   });
+}
+
+/**
+ * Takes rows out of the inbox into History (kept for the 30-day retention), or
+ * with `restore` puts them back and lifts any snooze — the inverse the undo bar
+ * sends.
+ */
+export function clearNotifications(
+  input: { ids: string[]; restore?: boolean } | { read: true } | { resolved: true },
+): Promise<BridgeResult<"notifications.clear">> {
+  return transport().request<BridgeResult<"notifications.clear">>("notifications.clear", {
+    ...input,
+    target: target(),
+  });
+}
+
+/** Hides rows from the inbox until `until`, or lifts a snooze with `clear`. */
+export function snoozeNotifications(
+  input: { ids: string[]; until: string } | { ids: string[]; clear: true },
+): Promise<BridgeResult<"notifications.snooze">> {
+  return transport().request<BridgeResult<"notifications.snooze">>("notifications.snooze", {
+    ...input,
+    target: target(),
+  });
+}
+
+/**
+ * The inbox's auto-clear rule, which is core's and shared with the CLI's
+ * `hermetic inbox settings`. An empty input reads it.
+ */
+export function notificationSettings(
+  input: Partial<NotificationSettingsView> = {},
+): Promise<NotificationSettingsView> {
+  return transport().request<NotificationSettingsView>("notifications.settings", { ...input });
 }
 
 /**

@@ -99,6 +99,7 @@ describe("the remote archive", () => {
       "fleet.json",
       "agents.json",
       "events.json",
+      "destroyed.json",
       "ssm-paths.json",
       "s3-listing.json",
       "archived-at.json",
@@ -119,6 +120,47 @@ describe("the remote archive", () => {
     expect(agentsJson.length).toBe(backend.agents.size);
     const meta = JSON.parse((await backend.artifacts.getText(`${prefix}archived-at.json`)) as string);
     expect(meta).toMatchObject({ foundation_version: 0, fleet_id: FIXTURE_CONFIG.fleet_id });
+  });
+
+  /** §6.7: a destroyed agent has no row now; its tombstone and events are its record. */
+  test("holds every tombstone and each tombstoned name's events", async () => {
+    const backend = fleet();
+    const row = [...backend.agents.values()][0]!;
+    await backend.store.events.append({
+      name: "gone-one",
+      timestamp: "2026-08-01T00:00:00.000Z",
+      actor: "tester",
+      action: "release",
+      from_status: "destroying",
+      to_status: null,
+      detail: "name released; tombstone written",
+    });
+    await backend.store.events.appendTombstone({
+      name: "gone-one",
+      fleet_id: FIXTURE_CONFIG.fleet_id,
+      created_at: row.created_at,
+      created_by: row.created_by,
+      destroyed_at: "2026-08-01T00:00:00.000Z",
+      destroyed_by: "tester",
+      size: row.size,
+      region: row.region,
+      provider: row.provider,
+      profile_id: null,
+      instance_id: null,
+      volume_id: null,
+      volume_kept: false,
+      hermes_version: row.hermes_version,
+      legacy: false,
+    });
+    await run(archiver(backend).archive(target));
+
+    const prefix = archivePrefix(0);
+    const destroyed = JSON.parse(
+      (await backend.artifacts.getText(`${prefix}destroyed.json`)) as string,
+    ) as Array<{ name: string }>;
+    expect(destroyed.map((t) => t.name)).toContain("gone-one");
+    const events = JSON.parse((await backend.artifacts.getText(`${prefix}events.json`)) as string);
+    expect(events["gone-one"].map((e: { action: string }) => e.action)).toEqual(["release"]);
   });
 
   test("records SSM parameter names and no value of any kind", async () => {
@@ -391,6 +433,7 @@ describe("the local archive", () => {
       "agents.json",
       "archived-at.json",
       ARCHIVE_COMPLETE_KEY,
+      "destroyed.json",
       "events.json",
       "fleet.json",
       "hermetic.db",

@@ -4,7 +4,7 @@
  * Four things live here and nowhere else: the roster the rail draws, which bot
  * and session the operator is looking at, each conversation's transcript
  * and draft, and its independent live turn. The rules are not here — they are in `chat-logic.ts`,
- * pure, so "which origins need the banner" and "gold outranks orange" are
+ * pure, so "which origins relabel the send button" and "gold outranks orange" are
  * testable without mounting a provider. The shape is `notify-state.tsx`'s:
  * a provider, injectable calls, and a `useChatIfAvailable()` for a tree that
  * has no provider.
@@ -294,7 +294,9 @@ export interface Chat {
    * Where a reply would go, as far as this thread has actually established it.
    *
    * Not `session?.origin ?? "portal"`. `portal` is the one value that silences
-   * the destination banner, so it has to be read rather than fallen back to —
+   * the composer's destination restatement (send label and footer), and an
+   * unread destination disables sending, so it has to be read rather than
+   * fallen back to —
    * `Destination` in `chat-logic.ts` has the argument.
    */
   destination: Destination;
@@ -409,7 +411,7 @@ const LIVE_API: ChatApi = {
   resumeObservation,
 };
 
-const ChatContext = createContext<Chat | null>(null);
+export const ChatContext = createContext<Chat | null>(null);
 
 /* ── frame assembly ──────────────────────────────────────────────────────── */
 
@@ -536,7 +538,7 @@ interface RailBump {
    * What the row quotes until the next roster read answers for it. `null` means
    * this bump has nothing to say about the words and the roster's stand.
    */
-  preview: string | null;
+  preview: NonNullable<ChatArrival["preview"]> | null;
   seq: number;
 }
 
@@ -562,10 +564,10 @@ function withBumps(swarms: readonly SwarmView[], bumps: ReadonlyMap<string, Rail
       const bump = bumps.get(railKey(swarm.instance, bot.name));
       if (!bump) return bot;
       const at = newest(bot.last_message_at, bump.at);
-      const preview = bump.preview ?? bot.preview;
-      if (bump.unread === 0 && at === bot.last_message_at && preview === bot.preview) return bot;
+      if (bump.unread === 0 && at === bot.last_message_at && !bump.preview) return bot;
       touched = true;
-      return { ...bot, unread: bot.unread + bump.unread, last_message_at: at, preview };
+      // A bump's quote moves the words and who wrote them together (`preview_role`).
+      return { ...bot, ...bump.preview, unread: bot.unread + bump.unread, last_message_at: at };
     });
     return touched ? { ...swarm, bots } : swarm;
   });

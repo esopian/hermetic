@@ -7,7 +7,7 @@ import { PREF_DEFAULT_FLEET } from "./config.ts";
  * migration *names* recorded in `schema_migrations` (see `MIGRATIONS`), because
  * two branches can and do reach the same number by different routes.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 13;
 
 /**
  * A migration this branch may assume ran when a bare *number* is all the ledger
@@ -495,6 +495,57 @@ const MIGRATIONS: Migration[] = [
          PRIMARY KEY (fleet, instance, bot)
        )`,
     ],
+  },
+  {
+    /**
+     * Which incarnation of each agent name the rows above describe
+     * (`local/incarnations.ts`, §6.7). A destroy releases the name and only the
+     * laptop that ran it purges its own local state; every other laptop finds
+     * out by seeing a different `created_at` on the live row, and this is where
+     * it remembers the one it saw last. Created empty on purpose: an existing
+     * home's state is adopted on its first read, never purged by the upgrade —
+     * unless a tombstone shows the name changed hands after that state was
+     * written (`oldestStateAt` in `db/incarnations.ts`).
+     */
+    name: "agent-incarnations",
+    version: 13,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS agent_incarnations (
+         fleet      TEXT NOT NULL,
+         name       TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         PRIMARY KEY (fleet, name)
+       )`,
+    ],
+  },
+  {
+    /**
+     * Inbox v2 (§4.9): the operator can take a row out of the inbox
+     * (`cleared_at`, after which it is History until retention) or hide it for
+     * a while (`snoozed_until`). Declared columns, so a re-run on a ledger that
+     * lost this name adds nothing twice. The auto-clear settings need no table:
+     * they are two `prefs` rows.
+     */
+    name: "notifications-cleared-snoozed",
+    version: 14,
+    statements: [],
+    columns: [
+      { table: "notifications", column: "cleared_at", type: "TEXT" },
+      { table: "notifications", column: "snoozed_until", type: "TEXT" },
+    ],
+  },
+  {
+    /**
+     * When the operator last restored a row out of History (§4.9). The
+     * auto-clear sweep measures a read row's age from the later of `read_at`
+     * and this, and skips the resolved-on-read rule until the row is read again
+     * after the restore, so a restored row stays in the inbox instead of being
+     * re-cleared by the next list. Kept internal: no `Notification` field.
+     */
+    name: "notifications-restored",
+    version: 15,
+    statements: [],
+    columns: [{ table: "notifications", column: "restored_at", type: "TEXT" }],
   },
 ];
 

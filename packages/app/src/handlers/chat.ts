@@ -37,6 +37,7 @@ import {
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
+  ChatSettingsInput,
   ChatSwarmsInput,
 } from "@hermetic/core";
 import type { Hermetic } from "@hermetic/core";
@@ -59,6 +60,7 @@ import type { StreamSink } from "./streams.ts";
  */
 export const chatListeningSchema = declareRpc("chat.listening", ChatListeningInput);
 export const chatListenSchema = declareRpc("chat.listen", ChatListenInput);
+export const chatSettingsSchema = declareRpc("chat.settings", ChatSettingsInput);
 export const chatSwarmsSchema = declareRpc("chat.swarms", ChatSwarmsInput);
 export const chatSessionsSchema = declareRpc("chat.sessions", ChatSessionsInput);
 export const chatHistorySchema = declareRpc("chat.history", ChatHistoryInput);
@@ -116,6 +118,23 @@ export const ChatSubscribeRequest = z.object({});
 
 export async function listening(ctx: HandlerContext, params: unknown) {
   return await ctx.hermetic().chat.listening(parseInput(chatListeningSchema, params ?? {}));
+}
+
+/**
+ * This laptop's chat settings (§9.2). A `redact` that changed drops the held
+ * observations and re-establishes them, the way a fleet switch does, so a
+ * snapshot read under the old setting is never handed to the next reader.
+ */
+export async function settings(ctx: HandlerContext, params: unknown) {
+  const input = parseInput(chatSettingsSchema, params ?? {});
+  const h = ctx.hermetic();
+  const before = input.redact === undefined ? null : (await h.chat.settings({})).redact;
+  const result = await h.chat.settings(input);
+  if (before !== null && before !== result.redact) {
+    await ctx.chatOwner.reset();
+    void ctx.chatOwner.sync();
+  }
+  return result;
 }
 
 /**
@@ -214,18 +233,20 @@ export async function send(
 }
 
 /**
- * `chat.turn`: the same turn for a transport that cannot set a body — an
- * `EventSource` can only issue a `GET`, so the message rides in the query
- * string and there is no envelope around it. Validated against the schema
- * `chat.send` validates against, because it is the same request.
+ * `chat.turn`: the same turn under the name the page opens it with, closed by
+ * `chat.turn.abort` rather than by hanging up. It was the `EventSource` route,
+ * whose `GET` had no body to carry an envelope; over the bridge its params are
+ * an object like any other request's, so it carries the same §4.7 target
+ * `chat.send` does and is refused `FLEET_MISMATCH` the same way. A window left
+ * open across a fleet switch must not land a turn on a box in the fleet the
+ * head moved to.
  */
 export async function turn(
   ctx: HandlerContext,
   params: unknown,
   sink: StreamSink,
 ): Promise<{ stream_id: string }> {
-  const input = parseInput(chatSendSchema, params);
-  return startTurn(ctx, ctx.hermetic(), input, sink);
+  return send(ctx, params, sink);
 }
 
 /** Hanging up, for a transport with nothing to hang up. */
@@ -399,6 +420,7 @@ const turnEntry: Handler = (ctx, params, sink) => turn(ctx, params, requireSink(
 export const chatHandlers = {
   "chat.listening": listening,
   "chat.listen": listen,
+  "chat.settings": settings,
   "chat.swarms": swarms,
   "chat.sessions": sessions,
   "chat.history": history,

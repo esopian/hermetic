@@ -11,7 +11,6 @@ import { runningBinarySha256 } from "../src/main.ts";
 import { HERMETICD_PATH } from "../src/stages.ts";
 import {
   BASELINE_PATH,
-  BASELINE_WRITE_EVERY,
   DEGRADE_AFTER_TICKS,
   GATEWAY_STATE_PATH,
   GATEWAY_STATE_STALE_MS,
@@ -20,13 +19,12 @@ import {
   HERMES_UNITS,
   ROOT_MOUNT,
   UNIT_SHOW_PROPERTIES,
-  cpuPercent,
   dashboardUrl,
+  freeMib,
   makeHeartbeat,
+  memoryPercent,
   parseBaseline,
   parseGatewayState,
-  parseMeminfo,
-  parseProcStat,
   parseUnitState,
   shortReason,
 } from "../src/heartbeat.ts";
@@ -219,19 +217,24 @@ function harness(options: {
   const gatewayRestarts = counter(options.gatewayRestarts);
 
   const pct = options.diskPct ?? 20;
-  const statfsAt = (full: number) => ({ blockSize: 4096, blocks: 1000, available: 1000 - full * 10 });
-  host.statfsResult = statfsAt(pct);
+  // 1000 blocks of 4 KiB, `full` percent of them used.
+  const fsAt = (mount: string, full: number) => ({
+    mount,
+    size: 1000 * 4096,
+    available: (1000 - full * 10) * 4096,
+    usePct: full,
+  });
+  host.filesystemResult = fsAt("/data", pct);
   if (options.rootDiskPct !== undefined) {
-    host.statfsByPath.set(
+    host.filesystemByPath.set(
       ROOT_MOUNT,
-      options.rootDiskPct === "unmeasured" ? null : statfsAt(options.rootDiskPct),
+      options.rootDiskPct === "unmeasured" ? null : fsAt(ROOT_MOUNT, options.rootDiskPct),
     );
   }
   if (options.gatewayStateFile !== undefined) {
     host.seed(GATEWAY_STATE_PATH, options.gatewayStateFile);
   }
-  host.seed("/proc/stat", "cpu  100 0 100 700 100 0 0 0 0 0\n");
-  host.seed("/proc/meminfo", "MemTotal:       1000 kB\nMemAvailable:    250 kB\n");
+  host.memorySample = { total: 1000, available: 250 };
   host.handlers.push((argv) => {
     if (argv[0] === "tailscale" && argv[1] === "status") {
       return options.tailscaleOnline === false
@@ -929,15 +932,27 @@ describe("the heartbeat writer (§6.4)", () => {
 
   test("metrics carry cpu, mem and disk percentages in range", async () => {
     h = harness({ status: "ready", diskPct: 40 });
+    h.host.cpuLoadPct = 42.37;
     const first = await h.heartbeat.once();
-    expect(first.metrics.cpu_pct).toBe(0); // no delta on the first tick
+    expect(first.metrics.cpu_pct).toBe(42.4);
     expect(first.metrics.mem_pct).toBe(75);
     expect(first.metrics.disk_pct).toBe(40);
 
-    // Second sample: 100 more busy ticks, 100 more idle → 50% busy.
-    h.host.seed("/proc/stat", "cpu  200 0 100 800 100 0 0 0 0 0\n");
-    const second = await h.heartbeat.once();
-    expect(second.metrics.cpu_pct).toBe(50);
+    // Out of range is clamped; unmeasured is 0, since `cpu_pct` is required.
+    h.host.cpuLoadPct = 140;
+    expect((await h.heartbeat.once()).metrics.cpu_pct).toBe(100);
+    h.host.cpuLoadPct = null;
+    expect((await h.heartbeat.once()).metrics.cpu_pct).toBe(0);
+  });
+
+  test("the CPU reading is primed when the heartbeat is built, before any tick", async () => {
+    // `cpuLoad` is a delta since its previous call, and the first call in a
+    // process is the average since boot. Priming at construction makes the
+    // first tick a recent window instead.
+    h = harness({ status: "ready" });
+    expect(h.host.cpuLoadCalls).toBe(1);
+    await h.heartbeat.once();
+    expect(h.host.cpuLoadCalls).toBe(2);
   });
 
   test("the root filesystem is measured alongside /data", async () => {
@@ -947,29 +962,21 @@ describe("the heartbeat writer (§6.4)", () => {
     // root disk the self-update is about to refuse to write to.
     expect(tick.metrics.disk_pct).toBe(40);
     expect(tick.metrics.root_disk_pct).toBe(62);
-    expect(h.host.commands.filter((c) => c.startsWith("df "))).toHaveLength(0);
   });
 
   test("the root filesystem's free bytes ride along with its percentage", async () => {
-    // `statfsAt` builds 1000 blocks of 4 KiB, so 62% full leaves 380 blocks —
+    // `fsAt` builds 1000 blocks of 4 KiB, so 62% full leaves 380 blocks —
     // 1.48 MiB, floored to 1. The point is not the figure but that it comes
     // from the filesystem rather than from `size × (1 - pct)`, which cannot see
     // the boot partitions and metadata that sit between the two.
     h = harness({ status: "ready", diskPct: 40, rootDiskPct: 62 });
     const tick = await h.heartbeat.once();
     expect(tick.metrics.root_free_mib).toBe(1);
-    expect(h.host.commands.filter((c) => c.startsWith("df "))).toHaveLength(0);
   });
 
   test("an unmeasurable root filesystem omits the field rather than reporting 0%", async () => {
+    // No reading for `/`, so nothing is claimed.
     h = harness({ status: "ready", diskPct: 40, rootDiskPct: "unmeasured" });
-    // statvfs said nothing for `/`, and `df` would not either — the two ways of
-    // asking are both exhausted, so nothing is claimed.
-    h.host.handlers.unshift((argv) =>
-      argv[0] === "df" && argv[2] === ROOT_MOUNT
-        ? { code: 1, stdout: "", stderr: "df: /: No such file or directory" }
-        : null,
-    );
     const tick = await h.heartbeat.once();
     expect(tick.metrics.disk_pct).toBe(40);
     expect("root_disk_pct" in tick.metrics).toBe(false);
@@ -1086,8 +1093,6 @@ describe("the heartbeat writer (§6.4)", () => {
       }
       return null;
     });
-    host.seed("/proc/stat", "cpu  1 0 1 8 0 0 0 0 0 0\n");
-    host.seed("/proc/meminfo", "MemTotal: 10 kB\nMemAvailable: 5 kB\n");
     const beat = makeHeartbeat({
       host,
       aws: makeAws({
@@ -1256,22 +1261,16 @@ describe("the rollout request on the row (§6.6)", () => {
   });
 });
 
-describe("/proc parsing", () => {
-  test("parseProcStat sums the cpu line and counts idle+iowait as idle", () => {
-    expect(parseProcStat("cpu  10 0 10 70 10 0 0 0 0 0\n")).toEqual({ total: 100, idle: 80 });
-    expect(parseProcStat("intr 1 2 3\n")).toBeNull();
+describe("turning readings into metrics", () => {
+  test("memoryPercent is the share the kernel could not hand out; unmeasured is 0", () => {
+    expect(memoryPercent({ total: 1000, available: 400 })).toBe(60);
+    expect(memoryPercent({ total: 0, available: 0 })).toBe(0);
+    expect(memoryPercent(null)).toBe(0);
   });
 
-  test("cpuPercent is 0 without a previous sample and clamps to [0,100]", () => {
-    expect(cpuPercent(null, { total: 100, idle: 50 })).toBe(0);
-    expect(cpuPercent({ total: 0, idle: 0 }, { total: 100, idle: 25 })).toBe(75);
-    expect(cpuPercent({ total: 100, idle: 50 }, { total: 100, idle: 50 })).toBe(0);
-  });
-
-  test("parseMeminfo uses MemAvailable, falling back to MemFree", () => {
-    expect(parseMeminfo("MemTotal: 1000 kB\nMemAvailable: 400 kB\n")).toBe(60);
-    expect(parseMeminfo("MemTotal: 1000 kB\nMemFree: 100 kB\n")).toBe(90);
-    expect(parseMeminfo("garbage")).toBe(0);
+  test("freeMib floors to whole MiB and never goes negative", () => {
+    expect(freeMib(3 * 1024 * 1024 - 1)).toBe(2);
+    expect(freeMib(-5)).toBe(0);
   });
 });
 
@@ -1334,18 +1333,6 @@ describe("the crash-loop baseline outlives the process", () => {
     expect((await second.heartbeat.once()).health.hermes).toBe(true);
   });
 
-  test("the CPU sample survives too, so the first tick after a swap is not 0%", async () => {
-    const first = harness({ status: "ready" });
-    await first.heartbeat.once();
-
-    const second = harness({ status: "ready", host: first.host });
-    // Busier since the sample the previous process took: 100 more jiffies, all
-    // of them non-idle.
-    second.host.seed("/proc/stat", "cpu  200 0 100 700 100 0 0 0 0 0\n");
-
-    expect((await second.heartbeat.once()).metrics.cpu_pct).toBeGreaterThan(0);
-  });
-
   test("a truncated or foreign baseline is ignored, not fatal", async () => {
     const h = harness({ status: "ready", hermesRestarts: [5] });
     h.host.seed(BASELINE_PATH, '{"restarts":');
@@ -1353,17 +1340,16 @@ describe("the crash-loop baseline outlives the process", () => {
     // No baseline means no delta, which is the same answer a first tick gives.
     expect((await h.heartbeat.once()).health.hermes).toBe(true);
     expect(parseBaseline("{ not json")).toBeNull();
-    expect(parseBaseline('{"restarts":"nope","cpu":{"total":1}}')).toEqual({
-      restarts: null,
-      cpu: null,
-    });
+    expect(parseBaseline('{"restarts":"nope","cpu":{"total":1}}')).toEqual({ restarts: null });
+    // An older build also persisted a CPU sample; it is read past, not refused.
+    expect(parseBaseline('{"restarts":3,"cpu":{"total":1,"idle":1}}')).toEqual({ restarts: 3 });
   });
 
   /**
    * The heartbeat runs every 30 s for the life of the box; an fsync'd write per
    * tick is ~2,880 writes a day to a root volume for a file whose only reader
    * is the next process. The restart counter is written the moment it changes —
-   * that is the value a crash loop turns on — and the rest is periodic.
+   * that is the value a crash loop turns on — and an unchanged one never is.
    */
   test("the baseline is not rewritten on every tick", async () => {
     const h = harness({ status: "ready", hermesRestarts: [7] });
@@ -1374,11 +1360,11 @@ describe("the crash-loop baseline outlives the process", () => {
       await write(path, content, mode);
     };
 
-    for (let i = 0; i < BASELINE_WRITE_EVERY; i += 1) await h.heartbeat.once();
+    for (let i = 0; i < 4; i += 1) await h.heartbeat.once();
 
-    // Tick 1 (a fresh box needs a baseline at once) and tick 4 (the periodic
-    // refresh); ticks 2 and 3 changed nothing worth an fsync.
-    expect(writes).toHaveLength(2);
+    // Tick 1 only: a fresh box needs a baseline at once, and ticks 2 to 4
+    // changed nothing worth an fsync.
+    expect(writes).toHaveLength(1);
   });
 
   test("a restart is persisted the moment it appears, not on the next refresh", async () => {

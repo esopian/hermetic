@@ -26,12 +26,15 @@ import type {
   SnapshotRef,
   TagSelector,
   VolumeRef,
+  OwnedVolumeStatus,
+  RetagVolumeOptions,
   VolumeStatus,
 } from "./types.ts";
 
 import {
   AGENT_TAG,
   FLEET_ID_TAG,
+  FORMER_AGENT_TAG,
   MANAGED_TAG,
   MANAGED_TAG_VALUE,
   ROLE_DATA,
@@ -92,8 +95,22 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
       b.record("compute.deleteVolume");
       b.volumes.delete(volumeId);
     },
-    /** Every live instance carrying this agent's tag — a fixture can hold two. */
-    listInstancesByTag: async (name: string): Promise<InstanceRef[]> => b.liveByTag(name),
+    /**
+     * Every live instance carrying this agent's tag — a fixture can hold two.
+     * `shuttingDown` adds the dying ones, exactly as `Ec2Compute` widens its
+     * state filter.
+     */
+    listInstancesByTag: async (
+      name: string,
+      opts: { shuttingDown?: boolean } = {},
+    ): Promise<InstanceRef[]> => {
+      const live = b.liveByTag(name);
+      if (!opts.shuttingDown) return live;
+      const dying = [...b.instances.values()]
+        .filter((i) => i.agent === name && i.state === "shutting-down" && b.inFleet(i))
+        .map((i) => ({ instance_id: i.instance_id, state: i.state, public_ip: i.public_ip }));
+      return [...live, ...dying];
+    },
     listNetworkInterfaces: async (subnetIds: readonly string[]): Promise<NetworkInterfaceRef[]> =>
       subnetIds.length === 0 ? [] : b.enisIn(subnetIds),
     runInstance: async (spec: RunInstanceSpec): Promise<InstanceRef> => {
@@ -222,15 +239,24 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
         attachments: vol.attached_to ? [{ instance_id: vol.attached_to, state: "attached" }] : [],
       };
     },
-    /** §6.7's volume half: the agent's data disk, gone, or a refusal. */
+    /**
+     * §6.7's volume half: the agent's data disk, gone, or a refusal — with the
+     * `hermetic:former_agent` tag in the answer and in a refusal's `found`.
+     */
     describeOwnedVolume: async (
       volumeId: string,
       owner: ResourceOwner,
-    ): Promise<VolumeStatus | null> => {
+    ): Promise<OwnedVolumeStatus | null> => {
       const vol = b.volumes.get(volumeId);
       if (!vol) return null;
-      assertResourceOwned("volume", volumeId, owner, b.volumeTagMap(vol), OWNED_VOLUME_ROLE);
-      return await b.compute.describeVolume(volumeId);
+      const former_agent = vol.former_agent ?? null;
+      const tags = {
+        ...b.volumeTagMap(vol),
+        ...(former_agent === null ? {} : { [FORMER_AGENT_TAG]: former_agent }),
+      };
+      assertResourceOwned("volume", volumeId, owner, tags, OWNED_VOLUME_ROLE);
+      const status = await b.compute.describeVolume(volumeId);
+      return status === null ? null : { ...status, former_agent };
     },
     /**
      * Raw, like `Ec2Compute.attachVolume`: `attachAgentVolume` polls the
@@ -344,7 +370,33 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           volume_id: v.volume_id,
           size_gib: v.size_gib,
           agent: v.agent,
+          former_agent: v.former_agent ?? null,
           state: v.state,
+          created_at: v.created_at ?? null,
+        }))
+        .sort((a, b) => (a.volume_id < b.volume_id ? -1 : 1)),
+    /**
+     * `Ec2Compute.listVolumesByAgentTag`: managed, this fleet, `agent=<name>`,
+     * any role. The model's root disks carry the instance's `agent` tag but
+     * are not managed (`isManagedVolume`), as EC2's untagged ones are not.
+     */
+    listVolumesByAgentTag: async (name: string): Promise<ManagedVolumeRef[]> =>
+      [...b.volumes.values()]
+        .filter(
+          (v) =>
+            v.agent === name &&
+            b.isManagedVolume(v) &&
+            b.inFleet(v) &&
+            v.state !== "deleting" &&
+            v.state !== "deleted",
+        )
+        .map((v) => ({
+          volume_id: v.volume_id,
+          size_gib: v.size_gib,
+          agent: v.agent,
+          former_agent: v.former_agent ?? null,
+          state: v.state,
+          created_at: v.created_at ?? null,
         }))
         .sort((a, b) => (a.volume_id < b.volume_id ? -1 : 1)),
     /**
@@ -378,6 +430,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
           const fleetTag = v.fleet_id === undefined ? b.boundFleetId() : v.fleet_id;
           if (managed && fleetTag !== null) tags[FLEET_ID_TAG] = fleetTag;
           if (v.name_tag) tags["Name"] = v.name_tag;
+          if (v.former_agent) tags[FORMER_AGENT_TAG] = v.former_agent;
           return {
             volume_id: v.volume_id,
             size_gib: v.size_gib,
@@ -385,6 +438,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
             availability_zone: v.az ?? b.launchAzId,
             created_at: v.created_at ?? null,
             agent: v.agent,
+            former_agent: v.former_agent ?? null,
             managed,
             role_data: v.role === "data",
             tags,
@@ -396,7 +450,7 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
     retagVolume: async (
       volumeId: string,
       agent: string | null,
-      opts: { roleData?: boolean; name?: string | null } = {},
+      opts: RetagVolumeOptions = {},
     ): Promise<void> => {
       const roleData = opts.roleData ?? true;
       const vol = b.volumes.get(volumeId);
@@ -408,12 +462,21 @@ export function createMemoryCompute(b: MemoryBackend): Backend["compute"] {
       // "not role=data" is "no role tag" — which is what a restore puts back.
       // An absent `opts.name` leaves the display `Name` alone; `null` clears it,
       // which is what a rollback of an adopted volume asks for.
+      //
+      // `expectedAgent` mirrors `DeleteTags` with a `Value`: with `agent: null`
+      // the tag is removed only while it still reads that value, and a
+      // mismatch leaves it — everything else in the call still lands, as the
+      // `CreateTags` before it does on EC2.
+      const keepsAgent =
+        agent === null && opts.expectedAgent !== undefined && vol.agent !== opts.expectedAgent;
       b.volumes.set(volumeId, {
         ...vol,
-        agent,
+        agent: keepsAgent ? vol.agent : agent,
         role: roleData ? "data" : null,
         fleet_id: b.boundFleetId(),
         ...(opts.name === undefined ? {} : { name_tag: opts.name }),
+        // Same three states for `hermetic:former_agent` (§6.7).
+        ...(opts.formerAgent === undefined ? {} : { former_agent: opts.formerAgent }),
       });
     },
     /**

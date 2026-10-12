@@ -55,6 +55,8 @@ import {
   openTeardownStore,
   openRunStore,
   SqliteChatFenceStore,
+  SqliteChatSettingsStore,
+  SqliteIncarnationStore,
   SqliteLocalChatSessions,
   SqliteInstanceListeningStore,
   SqliteNotificationStore,
@@ -84,6 +86,18 @@ import type {
  * warning, never a failure, because the nightly check picks it up anyway.
  */
 export const FOUNDATION_ROLLOUT_WAIT_MS = 10 * 60_000;
+
+/**
+ * §6.5's converge, as fixture mode runs it. The fixture backend's fake box
+ * (`simulateConverge`, `memory-simulation.ts`) answers an `apply_request` about
+ * a second after it is written; at a real fleet's ten-second poll the demo — and
+ * every UI flow test that applies a rollout or an `upgrade --now` — would sit
+ * out most of a poll interval for nothing. The timeout is left at its default:
+ * the looks are counted (`converge.ts`), so a shorter poll only means more of
+ * them, and a fixture box that does not answer still ends in the same minutes a
+ * real one would.
+ */
+const FIXTURE_CONVERGE = { convergePollMs: 250 } as const;
 
 /**
  * The fixture's knobs (§3.5). Core reads no environment for any of these: a
@@ -209,7 +223,9 @@ const FIXTURE_PREFLIGHT: Pick<HermeticDeps, "localTailscale" | "verifyTailscaleO
     cert_domains: [`fixture-laptop.${FIXTURE_TAILNET}`],
     hostname: "fixture-laptop",
     addresses: ["100.64.0.1"],
-    binary: "tailscale",
+    // A plausible resolved path, never run: the fixture terminal answers in
+    // memory, and nothing in fixture mode spawns `tailscale`.
+    binary: "/usr/local/bin/tailscale",
     problem: null,
   }),
   verifyTailscaleOauth: async () => ({
@@ -311,6 +327,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     });
     backend.slowStackMs = knobs.slowStackMs ?? 0;
     if (knobs.foundationUnsafe === true) backend.changeSetChanges = [...FIXTURE_UNSAFE_CHANGES];
+    // §6.5: a box that answers `plan rollout` and `upgrade --now`; see `fixtureConverge`.
+    backend.simulateConverge = true;
     const { runs } = openRunStore(opts.home, { fixture: true });
     const { teardowns } = openTeardownStore(opts.home, { fixture: true });
     /**
@@ -326,6 +344,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     return createHermetic({
       fixture: true,
       fixtureChat: { delayMs: knobs.chatDelayMs, cutAfter: knobs.chatCutAfter },
+      rollout: FIXTURE_CONVERGE,
       backend,
       config,
       runs,
@@ -337,6 +356,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       localSessions: new SqliteLocalChatSessions(local.db),
       chatFence: new SqliteChatFenceStore(local.db),
       instanceListening: new SqliteInstanceListeningStore(local.db),
+      chatSettings: new SqliteChatSettingsStore(local.db),
+      incarnations: new SqliteIncarnationStore(local.db),
       // §4.6's create presets: a laptop preference, so the fixture database's.
       presets: new SqlitePresetStore(local.db),
       configStore: configStoreFor(local),
@@ -426,6 +447,10 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     /** The fence the portal and the CLI share; see `chat-fence.ts`. */
     chatFence: new SqliteChatFenceStore(local.db),
     instanceListening: new SqliteInstanceListeningStore(local.db),
+    /** §9.2: this laptop's chat settings — transcript redaction — in `prefs`. */
+    chatSettings: new SqliteChatSettingsStore(local.db),
+    /** §6.7: which incarnation of each name the tables above describe. */
+    incarnations: new SqliteIncarnationStore(local.db),
     /** §4.6: this laptop's create presets, one `prefs` row. */
     presets: new SqlitePresetStore(local.db),
     configStore: configStoreFor(local),
@@ -639,6 +664,7 @@ const COMPUTE_METHODS = [
   "resolveUbuntuAmi",
   "listManagedInstances",
   "listManagedVolumes",
+  "listVolumesByAgentTag",
   "listVolumes",
   "listUnscopedManaged",
   "tagFleetId",
@@ -681,7 +707,7 @@ function notInitializedBackend(): Backend {
     identity: group("identity", ["callerIdentity", "accountAlias", "orgId"]),
     store: {
       agents: group("store.agents", ["get", "putIfAbsent", "update", "scan", "delete"]),
-      events: group("store.events", ["append", "query"]),
+      events: group("store.events", ["append", "query", "appendTombstone", "queryTombstones"]),
       fleet: group("store.fleet", [
         "get",
         "put",
@@ -1038,6 +1064,7 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
   // into `slowStackMs`) reproduces the minutes-long foundation phase so its
   // progress UX can be worked on.
   backend.slowStackMs = knobs.slowStackMs ?? 0;
+  backend.simulateConverge = true;
 
   let frozen: LocalConfig | null = existingConfig;
   const configStore: ConfigStore = {
@@ -1090,6 +1117,7 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
   const make = (): Hermetic =>
     createHermetic({
       fixture: true,
+      rollout: FIXTURE_CONVERGE,
       backend,
       config: frozen,
       configStore,

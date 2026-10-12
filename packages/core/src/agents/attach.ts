@@ -112,6 +112,12 @@ export interface AttachDeps {
   /** Injected by tests so a poll loop is not a real five seconds. */
   pollMs?: number | undefined;
   progressMs?: number | undefined;
+  /**
+   * `destroy`'s and `recreate`'s bounded wait for the agent's tailnet devices
+   * to read offline (`TAILNET_OFFLINE_WAIT_MS`, `fleet/tailnet-devices.ts`). Carried here
+   * because it runs on this same poll and clock; tests set it to zero.
+   */
+  tailnetOfflineMs?: number | undefined;
   now?: () => number;
   /** The jitter's source. Injected so a test can assert an exact delay. */
   random?: () => number;
@@ -592,6 +598,98 @@ export async function* waitVolumeReleased(
         ? `waiting for ${holders[0].instance_id} to release volume ${volumeId}`
         : `waiting for ${holders.length} instance(s) to release volume ${volumeId}`,
     );
+    await abortableSleep(pollMs, opts.signal);
+  }
+}
+
+/**
+ * Wait until `instanceId` is `terminated`, or so gone EC2 no longer admits it
+ * ever existed — the instance-side twin of `waitVolumeReleased`, unbounded for
+ * the same reason.
+ *
+ * `destroy` needs it before it releases the name (§6.7): the box's hermeticd
+ * keeps writing its facts onto the agent row while the instance is
+ * `shutting-down`, and the release deletes that row. Waiting for `terminated`
+ * is what guarantees nothing on the box is still running when the row goes.
+ * `recreate` needs it before it launches the replacement (§6.5): the old
+ * box's tailnet node reads online until the machine is gone, and a
+ * replacement joining beside it is pushed onto `<name>-2`. Both reach it
+ * through `lifecycle/retire-nodes.ts`.
+ *
+ * Any other state is waited on rather than refused. `TerminateInstances` has
+ * already been accepted by the time this is called, and `DescribeInstances` is
+ * eventually consistent, so a poll can still read `running` for a moment
+ * after the terminate; the operator's abort is the way out of a wait that
+ * never ends.
+ */
+export async function* waitInstanceTerminated(
+  deps: Pick<AttachDeps, "pollMs" | "progressMs" | "now" | "random"> & {
+    compute: Pick<ComputeApi, "describeInstance">;
+  },
+  instanceId: string,
+  opts: AttachOptions = {},
+): AsyncGenerator<OpEvent, void> {
+  const now = deps.now ?? Date.now;
+  const pollMs = deps.pollMs ?? ATTACH_POLL_MS;
+  const progressMs = deps.progressMs ?? ATTACH_PROGRESS_MS;
+  const random = deps.random ?? Math.random;
+  const phase = opts.phase ?? "instance";
+  const waiting = opts.progress?.waiting ?? 0.8;
+  const finished = opts.progress?.done ?? 0.85;
+
+  const started = now();
+  let lastSaid = 0;
+  let lastReason = "";
+  let waited = false;
+
+  const say = function* (reason: string, level?: OpEvent["level"]): Generator<OpEvent> {
+    waited = true;
+    const quiet = now() - lastSaid;
+    if (reason === lastReason && quiet < progressMs) return;
+    lastReason = reason;
+    lastSaid = now();
+    yield evt(phase, waiting, `${reason} (${elapsed(now() - started)} so far)`, at(now), level);
+  };
+
+  const retries = transientRetries({
+    pollMs,
+    random,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    say,
+  });
+
+  for (;;) {
+    if (opts.signal?.aborted) {
+      throw new HermeticError(
+        "ABORTED",
+        `stopped waiting for instance ${instanceId} to terminate; the agent row still names it`,
+        { instanceId },
+      );
+    }
+    await opts.heartbeat?.();
+    retries.pass();
+
+    let instance: Awaited<ReturnType<typeof deps.compute.describeInstance>>;
+    try {
+      instance = await deps.compute.describeInstance(instanceId);
+    } catch (e) {
+      yield* retries.refused("DescribeInstances", e);
+      continue;
+    }
+    if (instance === null || instance.state === "terminated") {
+      if (waited) {
+        yield evt(
+          phase,
+          finished,
+          `instance ${instanceId} terminated after ${elapsed(now() - started)}`,
+          at(now),
+          undefined,
+          "done",
+        );
+      }
+      return;
+    }
+    yield* say(`waiting for instance ${instanceId} to terminate (${instance.state})`);
     await abortableSleep(pollMs, opts.signal);
   }
 }

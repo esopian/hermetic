@@ -54,11 +54,14 @@ test("destroying an agent but keeping its volume moves the volume to free withou
     return freeCount(badge);
   });
 
-  for await (const _ of h.ctx.hermetic().agents.destroy({ name: FIXTURE.readyAgent, yes: true })) {
+  // Kept, so the volume goes loose rather than away: that is the count to move.
+  for await (const _ of h.ctx
+    .hermetic()
+    .agents.destroy({ name: FIXTURE.readyAgent, yes: true, keep_volume: true })) {
     // Drained for its side effects; the page only sees the stream.
   }
 
-  // One scan carries the `destroyed` row; nothing here asks for the volumes.
+  // One scan no longer carries the row (§6.7 deletes it); nothing here asks for the volumes.
   await h.poll();
   await waitFor(() => expect(freeCount(volumesBadge())).toBe(before + 1), { timeout: 2000 });
 }, 30_000);

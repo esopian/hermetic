@@ -18,9 +18,11 @@
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { RedactedText } from "./RedactedText.tsx";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { MentionBot } from "../chat-mentions.ts";
+import { recoveredDms } from "../bot-dm.ts";
+import type { DmBot } from "../bot-dm.ts";
 import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts";
 import type { Observation } from "../chat-conversations.ts";
 import { composerState, hasKnownOrigin, originClass, railTime } from "../chat-logic.ts";
@@ -36,6 +38,10 @@ import type { Pin } from "../stick-to-bottom.ts";
 import type { Destination, ThreadState } from "../chat-logic.ts";
 import { Composer } from "./Composer.tsx";
 import { Face } from "./Face.tsx";
+import { BotTitleEdit } from "./BotTitleEdit.tsx";
+import { BotDmContext } from "./BotDm.tsx";
+import type { ExchangeRequest } from "./BotDm.tsx";
+import { BotExchange } from "./BotExchange.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
 
@@ -59,6 +65,8 @@ function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status
       return "pending";
   }
 }
+
+const NO_TEAMMATES: readonly DmBot[] = [];
 
 /** A watch that is working — what a surface with no observation of its own passes. */
 const LIVE_OBSERVATION: Observation = { state: "live", attempt: 0, error: null };
@@ -112,6 +120,26 @@ function ObservationBand({
       ) : null}
     </div>
   );
+}
+
+/**
+ * What a refused turn's band says. A refusal never reached the box, so the
+ * message the operator typed is not in the transcript the re-read brings back;
+ * the band is the only record that it was not sent. `FLEET_MISMATCH` is a
+ * window left open across a fleet switch (§4.7), and `NO_TARGET` a window that
+ * never learned its fleet: both are fixed by reloading, which the head's own
+ * message says.
+ */
+export function turnErrorHeadline(code: string): string {
+  switch (code) {
+    case "ABORT_FAILED":
+      return "The turn could not be stopped.";
+    case "FLEET_MISMATCH":
+    case "NO_TARGET":
+      return "Not sent: this window is showing a fleet the app is no longer serving.";
+    default:
+      return "The message was not sent.";
+  }
 }
 
 /** The thread-level band: one condition, stated, with no way to dismiss it. */
@@ -338,6 +366,7 @@ export function Thread({
   sending,
   activity = sending ? "thinking" : "idle",
   historyError,
+  turnError = null,
   now,
   fixture = false,
   reconnectAttempt = 0,
@@ -347,8 +376,12 @@ export function Thread({
   onSend,
   onAbort,
   actions,
+  onRename,
   mentions,
   mentionHint,
+  teammates = NO_TEAMMATES,
+  sessions = [],
+  onChooseSession,
 }: {
   fleetId: string;
   instance: string;
@@ -364,6 +397,11 @@ export function Thread({
   sending: boolean;
   activity?: TurnActivity;
   historyError: string | null;
+  /**
+   * Why the last turn was refused before it reached the box, or why stopping
+   * it failed. Cleared by the next send.
+   */
+  turnError?: { code: string; message: string } | null;
   now: number;
   fixture?: boolean;
   reconnectAttempt?: number;
@@ -375,8 +413,26 @@ export function Thread({
   onSend: (text: string) => void;
   onAbort: () => void;
   actions?: ReactNode;
+  /**
+   * Rename the bot's friendly title (`null` resets it). Absent means this
+   * surface cannot, so the header offers no pencil.
+   */
+  onRename?: (title: string | null) => Promise<void>;
   mentions?: readonly MentionBot[];
   mentionHint?: string;
+  /**
+   * Every bot on this instance, this one included: who a `message_agent` call
+   * or a DM delivery names (`bot-dm.ts`). Not `mentions`, which leaves this
+   * bot out and is empty in a named session.
+   */
+  teammates?: readonly DmBot[];
+  /**
+   * This bot's sessions, offered as chips when the destination is `unchosen`.
+   * Passed by the surface that owns the rail, with the same select the rail's
+   * Sessions tab performs, so a chip and a rail row land in the same place.
+   */
+  sessions?: readonly SessionView[];
+  onChooseSession?: (session: string) => void;
 }) {
   const log = useRef<HTMLDivElement>(null);
   // One turn is one row: a durable read hands back an assistant row per tool
@@ -392,6 +448,15 @@ export function Thread({
   const [density, setDensity] = useEventDensity(densityThreadKey(fleetId, instance, bot, session?.id));
   const items = threadItems(rows, eventful ? density : "compact");
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
+  // Refused DMs a later call already sent again, and the ones Retry was asked
+  // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
+  // streaming turn that changes neither does not re-render every marker.
+  const recoveredKey = useMemo(
+    () => [...recoveredDms(live ? [...messages, live] : messages, teammates)].sort().join("\n"),
+    [messages, live, teammates],
+  );
+  const recovered = useMemo(() => new Set(recoveredKey.split("\n")), [recoveredKey]);
+  const askedDms = useRef(new Set<string>());
   // One predicate for the header badge and the composer band: an empty
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
@@ -431,6 +496,31 @@ export function Thread({
     if (node) pinToBottom(node, pin.current);
   }, [instance, bot, session?.id]);
 
+  // A bot-to-bot DM opened from its marker (`BotDm.tsx`), drawn over the log.
+  // It belongs to the conversation it was opened from and closes with it.
+  const [exchange, setExchange] = useState<ExchangeRequest | null>(null);
+  useEffect(() => setExchange(null), [instance, bot, session?.id]);
+  // A refused DM's Retry asks this bot through the composer's own path
+  // (`BotDm.tsx`), so only where the composer could send it. `message_agent`
+  // runs only in the canonical Bot Chat, so a refusal is only ever drawn in
+  // the thread whose composer sends there. A ref keeps the context stable
+  // across renders while still calling the newest `send`.
+  const sendRef = useRef<(text: string) => void>(() => {});
+  const retrySender = composer.enabled ? botLabel(instance, bot, botTitle) : null;
+  const dm = useMemo(
+    () => ({
+      teammates,
+      open: setExchange,
+      retry:
+        retrySender === null
+          ? null
+          : { send: (text: string) => sendRef.current(text), sender: retrySender },
+      recovered,
+      asked: askedDms.current,
+    }),
+    [teammates, retrySender, recovered],
+  );
+
   // The log follows the bottom while a turn is arriving, and only then: a
   // reader who scrolled up into older turns is reading those, and yanking them
   // back down is the one thing a transcript must not do to them.
@@ -447,6 +537,7 @@ export function Thread({
     if (node) pinToBottom(node, pin.current);
     onSend(text);
   };
+  sendRef.current = send;
 
   // Looking at a conversation is what marks its messages read (see `view-ack`).
   useViewAck({
@@ -472,14 +563,23 @@ export function Thread({
         />
         <div>
           <div className="ch-thead-name">
-            <RedactedText text={botLabel(instance, bot, botTitle)} />
+            {onRename ? (
+              <BotTitleEdit
+                label={botLabel(instance, bot, botTitle)}
+                title={botTitle?.trim() && botTitle.trim() !== bot ? botTitle.trim() : null}
+                fallback={botLabel(instance, bot, null)}
+                onSave={onRename}
+              />
+            ) : (
+              <RedactedText text={botLabel(instance, bot, botTitle)} />
+            )}
             {bot !== "default" ? <span className="mono">{`@ ${instance}`}</span> : null}
             {isDefault ? <span className="ch-default">default bot</span> : null}
           </div>
           <div className="ch-thead-sub">
             {/*
-              The header's badge reads the same `Destination` the composer's
-              band does. It must not fall back to `portal` for a session that
+              The header's badge reads the same `Destination` the composer
+              does. It must not fall back to `portal` for a session that
               has not been read — a badge saying `portal` is the same claim the
               band exists to stop the UI from making.
             */}
@@ -533,71 +633,96 @@ export function Thread({
         </div>
       ) : null}
 
+      {turnError ? (
+        <div className="ch-band bad" role="alert">
+          <i className="dot" />
+          <span>{turnErrorHeadline(turnError.code)}</span>
+          <span className="sub">{turnError.message}</span>
+        </div>
+      ) : null}
+
       <div className="ch-log" ref={log} data-autoscroll>
-        <ProcessEventContext.Provider value={processContext}>
-          {rows.length === 0 ? (
-            <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
-          ) : items.length === 0 ? (
-            // Every row here is a routine event and "failures only" hides them all.
-            <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
-          ) : (
-            items.map((item) => {
-              // Keyed on the row's *first* source id: the merged row is named by
-              // its last one, which moves every time the turn takes another row,
-              // and a key that moves remounts the article — losing the group the
-              // reader closed and the step they opened mid-turn. A burst is keyed
-              // the same way, on its first event.
-              const key = item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
-              const divider = item.kind === "burst" ? item.divider : item.row.divider;
-              const ids =
-                item.kind === "burst"
-                  ? item.entries.map((entry) => entry.row.message.id)
-                  : item.row.ids;
-              return (
-                <div key={key}>
-                  {divider ? (
-                    <div className="ch-divider">
-                      <hr />
-                      <span>{divider}</span>
-                      <hr />
-                    </div>
-                  ) : null}
-                  <RowBoundary
-                    resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
-                    label={item.kind === "burst" ? item.key : item.row.message.id}
-                  >
-                    {item.kind === "burst" ? (
-                      <ProcessBurst entries={item.entries} />
-                    ) : item.kind === "event" ? (
-                      <ProcessEventRow entry={item} />
-                    ) : (
-                      <Message
-                        row={item.row}
-                        fleetId={fleetId}
-                        instance={instance}
-                        bot={bot}
-                        botTitle={botTitle}
-                        status={status}
-                        now={now}
-                        streaming={sending && live !== null && item.row.message.id === live.id}
-                        activity={live !== null && item.row.message.id === live.id ? activity : "idle"}
-                        inReply={item.inReply}
-                      />
-                    )}
-                  </RowBoundary>
-                </div>
-              );
-            })
-          )}
-        </ProcessEventContext.Provider>
+        <BotDmContext.Provider value={dm}>
+          <ProcessEventContext.Provider value={processContext}>
+            {rows.length === 0 ? (
+              <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
+            ) : items.length === 0 ? (
+              // Every row here is a routine event and "failures only" hides them all.
+              <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
+            ) : (
+              items.map((item) => {
+                // Keyed on the row's *first* source id: the merged row is named by
+                // its last one, which moves every time the turn takes another row,
+                // and a key that moves remounts the article — losing the group the
+                // reader closed and the step they opened mid-turn. A burst is keyed
+                // the same way, on its first event.
+                const key = item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
+                const divider = item.kind === "burst" ? item.divider : item.row.divider;
+                const ids =
+                  item.kind === "burst"
+                    ? item.entries.map((entry) => entry.row.message.id)
+                    : item.row.ids;
+                return (
+                  <div key={key}>
+                    {divider ? (
+                      <div className="ch-divider">
+                        <hr />
+                        <span>{divider}</span>
+                        <hr />
+                      </div>
+                    ) : null}
+                    <RowBoundary
+                      resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
+                      label={item.kind === "burst" ? item.key : item.row.message.id}
+                    >
+                      {item.kind === "burst" ? (
+                        <ProcessBurst entries={item.entries} />
+                      ) : item.kind === "event" ? (
+                        <ProcessEventRow entry={item} />
+                      ) : (
+                        <Message
+                          row={item.row}
+                          fleetId={fleetId}
+                          instance={instance}
+                          bot={bot}
+                          botTitle={botTitle}
+                          status={status}
+                          now={now}
+                          streaming={sending && live !== null && item.row.message.id === live.id}
+                          activity={
+                            live !== null && item.row.message.id === live.id ? activity : "idle"
+                          }
+                          inReply={item.inReply}
+                        />
+                      )}
+                    </RowBoundary>
+                  </div>
+                );
+              })
+            )}
+          </ProcessEventContext.Provider>
+        </BotDmContext.Provider>
       </div>
 
+      {exchange ? (
+        <BotExchange
+          request={exchange}
+          fleetId={fleetId}
+          instance={instance}
+          bot={bot}
+          botTitle={botTitle}
+          status={status}
+          transcript={all}
+          teammates={teammates}
+          now={now}
+          onClose={() => setExchange(null)}
+        />
+      ) : null}
+
       <Composer
-        destination={
-          destination.state === "known" && !knownOrigin
-            ? { ...destination, emptyCanonical: true }
-            : destination
-        }
+        destination={destination}
+        choices={sessions}
+        onChoose={onChooseSession}
         placeholder={
           composer.placeholder === "Message…"
             ? `Message ${botLabel(instance, bot, botTitle)}…`

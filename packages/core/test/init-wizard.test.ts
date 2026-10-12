@@ -110,7 +110,7 @@ describe("the fixture init wizard", () => {
       accountId: identity.account_id,
     });
     const agents = await bound.agents.list();
-    expect(agents).toHaveLength(12);
+    expect(agents).toHaveLength(11);
     expect(agents.map((a) => a.name)).toContain("atlas");
 
     // The frozen config is the one the wizard produced, not the fixture's.
@@ -125,8 +125,8 @@ describe("the fixture init wizard", () => {
     expect(existsSync(join(home, DB_FILENAME))).toBe(false);
     expect(readdirSync(home)).toEqual([]);
 
-    // And `openHermetic({ fixture: true })` shows the same twelve.
-    expect(await (await openHermetic({ fixture: true, home })).agents.list()).toHaveLength(12);
+    // And `openHermetic({ fixture: true })` shows the same eleven.
+    expect(await (await openHermetic({ fixture: true, home })).agents.list()).toHaveLength(11);
   });
 
   /**
@@ -154,7 +154,7 @@ describe("the fixture init wizard", () => {
     const shown = await reopened.config.show();
     expect(shown.region).toBe("eu-west-1");
     expect(shown.tailnet).toBe("live.example.net");
-    expect(await reopened.agents.list()).toHaveLength(12);
+    expect(await reopened.agents.list()).toHaveLength(11);
 
     session.close();
   });

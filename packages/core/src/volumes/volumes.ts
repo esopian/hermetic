@@ -2,9 +2,11 @@
  * The volume surface (§9): `volumes.list`, `volumes.get`, `volumes.delete`.
  *
  * Instances are disposable, volumes are precious (§1) — which means a volume
- * outlives the row that made it. `destroy` keeps the data volume by default
- * (§6.6), so an account that has seen agents come and go accumulates memory
- * nothing is reading and everything is billing for. Before this module the only
+ * can outlive the row that made it. `destroy --keep-volume` leaves the data
+ * volume behind, released from the name (§6.7), and a fleet that destroyed
+ * agents before that kept every one by default, so an account that has seen
+ * agents come and go accumulates memory nothing is reading and everything is
+ * billing for. Before this module the only
  * thing that could see those volumes was `teardown --delete-volumes`, at the
  * one moment it was too late to do anything but delete them.
  *
@@ -25,6 +27,7 @@ import {
 } from "../schema/index.ts";
 import type {
   Agent,
+  AgentTombstone,
   DeleteVolumeInput,
   ListVolumesInput,
   VolumeDeleteResult,
@@ -107,7 +110,10 @@ export function ambiguousVolumeTags(volumes: readonly VolumeDetail[]): Map<strin
 export interface VolumeOwners {
   /** Rows that are not `destroyed`: the agents this volume actually belongs to. */
   live: Agent[];
-  /** Destroyed rows that still name it — kept forever (§4.3), owners of nothing. */
+  /**
+   * Legacy `destroyed` rows that still name it — owners of nothing. A destroy
+   * now deletes the row (§6.7), so these are pre-tombstone rows only.
+   */
   historical: Agent[];
 }
 
@@ -119,7 +125,7 @@ export interface VolumeOwners {
  * volume whose row predates it or whose create died before the write.
  *
  * Returning *all* of them, rather than the first match, is the point. A
- * destroyed row goes on naming its volume forever, and `agent create B --volume
+ * legacy destroyed row goes on naming its volume, and `agent create B --volume
  * <id>` gives that same disk a live owner, so a volume with a history has two
  * rows naming it and which one a scan happens to return first is arbitrary. The
  * first-match version of this function answered with whichever came back first,
@@ -145,12 +151,27 @@ export function ownersOf(volume: VolumeDetail, agents: readonly Agent[]): Volume
 }
 
 /**
+ * Whose memory a volume with no live owner holds (§6.7), for display only.
+ * Three sources, most direct first: the `former_agent` tag the destroy that
+ * kept it left on the disk itself; a legacy `destroyed` row still naming it;
+ * the newest tombstone that recorded it. `null` when none says.
+ */
+export function formerOwnerOf(
+  volume: VolumeDetail,
+  owners: VolumeOwners,
+  tombstone: AgentTombstone | undefined,
+): string | null {
+  if (owners.live.length > 0) return null;
+  return volume.former_agent ?? owners.historical[0]?.name ?? tombstone?.name ?? null;
+}
+
+/**
  * Where a volume belongs. Order matters and encodes the design's rules:
  * ambiguity beats everything (hermetic does not know which volume this
  * is, or whose it is), an unmanaged volume is never hermetic's to place, and a
- * *destroyed* agent row does not count as an owner — the row is kept forever
- * (§4.3) but nothing is reading its volume, which is the whole point of the
- * group.
+ * *destroyed* agent does not count as an owner — whether it survives as a
+ * legacy row or only as a tombstone (§6.7), nothing is reading its volume,
+ * which is the whole point of the group.
  */
 export function groupOf(volume: VolumeDetail, owners: VolumeOwners, ambiguous: boolean): VolumeGroup {
   if (ambiguous) return "ambiguous";
@@ -168,15 +189,18 @@ export function createVolumes(deps: VolumesDeps) {
   const { reservation } = deps;
 
   /**
-   * One read of reality: EC2's volumes, EC2's snapshots, DynamoDB's rows. The
-   * three are joined here and nowhere else — a head that recomputed the
-   * grouping would be a second definition of it (§3.1).
+   * One read of reality: EC2's volumes, EC2's snapshots, DynamoDB's rows and
+   * tombstones. They are joined here and nowhere else — a head that
+   * recomputed the grouping would be a second definition of it (§3.1).
    */
   async function readAll(): Promise<{ views: VolumeView[]; snapshots: SnapshotRef[] }> {
-    const [volumes, snapshots, agents, reserved] = await Promise.all([
+    const [volumes, snapshots, agents, tombstones, reserved] = await Promise.all([
       backend.compute.listVolumes(),
       backend.compute.listSnapshots(DATA_SNAPSHOT_TAG),
       backend.store.agents.scan(),
+      // §6.7: a destroy deletes the row, so what the fleet remembers about a
+      // kept volume's former agent is its tombstone. One query, newest first.
+      backend.store.events.queryTombstones(),
       // §9.1: a fourth fact, read the same way the other three are. A volume
       // somebody is mid-adoption of looks free to every other read here, and a
       // list that showed it as reclaimable would be inviting a race it can see.
@@ -184,6 +208,13 @@ export function createVolumes(deps: VolumesDeps) {
     ]);
     const ambiguous = ambiguousVolumeTags(volumes);
     const now = Date.parse(nowIso());
+
+    // Newest first from the store, so the first tombstone naming an id is the
+    // last incarnation that held it.
+    const tombstoneOf = new Map<string, AgentTombstone>();
+    for (const t of tombstones) {
+      if (t.volume_id !== null && !tombstoneOf.has(t.volume_id)) tombstoneOf.set(t.volume_id, t);
+    }
 
     const byVolume = new Map<string, SnapshotRef[]>();
     for (const snap of snapshots) {
@@ -193,6 +224,8 @@ export function createVolumes(deps: VolumesDeps) {
     const views = volumes.map((volume): VolumeView => {
       const owners = ownersOf(volume, agents);
       const owner = owners.live[0] ?? owners.historical[0] ?? null;
+      const tombstone = tombstoneOf.get(volume.volume_id);
+      const retainedBy = formerOwnerOf(volume, owners, tombstone);
       const claim = reserved.get(volume.volume_id) ?? null;
       const twins = ambiguous.get(volume.volume_id) ?? null;
       const attached_to = attachmentOf(volume);
@@ -205,11 +238,16 @@ export function createVolumes(deps: VolumesDeps) {
       /**
        * How long it has been free. EC2 does not report a detach time, so this
        * is the honest approximation available from what does exist: the owning
-       * row's last update for a volume an agent let go, and creation time for
-       * one that was never attached. Null when neither is parseable, rather
-       * than a zero that would read as "just now".
+       * row's last update for a volume an agent let go, the tombstone's
+       * `destroyed_at` for one whose row is gone (§6.7), and creation time for
+       * one that was never attached. Null when none is parseable, rather than
+       * a zero that would read as "just now".
        */
-      const since = owner ? owner.updated_at : volume.created_at;
+      const since = owner
+        ? owner.updated_at
+        : retainedBy !== null && tombstone
+          ? tombstone.destroyed_at
+          : volume.created_at;
       const sinceMs = since === null ? NaN : Date.parse(since);
       return {
         volume_id: volume.volume_id,
@@ -224,9 +262,11 @@ export function createVolumes(deps: VolumesDeps) {
         attachments: volume.attachments,
         attached,
         attached_to,
-        agent_status: owner?.status ?? null,
+        // A former owner known only by tag or tombstone was destroyed too;
+        // saying so keeps `no_agent` reading the same whichever record survives.
+        agent_status: owner?.status ?? (retainedBy !== null ? "destroyed" : null),
         owners: owners.live.map((a) => a.name),
-        retained_by: owners.live.length === 0 ? (owners.historical[0]?.name ?? null) : null,
+        retained_by: retainedBy,
         reserved_by: claim?.owner ?? null,
         reserved_until: claim?.expires ?? null,
         free_for_ms: attached || Number.isNaN(sinceMs) ? null : Math.max(0, now - sinceMs),
@@ -357,7 +397,7 @@ export function createVolumes(deps: VolumesDeps) {
     if (owner !== undefined) {
       throw new HermeticError(
         "CONFLICT",
-        `agent ${owner} still owns ${view.volume_id}; destroy the agent first (\`hermetic agent destroy ${owner} --yes --delete-volume\`)`,
+        `agent ${owner} still owns ${view.volume_id}; destroying the agent deletes it (\`hermetic agent destroy ${owner} --yes\`)`,
         { volume_id: view.volume_id, agent: owner, status: view.agent_status },
       );
     }

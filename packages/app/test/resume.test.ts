@@ -248,7 +248,9 @@ describe("resumePendingOps", () => {
       (await resumePendingOps({ ops, pending, hermetic: () => hermetic, fleet: FLEET })).resumed,
     ).toEqual(["op-6"]);
     expect((await ops.wait("op-6"))?.status).toBe("ok");
-    expect((await hermetic.agents.get(name)).status).toBe("destroyed");
+    // §6.7: finished means released — the row is gone and a tombstone names it.
+    expect((await hermetic.agents.list({})).map((a) => a.name)).not.toContain(name);
+    expect((await hermetic.agents.destroyed({ name })).map((t) => t.name)).toEqual([name]);
   });
 
   test("only idempotent, secret-free methods are resumable", () => {
@@ -429,7 +431,8 @@ describe("resumePendingOps, bound to the agent it was confirmed against", () => 
     const outcome = await resumePendingOps({ ops, pending, hermetic: () => hermetic, fleet: FLEET });
     expect(outcome.resumed).toEqual(["op-same"]);
     expect((await ops.wait("op-same"))?.status).toBe("ok");
-    expect((await hermetic.agents.get(name)).status).toBe("destroyed");
+    expect((await hermetic.agents.list({})).map((a) => a.name)).not.toContain(name);
+    expect((await hermetic.agents.destroyed({ name })).map((t) => t.name)).toEqual([name]);
   });
 });
 

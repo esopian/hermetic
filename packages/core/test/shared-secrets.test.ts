@@ -307,6 +307,8 @@ describe("secrets push --rekey", () => {
   });
 
   test("naming a destroyed agent is refused, not silently honoured", async () => {
+    // §6.7: a destroy releases the name, so the row is gone and the name is
+    // unknown — refused as NOT_FOUND rather than as a destroyed row.
     const { backend, hermetic } = await withNousAgent();
     await drain(hermetic.agents.destroy({ name: "orbit", yes: true }));
     let error: HermeticError | null = null;
@@ -320,9 +322,7 @@ describe("secrets push --rekey", () => {
     } catch (e) {
       error = e as HermeticError;
     }
-    expect(error!.code).toBe("VALIDATION");
-    expect(error!.message).toInclude("orbit is destroyed");
-    expect(error!.details!["status"]).toBe("destroyed");
+    expect(error!.code).toBe("NOT_FOUND");
     // Refused before anything: neither the fleet slot nor the swept agent slot moved.
     expect(backend.params.get("/hermetic/fxtr0001/secrets/nous-key")).toBe(FIXTURE_SHARED_NOUS_KEY);
     expect(backend.params.has("/hermes/fxtr0001/orbit/provider-key-nousshrd-r1")).toBe(false);

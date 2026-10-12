@@ -1,11 +1,11 @@
 /**
  * Settings → Notifications: the rules that decide how much of the inbox
- * interrupts, and the full inbox itself.
+ * interrupts, and the way to the inbox itself.
  *
- * Two things in one section on purpose. The rules are unreadable in the
- * abstract — "should health changes toast?" is a question nobody can answer
- * without seeing how many health changes there are — so the archive they are
- * about is on the same page, below them.
+ * The archive used to be the last block of this page. It is the full inbox
+ * drawer now (`⇧I`) — views, sources, agents, multi-select and core's
+ * auto-clear rule — and this page keeps a short `Inbox` block that opens it,
+ * so the rules and the rows they are about are still one click apart.
  *
  * Everything here is *this laptop's* (§7.1 item 4), which is why the page has
  * no save bar: delivery mode, quiet hours and the desktop permission only
@@ -15,19 +15,20 @@
  * about the rows themselves and the CLI's `hermetic inbox` on this machine has
  * to agree — but they are still this home's, not the fleet's.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
   DELIVERIES,
   PREF_GROUPS,
   desktopAllowed,
   inQuietHours,
-  isResolved,
 } from "../../logic/notification-logic.ts";
 import type { Delivery, PrefGroup } from "../../logic/notification-logic.ts";
+import { TERMINAL_TRIGGERS, TERMINAL_TRIGGER_LABEL } from "../../logic/terminal-notify.ts";
+import type { TerminalTrigger } from "../../logic/terminal-notify.ts";
 import { useNotify } from "../../state/notify-state.tsx";
 import type { MuteTarget } from "../../state/notify-state.tsx";
 import type { NotificationSourceView } from "../../api/index.ts";
-import { NotificationRow } from "../notify/NotificationRow.tsx";
 import {
   Block,
   PageFoot,
@@ -49,6 +50,7 @@ const MUTEABLE_SOURCES: readonly NotificationSourceView[] = [
   "fleet",
   "chat",
   "budget",
+  "terminal",
 ];
 
 /**
@@ -68,6 +70,7 @@ function RuleRow({
   desktop,
   onDelivery,
   onDesktop,
+  extra,
 }: {
   id: PrefGroup;
   label: string;
@@ -76,6 +79,8 @@ function RuleRow({
   desktop: boolean;
   onDelivery: (d: Delivery) => void;
   onDesktop: (on: boolean) => void;
+  /** A group's own control after the desktop box — the Terminal group's trigger. */
+  extra?: (flash: () => void) => ReactNode;
 }) {
   const [ticked, flash] = useSavedTick();
   const allowed = desktopAllowed(delivery);
@@ -113,6 +118,66 @@ function RuleRow({
         />
         desktop
       </label>
+      {extra?.(flash)}
+    </SettingRow>
+  );
+}
+
+/**
+ * The Terminal group's trigger (issue #18): `New output` lets every terminal
+ * row interrupt; `Finished & input only` sends output rows to the inbox
+ * silently. Page-level, like the rest of this block.
+ */
+function TriggerSeg({
+  value,
+  onChange,
+}: {
+  value: TerminalTrigger;
+  onChange: (t: TerminalTrigger) => void;
+}) {
+  return (
+    <div className="seg st-seg nt-seg" role="group" aria-label="Terminal trigger">
+      {TERMINAL_TRIGGERS.map((t) => (
+        <button type="button" key={t} aria-pressed={value === t} onClick={() => onChange(t)}>
+          {TERMINAL_TRIGGER_LABEL[t]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The master switch, core's `terminal_alerts` (shared with the CLI's `hermetic
+ * inbox settings --terminal-alerts`). Off is stronger than a mute: core writes
+ * no terminal row at all, and resolves the ones already open. Disabled until
+ * the setting has been read, so the switch never shows a guess.
+ */
+function TerminalSwitch({ on, onChange }: { on: boolean | null; onChange: (on: boolean) => void }) {
+  const [ticked, flash] = useSavedTick();
+  return (
+    <SettingRow
+      label="Terminal notifications"
+      desc="Alert me when a terminal session I'm not looking at prints output, finishes a long command, may be waiting for input, rings the bell or disconnects. Output text is never included."
+      field="terminal_alerts"
+      state={<SavedTick on={ticked} />}
+    >
+      <div className="seg st-seg nt-seg" role="group" aria-label="Terminal notifications">
+        {[true, false].map((value) => (
+          <button
+            type="button"
+            key={value ? "on" : "off"}
+            aria-pressed={on === value}
+            disabled={on === null}
+            onClick={() => {
+              if (on === value) return;
+              onChange(value);
+              flash();
+            }}
+          >
+            {value ? "On" : "Off"}
+          </button>
+        ))}
+      </div>
     </SettingRow>
   );
 }
@@ -132,23 +197,17 @@ function permissionLine(p: ReturnType<typeof useNotify>["desktopPermission"]): s
 
 export function NotificationsSection() {
   const notify = useNotify();
-  const [unreadOnly, setUnreadOnly] = useState(false);
   const [muteAgent, setMuteAgent] = useState("");
   const [muteSource, setMuteSource] = useState<NotificationSourceView | "">("");
   const [quietTicked, flashQuiet] = useSavedTick();
   const now = Date.now();
 
-  /**
-   * "Unread only" means the rows the unread count is counting, and core does not
-   * count a row whose condition has cleared — so neither does this filter. The
-   * full list still holds them, marked as history: a cleared condition is a
-   * record, not an item of work, and the two lists say so the same way the
-   * centre's `all` and `needs you` tabs do.
-   */
-  const rows = useMemo(
-    () => (unreadOnly ? notify.items.filter((n) => !n.read_at && !isResolved(n)) : notify.items),
-    [notify.items, unreadOnly],
-  );
+  // `terminal_alerts` is core's, read lazily; this page is one of its readers.
+  const { settings, loadSettings } = notify;
+  useEffect(() => {
+    if (settings === null) void loadSettings();
+  }, [settings, loadSettings]);
+  const terminalAlerts = settings === null ? null : settings.terminal_alerts !== false;
 
   const prefs = notify.prefs;
   const setDelivery = (group: PrefGroup, delivery: Delivery) => {
@@ -190,18 +249,47 @@ export function NotificationsSection() {
       {/* Delivery is per source and three-valued, because "off" and "in the
           inbox but silent" are different requests. */}
       <Block title="Rules" right={<span className="mono dim">off · inbox only · toast</span>}>
-        {PREF_GROUPS.map((g) => (
-          <RuleRow
-            key={g.id}
-            id={g.id}
-            label={g.label}
-            what={g.what}
-            delivery={prefs.delivery[g.id]}
-            desktop={prefs.desktop[g.id]}
-            onDelivery={(d) => setDelivery(g.id, d)}
-            onDesktop={(on) => setDesktop(g.id, on)}
-          />
-        ))}
+        <TerminalSwitch
+          on={terminalAlerts}
+          onChange={(on) => void notify.saveSettings({ terminal_alerts: on })}
+        />
+        {PREF_GROUPS.map((g) =>
+          g.id === "terminal" && terminalAlerts === false ? (
+            // Nothing is raised while the switch is off, so the group's own
+            // controls would be choices about nothing. Dimmed, and saying so.
+            <div className="st-dim" key={g.id} data-off="true">
+              <SettingRow label={g.label} desc={g.what} field={g.id}>
+                <span className="mono st-cell-sm">
+                  Terminal notifications are off · nothing is raised
+                </span>
+              </SettingRow>
+            </div>
+          ) : (
+            <RuleRow
+              key={g.id}
+              id={g.id}
+              label={g.label}
+              what={g.what}
+              delivery={prefs.delivery[g.id]}
+              desktop={prefs.desktop[g.id]}
+              onDelivery={(d) => setDelivery(g.id, d)}
+              onDesktop={(on) => setDesktop(g.id, on)}
+              extra={
+                g.id === "terminal"
+                  ? (flash) => (
+                      <TriggerSeg
+                        value={prefs.terminalTrigger}
+                        onChange={(t) => {
+                          notify.setPrefs({ ...prefs, terminalTrigger: t });
+                          flash();
+                        }}
+                      />
+                    )
+                  : undefined
+              }
+            />
+          ),
+        )}
       </Block>
 
       <Block title="Quiet hours">
@@ -329,46 +417,18 @@ export function NotificationsSection() {
         </div>
       </Block>
 
-      <Block
-        title="Inbox"
-        right={
-          <>
-            <TextAction onClick={() => void notify.ackAll()}>Mark all read</TextAction>
-            <TextAction onClick={() => void notify.refresh()}>Refresh</TextAction>
-          </>
-        }
-      >
-        <div className="nt-inbox-bar">
-          <label className="st-check">
-            <input
-              type="checkbox"
-              checked={unreadOnly}
-              onChange={(e) => setUnreadOnly(e.target.checked)}
-            />
-            unread only
-          </label>
-          <span className="mono st-cell-sm nt-inbox-count">
-            {notify.unread} unread · {notify.needsAction} need you
-          </span>
-        </div>
-        {notify.error ? (
-          <div className="wiz-error mono" role="alert">
-            Could not read the inbox: {notify.error}
-          </div>
-        ) : null}
-        <div className="nt-inbox">
-          {rows.length === 0 ? (
-            <div className="nt-empty mono">
-              {unreadOnly
-                ? "Nothing unread."
-                : "Nothing yet. Failed and finished operations, health changes and fleet advisories land here."}
-            </div>
-          ) : (
-            rows.map((n) => (
-              <NotificationRow key={n.id} n={n} now={now} onAck={(id) => void notify.ack(id)} />
-            ))
-          )}
-        </div>
+      {/* The inbox itself lives in the drawer (`⇧I`), which has the views,
+          the sources, multi-select and the auto-clear rule; this is the way
+          there from the page that sets the rules about it. */}
+      <Block title="Inbox">
+        <SettingRow
+          label="Full inbox"
+          desc={`${notify.unread} unread · ${notify.needsAction} need you · ${notify.history} in History, kept 30 days. Auto-clear lives in the inbox's foot.`}
+        >
+          <button type="button" className="btn-mini" onClick={() => notify.openDrawer()}>
+            Open inbox
+          </button>
+        </SettingRow>
       </Block>
 
       <PageFoot>saves as you change it · rules in this app&apos;s storage, mutes in this home</PageFoot>

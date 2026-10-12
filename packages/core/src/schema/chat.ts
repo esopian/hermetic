@@ -21,6 +21,7 @@
  */
 import { z } from "zod";
 import { Iso } from "./common.ts";
+import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
 
 export {
   PROCESS_COMMAND_MAX,
@@ -29,6 +30,9 @@ export {
   shortCommand,
 } from "../shared/process-event.ts";
 export type { ProcessEventLike } from "../shared/process-event.ts";
+export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "../shared/bot-handles.ts";
+export type { BotIdentity } from "../shared/bot-handles.ts";
+export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "../shared/silence.ts";
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
 
@@ -49,24 +53,34 @@ export type BotRef = z.infer<typeof BotRef>;
  *
  * The portal did not start most of the sessions it shows. A box runs messaging
  * channels, cron jobs, a dashboard and a CLI; Hermes Desktop can attach to it;
- * other bots drive turns on it. So the origin travels with the session and the
- * composer restates the destination whenever it is not `portal`.
+ * other bots drive turns on it. So the origin travels with the session, and the
+ * composer says what sending does wherever that has a consequence.
  *
  * This is a safety field, not a decoration: a reply into a `channel` session
  * leaves the tailnet and lands in somebody's Slack, and a reply into a `peer`
  * session is answering a robot. Neither is what the operator assumed when they
  * hit Enter in a box that looks like every other box.
+ *
+ * The values themselves live in `shared/session-origins.ts`, where the UI can
+ * read them too.
  */
-export const SessionOrigin = z.enum(["portal", "desktop", "cli", "routine", "peer", "room", "channel"]);
+export const SessionOrigin = z.enum(SESSION_ORIGIN_NAMES);
 export type SessionOrigin = z.infer<typeof SessionOrigin>;
 
 export const SESSION_ORIGINS = SessionOrigin.options;
 
-/** Origins whose destination is not this portal, and which the composer must restate. */
+/**
+ * Origins whose destination is not this portal: every value but `portal`, which
+ * only this laptop's own record of sending into a session may grant.
+ */
 export const FOREIGN_ORIGINS: readonly SessionOrigin[] = SESSION_ORIGINS.filter((o) => o !== "portal");
 
 export const SessionKind = z.enum(["canonical", "thread", "routine"]);
 export type SessionKind = z.infer<typeof SessionKind>;
+
+/** Who wrote a message. Declared here because the roster quotes one (`Bot.preview_role`). */
+export const ChatRole = z.enum(["user", "bot", "system"]);
+export type ChatRole = z.infer<typeof ChatRole>;
 
 /* ── the roster ───────────────────────────────────────────────────────────── */
 
@@ -120,6 +134,20 @@ export const Bot = z.object({
    * a bot nobody has spoken to has nothing to preview.
    */
   preview: z.string().nullish(),
+  /**
+   * Who wrote the message `preview` quotes, when that is known.
+   *
+   * The rail reads a bare silence marker (`NO_REPLY`) as the bot staying
+   * silent, which is only true of a `bot` row: the operator typing "No reply"
+   * is the operator's words. Upstream's preview carries no role
+   * (`tui_gateway/methods_profiles.py` `_latest_message_preview` selects the
+   * newest `user`/`assistant` row's `content` alone, v2026.9.24), so it is set
+   * only where hermetic itself knows the row: a preview it rewrote from a
+   * background-process notice (`system`, as history lifts it) or another bot's
+   * delivery (`user`) — `eventPreviewOf` — or one built from a transcript row.
+   * Null is "not known", never "the operator".
+   */
+  preview_role: ChatRole.nullish(),
   unread: z.number().int().nonnegative(),
   needs_action: z.boolean(),
   muted: z.boolean(),
@@ -210,8 +238,12 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * head that does not recognise one falls back to the raw payload. New
  * renderers can therefore be added without a schema change, and an upstream
  * tool this file has never heard of still renders as something.
+ *
+ * `message_agent` is Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`): a head
+ * draws it as a "Messaged <bot>" marker rather than a tool step, and falls back
+ * to the tool row when its arguments are not the `{target, message}` it knows.
  */
-export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot"]);
+export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot", "message_agent"]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
 export const ToolStatus = z.enum(["running", "ok", "warn", "bad"]);
@@ -498,9 +530,6 @@ export const CHAT_BLOCK_KINDS = [
 
 /* ── messages ─────────────────────────────────────────────────────────────── */
 
-export const ChatRole = z.enum(["user", "bot", "system"]);
-export type ChatRole = z.infer<typeof ChatRole>;
-
 export const ChatUsage = z.object({
   input_tokens: z.number().int().nonnegative().nullish(),
   output_tokens: z.number().int().nonnegative().nullish(),
@@ -522,6 +551,23 @@ export const ChatMessage = z.object({
   error: z.string().nullish(),
   /** The turn stopped before it finished: aborted, timed out, lost the socket. */
   incomplete: z.boolean().nullish(),
+  /**
+   * Set on a `user` row that is another bot's `message_agent` delivery rather
+   * than the operator speaking: Hermes stores it on the user role, signed
+   * `Message from 🤖 <name> (@<handle>): …`. The signature is lifted into this
+   * field and the row's text is the message alone
+   * (`chat/hermes/bot-delivery.ts`). `handle` is null for the legacy signature,
+   * which named the sender only. `connection` is set only for a relayed
+   * sender (`(@<handle>@<connection>)`): the handle then names a bot on that
+   * connection, never a local one, so a head must not resolve it locally.
+   */
+  from_bot: z
+    .object({
+      name: z.string().min(1),
+      handle: z.string().min(1).nullable(),
+      connection: z.string().min(1).nullish(),
+    })
+    .nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

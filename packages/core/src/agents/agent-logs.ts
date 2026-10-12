@@ -16,6 +16,7 @@ import { agentHostname, cloudName } from "../schema/index.ts";
 import type { Agent, LogsInput, SshInput } from "../schema/index.ts";
 import type { LogLine } from "../backend/types.ts";
 import { validateName } from "../shared/naming.ts";
+import { SSH_LOGIN_USER } from "../shared/shell-markers.ts";
 import type { CoreContext } from "../context.ts";
 
 /** The one option every long or interruptible read takes (§3.2 rule 2). */
@@ -40,16 +41,23 @@ export function createAgentLogs(deps: AgentLogsDeps) {
    * could not run, MagicDNS still points the canonical spelling at the corpse.
    * The row's `tailscale_dns_name` is what the node said about itself, so it
    * wins; the canonical cloud name is the fallback.
+   *
+   * The login user is explicit (`SSH_LOGIN_USER`, the account Hermes runs as,
+   * so the operator lands in Hermes's own home, `$HERMES_HOME` resolves, files
+   * they create are owned correctly and the agent `PATH` from
+   * `/etc/profile.d/hermetic-agent.sh` applies; root is one `sudo -i` away, or
+   * `tailscale ssh root@<host>`, which the managed ACL permits): left out,
+   * `tailscale ssh` logs in as the laptop's own user name, which the box has
+   * no account for. The desktop
+   * terminal runs this same argv, with the preflight's resolved binary in
+   * place of `tailscale`.
    */
   async function ssh(input: SshInput): Promise<string[]> {
     validateName(input.name);
     const { fleet } = await guardFleet();
     const agent = await getAgent(input.name);
-    return [
-      "tailscale",
-      "ssh",
-      agentHostname(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name)),
-    ];
+    const host = agentHostname(agent, fleet.tailnet, cloudName(fleet.fleet_id, agent.name));
+    return ["tailscale", "ssh", `${SSH_LOGIN_USER}@${host}`];
   }
 
   /**

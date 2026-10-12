@@ -41,6 +41,7 @@ import {
   ArtifactsPushApiInput as ArtifactsPushApiInputSchema,
   ArtifactsPushInput as ArtifactsPushInputSchema,
   ChatListeningInput as ChatListeningInputSchema,
+  ChatSettingsInput as ChatSettingsInputSchema,
   ChatListenInput as ChatListenInputSchema,
   ChatAbortInput as ChatAbortInputSchema,
   ChatHistoryInput as ChatHistoryInputSchema,
@@ -62,12 +63,16 @@ import {
   HistoryInput as HistoryInputSchema,
   InitInput as InitInputSchema,
   ListAgentsInput as ListAgentsInputSchema,
+  ListDestroyedInput as ListDestroyedInputSchema,
   ListVolumesInput as ListVolumesInputSchema,
   NetworkStatusInput as NetworkStatusInputSchema,
   LogsInput as LogsInputSchema,
   NotificationsAckInput as NotificationsAckInputSchema,
+  NotificationsClearInput as NotificationsClearInputSchema,
   NotificationsListInput as NotificationsListInputSchema,
   NotificationsMuteInput as NotificationsMuteInputSchema,
+  NotificationsSettingsInput as NotificationsSettingsInputSchema,
+  NotificationsSnoozeInput as NotificationsSnoozeInputSchema,
   PresetsGetInput as PresetsGetInputSchema,
   PresetsSetInput as PresetsSetInputSchema,
   PlanDestroyInput as PlanDestroyInputSchema,
@@ -147,11 +152,14 @@ export const PUBLIC_METHODS = [
   "directory.status",
   "runs.list",
   "teardowns.list",
-  // §4.9: the operator's local inbox. Three methods, all of them a read
-  // or a write of the laptop's own SQLite — no AWS, so `inbox` still answers on
-  // a laptop whose fleet is unreachable.
+  // §4.9: the operator's local inbox. Every method is a read or a write of
+  // the laptop's own SQLite — no AWS, so `inbox` still answers on a laptop
+  // whose fleet is unreachable.
   "notifications.list",
   "notifications.ack",
+  "notifications.clear",
+  "notifications.snooze",
+  "notifications.settings",
   "notifications.mute",
   // §4.6: this laptop's create presets — one `prefs` row, no AWS.
   "presets.get",
@@ -161,6 +169,9 @@ export const PUBLIC_METHODS = [
   // surface, declared above and covered by design.md §9.2.
   "chat.listening",
   "chat.listen",
+  // §9.2: this laptop's chat settings — transcript redaction — one `prefs` row
+  // each, no AWS.
+  "chat.settings",
   "chat.swarms",
   "chat.sessions",
   "chat.history",
@@ -185,6 +196,8 @@ export const PUBLIC_METHODS = [
   "agents.recreate",
   "agents.destroy",
   "agents.history",
+  // §6.7: a destroy frees the name and leaves a tombstone; this is the audit read.
+  "agents.destroyed",
   "agents.rerun",
   "agents.probe",
   "agents.desktop",
@@ -276,11 +289,14 @@ export const REQUEST_SCHEMAS = {
   "directory.status": DirectoryStatusInputSchema,
   "runs.list": RunsListInputSchema,
   "teardowns.list": TeardownsListInputSchema,
-  // §4.9. The read is newest-first with an optional `since` for a
-  // poller; the two writes each name exactly one thing, and say so by refusing
-  // a request that names both.
+  // §4.9. The read is newest-first in a view, with an optional `since` for
+  // a poller; each row write names exactly one selector, and says so by
+  // refusing a request that names two. `settings` is a patch, empty to read.
   "notifications.list": NotificationsListInputSchema,
   "notifications.ack": NotificationsAckInputSchema,
+  "notifications.clear": NotificationsClearInputSchema,
+  "notifications.snooze": NotificationsSnoozeInputSchema,
+  "notifications.settings": NotificationsSettingsInputSchema,
   "notifications.mute": NotificationsMuteInputSchema,
   // §4.6. The read takes nothing (one document per laptop); the write is a
   // patch whose stated parts each replace their field, or `reset`.
@@ -296,6 +312,7 @@ export const REQUEST_SCHEMAS = {
    * elsewhere, not an op that can be restarted, replayed or resumed.
    */
   "chat.listening": ChatListeningInputSchema,
+  "chat.settings": ChatSettingsInputSchema,
   "chat.listen": ChatListenInputSchema,
   "chat.swarms": ChatSwarmsInputSchema,
   "chat.sessions": ChatSessionsInputSchema,
@@ -332,6 +349,7 @@ export const REQUEST_SCHEMAS = {
   "agents.recreate": RecreateAgentInputSchema,
   "agents.destroy": DestroyAgentInputSchema,
   "agents.history": HistoryInputSchema,
+  "agents.destroyed": ListDestroyedInputSchema,
   "agents.rerun": RerunInputSchema,
   // Name-only and read-only, so it validates the same object `agents.get` does.
   "agents.probe": AgentRefInputSchema,

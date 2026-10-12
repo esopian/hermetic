@@ -7,6 +7,10 @@
 import { randomBytes } from "node:crypto";
 import { AgentdError } from "./errors.ts";
 import { redactArgv, redactEnv, redactValue } from "./redact.ts";
+import * as sysinfo from "./sysinfo.ts";
+import type { FilesystemSample, MemorySample } from "./sysinfo.ts";
+
+export type { FilesystemSample, MemorySample } from "./sysinfo.ts";
 
 export interface ExecResult {
   readonly code: number;
@@ -42,12 +46,6 @@ export interface FileStat {
   readonly isDirectory: boolean;
   /** Only ever true from `lstat`; `stat` follows the link and reports its target. */
   readonly isSymlink: boolean;
-}
-
-export interface StatfsResult {
-  readonly blockSize: number;
-  readonly blocks: number;
-  readonly available: number;
 }
 
 /**
@@ -91,7 +89,15 @@ export interface Host {
   link(path: string, to: string): Promise<void>;
   /** Unlink; a missing path is not an error. */
   remove(path: string): Promise<void>;
-  statfs(path: string): Promise<StatfsResult | null>;
+  /**
+   * The OS readings (`sysinfo.ts`). Each is `null` when it could not be taken —
+   * "not measured", never a fabricated zero. `cpuLoad` is busy percent since its
+   * previous call, so it has exactly one caller: the heartbeat.
+   */
+  cpuLoad(): Promise<number | null>;
+  memory(): Promise<MemorySample | null>;
+  /** The filesystem holding `path`, which need not be a mount point itself. */
+  filesystem(path: string): Promise<FilesystemSample | null>;
   /** Wall clock, injected so heartbeat and event timestamps are testable. */
   now(): Date;
   sleep(ms: number): Promise<void>;
@@ -353,7 +359,28 @@ async function writeAtomically(
   }
 }
 
-/** The real host: `Bun.$` for commands, `Bun.file`/`node:fs` for the filesystem. */
+/**
+ * A whole file, or `null` where there is no file to read — absent, a parent
+ * that is not a directory, or a directory itself (which `Bun.file().exists()`
+ * also answered `false` for). Anything else, a permission error included, is a
+ * real failure and throws.
+ */
+async function readOrNull(path: string): Promise<Uint8Array | null> {
+  const { readFile } = await import("node:fs/promises");
+  try {
+    const buf = await readFile(path);
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return null;
+    throw error;
+  }
+}
+
+/**
+ * The real host: `Bun.$` for commands, `Bun.file`/`node:fs` for the filesystem,
+ * `systeminformation` (`sysinfo.ts`) for the OS readings.
+ */
 export function realHost(): Host {
   return {
     async exec(argv, opts) {
@@ -449,14 +476,18 @@ export function realHost(): Host {
       return queue;
     },
 
+    // `node:fs`, not `Bun.file`: a `BunFile` that has been stat'ed (`exists()`
+    // does) trusts the size it saw, and every procfs file reports size 0 — so
+    // `/proc/stat`, `/proc/meminfo` and the boot id all read back as "", and the
+    // heartbeat reported 0% CPU and 0% memory on every box. `readFile` reads to
+    // EOF whatever the stat said.
     async readFile(path) {
-      const file = Bun.file(path);
-      return (await file.exists()) ? await file.text() : null;
+      const bytes = await readOrNull(path);
+      return bytes === null ? null : new TextDecoder().decode(bytes);
     },
 
     async readBytes(path) {
-      const file = Bun.file(path);
-      return (await file.exists()) ? new Uint8Array(await file.arrayBuffer()) : null;
+      return readOrNull(path);
     },
 
     // Every write is staged and renamed — see `writeAtomically`. `open(…, mode)`
@@ -550,22 +581,9 @@ export function realHost(): Host {
       return hash.digest("hex");
     },
 
-    async statfs(path) {
-      const fs = await import("node:fs/promises");
-      const statfs = (fs as unknown as { statfs?: (p: string) => Promise<Record<string, number>> })
-        .statfs;
-      if (!statfs) return null;
-      try {
-        const s = await statfs(path);
-        return {
-          blockSize: Number(s["bsize"] ?? 0),
-          blocks: Number(s["blocks"] ?? 0),
-          available: Number(s["bavail"] ?? 0),
-        };
-      } catch {
-        return null;
-      }
-    },
+    cpuLoad: () => sysinfo.cpuLoad(),
+    memory: () => sysinfo.memory(),
+    filesystem: (path) => sysinfo.filesystem(path),
 
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

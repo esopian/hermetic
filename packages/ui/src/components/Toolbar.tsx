@@ -8,6 +8,10 @@
  * its own bold label for that reason. The volumes half also carries the alert
  * the old Volumes tab's badge did (`2 free · $16/mo`), in the accent colour.
  *
+ * The third half, `DESTROYED`, is the audit lens (`#fleet/destroyed`): a
+ * destroy deletes the agent's row (§6.7), so a destroyed agent is never on the
+ * agents lens, and its tombstone is reviewed there instead.
+ *
  * `+ New agent` is the last control, after a divider, so the view controls
  * (filter, layout) stay together and the one primary action on the page sits
  * beside the rows it adds to. It is drawn on both lenses: a loose volume is
@@ -47,8 +51,9 @@ export function Toolbar({
   onQuery,
   layout,
   onLayout,
-  showDestroyed,
-  onShowDestroyed,
+  destroyedCount = null,
+  destroyedBusy = false,
+  onRefreshDestroyed,
   sort = null,
   onClearSort,
   scanning = false,
@@ -77,8 +82,11 @@ export function Toolbar({
   onQuery: (v: string) => void;
   layout: Layout;
   onLayout: (l: Layout) => void;
-  showDestroyed: boolean;
-  onShowDestroyed: (v: boolean) => void;
+  /** Tombstones the Destroyed lens last read; `null` before its first read. */
+  destroyedCount?: number | null;
+  /** The Destroyed lens is reading `agents.destroyed`. */
+  destroyedBusy?: boolean;
+  onRefreshDestroyed?: () => void;
   /**
    * The column order in force, chosen on the table's headers but applied to all
    * three layouts — so it has to be visible (and undoable) from the two that
@@ -117,6 +125,9 @@ export function Toolbar({
               <em className="lens-pending">{VOLUME_BADGE_PENDING}</em>
             ) : null}
           </button>
+          <button type="button" aria-pressed={lens === "destroyed"} onClick={() => onLens("destroyed")}>
+            {destroyedCount !== null ? <b>{destroyedCount}</b> : null} destroyed
+          </button>
         </div>
         {lens === "agents" ? (
           <AgentLegend
@@ -126,11 +137,15 @@ export function Toolbar({
             looseMonthly={looseMonthly}
             showVolumes={showVolumes}
             onShowVolumes={onShowVolumes}
-            showDestroyed={showDestroyed}
-            onShowDestroyed={onShowDestroyed}
           />
-        ) : (
+        ) : lens === "volumes" ? (
           <VolumeLegend volumes={volumes} summary={volumeSummary} scan={volumeScan} />
+        ) : (
+          <div className="toolbar-counts">
+            <span className="legend mono" style={{ color: "var(--fg3)" }}>
+              one record per destroyed agent · newest first · read-only
+            </span>
+          </div>
         )}
       </div>
       <div className="toolbar-right">
@@ -156,9 +171,17 @@ export function Toolbar({
           placeholder={
             lens === "agents"
               ? "filter by name, hostname, version, size…"
-              : "filter by volume id, agent, size, az…"
+              : lens === "volumes"
+                ? "filter by volume id, agent, size, az…"
+                : "filter by name, actor, volume id…"
           }
-          aria-label={lens === "agents" ? "Filter agents" : "Filter volumes"}
+          aria-label={
+            lens === "agents"
+              ? "Filter agents"
+              : lens === "volumes"
+                ? "Filter volumes"
+                : "Filter destroyed agents"
+          }
         />
         {lens === "agents" ? (
           <div className="switch" role="group" aria-label="Layout">
@@ -168,6 +191,22 @@ export function Toolbar({
               </button>
             ))}
           </div>
+        ) : lens === "destroyed" ? (
+          <>
+            <div className="switch" role="group" aria-label="Layout">
+              <button type="button" aria-pressed={true}>
+                list
+              </button>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={onRefreshDestroyed}
+              disabled={destroyedBusy || !onRefreshDestroyed}
+            >
+              {destroyedBusy ? "reading…" : "refresh"}
+            </button>
+          </>
         ) : (
           <>
             {/* One layout today; drawn anyway so the control sits where the agents' one does. */}
@@ -204,8 +243,6 @@ function AgentLegend({
   looseMonthly,
   showVolumes,
   onShowVolumes,
-  showDestroyed,
-  onShowDestroyed,
 }: {
   counts: Counts;
   scanning: boolean;
@@ -213,8 +250,6 @@ function AgentLegend({
   looseMonthly: number;
   showVolumes: boolean;
   onShowVolumes: (v: boolean) => void;
-  showDestroyed: boolean;
-  onShowDestroyed: (v: boolean) => void;
 }) {
   if (scanning) {
     return (
@@ -261,20 +296,6 @@ function AgentLegend({
           <i style={{ background: "var(--acc)" }} />
           {loose} volume{loose === 1 ? "" : "s"} with no agent · ≈ ${looseMonthly.toFixed(0)}/mo
           <EyeIcon open={showVolumes} />
-        </button>
-      ) : null}
-      {counts.destroyed > 0 ? (
-        <button
-          type="button"
-          className="legend legend-link"
-          style={{ color: "var(--fg2)" }}
-          onClick={() => onShowDestroyed(!showDestroyed)}
-          aria-pressed={showDestroyed}
-          title={showDestroyed ? "hide destroyed agents" : "show destroyed agents"}
-        >
-          <i style={{ background: "var(--fg3)" }} />
-          {counts.destroyed} destroyed
-          <EyeIcon open={showDestroyed} />
         </button>
       ) : null}
     </div>

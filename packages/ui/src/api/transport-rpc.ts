@@ -164,6 +164,7 @@ const STREAM: Record<StreamName, { close: RpcName }> = {
   "ops.subscribe": { close: "ops.unsubscribe" },
   "logs.open": { close: "logs.close" },
   "chat.turn": { close: "chat.turn.abort" },
+  "terminal.attach": { close: "terminal.detach" },
 };
 
 /**
@@ -188,6 +189,7 @@ const LOGS_LINE = "logs.line";
 const FLEET_EVENT = "fleet.event";
 const CHAT_EVENT = "chat.event";
 const APP_UPDATE = "app.update";
+const TERMINAL_FRAME = "terminal.frame";
 
 /** A source with nothing to say proves the channel alive; a channel needs no proof. */
 const KEEPALIVE = "keepalive";
@@ -485,6 +487,18 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
         [LOGS_LINE]: (payload) => {
           routeById(payload.stream_id, valueFrameOf(payload.line, payload.done, "line"));
         },
+        // The terminal's frames are already `{ event, data }` (`terminal/channel.ts`
+        // in the app) and number themselves inside `data`, so the frame is a
+        // straight rename. `exit` is the stream's last frame but not a `done`:
+        // the reader closes on it (`useTerminalSession.ts`), as it would on a
+        // stream it no longer wants.
+        [TERMINAL_FRAME]: (payload) => {
+          routeById(payload.stream_id, {
+            event: payload.frame.event,
+            id: "",
+            data: payload.frame.data,
+          });
+        },
         [FLEET_EVENT]: (payload) => {
           toFeed("fleet", frameOf(payload.event));
         },
@@ -706,6 +720,7 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
           const streamId = streamIdOf(answer);
           stream.streamId = streamId;
           if (streamId === null) return;
+          if (!stream.closed) handlers.onOpen?.(streamId);
           if (opId === null) {
             byStreamId.set(streamId, stream);
             const held = orphans.get(streamId);
@@ -771,6 +786,28 @@ let handle: RpcHandle | null = null;
 export function sendPageReady(): boolean {
   if (handle === null) return false;
   handle.send("page.ready", {});
+  return true;
+}
+
+/**
+ * The page → main messages besides `page.ready`: the terminal's keystrokes,
+ * acks and view state (issue #18). Fire-and-forget by contract — a keystroke
+ * is not worth a round trip — so there is nothing to await and nothing to
+ * refuse.
+ */
+export type TerminalMessageName = Exclude<keyof Sends, "page.ready">;
+
+/**
+ * Put one terminal message on the bridge, and say whether it went. `false`
+ * means no RPC transport was built (a DOM test over a fake transport); the
+ * caller has no fallback to try, so it stays unconditional too.
+ */
+export function sendTerminalMessage<K extends TerminalMessageName>(
+  message: K,
+  payload: Sends[K],
+): boolean {
+  if (handle === null) return false;
+  handle.send(message, payload);
   return true;
 }
 

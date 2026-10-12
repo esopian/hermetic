@@ -132,6 +132,9 @@ const SURFACE: Record<PublicMethod, string> = {
   // "silence this source" address the inbox, not one notification.
   "notifications.list": "inbox",
   "notifications.ack": "inbox ack",
+  "notifications.clear": "inbox clear",
+  "notifications.snooze": "inbox snooze",
+  "notifications.settings": "inbox settings",
   "notifications.mute": "inbox mute",
   // §9: this laptop's create presets, one `prefs` row (§4.6).
   "presets.get": "presets show",
@@ -142,6 +145,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // read names an `<instance>/<bot>` pair, because that is the unit (§9.2).
   "chat.listening": "chat listening",
   "chat.listen": "chat listen",
+  // §9.2: this laptop's chat settings — whether transcripts are masked.
+  "chat.settings": "chat settings",
   "chat.swarms": "bots ls",
   "chat.sessions": "chat ls",
   "chat.history": "chat log",
@@ -168,6 +173,8 @@ const SURFACE: Record<PublicMethod, string> = {
   "agents.recreate": "agent recreate",
   "agents.destroy": "agent destroy",
   "agents.history": "agent history",
+  // §6.7: the tombstones a destroy leaves once the row is gone.
+  "agents.destroyed": "agent destroyed",
   "agents.rerun": "agent rerun",
   "agents.probe": "agent probe",
   // §7.4: the Serve URL and session token Hermes Desktop attaches with.

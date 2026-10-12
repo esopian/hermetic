@@ -104,20 +104,23 @@ export const VolumeView = z.object({
    * The agent row that owns this volume, and its status — a DynamoDB fact,
    * joined here because the group depends on it and neither head may compute a
    * join core can (§3.1). The *live* owner's status when there is one, and
-   * otherwise the destroyed row's, which is what `no_agent` means.
+   * otherwise `destroyed` when a former owner is known (`retained_by`), which
+   * is what `no_agent` means.
    */
   agent_status: AgentStatus.nullable(),
   /**
-   * The live agent rows claiming this volume (§9.1). Ownership is a row fact
-   * and rows are kept forever, so a disk can be named by a destroyed row *and*
-   * by the live agent that reclaimed it; only the live ones are owners. More
-   * than one is `ambiguous` — hermetic will not guess whose memory it is.
+   * The live agent rows claiming this volume (§9.1). Ownership is a row fact,
+   * and a disk can be named by a legacy destroyed row *and* by the live agent
+   * that reclaimed it; only the live ones are owners. More than one is
+   * `ambiguous` — hermetic will not guess whose memory it is.
    */
   owners: z.array(z.string()),
   /**
-   * When no live row owns it: the destroyed agent whose memory it is (§6.6).
-   * Display only — a destroyed row is not an owner, and this volume is
-   * reclaimable — but "retained by cinder" is what makes `no_agent` legible.
+   * When no live row owns it: the destroyed agent whose memory it is (§6.7) —
+   * the volume's `hermetic:former_agent` tag first, then a legacy destroyed
+   * row naming it, then the newest tombstone recording its id. Display only —
+   * a destroyed agent is not an owner, and this volume is reclaimable — but
+   * "retained by cinder" is what makes `no_agent` legible.
    */
   retained_by: z.string().nullable(),
   /**

@@ -26,6 +26,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // §4.9: `n` is already the create drawer, so the bell gets `i` for inbox
   // instead, and the collision is recorded rather than silently resolved.
   { keys: "i", what: "Notifications" },
+  // The full inbox drawer; inside the centre and the drawer, `j k ↵ e r s m z`
+  // work on the rows and `?`'s sheet is the only global key left.
+  { keys: "⇧ I", what: "Full inbox" },
   { keys: "/", what: "Filter the fleet" },
   { keys: ",", what: "Settings" },
   { keys: "?", what: "This list" },
@@ -43,6 +46,8 @@ export interface OverlayState {
   shortcutsOpen: boolean;
   /** The notification centre — a popover off the header bell, like the sheet. */
   notifyOpen: boolean;
+  /** The full inbox drawer (`⇧I`). Optional so older callers read as closed. */
+  inboxOpen?: boolean;
   popoverOpen: boolean;
   teardownOpen: boolean;
   createOpen: boolean;
@@ -57,6 +62,7 @@ export function overlayIsOpen(o: OverlayState): boolean {
   return (
     o.shortcutsOpen ||
     o.notifyOpen ||
+    o.inboxOpen === true ||
     o.popoverOpen ||
     o.createOpen ||
     o.selected !== null ||

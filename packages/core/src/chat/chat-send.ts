@@ -10,6 +10,7 @@
 import { ChatSendInput } from "../schema/index.ts";
 import type { ChatFrame } from "../schema/index.ts";
 import { redactText } from "./chat-redact.ts";
+import type { TranscriptMask } from "./chat-redact.ts";
 import { markChatTurn, notifyChatError, resolveChatErrors } from "./notifications.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
 import { CHAT_FENCE_RENEW_MS, acquireChatFence } from "./chat-fence.ts";
@@ -33,6 +34,27 @@ import type { ChatDeps, ChatOptions } from "./chat.ts";
  */
 const ATTRIBUTION_DEADLINE_MS = 5_000;
 
+/**
+ * What the canonical chat says when a slash command compacts it.
+ *
+ * `/new` and `/reset` would fork Bot Chat, so they compact instead, and the
+ * operator is told so in Hermes Desktop's words — its composer middleware
+ * reroutes them the same way and toasts "This chat never resets"
+ * (`apps/desktop/src/plugins/hermes-bots/plugin.tsx:756-784` at v2026.9.24).
+ * Desktop's last line points at its Sessions mode; Hermetic's equivalent is a
+ * separate session. A typed `/compact` gets the gateway's own completion
+ * status (`tui_gateway/compute_host_bridge.py:340`). A compaction the gateway
+ * did not perform reports its status either way.
+ */
+function compactNotice(message: string, result: { compressed: boolean; status: string }): string {
+  const outcome = result.compressed ? null : `Compaction: ${result.status}`;
+  if (/^\/compact\s*$/.test(message.trim())) return outcome ?? "✓ Context compression complete";
+  const notice =
+    "This chat never resets. Bot chats are one continuous conversation — compacting instead. " +
+    "For a throwaway session with this bot, start a separate session.";
+  return outcome ? `${notice}\n\n${outcome}` : notice;
+}
+
 /** What `send` reads from the surface that built it. */
 export interface ChatSendContext {
   deps: ChatDeps;
@@ -45,10 +67,12 @@ export interface ChatSendContext {
   now: () => string;
   /** The laptop's clock in milliseconds, for the lease and nothing else. */
   nowMs: () => number;
+  /** This laptop's transcript mask, taken once as the turn starts (`chat-settings.ts`). */
+  mask: () => TranscriptMask;
 }
 
 export function createChatSend(ctx: ChatSendContext) {
-  const { deps, hermes, validateName, address, fenceStore, instanceListening, now, nowMs } = ctx;
+  const { deps, hermes, validateName, address, fenceStore, instanceListening, now, nowMs, mask } = ctx;
 
   /**
    * One turn, streamed frame by frame.
@@ -99,7 +123,7 @@ export function createChatSend(ctx: ChatSendContext) {
       fence = null;
     }
     return (async function* () {
-      const gate = createDeltaGate();
+      const gate = createDeltaGate(mask());
       /**
        * The turn's verdict, accumulated as the frames go past rather than
        * decided at the end, because a turn reaches its end three different
@@ -170,12 +194,7 @@ export function createChatSend(ctx: ChatSendContext) {
             type: "block",
             seq: 0,
             message: "compact",
-            block: {
-              kind: "text",
-              markdown: result.compressed
-                ? "Context compacted. Bot Chat preserved."
-                : `Compaction: ${result.status}`,
-            },
+            block: { kind: "text", markdown: compactNotice(parsed.message, result) },
           };
           yield { type: "done", seq: 1, message: "compact" };
           return;
@@ -286,7 +305,8 @@ export function createChatSend(ctx: ChatSendContext) {
       turnSeen = true;
       // The local session record is not the inbox's and does not depend on one:
       // a `Hermetic` with no notification store still owes the operator a
-      // destination banner that stops firing on their own conversations.
+      // composer whose destination restatement (send label and footer) stops
+      // appearing on their own conversations.
       rememberSession();
       const notifications = deps.notifications;
       if (!notifications) return;
@@ -377,8 +397,8 @@ export function createChatSend(ctx: ChatSendContext) {
     }
 
     /**
-     * Record that this laptop sent into this conversation, so the destination
-     * banner stops calling it foreign (§9.2, and `LocalChatSessions` above).
+     * Record that this laptop sent into this conversation, so the session stops
+     * reading as foreign (§9.2, and `LocalChatSessions` above).
      *
      * Written after the turn rather than when it was addressed, because a send
      * that never reached the box is not this portal joining a conversation. A

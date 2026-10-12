@@ -751,14 +751,6 @@
   overflow: auto;
 }
 
-/* Notifications: the inbox's own bar, and the rows it holds. */
-.st-view .nt-inbox-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 10px 0;
-}
 .st-mute-add {
   display: flex;
   gap: 8px;
@@ -1099,4 +1091,10 @@
   .pr-load {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* A setting row whose controls mean nothing right now — the Terminal group
+   while `terminal_alerts` is off (issue #18). Readable, and plainly inert. */
+.st-dim {
+  opacity: 0.4;
 }

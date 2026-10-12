@@ -20,7 +20,10 @@
  * **This module is the redaction door.** Everything leaving here has been
  * through `chat-redact.ts` first — not the adapter, which would leave a second
  * door open the day something else calls it, and never the renderer, where a
- * new block kind would silently bypass it (§9.2).
+ * new block kind would silently bypass it (§9.2). Whether the door masks
+ * transcript content is this laptop's `chat.settings` `redact`, read once as
+ * each read starts and handed down as one `TranscriptMask`; errors and what
+ * reaches the inbox are masked either way.
  *
  * **The inbox is written here, not in the adapter.** `chat.message` comes from
  * the roster read and `chat.error` from a failed turn, and both are raised from
@@ -47,6 +50,7 @@ import {
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
+  ChatSettingsInput,
   ChatSwarmsInput,
   agentDashboardUrl,
   cloudName,
@@ -63,7 +67,10 @@ import type {
   Swarm,
 } from "../schema/index.ts";
 import type { StackInfo } from "../backend/types.ts";
-import { redactDeep, redactMessage } from "./chat-redact.ts";
+import { redactMessage } from "./chat-redact.ts";
+import type { TranscriptMask } from "./chat-redact.ts";
+import { MemoryChatSettingsStore, maskFor } from "./chat-settings.ts";
+import type { ChatSettings, ChatSettingsStore } from "./chat-settings.ts";
 import { observeChatActivity } from "./notifications.ts";
 import type { ChatActivity, NotificationDeps } from "./notifications.ts";
 import { CHAT_CLASSIFY_LIMIT, classifyChatActivity } from "./chat-activity.ts";
@@ -75,7 +82,7 @@ import type { InstanceListeningStore } from "./instance-listening.ts";
 import { HermeticError } from "../errors.ts";
 
 import { validateName } from "../shared/naming.ts";
-import { parse, reasonOf, redactSessions, redactSwarm, sealed, unreachableSwarm } from "./chat-seal.ts";
+import { parse, reasonOf, redactSwarm, sealed, unreachableSwarm } from "./chat-seal.ts";
 import { createChatSend } from "./chat-send.ts";
 import { createChatObserveWiring } from "./chat-observe-wiring.ts";
 
@@ -89,13 +96,13 @@ export { defaultHermesChat, fixtureHermesChat } from "./chat-transport.ts";
  * The record of the sessions *this laptop* opened (§9.2).
  *
  * The box cannot answer this question, and that is not a gap to be closed. A
- * session hermetic opened over `/api/ws` and one the box's own TUI opened arrive
- * at the adapter identically; upstream's `source` field names a *kind of client*
- * rather than an installation, and `portal` is not among the values it can
- * produce. So the adapter maps nothing onto the `portal` origin, deliberately —
- * `portal` is the one value that silences the composer's destination warning,
- * and a warning that can be switched off by a string a box chose is not a
- * warning.
+ * session's `source` names a *kind of client* rather than an installation: a
+ * session hermetic created reads `hermetic` whichever operator's hermetic it
+ * was, and `portal` is not among the values the box can produce. So the
+ * adapter maps nothing onto the `portal` origin, deliberately — `portal` is the
+ * one value that silences the composer's destination restatement (send label
+ * and footer), and a warning that can be switched off by a string a box chose
+ * is not a warning.
  *
  * What the laptop *does* know is which sessions it sent into. That is local
  * state, in the local SQLite beside `runs` and the inbox, and the fact that two
@@ -117,6 +124,8 @@ export interface LocalChatSessions {
   ): void;
   /** Which of these session ids this laptop opened. Never more than it knows. */
   mine(fleet: string | null, sessions: readonly string[]): Set<string>;
+  /** Drop every session this laptop recorded against `instance` in `fleet` (§6.7). */
+  forgetInstance(fleet: string | null, instance: string): void;
 }
 
 /**
@@ -127,6 +136,8 @@ export interface LocalChatSessions {
  */
 export class MemoryLocalChatSessions implements LocalChatSessions {
   private readonly rows = new Map<string, string>();
+  /** Which instance each key was recorded against, for `forgetInstance`. */
+  private readonly instances = new Map<string, string>();
 
   private key(fleet: string | null, session: string): string {
     return `${fleet ?? "-"}\u0000${session}`;
@@ -137,7 +148,18 @@ export class MemoryLocalChatSessions implements LocalChatSessions {
     where: { instance: string; bot: string; session: string },
     at: string,
   ): void {
-    this.rows.set(this.key(fleet, where.session), at);
+    const key = this.key(fleet, where.session);
+    this.rows.set(key, at);
+    this.instances.set(key, where.instance);
+  }
+
+  forgetInstance(fleet: string | null, instance: string): void {
+    const head = this.key(fleet, "");
+    for (const [key, owner] of [...this.instances]) {
+      if (owner !== instance || !key.startsWith(head)) continue;
+      this.rows.delete(key);
+      this.instances.delete(key);
+    }
   }
 
   mine(fleet: string | null, sessions: readonly string[]): Set<string> {
@@ -156,6 +178,12 @@ export interface ChatOptions {
 
 export interface ChatDeps {
   instanceListening?: InstanceListeningStore;
+  /**
+   * This laptop's chat settings (§9.2). Absent, an in-process store with the
+   * defaults stands in — redaction off — the way an absent listening store is
+   * an empty one.
+   */
+  chatSettings?: ChatSettingsStore;
   fleet?: () => string | null;
   /** §4.2's account/fleet guard; the tailnet comes from the fleet it returns. */
   guardFleet: () => Promise<{ config: LocalConfig; fleet: FleetItem; stack: StackInfo }>;
@@ -190,8 +218,9 @@ export interface ChatDeps {
    */
   now?: () => string;
   /**
-   * Which sessions this laptop started, so the destination banner can stop
-   * firing on threads the operator opened from this portal thirty seconds ago.
+   * Which sessions this laptop started, so the composer's destination
+   * restatement (send label and footer) can stop appearing on threads the
+   * operator opened from this portal thirty seconds ago.
    * Optional, and absence means every session reads as foreign — which is the
    * safe direction and the reason it is safe to leave out.
    */
@@ -273,6 +302,9 @@ export function createChat(deps: ChatDeps) {
   const now = deps.now ?? (() => new Date().toISOString());
   const instanceListening = deps.instanceListening ?? new MemoryInstanceListeningStore();
   const fenceStore = deps.chatFence ?? new MemoryChatFenceStore();
+  const settingsStore = deps.chatSettings ?? new MemoryChatSettingsStore();
+  /** The mask a read takes as it starts; see `TranscriptMask`. */
+  const mask = (): TranscriptMask => maskFor(settingsStore);
   /**
    * The laptop's clock in milliseconds, for the lease and for nothing else.
    *
@@ -296,6 +328,7 @@ export function createChat(deps: ChatDeps) {
     instanceListening,
     now,
     nowMs,
+    mask,
   });
 
   function requireListening(fleet: string | null, instance: string): void {
@@ -308,6 +341,14 @@ export function createChat(deps: ChatDeps) {
     parse(ChatListeningInput, input, "chat listening");
     const fleet = deps.fleet ? deps.fleet() : (await guardFleet()).fleet.fleet_id;
     return { instances: instanceListening.list(fleet) };
+  }
+
+  /** Read, or write the fields stated (§9.2). Local: no fleet, no box. */
+  async function settings(input: unknown = {}): Promise<ChatSettings> {
+    const parsed = parse(ChatSettingsInput, input, "chat settings");
+    return parsed.redact === undefined
+      ? settingsStore.settings()
+      : settingsStore.setSettings({ redact: parsed.redact });
   }
 
   async function listen(input: unknown): Promise<{ instances: string[] }> {
@@ -390,6 +431,7 @@ export function createChat(deps: ChatDeps) {
   async function swarms(input: unknown = {}, opts: ChatOptions = {}): Promise<ChatSwarmsResult> {
     const parsed = parse(ChatSwarmsInput, input, "bots ls");
     if (parsed.instance !== undefined) validateName(parsed.instance);
+    const view = mask();
     const { fleet } = await guardFleet();
     const instances = instanceListening.list(fleet.fleet_id);
     if (parsed.instance !== undefined) requireListening(fleet.fleet_id, parsed.instance);
@@ -415,7 +457,7 @@ export function createChat(deps: ChatDeps) {
     const answered = settled
       .map((result, i) => {
         const instance = rows[i]?.name ?? "";
-        if (result.status === "fulfilled") return redactSwarm(result.value);
+        if (result.status === "fulfilled") return result.value;
         const { code, message } = reasonOf(result.reason);
         return unreachableSwarm(instance, `${code}: ${message}`);
       })
@@ -423,9 +465,9 @@ export function createChat(deps: ChatDeps) {
     /**
      * The roster read is the only place hermetic can see a turn it did not
      * drive, so it is where `chat.message` is raised (§4.9). It is
-     * handed the *redacted* swarms rather than the adapter's own, so a bot
-     * title that carried something it should not cannot reach the inbox by a
-     * shorter path than it reaches the screen.
+     * handed the *redacted* swarms rather than the adapter's own, whatever
+     * `redact` says: an inbox row is written to this laptop's disk, and a bot
+     * title that carried something it should not must not reach it.
      *
      * A box that did not answer contributes nothing: `unreachableSwarm` has an
      * empty bot list, so its watermarks stand still rather than being reset by
@@ -436,6 +478,7 @@ export function createChat(deps: ChatDeps) {
       const unfenced = (bot: ChatActivity): boolean =>
         !chatFenced(fenceStore, fleet.fleet_id, bot, nowMs());
       const roster = answered
+        .map(redactSwarm)
         .flatMap((swarm) =>
           swarm.bots.map(
             (bot): ChatActivity => ({
@@ -467,7 +510,8 @@ export function createChat(deps: ChatDeps) {
        * background-process event can raise its own row and an event-only
        * movement raises no "has a new message" (`chat-activity.ts`). The read
        * is a transcript read — it takes no warm backend slot — and is
-       * redacted here, the door, before the classifier sees a word of it.
+       * redacted here, the door, before the classifier sees a word of it,
+       * whatever `redact` says: the classifier writes the inbox.
        */
       const classified = await classifyChatActivity(notifications, roster, (bot) => {
         const agent = rows.find((row) => row.name === bot.instance);
@@ -486,7 +530,7 @@ export function createChat(deps: ChatDeps) {
       // classifier was reading, and its bot is deferred like any other.
       observeChatActivity(notifications, classified.filter(unfenced));
     }
-    return { swarms: answered };
+    return { swarms: answered.map((swarm) => view.deep(swarm)) };
   }
 
   /**
@@ -512,7 +556,8 @@ export function createChat(deps: ChatDeps) {
    * described it.
    *
    * The whole point is the asymmetry. `portal` silences the composer's
-   * destination warning, so it may only ever be granted on this laptop's own
+   * destination restatement (send label and footer), so it may only ever be
+   * granted on this laptop's own
    * evidence that it sent into that conversation — never inferred from a value
    * the box chose, and never withheld from a session the box called foreign.
    */
@@ -531,6 +576,7 @@ export function createChat(deps: ChatDeps) {
   async function sessions(input: unknown, opts: ChatOptions = {}): Promise<ChatSessionsResult> {
     const parsed = parse(ChatSessionsInput, input, "chat ls");
     validateName(parsed.instance);
+    const view = mask();
     const { fleet } = await guardFleet();
     const box = await address(parsed.instance);
     opts.signal?.throwIfAborted();
@@ -538,10 +584,10 @@ export function createChat(deps: ChatDeps) {
     return {
       instance: parsed.instance,
       bot: parsed.bot,
-      // Redacted first, then claimed: the claim only ever rewrites `origin`,
+      // Masked first, then claimed: the claim only ever rewrites `origin`,
       // and running it the other way round would put an unmasked title through
       // an object rebuild for no reason.
-      sessions: claimLocal(fleet.fleet_id, redactSessions(found)),
+      sessions: claimLocal(fleet.fleet_id, view.deep(found)),
     };
   }
 
@@ -557,6 +603,7 @@ export function createChat(deps: ChatDeps) {
   async function history(input: unknown, opts: ChatOptions = {}): Promise<ChatHistoryResult> {
     const parsed = parse(ChatHistoryInput, input, "chat log");
     validateName(parsed.instance);
+    const view = mask();
     const box = await address(parsed.instance);
     opts.signal?.throwIfAborted();
     const conversation = hermes.conversation
@@ -579,7 +626,7 @@ export function createChat(deps: ChatDeps) {
       bot: parsed.bot,
       session: selected ?? messages[0]?.session ?? null,
       ...(conversation !== undefined ? { conversation } : {}),
-      messages: messages.map(redactMessage),
+      messages: messages.map((message) => view.message(message)),
     };
   }
 
@@ -650,26 +697,25 @@ export function createChat(deps: ChatDeps) {
   ) {
     return watched(input.instance, opts, (request) => runLifecycle(input, kind, request));
   }
+  /** A Bot Mode lifecycle call, masked with the mask taken as it started. */
+  function masked<T>(work: () => Promise<T>): Promise<T> {
+    return sealed(async () => {
+      const view = mask();
+      return view.deep(await work());
+    });
+  }
   return {
-    open: (input: unknown, opts: ChatOptions = {}) =>
-      sealed(
-        async () =>
-          redactDeep(
-            await lifecycle(parse(ChatOpenInput, input, "Bot Mode"), "open", opts),
-          ) as ChatConversation,
-      ),
+    open: async (input: unknown, opts: ChatOptions = {}): Promise<ChatConversation> =>
+      (await masked(() =>
+        lifecycle(parse(ChatOpenInput, input, "Bot Mode"), "open", opts),
+      )) as ChatConversation,
     compact: (input: unknown, opts: ChatOptions = {}) =>
-      sealed(async () =>
-        redactDeep(await lifecycle(parse(ChatCompactInput, input, "Bot Mode"), "compact", opts)),
-      ),
+      masked(() => lifecycle(parse(ChatCompactInput, input, "Bot Mode"), "compact", opts)),
     archive: (input: unknown, opts: ChatOptions = {}) =>
-      sealed(async () =>
-        redactDeep(await lifecycle(parse(ChatArchiveInput, input, "Bot Mode"), "archive", opts)),
-      ),
+      masked(() => lifecycle(parse(ChatArchiveInput, input, "Bot Mode"), "archive", opts)),
     respond: (input: unknown, opts: ChatOptions = {}) =>
-      sealed(async () =>
-        redactDeep(await lifecycle(parse(ChatRespondInput, input, "Bot Mode"), "respond", opts)),
-      ),
+      masked(() => lifecycle(parse(ChatRespondInput, input, "Bot Mode"), "respond", opts)),
+    settings: (input: unknown = {}) => sealed(() => settings(input)),
     listening: (input: unknown = {}) => sealed(() => listening(input)),
     listen: (input: unknown) => sealed(() => listen(input)),
     swarms: (input: unknown, opts: ChatOptions = {}) => sealed(() => swarms(input, opts)),

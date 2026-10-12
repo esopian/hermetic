@@ -14,8 +14,10 @@
  * document they share sit in `lifecycle/release.ts`, built once here and handed
  * to both. `create`'s `--volume` checks are in `lifecycle/adopt-volume.ts` and
  * its re-run instance wait in `lifecycle/recorded-instance.ts`. `destroy` is in
- * `destroy-agent.ts`, `stop` and `start` are in `power.ts`, and the tailnet
- * sweep `destroy` and `recreate` both run is in `tailnet-devices.ts`. Each of
+ * `destroy-agent.ts`, `stop` and `start` are in `power.ts`, and the wait for
+ * the old nodes and the tailnet sweep `destroy` and `recreate` both run before
+ * the name is handed on are in `lifecycle/retire-nodes.ts` (over
+ * `tailnet-devices.ts`). Each of
  * those takes its own explicit deps object, and `createLifecycle` assembles the
  * five into the one surface `hermetic.ts` still asks for.
  *
@@ -30,7 +32,6 @@ import type { CoreContext } from "../context.ts";
 import type { VolumeReservation } from "../volumes/volume-claims.ts";
 import { createDestroy } from "./destroy-agent.ts";
 import { createPower } from "./power.ts";
-import { createTailnetCleanup } from "../fleet/tailnet-devices.ts";
 import { createCreateOp } from "./lifecycle/create-agent.ts";
 import { createRecreateOp } from "./lifecycle/recreate-agent.ts";
 import { createRelease } from "./lifecycle/release.ts";
@@ -71,6 +72,13 @@ export interface LifecycleDeps {
    * then recreating must not boot the replacement onto the *old* binding.
    */
   applyPending: (agent: Agent) => Promise<Agent>;
+  /**
+   * §6.7: drop what this machine keeps locally about a released name — called
+   * by the release (`lifecycle/release-name.ts`) that ends every destroy, and
+   * by a create that releases a legacy `destroyed` row. Optional: a release is
+   * complete without it, and a failure is reported rather than raised.
+   */
+  purgeLocal?: ((fleetId: string, name: string) => Promise<void>) | undefined;
 }
 
 export function createLifecycle(deps: LifecycleDeps) {
@@ -86,15 +94,15 @@ export function createLifecycle(deps: LifecycleDeps) {
 
   /**
    * Three of the five operations this module names live beside it: `destroy` in
-   * `destroy-agent.ts`, `stop` and `start` in `power.ts`, and the tailnet sweep
-   * those two share with `recreate` in `tailnet-devices.ts`. Each takes an
+   * `destroy-agent.ts`, and `stop` and `start` in `power.ts`. Each takes an
    * explicit deps object that `LifecycleDeps` satisfies, so this is the whole of
-   * the wiring — none of them reads anything from this closure.
+   * the wiring — none of them reads anything from this closure. `destroy` and
+   * `recreate` each build the old-node wait and tailnet sweep they share
+   * (`lifecycle/retire-nodes.ts`) from the context themselves.
    */
-  const { removeTailnetDevices } = createTailnetCleanup(deps.ctx);
   const { destroy } = createDestroy(deps);
   const { stop, start } = createPower(deps);
-  const { recreate } = createRecreateOp(deps, { release, removeTailnetDevices });
+  const { recreate } = createRecreateOp(deps, { release });
 
   return { create, destroy, stop, start, recreate };
 }

@@ -14,6 +14,7 @@
     "@aws-sdk/client-s3": "^3.1124.0",
     "@aws-sdk/client-ssm": "^3.1124.0",
     "@aws-sdk/lib-dynamodb": "^3.1124.0",
-    "@hermetic/core": "workspace:*"
+    "@hermetic/core": "workspace:*",
+    "systeminformation": "^5.33.15"
   }
 }

@@ -62,10 +62,20 @@ export const MANAGED_TAG_VALUE = "true";
 export const AGENT_TAG = "agent";
 
 /**
+ * Where a kept data volume's name goes when its agent is destroyed (§6.7).
+ * `findVolumeByTag` selects on `AGENT_TAG` alone, so a volume tagged only with
+ * this one is invisible to a plain `agent create <same name>` — the disk is
+ * released from the name and adoptable only by an explicit `--volume vol-…`
+ * (§9.1). The value is the former agent's name, for `volume ls` to show.
+ */
+export const FORMER_AGENT_TAG = "hermetic:former_agent";
+
+/**
  * What a hermetic-managed volume is *for*. The root volume of an instance is
  * tagged `agent=<name>` too (EC2 copies instance tags onto it in some flows), so
  * "the data volume" needs a tag of its own — otherwise a resume could attach the
- * root disk and `destroy --delete-volume` could delete the wrong one. Only
+ * root disk and `destroy` — which deletes the data volume by default (§6.7) —
+ * could delete the wrong one. Only
  * volumes carrying `hermetic:role=data` are the precious ones (§1).
  */
 export const ROLE_TAG = "hermetic:role";

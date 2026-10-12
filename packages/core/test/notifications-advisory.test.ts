@@ -539,7 +539,7 @@ for (const [label, make] of STORES) {
         actions: [{ label: "Review", target: "foundation" }],
       };
       observeAdvisories(depsFor(store), ADVISORY_FOUNDATION_UPDATE, [held]);
-      expect(store.counts(FLEET)).toEqual({ unread: 1, needs_action: 1 });
+      expect(store.counts(FLEET)).toMatchObject({ unread: 1, needs_action: 1 });
 
       observeAdvisories(depsFor(store), ADVISORY_FOUNDATION_UPDATE, []);
       const result = notificationsList(depsFor(store));

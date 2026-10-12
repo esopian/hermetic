@@ -232,6 +232,56 @@ describe("foundation.status", () => {
     };
     expect((await core(backend).foundation.status()).in_progress).toBeNull();
   });
+
+  /**
+   * §6.6's `drifted`, end to end through the read that computes it: a drift
+   * is `drifted` until an apply for the row's own config is in flight, and
+   * `drifted` again once that request is older than anything still waits on —
+   * hermeticd never clears `apply_request`, so the age is the only thing that
+   * stops a failed apply reading as "catching up" for good.
+   */
+  test("a drift reads as drifted, as pending while an apply lands, and drifted once it is stale", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const seeded = await seedOne(backend, "drifty");
+    backend.agents.set("drifty", {
+      ...seeded,
+      status: "ready",
+      hermeticd_version: FIXTURE_HERMETICD_VERSION,
+      config_hash: "want",
+      applied_config_hash: "have",
+      last_heartbeat: backend.now().toISOString(),
+    });
+    const skewOf = async () => (await core(backend).foundation.status()).skew;
+
+    expect((await skewOf())?.severity).toBe("drifted");
+    expect((await skewOf())?.fix).toBe("hermetic plan rollout");
+    expect((await skewOf())?.agents_affected).toBe(1);
+
+    const request = (issued: number, config_hash = "want") => ({
+      id: "r1",
+      config_hash,
+      issued_at: new Date(issued).toISOString(),
+      issued_by: "test",
+    });
+    const row = backend.agents.get("drifty")!;
+    const at = backend.now().getTime();
+
+    backend.agents.set("drifty", { ...row, apply_request: request(at - 60_000) });
+    expect((await skewOf())?.severity).toBe("pending");
+    expect((await skewOf())?.agents_affected).toBe(1);
+
+    backend.agents.set("drifty", { ...row, apply_request: request(at - 16 * 60_000) });
+    expect((await skewOf())?.severity).toBe("drifted");
+
+    backend.agents.set("drifty", { ...row, apply_request: request(at - 60_000, "older") });
+    expect((await skewOf())?.severity).toBe("drifted");
+
+    // The wire row is unchanged: whether an apply is in flight is the
+    // severity's input, not a field every head now has to render.
+    const status = await core(backend).foundation.status();
+    expect(Object.keys(status.agents[0] ?? {})).not.toContain("converging");
+    expect(FoundationStatus.safeParse(status).success).toBe(true);
+  });
 });
 
 /**

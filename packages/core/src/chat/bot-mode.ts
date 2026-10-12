@@ -1,11 +1,14 @@
 /** Typed Bot Mode operations. Upstream owns profiles, room logs and schedules. */
+import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import * as S from "../schema/bot-mode.ts";
 import { agentDashboardUrl, cloudName } from "../schema/index.ts";
 import type { ChatDeps, ChatOptions } from "./chat.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
-import { redactDeep, redactText } from "./chat-redact.ts";
+import { botHandle } from "../shared/bot-handles.ts";
+import { redactText } from "./chat-redact.ts";
+import { MemoryChatSettingsStore, maskFor } from "./chat-settings.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
 
 /**
@@ -18,6 +21,7 @@ const text = (v: unknown, fallback = ""): string => str(v) ?? fallback;
 const unsupported = (message: string): never => {
   throw new HermeticError("CHAT_PROTOCOL", message);
 };
+const NO_TITLES = "This gateway does not store Bot Mode titles; update Hermes";
 
 /**
  * The hosted-room protocol version this build speaks (`groups.capabilities`,
@@ -218,8 +222,9 @@ function probeProfile(roster: unknown): string {
 }
 
 export function createBotMode(
-  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes">,
+  deps: Pick<ChatDeps, "guardFleet" | "getAgent" | "instanceListening" | "hermes" | "chatSettings">,
 ) {
+  const settings = deps.chatSettings ?? new MemoryChatSettingsStore();
   async function box(instance: string) {
     validateName(instance);
     const { fleet } = await deps.guardFleet();
@@ -270,11 +275,14 @@ export function createBotMode(
           "VALIDATION",
           parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
         );
+      // Room logs and routine runs are transcript content: masked when this
+      // laptop's `redact` is on. A failure below is masked either way.
+      const mask = maskFor(settings);
       try {
         opts.signal?.throwIfAborted();
         const result = await work(parsed.data, opts);
         opts.signal?.throwIfAborted();
-        return redactDeep(result) as O;
+        return mask.deep(result);
       } catch (error) {
         // The caller hanging up is not a failure of the gateway and not a
         // verdict on anything: it propagates as the abort it is, never as a
@@ -343,7 +351,13 @@ export function createBotMode(
       const version = typeof groups.protocol_version === "number" ? groups.protocol_version : null;
       const hostedStatus = verdict(rooms, version === ROOM_PROTOCOL_VERSION);
       const hosted = hostedStatus === "supported";
-      const driver = hosted && groups.driver === true && groups.persistent_process === true;
+      // `driver` is the whole answer for a room on this instance: it is whether
+      // the gateway's hosted-room service is running, which is the same check
+      // upstream's room handlers make before accepting work. `persistent_process`
+      // is not read here. Upstream copies it out of the RoomLink peer catalog
+      // (`tui_gateway/methods_groups.py` at `v2026.9.24`), so it is false whenever
+      // RoomLink is disabled, which says nothing about local rooms.
+      const driver = hosted && groups.driver === true;
       // A driver claim can only be read off a protocol this build understands,
       // so an unknown hosted-room probe leaves the driver unknown too.
       const driverStatus: S.BotCapabilityStatus =
@@ -382,7 +396,7 @@ export function createBotMode(
           hosted_rooms: hostedReason,
           room_driver: driver
             ? null
-            : (hostedReason ?? "This gateway has no persistent hosted-room driver"),
+            : (hostedReason ?? "This gateway's hosted-room driver is not running"),
         },
         status: {
           profiles: profilesStatus,
@@ -413,15 +427,30 @@ export function createBotMode(
       mcp_servers: records(r.mcp_servers),
     });
   });
+  /**
+   * `profiles.create`, then the Bot Mode namespace the way Desktop's create
+   * dialog writes it (`apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:451-486`
+   * at v2026.9.24): the friendly `title` and `created` in epoch milliseconds,
+   * beside the `version` marker that makes the profile Bot Mode managed. The
+   * look keys (`shape`, `color`, `imageKind`) are Desktop's to choose; Hermetic
+   * seeds its avatars itself and invents none.
+   *
+   * Desktop also sends `profiles.create` a description of `"title — description"`.
+   * That is not copied: the teammate roster already joins the two
+   * (`_role_line`, `tools/bot_mode_probe.py:132-155`), so the title would read
+   * twice there, and `bots.get` would hand the prefix back as part of a
+   * description the operator never typed.
+   */
   const create = operation(S.BotCreateInput, async (p, opts) => {
-    const { instance, ...input } = p;
+    const { instance, title, ...input } = p;
     const created = record(await rpc(instance, "profiles.create", input, opts));
     if (created.ok !== true) return unsupported("Gateway did not create the profile");
+    const meta = { version: 1, ...(title ? { title } : {}), created: Date.now() };
     const configured = record(
       await rpc(
         instance,
         "profiles.configure",
-        { name: p.name, ui_meta: { "hermes-bots": { version: 1 } } },
+        { name: p.name, ui_meta: { "hermes-bots": meta } },
         opts,
       ),
     );
@@ -431,19 +460,89 @@ export function createBotMode(
       );
     return get({ instance, bot: p.name }, opts);
   });
+  /**
+   * The `ui_meta` half of a title change: the profile's current `hermes-bots`
+   * namespace with `title` merged in (an empty string, for a reset), sent with
+   * the revision it was read at.
+   *
+   * Upstream merges `ui_meta` one top-level key at a time
+   * (`_configure_ui_meta`, `tui_gateway/methods_profiles.py` at `v2026.9.24`),
+   * so sending `{ "hermes-bots": { title } }` alone would replace the whole
+   * namespace and drop every other key Desktop keeps there. The expected
+   * revision makes the read-merge-write one compare-and-swap: if Desktop saved
+   * that namespace in between, the gateway rejects the write instead of this
+   * one silently undoing it.
+   *
+   * A reset writes `title: ""` rather than deleting the key, the way Desktop's
+   * own Edit profile does: Desktop merges its local cache under the server's
+   * namespace (`{ ...cached, ...server }`, `apps/desktop/src/plugins/hermes-bots/data.ts`),
+   * so a missing key would let a cached title survive and be written back.
+   * `custom` is left as found — upstream it marks a customised avatar, not a
+   * title.
+   *
+   * A row without `ui_meta_revisions` is a gateway that predates gateway-owned
+   * compare-and-swap (upstream always sends the map, empty for a new profile,
+   * as its feature detection); a write there would be a blind overwrite, so it
+   * is refused as unsupported.
+   */
+  async function titleMeta(instance: string, bot: string, title: string | null, opts: ChatOptions) {
+    const listed = record(await rpc(instance, "profiles.list", { include_sessions: false }, opts));
+    const row = records(listed.profiles).find((entry) => entry.name === bot);
+    if (!row) throw new HermeticError("NOT_FOUND", `${bot}: profile not found on ${instance}`);
+    const revisions = row.ui_meta_revisions;
+    if (typeof revisions !== "object" || revisions === null || Array.isArray(revisions))
+      return unsupported(NO_TITLES);
+    const meta = { ...record(record(row.ui_meta)["hermes-bots"]), title: title ?? "" };
+    const revision = record(revisions)["hermes-bots"];
+    return {
+      ui_meta: { "hermes-bots": meta },
+      ui_meta_expected_revisions: { "hermes-bots": typeof revision === "number" ? revision : 0 },
+    };
+  }
+  const rejected = (r: Record<string, unknown>) =>
+    r.ok !== true || Object.values(record(r.applied)).some((v) => v === false);
+  /**
+   * The title goes in a `profiles.configure` of its own, before anything else.
+   * Upstream applies each section of one call independently
+   * (`methods_profiles.py`), so a title riding with a soul or a model could be
+   * saved and then reported as a CONFLICT or a confirmation prompt, leaving a
+   * half-applied edit the operator is told failed. Sent alone and first, a
+   * refused title stops the edit before any other field is written.
+   */
   const update = operation(S.BotUpdateInput, async (p, opts) => {
-    const { instance, bot, ...changes } = p;
-    const r = record(await rpc(instance, "profiles.configure", { name: bot, ...changes }, opts));
-    if (r.confirm_required === true)
-      throw new HermeticError(
-        "CONFIRMATION_REQUIRED",
-        text(r.confirm_message, "Confirm this model change"),
-      );
-    if (r.ok !== true || Object.values(record(r.applied)).some((v) => v === false))
-      throw new HermeticError(
-        "CONFLICT",
-        "Some profile changes were rejected. Reload before saving again.",
-      );
+    const { instance, bot, title, ...changes } = p;
+    if (title !== undefined) {
+      const meta = await titleMeta(instance, bot, title, opts);
+      const r = record(await rpc(instance, "profiles.configure", { name: bot, ...meta }, opts));
+      const applied = record(r.applied);
+      const conflict = record(record(applied.ui_meta_conflicts)["hermes-bots"]);
+      if (Object.keys(conflict).length > 0)
+        throw new HermeticError(
+          "CONFLICT",
+          `${bot}: its Bot Mode settings changed elsewhere since they were read (revision ${String(conflict.expected)} expected, ${String(conflict.actual)} found). Reload before renaming again.`,
+        );
+      if (applied.ui_meta === false)
+        throw new HermeticError("CONFLICT", `${bot}: the gateway did not save the new name`);
+      if (applied.ui_meta !== true) return unsupported(NO_TITLES);
+      if (rejected(r))
+        throw new HermeticError("CONFLICT", `${bot}: the gateway did not save the new name`);
+    }
+    const fields = Object.entries(changes).filter(
+      ([k, v]) => v !== undefined && k !== "confirm_expensive_model",
+    );
+    if (fields.length > 0) {
+      const r = record(await rpc(instance, "profiles.configure", { name: bot, ...changes }, opts));
+      if (r.confirm_required === true)
+        throw new HermeticError(
+          "CONFIRMATION_REQUIRED",
+          text(r.confirm_message, "Confirm this model change"),
+        );
+      if (rejected(r))
+        throw new HermeticError(
+          "CONFLICT",
+          "Some profile changes were rejected. Reload before saving again.",
+        );
+    }
     return get({ instance, bot }, opts);
   });
   const remove = operation(S.BotDeleteInput, async (p, opts) => {
@@ -488,7 +587,7 @@ export function createBotMode(
         c.detail.room_driver ??
           c.detail.hosted_rooms ??
           c.reason ??
-          "This gateway has no persistent hosted-room driver",
+          "This gateway's hosted-room driver is not running",
       );
   }
   const rooms = {
@@ -527,10 +626,17 @@ export function createBotMode(
             profile: "default",
             room_id: p.room,
             name: p.name,
+            // The default profile's handle is `hermes`, the alias `message_agent`
+            // and Desktop give it (`tools/bot_mode_probe.py:67-69`,
+            // `apps/desktop/src/plugins/hermes-bots/data.ts:1011-1017`). The room
+            // matches `@handle` against these registered handles alone
+            // (`resolve_mentions`, `gateway/hosted_room_discussion.py:302-318`),
+            // so a room created as `@default` before this keeps `@default`:
+            // the roster is frozen at creation.
             members: p.members.map((m) => ({
               member_id: m.bot,
               profile: m.bot,
-              handle: m.bot,
+              handle: botHandle(m.bot),
               display_name: m.bot,
             })),
           },
@@ -622,11 +728,16 @@ export function createBotMode(
       });
     }),
     control: operation(S.RoomControlInput, async (p, o) => {
+      // Upstream defaults an absent `cancel_id` to one fixed value and derives the
+      // stop fence's event id from it, so every Stop after the first in a room
+      // would replay that fence instead of superseding later work. A fresh id per
+      // Stop fits its identifier rule (128 chars, `[A-Za-z0-9][A-Za-z0-9._:-]*`).
+      const cancel = p.action === "stop" ? { cancel_id: `hermetic-stop-${randomUUID()}` } : {};
       const result = record(
         await rpc(
           p.instance,
           `groups.${p.action}`,
-          { ...roomParams(p), ...(p.task_id ? { task_id: p.task_id } : {}) },
+          { ...roomParams(p), ...(p.task_id ? { task_id: p.task_id } : {}), ...cancel },
           o,
         ),
       );
