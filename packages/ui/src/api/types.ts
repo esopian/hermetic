@@ -160,6 +160,7 @@ export type ChatActivityView = Extract<ChatBlockView, { kind: "activity" }>;
 export type ChatBlockOf<K extends ChatBlockView["kind"]> = Extract<ChatBlockView, { kind: K }>;
 export type ChatUsageView = NonNullable<ChatMessageView["usage"]>;
 export type ChatAbortResult = BridgeResult<"chat.abort">;
+export type ChatSteerResult = BridgeResult<"chat.steer">;
 export type ChatResumeResult = BridgeResult<"chat.observe.resume">;
 
 /** One frame of a live turn, as the app's chat handler names its events. */

@@ -119,6 +119,7 @@ export type RequestName =
   | "chat.sessions"
   | "chat.history"
   | "chat.abort"
+  | "chat.steer"
   // Machinery, listed with the core methods it sits between: the one-shot
   // "watch again" (`app/src/handlers/chat.ts`, `observeResume`). The public
   // `chat.observe` is the *subscription* and answers a `stream_id`, which is

@@ -549,6 +549,10 @@
   padding: 10px 20px 4px;
   gap: 8px;
 }
+/* The skin's own `gap` above would part the queue from the box it sits on. */
+[data-skin="soft"] .ch-input-wrap:has(> .ch-queue) {
+  row-gap: 0;
+}
 [data-skin="soft"] .ch-input {
   border: 1px solid var(--line2);
   background: var(--bg);

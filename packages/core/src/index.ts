@@ -139,6 +139,8 @@ export type {
 export type {
   ChatAbortResult,
   ChatDeps,
+  ChatSteerResult,
+  ChatSteerStatus,
   ChatHistoryResult,
   ChatOptions,
   ChatSessionsResult,
