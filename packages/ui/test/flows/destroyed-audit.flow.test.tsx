@@ -37,6 +37,22 @@ function lens(): HTMLElement {
   return screen.getByRole("group", { name: "Fleet lens" });
 }
 
+/**
+ * The headline's third half carries its number up front, like the other two:
+ * read once at mount, not on the first click, so the switch never grows a
+ * number under the pointer.
+ */
+test("the destroyed count is in the headline before the lens is opened", async () => {
+  harness = await flowHarness();
+  mountPortal();
+
+  // `oriole` is the fixture's one tombstone.
+  const half = await waitFor(() => within(lens()).getByRole("button", { name: /^1 destroyed$/ }));
+  expect(half.getAttribute("aria-pressed")).toBe("false");
+  expect(window.location.hash).toBe("");
+  expect(harness.calls.filter((c) => c.name === "agents.destroyed").length).toBe(1);
+});
+
 test("destroy, review the tombstone and its history, then reuse the name", async () => {
   harness = await flowHarness();
   mountPortal();
@@ -79,6 +95,11 @@ test("destroy, review the tombstone and its history, then reuse the name", async
     },
     { timeout: 15_000 },
   );
+
+  // The count in the headline follows the destroy on the agents lens too.
+  await waitFor(() => within(lens()).getByRole("button", { name: /^2 destroyed$/ }), {
+    timeout: 10_000,
+  });
 
   // 3. The Destroyed lens has its record, and its history for that life alone.
   await user.click(within(lens()).getByRole("button", { name: /destroyed$/ }));

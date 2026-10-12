@@ -285,6 +285,18 @@ export function currentPhaseOf(events: readonly OpEvent[]): string | null {
   return last?.phase ?? null;
 }
 
+/**
+ * The bar's percentage. A finished op that succeeded is 100; anything else is
+ * the last event's own progress — capped at 99 while the op runs, because an
+ * event that says 1 before the op's terminal frame would otherwise leave a full
+ * bar over a step that is still waiting.
+ */
+export function opPercent(finished: boolean, ok: boolean, progress: number): number {
+  const said = Math.round(progress * 100);
+  if (finished) return ok ? 100 : said;
+  return Math.min(99, said);
+}
+
 export interface OpState {
   events: OpEvent[];
   steps: OpStep[];
@@ -315,11 +327,14 @@ export function useOp(
   const [ok, setOk] = useState(true);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const current = useRef<string | null>(null);
+  /** How many of `opId`'s events this reader holds; none means it must be sent all of them. */
+  const drawn = useRef(0);
 
   useEffect(() => {
     if (!opId) return;
     if (current.current !== opId) {
       current.current = opId;
+      drawn.current = 0;
       setEvents([]);
       setFinished(false);
       setOk(true);
@@ -328,6 +343,7 @@ export function useOp(
     const stop = followOp(
       opId,
       (e) => {
+        drawn.current += 1;
         receivedAt.current.set(e, Date.now());
         setEvents((prev) => [...prev, e]);
       },
@@ -336,6 +352,9 @@ export function useOp(
         setOk(okay);
         setError(err);
       },
+      // A drawer reopened mid-op is a fresh reader: the window's cursor may sit
+      // past every phase it has to draw (`StreamHandlers.replay`).
+      { replay: drawn.current === 0 },
     );
     return stop;
   }, [opId]);
@@ -401,11 +420,7 @@ export function useOp(
     });
 
     const last = events[events.length - 1];
-    const percent = finished
-      ? ok
-        ? 100
-        : Math.round((last?.progress ?? 0) * 100)
-      : Math.round((last?.progress ?? 0) * 100);
+    const percent = opPercent(finished, ok, last?.progress ?? 0);
 
     return {
       events,

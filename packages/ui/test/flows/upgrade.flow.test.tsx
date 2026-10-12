@@ -18,8 +18,11 @@
  * `fathom` is the subject: seeded `ready`, heartbeating and on 0.14.2, behind
  * the fleet's newest release, so the card is live and its box can answer.
  */
-import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
+import { createElement, StrictMode } from "react";
+import { act, cleanup, render, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Portal } from "../../src/Portal.tsx";
+import { FleetProvider } from "../../src/state/state.tsx";
 import { flowHarness, gotoHash, mountPortal, type FlowHarness } from "./bridge.ts";
 
 /** Seeded `ready` on 0.14.2 with a fresh heartbeat (`fixture-agents.ts`). */
@@ -163,4 +166,72 @@ test("a stopped agent can be pinned but not upgraded now, and the card says why"
     within(card).getByRole("button", { name: "Pin for next recreate" }).hasAttribute("disabled"),
   ).toBe(false);
   expect(upgradeRequests(h)).toEqual([]);
+}, 30_000);
+
+/**
+ * Closing and reopening the drawer while Upgrade now is still waiting on the
+ * box (real mode, 2026-10-12): the reopened rail ended on `STREAM_ENDED` and
+ * "What to try next" while core went on to converge the box.
+ *
+ * The reopened drawer mounts under StrictMode, as the dev app does
+ * (`entry-app.tsx`), so it subscribes, unsubscribes and subscribes again. The
+ * binding answered the unsubscribe with a synthetic `STREAM_ENDED` terminal,
+ * and because `op.event` was then routed by `op_id` alone, the surviving
+ * subscription took it as the op's end. Fixed three ways, all held here: no
+ * terminal for a reader that hung up (`rpc/bind.ts`), frames routed by the
+ * subscription that produced them (`transport-rpc.ts`), and a fresh reader
+ * replayed the op whole rather than resumed from the window's cursor
+ * (`useOp.ts`) — plus `useAgentOp` asking the registry again after
+ * StrictMode's rehearsal unmount. The op is held open so the reopen lands while
+ * it is running, which the real one did for the ninety seconds Hermes took to
+ * restart. The ordering race — another reader's live frame arriving before the
+ * reopened drawer's replay — is `transport-rpc.test.ts`'s "a reader gets its
+ * own subscription's frames".
+ */
+test("reopening the drawer on a running upgrade does not end it as STREAM_ENDED", async () => {
+  const h = await flowHarness();
+  harness = h;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let opId: string | null = null;
+  h.intercept("upgrade", () => {
+    const op = h.ctx.ops.start("upgrade", BEHIND, async function* () {
+      const at = () => new Date().toISOString();
+      yield { phase: `${BEHIND}:render`, progress: 0.25, message: "pinned; config uploaded", at: at() };
+      yield { phase: `${BEHIND}:requested`, progress: 0.5, message: "asked to apply", at: at() };
+      await gate;
+      yield { phase: "done", progress: 1, message: "pinned 1 agent(s): 1 converged", at: at() };
+    });
+    opId = op.id;
+    return { op_id: op.id, op };
+  });
+  render(createElement(StrictMode, null, createElement(FleetProvider, null, createElement(Portal))));
+  const user = userEvent.setup();
+
+  const { drawer, card } = await upgradeCard();
+  await user.click(within(card).getByRole("button", { name: "Upgrade now" }));
+  await waitFor(() => expect(drawer.textContent ?? "").toContain("asked to apply"));
+
+  // Close it, and open it again while the box has still not reported.
+  await user.click(within(drawer).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await user.click(await screen.findByRole("button", { name: `Open ${BEHIND} details` }));
+  const reopened = await waitFor(() => screen.getByRole("dialog"));
+  await waitFor(() => expect(reopened.textContent ?? "").toContain("asked to apply"));
+  // Room for the StrictMode unmount's unsubscribe to cross the bridge and back.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  expect(reopened.textContent ?? "").not.toContain("STREAM_ENDED");
+
+  // The op is still running, and ends the way core ends it.
+  expect(opId).not.toBeNull();
+  expect(h.ctx.ops.get(opId ?? "")?.status).toBe("running");
+  release();
+  await waitFor(() => expect(h.ctx.ops.get(opId ?? "")?.status).toBe("ok"));
+  await waitFor(() => expect(reopened.textContent ?? "").toContain("1 converged"));
+  expect(reopened.textContent ?? "").not.toContain("STREAM_ENDED");
+  expect(reopened.textContent ?? "").not.toContain("What to try next");
 }, 30_000);

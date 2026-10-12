@@ -29,6 +29,7 @@ import {
 import type { ProfilesState } from "../state/state.tsx";
 import { ModelPicker, useModelCatalog } from "./ModelPicker.tsx";
 import { PlanSkeleton } from "./Loading.tsx";
+import { CfgGroup, CfgRow, CfgRows, Dim } from "./agent/config-parts.tsx";
 
 /**
  * A failed save, in the operator's words.
@@ -148,36 +149,59 @@ export function AgentProfilePanel({
     }
   }
 
-  return (
+  /*
+    The group's actions sit at the right of its rule, as every Config group's
+    do (`config-parts.tsx`); while the editor is open they give way to its own
+    Save / Cancel.
+  */
+  const actions = editing ? null : (
     <>
-      <div className="kicker" style={{ marginTop: 22 }}>
-        Provider profile
-      </div>
-      <div className="kv">
-        <span className="k">profile</span>
-        <span className="v">
+      <button
+        type="button"
+        className="btn btn-secondary btn-mini"
+        disabled={busy || saving}
+        onClick={openEdit}
+      >
+        Change profile or model
+      </button>
+      {bound !== null && updateAvailable ? (
+        <button
+          type="button"
+          className="btn btn-secondary btn-mini"
+          disabled={busy || saving}
+          title="Re-pin the same profile at its latest revision, keeping any model override this agent has"
+          onClick={() => void save(true)}
+        >
+          Refresh profile
+        </button>
+      ) : null}
+    </>
+  );
+
+  return (
+    <CfgGroup title="Provider profile" actions={actions}>
+      <CfgRows>
+        <CfgRow k="profile">
           {bound === null ? (
-            <span style={{ color: "var(--fg3)" }}>
-              {agent.provider} · the fleet&apos;s designated profile for this provider
-            </span>
+            <Dim>{agent.provider} · the fleet&apos;s designated profile for this provider</Dim>
           ) : (
             <>
               {bound.name}
-              <span style={{ color: "var(--fg3)" }}>
+              <Dim>
                 {" "}
                 · r{agent.profile_revision ?? bound.revision} · {providerSpec(bound).label}
-              </span>
+              </Dim>
               {updateAvailable ? (
                 <span className="tag ghost profile-update"> update available</span>
               ) : null}
             </>
           )}
-        </span>
-        <span className="k">model</span>
-        <span className="v">{agent.hermes?.model ?? bound?.model ?? "—"}</span>
-        <span className="k">credential</span>
-        <span className={credential.mono ? "v mono" : "v"}>{credential.text}</span>
-      </div>
+        </CfgRow>
+        <CfgRow k="model">{agent.hermes?.model ?? bound?.model ?? "—"}</CfgRow>
+        <CfgRow k="credential" className={credential.mono ? undefined : "cfg-prose"}>
+          {credential.text}
+        </CfgRow>
+      </CfgRows>
 
       {updateAvailable && pending === null ? (
         <div className="name-hint" style={{ color: "var(--warn)" }}>
@@ -258,29 +282,7 @@ export function AgentProfilePanel({
         </div>
       ) : null}
 
-      {!editing ? (
-        <div className="profile-panel-acts">
-          <button
-            type="button"
-            className="btn btn-secondary btn-mini"
-            disabled={busy || saving}
-            onClick={openEdit}
-          >
-            Change profile or model
-          </button>
-          {bound !== null && updateAvailable ? (
-            <button
-              type="button"
-              className="btn btn-secondary btn-mini"
-              disabled={busy || saving}
-              title="Re-pin the same profile at its latest revision, keeping any model override this agent has"
-              onClick={() => void save(true)}
-            >
-              Refresh profile
-            </button>
-          ) : null}
-        </div>
-      ) : (
+      {editing ? (
         <div className="profile-panel-edit">
           <label className="select-field">
             <div className="kicker" style={{ marginBottom: 8 }}>
@@ -341,13 +343,13 @@ export function AgentProfilePanel({
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {error !== null && !editing ? (
         <div className="mono" style={{ color: "var(--bad)", fontSize: 12 }}>
           {error}
         </div>
       ) : null}
-    </>
+    </CfgGroup>
   );
 }

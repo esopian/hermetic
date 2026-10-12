@@ -227,7 +227,7 @@ export function NotificationsSection() {
     <SettingsPage
       section="notifications"
       scope="laptop"
-      desc="What reaches you, and how. Only this laptop; another laptop on the fleet keeps its own."
+      desc="This laptop only; another laptop on the fleet keeps its own."
       primary={
         <button type="button" className="btn btn-secondary" onClick={notify.sendTest}>
           Send test

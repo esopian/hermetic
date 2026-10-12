@@ -283,7 +283,8 @@ export interface TriageGroup {
   key: string;
   label: string;
   color: string;
-  hint: string;
+  /** What puts an agent in this group, when the label alone does not say. */
+  hint?: string;
   items: AgentView[];
 }
 
@@ -311,21 +312,19 @@ export function triageGroups(agents: AgentView[], latest: string | null): Triage
       key: "progress",
       label: "in progress",
       color: "var(--acc)",
-      hint: "Long operations streaming from the engine.",
       items: progress,
     },
     {
       key: "healthy",
       label: "healthy",
       color: "var(--ok)",
-      hint: "Current version, all checks green.",
       items: healthy,
     },
     {
       key: "stopped",
       label: "stopped",
       color: "var(--fg3)",
-      hint: "Instance stopped; data volume retained.",
+      hint: "Data volume kept.",
       items: stopped,
     },
   ];

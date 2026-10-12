@@ -134,7 +134,7 @@ export function DiagnosticsSection() {
     <SettingsPage
       section="diagnostics"
       scope="readonly"
-      desc="Walks EC2, DynamoDB, the tailnet and this laptop's tailscale, and reports every check. Changes nothing."
+      desc="Checks EC2, DynamoDB, the tailnet and this laptop's tailscale. Changes nothing."
       primary={
         <button type="button" className="btn btn-primary" disabled={busy} onClick={runDoctor}>
           {busy ? "Running…" : doctor === null ? "Run doctor" : "Run doctor again"}

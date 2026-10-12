@@ -168,9 +168,10 @@ export function refusalFor(e: unknown): { refusal: RpcRefusal; internal?: string
  * request it is still waiting on.
  *
  * So frames buffer until `settle` is handed the resolved value, and are flushed
- * in order with the id it carried. `ops.subscribe` is the exception: it is
- * correlated by `op_id`, which the page sent in the *params*, so its frames go
- * out as they arrive and nothing is held.
+ * in order with the id it carried. `ops.subscribe` is no exception: its frames
+ * also carry the `op_id` the page sent, but correlating on that alone shared
+ * every frame between all of one op's readers in the window, and a live frame
+ * sent for one reached another that was still waiting for its replay.
  */
 export interface StreamPump {
   sink: StreamSink;
@@ -242,10 +243,16 @@ function stringField(value: unknown, field: string): string | undefined {
 }
 
 /** One frame, on the message its request's frames ride (`schema.ts`). */
-function push(send: SendMessage, message: StreamMessageName, id: string, frame: StreamFrame): void {
+function push(
+  send: SendMessage,
+  message: StreamMessageName,
+  id: string,
+  frame: StreamFrame,
+  opId: string | null,
+): void {
   switch (message) {
     case "op.event":
-      send("op.event", { op_id: id, msg: frame });
+      send("op.event", { op_id: opId ?? "", stream_id: id, msg: frame });
       return;
     case "fleet.event":
       send("fleet.event", { event: frame });
@@ -290,9 +297,10 @@ export function createStreamPump(
   params: unknown,
   send: SendMessage,
 ): StreamPump {
-  // `ops.subscribe` carries its correlator in the request, so there is nothing
-  // to wait for; every other stream is named by what the request resolves to.
-  let id: string | null = message === "op.event" ? (stringField(params, "op_id") ?? null) : null;
+  // Every stream is named by what its request resolves to. An op's frames also
+  // carry the op the page asked about, which is what its replay cursor keys on.
+  const opId = message === "op.event" ? (stringField(params, "op_id") ?? null) : null;
+  let id: string | null = null;
   const buffered: StreamFrame[] = [];
   /**
    * Nothing will ever correlate this pump's frames: the request was refused, or
@@ -316,7 +324,7 @@ export function createStreamPump(
         buffered.push(frame);
         return;
       }
-      push(send, message, id, frame);
+      push(send, message, id, frame, opId);
     },
     settle(result) {
       if (dead) return;
@@ -330,7 +338,7 @@ export function createStreamPump(
         }
         id = resolved;
       }
-      for (const frame of buffered.splice(0)) push(send, message, id, frame);
+      for (const frame of buffered.splice(0)) push(send, message, id, frame, opId);
     },
     abandon: die,
     pending() {
@@ -340,7 +348,7 @@ export function createStreamPump(
       if (dead || terminated || id === null) return;
       if (!FINITE_MESSAGES.includes(message)) return;
       terminated = true;
-      push(send, message, id, { event: "done", data: STREAM_ENDED });
+      push(send, message, id, { event: "done", data: STREAM_ENDED }, opId);
     },
   };
 }
@@ -354,6 +362,12 @@ export function createStreamPump(
  * `handlers/chat.ts`, `handlers/agents.ts`), so by the time a later tick looked
  * the registry would have nothing under that id. A handle that is already gone
  * is a stream that has already ended, which is `end()` immediately.
+ *
+ * A stream its reader closed gets no terminal. That reader asked to stop and is
+ * waiting for nothing. (When `op.event` was routed by `op_id` alone, every other
+ * reader of the same op in the window — the fleet's watcher, a drawer reopened
+ * on the op, StrictMode's second mount of the same drawer — took a
+ * `STREAM_ENDED` written for the one that left as the end of the op itself.)
  */
 function watchForSilence(ctx: HandlerContext, result: unknown, pump: StreamPump): void {
   const streamId = stringField(result, "stream_id");
@@ -363,7 +377,9 @@ function watchForSilence(ctx: HandlerContext, result: unknown, pump: StreamPump)
     pump.end();
     return;
   }
-  void handle.done.then(() => pump.end());
+  void handle.done.then(() => {
+    if (!ctx.streams.hungUp(handle)) pump.end();
+  });
 }
 
 function pumpFor(name: string, params: unknown, send: SendMessage): StreamPump | null {

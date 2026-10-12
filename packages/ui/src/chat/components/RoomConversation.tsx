@@ -567,7 +567,7 @@ export function RoomConversation({
             </button>
           </div>
           <div className="ch-composer-foot">
-            @everyone or @member · a new message continues a stopped discussion
+            <span>@everyone or @member · a new message continues a stopped discussion</span>
           </div>
         </div>
       </section>

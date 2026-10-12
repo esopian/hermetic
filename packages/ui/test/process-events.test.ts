@@ -1,7 +1,7 @@
 /**
  * Background-process events in a thread: the pure rules (`process-events.ts`).
  *
- * Bursts, the "failures only" density, the links between a start and its
+ * Bursts, the one rendering that hides nothing, the links between a start and its
  * event, and the places an event row must not be counted as the operator.
  */
 import { describe, expect, test } from "bun:test";
@@ -29,8 +29,7 @@ import { PIDS, T0, at, eventMessage, eventOf, kestrelEvents } from "./process-ev
 
 const NOW = T0 + 3_600_000;
 
-const items = (messages: ChatMessageView[], density: "compact" | "failures" = "compact") =>
-  threadItems(turnRows(messages, NOW), density);
+const items = (messages: ChatMessageView[]) => threadItems(turnRows(messages, NOW));
 
 /** Each item as a short tag, so a whole thread's shape reads as one line. */
 const shape = (list: ThreadItem<ChatMessageView>[]): string[] =>
@@ -115,33 +114,13 @@ describe("bursts", () => {
   });
 });
 
-describe("failures only", () => {
-  test("hides routine events and bursts, and keeps failures, DM replies and subagent results", () => {
-    expect(shape(items(kestrelEvents(), "failures"))).toEqual([
-      "turn(m-prompt)",
-      "turn(m-starts)",
-      "event(m-dm)",
-      "turn(m-reply)",
-      "event(m-test)",
-      "turn(m-ack)",
-      "event(m-deleg)",
-    ]);
-  });
-
-  test("a hidden row's day divider moves to the next row drawn", () => {
-    const list = threadItems(
-      turnRows(
-        [
-          { ...eventMessage("old", 0), at: new Date(T0 - 86_400_000).toISOString() },
-          eventMessage("a", 1),
-          eventMessage("b", 2, { outcome: "failed", status: "exited", exit_code: 1 }),
-        ],
-        NOW,
-      ),
-      "failures",
+describe("one rendering", () => {
+  test("hides nothing: every row is drawn once, routine events inside a burst", () => {
+    const rows = turnRows(kestrelEvents(), NOW);
+    const drawn = threadItems(rows).flatMap((item) =>
+      item.kind === "burst" ? item.entries.map((e) => e.row.message.id) : [item.row.message.id],
     );
-    expect(shape(list)).toEqual(["event(b)"]);
-    expect(list[0]!.kind === "event" && list[0]!.row.divider).toBeTruthy();
+    expect(drawn).toEqual(rows.map((row) => row.message.id));
   });
 });
 
@@ -197,9 +176,7 @@ describe("links between a start and its event", () => {
       eventMessage("m", 2, { outcome: "failed", status: "exited", exit_code: 1, process_id: "proc_w" }),
     ];
     expect(eventAnchors(items(watched)).get("proc_w")).toBe("m");
-    // A hidden row is not a place to land.
-    expect(eventAnchors(items(messages, "failures")).has(PIDS.build)).toBe(false);
-    expect(eventAnchors(items(messages, "failures")).get(PIDS.test)).toBe("m-test");
+    expect(eventAnchors(items(messages)).get(PIDS.test)).toBe("m-test");
   });
 
   test("a duration is the difference of two readable stamps, never a guess", () => {

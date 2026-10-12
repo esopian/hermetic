@@ -821,6 +821,10 @@
 .ch-band.acc {
   border-left: 4px solid var(--acc);
 }
+/* A plain state (stopped): a neutral rule, so it reads as information. */
+.ch-band.mute {
+  border-left: 4px solid var(--fg3);
+}
 .ch-band .sub {
   font-family: var(--mono);
   font-size: 11px;
@@ -1596,6 +1600,50 @@
   resize: none;
   width: 100%;
 }
+/* The thread composer's input: the box draws the border and the padding, and
+   the textarea inside it has neither, so text scrolled past the autosize cap
+   (`autosize.ts`) is clipped inside the padding, never against the border.
+   The right padding is split so the scrollbar sits near the edge while the
+   text keeps its distance from it. */
+.ch-input-box {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 46px;
+  padding: 12px 6px 12px 16px;
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  cursor: text;
+}
+.ch-input-box:focus-within {
+  outline: 2px solid var(--text-accent);
+  outline-offset: -2px;
+}
+.ch-input-box > textarea.ch-input {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 0 10px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow-y: hidden;
+}
+/* The ring is the box's (above), so it frames the padding, not the text. */
+.ch-input-box > textarea.ch-input:focus-visible {
+  outline: none;
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar {
+  width: 10px;
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar-thumb {
+  background: var(--line2);
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar-track {
+  background: transparent;
+}
 .ch-send {
   height: 46px;
   min-width: 46px;
@@ -1613,12 +1661,6 @@
 .ch-send:hover {
   background: var(--acc);
   color: var(--acc-fg);
-}
-/* Mid-turn the same control stops the turn, so it takes the destructive fill
-   rather than moving or changing size. */
-.ch-send.stop {
-  background: var(--bad);
-  color: var(--danger-text);
 }
 /* A send whose reply does something the operator may not have meant — a new
    session, a robot, somebody's Slack — says so in words, at the same height
@@ -1655,10 +1697,56 @@
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-muted);
-  flex-wrap: wrap;
+}
+/* One line: the key hints give way first (they ellipsize), then what the
+   right end says, and Stop never does — so it sits on the hints' line rather
+   than wrapping onto one of its own. */
+.ch-composer-foot > span:first-child {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ch-composer-foot .right {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Stop, while a turn runs: the footer's last word, small and red-outlined so it
+   reads as the one destructive control here without competing with Send. */
+.ch-stop {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--bad);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--bad);
+  vertical-align: middle;
+}
+.ch-stop > i {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+}
+.ch-stop:hover {
+  background: var(--bad);
+  color: var(--danger-text);
+}
+.ch-stop:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
 }
 /* What a reply does beyond this window, after "over the tailnet · <name>". */
 .ch-composer-hint.muted {
@@ -2362,6 +2450,7 @@ body:has(.app > .ch-body) {
   min-width: 0;
 }
 .ch-input-wrap:has(> .ch-queue) > .ch-input,
+.ch-input-wrap:has(> .ch-queue) > .ch-input-box,
 .ch-input-wrap:has(> .ch-queue) > .ch-send {
   grid-row: 2;
 }

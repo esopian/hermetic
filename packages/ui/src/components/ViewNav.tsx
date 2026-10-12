@@ -3,9 +3,9 @@
  * rather than on a row of its own. Volumes used to be a fourth tab; it is now the
  * fleet's second lens (`Toolbar.tsx`, `#fleet/volumes`), so the alert its badge
  * carried moved onto the Fleet badge instead: `12 · 2 loose vols`, the suffix
- * in the accent colour and present only while something is actually loose, so
- * a quiet fleet reads quiet. The dollar figure lives on the lens switch, next
- * to the thing it prices.
+ * in `--warn` (it costs money and wants a decision) and present only while
+ * something is actually loose, so a quiet fleet reads quiet. The dollar
+ * figure lives on the lens switch, next to the thing it prices.
  *
  * Chat carries no badge of its own, and that is a decision rather than an
  * omission. The number would have to come from `chat.swarms`, which is a

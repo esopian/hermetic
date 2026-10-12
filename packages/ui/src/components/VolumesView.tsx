@@ -227,7 +227,7 @@ export function VolumesView({
               <div className="lane-label">
                 <Kicker style={{ color: lane.color }}>{lane.title}</Kicker>
                 <div className="lane-n">{rows.length}</div>
-                <div className="lane-hint">{lane.hint}</div>
+                {lane.hint ? <div className="lane-hint">{lane.hint}</div> : null}
               </div>
               {dense ? (
                 <VolumeRows rows={rows} />

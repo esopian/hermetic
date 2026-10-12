@@ -101,7 +101,7 @@ export function FleetTriage({
               {g.label}
             </div>
             <div className="group-count">{g.items.length}</div>
-            <div className="group-hint">{g.hint}</div>
+            {g.hint ? <div className="group-hint">{g.hint}</div> : null}
           </div>
           <div>
             {g.items.map((a) => (

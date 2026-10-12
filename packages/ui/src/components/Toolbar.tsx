@@ -10,7 +10,14 @@
  *
  * The third half, `DESTROYED`, is the audit lens (`#fleet/destroyed`): a
  * destroy deletes the agent's row (§6.7), so a destroyed agent is never on the
- * agents lens, and its tombstone is reviewed there instead.
+ * agents lens, and its tombstone is reviewed there instead. Its count is read
+ * up front like the other two, so the headline never grows a number on click.
+ *
+ * The toolbar is two rows: the kicker and the switch across the full width
+ * (`.toolbar-head`), so the headline never wraps to make room for controls;
+ * then the lens's legend (and, on the agents lens, the listening line) on the
+ * left and the view controls on the right, bottom-aligned with that block's
+ * last line.
  *
  * `+ New agent` is the last control, after a divider, so the view controls
  * (filter, layout) stay together and the one primary action on the page sits
@@ -52,6 +59,7 @@ export function Toolbar({
   layout,
   onLayout,
   destroyedCount = null,
+  destroyedRead = false,
   destroyedBusy = false,
   onRefreshDestroyed,
   sort = null,
@@ -82,8 +90,10 @@ export function Toolbar({
   onQuery: (v: string) => void;
   layout: Layout;
   onLayout: (l: Layout) => void;
-  /** Tombstones the Destroyed lens last read; `null` before its first read. */
+  /** Tombstones last read; `null` before the first read comes back, or when it failed. */
   destroyedCount?: number | null;
+  /** A read of `agents.destroyed` has come back, good or failed (`—` rather than `···`). */
+  destroyedRead?: boolean;
   /** The Destroyed lens is reading `agents.destroyed`. */
   destroyedBusy?: boolean;
   onRefreshDestroyed?: () => void;
@@ -104,7 +114,7 @@ export function Toolbar({
   const looseMonthly = volumeSummary?.unattached_monthly_cost_usd ?? 0;
   return (
     <div className="toolbar">
-      <div>
+      <div className="toolbar-head">
         <div className="kicker">Fleet · {region}</div>
         <div className="lens-switch" role="group" aria-label="Fleet lens">
           <button type="button" aria-pressed={lens === "agents"} onClick={() => onLens("agents")}>
@@ -114,7 +124,9 @@ export function Toolbar({
             {volumeSummary ? (
               <b>{volumeSummary.total}</b>
             ) : (
-              <b className="lens-pending">{volumesRead ? "—" : "···"}</b>
+              <b className={volumesRead ? "lens-pending lens-failed" : "lens-pending"}>
+                {volumesRead ? "—" : "···"}
+              </b>
             )}{" "}
             volumes{" "}
             {loose > 0 ? (
@@ -126,9 +138,18 @@ export function Toolbar({
             ) : null}
           </button>
           <button type="button" aria-pressed={lens === "destroyed"} onClick={() => onLens("destroyed")}>
-            {destroyedCount !== null ? <b>{destroyedCount}</b> : null} destroyed
+            {destroyedCount !== null ? (
+              <b>{destroyedCount}</b>
+            ) : (
+              <b className={destroyedRead ? "lens-pending lens-failed" : "lens-pending"}>
+                {destroyedRead ? "—" : "···"}
+              </b>
+            )}{" "}
+            destroyed
           </button>
         </div>
+      </div>
+      <div className="toolbar-legend">
         {lens === "agents" ? (
           <AgentLegend
             counts={counts}
@@ -141,12 +162,15 @@ export function Toolbar({
         ) : lens === "volumes" ? (
           <VolumeLegend volumes={volumes} summary={volumeSummary} scan={volumeScan} />
         ) : (
-          <div className="toolbar-counts">
-            <span className="legend mono" style={{ color: "var(--fg3)" }}>
-              one record per destroyed agent · newest first · read-only
-            </span>
+          /*
+           * No legend on this lens: the row is held at a legend's height so the
+           * toolbar does not change height between the volumes and destroyed lenses.
+           */
+          <div className="toolbar-counts" aria-hidden="true">
+            <span className="legend">{"\u00a0"}</span>
           </div>
         )}
+        {lens === "agents" ? <ListeningToolbar /> : null}
       </div>
       <div className="toolbar-right">
         {lens === "agents" && sort && onClearSort ? (
@@ -231,7 +255,6 @@ export function Toolbar({
           </span>
         </button>
       </div>
-      {lens === "agents" ? <ListeningToolbar /> : null}
     </div>
   );
 }
@@ -288,12 +311,12 @@ function AgentLegend({
         <button
           type="button"
           className="legend legend-link"
-          style={{ color: "var(--acc)" }}
+          style={{ color: "var(--text-warn, var(--warn))" }}
           onClick={() => onShowVolumes(!showVolumes)}
           aria-pressed={showVolumes}
           title={showVolumes ? "hide volumes with no agent" : "show volumes with no agent"}
         >
-          <i style={{ background: "var(--acc)" }} />
+          <i style={{ background: "var(--warn)" }} />
           {loose} volume{loose === 1 ? "" : "s"} with no agent · ≈ ${looseMonthly.toFixed(0)}/mo
           <EyeIcon open={showVolumes} />
         </button>

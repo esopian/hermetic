@@ -52,15 +52,19 @@
   font-size: 11px;
   font-weight: 700;
   text-transform: none;
-  color: var(--text-accent, var(--acc));
+  color: var(--text-warn, var(--warn));
 }
 .lens-switch .lens-pending {
   color: var(--fg3);
   font-weight: 500;
   animation: hpulse 1.6s infinite;
 }
+/* A failed read is not a read in flight: the dash stays still. */
+.lens-switch .lens-pending.lens-failed {
+  animation: none;
+}
 /* The legend sits under the switch rather than beside a bare number now. */
-.lens-switch + .toolbar-counts {
+.toolbar-legend > .toolbar-counts:first-child {
   margin-top: 10px;
 }
 
@@ -90,10 +94,10 @@
 /* ── Fleet tab badge ────────────────────────────────────────────────────── */
 
 .viewnav-loose {
-  color: var(--text-accent, var(--acc));
+  color: var(--text-warn, var(--warn));
   font-weight: 700;
 }
-/* On an inverted tab, the foreground is the page colour, not accent ink. */
+/* On an inverted tab, the foreground is the page colour, not warn ink. */
 .viewnav button[aria-pressed="true"] .viewnav-loose {
   color: inherit;
 }
@@ -132,7 +136,7 @@
   color: var(--fg3);
 }
 .destroyed-kept {
-  color: var(--text-accent, var(--acc));
+  color: var(--text-warn, var(--warn));
   font-weight: 700;
 }
 .destroyed-detail {

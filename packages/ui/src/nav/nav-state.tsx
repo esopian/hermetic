@@ -114,6 +114,15 @@ export interface Nav {
    * leaves whichever view is up and puts the fleet back on its agents.
    */
   openAgent: (name: string) => void;
+  /**
+   * The Chat view's `Desktop` / `Terminal` links: the drawer opens on that
+   * section *over* the conversation, which stays mounted underneath, so
+   * closing the drawer is back in the same thread with its draft. Not in the
+   * hash — the Chat view keeps the URL — so a reload is back on the chat.
+   */
+  openAgentOverChat: (name: string, tab: AgentTab) => void;
+  /** Whether the open drawer was raised over the Chat view by `openAgentOverChat`. */
+  agentOverChat: boolean;
   closeAgent: () => void;
 
   createOpen: boolean;
@@ -359,10 +368,24 @@ export function NavProvider({
     },
     [select],
   );
+  const [agentOverChat, setAgentOverChat] = useState(false);
+  const openAgentOverChat = useCallback(
+    (name: string, tab: AgentTab) => {
+      select(name, tab);
+      setAgentOverChat(true);
+    },
+    [select],
+  );
   const closeAgent = useCallback(() => {
     setSelected(null);
     setTeardownOpen(false);
+    setAgentOverChat(false);
   }, []);
+  // Leaving Chat, or the drawer going by any other route, ends the overlay:
+  // the next drawer opened while Chat is up is not raised over it unasked.
+  useEffect(() => {
+    if (!chatOpen || selected === null) setAgentOverChat(false);
+  }, [chatOpen, selected]);
 
   /**
    * Chat's drawer destination, which opens the agent drawer over whatever else
@@ -530,6 +553,8 @@ export function NavProvider({
       setTeardownOpen,
       select,
       openAgent,
+      openAgentOverChat,
+      agentOverChat,
       closeAgent,
       createOpen,
       createOnVolume,
@@ -569,6 +594,8 @@ export function NavProvider({
       teardownOpen,
       select,
       openAgent,
+      openAgentOverChat,
+      agentOverChat,
       closeAgent,
       createOpen,
       createOnVolume,

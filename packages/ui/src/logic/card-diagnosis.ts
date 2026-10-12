@@ -92,7 +92,7 @@ export function diagnose(
     if (a.pending) {
       add({
         kind: "maintenance",
-        tone: "acc",
+        tone: "warn",
         message: `Saved: ${a.provider} → ${a.pending.provider} · ${a.pending.model}`,
         evidence: "Applies after start and apply, or on rebuild",
         suppress: "pending",
@@ -107,7 +107,7 @@ export function diagnose(
   } else if (a.pending) {
     add({
       kind: "maintenance",
-      tone: "acc",
+      tone: "warn",
       message: `Saved: ${a.provider} → ${a.pending.provider} · ${a.pending.model}`,
       link: "Apply…",
       tab: "config",
@@ -118,7 +118,7 @@ export function diagnose(
     const profile = profileById(ctx.profiles, a.profile_id ?? "");
     add({
       kind: "maintenance",
-      tone: "acc",
+      tone: "warn",
       message: `${profile?.name ?? "Provider"} profile changed · r${a.profile_revision ?? "?"} → r${profile?.revision ?? "?"}`,
       link: "Update…",
       tab: "config",
@@ -137,7 +137,7 @@ export function diagnose(
   if (a.running_hermes_version && a.running_hermes_version !== a.hermes_version) {
     add({
       kind: "maintenance",
-      tone: "acc",
+      tone: "muted",
       message: `Running ${a.running_hermes_version} · pinned ${a.hermes_version}`,
       link: "Rebuild options",
       tab: "lifecycle",

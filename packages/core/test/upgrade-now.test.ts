@@ -78,6 +78,33 @@ describe("upgrade --hermes V --now", () => {
     ).toBe(true);
   });
 
+  /**
+   * Every per-agent event used to carry `(index + 1) / n`, so a one-agent run
+   * read 1.0 from the moment the config was uploaded — and the drawer's bar sat
+   * at 100% through the minute and a half the box takes to restart Hermes
+   * (real mode, 2026-10-12). Only the run's own `done` may say 1, the bar
+   * never moves backwards, and the wait says what it is waiting for.
+   */
+  test("progress stays below 1 until the run's done, and never moves backwards", async () => {
+    const { backend, hermetic } = fleet();
+    boxesAnswer(backend);
+
+    for (const input of [{ name: "atlas" }, { all: true }] as const) {
+      const events = await drain(hermetic.upgrade({ ...input, hermes: NEXT, now: true }));
+      const last = events.at(-1);
+      expect(last?.phase).toBe("done");
+      expect(last?.progress).toBe(1);
+      const before = events.slice(0, -1);
+      for (const e of before) expect(e.progress).toBeLessThan(1);
+      const steps = events.map((e) => e.progress);
+      expect(steps).toEqual([...steps].sort((a, b) => a - b));
+    }
+
+    const events = await drain(hermetic.upgrade({ name: "atlas", hermes: "0.99.1", now: true }));
+    const waiting = events.find((e) => e.phase === "atlas:requested");
+    expect(waiting?.message).toContain("waiting for the box to restart Hermes on 0.99.1");
+  });
+
   test("a box that never reports is unconverged — a warning, not a thrown run", async () => {
     const { backend, hermetic } = fleet({ convergeTimeoutMs: 5 });
 

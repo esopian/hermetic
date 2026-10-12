@@ -17,6 +17,12 @@
  * session, which is too often this operator's own conversation to be worth a
  * warning, and the header's origin badge still names them. Thread-level bands
  * (stopped, reconnecting, destroyed) stay at the top of the thread.
+ *
+ * While a turn runs, the footer's right end carries the one Stop control (Esc
+ * does the same); the send button keeps queueing, so the two never share a key
+ * or a place. The input grows with its text up to a cap and then scrolls
+ * (`autosize.ts`); its border and padding sit on the box around it, so text
+ * scrolled past the cap is clipped inside the padding rather than at the edge.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { useRef, useState } from "react";
@@ -27,6 +33,7 @@ import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
+import { useAutosize } from "../autosize.ts";
 import type { Destination } from "../chat-logic.ts";
 
 /** A conversation the `unchosen` band offers as a chip. */
@@ -81,6 +88,7 @@ export function Composer({
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
+  useAutosize(input, text);
   const notice = destinationNotice(destination);
   const label = sendLabel(destination);
   const hint = composerHint(destination);
@@ -250,43 +258,51 @@ export function Composer({
             </ul>
           </section>
         ) : null}
-        <textarea
-          ref={input}
-          className="ch-input"
-          aria-label={placeholder}
-          {...picker.inputProps}
-          rows={1}
-          disabled={!editable}
-          placeholder={placeholder}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            picker.track(e.target);
-          }}
-          onSelect={(e) => picker.track(e.currentTarget)}
-          onKeyDown={(e) => {
-            if (e.defaultPrevented || e.nativeEvent.isComposing) return;
-            if (picker.onKeyDown(e)) return;
-            // Enter sends — or queues, while the agent works — and Shift+Enter
-            // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
-            // when idle, past the queue when not.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (e.metaKey || e.ctrlKey) submitNow();
-              else submit();
-              return;
-            }
-            // Esc stops the turn. `preventDefault` is load-bearing rather than
-            // tidy: the app shell has a window-level Escape handler that closes
-            // whichever full-page view is up, and it checks `defaultPrevented`
-            // first — so without this, stopping a turn would also leave the
-            // chat view.
-            if (e.key === "Escape" && sending) {
-              e.preventDefault();
-              onAbort();
-            }
-          }}
-        />
+        {/*
+          The box draws the border and padding; the textarea inside has none, so
+          a draft taller than the cap scrolls inside the padding instead of
+          running into the border. A label, so a press on the padding focuses
+          the input natively; the textarea's own `aria-label` still names it.
+        */}
+        <label className="ch-input-box">
+          <textarea
+            ref={input}
+            className="ch-input"
+            aria-label={placeholder}
+            {...picker.inputProps}
+            rows={1}
+            disabled={!editable}
+            placeholder={placeholder}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              picker.track(e.target);
+            }}
+            onSelect={(e) => picker.track(e.currentTarget)}
+            onKeyDown={(e) => {
+              if (e.defaultPrevented || e.nativeEvent.isComposing) return;
+              if (picker.onKeyDown(e)) return;
+              // Enter sends — or queues, while the agent works — and Shift+Enter
+              // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
+              // when idle, past the queue when not.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (e.metaKey || e.ctrlKey) submitNow();
+                else submit();
+                return;
+              }
+              // Esc stops the turn. `preventDefault` is load-bearing rather than
+              // tidy: the app shell has a window-level Escape handler that closes
+              // whichever full-page view is up, and it checks `defaultPrevented`
+              // first — so without this, stopping a turn would also leave the
+              // chat view.
+              if (e.key === "Escape" && sending) {
+                e.preventDefault();
+                onAbort();
+              }
+            }}
+          />
+        </label>
         <button
           type="button"
           className={[
@@ -330,6 +346,19 @@ export function Composer({
             </span>
           ) : null}
         </span>
+        {/* Outside `.right`, so the skin's dimmed footer text never dims it. */}
+        {sending ? (
+          <button
+            type="button"
+            className="ch-stop"
+            aria-label="Stop turn"
+            title="Stop the turn (Esc)"
+            onClick={onAbort}
+          >
+            <i aria-hidden="true" />
+            Stop
+          </button>
+        ) : null}
       </div>
     </div>
   );

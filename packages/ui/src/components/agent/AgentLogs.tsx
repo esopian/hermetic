@@ -173,10 +173,7 @@ export function AgentLogs({
 
   return (
     <div className="dr-pane dr-logs">
-      <div className="dr-say">
-        <div className="kicker">Logs</div>
-        <p>One source at a time, read once. Refresh reads it again.</p>
-      </div>
+      <div className="kicker">Logs</div>
       <div className="dr-logbar">
         <label className="dr-logsel">
           <span className="kicker">Source</span>
@@ -200,6 +197,8 @@ export function AgentLogs({
         >
           {loading ? "Reading…" : "Refresh"}
         </button>
+        {/* A read, never a follow: say so, or a quiet pane reads as a quiet box. */}
+        <span className="dr-logbar-note mono">snapshot · Refresh re-reads</span>
       </div>
       <div className="hint">{source.about}</div>
       {blocked ? <div className="hint">Not available: {blocked}.</div> : null}

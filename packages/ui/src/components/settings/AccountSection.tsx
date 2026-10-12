@@ -256,7 +256,7 @@ export function AccountSection({ config, meta }: { config: LocalConfig | null; m
     <SettingsPage
       section="account"
       scope="readonly"
-      desc="The AWS account this home was frozen to at init, and the fleets in it."
+      desc="The AWS account this home was frozen to at init."
     >
       <Block title="This home">
         <Facts

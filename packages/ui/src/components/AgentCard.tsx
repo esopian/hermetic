@@ -39,7 +39,7 @@ interface Props {
   onStarted?: (name: string, opId: string) => void;
 }
 
-function Tag({ children, tone }: { children: React.ReactNode; tone: "warn" | "acc" | "muted" }) {
+function Tag({ children, tone }: { children: React.ReactNode; tone: "warn" | "muted" }) {
   return <span className={`card-tag ${tone}`}>{children}</span>;
 }
 
@@ -199,12 +199,12 @@ export function AgentCard({
       </Tag>
     ) : null,
     a.pending && diagnosis?.suppress !== "pending" ? (
-      <Tag key="pending" tone="acc">
+      <Tag key="pending" tone="warn">
         Pending
       </Tag>
     ) : null,
     a.update_available && diagnosis?.suppress !== "update" ? (
-      <Tag key="update" tone="acc">
+      <Tag key="update" tone="warn">
         Update
       </Tag>
     ) : null,
@@ -362,7 +362,7 @@ export function AgentCard({
               {behind && diagnosis?.suppress !== "behind" ? (
                 <Tag tone="warn">Behind</Tag>
               ) : pinDiff && diagnosis?.suppress !== "pin" ? (
-                <Tag tone="acc">Pin≠run</Tag>
+                <Tag tone="muted">Pin≠run</Tag>
               ) : (
                 "Hermes"
               )}

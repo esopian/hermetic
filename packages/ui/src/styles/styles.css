@@ -588,13 +588,19 @@ button:focus-visible,
   letter-spacing: 0.06em;
 }
 
+/* Two rows: `.toolbar-head` (kicker + lens switch) spans both columns; under
+   it the legend block on the left and `.toolbar-right`'s controls, which
+   `align-items: end` sits on the legend block's last line. */
 .toolbar {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: end;
-  gap: 24px;
+  gap: 0 24px;
   padding: 28px 24px 18px;
   border-bottom: 1px solid var(--line);
+}
+.toolbar-head {
+  grid-column: 1 / -1;
 }
 .toolbar-counts {
   display: flex;
@@ -1649,8 +1655,12 @@ button:focus-visible,
   margin-top: 10px;
   height: 6px;
 }
+/* Capped, like the log below it, so a long op leaves the section under the
+   rail usable: about four rows, then the list scrolls. */
 .drawer-op .steps {
   margin-top: 12px;
+  max-height: 148px;
+  overflow-y: auto;
 }
 .drawer-op .op-next {
   margin: 12px 28px 0;
@@ -1882,25 +1892,10 @@ button:focus-visible,
   detail list would invite reading rather than copying.
 */
 .desktop-attach {
-  margin: 14px 0 0;
-  padding: 12px 14px;
+  margin: 12px 0 0;
+  padding: 4px 14px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
   background: var(--bg2);
-}
-.desktop-field {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-.desktop-field b {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg3);
-  min-width: 108px;
 }
 .desktop-note {
   margin-top: 10px;
@@ -2454,6 +2449,50 @@ button:focus-visible,
 .wiz-progress .progress-log {
   min-height: 120px;
   margin-bottom: 18px;
+}
+/* An op drawer once its op has started (`op-body`, set by the foundation
+   update, network, policy and teardown drawers on their progress stage): the
+   drawer stays its full height, the header, bar, steps and callouts stay put,
+   and the log takes the rest and scrolls on its own. Without it the body was
+   the scroller and the log grew without bound, carrying everything above it
+   off the top. Every height below is a minimum, not a cap, and the body keeps
+   `overflow: auto`: a window too short for those minimums scrolls the body
+   rather than clipping the result or the Back button under it. The rules
+   outrank the short-window fallback in `polish.css`, which would otherwise let
+   the body grow to its content and bring the unbounded log back. */
+.drawer > .drawer-body.op-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+/* Grows to fill the body, never shrinks below its content. Its content height
+   counts the progress block at its minimum (a zero basis), not at the log's
+   full text, so a tall result under it (teardown's checklist) lengthens the
+   stage itself and the body's bottom padding stays below it. */
+.op-body > .td-stage {
+  flex: 1 0 auto;
+}
+.op-body > .td-stage > * {
+  flex: none;
+}
+.op-body .wiz-progress {
+  flex: 1 1 0;
+  min-height: 340px;
+}
+.op-body .wiz-progress > * {
+  flex: none;
+}
+/* A long step list gives way first, down to two rows, so the log keeps its own
+   minimum on a short window. */
+.op-body .wiz-progress .steps {
+  flex: 0 1 auto;
+  min-height: 74px;
+  overflow-y: auto;
+}
+.op-body .wiz-progress .progress-log {
+  flex: 1 1 0;
+  min-height: 120px;
 }
 .wiz-tail {
   font-size: 11px;
@@ -3098,7 +3137,7 @@ button:focus-visible,
   border: 2px solid var(--warn);
 }
 .op-next .kicker {
-  color: var(--warn);
+  color: var(--text-warn, var(--warn));
   margin-bottom: 6px;
 }
 .op-next-line {
@@ -3268,12 +3307,6 @@ button:focus-visible,
   text-transform: none;
   letter-spacing: 0;
   opacity: 0.75;
-}
-/* Accent only while something is actually loose, so a quiet fleet reads quiet. */
-.viewnav .badge.alert {
-  color: var(--acc);
-  opacity: 1;
-  font-weight: 700;
 }
 
 .volumes-body {
@@ -3993,9 +4026,10 @@ button:focus-visible,
 .profile-card-acts .btn[disabled] {
   opacity: 0.4;
 }
-/* The "this profile moved since you pinned it" chip, in the accent. */
-.profile-update {
-  color: var(--acc);
+/* The "this profile moved since you pinned it" chip: an update is available, so --warn. */
+.tag.ghost.profile-update {
+  color: var(--text-warn, var(--warn));
+  border-color: var(--warn);
 }
 .profile-panel-edit {
   display: flex;
@@ -5649,10 +5683,7 @@ button:focus-visible,
   white-space: nowrap;
 }
 .card-tag.warn {
-  color: var(--warn);
-}
-.card-tag.acc {
-  color: var(--acc);
+  color: var(--text-warn, var(--warn));
 }
 .card-tag.muted {
   color: var(--fg3);
