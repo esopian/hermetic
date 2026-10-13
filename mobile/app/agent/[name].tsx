@@ -67,9 +67,12 @@ export default function AgentBrowser() {
   const [generation, setGeneration] = useState(0);
   const web = useRef<WebView>(null);
 
+  // Re-read on Reconnect too (`generation`), so a failed read can be retried
+  // from this screen rather than only by leaving it.
   useEffect(() => {
-    if (!client || !name) return;
+    if (!client || !name || generation < 0) return;
     let live = true;
+    setError(null);
     client
       .rpc<AgentView>("agents.get", { name: String(name) })
       .then((a) => live && setAgent(a))
@@ -77,7 +80,7 @@ export default function AgentBrowser() {
     return () => {
       live = false;
     };
-  }, [client, name]);
+  }, [client, name, generation]);
 
   const url = useMemo(
     () =>
@@ -136,7 +139,7 @@ export default function AgentBrowser() {
       >
         <StatusSquare status={agent?.display_status ?? "pending"} size={8} />
         <Kicker style={{ flex: 1 }} numberOfLines={1}>
-          {viewOnly ? "view only" : "interactive"}
+          {[agent?.display_status, viewOnly ? "view only" : "interactive"].filter(Boolean).join(" · ")}
         </Kicker>
         <Chip label="View only" on={viewOnly} onPress={() => setViewOnly((v) => !v)} />
         <Chip
@@ -195,6 +198,7 @@ export default function AgentBrowser() {
                 <Text variant="bodySmall" tone="fg2" style={{ textAlign: "center" }}>
                   {error}
                 </Text>
+                <Button label="Try again" variant="secondary" onPress={reconnect} />
               </>,
             )
           : !agent

@@ -321,6 +321,8 @@ export function QuestionCard({
               ))}
               <TextInput
                 accessibilityLabel={`Answer: ${q.prompt}`}
+                selectionColor={t.c.acc}
+                cursorColor={t.c.acc}
                 placeholder={q.choices.length > 0 ? "Other (type your answer)" : "Type your answer…"}
                 placeholderTextColor={t.c.fg3}
                 editable={!locked}

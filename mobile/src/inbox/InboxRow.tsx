@@ -14,6 +14,7 @@ import { groupRow, type NotificationGroup } from "../client/inbox-logic.ts";
 import type { Notification } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { classColor } from "../theme/tokens.ts";
+import { codeSpans } from "../ui/codeSpans.tsx";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
 
@@ -103,7 +104,7 @@ function InboxRowImpl({
           </View>
           {row.detail ? (
             <Text variant="bodySmall" tone="fg2" numberOfLines={2}>
-              {row.detail}
+              {codeSpans(row.detail)}
             </Text>
           ) : null}
           <View style={{ flexDirection: "row", gap: t.space.sm }}>

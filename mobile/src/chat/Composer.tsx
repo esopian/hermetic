@@ -10,9 +10,13 @@
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
  *
- * The input grows to six lines, then scrolls.
+ * The input grows to six lines, then scrolls. It sizes itself: a multiline
+ * input on iOS grows with its content between `minHeight` and `maxHeight`.
+ * Feeding `onContentSizeChange` back into an explicit `height` does not work
+ * there — the reported content size includes the padding, so every pass adds
+ * the padding again and an empty input opens several lines tall.
  */
-import { memo, useState } from "react";
+import { memo, useRef } from "react";
 import { Pressable, TextInput, View } from "react-native";
 import type { QueuedMessage } from "../client/conversation-store.ts";
 import { useTheme } from "../theme/theme.tsx";
@@ -35,8 +39,45 @@ export function composerMode(input: {
   return "send";
 }
 
+/**
+ * How long after a send a change event can still be iOS finishing the
+ * autocorrection the user did not wait for, rather than new typing.
+ */
+export const ECHO_MS = 400;
+
+/**
+ * Whether a change arriving right after a send is iOS re-inserting the text
+ * that was just taken. With an autocorrection pending ("summarise" →
+ * "summarize"), UIKit applies it after the field was cleared and reports the
+ * whole corrected text as an edit, which would put the sent message straight
+ * back into the composer. The echo is the taken text, word for word, with at
+ * most half its words corrected; real typing within `ECHO_MS` of a send is a
+ * character or two, never the whole message again. Pure, so it is testable.
+ */
+export function isAutocorrectEcho(incoming: string, taken: string, elapsedMs: number): boolean {
+  if (elapsedMs > ECHO_MS) return false;
+  const words = (s: string) => s.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const a = words(incoming);
+  const b = words(taken);
+  if (a.length === 0 || a.length !== b.length) return false;
+  // Autocorrection rewrites a word or two and keeps its first letter
+  // ("teh" → "the", "summarise" → "summarize"); anything further apart is
+  // the user typing something new.
+  let changed = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] ?? "";
+    const y = b[i] ?? "";
+    if (x === y) continue;
+    if (x[0] !== y[0]) return false;
+    changed++;
+  }
+  return changed <= Math.max(1, Math.floor(a.length / 2));
+}
+
 const LINE = 21;
 const MAX_LINES = 6;
+/** Vertical padding inside the input, top plus bottom. */
+const PAD_Y = 22;
 
 export interface ComposerProps {
   draft: string;
@@ -119,15 +160,26 @@ function QueuedRow({
 function ComposerImpl(props: ComposerProps) {
   const t = useTheme();
   const { draft, onDraft, enabled, placeholder, sending, aborting, queue, parked } = props;
-  const [height, setHeight] = useState(LINE);
   const mode = composerMode({ enabled, sending, aborting, draft });
   const editable = enabled || sending;
+  const input = useRef<TextInput>(null);
+  const taken = useRef<{ text: string; at: number } | null>(null);
   const take = () => {
     const text = draft.trim();
     if (!text) return null;
     onDraft("");
-    setHeight(LINE);
+    input.current?.clear();
+    taken.current = { text, at: Date.now() };
     return text;
+  };
+  const onChange = (next: string) => {
+    const last = taken.current;
+    taken.current = null;
+    if (last && isAutocorrectEcho(next, last.text, Date.now() - last.at)) {
+      input.current?.clear();
+      return;
+    }
+    onDraft(next);
   };
 
   return (
@@ -156,28 +208,27 @@ function ComposerImpl(props: ComposerProps) {
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}>
         <TextInput
+          ref={input}
           accessibilityLabel="Message"
           value={draft}
-          onChangeText={onDraft}
+          onChangeText={onChange}
           editable={editable}
           placeholder={sending ? "Queue a message, or steer with Now…" : placeholder}
           placeholderTextColor={t.c.fg3}
           multiline
-          scrollEnabled={height >= LINE * MAX_LINES}
-          onContentSizeChange={(e) =>
-            setHeight(Math.min(LINE * MAX_LINES, Math.max(LINE, e.nativeEvent.contentSize.height)))
-          }
+          selectionColor={t.c.acc}
+          cursorColor={t.c.acc}
           style={{
             flex: 1,
-            height: height + 22,
-            maxHeight: LINE * MAX_LINES + 22,
+            minHeight: LINE + PAD_Y,
+            maxHeight: LINE * MAX_LINES + PAD_Y,
             color: t.c.fg,
             fontFamily: t.sans(400),
             fontSize: 15,
             lineHeight: LINE,
             paddingHorizontal: t.space.md,
-            paddingTop: 11,
-            paddingBottom: 11,
+            paddingTop: PAD_Y / 2,
+            paddingBottom: PAD_Y / 2,
             borderWidth: t.border.control,
             borderColor: editable ? t.c.line2 : t.c.line,
             backgroundColor: editable ? t.c.bg : t.c.bg2,

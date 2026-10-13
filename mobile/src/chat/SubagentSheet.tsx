@@ -20,6 +20,7 @@ import {
   timeText,
   UNOBSERVED_TEXT,
 } from "../client/chat-activity.ts";
+import { threadTime } from "../client/chat-logic.ts";
 import type { SubagentBlock } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -128,7 +129,13 @@ export function SubagentSheet({
           </View>
           <Text variant="title">{block.goal || "Subagent"}</Text>
           <Text mono variant="caption" tone="fg3">
-            {["started", block.model, `depth ${block.depth + 1}`].filter(Boolean).join(" · ")}
+            {[
+              block.started_at ? `started ${threadTime(block.started_at, now)}` : null,
+              block.model,
+              `depth ${block.depth + 1}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
         </View>
         <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.md }}>
@@ -207,6 +214,8 @@ export function SubagentSheet({
             <View style={{ flexDirection: "row", gap: t.space.sm, alignItems: "flex-end" }}>
               <TextInput
                 accessibilityLabel="Steer this subagent"
+                selectionColor={t.c.acc}
+                cursorColor={t.c.acc}
                 value={draft}
                 onChangeText={setDraft}
                 placeholder="Steer this subagent…"

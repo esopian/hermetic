@@ -66,7 +66,8 @@ function Shell() {
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        {/* The title is what VoiceOver reads on the next screen's back button. */}
+        <Stack.Screen name="(tabs)" options={{ headerShown: false, title: "Hermetic" }} />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
         <Stack.Screen name="agent/[name]" options={{ title: "Browser" }} />
         <Stack.Screen

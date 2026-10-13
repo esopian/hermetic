@@ -10,6 +10,7 @@ import { type PairErrorCopy, validHost, validPort } from "../client/pairing.ts";
 import { MOBILE_PROTOCOL } from "../protocol/constants.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
+import { codeSpans } from "../ui/codeSpans.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
 
@@ -58,6 +59,7 @@ export function PairForm({
     minHeight: t.touch.min + 4,
     borderRadius: 0,
   } as const;
+  const caret = { selectionColor: t.c.acc, cursorColor: t.c.acc } as const;
 
   const fromLink = (text: string) => {
     const parsed = parsePairLink(text);
@@ -84,6 +86,7 @@ export function PairForm({
           if (/^hermetic:\/\/pair/i.test(v.trim()) && parsePairLink(v)) fromLink(v);
         }}
         placeholder="hermetic://pair?host=…"
+        {...caret}
         placeholderTextColor={t.c.fg3}
         autoCapitalize="none"
         autoCorrect={false}
@@ -102,6 +105,7 @@ export function PairForm({
           value={host}
           onChangeText={setHost}
           placeholder="100.x.y.z"
+          {...caret}
           placeholderTextColor={t.c.fg3}
           autoCapitalize="none"
           autoCorrect={false}
@@ -115,6 +119,7 @@ export function PairForm({
           onChangeText={(v) => setPort(v.replace(/[^0-9]/g, ""))}
           keyboardType="number-pad"
           maxLength={5}
+          {...caret}
           style={[input, { width: 96, borderColor: validPort(port) ? t.c.line2 : t.c.bad }]}
         />
       </View>
@@ -123,6 +128,7 @@ export function PairForm({
         value={code}
         onChangeText={(v) => setCode(v.toUpperCase())}
         placeholder="XXXX-XXXX"
+        {...caret}
         placeholderTextColor={t.c.fg3}
         autoCapitalize="characters"
         autoCorrect={false}
@@ -151,7 +157,7 @@ export function PairForm({
             {error.title}
           </Text>
           <Text variant="bodySmall" tone="fg2">
-            {error.detail}
+            {codeSpans(error.detail)}
           </Text>
         </View>
       ) : null}

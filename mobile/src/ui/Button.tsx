@@ -92,8 +92,16 @@ export function Button({
         return (
           <>
             {busy ? <ActivityIndicator size="small" color={color} /> : null}
+            {/* One line, centred, shrinking a little before it would wrap: a
+                two-up row of buttons on a phone ("Approve once" beside "This
+                session") otherwise breaks one label over two ragged lines. */}
             <RNText
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
               style={{
+                flexShrink: 1,
+                textAlign: "center",
                 color,
                 fontFamily: t.sans(variant === "primary" ? 900 : 700),
                 fontSize: compact ? 11 : 13,

@@ -352,7 +352,15 @@ export default function Conversation() {
 
   return (
     <ChatScope.Provider value={scope}>
-      <View style={{ flex: 1, backgroundColor: t.c.bg }}>
+      {/* A row rule under the header: the transcript scrolls up beneath it. */}
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: t.c.bg,
+          borderTopWidth: t.border.row,
+          borderTopColor: t.c.line,
+        }}
+      >
         <Stack.Screen options={{ headerTitle, headerRight, title: botTitle ?? target.bot }} />
         <SocketBand state={socketState} onRetry={reconnect} />
         <ThreadBand

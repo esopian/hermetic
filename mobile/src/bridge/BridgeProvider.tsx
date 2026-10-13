@@ -79,7 +79,7 @@ export const BridgeContext = createContext<BridgeContextValue | null>(null);
 
 const PREVIEWS_KEY = "hermetic.previews";
 
-const createSocket = (url: string): WebSocketLike => new WebSocket(url) as unknown as WebSocketLike;
+const createSocket = (url: string): WebSocketLike => new WebSocket(url);
 
 const platform = (): MobilePlatform =>
   Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "other";

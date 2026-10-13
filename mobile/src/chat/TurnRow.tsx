@@ -47,7 +47,16 @@ function OperatorBubble({ message, now }: { message: ChatMessage; now: number })
   const text = message.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("");
   const steer = message.id.startsWith("local:steer:");
   return (
-    <View style={{ alignItems: "flex-end", paddingLeft: 48, marginVertical: t.space.xs }}>
+    // The same top margin an agent turn opens with, so a reply and the next
+    // message read as two turns rather than one block.
+    <View
+      style={{
+        alignItems: "flex-end",
+        paddingLeft: 48,
+        marginTop: t.space.md,
+        marginBottom: t.space.xs,
+      }}
+    >
       <View
         style={{
           backgroundColor: t.c.bg3,

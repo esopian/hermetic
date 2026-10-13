@@ -1,6 +1,12 @@
 import { fireEvent, screen } from "@testing-library/react-native";
 import { useState } from "react";
-import { Composer, type ComposerProps, composerMode } from "../../src/chat/Composer.tsx";
+import {
+  Composer,
+  type ComposerProps,
+  composerMode,
+  ECHO_MS,
+  isAutocorrectEcho,
+} from "../../src/chat/Composer.tsx";
 import { composerState, threadState } from "../../src/client/chat-logic.ts";
 import { renderUi } from "../helpers/render.tsx";
 
@@ -129,5 +135,31 @@ describe("Composer", () => {
   test("an open question is called out", async () => {
     await renderUi(<Harness {...base} {...handlers()} sending questionOpen />);
     expect(screen.getByText(/a question is waiting above/)).toBeTruthy();
+  });
+});
+
+describe("isAutocorrectEcho", () => {
+  test("the corrected text straight after a send is an echo", () => {
+    expect(isAutocorrectEcho("And summarize", "And summarise", 30)).toBe(true);
+    expect(isAutocorrectEcho("and summarise", "and summarise", 30)).toBe(true);
+  });
+
+  test("new typing, an empty field or a late change is not", () => {
+    expect(isAutocorrectEcho("o", "And summarise", 30)).toBe(false);
+    expect(isAutocorrectEcho("redirect", "first", 30)).toBe(false);
+    expect(isAutocorrectEcho("go ahead now", "teh cat sat", 30)).toBe(false);
+    expect(isAutocorrectEcho("", "And summarise", 30)).toBe(false);
+    expect(isAutocorrectEcho("And summarize", "And summarise", ECHO_MS + 1)).toBe(false);
+  });
+
+  test("the composer drops the echo and keeps typing after it", async () => {
+    const h = handlers();
+    await renderUi(<Harness {...base} {...h} sending initial="and summarise" />);
+    await fireEvent.press(screen.getByLabelText("Queue"));
+    expect(h.onQueue).toHaveBeenCalledWith("and summarise");
+    await fireEvent.changeText(screen.getByLabelText("Message"), "And summarize");
+    expect(screen.getByLabelText("Message").props.value).toBe("");
+    await fireEvent.changeText(screen.getByLabelText("Message"), "n");
+    expect(screen.getByLabelText("Message").props.value).toBe("n");
   });
 });

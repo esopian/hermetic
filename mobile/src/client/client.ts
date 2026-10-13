@@ -4,7 +4,9 @@
  *
  * Pure TypeScript — the React Native layer (`src/bridge/`) supplies the real
  * `WebSocket`, `fetch`, SecureStore and expo-notifications; the root e2e test
- * supplies bun's. Nothing here imports React or React Native.
+ * supplies bun's. Either `WebSocket` is a `WebSocketLike` as-is
+ * (`(url) => new WebSocket(url)`, no cast; see `socket.ts`). Nothing here
+ * imports React or React Native.
  */
 import type {
   ApprovalBlock,

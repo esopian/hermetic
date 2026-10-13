@@ -200,7 +200,7 @@ function BotsListImpl(props: BotsListProps) {
       ))}
     </View>
   ) : props.error ? (
-    <View style={{ padding: t.space.xl, gap: t.space.md }}>
+    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
       <Text tone="bad" weight={700}>
         Could not read the bots.
       </Text>
@@ -210,14 +210,14 @@ function BotsListImpl(props: BotsListProps) {
       <Button label="Try again" variant="secondary" onPress={props.onRefresh} />
     </View>
   ) : searching ? (
-    <View style={{ padding: t.space.xl, gap: t.space.sm }}>
+    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.sm }}>
       <Text tone="fg2">Nothing matches.</Text>
       <Text variant="bodySmall" tone="fg3">
         {props.filter === "needs" ? "No bot is waiting on you." : "Try another search or filter."}
       </Text>
     </View>
   ) : (
-    <View style={{ padding: t.space.xl, gap: t.space.md }}>
+    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
       <Text variant="title">
         {props.listening === 0 ? "Not listening to any instance." : "No bots yet."}
       </Text>
@@ -253,6 +253,8 @@ function BotsListImpl(props: BotsListProps) {
             </Text>
             <TextInput
               accessibilityLabel="Search bots"
+              selectionColor={t.c.acc}
+              cursorColor={t.c.acc}
               value={props.query}
               onChangeText={props.onQuery}
               placeholder="Search bots"

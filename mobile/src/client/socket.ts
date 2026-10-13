@@ -35,15 +35,29 @@ import { BridgeError, CLIENT_ERROR_CODES, errorBody } from "./errors.ts";
 
 /* ── injected effects ───────────────────────────────────────────────────── */
 
-/** The slice of a WebSocket the client uses. The browser/RN/bun `WebSocket` satisfies it. */
+/**
+ * An event-handler slot, checked bivariantly. A real socket types its handlers
+ * with its own, richer event (`MessageEvent`, `CloseEvent`, RN's
+ * `WebSocketMessageEvent`); under `strictFunctionTypes` a plain function-typed
+ * property would reject those as narrower than the shape read here. A
+ * method-derived type is compared bivariantly, so any socket whose events carry
+ * at least these fields is assignable without a cast.
+ */
+type EventHandler<E> = { bivarianceHack(event: E): unknown }["bivarianceHack"];
+
+/**
+ * The slice of a WebSocket the client uses. The browser, React Native and bun
+ * `WebSocket` satisfy it as-is: `(url) => new WebSocket(url)` is a
+ * `WebSocketFactory` with no cast.
+ */
 export interface WebSocketLike {
   readonly readyState: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
-  onopen: ((event: unknown) => void) | null;
-  onmessage: ((event: { data: unknown }) => void) | null;
-  onclose: ((event: { code: number; reason: string }) => void) | null;
-  onerror: ((event: unknown) => void) | null;
+  onopen: EventHandler<unknown> | null;
+  onmessage: EventHandler<{ data: unknown }> | null;
+  onclose: EventHandler<{ code: number; reason: string }> | null;
+  onerror: EventHandler<unknown> | null;
 }
 
 export type WebSocketFactory = (url: string) => WebSocketLike;

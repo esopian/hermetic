@@ -3,7 +3,8 @@ import { buildTheme, ThemeProvider } from "../../src/theme/theme.tsx";
 import { palettes, statusColor } from "../../src/theme/tokens.ts";
 import { buildBlob } from "../../src/ui/avatar/Avatar.tsx";
 import { avatarPalette, avatarSeed, hslHex, rngFor } from "../../src/ui/avatar/avatar-seed.ts";
-import { Avatar, Badge, Button, Kicker, Text } from "../../src/ui/index.ts";
+import { codeSpans } from "../../src/ui/codeSpans.tsx";
+import { Avatar, Badge, Button, Kicker, Text, ToggleSwitch } from "../../src/ui/index.ts";
 
 describe("theme", () => {
   test("tokens are the desktop's, verbatim", () => {
@@ -98,5 +99,43 @@ describe("primitives render", () => {
       </ThemeProvider>,
     );
     expect(screen.getByLabelText("scribe@atlas — ready")).toBeTruthy();
+  });
+
+  test("a button label stays on one centred line", async () => {
+    await render(
+      <ThemeProvider>
+        <Button label="Approve once" onPress={() => {}} haptic={false} />
+      </ThemeProvider>,
+    );
+    const label = screen.getByText("Approve once");
+    expect(label.props.numberOfLines).toBe(1);
+    expect(label.props.adjustsFontSizeToFit).toBe(true);
+  });
+
+  test("ToggleSwitch is a themed Switch", async () => {
+    const onValueChange = jest.fn();
+    await render(
+      <ThemeProvider>
+        <ToggleSwitch
+          accessibilityLabel="Listen to atlas"
+          value={false}
+          onValueChange={onValueChange}
+        />
+      </ThemeProvider>,
+    );
+    await fireEvent(screen.getByLabelText("Listen to atlas"), "valueChange", true);
+    expect(onValueChange).toHaveBeenCalledWith(true);
+  });
+
+  test("codeSpans shows backticked runs in mono and leaves the rest", async () => {
+    expect(codeSpans("no code here")).toBe("no code here");
+    expect(codeSpans("one ` stray")).toBe("one ` stray");
+    await render(
+      <ThemeProvider>
+        <Text>{codeSpans("Run `hermetic mobile pair` on the laptop.")}</Text>
+      </ThemeProvider>,
+    );
+    expect(screen.getByText("hermetic mobile pair")).toBeTruthy();
+    expect(screen.queryByText(/`/)).toBeNull();
   });
 });

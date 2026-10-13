@@ -38,6 +38,8 @@ export default function TabsLayout() {
           backgroundColor: needs > 0 ? t.c.warn : t.c.fg,
           color: t.c.bg,
           borderRadius: 0,
+          fontFamily: t.mono(700),
+          fontSize: 11,
         },
       }}
     >

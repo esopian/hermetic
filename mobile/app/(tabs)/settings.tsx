@@ -6,7 +6,7 @@
 import Constants from "expo-constants";
 import { router } from "expo-router";
 import { type ReactNode, useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Switch, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useRoster } from "../../src/bridge/hooks.ts";
 import { easProjectId } from "../../src/bridge/notifications.ts";
@@ -15,7 +15,7 @@ import { usePrefs } from "../../src/prefs/prefs.tsx";
 import { MOBILE_PROTOCOL } from "../../src/protocol/constants.ts";
 import { type SchemePreference, useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
-import { Button, Kicker, Screen, StatusSquare, Text } from "../../src/ui/index.ts";
+import { Button, Kicker, Screen, StatusSquare, Text, ToggleSwitch } from "../../src/ui/index.ts";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const t = useTheme();
@@ -83,11 +83,10 @@ function Toggle({
           </Text>
         ) : null}
       </View>
-      <Switch
+      <ToggleSwitch
         accessibilityLabel={label}
         value={value}
         disabled={disabled}
-        trackColor={{ true: t.c.acc, false: t.c.line2 }}
         onValueChange={(v) => {
           haptic.select();
           onChange(v);
@@ -117,6 +116,8 @@ function TimeField({
       </Text>
       <TextInput
         accessibilityLabel={`Quiet hours ${label}`}
+        selectionColor={t.c.acc}
+        cursorColor={t.c.acc}
         value={text}
         onChangeText={setText}
         onEndEditing={() => (bad ? setText(value) : onCommit(text.trim()))}

@@ -37,7 +37,7 @@ export function BandShell({
       accessibilityRole={tone === "bad" ? "alert" : "text"}
       style={{
         flexDirection: "row",
-        alignItems: "center",
+        alignItems: "flex-start",
         gap: t.space.sm,
         paddingHorizontal: t.space.lg,
         paddingVertical: t.space.sm,
@@ -46,7 +46,10 @@ export function BandShell({
         borderBottomColor: color,
       }}
     >
-      <StatusSquare size={8} color={color} pulse={pulse} />
+      {/* The square sits on the title's line, not the middle of a wrapped sub. */}
+      <View style={{ height: t.type.bodySmall.lineHeight, justifyContent: "center" }}>
+        <StatusSquare size={8} color={color} pulse={pulse} />
+      </View>
       <View style={{ flex: 1 }}>
         <Text variant="bodySmall" weight={700}>
           {title}
@@ -58,7 +61,13 @@ export function BandShell({
         ) : null}
       </View>
       {action ? (
-        <Button label={action.label} variant="secondary" compact onPress={action.onPress} />
+        <Button
+          label={action.label}
+          variant="secondary"
+          compact
+          onPress={action.onPress}
+          style={{ alignSelf: "center" }}
+        />
       ) : null}
     </View>
   );
