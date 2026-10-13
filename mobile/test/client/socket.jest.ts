@@ -1,5 +1,10 @@
 import { BridgeError } from "../../src/client/errors.ts";
-import { BridgeSocket, backoffDelay, type SocketEvents } from "../../src/client/socket.ts";
+import {
+  BAD_FRAME_LIMIT,
+  BridgeSocket,
+  backoffDelay,
+  type SocketEvents,
+} from "../../src/client/socket.ts";
 import { MOBILE_CLOSE_CODES } from "../../src/protocol/constants.ts";
 import type { FleetTarget } from "../../src/protocol/types.ts";
 import { FakeTimers, flush, socketFactory } from "../helpers/fakes.ts";
@@ -107,6 +112,72 @@ describe("BridgeSocket — handshake", () => {
     s.timers.advance(60_000);
     expect(s.factory.sockets).toHaveLength(1);
     expect(s.events["auth.error"]?.[0]?.code).toBe("UNAUTHORIZED");
+  });
+
+  test("close 4401 is unauthorized and final (a revoked phone or a legacy row: same refusal)", () => {
+    const s = setup();
+    s.socket.connect();
+    s.factory.current().open();
+    s.factory.current().drop(MOBILE_CLOSE_CODES.UNAUTHORIZED);
+    expect(s.socket.state).toBe("unauthorized");
+    s.timers.advance(120_000);
+    expect(s.factory.sockets).toHaveLength(1);
+  });
+
+  test("three consecutive 4400 closes stop dialling and read as unauthorized", () => {
+    const s = setup();
+    s.socket.connect();
+    for (let i = 0; i < BAD_FRAME_LIMIT - 1; i++) {
+      s.factory.current().open();
+      s.factory.current().drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+      expect(s.socket.state).toBe("reconnecting");
+      s.timers.advance(60_000);
+      expect(s.factory.sockets).toHaveLength(i + 2);
+    }
+    s.factory.current().open();
+    s.factory.current().drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    expect(s.socket.state).toBe("unauthorized");
+    s.timers.advance(120_000);
+    expect(s.factory.sockets).toHaveLength(BAD_FRAME_LIMIT);
+    // A re-pair clears it and dials again.
+    s.socket.clearFatal();
+    s.socket.connect();
+    expect(s.factory.sockets).toHaveLength(BAD_FRAME_LIMIT + 1);
+  });
+
+  test("a different close, or an auth.ok, restarts the 4400 count", () => {
+    const s = setup();
+    s.socket.connect();
+    const drop = (code: number) => {
+      s.factory.current().open();
+      s.factory.current().drop(code);
+      s.timers.advance(60_000);
+    };
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    drop(MOBILE_CLOSE_CODES.GOING_AWAY);
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    expect(s.socket.state).not.toBe("unauthorized");
+    s.factory.current().open();
+    s.factory.current().push({ type: "auth.ok", hello: hello() });
+    expect(s.socket.state).toBe("open");
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    drop(MOBILE_CLOSE_CODES.BAD_FRAME);
+    expect(s.socket.state).not.toBe("unauthorized");
+  });
+
+  test("4400 does not disturb wrong_fleet or unavailable", () => {
+    const a = setup();
+    a.socket.connect();
+    a.factory.current().open();
+    a.factory.current().drop(MOBILE_CLOSE_CODES.WRONG_FLEET);
+    expect(a.socket.state).toBe("wrong_fleet");
+    const b = setup();
+    b.socket.connect();
+    b.factory.current().open();
+    b.factory.current().drop(MOBILE_CLOSE_CODES.UNAVAILABLE);
+    expect(b.socket.state).toBe("unavailable");
   });
 
   test("close 4426 is a protocol mismatch and is final", () => {

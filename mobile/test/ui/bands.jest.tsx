@@ -46,5 +46,6 @@ describe("SocketBand — wrong fleet", () => {
   test("an unauthorized phone still reads as revoked", async () => {
     await renderUi(<SocketBand state="unauthorized" />);
     expect(screen.getByText("The bridge no longer knows this phone.")).toBeTruthy();
+    expect(screen.getByText(/never re-paired after a laptop upgrade/)).toBeTruthy();
   });
 });

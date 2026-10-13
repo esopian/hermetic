@@ -79,6 +79,8 @@ export const realTimers: Timers = {
 /* ── backoff ────────────────────────────────────────────────────────────── */
 
 export const RECONNECT_MAX_MS = 30_000;
+/** Consecutive pre-auth 4400 closes after which the socket stops dialling (`unauthorized`). */
+export const BAD_FRAME_LIMIT = 3;
 
 /**
  * The wait before reconnect attempt `attempt` (1-based): 0, 1, 2, 4, 8, 16 s,
@@ -110,7 +112,12 @@ export type SocketState =
    * across attempts until an `auth.ok` or a different kind of drop.
    */
   | "unavailable"
-  /** The bridge refused this device (revoked, unknown token). Reconnecting will not help. */
+  /**
+   * The bridge refused this device: revoked, an unknown token (a device row the
+   * laptop never re-paired after an upgrade answers the same 4401, so the phone
+   * cannot tell the two apart), or a handshake it rejected as malformed
+   * `BAD_FRAME_LIMIT` times in a row. Reconnecting will not help; a re-pair does.
+   */
   | "unauthorized"
   /** The bridge speaks another protocol version. Reconnecting will not help. */
   | "mismatch"
@@ -238,6 +245,8 @@ export class BridgeSocket {
   private phase: SocketPhase = "foreground";
   /** The last drop was a 4503: say "unavailable" rather than "reconnecting" until something else happens. */
   private unavailable = false;
+  /** Consecutive pre-auth 4400 closes; reset by an `auth.ok`, any other close code, or a re-pair. */
+  private badFrames = 0;
   /** The fleet the bridge said it serves instead, when it said (`auth.ok`, HTTP `hello`). */
   private _servedFleet: Hello["fleet"] | null = null;
   /** In-flight `turn.resume` request ids → turn, answered synchronously in `receive`. */
@@ -320,6 +329,7 @@ export class BridgeSocket {
     this.observations.clear();
     this._hello = null;
     this._servedFleet = null;
+    this.badFrames = 0;
     if (this._state !== "idle") this.setState("idle");
   }
 
@@ -338,6 +348,7 @@ export class BridgeSocket {
   clearFatal(): void {
     if (this.fatal()) {
       this._servedFleet = null;
+      this.badFrames = 0;
       this.setState("idle");
     }
   }
@@ -513,7 +524,10 @@ export class BridgeSocket {
     // The next `auth` resumes every turn from its `lastN`, which covers any gap.
     for (const t of this.turns.values()) t.gap = false;
     this.unavailable = code === MOBILE_CLOSE_CODES.UNAVAILABLE;
-    if (code === MOBILE_CLOSE_CODES.UNAUTHORIZED) {
+    // A rejected frame is retried (it may be a one-off), but the same handshake
+    // would be rejected the same way: give up after a few and ask for a re-pair.
+    this.badFrames = code === MOBILE_CLOSE_CODES.BAD_FRAME ? this.badFrames + 1 : 0;
+    if (code === MOBILE_CLOSE_CODES.UNAUTHORIZED || this.badFrames >= BAD_FRAME_LIMIT) {
       this.wanted = false;
       this.setState("unauthorized");
       return;
@@ -725,6 +739,7 @@ export class BridgeSocket {
     }
     this._hello = hello;
     this.attempt = 0;
+    this.badFrames = 0;
     this.unavailable = false;
     this.setState("open");
     // The bridge counts a fresh socket as foreground; say where the app really is.

@@ -218,7 +218,7 @@ export function SocketBand({
         tone="bad"
         testID="band-socket"
         title="The bridge no longer knows this phone."
-        sub="It was revoked on the laptop. Sign out in Settings and pair again."
+        sub="It was revoked on the laptop, was never re-paired after a laptop upgrade, or its handshake was rejected. Sign out in Settings and pair again."
       />
     );
   if (state === "mismatch")

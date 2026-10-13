@@ -32,7 +32,9 @@ export function validTailnetHost(host: string): boolean {
  * origin the WebView is pinned to.
  */
 export function onTailnet(host: string, tailnet: string | null): boolean {
-  const zone = (tailnet ?? "").toLowerCase().replace(/\.$/, "");
+  // `hermetic init --tailnet` is free text: `tail1234` and `tail1234.ts.net` both mean the latter.
+  let zone = (tailnet ?? "").trim().toLowerCase().replace(/\.$/, "");
+  if (zone && !zone.includes(".")) zone = `${zone}.ts.net`;
   const suffix = zone && validTailnetHost(zone) ? `.${zone}` : ".ts.net";
   return validTailnetHost(host) && host.endsWith(suffix) && host.length > suffix.length;
 }

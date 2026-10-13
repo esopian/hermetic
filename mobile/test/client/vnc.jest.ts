@@ -105,6 +105,21 @@ describe("a reported name off this fleet's tailnet is refused", () => {
     expect(onTailnet("a.tail1234.ts.net", "evil.com/#")).toBe(true);
   });
 
+  test("a bare, full or shouting tailnet value all name the same zone", () => {
+    for (const tailnet of ["tail1234", "tail1234.ts.net", "Hermetic.TS.NET.", " tail1234 "]) {
+      const host = tailnet.trim().toLowerCase().replace(/\.$/, "");
+      const zone = host.includes(".") ? host : `${host}.ts.net`;
+      expect(onTailnet(`atlas.${zone}`, tailnet)).toBe(true);
+      expect(onTailnet("evil.com", tailnet)).toBe(false);
+      expect(onTailnet(zone, tailnet)).toBe(false);
+    }
+    expect(onTailnet("atlas.tail1234.ts.net", "tail1234")).toBe(true);
+    expect(onTailnet("atlas.hermetic.ts.net", "Hermetic.TS.NET.")).toBe(true);
+    // A bare name is a `.ts.net` zone, not a suffix of anything else.
+    expect(onTailnet("atlas.tail1234.example.com", "tail1234")).toBe(false);
+    expect(onTailnet("atlas.other.ts.net", "tail1234")).toBe(false);
+  });
+
   test("the overlay says why", () => {
     const target = noVncTarget(
       { name: "atlas", tailscale_dns_name: "evil.com" },
