@@ -5,6 +5,14 @@
  * both follow the app's theme without rules of their own here.
  */
 
+/* Maximized (the header's toggle): the window less a 48px strip of the page,
+   so the backdrop still shows and still closes on a click — but never
+   narrower than the usual 840px, or on a window under 888px Maximize would
+   shrink the drawer. `.drawer`'s `max-width: 100%` caps both. */
+.drawer.dr-maximized {
+  width: max(840px, calc(100vw - 48px));
+}
+
 /* ── header ─────────────────────────────────────────────────────────────── */
 .dr-head {
   padding: 16px 24px 14px;
@@ -41,6 +49,11 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+/* The maximize toggle, pressed: inverted, like the box's own hover. */
+.dr-size-toggle[aria-pressed="true"] {
+  background: var(--fg);
+  color: var(--bg);
 }
 .dr-head-actions .btn-sm {
   height: 32px;
@@ -100,6 +113,10 @@
 .dr-snav [role="tab"] small.acc {
   color: var(--acc);
 }
+/* A recommended action waiting on Lifecycle (upgrade, rerun, reboot). */
+.dr-snav [role="tab"] small.warn {
+  color: var(--text-warn, var(--warn));
+}
 .dr-snav [role="tab"].on {
   background: var(--fg);
   color: var(--bg);
@@ -112,17 +129,17 @@
   cursor: not-allowed;
   opacity: 0.45;
 }
+.dr-snav-listen .hint {
+  font-size: 11px;
+  color: var(--fg3);
+  line-height: 1.4;
+}
 .dr-snav-listen {
   padding: 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   border-bottom: 1px solid var(--line);
-}
-.dr-snav-listen .hint {
-  font-size: 11px;
-  color: var(--fg3);
-  line-height: 1.4;
 }
 .dr-snav-foot {
   margin-top: auto;
@@ -143,6 +160,12 @@
 .dr-main > .drawer-op,
 .dr-main > .opbar {
   flex: none;
+}
+/* The rail's steps and log are capped in `styles.css`; this is the backstop for
+   a short window, so the section under the rail always keeps at least 40%. */
+.dr-main > .drawer-op {
+  max-height: 60%;
+  overflow-y: auto;
 }
 .dr-scroll {
   flex: 1;
@@ -201,11 +224,6 @@
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
-}
-.dr-2col {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
 }
 .dr-kv2 {
   display: grid;
@@ -332,6 +350,11 @@
   padding: 0 8px;
   border-radius: 0;
 }
+.dr-logbar-note {
+  align-self: center;
+  font-size: 11px;
+  color: var(--fg3);
+}
 .dr-logbar .btn-sm {
   height: 34px;
   box-sizing: border-box;
@@ -372,8 +395,9 @@
   color: var(--fg2);
   line-height: 1.45;
 }
+/* Recommended is "an action is recommended": --warn, never the accent. */
 .dr-lc.rec {
-  border-color: var(--acc);
+  border-color: var(--warn);
 }
 .dr-lc.off > :not(.between):not(.hint):not(button) {
   opacity: 0.6;
@@ -421,21 +445,9 @@
   white-space: nowrap;
 }
 .dr-tag {
-  border-color: var(--acc);
-  color: var(--acc);
+  border-color: var(--warn);
+  color: var(--text-warn, var(--warn));
   font-weight: 700;
-}
-.dr-pill.warn {
-  border-color: var(--warn);
-  color: var(--warn);
-}
-.dr-btn-warn {
-  border-color: var(--warn);
-  color: var(--warn);
-}
-.dr-btn-ok {
-  border-color: var(--ok);
-  color: var(--ok);
 }
 .dr-ask {
   display: flex;
@@ -767,28 +779,128 @@
   text-align: right;
 }
 .term-warn {
-  color: var(--warn);
+  color: var(--text-warn, var(--warn));
 }
 .term-dim {
   color: var(--fg3);
   opacity: 0.8;
 }
 
-/* Config › Tailscale's `ssh` row: the command, Copy, and the way in. */
-.dr-ssh {
+/* ── Config ─────────────────────────────────────────────────────────────
+   Groups (`config-parts.tsx`): a kicker over a 2px rule with the group's
+   actions at its right, then rows on one shared label column, 1px lines
+   between them. One column at 840px; two once the (maximized) section is wide
+   enough that no value has to wrap. */
+.dr-cfg {
+  container-type: inline-size;
+}
+.cfg-cols,
+.cfg-col {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 28px;
   min-width: 0;
 }
-.dr-ssh-cmd {
-  word-break: break-all;
+@container (min-width: 1040px) {
+  .cfg-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 28px 40px;
+    align-items: start;
+  }
 }
-.dr-ssh-row {
+.cfg-grp {
+  min-width: 0;
+}
+/* One height whether or not the group has an action, so two columns' rules
+   line up in the maximized drawer. */
+.cfg-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  min-height: 34px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--fg);
+}
+.cfg-h .kicker {
+  margin: 0;
+}
+.cfg-h-r {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cfg-h-r .btn {
+  height: 28px;
+}
+.dr-pane .cfg-kv {
+  margin-top: 0;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 0 16px;
+}
+.cfg-kv > .k,
+.cfg-kv > .v {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.45;
+}
+.cfg-kv > .k {
+  white-space: nowrap;
+}
+.cfg-kv > .v {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cfg-kv > .v.cfg-prose {
+  font-family: var(--sans);
+}
+.cfg-v {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cfg-dim,
+.cfg-sub {
+  color: var(--fg3);
+}
+.cfg-sub {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.cfg-acts {
+  flex: none;
   display: flex;
   gap: 6px;
 }
-.dr-ssh-note {
-  font-size: 10.5px;
-  color: var(--fg3);
+.cfg-acts .btn-mini {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+.cfg-trunc {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An id that links out: the value's own colour, a dotted underline, the
+   accent only under the pointer. */
+.cfg-kv a.cfg-link {
+  color: inherit;
+  text-decoration: underline dotted var(--fg3);
+  text-underline-offset: 3px;
+}
+.cfg-kv a.cfg-link:hover {
+  color: var(--text-accent, var(--acc));
+}
+.cfg-grp > .hint,
+.cfg-grp > .wiz-error {
+  margin-top: 10px;
+}
+.dr-ssh-cmd {
+  overflow-wrap: anywhere;
 }

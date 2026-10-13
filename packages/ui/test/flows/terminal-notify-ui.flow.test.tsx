@@ -21,7 +21,7 @@ beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
   window.localStorage.removeItem("hermetic.notifications");
   window.sessionStorage.clear();
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {

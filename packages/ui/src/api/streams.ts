@@ -145,8 +145,11 @@ export function followOp(
   opId: string,
   onEvent: (e: OpEvent) => void,
   onDone: (ok: boolean, error: { code: string; message: string } | null) => void,
-  /** False for a watcher that only wants the end; see `StreamHandlers.resumes`. */
-  { resumes = true }: { resumes?: boolean } = {},
+  /**
+   * `resumes`: false for a watcher that only wants the end. `replay`: true for
+   * a reader that has drawn none of the op yet. See `StreamHandlers`.
+   */
+  { resumes = true, replay = false }: { resumes?: boolean; replay?: boolean } = {},
 ): () => void {
   let settled = false;
   let close: (() => void) | null = null;
@@ -185,6 +188,7 @@ export function followOp(
       },
       onEnd: () => finish(false, null),
       resumes,
+      replay,
     },
   );
   if (settled) close();

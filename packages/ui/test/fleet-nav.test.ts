@@ -6,9 +6,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   FLEET_DESTROYED_HASH,
+  FLEET_HASH,
   FLEET_VOLUMES_HASH,
   LEGACY_VOLUMES_HASH,
   fleetLensHash,
+  isLandingHash,
   parseFleetLensHash,
 } from "../src/nav/fleet-nav.ts";
 
@@ -28,7 +30,8 @@ describe("parseFleetLensHash", () => {
   });
 
   test("every other fleet address is the agents lens", () => {
-    for (const hash of ["", "#", "#fleet", "#agent/lumen", "#agent/lumen/desktop"]) {
+    expect(fleetLensHash("agents")).toBe(FLEET_HASH);
+    for (const hash of ["#fleet", "#agent/lumen", "#agent/lumen/desktop"]) {
       expect(parseFleetLensHash(hash)).toBe("agents");
     }
   });
@@ -36,6 +39,16 @@ describe("parseFleetLensHash", () => {
   test("Settings and Chat hashes say nothing about the lens", () => {
     for (const hash of ["#settings", "#settings/providers", "#chat", "#chat/lumen/main"]) {
       expect(parseFleetLensHash(hash)).toBeNull();
+    }
+  });
+
+  test("a hash naming nothing is Chat's landing, not the fleet", () => {
+    for (const hash of ["", "#", "#/"]) {
+      expect(isLandingHash(hash)).toBe(true);
+      expect(parseFleetLensHash(hash)).toBeNull();
+    }
+    for (const hash of ["#fleet", "#chat", "#settings", "#agent/lumen"]) {
+      expect(isLandingHash(hash)).toBe(false);
     }
   });
 });

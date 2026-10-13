@@ -12,8 +12,6 @@
  *   them, fold into one `n events` row. A failure, a DM reply and a subagent
  *   result are never routine (`isRoutineProcessEvent`), so each keeps its own
  *   row and breaks a burst.
- * - **Density.** "failures only" hides the routine events, bursts included.
- *   What it keeps is exactly what a burst refuses to swallow.
  * - **Links.** A `terminal` call started in the background names its process
  *   in its result; the event names the same id. The two rows link to each other
  *   only when both are in the loaded transcript, and the event's duration is
@@ -47,14 +45,7 @@ export function isProcessEventMessage(message: Pick<MessageLike, "blocks">): boo
   return processEventOf(message) !== null;
 }
 
-export function hasProcessEvents(messages: readonly Pick<MessageLike, "blocks">[]): boolean {
-  return messages.some(isProcessEventMessage);
-}
-
-/* ── rows: bursts, density, and the "responding to" line ─────────────────── */
-
-/** Per-thread event density: everything, or only what needs reading. */
-export type EventDensity = "compact" | "failures";
+/* ── rows: bursts and the "responding to" line ──────────────────────────── */
 
 export interface EventEntry<M extends MessageLike = MessageLike> {
   row: TurnRow<M>;
@@ -94,19 +85,12 @@ function respondingTo<M extends MessageLike>(item: ThreadItem<M>): string | null
  *
  * `rows` is `turnRows()` output: an event message is always a row of its own
  * there, because a `system` row that is not tool machinery is a hard break in
- * `turnGroups()`. This pass only decides which of those rows fold together and
- * which are hidden.
- *
- * The `responding to` line is decided before the density filter: the bot was
- * answering the event whether or not the reader chose to see it.
- *
- * A hidden row's day divider moves to the next row that is drawn, so hiding the
- * first event of a day does not also hide the day.
+ * `turnGroups()`. This pass only decides which of those rows fold together.
+ * Nothing is hidden: there is one rendering, and every row already keeps its
+ * output collapsed, so a quiet event costs one line and a failure stands out
+ * in red without a filter to find it.
  */
-export function threadItems<M extends MessageLike>(
-  rows: readonly TurnRow<M>[],
-  density: EventDensity = "compact",
-): ThreadItem<M>[] {
+export function threadItems<M extends MessageLike>(rows: readonly TurnRow<M>[]): ThreadItem<M>[] {
   const items: ThreadItem<M>[] = [];
   let run: EventEntry<M>[] = [];
   const flush = () => {
@@ -144,36 +128,7 @@ export function threadItems<M extends MessageLike>(
     items.push({ kind: "turn", row, inReply });
   }
   flush();
-  return density === "failures" ? withoutRoutine(items) : items;
-}
-
-/** True for an item "failures only" hides. */
-export function hiddenByFailuresOnly<M extends MessageLike>(item: ThreadItem<M>): boolean {
-  if (item.kind === "burst") return true;
-  return item.kind === "event" && isRoutineProcessEvent(item.event);
-}
-
-function itemDivider<M extends MessageLike>(item: ThreadItem<M>): string | null {
-  return item.kind === "burst" ? item.divider : item.row.divider;
-}
-
-function withDivider<M extends MessageLike>(item: ThreadItem<M>, divider: string): ThreadItem<M> {
-  if (item.kind === "burst") return { ...item, divider };
-  return { ...item, row: { ...item.row, divider } };
-}
-
-function withoutRoutine<M extends MessageLike>(items: readonly ThreadItem<M>[]): ThreadItem<M>[] {
-  const kept: ThreadItem<M>[] = [];
-  let carried: string | null = null;
-  for (const item of items) {
-    if (hiddenByFailuresOnly(item)) {
-      carried = itemDivider(item) ?? carried;
-      continue;
-    }
-    kept.push(carried !== null && itemDivider(item) === null ? withDivider(item, carried) : item);
-    carried = null;
-  }
-  return kept;
+  return items;
 }
 
 /* ── the burst's one line ────────────────────────────────────────────────── */
@@ -395,19 +350,6 @@ export function fmtSpan(ms: number): string {
 }
 
 /* ── the places an event row must not read as the operator ───────────────── */
-
-/**
- * What quick jump searches a message by. An event row has no prose the
- * operator wrote, so it is not searchable as one of their messages.
- */
-export function searchableText(message: Pick<MessageLike, "blocks">): string {
-  if (isProcessEventMessage(message)) return "";
-  return message.blocks
-    .flatMap((block) =>
-      block.kind === "text" && typeof block["markdown"] === "string" ? [block["markdown"]] : [],
-    )
-    .join(" ");
-}
 
 /**
  * What the rail quotes for a message this browser just watched land: its prose,

@@ -7,10 +7,9 @@
  * text when it failed), a timer and an `OPEN ↗` button. The child's run — every
  * tool call, its progress and thinking, its result — is in the modal
  * (`SubagentModal.tsx`), and so are Steer and Stop: a dense list of lines is
- * no place for a destructive control, and "Stop turn" in the header keeps its
+ * no place for a destructive control, and the composer's Stop keeps its
  * turn-wide meaning. Grandchildren are flattened into the same list with a
- * `depth N` tag (Q3). Under FAILURES ONLY a successful child stays as a dimmed
- * line with nothing beside its goal (Q9).
+ * `depth N` tag (Q3).
  *
  * A line fades in once: on the first render that ever drew its child, and
  * only for a live child. A re-mount — the thread re-read, the group re-keyed,
@@ -34,15 +33,12 @@ import { RedactedText } from "../RedactedText.tsx";
 export interface SubagentScopeValue {
   /** Open a child's modal. `null` where no thread is around to hold one. */
   open: ((subagentId: string) => void) | null;
-  /** The thread's density is FAILURES ONLY (Q9). */
-  failuresOnly: boolean;
   /** The results turn of each background delegation, by delegation id (`delegationResults`). */
   results: ReadonlyMap<string, string>;
 }
 
 export const SubagentContext = createContext<SubagentScopeValue>({
   open: null,
-  failuresOnly: false,
   results: new Map(),
 });
 
@@ -91,13 +87,12 @@ function jumpTo(messageId: string): void {
 }
 
 export function SubagentLine({ block }: { block: SubagentView }) {
-  const { open, failuresOnly, results } = useContext(SubagentContext);
+  const { open, results } = useContext(SubagentContext);
   const first = useFirstDraw(block);
   const live = running(block);
   const now = useTicker(live);
   const glyph = glyphOf(block);
-  const activity = activityOf(block, failuresOnly);
-  const dim = failuresOnly && block.verdict === "done";
+  const activity = activityOf(block);
   const result =
     dispatchedOnly(block) && block.delegation_id ? results.get(block.delegation_id) : undefined;
   const goal = block.goal || "Subagent";
@@ -105,7 +100,6 @@ export function SubagentLine({ block }: { block: SubagentView }) {
     "sa-line",
     live ? "run" : "",
     block.verdict === "failed" ? "bad" : "",
-    dim ? "dim" : "",
     first ? "sa-enter" : "",
   ]
     .filter(Boolean)
@@ -119,9 +113,7 @@ export function SubagentLine({ block }: { block: SubagentView }) {
       <span className="sa-goal" title={goal}>
         <RedactedText text={goal} />
       </span>
-      {activity.kind === "none" ? (
-        <span className="sa-act" />
-      ) : activity.kind === "tool" ? (
+      {activity.kind === "tool" ? (
         <span className="sa-act tool" title={`${activity.name} ${activity.text}`}>
           {"↳ "}
           <span className="tn">{activity.name}</span> <RedactedText text={activity.text} />

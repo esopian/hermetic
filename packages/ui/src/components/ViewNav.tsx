@@ -1,11 +1,12 @@
 /**
- * `FLEET | CHAT | SETTINGS`, drawn inside the header (`Header.tsx`'s `nav`)
- * rather than on a row of its own. Volumes used to be a fourth tab; it is now the
+ * `CHAT | FLEET | SETTINGS`, drawn inside the header (`Header.tsx`'s `nav`)
+ * rather than on a row of its own. Chat leads because it is the page the app
+ * opens on (`nav-state.tsx`). Volumes used to be a fourth tab; it is now the
  * fleet's second lens (`Toolbar.tsx`, `#fleet/volumes`), so the alert its badge
  * carried moved onto the Fleet badge instead: `12 · 2 loose vols`, the suffix
- * in the accent colour and present only while something is actually loose, so
- * a quiet fleet reads quiet. The dollar figure lives on the lens switch, next
- * to the thing it prices.
+ * in `--warn` (it costs money and wants a decision) and present only while
+ * something is actually loose, so a quiet fleet reads quiet. The dollar
+ * figure lives on the lens switch, next to the thing it prices.
  *
  * Chat carries no badge of its own, and that is a decision rather than an
  * omission. The number would have to come from `chat.swarms`, which is a
@@ -39,6 +40,9 @@ export function ViewNav({
 
   return (
     <nav className="viewnav" aria-label="Views">
+      <button type="button" aria-pressed={view === "chat"} onClick={() => onView("chat")}>
+        Chat
+      </button>
       <button type="button" aria-pressed={view === "fleet"} onClick={() => onView("fleet")}>
         Fleet{" "}
         <span className={agentCountKnown ? "badge mono" : "badge mono pending"}>
@@ -50,9 +54,6 @@ export function ViewNav({
             </span>
           ) : null}
         </span>
-      </button>
-      <button type="button" aria-pressed={view === "chat"} onClick={() => onView("chat")}>
-        Chat
       </button>
       <button type="button" aria-pressed={view === "settings"} onClick={() => onView("settings")}>
         Settings

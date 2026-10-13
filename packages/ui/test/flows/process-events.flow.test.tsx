@@ -12,21 +12,19 @@
  * must never do is claim to be the operator: the "You" label belongs to the
  * prompt at the top of the transcript and to nothing the box wrote.
  */
-import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
+import { cleanup, screen, waitFor } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { EVENT_DENSITY_KEY } from "../../src/chat/event-density.ts";
 import { FIXTURE, type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
 let harness: FlowHarness | null = null;
 
 /**
- * The route, the layout and the density document, cleared before and after:
- * an inherited `#chat/...` or a thread left on "failures only" would decide
- * what the next test sees before it has asked for anything.
+ * The route and the layout, cleared before and after: an inherited
+ * `#chat/...` would decide what the next test sees before it has asked for
+ * anything.
  */
 function reset(): void {
   window.localStorage.removeItem("hermetic.layout");
-  window.localStorage.removeItem(EVENT_DENSITY_KEY);
   window.sessionStorage.clear();
   gotoHash("");
 }
@@ -124,26 +122,17 @@ test("no event row is labelled You; the operator's prompt is", async () => {
   );
 });
 
-test("failures only hides routine rows and compact brings them back", async () => {
+test("an eventful thread has one rendering and no density switch", async () => {
+  // A density the old switch stored for this thread must not hide anything now.
+  window.localStorage.setItem(
+    "hermetic.chat.event-density",
+    JSON.stringify({ [`${FIXTURE.main.fleet_id}/${FIXTURE.sseAgent}/default/`]: "failures" }),
+  );
   await openKestrel();
-  const user = userEvent.setup();
-  const density = screen.getByRole("group", { name: "Background events" });
-  const compact = within(density).getByRole("button", { name: "compact" });
-  const failures = within(density).getByRole("button", { name: "failures only" });
-  expect(compact.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByRole("group", { name: "Background events" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "failures only" })).toBeNull();
+  // Routine rows, the failure and the DM reply are all drawn.
   expect(burst()).not.toBeNull();
-  expect(rowsFor("bun run build")).toHaveLength(1);
-
-  await user.click(failures);
-  await waitFor(() => expect(burst()).toBeNull());
-  expect(failures.getAttribute("aria-pressed")).toBe("true");
-  expect(rowsFor("bun run build")).toHaveLength(0);
-  expect(failedRow()).not.toBeNull();
-  expect(dmCard()).not.toBeNull();
-
-  await user.click(compact);
-  await waitFor(() => expect(burst()).not.toBeNull());
-  expect(compact.getAttribute("aria-pressed")).toBe("true");
   expect(rowsFor("bun run build")).toHaveLength(1);
   expect(failedRow()).not.toBeNull();
   expect(dmCard()).not.toBeNull();

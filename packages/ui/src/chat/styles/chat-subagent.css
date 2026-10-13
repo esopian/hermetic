@@ -58,9 +58,6 @@
 .sa-line.bad {
   border-left-color: var(--bad);
 }
-.sa-line.dim {
-  opacity: 0.55;
-}
 .sa-line.sa-enter {
   animation: sarowin 0.2s ease-out;
 }

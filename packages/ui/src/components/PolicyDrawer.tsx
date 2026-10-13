@@ -144,7 +144,7 @@ export function PolicyDrawer({
         onClose={onClose}
       />
 
-      <div className="drawer-body td-body">
+      <div className={opId !== null ? "drawer-body td-body op-body" : "drawer-body td-body"}>
         {opId === null ? (
           <div className="td-stage">
             <div className="kicker">Stage 1 · Review</div>

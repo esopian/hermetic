@@ -33,6 +33,8 @@ import { ShortcutsPopover } from "./components/Shortcuts.tsx";
 import { InitWizard } from "./components/InitWizard.tsx";
 import { FleetSkeleton } from "./components/Loading.tsx";
 import { ChatView } from "./chat/components/ChatView.tsx";
+import { ChatEmpty, chatEmptyKind } from "./chat/components/ChatEmpty.tsx";
+import { AgentSectionContext } from "./chat/agent-sections.ts";
 import { ChatShell } from "./chat/components/ChatShell.tsx";
 import { useChatEntry } from "./chat/chat-entry-state.tsx";
 import { ChatProvider } from "./chat/chat-state.tsx";
@@ -48,6 +50,7 @@ import { DestroyedView, useDestroyedAudit } from "./components/DestroyedView.tsx
 import { filterVolumes, settleVolumes, type SettledPhase } from "./logic/volume-logic.ts";
 import { fleetPhase, volumeScan } from "./logic/loading.ts";
 import { NavProvider, useNav, useNavKeys } from "./nav/nav-state.tsx";
+import { useListeningIfAvailable } from "./state/listening-state.tsx";
 import {
   countsOf,
   emptyHint,
@@ -116,6 +119,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const chatEntry = useChatEntry();
   const fleet = useFleet();
   const nav = useNav();
+  const listening = useListeningIfAvailable();
   const initialized = fleet.meta !== null && isInitialized(fleet.meta);
   const volumes = useVolumes(initialized);
   /**
@@ -133,10 +137,11 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const [query, setQuery] = useState("");
   /**
    * §6.7: a destroy deletes the agent's row, so a destroyed agent is on no
-   * layout here; its tombstone and history are the Destroyed lens's, read
-   * only while that lens is up.
+   * layout here; its tombstone and history are the Destroyed lens's. Read once
+   * up front so the toolbar's `<n> DESTROYED` has its number before the lens is
+   * opened, then again on lens entry and when a destroy settles.
    */
-  const destroyedAudit = useDestroyedAudit(initialized && nav.fleetLens === "destroyed");
+  const destroyedAudit = useDestroyedAudit(initialized, nav.fleetLens === "destroyed");
   /** The create drawer's running op, so reopening re-attaches to its stream. */
   const [createOp, setCreateOp] = useState<CreateOp | null>(null);
   /**
@@ -321,11 +326,14 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const prevFleetId = useRef(fleetId);
   /** Each agent's last settled phase, for `settleVolumes` below; forgotten on a switch. */
   const settled = useRef<ReadonlyMap<string, SettledPhase> | null>(null);
+  /** The fleet's names at the last read, for the destroyed count below; forgotten on a switch. */
+  const knownNames = useRef<ReadonlySet<string> | null>(null);
   useEffect(() => {
     const previous = prevFleetId.current;
     prevFleetId.current = fleetId;
     if (previous === null || fleetId === null || previous === fleetId) return;
     settled.current = null;
+    knownNames.current = null;
     volumes.reset();
     destroyedAudit.reset();
   }, [fleetId, volumes.reset, destroyedAudit.reset]);
@@ -338,18 +346,25 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
    */
   const { refresh: refreshVolumes } = volumes;
   const { refresh: refreshDestroyed } = destroyedAudit;
-  // Read through a ref: the lens changing is not a reason to re-settle.
-  const onDestroyedLens = useRef(false);
-  onDestroyedLens.current = nav.fleetLens === "destroyed";
   useEffect(() => {
     if (!fleet.scanned) return;
     const { next, changed } = settleVolumes(settled.current, fleet.agents);
     settled.current = next;
-    if (!changed) return;
-    refreshVolumes();
-    // A destroy settling is a new tombstone; the lens reads again on entry anyway.
-    if (onDestroyedLens.current) refreshDestroyed();
-  }, [fleet.scanned, fleet.agents, refreshVolumes, refreshDestroyed]);
+    if (changed) refreshVolumes();
+  }, [fleet.scanned, fleet.agents, refreshVolumes]);
+  /**
+   * A destroy settling is a new tombstone, and the toolbar shows the count on
+   * every lens, so it is read again whichever lens is up. A destroy ends by
+   * deleting the row, so it shows here as a name leaving the fleet — including
+   * one that never reached a settled phase, which `settleVolumes` would miss.
+   */
+  useEffect(() => {
+    if (!fleet.scanned) return;
+    const names = new Set(fleet.agents.map((a) => a.name));
+    const before = knownNames.current;
+    knownNames.current = names;
+    if (before !== null && [...before].some((name) => !names.has(name))) refreshDestroyed();
+  }, [fleet.scanned, fleet.agents, refreshDestroyed]);
 
   const region = fleet.meta?.config?.region ?? "—";
   const hint = emptyHint({ total: counts.total, query });
@@ -414,7 +429,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
       </>
     );
   /**
-   * `FLEET | CHAT | SETTINGS`, drawn inside the header on every screen that has
+   * `CHAT | FLEET | SETTINGS`, drawn inside the header on every screen that has
    * views to move between — Settings included, so leaving it is the same click
    * as arriving.
    */
@@ -510,6 +525,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           onOpenFleet={() => {
             fleet.resync();
             setWizardOpen(false);
+            // The wizard's last step says "Open fleet", so it lands on the
+            // fleet rather than on Chat, the view a launch opens on.
+            nav.setView("fleet");
           }}
           onOpenReceipt={showReceipt}
         />
@@ -555,6 +573,58 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
     );
   }
 
+  /**
+   * The agent drawer. Drawn over the fleet, and over the Chat view only when
+   * a thread's `Desktop` / `Terminal` link raised it there (`agentOverChat`):
+   * a drawer left open on the fleet stays out of the way of a conversation.
+   */
+  const agentDrawer = agent ? (
+    <AgentDrawer
+      key={`${fleetIdentity}:${agent.name}`}
+      agent={agent}
+      chatInitiallyOpen={chatEntry?.drawerTarget?.instance === agent.name}
+      meta={fleet.meta}
+      latest={fleet.latest}
+      tailnet={fleet.tailnet}
+      profiles={profiles}
+      runningOpId={fleet.opsByAgent[agent.name] ?? null}
+      onOp={fleet.setOp}
+      onClose={() => {
+        chatEntry?.closeDrawer();
+        nav.closeAgent();
+      }}
+      confirmOpen={nav.teardownOpen}
+      setConfirmOpen={nav.setTeardownOpen}
+      tab={nav.agentTab}
+      initialLogSource={nav.agentLogSource}
+      onTab={nav.setAgentTab}
+      session={nav.agentSession}
+      onSession={nav.setAgentSession}
+      onSettings={nav.openSettings}
+      onChatBehind={
+        nav.agentOverChat
+          ? () => {
+              chatEntry?.closeDrawer();
+              nav.closeAgent();
+            }
+          : undefined
+      }
+      /*
+       * Anything raised over the drawer suspends the Desktop tab's stream.
+       * The drawer stays mounted underneath these, so without this the RFB
+       * session keeps running — and keeps the agent's screen live — behind
+       * a Settings pane the operator may sit in for minutes.
+       */
+      covered={
+        nav.settingsOpen ||
+        nav.createOpen ||
+        wizardOpen ||
+        nav.foundationTeardownOpen ||
+        nav.foundationUpdateOpen
+      }
+    />
+  ) : null;
+
   const chrome = (
     <>
       <Header nav={viewNav} bell={bell} />
@@ -567,10 +637,20 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   );
 
   if (nav.chatOpen) {
+    // Chat is the landing view, so a fleet with nobody to talk to says why
+    // here, and how to fix it, instead of drawing an empty workspace.
+    const empty = chatEmptyKind({ fleetRead: !scanning, agents: shown, listening });
     return (
       <div className="app">
         {chrome}
-        <ChatView />
+        {empty ? (
+          <ChatEmpty kind={empty} onGoToFleet={() => nav.setView("fleet")} />
+        ) : (
+          <AgentSectionContext.Provider value={nav.openAgentOverChat}>
+            <ChatView />
+          </AgentSectionContext.Provider>
+        )}
+        {nav.agentOverChat ? agentDrawer : null}
         {footer}
         {help}
         {inbox}
@@ -612,6 +692,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         layout={layout}
         onLayout={setLayout}
         destroyedCount={destroyedAudit.tombstones?.length ?? null}
+        destroyedRead={destroyedAudit.hasRead}
         destroyedBusy={destroyedAudit.loading}
         onRefreshDestroyed={destroyedAudit.refresh}
         sort={sort}
@@ -714,44 +795,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         />
       ) : null}
 
-      {agent ? (
-        <AgentDrawer
-          key={`${fleetIdentity}:${agent.name}`}
-          agent={agent}
-          chatInitiallyOpen={chatEntry?.drawerTarget?.instance === agent.name}
-          meta={fleet.meta}
-          latest={fleet.latest}
-          tailnet={fleet.tailnet}
-          profiles={profiles}
-          runningOpId={fleet.opsByAgent[agent.name] ?? null}
-          onOp={fleet.setOp}
-          onClose={() => {
-            chatEntry?.closeDrawer();
-            nav.closeAgent();
-          }}
-          confirmOpen={nav.teardownOpen}
-          setConfirmOpen={nav.setTeardownOpen}
-          tab={nav.agentTab}
-          initialLogSource={nav.agentLogSource}
-          onTab={nav.setAgentTab}
-          session={nav.agentSession}
-          onSession={nav.setAgentSession}
-          onSettings={nav.openSettings}
-          /*
-           * Anything raised over the drawer suspends the Desktop tab's stream.
-           * The drawer stays mounted underneath these, so without this the RFB
-           * session keeps running — and keeps the agent's screen live — behind
-           * a Settings pane the operator may sit in for minutes.
-           */
-          covered={
-            nav.settingsOpen ||
-            nav.createOpen ||
-            wizardOpen ||
-            nav.foundationTeardownOpen ||
-            nav.foundationUpdateOpen
-          }
-        />
-      ) : null}
+      {agentDrawer}
       {help}
       {inbox}
     </div>

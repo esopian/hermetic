@@ -16,6 +16,7 @@ import type {
   ChatFrame,
   ChatMessage,
   ChatRespondInput,
+  ChatUsage,
   ErrorCode,
   Session,
   Swarm,
@@ -210,6 +211,18 @@ export interface HermesChatClient {
   swarm(box: BoxAddress, opts?: HermesChatOptions): Promise<Swarm>;
   sessions(box: BoxAddress, bot: string, opts?: HermesChatOptions): Promise<Session[]>;
   history(box: BoxAddress, bot: string, opts?: HistoryOptions): Promise<ChatMessage[]>;
+  /**
+   * The usage the gateway holds for `session` while it is live there, read
+   * without resuming it (`hermes-chat-live-usage.ts`); null when it is not live
+   * or reports no context window. Optional: a client without it answers no
+   * figure, which is what a cold conversation looks like anyway.
+   */
+  liveUsage?(
+    box: BoxAddress,
+    bot: string,
+    session: string,
+    opts?: HermesChatOptions,
+  ): Promise<ChatUsage | null>;
   send(box: BoxAddress, bot: string, text: string, opts?: SendOptions): AsyncIterable<ChatFrame>;
   /**
    * The passive hint stream (§9.2): "something happened on this

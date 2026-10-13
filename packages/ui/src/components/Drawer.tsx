@@ -9,12 +9,19 @@ import { Dialog } from "./Dialog.tsx";
 
 export function Drawer({
   width,
+  className,
   onClose,
   onEscape = onClose,
   labelledBy,
   children,
 }: {
-  width: number;
+  /**
+   * Pixels, as an inline style. `null` leaves the width to a stylesheet rule on
+   * `className` — the agent drawer's maximized width is a `max()`/`calc()`.
+   */
+  width: number | null;
+  /** Added to `drawer`. */
+  className?: string;
   onClose: () => void;
   onEscape?: () => void;
   labelledBy?: string;
@@ -22,12 +29,12 @@ export function Drawer({
 }) {
   return (
     <Dialog
-      className="drawer"
+      className={className ? `drawer ${className}` : "drawer"}
       modal
       labelledBy={labelledBy}
       onDismiss={onEscape}
       backdrop={{ className: "backdrop", onClose }}
-      style={{ width }}
+      style={width === null ? undefined : { width }}
     >
       {children}
     </Dialog>

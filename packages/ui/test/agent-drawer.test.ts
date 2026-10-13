@@ -324,11 +324,13 @@ describe("AgentDrawer · desktop", () => {
 describe("AgentDrawer · the approvals mode", () => {
   /** The Hermes panel lives on the Config section. */
   const config = (a: AgentView) => html(a, META, "acme.ts.net", "config");
+  /** The mode as the row draws it: the value, then whose it is, dimmed on the same line. */
+  const seeded = (mode: string) => `${mode}<span class="cfg-dim"> · seeded`;
 
   test("a mode stated on the row is the one shown, and it is labelled seeded", () => {
     const out = config(agent({ hermes: { approvals_mode: "manual" } } as Partial<AgentView>));
     expect(out).toContain('<span class="k">approvals</span>');
-    expect(out).toContain("manual");
+    expect(out).toContain(seeded("manual"));
     expect(out).toContain("seeded — the agent&#x27;s to change");
     expect(out).toContain("agent set --approvals");
   });
@@ -341,8 +343,8 @@ describe("AgentDrawer · the approvals mode", () => {
    */
   test("with nothing stated, the fleet's answer frozen at create time shows", () => {
     const out = config(agent({ seed: { approvals_mode: "smart" } } as Partial<AgentView>));
-    expect(out).toContain("smart (seeded");
-    expect(out).not.toContain("off (seeded");
+    expect(out).toContain(seeded("smart"));
+    expect(out).not.toContain(seeded("off"));
   });
 
   test("a stated mode outranks the seed", () => {
@@ -352,7 +354,7 @@ describe("AgentDrawer · the approvals mode", () => {
         seed: { approvals_mode: "smart" },
       } as Partial<AgentView>),
     );
-    expect(out).toContain("off (seeded");
+    expect(out).toContain(seeded("off"));
     expect(out).not.toContain("smart");
   });
 
@@ -362,7 +364,7 @@ describe("AgentDrawer · the approvals mode", () => {
    * a mode leaves `seed.approvals_mode` absent on everything it created.
    */
   test("with neither stated, the build's own default is what the panel says", () => {
-    expect(config(agent())).toContain("off (seeded");
+    expect(config(agent())).toContain(seeded("off"));
   });
 
   /**

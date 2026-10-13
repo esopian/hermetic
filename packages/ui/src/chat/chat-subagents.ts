@@ -384,19 +384,18 @@ export function glyphOf(block: SubagentView): Glyph {
 export const UNOBSERVED_TEXT = "no longer observable — results arrive with the next turn";
 export const DISPATCHED_TEXT = "dispatched in the background — results arrive with a later turn";
 
-/** The line's activity column. `none` draws nothing. */
+/** The line's activity column. */
 export type ActivityLine =
   | { kind: "tool"; name: string; text: string }
-  | { kind: "summary" | "error" | "note"; text: string }
-  | { kind: "none" };
+  | { kind: "summary" | "error" | "note"; text: string };
 
 /**
  * What a child is doing, or how it ended: the latest tool call while it runs,
  * the first line of its summary once done, its failure text when it failed
  * (live: the summary, which is all the wire carries; history: the classified
- * `failure_reason`). Under FAILURES ONLY (Q9) a successful child says nothing.
+ * `failure_reason`).
  */
-export function activityOf(block: SubagentView, failuresOnly = false): ActivityLine {
+export function activityOf(block: SubagentView): ActivityLine {
   if (dispatchedOnly(block)) return { kind: "note", text: DISPATCHED_TEXT };
   switch (block.verdict) {
     case "running": {
@@ -406,9 +405,7 @@ export function activityOf(block: SubagentView, failuresOnly = false): ActivityL
       return { kind: "note", text: block.status === "queued" ? "queued" : "starting" };
     }
     case "done":
-      return failuresOnly
-        ? { kind: "none" }
-        : { kind: "summary", text: firstLine(plainSummary(block.summary)) };
+      return { kind: "summary", text: firstLine(plainSummary(block.summary)) };
     case "failed":
       return {
         kind: "error",
@@ -626,8 +623,4 @@ export function delegationResults(messages: readonly ChatMessageView[]): Map<str
         if (!found.has(b.delegation_id)) found.set(b.delegation_id, m.id);
   }
   return found;
-}
-
-export function hasSubagents(messages: readonly ChatMessageView[]): boolean {
-  return messages.some((m) => m.blocks.some(isSubagent));
 }

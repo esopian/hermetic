@@ -78,18 +78,26 @@ export function useAgentOp({
     if (probed.current === key) return;
     probed.current = key;
     let alive = true;
+    let answered = false;
     listOps({ target: name, status: "running" })
       .then((running) => {
+        answered = true;
         const found = runningOpId ? running.find((o) => o.id === runningOpId) : running[0];
         if (!alive || !found) return;
         setOpLocal({ opId: found.id, label: found.method.replace(/^agents\./, ""), live: true });
         onOp(name, found.id);
       })
       .catch(() => {
+        answered = true;
         /* no registry answer just means no progress bar */
       });
     return () => {
       alive = false;
+      // Torn down before the registry answered — StrictMode's rehearsal
+      // unmount does exactly that on every open of a dev build — so the
+      // answer is dropped, and the next run must ask again rather than find
+      // its key already probed and leave a running op without its rail.
+      if (!answered && probed.current === key) probed.current = null;
     };
   }, [runningOpId, name, onOp]);
 

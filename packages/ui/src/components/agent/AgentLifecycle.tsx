@@ -31,7 +31,6 @@ export type RunOp = (label: string, fn: () => Promise<{ op_id: string }>) => Pro
 function Card({
   title,
   pill,
-  pillTone,
   recommended = false,
   about,
   keeps,
@@ -43,9 +42,14 @@ function Card({
 }: {
   title: string;
   pill?: string;
-  pillTone?: "warn";
+  /**
+   * The one card worth pressing now. Drawn in `--warn`, the "an action is
+   * recommended" colour (docs/ui-brief.md, Colour meaning) — never the accent,
+   * which is brand and activity only.
+   */
   recommended?: boolean;
-  about: string;
+  /** One line on a consequence the table does not already say; omitted when it would only restate the title. */
+  about?: string;
   keeps: string;
   loses: string;
   down: string;
@@ -65,10 +69,10 @@ function Card({
         {recommended ? (
           <span className="dr-tag">Recommended</span>
         ) : pill ? (
-          <span className={`dr-pill${pillTone ? ` ${pillTone}` : ""}`}>{off ? "n/a" : pill}</span>
+          <span className="dr-pill">{off ? "n/a" : pill}</span>
         ) : null}
       </div>
-      <p>{about}</p>
+      {about ? <p>{about}</p> : null}
       {off ? (
         <div className="hint">Not available: {unavailable}.</div>
       ) : (
@@ -150,13 +154,7 @@ export function AgentLifecycle({
 
   return (
     <div className="dr-pane">
-      <div className="dr-say">
-        <div className="kicker">Lifecycle</div>
-        <p>
-          What each action does to {name}. Nothing runs until you press its button, and the disruptive
-          ones ask again.
-        </p>
-      </div>
+      <div className="kicker">Lifecycle</div>
 
       <div className="dr-lcg">
         {/*
@@ -268,14 +266,13 @@ export function AgentLifecycle({
           <Card
             title="Start"
             pill="~2 min"
-            about="Boots the stopped instance on the same disks."
             keeps="everything"
             loses="nothing"
             down="until it reports ready, ~2 min"
           >
             <button
               type="button"
-              className="btn btn-sm btn-secondary dr-btn-ok"
+              className="btn btn-sm btn-secondary"
               disabled={busy}
               onClick={() => void onRun("start", () => startAgent(name))}
             >
@@ -293,7 +290,7 @@ export function AgentLifecycle({
           >
             <button
               type="button"
-              className="btn btn-sm btn-secondary dr-btn-warn"
+              className="btn btn-sm btn-secondary"
               disabled={busy}
               onClick={() => void onRun("stop", () => stopAgent(name))}
             >
@@ -337,7 +334,6 @@ export function AgentLifecycle({
         <Card
           title="Rebuild instance"
           pill="~8 min"
-          pillTone="warn"
           wide
           about="Terminates this instance and boots a new one on the same data volume (recreate). Use it when the system disk is broken, or to apply a Hermes upgrade."
           keeps="data volume (/data), config, name"
@@ -350,7 +346,7 @@ export function AgentLifecycle({
               <span>Terminate this instance and boot a new one from the same data volume?</span>
               <button
                 type="button"
-                className="btn btn-sm btn-secondary dr-btn-warn"
+                className="btn btn-sm btn-secondary"
                 onClick={() => {
                   setRebuildAsk(false);
                   void onRun("recreate", () => recreateAgent(name));
@@ -369,7 +365,7 @@ export function AgentLifecycle({
           ) : (
             <button
               type="button"
-              className="btn btn-sm btn-secondary dr-btn-warn"
+              className="btn btn-sm btn-secondary"
               disabled={busy || !actions.rebuild}
               title="Terminate this instance and boot a new one from the same data volume"
               onClick={() => setRebuildAsk(true)}
@@ -418,11 +414,7 @@ export function AgentLifecycle({
               setConfirmOpen={setConfirmOpen}
               runDestroy={destroy.runDestroy}
             />
-          ) : (
-            <div className="hint">
-              Next step: review the plan, choose what happens to the data volume, and type the name.
-            </div>
-          )}
+          ) : null}
         </section>
       ) : null}
     </div>

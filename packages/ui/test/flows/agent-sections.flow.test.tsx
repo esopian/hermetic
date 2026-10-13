@@ -27,7 +27,7 @@ let harness: FlowHarness | null = null;
 /** See `rerun.flow.test.tsx`: the hash is read at mount, so it is cleared before as well as after. */
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {
@@ -191,7 +191,53 @@ describe("the Lifecycle section", () => {
     await screen.findByLabelText(new RegExp(`^${FIXTURE.readyAgent} · `));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(window.location.hash).toBe("");
+      expect(window.location.hash).toBe("#fleet");
     });
+  });
+});
+
+/**
+ * Maximized: the inline 840px is gone and `.dr-maximized` sizes the drawer
+ * (`drawer.css`, a `max()` happy-dom cannot parse inline anyway).
+ */
+function expectWide(d: HTMLElement): void {
+  expect(d.classList.contains("dr-maximized")).toBe(true);
+  expect(d.style.width).toBe("");
+}
+
+describe("the maximize toggle", () => {
+  test("widens the drawer, keeps it wide across sections and agents, and restores", async () => {
+    harness = await flowHarness();
+    mountPortal();
+    const user = userEvent.setup();
+
+    const d = await openAgent(FIXTURE.readyAgent);
+    const toggle = () =>
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Maximize drawer" });
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(d.style.width).toBe("840px");
+
+    await user.click(toggle());
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expectWide(d);
+
+    // A section switch is a re-render, not a remount: still wide.
+    await user.click(within(d).getByRole("tab", { name: "Logs" }));
+    expectWide(d);
+
+    // Another agent is a remount (`App` keys the drawer by name): the choice
+    // is the page's, so it carries over.
+    await user.click(within(d).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const next = await openAgent(FIXTURE.sseAgent);
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expectWide(next);
+
+    // And back. Restored here, too, so the page-lifetime state does not leak
+    // into the next test in this file.
+    await user.click(toggle());
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(next.style.width).toBe("840px");
+    expect(next.classList.contains("dr-maximized")).toBe(false);
   });
 });

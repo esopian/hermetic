@@ -275,9 +275,10 @@ jobs:
       - uses: ./.github/actions/setup
       - run: bun run audit:dependencies
 
-  # Scans the full commit history reachable from the checkout (`fetch-depth:
-  # 0`, otherwise the checkout is a one-commit shard and gitleaks would only
-  # ever see the tip) for hardcoded secrets. It runs the gitleaks binary
+  # Scans the full history of the checked-out commit (`fetch-depth: 0`,
+  # otherwise the checkout is a one-commit shard). Pass HEAD explicitly:
+  # gitleaks otherwise scans every fetched branch, including unrelated work.
+  # It runs the gitleaks binary
   # directly, pinned by version and sha256, rather than gitleaks-action: the
   # action lists a PR's commits through the API, which needs `pull-requests:
   # read`, and scans only that range, where the binary needs no token at all
@@ -305,7 +306,7 @@ jobs:
           echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
       - name: Scan history
-        run: '"$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --exit-code 1 .'
+        run: '"$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --exit-code 1 --log-opts=HEAD .'
 
   # One green/red check for branch protection to point at, so the required
   # check does not have to be re-listed every time a job is added or renamed.

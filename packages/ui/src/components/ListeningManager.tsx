@@ -48,7 +48,7 @@ export function ListeningManager({ agents, onClose }: { agents: AgentView[]; onC
         title="Listening"
         sub={
           <div className="mono listening-drawer-sub">
-            Select the instances whose bots and alerts you want to follow.
+            Watched instances&apos; bots appear in Chat and raise alerts.
           </div>
         }
         onClose={close}
@@ -107,6 +107,13 @@ export function ListeningManager({ agents, onClose }: { agents: AgentView[]; onC
   );
 }
 
+/**
+ * The fleet toolbar's listening line. The count is the control: `N listening`
+ * is a link-styled button that opens the manager, so there is no separate
+ * "Manage listening" button beside it. At zero it still reads `0 listening`
+ * and still opens the manager; the guidance for that state is the page's
+ * `ListeningNotice` above the toolbar.
+ */
 export function ListeningToolbar() {
   const listening = useListeningIfAvailable();
   const fleet = useFleetIfAvailable();
@@ -114,21 +121,20 @@ export function ListeningToolbar() {
   if (!listening || !fleet) return null;
   const agents = fleet.agents.filter((agent) => agent.status !== "destroyed");
   const count = agents.filter((agent) => listening.instances.includes(agent.name)).length;
+  const label = listening.loading ? "Loading listening…" : `${count} listening`;
   return (
     <>
       <div className="listening-toolbar-row">
-        <span className="mono listening-toolbar-count">
-          <ListeningSignal on={count > 0} />
-          {listening.loading ? "Loading listening…" : `${count} listening`}
-          <span className="listening-toolbar-help"> · chat & alerts</span>
-        </span>
         <button
           type="button"
-          className="btn btn-sm"
+          className="mono listening-toolbar-link"
           disabled={listening.loading}
           onClick={() => setManaging(true)}
+          aria-label={listening.loading ? label : `${label} — manage listening`}
+          title="Choose the instances whose bots and alerts you follow"
         >
-          Manage listening
+          <ListeningSignal on={count > 0} />
+          <span className="listening-toolbar-text">{label}</span>
         </button>
       </div>
       {managing && <ListeningManager agents={agents} onClose={() => setManaging(false)} />}

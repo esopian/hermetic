@@ -20,7 +20,7 @@ import { FakeStream } from "./fake-stream.ts";
 let server: FakeServer | null = null;
 
 beforeEach(() => {
-  window.location.hash = "";
+  window.location.hash = "#fleet";
 });
 
 afterEach(() => {
@@ -169,7 +169,7 @@ describe("agent routes · what a navigation resets", () => {
     window.location.hash = "#agent/ghost";
     await page(["lumen"]);
 
-    await waitFor(() => expect(window.location.hash).toBe(""));
+    await waitFor(() => expect(window.location.hash).toBe("#fleet"));
     expect(document.querySelector(".drawer")).toBeNull();
   });
 

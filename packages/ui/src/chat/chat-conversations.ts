@@ -1,7 +1,13 @@
 /** Conversation records outlive the frame displaying them, but never their fleet provider. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatApi, ChatSelection } from "./chat-state.tsx";
-import type { BotView, ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
+import type {
+  BotView,
+  ChatConversationView,
+  ChatMessageView,
+  ChatObserveView,
+  SessionView,
+} from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
 import {
@@ -26,12 +32,15 @@ import {
   insertByStamp,
   isLocal,
   key,
+  noteContext,
+  noteRows,
   releaseHeld,
   sessionOf,
   stillPending,
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
+import { frameContext, usageContext } from "./context-usage.ts";
 import {
   noteSubagentFrame,
   observeSubagent,
@@ -301,15 +310,26 @@ export function useConversations(
             const previous = { ...record, target: { ...target, session: record.resolvedSession } };
             for (const [alias, value] of records.current)
               if (value === record && alias !== key(target)) records.current.set(alias, previous);
+            // A new conversation (an archive's replacement) starts with no
+            // figure; the old one keeps its own on `previous`.
+            record.context = null;
           }
           session = opened.session;
         }
+        // The first read of a conversation with no figure also asks the box for
+        // the window its live session holds: the stored rows carry none, so a
+        // reopened conversation would otherwise show no meter until its next
+        // turn. Once only — a poll does not pay for it. Stamped with when it was
+        // asked, so a turn frame that lands while it is in flight stays newer.
+        const askUsage = !record.historyRead && record.context === null;
+        const asked = new Date().toISOString();
         const result = await apiRef.current.fetchHistory(
           target.instance,
           target.bot,
           {
             ...(session ? { session } : {}),
             limit: 200,
+            ...(askUsage ? { usage: true } : {}),
           },
           controller.signal,
         );
@@ -330,6 +350,7 @@ export function useConversations(
               if (candidate === loser) records.current.set(alias, winner);
             }
             if (!winner.draft) winner.draft = loser.draft;
+            noteContext(winner, loser.context);
             if (winner !== record) {
               changed();
               return true;
@@ -342,18 +363,25 @@ export function useConversations(
           !record.sessions.some((s) => s.id === result.conversation!.session)
         ) {
           const c = result.conversation;
-          record.sessions.push({
-            id: c.session,
-            instance: c.instance,
-            bot: c.bot,
-            kind: c.kind,
-            origin: "desktop",
-            title: c.kind === "canonical" ? "Bot Chat" : "Chat",
-            unread: 0,
-            turn_count: 0,
-          });
+          // This record's own entry only: the list is shared with the bot's
+          // other records once read, so it is replaced, never pushed into.
+          record.sessions = [
+            ...record.sessions,
+            {
+              id: c.session,
+              instance: c.instance,
+              bot: c.bot,
+              kind: c.kind,
+              origin: "desktop",
+              title: c.kind === "canonical" ? "Bot Chat" : "Chat",
+              unread: 0,
+              turn_count: 0,
+            },
+          ];
         }
         record.messages = absorbEarly(record, result.messages);
+        noteRows(record, record.messages);
+        noteContext(record, usageContext(result.usage, asked));
         record.resolvedSession = result.session ?? record.resolvedSession;
         record.historyRead = true;
         record.historyError = null;
@@ -387,13 +415,48 @@ export function useConversations(
     [changed, permits],
   );
 
+  /**
+   * Every record of the same bot as `record`, itself excluded. A bot's Bot Chat
+   * and each of its additional sessions are separate records, but the list of
+   * the bot's sessions is one fact about the bot, so a read made through any of
+   * them is the answer for all of them.
+   */
+  const siblingsOf = useCallback((record: Conversation): Conversation[] => {
+    const out: Conversation[] = [];
+    for (const other of new Set(records.current.values())) {
+      if (other === record) continue;
+      if (other.target.instance !== record.target.instance) continue;
+      if (other.target.bot !== record.target.bot) continue;
+      out.push(other);
+    }
+    return out;
+  }, []);
+  /** The bot's session list, as every record of the bot now holds it. */
+  const setSessions = useCallback(
+    (record: Conversation, sessions: SessionView[]) => {
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessions = sessions;
+        each.sessionsState = "ready";
+        each.sessionsError = null;
+      }
+    },
+    [siblingsOf],
+  );
+
   const readSessions = useCallback(
     async (record: Conversation) => {
       if (!alive.current || !permits(record.target.instance)) return;
-      record.sessionsController?.abort();
+      // A read for any record of this bot answers for all of them, so one in
+      // flight through a sibling is superseded here rather than left to land
+      // later with a list that may predate a session this one will name.
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessionsController?.abort();
+        each.sessionsController = null;
+        each.sessionsGen += 1;
+      }
       const controller = new AbortController();
       record.sessionsController = controller;
-      const gen = ++record.sessionsGen;
+      const gen = record.sessionsGen;
       record.sessionsState = "pending";
       changed();
       try {
@@ -403,17 +466,23 @@ export function useConversations(
           controller.signal,
         );
         if (!alive.current || gen !== record.sessionsGen) return;
-        record.sessions = result.sessions;
-        record.sessionsState = "ready";
-        record.sessionsError = null;
+        setSessions(record, result.sessions);
       } catch (error) {
         if (!alive.current || gen !== record.sessionsGen) return;
+        const message = error instanceof Error ? error.message : String(error);
         record.sessionsState = "failed";
-        record.sessionsError = error instanceof Error ? error.message : String(error);
+        record.sessionsError = message;
+        // A sibling still waiting on this read has no list of its own to fall
+        // back on; one that already holds a list keeps it.
+        for (const each of siblingsOf(record)) {
+          if (each.sessionsState !== "pending") continue;
+          each.sessionsState = "failed";
+          each.sessionsError = message;
+        }
       }
       changed();
     },
-    [changed, permits],
+    [changed, permits, setSessions, siblingsOf],
   );
 
   const select = useCallback(
@@ -563,9 +632,15 @@ export function useConversations(
                   sessions: [...record.sessions],
                   sessionsState: record.sessionsState,
                   sessionsError: record.sessionsError,
+                  context: record.context,
                   ...children,
                 });
               }
+              // The figure stays with the conversation it described. The new
+              // session starts with none: a rollover follows a compaction or an
+              // archive, so the old figure no longer describes the window, and
+              // the turn's next tick or `done` says what does.
+              record.context = null;
             }
             record.resolvedSession = event.session;
             // A record's own `target` can name a session too — `readHistory`'s
@@ -612,6 +687,7 @@ export function useConversations(
                 // against it, so a row the box already sent here is not doubled.
                 record.observedEarly = [...record.observedEarly, ...takeHeld(existing, true)];
                 adopted = existing.messages;
+                noteContext(record, existing.context);
                 existing.historyGen += 1;
                 existing.sessionsGen += 1;
                 existing.historyController?.abort();
@@ -628,8 +704,16 @@ export function useConversations(
             // frame can correct it. Same refresh, for the same reason, as the
             // one a send does when its history response names a new session.
             // Only on a rollover away from a session: a first snapshot is
-            // already behind a read that refreshes the list itself.
-            if (retiredSession) void readSessions(record);
+            // already behind a read that refreshes the list itself — unless
+            // that read was the collided record's, cancelled just above while
+            // this record's own had already been superseded by it (a sibling's
+            // read answers for every record of the bot). Nothing else would
+            // read for it then, and `pending` would hold the composer closed.
+            if (
+              retiredSession ||
+              (record.sessionsState === "pending" && record.sessionsController === null)
+            )
+              void readSessions(record);
           }
           // Anything observed before this transcript existed is folded into it
           // first, so the reconciliation below sees every message this browser
@@ -648,6 +732,7 @@ export function useConversations(
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
           ];
+          noteRows(record, messages);
           record.historyRead = true;
           record.historyError = null;
           if (record.live && messages.some((m) => m.id === record.live?.id)) {
@@ -714,6 +799,7 @@ export function useConversations(
           if (record.messages.some((m) => m.id === message.id)) break;
           if (record.observedDuringTurn.some((held) => held.message.id === message.id)) break;
           note();
+          noteRows(record, [message]);
           // The box records a turn as it runs, so while this browser is
           // streaming one the rows for that same reply arrive here. They are
           // held rather than appended: the live message is already drawing
@@ -1125,6 +1211,7 @@ export function useConversations(
             const merged = frame.type === "block" && block ? { ...frame, block } : frame;
             if ((frame.type !== "block" || block) && !landOnSegment(record, merged, seed, assemble))
               record.live = assemble(record.live, merged, { ...seed, at: record.segmentAt ?? seed.at });
+            noteContext(record, frameContext(frame, new Date().toISOString()));
             changed();
           },
           onEnd: end,

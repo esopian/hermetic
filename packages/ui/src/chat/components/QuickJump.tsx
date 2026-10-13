@@ -1,11 +1,15 @@
-import { botLabel } from "../chat-presentation.ts";
-/** One keyboard-owned dialog. Search states its cache boundary instead of pretending to search boxes. */
+/**
+ * One keyboard-owned dialog. It searches what the page already holds and never
+ * asks a box for more; in the Chat view it searches conversations first.
+ */
 import { useMemo, useState } from "react";
+import { botLabel } from "../chat-presentation.ts";
 import type { ChatSelection } from "../chat-state.tsx";
 import { useChat } from "../chat-state.tsx";
 import { useChatEntry } from "../chat-entry-state.tsx";
-import { searchableText } from "../process-events.ts";
+import { conversationCandidates } from "../conversation-search.ts";
 import { Dialog } from "../../components/Dialog.tsx";
+import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 
 interface Result {
   key: string;
@@ -13,22 +17,29 @@ interface Result {
   detail: string;
   target?: ChatSelection;
   draft?: string;
-  message?: string;
   hash?: string;
 }
 const COMMANDS = [
-  { name: "Fleet", hash: "" },
   { name: "Chat", hash: "#chat" },
+  { name: "Fleet", hash: "#fleet" },
   { name: "Volumes", hash: "#fleet/volumes" },
   { name: "Settings", hash: "#settings" },
   { name: "Run log", hash: "#settings/runs" },
 ];
 
-export function QuickJump({ onClose }: { onClose: () => void }) {
+/**
+ * `chatMode` is the Chat view being on screen: there, a query with no prefix is
+ * a conversation search, conversations listed before agents and bots (after
+ * an exact-alias quick send, which always leads).
+ */
+export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; chatMode?: boolean }) {
   const chat = useChat();
   const entry = useChatEntry();
   const [query, setQuery] = useState("");
-  const [index, setIndex] = useState(0);
+  // The highlighted row is held by key, not position: conversation rows arrive
+  // with the session and roster reads, after the dialog opened, and a held
+  // position would move the highlight to another row or past the end.
+  const [selected, setSelected] = useState<string | null>(null);
   const results = useMemo<Result[]>(() => {
     const q = query.trim().toLowerCase();
     if (q.startsWith(">"))
@@ -38,6 +49,22 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
         detail: "Open existing view",
       }));
     const rows: Result[] = [];
+    const conversations: Result[] = [];
+    if (chatMode && !/^[#@>]/.test(q))
+      for (const found of conversationCandidates({
+        swarms: chat.swarms,
+        sessions: chat.sessions,
+        selection: chat.selection,
+        query: q,
+      }))
+        conversations.push({
+          key: `conversation:${found.target.instance}/${found.target.bot}/${found.target.session}`,
+          name: found.title ?? found.label,
+          detail:
+            [found.title ? found.label : null, found.preview].filter(Boolean).join(" · ") ||
+            `${found.target.instance}/${found.target.bot}`,
+          target: found.target,
+        });
     if (q.startsWith("#")) {
       if (chat.selection)
         for (const session of chat.sessions) {
@@ -76,35 +103,20 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
           draft: exact ? query.trim().slice(exact.length).trim() : undefined,
         });
       }
-    if (search && !q.startsWith("@") && chat.selection)
-      for (const message of chat.messages) {
-        // A background event is not a message anybody wrote (`searchableText`).
-        const text = searchableText(message);
-        if (text.toLowerCase().includes(search))
-          rows.push({
-            key: `message:${message.id}`,
-            name: text.slice(0, 140),
-            detail: "Message loaded in this browser",
-            target: { ...chat.selection, session: message.session || chat.selection.session },
-            message: message.id,
-          });
-      }
-    return rows;
-  }, [query, chat.swarms, chat.sessions, chat.messages, chat.selection]);
+    // `<alias> <text>` is a message for that bot. Its row leads, so Enter
+    // sends it rather than opening a conversation the text happens to match.
+    const drafts = rows.filter((row) => row.draft !== undefined);
+    return [...drafts, ...conversations, ...rows.filter((row) => row.draft === undefined)];
+  }, [query, chatMode, chat.swarms, chat.sessions, chat.selection]);
+  const found = results.findIndex((result) => result.key === selected);
+  const index = found < 0 ? 0 : found;
   const choose = (result: Result | undefined, full: boolean) => {
     if (!result) return;
     if (result.target) {
-      if (
-        !entry?.open(
-          result.target,
-          result.draft ? "dock" : full || result.message ? "full" : "dock",
-          result.draft,
-          result.message,
-        )
-      )
+      if (!entry?.open(result.target, result.draft ? "dock" : full ? "full" : "dock", result.draft))
         return;
     } else {
-      window.location.hash = result.hash ?? "";
+      window.location.hash = result.hash ?? FLEET_HASH;
     }
     onClose();
   };
@@ -120,7 +132,11 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
         className="qj-input"
         data-autofocus
         aria-label="Jump to a conversation or command"
-        placeholder="agent, message, > commands, @ agents, # conversations"
+        placeholder={
+          chatMode
+            ? "Search conversations…  > commands, @ agents, # this bot"
+            : "agent, > commands, @ agents, # conversations"
+        }
         value={query}
         role="combobox"
         aria-expanded="true"
@@ -128,17 +144,15 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
         aria-activedescendant={results[index] ? `qj-result-${index}` : undefined}
         onChange={(e) => {
           setQuery(e.target.value);
-          setIndex(0);
+          setSelected(null);
         }}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            setIndex((n) =>
-              results.length
-                ? (n + (e.key === "ArrowDown" ? 1 : -1) + results.length) % results.length
-                : 0,
-            );
+            const step = e.key === "ArrowDown" ? 1 : -1;
+            const next = results[(index + step + results.length) % results.length];
+            if (next) setSelected(next.key);
           }
           if (e.key === "Enter") {
             e.preventDefault();
@@ -149,7 +163,11 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
       <div className="qj-sec">
         {query.startsWith("#")
           ? "Conversations loaded for the current bot"
-          : "Agents and messages loaded in this browser"}
+          : query.startsWith(">")
+            ? "Commands"
+            : chatMode && !query.startsWith("@")
+              ? "Conversations and agents"
+              : "Agents and bots"}
       </div>
       <div className="qj-list" id="quick-jump-results" role="listbox">
         {results.map((result, i) => (
@@ -165,7 +183,7 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => choose(result, true)}
           >
-            <span>{result.message ? "⌕" : result.hash !== undefined ? ">" : "↗"}</span>
+            <span>{result.hash !== undefined ? ">" : result.target?.session ? "#" : "↗"}</span>
             <span>
               <span className="qj-row-name">{result.name}</span>
               <span className="qj-row-sub">{result.detail}</span>
@@ -173,9 +191,7 @@ export function QuickJump({ onClose }: { onClose: () => void }) {
           </button>
         ))}
         {results.length === 0 ? (
-          <p className="qj-row">
-            {chat.swarmsLoading ? "Reading agents…" : "No matches in loaded conversations."}
-          </p>
+          <p className="qj-row">{chat.swarmsLoading ? "Reading agents…" : "No matches."}</p>
         ) : null}
       </div>
       {chat.selectionError ? (

@@ -5,6 +5,7 @@ import { useChat } from "../chat-state.tsx";
 import type { ChatSelection } from "../chat-state.tsx";
 import { ChatEntryContext } from "../chat-entry-state.tsx";
 import { chatHash, isChatHash, parseChatHash } from "../chat-routing.ts";
+import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { composerState, threadState } from "../chat-logic.ts";
@@ -23,6 +24,9 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
   const [collapsed, setCollapsed] = useState(false);
   const [tabs, setTabs] = useState<ChatSelection[]>([]);
   const [drawerTarget, setDrawerTarget] = useState<ChatSelection | null>(null);
+  // A cold start on no hash reads `#chat` here only because `NavProvider` is a
+  // child: its landing redirect (`redirectLandingHash`) runs before this
+  // shell's effects read the hash. Keep that order if the tree moves.
   const [hash, setHash] = useState(() => window.location.hash);
   const pendingSend = useRef<{ target: ChatSelection; text: string } | null>(null);
   const focusedMessageHash = useRef<string | null>(null);
@@ -62,7 +66,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
         setDock(true);
         setCollapsed(false);
         if (frame === "full") window.location.hash = chatHash(target, message);
-        else if (isChatHash(window.location.hash)) window.location.hash = "";
+        else if (isChatHash(window.location.hash)) window.location.hash = FLEET_HASH;
       }
       return true;
     },
@@ -172,7 +176,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
             const fromFull = isChatHash(window.location.hash);
             setDock(true);
             setCollapsed((v) => (dock && !fromFull ? !v : false));
-            if (fromFull) window.location.hash = "";
+            if (fromFull) window.location.hash = FLEET_HASH;
           } else quickJump();
         } else quickJump();
         return;
@@ -291,7 +295,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
           {chat.selectionError}
         </div>
       ) : null}
-      {quick ? <QuickJump onClose={() => setQuick(false)} /> : null}
+      {quick ? <QuickJump chatMode={isChatHash(hash)} onClose={() => setQuick(false)} /> : null}
     </ChatEntryContext.Provider>
   );
 }

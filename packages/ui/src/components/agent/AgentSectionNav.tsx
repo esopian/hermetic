@@ -78,8 +78,15 @@ export function AgentSectionNav({
     lifecycle: life.text,
   };
 
-  /** Entries whose sub-line is the `●` form, in `--acc`. */
-  const accent: Partial<Record<AgentTab, boolean>> = { lifecycle: life.accent, terminal: term.accent };
+  /**
+   * Entries whose sub-line is the `●` form, and its colour: Lifecycle's is a
+   * recommended action, so `--warn`; Terminal's is session activity, so the
+   * accent (docs/ui-brief.md, Colour meaning).
+   */
+  const accent: Partial<Record<AgentTab, "warn" | "acc">> = {
+    ...(life.accent ? { lifecycle: "warn" as const } : {}),
+    ...(term.accent ? { terminal: "acc" as const } : {}),
+  };
 
   const enabled = AGENT_TABS.filter((t) => !(t === "chat" && chatDisabled));
 
@@ -120,7 +127,7 @@ export function AgentSectionNav({
               onKeyDown={(e) => onKey(e, t)}
             >
               <span id={`agent-tab-${t}-label`}>{AGENT_TAB_LABELS[t]}</span>
-              <small id={`agent-tab-${t}-sub`} className={accent[t] ? "acc" : undefined}>
+              <small id={`agent-tab-${t}-sub`} className={accent[t]}>
                 {accent[t] ? "● " : ""}
                 {sub[t]}
               </small>
@@ -131,8 +138,11 @@ export function AgentSectionNav({
       {chat.listening ? (
         <div className="dr-snav-listen">
           <ListenButton instance={agent.name} />
+          {/* Visible, not only the disabled tab's tooltip, which neither a keyboard nor a screen reader reaches. */}
           {!chat.watched ? (
-            <span className="hint">Listen to enable this instance’s bots in chat and alerts.</span>
+            <span className="hint" id="agent-listen-hint">
+              Listen to use chat.
+            </span>
           ) : null}
         </div>
       ) : null}

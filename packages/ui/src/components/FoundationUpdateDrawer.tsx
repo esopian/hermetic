@@ -212,7 +212,7 @@ export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; o
         onClose={attemptClose}
       />
 
-      <div className="drawer-body td-body">
+      <div className={stage === 3 ? "drawer-body td-body op-body" : "drawer-body td-body"}>
         {stage === 1 ? (
           <div className="td-stage">
             <div className="kicker">Stage 1 · Review</div>

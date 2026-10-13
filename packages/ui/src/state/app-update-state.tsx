@@ -106,7 +106,10 @@ export function AppUpdateNotice(): ReactElement | null {
   if (update === null || text === null) return null;
   return (
     <span className="foot-tick" data-app-update={update.status}>
-      <i className="tick-dot" style={{ background: "var(--acc)" }} />
+      <i
+        className="tick-dot"
+        style={{ background: update.status === "error" ? "var(--bad)" : "var(--warn)" }}
+      />
       {text}
     </span>
   );

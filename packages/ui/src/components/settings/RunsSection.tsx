@@ -135,8 +135,7 @@ export function RunsSection({ config }: { config: LocalConfig | null }) {
   const filtered = hasActiveRunsFilter(filter, current);
   const nextWindow = WINDOWS.find((w) => w > windowSize);
 
-  const desc =
-    "Every hermetic command this laptop ran — at the CLI or from this app. Nothing here is read from the fleet.";
+  const desc = "This laptop's commands, from the CLI or this app. Nothing here is read from the fleet.";
 
   if (error) {
     return (

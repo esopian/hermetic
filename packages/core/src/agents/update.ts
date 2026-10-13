@@ -475,6 +475,15 @@ export function createUpdate(deps: UpdateDeps) {
     const nowCommand = (target: string) => `\`hermetic upgrade ${target} --hermes ${version} --now\``;
 
     /**
+     * Where step `step` (0 to 1) of agent `index`'s own share sits on the run's
+     * bar: after the mirror, and short of 1, which only the run's `done` says.
+     * Every per-agent event used to carry `(index + 1) / n`, so a one-agent
+     * `--now` read 100% from the upload on, through the whole converge wait.
+     */
+    const barAt = (index: number, step: number): number =>
+      mirrorProgress + ((0.98 - mirrorProgress) * (index + step)) / targets.length;
+
+    /**
      * One agent's hermes upgrade. It takes the agent's TTL lock (§4.4) for the
      * same reason `create` and `destroy` do: it rewrites the pin and the
      * `config_hash`, and two operators doing that at once would race the row.
@@ -485,7 +494,7 @@ export function createUpdate(deps: UpdateDeps) {
      * other operator's write for nothing.
      */
     async function* upgradeOne(target: Agent, index: number): AsyncGenerator<OpEvent, UpgradeOutcome> {
-      const progress = (index + 1) / targets.length;
+      const progress = barAt(index, 1);
       let agent = await acquireLock(target, owner);
       let asked: string | null = null;
       try {
@@ -513,7 +522,7 @@ export function createUpdate(deps: UpdateDeps) {
           );
           return "pinned";
         }
-        yield evt(`${agent.name}:render`, progress, uploaded, nowIso());
+        yield evt(`${agent.name}:render`, barAt(index, 0.25), uploaded, nowIso());
 
         /**
          * The same deferral a rollout gives (`converge.ts`): a box that is not
@@ -547,7 +556,12 @@ export function createUpdate(deps: UpdateDeps) {
         if (latest?.lock?.owner === owner) await releaseLock(latest);
       }
 
-      yield evt(`${agent.name}:requested`, progress, `${agent.name} asked to apply ${asked}`, nowIso());
+      yield evt(
+        `${agent.name}:requested`,
+        barAt(index, 0.5),
+        `${agent.name} asked to apply ${asked}; waiting for the box to restart Hermes on ${version}`,
+        nowIso(),
+      );
       const outcome = await converge.waitForConverge(agent.name, asked, opts.signal);
       // An abort ends the wait early; it is the operator hanging up, not a box
       // that stayed silent, and is reported as such rather than as unconverged.
@@ -603,7 +617,7 @@ export function createUpdate(deps: UpdateDeps) {
         if (e instanceof HermeticError && e.code === "LOCKED" && parsed.all) {
           yield evt(
             `${target.name}:skipped`,
-            (index + 1) / targets.length,
+            barAt(index, 1),
             `${target.name} is locked by another operator; skipped`,
             nowIso(),
             "warn",
@@ -618,12 +632,7 @@ export function createUpdate(deps: UpdateDeps) {
       else if (outcome === "skipped") deferred += 1;
       else if (outcome === "unconverged") unconverged += 1;
       else {
-        yield evt(
-          `${target.name}:done`,
-          (index + 1) / targets.length,
-          `${target.name} upgraded`,
-          nowIso(),
-        );
+        yield evt(`${target.name}:done`, barAt(index, 1), `${target.name} upgraded`, nowIso());
       }
     }
 

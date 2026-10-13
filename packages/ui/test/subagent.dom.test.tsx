@@ -12,7 +12,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, render, screen, userEvent, waitFor, within } from "./dom.ts";
 import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import { Thread } from "../src/chat/components/Thread.tsx";
-import { EVENT_DENSITY_KEY } from "../src/chat/event-density.ts";
 import { deliver, harness, mount } from "./chat-observe-fixtures.tsx";
 import {
   botTurn,
@@ -31,7 +30,6 @@ import {
 
 afterEach(() => {
   cleanup();
-  window.localStorage.removeItem(EVENT_DENSITY_KEY);
 });
 
 function thread(messages: ChatMessageView[], live: ChatMessageView | null = null) {
@@ -219,28 +217,6 @@ describe("drawing", () => {
     const k = done({ origin: "history" });
     thread(turn(delegateTool("call-delegate", "ok"), k));
     expect(line(k.subagent_id)?.classList.contains("sa-enter")).toBe(false);
-  });
-
-  test("FAILURES ONLY keeps a successful child as a dimmed line with no detail", () => {
-    window.localStorage.setItem(
-      EVENT_DENSITY_KEY,
-      JSON.stringify({ [["fleet", "silent-crane", "default", ""].join("/")]: "failures" }),
-    );
-    const ok = done({ task_index: 0, task_count: 2 });
-    const bad = failed({ task_index: 1, task_count: 2 });
-    thread(turn(delegateTool("call-delegate", "ok"), ok, bad));
-    // The switch is offered in a thread that delegated, and it is on.
-    expect(screen.getByRole("button", { name: /failures only/i }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    const okLine = line(ok.subagent_id)!;
-    expect(okLine.classList.contains("dim")).toBe(true);
-    expect(text(okLine.querySelector(".sa-act"))).toBe("");
-    expect(text(okLine.querySelector(".sa-goal"))).toBe(ok.goal);
-    expect(line(bad.subagent_id)?.classList.contains("dim")).toBe(false);
-    expect(text(line(bad.subagent_id)!.querySelector(".sa-act.error"))).toContain("Could not finish");
-    // Nothing opened on its own.
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 
