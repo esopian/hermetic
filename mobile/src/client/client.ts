@@ -322,6 +322,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
    */
   const ackFocused = () => {
     if (phase !== "active" || !watched?.focused) return;
+    roster.markSeen(watched.instance, watched.bot);
     void inbox.ackThread(watched.instance, watched.bot);
   };
 

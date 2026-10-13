@@ -312,13 +312,11 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
         // `turn.end` of every turn it ends, can still reach a socket that is
         // open. Best effort — a refusal that settles after the sockets close
         // is lost, and the phone's retry is refused the same way.
-        // `push.close()` cancels the receipt poll and drops every ticket still
-        // waiting on one; it runs even if stopping the turns fails.
-        try {
-          await turns.stopAll();
-        } finally {
-          push.close();
-        }
+        // A failed stop must not strand the rest of the close: the sockets,
+        // the pool and the listener still go. `push.close()` cancels the
+        // receipt poll and drops every ticket still waiting on one.
+        await turns.stopAll().catch(() => undefined);
+        push.close();
         hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
         await pool.stop();
         // Let the 1001s reach their sockets before the listener goes.

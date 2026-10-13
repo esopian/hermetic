@@ -274,13 +274,14 @@ export class NotificationsStore {
     // unacknowledged but was never in `unread`.
     let cleared = 0;
     let needs = 0;
-    const counted: string[] = [];
+    const counted: Array<[string, { needs: boolean }]> = [];
     const rows = this.state.rows.map((r) => {
       if (!wanted.has(r.id) || r.read_at) return r;
       if (isUnreadRow(r)) {
         cleared += 1;
-        counted.push(r.id);
-        this.inflight.set(r.id, { needs: r.class === "needs_action" });
+        const entry = { needs: r.class === "needs_action" };
+        counted.push([r.id, entry]);
+        this.inflight.set(r.id, entry);
         if (r.class === "needs_action") needs += 1;
       }
       return { ...r, read_at: now };
@@ -297,7 +298,8 @@ export class NotificationsStore {
     } catch {
       void this.refresh();
     } finally {
-      for (const id of counted) this.inflight.delete(id);
+      // Only this ack's entries: a later ack of the same row owns a newer one.
+      for (const [id, entry] of counted) if (this.inflight.get(id) === entry) this.inflight.delete(id);
     }
   }
 

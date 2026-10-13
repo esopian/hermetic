@@ -175,6 +175,27 @@ describe("NotificationsStore", () => {
     expect(store.getState().counts).toEqual({ unread: 3, needs_action: 1 });
   });
 
+  test("a late ack answer leaves a newer ack of the same row in flight", async () => {
+    const { store, source } = setup();
+    const answers: Array<() => void> = [];
+    source.ack.mockImplementation(
+      () => new Promise<{ acked: number }>((resolve) => answers.push(() => resolve({ acked: 1 }))),
+    );
+    await store.refresh();
+    const first = store.ack(["a"]);
+    // A refresh answered before the first ack applied puts "a" back to unread.
+    await store.refresh();
+    const second = store.ack(["a"]);
+    answers[0]?.();
+    await first;
+    // The second ack is still unanswered, so a frame counted before it applied
+    // must still have "a" taken off.
+    store.ingest(notification({ id: "c", at: "2026-10-13T11:00:00Z" }), { unread: 3, needs_action: 0 });
+    expect(store.getState().counts.unread).toBe(2);
+    answers[1]?.();
+    await second;
+  });
+
   test("ackThread marks a conversation's rows read optimistically", async () => {
     const { store, source } = setup();
     await store.refresh();

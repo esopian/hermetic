@@ -123,6 +123,7 @@ export class PinController {
   readonly touch = { dragging: false, momentum: false };
   private insetTimer: unknown = null;
   private graceTimer: unknown = null;
+  private disposed = false;
 
   constructor(
     private readonly deps: {
@@ -192,6 +193,7 @@ export class PinController {
 
   onInset(bottom: number): void {
     this.size.inset = bottom;
+    if (this.disposed) return;
     if (this.insetTimer !== null) this.timers.clear(this.insetTimer);
     this.insetTimer = this.timers.set(() => {
       this.insetTimer = null;
@@ -212,6 +214,7 @@ export class PinController {
     }
     // A fling ends the touch at momentum end, unless the momentum never begins.
     this.cancelGrace();
+    if (this.disposed) return;
     this.graceTimer = this.timers.set(() => {
       this.graceTimer = null;
       this.repinIfFree();
@@ -230,6 +233,7 @@ export class PinController {
 
   /** Drop pending timers (unmount). */
   dispose(): void {
+    this.disposed = true;
     this.cancelGrace();
     if (this.insetTimer !== null) this.timers.clear(this.insetTimer);
     this.insetTimer = null;
