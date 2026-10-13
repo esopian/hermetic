@@ -105,18 +105,13 @@ export const TEARDOWN_PLANNING = "teardown:planning";
  * started before this one keep streaming to completion regardless of what
  * happens to `state.hermetic` below (see `OpRegistry` and
  * `AppState.resetToUninitialized`).
- *
- * Called as the op starts, so the phone bridge stops here: it must not keep
- * serving the fleet being deleted until the reset swaps the instance. The
- * `sync()` once the state has settled starts it again where there is a fleet.
  */
 export function afterTeardown(
-  { state, ops, mobile }: HandlerContext,
+  { state, ops }: HandlerContext,
   opId: string,
   plan: { summary?: PlanSummary; warnings: string[] },
   resetLocal: boolean,
 ): void {
-  void mobile?.stop("teardown");
   void ops.wait(opId).then(async (summary) => {
     /**
      * The block outlives the op. `endTeardown()` used to run first, which
@@ -145,8 +140,6 @@ export function afterTeardown(
       }
     } finally {
       state.endTeardown();
-      // A reset swapped (or dropped) the instance the phone bridge serves.
-      void mobile?.sync();
     }
   });
 }

@@ -264,10 +264,11 @@ jobs:
   # bun.lock, not a root workspace). Gated by the same `changes` pattern as
   # `site` and for the same reason: it always runs, so the `ci` aggregate never
   # sees it `skipped`, and the gate only decides whether the later steps do
-  # work. The paths are the phone's own tree plus the three core/ui files it
-  # mirrors or reads through the wire (the bridge, its Zod shapes, the desktop
-  # markdown parser the phone copies byte for byte); the root seam tests
-  # (`tests/mobile-*.test.ts`) run in the `test` job. `expo export` proves the
+  # work. The paths are the phone's own tree plus what it imports from core
+  # (the chat adapter and its `chat-client` door, the Zod schemas, the shared
+  # helpers, core's package.json exports map) and the desktop markdown parser
+  # it copies byte for byte; the root seam tests (`tests/mobile-*.test.ts`)
+  # run in the `test` job. `expo export` proves the
   # Metro bundle builds, which typecheck and Jest do not. It is JavaScript
   # only, so an ubuntu runner is enough; nothing here builds or signs an iOS
   # binary.
@@ -293,13 +294,15 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only "$BASE_SHA"...HEAD)
-          if echo "$changed" | grep -qE '^(mobile/|packages/core/src/mobile/|packages/core/src/schema/mobile\.ts$|packages/ui/src/chat/chat-markdown\.ts$)'; then
+          if echo "$changed" | grep -qE '^(mobile/|packages/core/src/chat/|packages/core/src/chat-client|packages/core/src/schema/|packages/core/src/shared/|packages/core/package\.json$|packages/ui/src/chat/chat-markdown\.ts$)'; then
             echo "mobile=true" >> "$GITHUB_OUTPUT"
           else
             echo "mobile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The root setup action installs bun and the root workspace. mobile/ has
+      # The root setup action installs bun and the root workspace, and the root
+      # install is required here: Metro resolves `@hermetic/core/*` through
+      # `../packages/core` and `zod` from the root `node_modules`. mobile/ has
       # its own lockfile and is not part of that install.
       - uses: ./.github/actions/setup
         if: steps.changes.outputs.mobile == 'true'

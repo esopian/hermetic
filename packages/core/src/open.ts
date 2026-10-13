@@ -23,7 +23,6 @@ import { localBuild, resolveHermeticd, type HermeticdCandidate } from "./release
 import { HANDOFF_WATCH_MS } from "./agents/handoff.ts";
 import { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS } from "./agents/state.ts";
 import { join } from "node:path";
-import { SqliteMobileStore } from "./mobile/device-store.ts";
 import { HermeticError } from "./errors.ts";
 import { fixtureBedrockCatalog, fixtureModelFetch } from "./profiles/model-catalog.ts";
 import {
@@ -361,8 +360,6 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       incarnations: new SqliteIncarnationStore(local.db),
       // §4.6's create presets: a laptop preference, so the fixture database's.
       presets: new SqlitePresetStore(local.db),
-      // Paired phones survive a `dev:fixture` restart, in the fixture database.
-      mobile: new SqliteMobileStore(local.db),
       configStore: configStoreFor(local),
       ...FIXTURE_PREFLIGHT,
       /**
@@ -456,8 +453,6 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     incarnations: new SqliteIncarnationStore(local.db),
     /** §4.6: this laptop's create presets, one `prefs` row. */
     presets: new SqlitePresetStore(local.db),
-    /** The mobile bridge's paired phones and settings (`mobile/`). */
-    mobile: new SqliteMobileStore(local.db),
     configStore: configStoreFor(local),
     initSupport: { listProfiles: listAwsProfiles, resolveIdentity, describeFoundation },
     ...opts.preflight,

@@ -1,8 +1,9 @@
 /**
  * A minimal QR Code encoder: byte mode, error correction level L, versions 1
- * to 10 (up to 271 bytes) — enough for a `hermetic://pair?…` URL, and nothing
- * more. It exists so `hermetic mobile pair` can draw its QR in a terminal and
- * the desktop Settings page can draw the same one as SVG without a dependency.
+ * to 40 (up to 2,953 bytes) — enough for a `hermetic://fleet?…` pairing link
+ * naming a large fleet, and nothing more. It exists so `hermetic mobile pair`
+ * can draw its QR in a terminal and the desktop Settings page can draw the
+ * same one as SVG without a dependency.
  *
  * Follows ISO/IEC 18004 in the shape of Project Nayuki's reference encoder:
  * function patterns, Reed–Solomon over GF(2^8) with 0x11D, interleaved blocks,
@@ -13,10 +14,16 @@
  * the browser (`packages/core/test/shared-browser-safe.test.ts`).
  */
 
-/** Error-correction codewords per block and the block count, for level L, versions 1–10. */
-const ECC_PER_BLOCK_L = [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18];
-const BLOCKS_L = [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4];
-const MAX_VERSION = 10;
+/** Error-correction codewords per block and the block count, for level L, versions 1–40. */
+const ECC_PER_BLOCK_L = [
+  -1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26,
+  28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30,
+];
+const BLOCKS_L = [
+  -1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15,
+  16, 17, 18, 19, 19, 20, 21, 22, 24, 25,
+];
+const MAX_VERSION = 40;
 
 export interface QrMatrix {
   size: number;
@@ -126,7 +133,8 @@ function interleave(data: readonly number[], ver: number): number[] {
 function alignmentPositions(ver: number, size: number): number[] {
   if (ver === 1) return [];
   const numAlign = Math.floor(ver / 7) + 2;
-  const step = Math.ceil((ver * 4 + 4) / (numAlign * 2 - 2)) * 2;
+  // Nayuki's closed form; it gives version 32 its irregular step of 26.
+  const step = Math.floor((ver * 8 + numAlign * 3 + 5) / (numAlign * 4 - 4)) * 2;
   const result = [6];
   for (let pos = size - 7; result.length < numAlign; pos -= step) result.splice(1, 0, pos);
   return result;
@@ -245,7 +253,7 @@ function penalty(m: boolean[][], size: number): number {
   return score;
 }
 
-/** Encode `text` (UTF-8). Throws if it does not fit in version 10-L. */
+/** Encode `text` (UTF-8). Throws if it does not fit in version 40-L. */
 export function encodeQr(text: string): QrMatrix {
   const bytes = utf8(text);
   let ver = 1;

@@ -13,7 +13,6 @@ import type { OpRegistry } from "../ops.ts";
 import type { FleetPoller } from "../poller.ts";
 import type { AppState } from "../state.ts";
 import type { TerminalHost } from "../terminal/host.ts";
-import type { MobileHost } from "../mobile-host.ts";
 import type { StreamRegistry } from "./streams.ts";
 
 /**
@@ -116,13 +115,6 @@ export interface HandlerContext {
    * refuses the `terminal.*` requests `UNSUPPORTED` and ignores their messages.
    */
   terminals?: TerminalHost;
-  /**
-   * The phone companion's bridge, one per process like the terminals: it
-   * outlives every window. Optional for the same reason — a context built
-   * without one refuses `mobile.serve` `UNSUPPORTED`, and `mobile.settings`
-   * writes the setting without moving anything.
-   */
-  mobile?: MobileHost;
 }
 
 /**

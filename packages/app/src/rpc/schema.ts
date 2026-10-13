@@ -154,8 +154,6 @@ export type MachineryRequests = {
   "chat.turn.abort": RpcRequest<StreamRef, StreamClosed>;
   "chat.subscribe": RpcRequest<Input<typeof chat.ChatSubscribeRequest>, { stream_id: string }>;
   "chat.unsubscribe": RpcRequest<StreamRef, StreamClosed>;
-  /** The close half of `mobile.serve`. */
-  "mobile.unsubscribe": RpcRequest<StreamRef, StreamClosed>;
   "chat.observe.resume": RpcRequest<
     Input<typeof chat.chatObserveSchema>,
     Answer<typeof chat.observeResume>
@@ -238,7 +236,6 @@ export const MACHINERY_REQUEST_NAMES = [
   "chat.turn.abort",
   "chat.subscribe",
   "chat.unsubscribe",
-  "mobile.unsubscribe",
   "chat.observe.resume",
   "logs.open",
   "logs.close",
@@ -288,8 +285,6 @@ export type WebviewMessages = {
   "op.event": { op_id: string; msg: StreamFrame };
   "fleet.event": { event: StreamFrame };
   "chat.event": { event: StreamFrame };
-  /** The mobile bridge's `status` and events (`mobile.serve`), named like a fleet event. */
-  "mobile.event": { event: StreamFrame };
   /** `frame` and `done` are core's `ChatFrame`s; see `PublicRequests` on why they are not typed. */
   "chat.frame": { stream_id: string; frame?: unknown; done?: unknown };
   /** `line` is core's `LogLine`; `done` is the tail's `{ ok }`. */
@@ -374,7 +369,6 @@ export const MESSAGE_FOR_REQUEST = {
   logs: "logs.line",
   "logs.open": "logs.line",
   "terminal.attach": "terminal.frame",
-  "mobile.serve": "mobile.event",
 } as const satisfies Record<string, WebviewMessageName>;
 
 export type StreamingRequestName = keyof typeof MESSAGE_FOR_REQUEST;

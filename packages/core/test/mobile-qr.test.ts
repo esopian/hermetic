@@ -1,8 +1,9 @@
 /**
- * The pair URL's QR encoder (`shared/qr.ts`). The two pinned matrices were
+ * The pairing link's QR encoder (`shared/qr.ts`). The pinned matrices were
  * decoded back to their exact input by macOS CoreImage's QR detector when the
- * encoder was written (versions 1, 5, 7 and 10 were checked that way); the
- * hashes catch any change to what it draws. The structural checks below hold
+ * encoder was written (versions 1, 5, 7 and 10 were checked that way) and when
+ * it grew to version 40 (11, 18, 25, 31, 32, 36 and 40 were); the hashes
+ * catch any change to what it draws. The structural checks below hold
  * for any input.
  */
 import { describe, expect, test } from "bun:test";
@@ -43,14 +44,24 @@ describe("encodeQr", () => {
     expect(hash(encodeQr("Z".repeat(250)))).toBe(
       "223c87c4b65e5454d8de1004e59a4d58353355884026050411e30fc148d2fa64",
     );
+    // Version 32, whose alignment step is the irregular one, and version 40.
+    expect(encodeQr("Z".repeat(1850)).size).toBe(145);
+    expect(hash(encodeQr("Z".repeat(1850)))).toBe(
+      "78bee91992c5910776c2123aedd0ee0f5a26f80117138bda5cddbdc0143f41f3",
+    );
+    expect(hash(encodeQr("Z".repeat(2953)))).toBe(
+      "4b2e8b3ebda6a2fc253b1f9c53fd465ff8ec5736ce638cf85d51e909beca875e",
+    );
   });
 
-  test("the smallest version that fits is chosen, up to 10", () => {
+  test("the smallest version that fits is chosen, up to 40", () => {
     expect(encodeQr("hi").size).toBe(21);
     expect(encodeQr("x".repeat(17)).size).toBe(21);
     expect(encodeQr("x".repeat(18)).size).toBe(25);
     expect(encodeQr("x".repeat(271)).size).toBe(57);
-    expect(() => encodeQr("x".repeat(272))).toThrow(RangeError);
+    expect(encodeQr("x".repeat(272)).size).toBe(61);
+    expect(encodeQr("x".repeat(2953)).size).toBe(177);
+    expect(() => encodeQr("x".repeat(2954))).toThrow(RangeError);
   });
 
   test("finders, timing and a valid level-L format word", () => {

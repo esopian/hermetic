@@ -12,8 +12,9 @@ flowchart LR
         ui["ui\nReact, webview only"]
     end
     core["core\nHermetic SDK"]
-    bridge["mobile bridge\nHTTP + WebSocket, in core"]
     phone["mobile/\nExpo phone app"]
+    gw["Hermes gateway\non each box"]
+    hd["hermeticd\n:7434 on each box"]
     subgraph backends["Backend implementations"]
         aws["AwsBackend"]
         mem["MemoryBackend\n(fixture)"]
@@ -22,21 +23,22 @@ flowchart LR
     cli -- "in-process" --> core
     app -- "in-process" --> core
     ui -- "Electrobun RPC" --> app
-    phone -- "paired, tailnet" --> bridge
-    bridge -- "hosted by cli or app" --> core
+    phone -- "tailnet 443, chat" --> gw
+    phone -- "tailnet 7434, fleet + push" --> hd
+    phone -. "imports adapter via core/chat-client" .-> core
     core -- "one Backend interface" --> aws
     core -- "one Backend interface" --> mem
 ```
 
 `cli` and `app` both import `core` in-process and call the same `Hermetic` instance methods; there is no daemon between them. `ui` never imports `core` — it is the page the app loads from a `views://` URL, and it talks to the main process over Electrobun RPC typed by the one shared contract, `HermeticRPC` (`packages/app/src/rpc/schema.ts`), so a field renamed in a core schema fails the UI's typecheck rather than its runtime. There is no socket, no port and no HTTP between the two. `agentd` is not a head over this core at all: it imports only `@hermetic/core/schema` and runs its own loop on the instance (see below).
 
-## The phone and the mobile bridge
+## The phone
 
-The Expo phone app in `mobile/` is a remote head beside those three: it never imports core and never reaches AWS or a box's gateway. It talks to the **mobile bridge**, an HTTP and WebSocket server that lives in core (`packages/core/src/mobile/`, one Bun HTTP server) and is hosted *by a head*: the desktop app when Settings → Mobile is on (`packages/app/src/mobile-host.ts`), or the CLI's `hermetic mobile serve` in the foreground. Both host the same bridge over the same `Hermetic` instance, so the phone sees what that laptop's core sees, and the two never need to run together (the desktop-hosted bridge leaves the `chat.swarms` tick to the app's poller, the headless one runs its own). The only thing the phone loads from elsewhere is a box's noVNC page, over the tailnet.
+The Expo phone app in `mobile/` is a client of the fleet, not a head of the laptop's core: there is no laptop bridge and no process on the laptop that a phone connects to. It talks to each box directly over the tailnet. Chat goes to the box's Hermes gateway on 443 through the adapter the desktop uses (`createHermesChat`, `createChatObservation`), which the phone imports through a fourth core door, `@hermetic/core/chat-client` (`packages/core/src/chat-client.ts`); the fleet list and push-token registration go to hermeticd on 7434; and the agent browser's noVNC page loads from the box over the same tailnet. The phone's authentication is the laptop's, tailnet membership (the ACL admits `autogroup:member`, §5.2) plus hermeticd's `tailscale whois` gate. It holds no credential and no AWS client.
 
-The bridge is a narrow door, not a second SDK. A phone reaches only `MOBILE_ALLOWED_METHODS` (`protocol.ts`), plus `chat.send` and `chat.observe` as socket turns and subscriptions that the bridge owns end to end: it buffers each turn's frames so a phone that locked mid-reply resumes by the bridge's own counter, fans one observation out to every socket, polls the inbox, and pushes through an injectable sender (Expo in real mode, an in-memory recorder in fixtures and tests). Pairing, device tokens (stored as sha256), the fleet guard and the push settings live there too; design.md §9.4 is the behavior and `mobile.pair`, `.devices`, `.revoke`, `.settings` and `.serve` are the parity-checked methods that manage it.
+The laptop's only mobile role is pairing. `mobile.pair` (CLI `hermetic mobile pair`, desktop Settings → Pair a phone) reads the fleet and returns a `hermetic://fleet?v=2&…` link carrying the fleet identity and a snapshot of the agent list, rendered as a QR. The link has no secret (`shared/mobile-link.ts`, parsed by the phone through `@hermetic/core/shared`). Live refresh is hermeticd's read-only `GET /fleet`, served from a DynamoDB Scan the foundation grants the box's role from version 16. Push is box-side: hermeticd's gateway watcher polls its own gateway's `session.active_list`, turns transitions into `turn.done`, `turn.error`, `needs_action` and `message`, and sends them to Expo for the phones registered through `POST /push/devices`; each push carries a `dedupe` key so the phone drops one its live socket already showed. Design.md §9.4 is the behavior.
 
-`mobile/` is not a workspace: its own `package.json`, `bun.lock`, Jest and Biome, like `site/`, and nothing in it imports `packages/`, because Metro would bundle core's Zod, AWS and node with it. What it shares with core it mirrors, and root tests pin every mirror since no package may import both sides: `tests/mobile-seams.test.ts` compares the phone's protocol constants with core's `protocol.ts` and its markdown parser with the desktop's `chat-markdown.ts`, and `tests/mobile-bridge-e2e.test.ts` runs the phone's pure client layer (`mobile/src/client/`, no React, no Expo) against a real bridge over the fixture fleet. The phone's UI, unlike the desktop page, is written for a phone; the desktop page stays desktop-only.
+`mobile/` is not a workspace: its own `package.json`, `bun.lock`, Jest and Biome, like `site/`. Metro resolves `@hermetic/core/<door>` to the door file (`mobile/metro.config.js`, with `watchFolders` for `../packages/core` and the root `node_modules`), so CI and a laptop install the root workspace before the phone. What it may import from core is the import matrix in `AGENTS.md` and `tests/boundaries.test.ts`: `schema`, `shared` and `chat-client`, with `chat-client-fixture` only from `mobile/src/fixture/`, and never a relative path into `packages/`. `chat-client` and `shared` are held browser- and Hermes-runtime-safe by `packages/core/test/chat-client-portable.test.ts`. The root seam tests are `tests/mobile-link-seam.test.ts`, `tests/mobile-box-seams.test.ts` and `tests/mobile-gateway-e2e.test.ts`, which drives the phone's gateway client against a scripted Hermes-wire server. The phone's UI, unlike the desktop page, is written for a phone; the desktop page stays desktop-only.
 
 ## Where to start reading, per package
 
@@ -62,9 +64,7 @@ The chat stack (§9.2) has two layers. `chat/hermes/hermes-chat.ts` is the Herme
 
 **ui** (`packages/ui/src/`). The app's page — `packages/ui/index.html`, loaded from a `views://` URL, with its fonts vendored in `packages/ui/fonts/` so nothing is fetched at render time. `api/` is the typed door to the main process (`transport.ts` is the seam, `transport-rpc.ts` the Electrobun RPC implementation of it, `client.ts` the per-method calls over it, `streams.ts` the readers for the open/close subscription pairs, `fleet.ts`/`chat.ts` the per-area calls). Rules live in pure, DOM-free modules — `volume-logic.ts`, `loading.ts`, `chat-logic.ts`, `chat-turns.ts`, `notification-logic.ts`, `settings-logic.ts`, `provider-logic.ts`, `selectors.ts`, `create-form.ts`, `destroy-plan.ts` — and rendering in `components/` (`agent/`, `chat/`, `settings/`, `notify/`, plus the fleet board, drawers, `InitWizard`, `TeardownDrawer` and the `Loading` vocabulary). `loading.ts` is the rule that an empty list is never rendered as "nothing there" until a read has actually come back.
 
-**mobile bridge** (`packages/core/src/mobile/`). `protocol.ts` is the wire constants and the allowlist (pure values, mirrored by the phone); `server.ts` is `startMobileBridge` (one Bun HTTP server joining the parts below) over `http.ts` (the routes), `ws.ts` (the socket hub), `pairing.ts` (one-time codes and the failure limiter), `device-store.ts` (the `mobile_devices`/`mobile_pair_codes` tables, a memory twin for tests), `turns.ts` (frame buffers and resume), `notify-loop.ts` (the inbox poll and the headless roster tick) and `push.ts` (the notifier and the `PushSender`s). `index.ts` is the `mobile.*` surface and the `mobileBridgeHost` door a head hosts the bridge through; the Zod shapes are `schema/mobile.ts`, the QR encoder `shared/qr.ts`. The desktop's side is `packages/app/src/handlers/mobile.ts` and `mobile-host.ts`, the CLI's `packages/cli/src/commands/mobile.ts`, and the UI's `components/settings/MobileSection.tsx`.
-
-**mobile** (`mobile/`). The Expo app: `app/` (expo-router screens), `src/client/` and `src/protocol/` (pure TypeScript, the bridge client and the mirrors), `src/bridge/` (React glue, SecureStore, push), `src/chat/`, `src/bots/`, `src/inbox/`. `mobile/README.md` has the layout.
+**mobile** (`mobile/`). The Expo app: `app/` (expo-router screens), `src/gateway/` (the transport over `@hermetic/core/chat-client`: socket opener, polyfills, Tailscale status), `src/fleet/` (`FleetProvider.tsx`, the pairing link store, `/fleet` and push registration), `src/fixture/` (fixture mode, the only importer of `chat-client-fixture`), `src/inbox/store.ts` (the phone-local inbox), plus `src/chat/`, `src/bots/`. The box side is `packages/agentd/src/push/` (`watch.ts`, `devices.ts`, `sender.ts`) and the `GET /fleet` and `/push/devices` routes in `rpc.ts`; the laptop's side is `packages/core` `mobile.pair`, `packages/cli/src/commands/mobile.ts`, `packages/app/src/handlers/mobile.ts` and the UI's `components/settings/MobileSection.tsx`. `mobile/README.md` has the layout.
 
 ## The `Backend` interface
 

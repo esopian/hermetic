@@ -6,7 +6,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
-    "./shared": "./src/shared/index.ts"
+    "./shared": "./src/shared/index.ts",
+    "./chat-client": "./src/chat-client.ts",
+    "./chat-client-fixture": "./src/chat-client-fixture.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1132.0",

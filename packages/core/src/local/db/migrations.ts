@@ -549,52 +549,33 @@ const MIGRATIONS: Migration[] = [
   },
   {
     /**
-     * The mobile bridge's paired phones and one-time pair codes (`mobile/`).
-     * Local for the reason the inbox is: a phone pairs with *this laptop*, and
-     * a colleague on the same fleet pairs their own. Neither table ever holds
-     * a raw secret — a device is found by the sha256 of its token and a code
-     * by the sha256 of the code. A token is 256 random bits, so its hash gives
-     * a copied database nothing to sign in with. A code is only 40 bits: its
-     * hash slows a casual read, not a determined one, and what bounds a copied
-     * code is its ten-minute life and single use.
+     * Once the laptop mobile bridge's paired phones and pair codes. The bridge
+     * was removed before release (the phone now talks to the boxes over the
+     * tailnet), so this is a no-op. The name and version stay so a home that
+     * ran the original keeps a valid ladder; `mobile-tables-dropped` below
+     * removes whatever it created.
      */
     name: "mobile-devices",
     version: 16,
-    statements: [
-      `CREATE TABLE IF NOT EXISTS mobile_devices (
-         device_id       TEXT PRIMARY KEY,
-         name            TEXT NOT NULL,
-         platform        TEXT NOT NULL,
-         token_sha256    TEXT NOT NULL UNIQUE,
-         created_at      TEXT NOT NULL,
-         last_seen_at    TEXT,
-         expo_push_token TEXT,
-         previews        INTEGER NOT NULL DEFAULT 1,
-         enabled         INTEGER NOT NULL DEFAULT 1,
-         revoked_at      TEXT
-       )`,
-      `CREATE TABLE IF NOT EXISTS mobile_pair_codes (
-         code_sha256 TEXT PRIMARY KEY,
-         created_at  TEXT NOT NULL,
-         expires_at  TEXT NOT NULL,
-         used_at     TEXT,
-         name_hint   TEXT
-       )`,
-    ],
+    statements: [],
   },
   {
     /**
-     * The fleet a phone was paired for. A device token is home-wide, but the
-     * bridge follows the desktop's fleet switch, so without this a phone
-     * paired on one fleet would authenticate on the next and be shown it. The
-     * bridge refuses a device whose `fleet_id` is not the fleet it serves
-     * (`WRONG_FLEET`), and a row from before this column (`NULL`) is refused
-     * outright: such a phone pairs again.
+     * Once a `fleet_id` column on the bridge's `mobile_devices`. A no-op for
+     * the same reason as `mobile-devices`, and kept for the same ladder.
      */
     name: "mobile-devices-fleet",
     version: 17,
     statements: [],
-    columns: [{ table: "mobile_devices", column: "fleet_id", type: "TEXT" }],
+  },
+  {
+    /**
+     * The laptop mobile bridge's tables, gone with the bridge. `IF EXISTS`,
+     * because only a home that ran the original 16 has them.
+     */
+    name: "mobile-tables-dropped",
+    version: 18,
+    statements: ["DROP TABLE IF EXISTS mobile_devices", "DROP TABLE IF EXISTS mobile_pair_codes"],
   },
 ];
 

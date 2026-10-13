@@ -68,11 +68,7 @@ import {
   ListVolumesInput as ListVolumesInputSchema,
   NetworkStatusInput as NetworkStatusInputSchema,
   LogsInput as LogsInputSchema,
-  MobileDevicesInput as MobileDevicesInputSchema,
   MobilePairInput as MobilePairInputSchema,
-  MobileRevokeInput as MobileRevokeInputSchema,
-  MobileServeInput as MobileServeInputSchema,
-  MobileSettingsInput as MobileSettingsInputSchema,
   NotificationsAckInput as NotificationsAckInputSchema,
   NotificationsClearInput as NotificationsClearInputSchema,
   NotificationsListInput as NotificationsListInputSchema,
@@ -187,13 +183,8 @@ export const PUBLIC_METHODS = [
   "chat.steer",
   // §9.2: a watch on one conversation, independent of any send.
   "chat.observe",
-  // The phone companion's bridge: pairing, paired devices and the bridge's own
-  // settings are this laptop's SQLite; `mobile.serve` is the server itself.
+  // The phone companion's pairing link: a read of the fleet, no secret in it.
   "mobile.pair",
-  "mobile.devices",
-  "mobile.revoke",
-  "mobile.settings",
-  "mobile.serve",
   "artifacts.push",
   "teardown",
   "doctor",
@@ -344,16 +335,7 @@ export const REQUEST_SCHEMAS = {
    * what makes reconnecting to it safe.
    */
   "chat.observe": ChatObserveInputSchema,
-  /**
-   * Like `chat.send`, `mobile.serve` returns an `AsyncIterable` and is *not* in
-   * `STREAMING_METHODS`: it is a server that runs until it is stopped, with no
-   * run record to replay and nothing to resume.
-   */
   "mobile.pair": MobilePairInputSchema,
-  "mobile.devices": MobileDevicesInputSchema,
-  "mobile.revoke": MobileRevokeInputSchema,
-  "mobile.settings": MobileSettingsInputSchema,
-  "mobile.serve": MobileServeInputSchema,
   // The HTTP surface may name a version and nothing else: a browser must not be
   // able to name a path on the server's filesystem.
   "artifacts.push": ArtifactsPushApiInputSchema,

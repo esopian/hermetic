@@ -28,7 +28,8 @@ Where to read for common tasks:
 - **Add a long operation** — a module with an explicit deps object, not another function in `hermetic.ts`. See rule 5.
 - **Bump `FOUNDATION_VERSION`** — see rule 7.
 - **Bump `chrome_ref`** — take the new Chrome for Testing zip's sha256 and byte size, edit `BUILD_VERSIONS.chrome_ref`/`chrome_sha256`/`chrome_size` (`packages/core/src/build-versions.ts`), then `hermetic artifacts push` to mirror it. A box gets the new pin when its config is rendered — `agent create` or `recreate`, not `rerun` (which only resumes an `error` agent). Same owner and cadence as `hermes_ref`; Chrome for Testing does not self-update. §7.3/§3.6.
-- **Mobile bridge** — `bun run cli -- mobile serve --fixture` (add `--host 127.0.0.1` for a simulator) serves the phone bridge over the fixture fleet, `mobile pair --fixture` prints the one-time code and QR, and Settings → Mobile does both from the desktop app. The wire protocol is design.md §9.4; its constants are `packages/core/src/mobile/protocol.ts`. Only `MOBILE_ALLOWED_METHODS` is reachable from a phone; `chat.send` and `chat.observe` run only as ws turns and subscriptions. Push goes through an injectable `PushSender` (`MobileDeps.push` / `StartMobileBridgeOptions.push`, `packages/core/src/mobile/push.ts`): Expo in real mode, an in-memory recorder in fixture mode, so nothing in a test reaches Expo. The phone app is `mobile/` and never imports `packages/`; `tests/mobile-seams.test.ts` pins its mirrors and `tests/mobile-bridge-e2e.test.ts` drives its client against the real bridge. Setup: [Phone app and mobile bridge](CONTRIBUTING.md#phone-app-and-mobile-bridge).
+- **Pair a phone** — `bun run cli -- mobile pair` (or desktop Settings → Pair a phone) prints the `hermetic://fleet?v=2&…` link and a QR; the phone needs the Tailscale app signed into the fleet's tailnet and scans it. The link carries no secret. `mobile pair --fixture` pairs the simulator against the fixture fleet.
+- **Mobile app** — `mobile/` talks to the fleet directly: chat through the Hermes gateway on each box (the adapter desktop uses, via the `@hermetic/core/chat-client` door), the fleet list and push-token registration through hermeticd (`GET /fleet`, `POST /push/devices`, port 7434), push sent by hermeticd's own watcher (`packages/agentd/src/push/`). There is no laptop bridge, no `mobile serve`, and the laptop's only mobile role is rendering the pairing QR (`mobile.pair`). Design is design.md §9.4. Run it with `EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios` in `mobile/` (the phone builds `fixtureChatClient` in process, no AWS, no tailnet). Seam tests: `tests/mobile-link-seam.test.ts`, `tests/mobile-box-seams.test.ts`, `tests/mobile-gateway-e2e.test.ts`. Setup: [Phone app](CONTRIBUTING.md#phone-app).
 - **Open a PR** — use `create-pr` (`.claude/skills/create-pr/SKILL.md`, also exposed to Codex through `.agents/skills/create-pr`), every time. See Conventions.
 - **Add a second fleet** — `hermetic init --attach --fleet <id|alias>` joins an existing foundation, `init --create` makes a new one. `hermetic fleet alias <fleet-id> <alias>` labels a fleet, `--clear` unlabels it, `fleet use <fleet-id|alias>` switches the local default. `fleet_id` is the identity; the alias is display only. §4.6/§4.8.
 
@@ -39,28 +40,29 @@ packages/core     SDK: all logic, all AWS, SQLite, DynamoDB. Zod schemas in pack
 packages/cli      Commander head. Imports core in-process. Never imports the app package.
 packages/app      Electrobun head: desktop main process, typed RPC over core; bundles ui's page.
 packages/ui       React. Webview only. Talks to the main process over Electrobun RPC.
-packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema` and `@hermetic/core/shared`.
+packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema`, `/shared` and `/chat-client`.
 ```
 
 `site/` — marketing + docs site, not a workspace, own toolchain, mobile in scope there (see `site/AGENTS.md`).
 
-`mobile/` — the Expo phone app, a remote head of the laptop's core through the mobile bridge. Not a workspace, own toolchain (bun, jest-expo, biome), never imports `packages/` (see `mobile/AGENTS.md`).
+`mobile/` — the Expo phone app: it reaches each box's Hermes gateway and hermeticd directly over the tailnet, with the laptop only rendering the pairing QR. Not a workspace, own toolchain (bun, jest-expo, biome); it may import `@hermetic/core/schema`, `/shared` and `/chat-client` (and `/chat-client-fixture` only from `mobile/src/fixture/`) and never a relative path into `packages/` (see `mobile/AGENTS.md`).
 
 ### Import boundaries
 
-The table below is the `ALLOWED` literal in `tests/boundaries.test.ts` — edit both together. That test parses every `packages/*/src` file with `Bun.Transpiler` and resolves every import, `export … from`, `import()` and `require()` specifier to one cell:
+The table below is the `ALLOWED` literal in `tests/boundaries.test.ts` — edit both together. That test parses every `packages/*/src` file, and every file in `mobile/src` and `mobile/app`, with `Bun.Transpiler` and resolves every import, `export … from`, `import()` and `require()` specifier to one cell:
 
-| From \ May import | core | core/schema | core/shared | cli | app | ui | agentd |
-|---|---|---|---|---|---|---|---|
-| **core** | — | — | — | no | no | no | no |
-| **cli** | yes | yes | yes | — | **no** | no | no |
-| **app** | yes | yes | yes | no | — | no | no |
-| **ui** | **no** | no | **yes** (browser-safe, values) | no | yes (types only, devDep) | — | no |
-| **agentd** | **no** | yes | yes | no | no | no | — |
+| From \ May import | core | core/schema | core/shared | core/chat-client | core/chat-client-fixture | cli | app | ui | agentd |
+|---|---|---|---|---|---|---|---|---|---|
+| **core** | — | — | — | — | — | no | no | no | no |
+| **cli** | yes | yes | yes | yes | no | — | **no** | no | no |
+| **app** | yes | yes | yes | yes | no | no | — | no | no |
+| **ui** | **no** | no | **yes** (browser-safe, values) | no | no | no | yes (types only, devDep) | — | no |
+| **agentd** | **no** | yes | yes | **yes** | no | no | no | no | — |
+| **mobile** | **no** | yes | yes | yes | `mobile/src/fixture/` only | no | no | no | no |
 
-A `no` covers `import type` too — a type-only import is still a dependency on the other package's shape. Only ui → app is types-only, and a devDependency: a value import from app inside the UI fails, and not a byte of the app may reach the bundle. A relative or absolute path escaping its package (`../../core/src/x.ts`) resolves to whatever `packages/<x>/` it lands in and hits the same table; bypassing the `exports` map, it can never count as `core/schema` however deep into `src/schema/` it reaches. A deep bare path like `@hermetic/core/index.ts` counts against the `core` column. The matrix has no exceptions.
+A `no` covers `import type` too — a type-only import is still a dependency on the other package's shape. Only ui → app is types-only, and a devDependency: a value import from app inside the UI fails, and not a byte of the app may reach the bundle. A relative or absolute path escaping its package (`../../core/src/x.ts`) resolves to whatever `packages/<x>/` it lands in and hits the same table; bypassing the `exports` map, it can never count as `core/schema` however deep into `src/schema/` it reaches. A deep bare path like `@hermetic/core/index.ts` counts against the `core` column. The phone app is stricter: a relative or absolute path from `mobile/` into `packages/` is refused outright, whatever it reaches, so the phone resolves core through the `exports` map alone. The matrix has no exceptions.
 
-Scope is each package's `src`. Package `test` trees are out (a test may read both sides of a seam — that is what root `tests/` is for). `scripts/` is not a package and has its own rule in the same file: relative into `packages/core/src`, no head, no `@hermetic/*`. The `core` `package.json` has zero `@hermetic/*` deps. The `core` `exports` map is exactly `{".": "./src/index.ts", "./schema": "./src/schema/index.ts", "./shared": "./src/shared/index.ts"}` — `schema` and `shared` are the only doors agentd can use, and `shared` (pure values and helpers, no Zod, no node; `packages/core/test/shared-browser-safe.test.ts`) is the only one the UI can. `schema/*` imports `shared/*`, never the reverse.
+Scope is each package's `src`, plus `mobile/src` and `mobile/app` for the phone. Package `test` trees are out (a test may read both sides of a seam — that is what root `tests/` is for). `scripts/` is not a package and has its own rule in the same file: relative into `packages/core/src`, no head, no `@hermetic/*`. The `core` `package.json` has zero `@hermetic/*` deps. The `core` `exports` map is exactly five doors: `{".": "./src/index.ts", "./schema": "./src/schema/index.ts", "./shared": "./src/shared/index.ts", "./chat-client": "./src/chat-client.ts", "./chat-client-fixture": "./src/chat-client-fixture.ts"}`. `schema`, `shared` and `chat-client` are the only doors agentd can use. `shared` (pure values and helpers, no Zod, no node; `packages/core/test/shared-browser-safe.test.ts`) is the only one the UI can. `chat-client` is the Hermes chat adapter (`createHermesChat`, `createChatObservation`, the chat wire types, the transcript mask), and nothing reachable from it may need node, bun or AWS, read `process.env`, or reach `chat-transport.ts`, `chat/chat.ts`, `backend/`, `aws/`, `local/` or the node renderers (`packages/core/test/chat-client-portable.test.ts`). `chat-client-fixture` is the canned chat client for the phone's fixture mode, and only `mobile/src/fixture/` may open it. `schema/*` imports `shared/*`, never the reverse.
 
 ## Parity contract
 

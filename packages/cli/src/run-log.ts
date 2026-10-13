@@ -102,7 +102,7 @@ export function annotateRun(target: RunTarget | null): void {
 const MAX_LOGGED_OUTPUT = 4 * 1024;
 
 /**
- * What goes in the `log` column. Three commands get nothing:
+ * What goes in the `log` column. Two commands get nothing:
  *
  * - `secrets push` reads a value from a prompt or stdin. It never reaches the
  *   transcript, but the log is redacted outright rather than relying on that
@@ -110,12 +110,12 @@ const MAX_LOGGED_OUTPUT = 4 * 1024;
  * - `runs` *prints* the log, so recording its output would fold every previous
  *   row into the next one — 295 bytes becomes 11 KiB in five invocations, and
  *   keeps squaring. The command that reads the log does not write to it.
- * - `mobile pair` prints a pair code, which pairs a phone until it expires.
+ *
+ * `mobile pair` is recorded like any read: its link names a fleet and holds
+ * no secret.
  */
 function loggedOutput(command: string): string {
   if (command.startsWith("secrets push")) return "[redacted]";
-  // A pair code is a credential until it expires; its screen is not a log line.
-  if (command.startsWith("mobile pair")) return "[redacted]";
   // Any command that read a secret this run — `agent create` with a provider
   // key, say — is redacted on the same principle rather than on a name.
   if (secretWasRead()) return "[redacted]";

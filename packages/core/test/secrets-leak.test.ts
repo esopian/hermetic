@@ -27,14 +27,12 @@ import { openForInit } from "../src/open.ts";
 import type { HermeticDeps } from "../src/hermetic.ts";
 import { drain, testHermetic } from "./helpers.ts";
 import { NO_DEVICES_SCOPE_NOTE } from "../src/fleet/preflight.ts";
-import type { ErrorCode, OpEvent, TailscaleOauthCheck } from "../src/schema/index.ts";
+import type { ErrorCode, TailscaleOauthCheck } from "../src/schema/index.ts";
 import { FLEET_KEY } from "../src/schema/index.ts";
 import { migrate } from "../src/local/db/index.ts";
 import { SqliteNotificationStore } from "../src/local/db/notifications.ts";
 import { notifyTerminalEvent } from "../src/chat/terminal-notifications.ts";
 import { openHermetic } from "../src/index.ts";
-import { generateToken } from "../src/mobile/pairing.ts";
-import { MOBILE_PROTOCOL, MOBILE_ROUTES } from "../src/mobile/protocol.ts";
 
 /**
  * §4.8: these walk `init --create`, so the account they describe has no fleets
@@ -85,21 +83,12 @@ const FIXTURE_SLUGS: readonly string[] = [
   ),
 ].sort();
 
-/**
- * A minted mobile device token (`mobile/pairing.ts`): `hmt_` and 32 random
- * bytes in base64url. Test tokens that are not real ones (`hmt_FIXTURE-…`) are
- * deliberately shorter, so only a minted token can match.
- */
-const MOBILE_TOKEN = /hmt_[A-Za-z0-9_-]{43}/;
-
 function assertClean(haystack: string) {
   for (const secret of SECRETS) {
     expect(haystack).not.toInclude(secret);
   }
   // Nor any tailscale key at all, whatever its value.
   expect(haystack).not.toMatch(/tskey-[A-Za-z0-9-]+/);
-  // Nor a phone's device token.
-  expect(haystack).not.toMatch(MOBILE_TOKEN);
 }
 
 /**
@@ -1043,46 +1032,15 @@ describe("terminal rows never carry a secret", () => {
   });
 });
 
-describe("a phone's device token never leaks", () => {
-  test("the pattern matches a minted token, and not a test sentinel", () => {
-    expect(generateToken()).toMatch(MOBILE_TOKEN);
-    expect("hmt_FIXTURE-not-a-token").not.toMatch(MOBILE_TOKEN);
-  });
-
-  test("pairing over the bridge: the token is in the pair answer and nowhere else", async () => {
+describe("the phone's pairing link carries no secret", () => {
+  test("mobile.pair: neither the link nor the result holds a fixture secret", async () => {
     const h = await openHermetic({
       fixture: true,
       home: mkdtempSync(join(tmpdir(), "hermetic-mobile-leak-")),
     });
-    const controller = new AbortController();
-    const events: OpEvent[] = [];
-    const it = h.mobile
-      .serve({ port: 0, tick_swarms: false }, { signal: controller.signal })
-      [Symbol.asyncIterator]();
-    events.push((await it.next()).value as OpEvent);
-    const serving = (await h.mobile.devices({})).serving;
-    if (serving === null) throw new Error("the bridge did not start");
-    const paired = await h.mobile.pair({ name: "FIXTURE phone" });
-    const res = await fetch(`${serving.url}${MOBILE_ROUTES.pair}`, {
-      method: "POST",
-      headers: { [MOBILE_PROTOCOL.VERSION_HEADER]: "1", "content-type": "application/json" },
-      body: JSON.stringify({ code: paired.code, device_name: "FIXTURE phone", platform: "ios" }),
-    });
-    const answer = await res.text();
-    // The one place it belongs.
-    expect(answer).toMatch(MOBILE_TOKEN);
-    const token = (JSON.parse(answer) as { token: string }).token;
-    const hello = await fetch(`${serving.url}${MOBILE_ROUTES.hello}`, {
-      headers: { [MOBILE_PROTOCOL.VERSION_HEADER]: "1", authorization: `Bearer ${token}` },
-    }).then((r) => r.text());
-    const devices = JSON.stringify(await h.mobile.devices({}));
-    const settings = JSON.stringify(await h.mobile.settings({}));
-    controller.abort();
-    for (let r = await it.next(); !r.done; r = await it.next()) events.push(r.value);
-    assertClean(JSON.stringify(events));
+    const paired = await h.mobile.pair({});
+    expect(paired.agents.length).toBeGreaterThan(0);
+    assertClean(paired.link);
     assertClean(JSON.stringify(paired));
-    assertClean(hello);
-    assertClean(devices);
-    assertClean(settings);
   });
 });

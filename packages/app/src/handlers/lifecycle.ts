@@ -68,7 +68,7 @@ export async function init(ctx: HandlerContext, params: unknown): Promise<Accept
       'init needs the twelve-digit account id typed back; send {"account_id_typed": "…"}',
     );
   }
-  return await startInit(state, ops, input, opts.log, () => void ctx.mobile?.sync());
+  return await startInit(state, ops, input, opts.log);
 }
 
 export async function teardown(ctx: HandlerContext, params: unknown): Promise<Accepted> {
@@ -115,10 +115,8 @@ export async function teardown(ctx: HandlerContext, params: unknown): Promise<Ac
     plan = await h.plan.teardown(input);
   } catch (e) {
     // Nothing ran, so nothing owns the slot; a failed plan must not leave the
-    // portal refusing every mutation until it is restarted. Nor the mobile
-    // bridge off: a sync that ran while the slot was held stopped it.
+    // portal refusing every mutation until it is restarted.
     state.endTeardown();
-    void ctx.mobile?.sync();
     throw e;
   }
   // The op id goes into the receipt (§4.6), so the record in the local table

@@ -1,336 +1,176 @@
 /**
- * The mobile bridge's shapes (`mobile/`): the four `mobile.*` methods' inputs
- * and results, what a phone sends over HTTP to pair and register for pushes,
- * and the two WebSocket frame unions.
+ * The phone companion's shapes (round 3: the phone talks to the boxes, not to
+ * a laptop bridge).
  *
- * The wire constants and the frame-type name lists are `mobile/protocol.ts`,
- * pure values the phone mirrors; this module only gives them a Zod shape.
- * Nothing here ever carries a raw device token except `MobilePairResponse`,
- * the one answer that hands a fresh token to the phone that paired.
+ * - `mobile.pair` — the one public `mobile.*` method: the laptop reads the
+ *   fleet and its agents and returns a pairing link (`shared/mobile-link.ts`)
+ *   that carries **no secret**. The phone's authentication to the fleet is
+ *   tailnet membership, like the laptop's.
+ * - `MobileFleetView` — what hermeticd's read-only `GET /fleet` answers, so a
+ *   paired phone can refresh the agent list without AWS credentials.
+ * - `MobilePushDevice` — what the phone registers with hermeticd's
+ *   `POST /push/devices`, and `MobilePushData`, the `data` payload of the Expo
+ *   push the box's watcher sends.
+ *
+ * Imports only `shared/*`, zod and sibling schema modules.
  */
 import { z } from "zod";
-import { MOBILE_PLATFORMS, MOBILE_PROTOCOL, MOBILE_TURN_STATES } from "../mobile/protocol.ts";
-import { AgentName, BotName } from "./requests.ts";
-import { ChatFrame, ChatObserveEvent } from "./chat.ts";
+import { AGENT_NAME_RE } from "../shared/naming.ts";
 import { AccountId, FleetIdSchema, Iso, Region } from "./common.ts";
-import { Notification } from "./notification.ts";
-import { FleetTarget } from "./target.ts";
+import { AgentStatus, Health } from "./agent.ts";
+import { FleetName } from "./directory.ts";
+import { AgentName, BotName } from "./requests.ts";
 
-// The pair URL's QR, so this door opens onto it like `shared` does.
+// The pairing link's QR and its codec, so this door opens onto them like `shared` does.
 export { encodeQr, qrToSvg, qrToTerminal, type QrMatrix } from "../shared/qr.ts";
+export {
+  MOBILE_LINK_MAX_AGENTS,
+  MOBILE_LINK_MAX_LENGTH,
+  MOBILE_LINK_PREFIX,
+  MOBILE_LINK_VERSION,
+  encodeMobileLink,
+  parseMobileLink,
+  type MobileLinkAgentEntry,
+  type MobileLinkPayload,
+} from "../shared/mobile-link.ts";
 
-export const MobilePlatformSchema = z.enum(MOBILE_PLATFORMS);
-
-/** A paired phone as every head sees it: no token, no hash. */
-export const MobileDevice = z.object({
-  device_id: z.string().min(1),
-  name: z.string(),
-  platform: MobilePlatformSchema,
-  created_at: Iso,
-  last_seen_at: Iso.nullable(),
-  push_registered: z.boolean(),
-  previews: z.boolean(),
-  enabled: z.boolean(),
-  /** The fleet the phone paired for; `null` for a pairing older than the field, which the bridge refuses. */
-  fleet_id: FleetIdSchema.nullable(),
-});
-export type MobileDevice = z.infer<typeof MobileDevice>;
-
-const Port = z.number().int().min(0).max(65_535);
-/** A host to bind or to advertise: a name or an IP literal, never a URL. */
-const Host = z
+/** A MagicDNS name: dotted labels, no scheme, no port, no trailing dot. */
+const DnsName = z
   .string()
-  .min(1)
   .max(253)
-  .regex(/^[A-Za-z0-9.:_-]+$/, "a hostname or an IP address");
+  .regex(
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i,
+    "a DNS name",
+  );
 
-/** What a running bridge reports about itself. */
-export const MobileServeStatus = z.object({
-  host: z.string(),
-  port: Port,
-  url: z.string(),
-  started_at: Iso,
-  /** Authenticated sockets open right now. */
-  connected: z.number().int().nonnegative(),
-  app: z.enum(["desktop", "cli"]),
-});
-export type MobileServeStatus = z.infer<typeof MobileServeStatus>;
+/* ── Pairing ────────────────────────────────────────────────────────────── */
 
-export const MobilePairInput = z
+/**
+ * One agent as the pairing link carries it. `host` is present only when the
+ * box's `tailscale_dns_name` differs from `cloudName(fleet_id, name).<tailnet>`,
+ * the name the phone derives on its own (a recreate that came up as `-2`, a
+ * box built under an older naming rule).
+ */
+export const MobileLinkAgent = z
   .object({
-    /** A label for the phone, shown until it names itself. */
-    name: z.string().min(1).max(64).optional(),
-    /** Where the phone should reach the bridge; default: settings, then the tailnet IPv4. */
-    host: Host.optional(),
-    port: Port.min(1).optional(),
-    ttl_ms: z.number().int().min(10_000).max(3_600_000).optional(),
+    name: z.string().regex(AGENT_NAME_RE),
+    host: DnsName.optional(),
   })
   .strict();
+export type MobileLinkAgent = z.infer<typeof MobileLinkAgent>;
+
+/** `hermetic mobile pair` takes nothing but the global options (`--fleet` among them). */
+export const MobilePairInput = z.object({}).strict();
 export type MobilePairInput = z.infer<typeof MobilePairInput>;
 
 export const MobilePairResult = z.object({
-  code: z.string(),
-  expires_at: Iso,
-  url: z.string(),
-  host: z.string(),
-  port: Port,
+  /** `hermetic://fleet?v=2&…` — what the QR draws. Not a secret. */
+  link: z.string(),
+  fleet: z.object({
+    fleet_id: FleetIdSchema,
+    alias: FleetName.nullable(),
+    account_id: AccountId,
+    region: Region,
+    tailnet: z.string(),
+  }),
+  /** Every live agent, name-sorted, with `host` where it differs from the derived one. */
+  agents: z.array(MobileLinkAgent),
+  /**
+   * How many of `agents` the link actually names. Less than `agents.length`
+   * only when the link would otherwise pass `MOBILE_LINK_MAX_LENGTH`; the
+   * phone fills the rest from `GET /fleet`.
+   */
+  agents_in_link: z.number().int().nonnegative(),
 });
 export type MobilePairResult = z.infer<typeof MobilePairResult>;
 
-export const MobileDevicesInput = z.object({}).strict();
-export type MobileDevicesInput = z.infer<typeof MobileDevicesInput>;
-export const MobileDevicesResult = z.object({
-  devices: z.array(MobileDevice),
-  serving: MobileServeStatus.nullable(),
-});
-export type MobileDevicesResult = z.infer<typeof MobileDevicesResult>;
+/* ── hermeticd GET /fleet ───────────────────────────────────────────────── */
 
-export const MobileRevokeInput = z.object({ device_id: z.string().min(1).max(64) }).strict();
-export type MobileRevokeInput = z.infer<typeof MobileRevokeInput>;
-export const MobileRevokeResult = z.object({ revoked: z.boolean() });
-export type MobileRevokeResult = z.infer<typeof MobileRevokeResult>;
+/** One agent as `GET /fleet` reports it: enough for the phone's list and detail. */
+export const MobileFleetAgent = z.object({
+  name: AgentName,
+  status: AgentStatus,
+  tailscale_dns_name: z.string().nullable(),
+  tailscale_ip: z.string().nullable(),
+  /**
+   * The Hermes version the box runs (`running_hermes_version`, else the pinned
+   * `hermes_version`); `null` when neither is known.
+   */
+  version: z.string().nullable(),
+  /** The heartbeat's health block; absent until the first heartbeat lands. */
+  health: Health.optional(),
+});
+export type MobileFleetAgent = z.infer<typeof MobileFleetAgent>;
 
 /**
- * `mobile.settings`: an empty request reads; a stated field writes. `null`
- * clears an override back to the default (tailnet IPv4, `DEFAULT_PORT`).
+ * hermeticd's `GET /fleet` answer: the `_fleet` row's identity and every live
+ * agent (no `_`-prefixed and no `destroyed` rows). Read with the agent role's
+ * `dynamodb:Scan`; a phone without it keeps its pairing snapshot.
  */
-export const MobileSettingsInput = z
-  .object({
-    enabled: z.boolean().optional(),
-    host: Host.nullable().optional(),
-    port: Port.min(1).nullable().optional(),
-  })
-  .strict();
-export type MobileSettingsInput = z.infer<typeof MobileSettingsInput>;
-export const MobileSettings = z.object({
-  enabled: z.boolean(),
-  host: z.string().nullable(),
-  port: z.number().int().nullable(),
-});
-export type MobileSettings = z.infer<typeof MobileSettings>;
-
-/**
- * What `mobile.settings` answers: the settings as stored, plus a `warning` when
- * they say something a head should repeat to the operator — today, a wildcard
- * host, which binds every interface and is not an address a phone can reach.
- */
-export const MobileSettingsResult = MobileSettings.extend({ warning: z.string().optional() });
-export type MobileSettingsResult = z.infer<typeof MobileSettingsResult>;
-
-export const MobileServeInput = z
-  .object({
-    host: Host.optional(),
-    /** 0 picks a free port, which is what a test wants. */
-    port: Port.optional(),
-    /** Tick `chat.swarms` so core raises `chat.message` rows (a headless bridge). */
-    tick_swarms: z.boolean().optional(),
-  })
-  .strict();
-export type MobileServeInput = z.infer<typeof MobileServeInput>;
-
-/* ── Hello ──────────────────────────────────────────────────────────────── */
-
-export const MobileTurnStateSchema = z.enum(MOBILE_TURN_STATES);
-
-export const TurnSummary = z.object({
-  turn_id: z.string(),
-  instance: z.string(),
-  bot: z.string(),
-  session: z.string().nullable(),
-  started_at: Iso,
-  state: MobileTurnStateSchema,
-  last_n: z.number().int().nonnegative(),
-  truncated: z.boolean(),
-  device_id: z.string(),
-});
-export type TurnSummary = z.infer<typeof TurnSummary>;
-
-export const MobileHello = z.object({
-  protocol: z.literal(MOBILE_PROTOCOL.PROTOCOL_VERSION),
+export const MobileFleetView = z.object({
   fleet: z.object({
     fleet_id: FleetIdSchema,
-    account_id: AccountId,
-    region: Region,
     alias: z.string().nullable(),
+    tailnet: z.string(),
+    region: Region,
+    account_id: AccountId,
+    foundation_version: z.number().int().nonnegative(),
   }),
-  tailnet: z.string().nullable(),
-  device: z.object({
-    device_id: z.string(),
-    name: z.string(),
-    platform: MobilePlatformSchema,
-    created_at: Iso,
-    previews: z.boolean(),
-    push_registered: z.boolean(),
-  }),
-  host: z.object({
-    app: z.enum(["desktop", "cli"]),
-    version: z.string(),
-    fixture: z.boolean(),
-  }),
-  listening: z.array(z.string()),
-  active_turns: z.array(TurnSummary),
+  agents: z.array(MobileFleetAgent),
+  /** When the box read the table (it caches the scan briefly). */
+  read_at: Iso,
 });
-export type MobileHello = z.infer<typeof MobileHello>;
+export type MobileFleetView = z.infer<typeof MobileFleetView>;
 
-/* ── HTTP bodies ────────────────────────────────────────────────────────── */
+/* ── Push registration (hermeticd /push/devices) ────────────────────────── */
+
+export const MOBILE_PUSH_PLATFORMS = ["ios", "android"] as const;
+export const MobilePushPlatform = z.enum(MOBILE_PUSH_PLATFORMS);
+export type MobilePushPlatform = z.infer<typeof MobilePushPlatform>;
+
+/** Expo's push token shape, the only token a box will store. */
+export const EXPO_PUSH_TOKEN_RE = /^Expo(nent)?PushToken\[[A-Za-z0-9_-]+\]$/;
 
 /**
- * C0/C1 controls, and the bidi marks and overrides (U+200E/F, U+202A–E,
- * U+2066–9) that would let a phone name itself so it reads differently in the
- * device list than it is stored.
+ * One phone's registration with one box: which bots on that box it wants
+ * pushes for (`"all"`, or a list of bot names), and where to send them.
  */
-const UNSAFE_NAME_CHARS = /[\p{Cc}\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
-
-/** A phone's self-chosen name: trimmed, 1–64 characters, nothing that reorders or hides text. */
-export const MobileDeviceName = z
-  .string()
-  .trim()
-  .min(1)
-  .max(64)
-  .refine((v) => !UNSAFE_NAME_CHARS.test(v), "no control or bidi-override characters");
-
-export const MobilePairRequest = z
+export const MobilePushDevice = z
   .object({
-    code: z.string().min(1).max(32),
-    device_name: MobileDeviceName,
-    platform: MobilePlatformSchema,
+    /** The phone's own stable id, chosen on the phone. */
+    device_id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    token: z.string().max(256).regex(EXPO_PUSH_TOKEN_RE, "an Expo push token"),
+    platform: MobilePushPlatform,
+    app_version: z.string().min(1).max(64),
+    listening: z.union([z.literal("all"), z.array(BotName).max(64)]),
   })
   .strict();
-export type MobilePairRequest = z.infer<typeof MobilePairRequest>;
+export type MobilePushDevice = z.infer<typeof MobilePushDevice>;
 
-export const MobilePairResponse = z.object({
-  token: z.string(),
-  device_id: z.string(),
-  hello: MobileHello,
-});
-export type MobilePairResponse = z.infer<typeof MobilePairResponse>;
+export const MobilePushDeviceList = z.object({ devices: z.array(MobilePushDevice) });
+export type MobilePushDeviceList = z.infer<typeof MobilePushDeviceList>;
 
-export const MobileRpcRequest = z.object({
-  method: z.string().min(1).max(64),
-  params: z.unknown().optional(),
-  target: FleetTarget,
-});
-export type MobileRpcRequest = z.infer<typeof MobileRpcRequest>;
+/* ── Push payload ───────────────────────────────────────────────────────── */
 
-export const MobilePushRegisterRequest = z
-  .object({
-    expo_push_token: z.string().min(1).max(256),
-    previews: z.boolean().optional(),
-  })
-  .strict();
-export type MobilePushRegisterRequest = z.infer<typeof MobilePushRegisterRequest>;
+export const MOBILE_PUSH_KINDS = ["turn.done", "turn.error", "needs_action", "message"] as const;
+export const MobilePushKind = z.enum(MOBILE_PUSH_KINDS);
+export type MobilePushKind = z.infer<typeof MobilePushKind>;
 
-export const MobilePushSettingsRequest = z
-  .object({ previews: z.boolean().optional(), enabled: z.boolean().optional() })
-  .strict();
-export type MobilePushSettingsRequest = z.infer<typeof MobilePushSettingsRequest>;
-
-/** `{code, message, details?}` — the desktop `RpcErrorBody` shape. */
-export const MobileErrorBody = z.object({
-  code: z.string(),
-  message: z.string(),
-  details: z.record(z.string(), z.unknown()).optional(),
-});
-export type MobileErrorBody = z.infer<typeof MobileErrorBody>;
-
-/* ── WebSocket: phone → bridge ──────────────────────────────────────────── */
-
-const FrameId = z.string().min(1).max(128);
-
-/** Where the phone app is: on screen, or backgrounded (and soon suspended). */
-export const MobileAppPhase = z.enum(["foreground", "background"]);
-export type MobileAppPhase = z.infer<typeof MobileAppPhase>;
-
-export const MobileTurnStartBody = z.object({
+/**
+ * The `data` of an Expo push from a box's gateway watcher. `dedupe` is
+ * `<instance>:<session>:<message_count>:<kind>`, so the phone drops a push for
+ * an event its own live socket already showed.
+ */
+export const MobilePushData = z.object({
+  fleet_id: FleetIdSchema,
   instance: AgentName,
   bot: BotName,
-  session: z.string().min(1).optional(),
-  new_session: z.boolean().optional(),
-  message: z.string().min(1).max(200_000),
-  client_ref: z.string().max(128).optional(),
+  session: z.string().min(1).max(256),
+  kind: MobilePushKind,
+  dedupe: z.string().min(1).max(512),
 });
-export type MobileTurnStartBody = z.infer<typeof MobileTurnStartBody>;
-
-export const MobileClientFrame = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("auth"),
-    token: z.string().min(1).max(256),
-    protocol: z.number().int(),
-    resume: z
-      .object({
-        turns: z
-          .array(z.object({ turn_id: z.string().min(1), after: z.number().int().min(0) }))
-          .max(64),
-      })
-      .optional(),
-  }),
-  z.object({
-    type: z.literal("rpc"),
-    id: FrameId,
-    method: z.string().min(1).max(64),
-    params: z.unknown().optional(),
-    target: FleetTarget,
-  }),
-  z.object({
-    type: z.literal("turn.start"),
-    id: FrameId,
-    target: FleetTarget,
-    turn: MobileTurnStartBody,
-  }),
-  z.object({
-    type: z.literal("turn.resume"),
-    id: FrameId,
-    turn_id: z.string().min(1),
-    after: z.number().int().min(0),
-  }),
-  z.object({ type: z.literal("turn.abort"), id: FrameId, turn_id: z.string().min(1) }),
-  z.object({
-    type: z.literal("observe.open"),
-    id: FrameId,
-    target: FleetTarget,
-    instance: AgentName,
-    bot: BotName,
-    session: z.string().min(1).nullable().optional(),
-  }),
-  z.object({ type: z.literal("observe.close"), id: FrameId, sub_id: z.string().min(1) }),
-  z.object({ type: z.literal("pong") }),
-  z.object({ type: z.literal("phase"), phase: MobileAppPhase }),
-]);
-export type MobileClientFrame = z.infer<typeof MobileClientFrame>;
-
-/* ── WebSocket: bridge → phone ──────────────────────────────────────────── */
-
-export const MobileServerFrame = z.union([
-  z.object({ type: z.literal("auth.ok"), hello: MobileHello }),
-  z.object({ type: z.literal("auth.error"), error: MobileErrorBody }),
-  z.object({ type: z.literal("res"), id: z.string(), ok: z.literal(true), result: z.unknown() }),
-  z.object({ type: z.literal("res"), id: z.string(), ok: z.literal(false), error: MobileErrorBody }),
-  z.object({
-    type: z.literal("turn.frame"),
-    turn_id: z.string(),
-    n: z.number().int().positive(),
-    frame: ChatFrame,
-  }),
-  z.object({
-    type: z.literal("turn.end"),
-    turn_id: z.string(),
-    n: z.number().int().nonnegative(),
-    state: z.enum(["done", "error", "aborted"]),
-  }),
-  z.object({ type: z.literal("turn.started"), turn: TurnSummary }),
-  z.object({ type: z.literal("observe.event"), sub_id: z.string(), event: ChatObserveEvent }),
-  z.object({
-    type: z.literal("observe.end"),
-    sub_id: z.string(),
-    error: z.object({ code: z.string(), message: z.string() }).optional(),
-  }),
-  z.object({
-    type: z.literal("notification"),
-    row: Notification,
-    counts: z.object({ unread: z.number().int(), needs_action: z.number().int() }),
-  }),
-  z.object({ type: z.literal("listening"), instances: z.array(z.string()) }),
-  z.object({ type: z.literal("ping") }),
-  z.object({ type: z.literal("error"), error: MobileErrorBody }),
-]);
-export type MobileServerFrame = z.infer<typeof MobileServerFrame>;
+export type MobilePushData = z.infer<typeof MobilePushData>;

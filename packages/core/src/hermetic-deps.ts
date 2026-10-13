@@ -34,8 +34,6 @@ import type { InstanceListeningStore } from "./chat/instance-listening.ts";
 import type { IncarnationStore } from "./local/incarnations.ts";
 import type { PresetStore } from "./local/create-presets.ts";
 import type { ChatSettingsStore } from "./chat/chat-settings.ts";
-import type { MobileStore } from "./mobile/device-store.ts";
-import type { PushSender } from "./mobile/push.ts";
 
 export interface OpOptions {
   signal?: AbortSignal;
@@ -178,16 +176,6 @@ export interface HermeticDeps {
    * built-ins until something is set.
    */
   presets?: PresetStore;
-  /**
-   * The mobile bridge's paired phones, pair codes and settings (`mobile/`),
-   * in this laptop's database. Absent, an in-process store stands in.
-   */
-  mobile?: MobileStore;
-  /**
-   * Where the bridge's pushes go. Absent: Expo in real mode, a recording
-   * sender in fixture mode — fixture mode never reaches the network.
-   */
-  mobilePush?: PushSender;
   /** hermeticd version this build ships, pushed to S3 by `init`/`upgrade`. */
   hermeticdVersion?: string | undefined;
   /** Hermes version pinned into a fresh render. */

@@ -170,6 +170,23 @@ export {
 } from "./shell-markers.ts";
 export type { ShellMarker } from "./shell-markers.ts";
 
-// --- QR codes (the mobile pair URL) -----------------------------------------
+// --- QR codes (the mobile pairing link) -------------------------------------
 export { encodeQr, qrToSvg, qrToTerminal } from "./qr.ts";
 export type { QrMatrix } from "./qr.ts";
+
+// --- The phone's pairing link (no secret; the phone parses the same code) ---
+export {
+  MOBILE_LINK_MAX_AGENTS,
+  MOBILE_LINK_MAX_LENGTH,
+  MOBILE_LINK_PREFIX,
+  MOBILE_LINK_VERSION,
+  encodeMobileLink,
+  parseMobileLink,
+} from "./mobile-link.ts";
+export type { MobileLinkAgentEntry, MobileLinkPayload } from "./mobile-link.ts";
+
+// --- SHA-256 (chat message ids) ---------------------------------------------
+// The chat adapter's transcript row ids are a SHA-256 prefix, and the adapter
+// runs on the phone and the box as well as the laptop, so the hash cannot be
+// `node:crypto`. Pinned byte-equal to it in `test/sha256.test.ts`.
+export { sha256Hex } from "./sha256.ts";

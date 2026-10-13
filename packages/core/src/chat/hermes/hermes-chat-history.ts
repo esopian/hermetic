@@ -7,8 +7,8 @@
  * one of the gateway's warm backends; the REST route pages durable IDs, scopes
  * the database by profile, and builds nothing.
  */
-import { createHash } from "node:crypto";
 import { checkAbort } from "../../abort.ts";
+import { sha256Hex } from "../../shared/sha256.ts";
 import {
   CHAT_ERROR_CODES,
   chatError,
@@ -249,7 +249,7 @@ function rowId(session: string, row: Record<string, unknown>, stamped: string | 
     canonical(row.content ?? row.display_content ?? row.text ?? null),
     stamped ?? "",
   ];
-  const digest = createHash("sha256").update(parts.join("\u0000")).digest("hex");
+  const digest = sha256Hex(parts.join("\u0000"));
   return `${session}:h${digest.slice(0, 16)}`;
 }
 

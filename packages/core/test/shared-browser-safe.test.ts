@@ -120,9 +120,16 @@ describe("@hermetic/core/shared is browser-safe", () => {
   test("the direction holds: schema imports shared, and core's schema door still opens", () => {
     // Every value `shared/index.ts` exports is reachable from `schema/index.ts`
     // too, because schema re-exports it — so nothing outside core had to move.
+    // `sha256.ts` is no schema's business: the chat adapter's row ids use it,
+    // through `@hermetic/core/chat-client`, not through a schema.
     const schemaReach = new Set(reachable(join(ROOT, "src/schema/index.ts")));
     for (const path of modules) {
-      if (path.endsWith("/shared/index.ts") || path.endsWith("/tailscale-urls.ts")) continue;
+      if (
+        path.endsWith("/shared/index.ts") ||
+        path.endsWith("/tailscale-urls.ts") ||
+        path.endsWith("/shared/sha256.ts")
+      )
+        continue;
       expect(schemaReach.has(path), relative(ROOT, path)).toBe(true);
     }
   });

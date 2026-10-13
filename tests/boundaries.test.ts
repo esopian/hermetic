@@ -26,6 +26,17 @@ function sources(pkg: string): string[] {
   );
 }
 
+/**
+ * The phone app (`mobile/`) is not a workspace package, but it is a head with a
+ * row in the matrix: its shipped code is `mobile/src` and the Expo Router screens
+ * in `mobile/app`. Its `test` tree is out, for the same reason as the packages'.
+ */
+function mobileSources(): string[] {
+  return [...walk(join(ROOT, "mobile", "src")), ...walk(join(ROOT, "mobile", "app"))].filter(
+    (f) => f.endsWith(".ts") || f.endsWith(".tsx"),
+  );
+}
+
 /** The build/lint scripts, which are outside every package and import core directly. */
 function scriptSources(): string[] {
   return walk(join(ROOT, "scripts")).filter((f) => f.endsWith(".ts"));
@@ -108,39 +119,62 @@ function specifiersOf(file: SourceFile): Specifier[] {
 const PACKAGES = ["core", "cli", "app", "ui", "agentd"] as const;
 type Pkg = (typeof PACKAGES)[number];
 
-/**
- * A column of the matrix: a package, plus each of core's two subpath doors as
- * its own column — `schema` (the Zod schemas, the types) and `shared` (the
- * browser-safe pure values and helpers the UI and hermeticd need verbatim).
- */
-type Target = Pkg | "core/schema" | "core/shared";
+/** A row of the matrix: a package, or the phone app, which imports but is never imported. */
+type From = Pkg | "mobile";
 
-/** `value` allows both value and type imports; `type` allows type-only imports alone. */
-type Allowance = "value" | "type";
+/**
+ * A column of the matrix: a package, plus each of core's four subpath doors as
+ * its own column — `schema` (the Zod schemas, the types), `shared` (the
+ * browser-safe pure values and helpers the UI and hermeticd need verbatim),
+ * `chat-client` (the Hermes chat adapter, portable to the phone and the box) and
+ * `chat-client-fixture` (the canned chat client, for the phone's fixture mode).
+ */
+type Target = Pkg | "core/schema" | "core/shared" | "core/chat-client" | "core/chat-client-fixture";
+
+/**
+ * `value` allows both value and type imports; `type` allows type-only imports
+ * alone; `fixture` allows both, but only from a file under `FIXTURE_DIR`.
+ */
+type Allowance = "value" | "type" | "fixture";
+
+/** The one directory of the phone app that may open the fixture chat door. */
+const FIXTURE_DIR = "mobile/src/fixture/";
 
 /**
  * The matrix from AGENTS.md, "Import boundaries", as data. A missing entry is a
  * forbidden edge. Same-package edges (the table's `—`) are internal and never
  * consulted.
  *
- * | From \ May import | core | core/schema | core/shared | cli | app | ui | agentd |
- * |---|---|---|---|---|---|---|---|
- * | core    | —   | —   | —   | no | no     | no | no |
- * | cli     | yes | yes | yes | —  | no     | no | no |
- * | app     | yes | yes | yes | no | —      | no | no |
- * | ui      | no  | no  | yes | no | types  | —  | no |
- * | agentd  | no  | yes | yes | no | no     | no | —  |
+ * | From \ May import | core | core/schema | core/shared | core/chat-client | core/chat-client-fixture | cli | app | ui | agentd |
+ * |---|---|---|---|---|---|---|---|---|---|
+ * | core    | —   | —   | —   | —   | —                | no | no    | no | no |
+ * | cli     | yes | yes | yes | yes | no               | —  | no    | no | no |
+ * | app     | yes | yes | yes | yes | no               | no | —     | no | no |
+ * | ui      | no  | no  | yes | no  | no               | no | types | —  | no |
+ * | agentd  | no  | yes | yes | yes | no               | no | no    | no | —  |
+ * | mobile  | no  | yes | yes | yes | fixture dir only | no | no    | no | no |
  */
-const ALLOWED: Record<Pkg, Partial<Record<Target, Allowance>>> = {
+const ALLOWED: Record<From, Partial<Record<Target, Allowance>>> = {
   core: {},
-  cli: { core: "value", "core/schema": "value", "core/shared": "value" },
-  app: { core: "value", "core/schema": "value", "core/shared": "value" },
+  cli: { core: "value", "core/schema": "value", "core/shared": "value", "core/chat-client": "value" },
+  app: { core: "value", "core/schema": "value", "core/shared": "value", "core/chat-client": "value" },
   // The UI ships to a browser. `core/shared` is the one value door it may
   // open, and `packages/core/test/shared-browser-safe.test.ts` keeps what is
   // behind it free of node, bun and AWS code. The app edge is types only,
   // and a devDependency: not a byte of the app may reach the bundle.
   ui: { app: "type", "core/shared": "value" },
-  agentd: { "core/schema": "value", "core/shared": "value" },
+  // hermeticd's push watcher drives its own box's gateway through the same
+  // chat adapter the desktop and the phone use.
+  agentd: { "core/schema": "value", "core/shared": "value", "core/chat-client": "value" },
+  // The phone talks to the boxes directly, through the portable doors only
+  // (`packages/core/test/chat-client-portable.test.ts`). The canned chat client
+  // is for its fixture mode, so only `mobile/src/fixture/` may open that door.
+  mobile: {
+    "core/schema": "value",
+    "core/shared": "value",
+    "core/chat-client": "value",
+    "core/chat-client-fixture": "fixture",
+  },
 };
 
 /**
@@ -151,6 +185,8 @@ const CORE_SUBPATHS: Record<string, Target> = {
   "": "core",
   schema: "core/schema",
   shared: "core/shared",
+  "chat-client": "core/chat-client",
+  "chat-client-fixture": "core/chat-client-fixture",
 };
 
 /**
@@ -176,6 +212,20 @@ function packageOf(absolute: string): Pkg | null {
   return PACKAGES.find((p) => p === name) ?? null;
 }
 
+/** The matrix row a source file belongs to: its package, or the phone app. */
+function rowOf(absolute: string): From | null {
+  if (absolute.startsWith(join(ROOT, "mobile") + sep)) return "mobile";
+  return packageOf(absolute);
+}
+
+/** The file a relative, absolute or `file://` specifier names, or `null` for a bare one. */
+function pathOf(file: string, spec: string): string | null {
+  if (spec.startsWith("file://")) return fileURLToPath(spec);
+  if (spec.startsWith("/")) return spec;
+  if (spec.startsWith(".")) return resolve(dirname(file), spec);
+  return null;
+}
+
 /** Where a specifier lands, or `null` if it leaves the workspace entirely. */
 type Resolved = { target: Target; known: boolean };
 
@@ -192,10 +242,7 @@ function resolveTarget(file: string, spec: string): Resolved | null {
     return target ? { target, known: true } : { target: "core", known: false };
   }
 
-  let absolute: string | null = null;
-  if (spec.startsWith("file://")) absolute = fileURLToPath(spec);
-  else if (spec.startsWith("/")) absolute = spec;
-  else if (spec.startsWith(".")) absolute = resolve(dirname(file), spec);
+  const absolute = pathOf(file, spec);
   if (absolute === null) return null;
 
   const pkg = packageOf(absolute);
@@ -211,10 +258,19 @@ function resolveTarget(file: string, spec: string): Resolved | null {
 function checkBoundaries(files: readonly SourceFile[]): Violation[] {
   const out: Violation[] = [];
   for (const file of files) {
-    const from = packageOf(file.path);
+    const from = rowOf(file.path);
     if (!from) continue;
     const relative = file.path.slice(ROOT.length);
     for (const { spec, typeOnly } of specifiersOf(file)) {
+      // The phone is outside the workspace and resolves core through its
+      // exports map alone: a path into `packages/` is refused whatever it
+      // reaches, including a directory the matrix has no column for.
+      const path = from === "mobile" ? pathOf(file.path, spec) : null;
+      if (path?.startsWith(join(ROOT, "packages") + sep)) {
+        const edge = `mobile → ${packageOf(path) ?? "packages"}`;
+        out.push({ file: relative, spec, edge, reason: "mobile may not import a path into packages/" });
+        continue;
+      }
       const resolved = resolveTarget(file.path, spec);
       if (!resolved) continue;
       const { target, known } = resolved;
@@ -225,6 +281,15 @@ function checkBoundaries(files: readonly SourceFile[]): Violation[] {
       const allowance = ALLOWED[from][target];
       if (!allowance) {
         out.push({ file: relative, spec, edge, reason: `${edge} is not an allowed edge` });
+        continue;
+      }
+      if (allowance === "fixture" && !relative.startsWith(FIXTURE_DIR)) {
+        out.push({
+          file: relative,
+          spec,
+          edge,
+          reason: `${edge} is allowed only from ${FIXTURE_DIR}`,
+        });
         continue;
       }
       if (allowance === "type" && !typeOnly) {
@@ -253,7 +318,7 @@ function checkBoundaries(files: readonly SourceFile[]): Violation[] {
 function observedEdges(files: readonly SourceFile[]): Set<string> {
   const out = new Set<string>();
   for (const file of files) {
-    const from = packageOf(file.path);
+    const from = rowOf(file.path);
     if (!from) continue;
     for (const { spec } of specifiersOf(file)) {
       const resolved = resolveTarget(file.path, spec);
@@ -272,6 +337,15 @@ function allPackageSources(): SourceFile[] {
   return PACKAGES.flatMap(readPackage);
 }
 
+function readMobile(): SourceFile[] {
+  return mobileSources().map((path) => ({ path, source: readFileSync(path, "utf8") }));
+}
+
+/** A synthetic phone-app file, by repo-relative path (`mobile/src/...`). */
+function fakeMobile(path: string, source: string): SourceFile {
+  return { path: join(ROOT, path), source };
+}
+
 /** A synthetic file, so the negative cases never touch the working tree. */
 function fake(pkg: Pkg, name: string, source: string): SourceFile {
   return { path: join(ROOT, "packages", pkg, "src", name), source };
@@ -282,10 +356,11 @@ describe("workspace import boundaries", () => {
     for (const pkg of PACKAGES) {
       expect(sources(pkg).length).toBeGreaterThan(0);
     }
+    expect(mobileSources().length).toBeGreaterThan(0);
   });
 
-  test("every import in every package obeys the matrix", () => {
-    const violations = checkBoundaries(allPackageSources());
+  test("every import in every package, and in the phone app, obeys the matrix", () => {
+    const violations = checkBoundaries([...allPackageSources(), ...readMobile()]);
     const report = violations.map((v) => `${v.file}: ${v.spec} — ${v.reason}`);
     expect(report).toEqual([]);
   });
@@ -583,6 +658,110 @@ describe("workspace import boundaries", () => {
         spec: "@hermetic/ui",
         edge: "agentd → ui",
       },
+      {
+        name: "agentd → core/chat-client-fixture",
+        file: fake(
+          "agentd",
+          "a.ts",
+          'import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";\nfixtureChatClient;\n',
+        ),
+        spec: "@hermetic/core/chat-client-fixture",
+        edge: "agentd → core/chat-client-fixture",
+      },
+      {
+        name: "cli → core/chat-client-fixture",
+        file: fake(
+          "cli",
+          "a.ts",
+          'import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";\nfixtureChatClient;\n',
+        ),
+        spec: "@hermetic/core/chat-client-fixture",
+        edge: "cli → core/chat-client-fixture",
+      },
+      {
+        name: "ui → core/chat-client",
+        file: fake("ui", "a.tsx", 'import type { ChatFrame } from "@hermetic/core/chat-client";\n'),
+        spec: "@hermetic/core/chat-client",
+        edge: "ui → core/chat-client",
+      },
+      {
+        name: "mobile → core",
+        file: fakeMobile(
+          "mobile/src/a.ts",
+          'import { openHermetic } from "@hermetic/core";\nopenHermetic;\n',
+        ),
+        spec: "@hermetic/core",
+        edge: "mobile → core",
+      },
+      {
+        name: "mobile → core, type-only",
+        file: fakeMobile("mobile/app/a.tsx", 'import type { Hermetic } from "@hermetic/core";\n'),
+        spec: "@hermetic/core",
+        edge: "mobile → core",
+      },
+      {
+        name: "mobile → core/chat-client-fixture outside the fixture directory",
+        file: fakeMobile(
+          "mobile/src/gateway/client.ts",
+          'import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";\nfixtureChatClient;\n',
+        ),
+        spec: "@hermetic/core/chat-client-fixture",
+        edge: "mobile → core/chat-client-fixture",
+      },
+      {
+        name: "mobile → core/chat-client-fixture from a screen",
+        file: fakeMobile(
+          "mobile/app/index.tsx",
+          'import type { FixtureChatOptions } from "@hermetic/core/chat-client-fixture";\n',
+        ),
+        spec: "@hermetic/core/chat-client-fixture",
+        edge: "mobile → core/chat-client-fixture",
+      },
+      {
+        name: "mobile → ui",
+        file: fakeMobile("mobile/src/a.ts", 'import { App } from "@hermetic/ui";\nApp;\n'),
+        spec: "@hermetic/ui",
+        edge: "mobile → ui",
+      },
+      {
+        name: "mobile → agentd",
+        file: fakeMobile("mobile/src/a.ts", 'import { run } from "@hermetic/agentd";\nrun;\n'),
+        spec: "@hermetic/agentd",
+        edge: "mobile → agentd",
+      },
+      {
+        name: "mobile → core/shared by relative path",
+        file: fakeMobile(
+          "mobile/src/a.ts",
+          'import { cloudName } from "../../packages/core/src/shared/index.ts";\ncloudName;\n',
+        ),
+        spec: "../../packages/core/src/shared/index.ts",
+        edge: "mobile → core",
+      },
+      {
+        name: "mobile → the chat-client door by relative path",
+        file: fakeMobile(
+          "mobile/src/fixture/a.ts",
+          'import type { ChatFrame } from "../../../packages/core/src/chat-client.ts";\n',
+        ),
+        spec: "../../../packages/core/src/chat-client.ts",
+        edge: "mobile → core",
+      },
+      {
+        name: "mobile → a packages/ directory the matrix has no column for",
+        file: fakeMobile("mobile/app/a.tsx", 'import x from "../../packages/nope/x.ts";\nx;\n'),
+        spec: "../../packages/nope/x.ts",
+        edge: "mobile → packages",
+      },
+      {
+        name: "mobile → packages/ by absolute path",
+        file: fakeMobile(
+          "mobile/src/a.ts",
+          `import { aws } from "${join(ROOT, "packages/core/src/x.ts")}";\naws;\n`,
+        ),
+        spec: join(ROOT, "packages/core/src/x.ts"),
+        edge: "mobile → core",
+      },
     ];
 
     for (const c of cases) {
@@ -628,6 +807,53 @@ describe("workspace import boundaries", () => {
           "agentd",
           "a.ts",
           'import { HERMES_HOME } from "@hermetic/core/shared";\nHERMES_HOME;\n',
+        ),
+      },
+      {
+        name: "agentd → core/chat-client",
+        file: fake(
+          "agentd",
+          "a.ts",
+          'import { createHermesChat } from "@hermetic/core/chat-client";\ncreateHermesChat;\n',
+        ),
+      },
+      {
+        name: "app → core/chat-client",
+        file: fake("app", "a.ts", 'import type { ChatFrame } from "@hermetic/core/chat-client";\n'),
+      },
+      {
+        name: "mobile → core/chat-client",
+        file: fakeMobile(
+          "mobile/src/gateway/client.ts",
+          'import { createHermesChat } from "@hermetic/core/chat-client";\ncreateHermesChat;\n',
+        ),
+      },
+      {
+        name: "mobile → core/schema and core/shared",
+        file: fakeMobile(
+          "mobile/app/a.tsx",
+          'import { Agent } from "@hermetic/core/schema";\nimport { cloudName } from "@hermetic/core/shared";\nAgent;\ncloudName;\n',
+        ),
+      },
+      {
+        name: "mobile → core/chat-client-fixture from the fixture directory",
+        file: fakeMobile(
+          "mobile/src/fixture/chat.ts",
+          'import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";\nfixtureChatClient;\n',
+        ),
+      },
+      {
+        name: "mobile's own relative imports, screens into src",
+        file: fakeMobile(
+          "mobile/app/a.tsx",
+          'import { Composer } from "../src/chat/Composer.tsx";\nimport icon from "../assets/icon.png";\nComposer;\nicon;\n',
+        ),
+      },
+      {
+        name: "mobile's third-party imports",
+        file: fakeMobile(
+          "mobile/src/a.ts",
+          'import { View } from "react-native";\nimport { z } from "zod";\nView;\nz;\n',
         ),
       },
       {
@@ -805,7 +1031,7 @@ describe("workspace import boundaries", () => {
     expect(reachesCore).toBeGreaterThan(0);
   });
 
-  test("core's exports map is the only pair of doors agentd and the UI can use", () => {
+  test("core's exports map is exactly the doors agentd, the UI and the phone can use", () => {
     const core = JSON.parse(readFileSync(join(ROOT, "packages", "core", "package.json"), "utf8")) as {
       exports: Record<string, string>;
     };
@@ -813,10 +1039,11 @@ describe("workspace import boundaries", () => {
       ".": "./src/index.ts",
       "./schema": "./src/schema/index.ts",
       "./shared": "./src/shared/index.ts",
+      "./chat-client": "./src/chat-client.ts",
+      "./chat-client-fixture": "./src/chat-client-fixture.ts",
     });
-    // The matrix's `core/schema` and `core/shared` columns are that map's
-    // subpath entries: if a fourth door were added, this file would have to
-    // grow a column for it.
+    // The matrix's `core/*` columns are that map's subpath entries: if a sixth
+    // door were added, this file would have to grow a column for it.
     expect(Object.keys(CORE_SUBPATHS).map((s) => (s ? `./${s}` : "."))).toEqual(
       Object.keys(core.exports),
     );

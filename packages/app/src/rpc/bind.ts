@@ -253,9 +253,6 @@ function push(send: SendMessage, message: StreamMessageName, id: string, frame: 
     case "chat.event":
       send("chat.event", { event: frame });
       return;
-    case "mobile.event":
-      send("mobile.event", { event: frame });
-      return;
     case "chat.frame":
       send(
         "chat.frame",

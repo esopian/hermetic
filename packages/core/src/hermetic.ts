@@ -62,7 +62,7 @@ import { createVolumeReservation } from "./volumes/volume-claims.ts";
 import { createProbe } from "./agents/probe.ts";
 import { createFoundation } from "./fleet/foundation/index.ts";
 import { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
-import { FOUNDATION_VERSION, HERMETIC_VERSION } from "./version.ts";
+import { FOUNDATION_VERSION } from "./version.ts";
 import { foundationTemplateSha256 } from "./aws/cfn-template.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
@@ -72,10 +72,7 @@ import { createLocalAgentPurge } from "./local/purge-agent.ts";
 import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
-import { createMobile, registerMobileBridgeHost } from "./mobile/index.ts";
-import type { MobileCore } from "./mobile/core.ts";
-import { MemoryMobileStore } from "./mobile/device-store.ts";
-import { HermeticError } from "./errors.ts";
+import { createMobilePair } from "./mobile-pair.ts";
 
 /**
  * The surface declaration lives in its own module (`surface.ts`), and is
@@ -530,22 +527,8 @@ export function createHermetic(deps: HermeticDeps) {
     },
   });
 
-  /**
-   * The mobile bridge (`mobile/`). It reads the SDK it is part of, so it is
-   * handed a getter that resolves once `hermetic` below exists.
-   */
-  let self: MobileCore | null = null;
-  const mobile = createMobile({
-    store: deps.mobile ?? new MemoryMobileStore(),
-    core: () => {
-      if (self === null) throw new HermeticError("INTERNAL", "the SDK is still being built");
-      return self;
-    },
-    fixture,
-    version: HERMETIC_VERSION,
-    localTailscale,
-    push: deps.mobilePush,
-  });
+  /** The phone's pairing link (`mobile-pair.ts`): a read, and no secret in it. */
+  const mobile = createMobilePair({ ctx, listAgents: list });
 
   const hermetic = {
     ...botMode,
@@ -647,21 +630,13 @@ export function createHermetic(deps: HermeticDeps) {
     /** Fixture-mode chat staging (§9.2). `null` outside fixture mode, and that is the guard. */
     fixture: fixtureChat.controls,
     /**
-     * The phone companion's bridge: pairing, paired devices, its settings, and
-     * the server itself. All local to this laptop; `serve` is a server, not an op.
+     * The phone companion's pairing link. The phone talks to the boxes
+     * directly over the tailnet; the laptop only shows it where the fleet is.
      */
-    mobile: {
-      pair: mobile.pair,
-      devices: mobile.devices,
-      revoke: mobile.revoke,
-      settings: mobile.settings,
-      serve: mobile.serve,
-    },
+    mobile: { pair: mobile.pair },
     /** Derived-state constants the heads render against. */
     constants: { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS },
   };
-  self = hermetic;
-  registerMobileBridgeHost(hermetic, mobile.host);
   /**
    * The desktop terminal's inbox source (issue #18), reached through
    * `terminalNotices(hermetic)` rather than a member: it is not a command, so it

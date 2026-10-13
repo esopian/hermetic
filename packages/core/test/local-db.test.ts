@@ -252,7 +252,7 @@ describe("the local database", () => {
       .query(`SELECT version FROM schema_migrations ORDER BY version`)
       .all() as Array<{ version: number }>;
     expect(applied.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
 
     const tables = (
@@ -608,6 +608,7 @@ describe("the migration ledger", () => {
     "notifications-restored",
     "mobile-devices",
     "mobile-devices-fleet",
+    "mobile-tables-dropped",
   ];
 
   test("a fresh home gets every table, and a named ledger row for each migration", () => {
@@ -616,7 +617,7 @@ describe("the migration ledger", () => {
     const rows = ledger(local.db);
     expect(rows.map((r) => r.name)).toEqual(NAMES);
     expect(rows.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
 
     const tables = tablesIn(local.db);
@@ -632,11 +633,28 @@ describe("the migration ledger", () => {
       "agent_status_seen",
       "chat_local_sessions",
       "agent_incarnations",
-      "mobile_devices",
-      "mobile_pair_codes",
     ]) {
       expect(tables).toContain(table);
     }
+    // The laptop mobile bridge's tables: 16 is a no-op now, so never created.
+    expect(tables).not.toContain("mobile_devices");
+    expect(tables).not.toContain("mobile_pair_codes");
+    local.close();
+  });
+
+  test("a home that ran the bridge's migrations loses its tables to the drop", () => {
+    const local = openLocalDb({ home });
+    // As a home that ran the original 16 and 17 left it, before 18 existed.
+    local.db.run(`CREATE TABLE mobile_devices (device_id TEXT PRIMARY KEY, fleet_id TEXT)`);
+    local.db.run(`CREATE TABLE mobile_pair_codes (code_sha256 TEXT PRIMARY KEY)`);
+    local.db.run(`DELETE FROM schema_migrations WHERE name = 'mobile-tables-dropped'`);
+
+    migrate(local.db);
+
+    const tables = tablesIn(local.db);
+    expect(tables).not.toContain("mobile_devices");
+    expect(tables).not.toContain("mobile_pair_codes");
+    expect(ledger(local.db).map((r) => r.name)).toContain("mobile-tables-dropped");
     local.close();
   });
 

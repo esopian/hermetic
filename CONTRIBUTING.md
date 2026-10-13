@@ -224,10 +224,14 @@ queue behind the fast ones. CI also runs four things `bun run ci` does not:
 - The `mobile` job checks the phone app: `bun install --frozen-lockfile` and `bun run check` in
   `mobile/` (typecheck, Jest, Biome), then `npx expo export --platform ios` to prove the Metro bundle
   builds, on an ubuntu runner (no iOS binary is built or signed). It always reports, like `site`, and
-  does the work only when a PR touches `mobile/`, `packages/core/src/mobile/`,
-  `packages/core/src/schema/mobile.ts` or `packages/ui/src/chat/chat-markdown.ts` (the file the
-  phone copies byte for byte); a push to `master` always runs it. The root seam tests that guard the
-  mirrors, `tests/mobile-seams.test.ts` and `tests/mobile-bridge-e2e.test.ts`, run in `test`.
+  does the work only when a PR touches `mobile/`, `packages/core/src/chat/`,
+  `packages/core/src/chat-client*`, `packages/core/src/schema/`, `packages/core/src/shared/`,
+  `packages/core/package.json` (the exports map the phone resolves) or
+  `packages/ui/src/chat/chat-markdown.ts` (the file the phone copies byte for byte); a push to
+  `master` always runs it. It installs the root workspace first, because Metro resolves
+  `../packages/core` and the root `node_modules/zod`. The root seam tests that guard the phone's
+  edges, `tests/mobile-link-seam.test.ts`, `tests/mobile-box-seams.test.ts` and
+  `tests/mobile-gateway-e2e.test.ts`, run in `test`.
   Locally: `bun run mobile:check`.
 
 The `ci` job aggregates the rest into a single green/red check for branch protection, and it fails
@@ -322,14 +326,17 @@ updates weekly. `tests/ci-contract.test.ts` enforces all of that, plus the agree
 workflow's jobs, the `ci` aggregate's `needs`, and `EXPECTED_JOBS` in `scripts/ci-results.ts` — so
 adding a CI job without requiring it fails the suite rather than quietly widening the gap.
 
-## Phone app and mobile bridge
+## Phone app
 
-`mobile/` is the Expo phone app, a remote head of your laptop's core. It is not a root workspace
-(like `site/`): its own `package.json`, `bun.lock`, Jest and Biome, and root `bun install`,
-`bun run check` and `bun run ci` never touch it. It never imports `packages/`; what it shares with
-core is mirrored and pinned by the root seam tests. `mobile/README.md` has the layout and
-`mobile/AGENTS.md` the conventions; the wire protocol is design.md §9.4. None of this is needed for
-the desktop app, the CLI or a green `bun run ci`.
+`mobile/` is the Expo phone app. It talks to the fleet directly over the tailnet: chat through the
+Hermes gateway on each box (core's own adapter, imported through `@hermetic/core/chat-client`), the
+fleet list and push-token registration through hermeticd on port 7434, push from hermeticd's watcher
+on the box. Your laptop only renders the pairing QR; nothing on it listens for a phone. It is not a
+root workspace (like `site/`): its own `package.json`, `bun.lock`, Jest and Biome, and root
+`bun run check` and `bun run ci` never touch it. It may import `@hermetic/core/schema`, `/shared`
+and `/chat-client`, never a relative path into `packages/`. `mobile/README.md` has the layout and
+`mobile/AGENTS.md` the conventions; the design is design.md §9.4. None of this is needed for the
+desktop app, the CLI or a green `bun run ci`.
 
 Prerequisites, only to run the app in the iOS simulator:
 
@@ -342,7 +349,8 @@ Prerequisites, only to run the app in the iOS simulator:
 - Node, which Expo's CLI runs on, alongside Bun.
 
 ```
-cd mobile && bun install     # once; not part of the root install
+bun install                  # at the repo root first: Metro resolves ../packages/core and root zod
+cd mobile && bun install     # once; the phone has its own lockfile
 bun run ios                  # expo run:ios: builds a dev client, opens the simulator
 bun run check                # typecheck + jest + biome; what the `mobile` CI job runs
 bun run export:ios           # expo export: proves the Metro bundle builds
@@ -352,25 +360,27 @@ From the repo root, `bun run mobile:ios`, `mobile:test` and `mobile:check` do th
 uses native modules (camera, notifications, secure store, webview), so it needs a development build,
 not Expo Go.
 
-**Run the bridge.** The phone talks to the mobile bridge on your laptop, hosted two ways:
+**Run against the fixture.** No AWS, no tailnet and no laptop process: the phone builds
+`fixtureChatClient` in process, with a canned fleet, a canned Tailscale status and an in-memory push
+registry.
 
 ```
-bun run cli -- mobile serve --fixture     # headless, over the fixture fleet; Ctrl-C stops it
-bun run cli -- mobile serve               # headless, over your real fleet
+cd mobile && EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios
 ```
 
-or from the desktop app: **Settings → Mobile**, switch the bridge on. In fixture mode the default
-host is `127.0.0.1`, which the simulator reaches; in real mode it is your Tailscale IPv4, so a real
-phone must be on the tailnet. The bridge never binds `0.0.0.0` unless you pass `--host 0.0.0.0`,
-and then it warns. One process serves one port: do not enable Settings → Mobile and run `mobile
-serve` on the same port. `mobile serve` ticks `chat.swarms` so chat rows reach the inbox; pass
-`--no-tick` beside a running desktop app, whose poller already does.
+**Use it on a real fleet.** The phone needs the Tailscale app signed into the fleet's tailnet. On the
+laptop, run `bun run cli -- mobile pair` (or open **Settings → Pair a phone** in the desktop app) and
+scan the QR from the phone's pairing screen, or paste the `hermetic://fleet?v=2&…` link; the simulator
+has no camera, so paste. The link names the fleet and an agent snapshot and carries no secret, so
+there is nothing to revoke on the laptop: removing the phone from the tailnet cuts it off. The
+tailnet policy (§5.2) already admits it. `hermetic mobile pair --fixture` prints a link for the
+fixture fleet.
 
-**Pair a phone.** `bun run cli -- mobile pair --fixture` (or **Settings → Mobile → Pair a phone**)
-prints a one-time code, a `hermetic://pair?…` link and a QR. Scan it from the app, paste the link,
-or type host, port and the eight characters. A code is single use and lasts ten minutes. Then
-`mobile devices` lists paired phones and `mobile revoke <device_id>` ends one. The simulator has no
-camera, so type or paste.
+Two fleet-side pieces ship with hermeticd and the foundation, and a fleet that predates them needs
+them rolled out: `hermetic artifacts push`, then `hermetic agent recreate <name>` for each agent (a
+new hermeticd serves `GET /fleet`, `POST /push/devices` and the push watcher), and `hermetic
+foundation update` (foundation 16 grants the agent role `dynamodb:Scan` on the agents table, which
+`GET /fleet` reads). Until then the phone shows its QR snapshot and has no push.
 
 **Push needs an EAS project id.** No Expo or EAS account is configured for this repo, and nothing
 here creates one. Remote push needs a project id at build time, from `EXPO_PUBLIC_PROJECT_ID`, or
@@ -381,43 +391,13 @@ EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios
 ```
 
 Without it the app still pairs and chats, and alerts locally while it holds its socket; Settings
-says push is unavailable. Tests and the fixture never reach Expo: the bridge's `PushSender` is
-injected, an in-memory recorder in fixture mode.
+says push is unavailable. The box talks to Expo itself (`exp.host`, from hermeticd), so a box needs
+internet egress, and tests and the fixture never reach Expo: the sender is injected.
 
-**An always-on bridge on a Mac.** To keep the bridge up with no desktop app open, run `hermetic
-mobile serve` under launchd. This is a sketch, not something the repo installs; save it as
-`~/Library/LaunchAgents/com.hermetic.mobile-bridge.plist`:
-
-```
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.hermetic.mobile-bridge</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/hermetic</string>
-    <string>mobile</string>
-    <string>serve</string>
-    <string>--host</string><string>100.64.0.1</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-  </dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/hermetic-mobile-bridge.log</string>
-  <key>StandardErrorPath</key><string>/tmp/hermetic-mobile-bridge.log</string>
-</dict>
-</plist>
-```
-
-Replace `100.64.0.1` with `tailscale ip -4`. Pass the host explicitly: launchd starts the job before
-Tailscale may be up, and with no host the bridge falls back to loopback and a phone cannot reach it.
-The job needs the same AWS credentials as any real-mode command. Load it with `launchctl bootstrap
-gui/$(id -u) ~/Library/LaunchAgents/com.hermetic.mobile-bridge.plist` and remove it with
-`launchctl bootout gui/$(id -u)/com.hermetic.mobile-bridge`.
+**Tailscale status on the phone is a heuristic.** iOS offers no API to ask the Tailscale app, so the
+Bots screen probes `https://<host>/api/health` on up to three listened boxes and reads the failure:
+DNS failure everywhere means Tailscale is off or signed out, timeouts mean the tailnet is up but no
+box answers.
 
 ## Formatting and hooks
 
