@@ -786,6 +786,111 @@ describe("previews are opt-in", () => {
   });
 });
 
+describe("settling a turn", () => {
+  test("a count that grew while still working settles at the next idle", async () => {
+    // Upstream commits the turn's history before it marks the session idle.
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [message("user", "go"), message("bot", "done")]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "working", message_count: 2 }),
+      snapshot({ id: "s1", status: "working", message_count: 4 }),
+      snapshot({ id: "s1", status: "idle", message_count: 4 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 3; i++) await step(r, w);
+    expect(r.sent.map((m) => (m.data as MobilePushData).kind)).toEqual(["turn.done"]);
+  });
+
+  test("a turn settled with nothing to say leaves no flag for a later growth to push", async () => {
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    // Interrupted before any output: the tail ends on the user row.
+    r.chat.tails.set("s1", [message("bot", "earlier"), message("user", "stop")]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 2 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "idle", message_count: 5 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    await step(r, w);
+    // A resume grows the count with rows written long before the previous poll.
+    r.chat.tails.set("s1", [
+      message("user", "stop"),
+      message("bot", "an old reply", { at: isoAt(r, -60_000) }),
+    ]);
+    await step(r, w);
+    expect(r.sent).toEqual([]);
+  });
+
+  test("a session reaped before any poll saw it idle still settles from its tail", async () => {
+    const r = await rig([previewing("a", TOKEN_A)]);
+    const n = nth(r, 1);
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [
+      message("user", "go"),
+      message("bot", "finished", { at: isoAt(r, 4_000) }),
+    ]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "working", message_count: 2 }),
+      snapshot(),
+      snapshot(),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 3; i++) await step(r, w);
+    expect(r.sent.map((m) => [(m.data as MobilePushData).dedupe, m.body])).toEqual([
+      [`atlas:s1:${n}:turn.done`, "finished"],
+    ]);
+  });
+
+  test("a reaped session whose tail cannot be read still says the turn finished", async () => {
+    const r = await rig([previewing("a", TOKEN_A)]);
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", new Error("history unavailable"));
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "working", message_count: 2 }),
+      snapshot(),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    await step(r, w);
+    expect(r.sent.map((m) => [(m.data as MobilePushData).kind, m.body])).toEqual([
+      ["turn.done", "granite replied"],
+    ]);
+  });
+
+  test("a key rotated mid-turn by a compression settles once, under the new key", async () => {
+    const r = await rig();
+    r.chat.bots.set("old", "granite");
+    r.chat.bots.set("new", "granite");
+    // The old key's newest reply predates the turn; the turn ends under the new one.
+    r.chat.tails.set("old", [
+      message("user", "go"),
+      message("bot", "before", { at: isoAt(r, -60_000) }),
+    ]);
+    r.chat.tails.set("new", [message("user", "go"), message("bot", "after", { at: isoAt(r, 7_000) })]);
+    r.chat.snapshots.push(
+      snapshot({ id: "old", status: "idle", message_count: 40 }),
+      snapshot({ id: "old", status: "working", message_count: 40 }),
+      snapshot({ id: "new", status: "working", message_count: 6 }),
+      snapshot({ id: "new", status: "idle", message_count: 7 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 3; i++) await step(r, w);
+    expect(r.sent.map((m) => (m.data as MobilePushData).session)).toEqual(["new"]);
+  });
+});
+
 describe("a failed poll", () => {
   for (const [label, failure] of [
     ["a throw", new Error("timed out")],

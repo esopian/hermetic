@@ -44,6 +44,7 @@ function setup() {
   let historyFails = 0;
   let opens = 0;
   let historyFailCode = "CHAT_UNREACHABLE";
+  let abortTurnAnswer: unknown = {};
   const transport: ConversationTransport = {
     history: async (input) => {
       calls.push({ method: "chat.history", input });
@@ -68,7 +69,7 @@ function setup() {
     },
     abortTurn: async (turn_id) => {
       calls.push({ method: "turn.abort", input: turn_id });
-      return {};
+      return abortTurnAnswer;
     },
     abort: async (input) => {
       calls.push({ method: "chat.abort", input });
@@ -115,6 +116,9 @@ function setup() {
     view: () => store.view(T),
     setSteer: (s: SteerStatus) => {
       steerStatus = s;
+    },
+    setAbortTurn: (answer: unknown) => {
+      abortTurnAnswer = answer;
     },
     failHistory: (n: number, code = "CHAT_UNREACHABLE") => {
       historyFails = n;
@@ -330,6 +334,33 @@ describe("stop, steer, queue", () => {
     // Late frames for the stopped turn are ignored.
     s.store.onTurnFrame("T1", 9, delta(9, "late"));
     expect(s.view().live?.blocks ?? []).not.toContainEqual({ kind: "text", markdown: "late" });
+  });
+
+  test("stop after suspend detached the turn goes by its session, never the pump", async () => {
+    const s = setup();
+    await started(s);
+    s.store.onTurnSession("T1", "s-1");
+    s.store.suspend();
+    s.store.enqueue(T, "after");
+    await s.store.stop(T);
+    expect(s.method("turn.abort")).toEqual([]);
+    expect(s.method("chat.abort").map((c) => c.input)).toEqual([
+      { instance: "atlas", bot: "scribe", session: "s-1" },
+    ]);
+    expect(s.view()).toMatchObject({ sending: false, queueParked: true });
+    expect(s.method("turn.start")).toHaveLength(1);
+  });
+
+  test("stop whose pump the transport no longer holds falls back to the session", async () => {
+    const s = setup();
+    await started(s);
+    s.store.onTurnSession("T1", "s-1");
+    s.setAbortTurn(false);
+    await s.store.stop(T);
+    expect(s.method("turn.abort")).toHaveLength(1);
+    expect(s.method("chat.abort").map((c) => c.input)).toEqual([
+      { instance: "atlas", bot: "scribe", session: "s-1" },
+    ]);
   });
 
   test("stop before the turn id is known falls back to chat.abort", async () => {

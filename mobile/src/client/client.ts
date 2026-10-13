@@ -19,7 +19,7 @@ import {
 } from "@hermetic/core/chat-client";
 import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 import type { FleetStore } from "../fleet/store.ts";
-import { isRunning, type LiveStatus } from "../gateway/active-list.ts";
+import { isRunning, type LiveRow } from "../gateway/active-list.ts";
 import { boxAddress, createGatewayClient } from "../gateway/client.ts";
 import { type FetchLike, resetTunnelChecks } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
@@ -96,6 +96,12 @@ export const UNLISTENED = "UNLISTENED";
 export const REMOTE_POLL_MS = 3_000;
 /** Failed asks in a row after which a turn still running on its box is reported gone. */
 export const REMOTE_FAILURES = 5;
+/**
+ * Answers in a row that do not list a turn's session before it is taken as
+ * over. One is not enough: a compaction mid-turn renames the stored session,
+ * and until an answer has named the turn's live id the phone cannot match it.
+ */
+export const REMOTE_MISSES = 2;
 
 /* ── the client ─────────────────────────────────────────────────────────── */
 
@@ -134,9 +140,12 @@ export interface HermeticClientOptions {
  *   `starting`, `waiting`): the store keeps the turn in flight as running on
  *   the box (`chat.onTurnRemote`), and while its conversation is on screen
  *   the box is asked again every `REMOTE_POLL_MS` until the session is idle
- *   or gone (`chat.onRemoteDone`: the transcript is re-read, the queue
- *   released). Idle, gone, or no answer: the turn is reported gone
- *   (`chat.onTurnGone`), so the store re-reads its transcript from the box.
+ *   or gone. A definite answer that it is over — `idle`, or absent from
+ *   `REMOTE_MISSES` answers in a row — is `chat.onRemoteDone` on the first ask
+ *   as on any later one: the turn ran to its end, so the transcript is re-read
+ *   and the queue released, with nothing marked dropped. No answer (the first
+ *   ask failing, or `REMOTE_FAILURES` in a row) is `chat.onTurnGone`: dropped,
+ *   and the transcript re-read from the box.
  * - `"inactive"` — alerts only; nothing is detached.
  *
  * Every move into `"background"` or `"active"` forgets the hermeticd tunnel
@@ -366,8 +375,9 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   /**
    * Ask a detached turn's box what its session is doing, and keep asking
    * while the box says it is busy and its conversation is on screen. `back`:
-   * the first ask on the return to the foreground, where anything but "busy"
-   * (idle, gone, no answer) is today's `onTurnGone`.
+   * the first ask on the return to the foreground, where no answer at all is
+   * `onTurnGone`. A row once matched names the turn's live id, which the next
+   * ask matches on too (a compaction renames the stored id, not the live one).
    */
   function followRemote(turnId: string, back: boolean): void {
     if (following.has(turnId)) return;
@@ -379,6 +389,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     };
     void (async () => {
       let failures = 0;
+      let misses = 0;
       for (let first = true; ; first = false) {
         if (!first) await pause(REMOTE_POLL_MS, signal);
         if (signal.aborted) return;
@@ -388,11 +399,12 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
           done();
           return chat.onTurnGone(turnId);
         }
-        let status: LiveStatus | null;
+        let row: LiveRow | null;
         try {
-          status = await transport.liveStatus({
+          row = await transport.liveStatus({
             instance: where.target.instance,
             session: where.session,
+            runtime: where.runtime,
             signal,
           });
         } catch {
@@ -405,11 +417,14 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         }
         if (signal.aborted) return;
         failures = 0;
-        if (!isRunning(status)) {
+        // Not listed: over, or renamed under a live id not yet learned. Ask again.
+        if (row === null && ++misses < REMOTE_MISSES) continue;
+        if (row === null || !isRunning(row.status)) {
           done();
           return chat.onRemoteDone(turnId);
         }
-        chat.onTurnRemote(turnId, status);
+        misses = 0;
+        chat.onTurnRemote(turnId, row.status, row.id);
         // Off screen: the turn stays "running on the box" until it is shown again.
         if (!chat.turnTarget(turnId)?.opened) return done();
       }

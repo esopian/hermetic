@@ -56,7 +56,7 @@ import type {
   Failure,
 } from "../client/conversation-store.ts";
 import { reasonOf } from "../client/errors.ts";
-import { type LiveStatus, liveStatusOf } from "./active-list.ts";
+import { type LiveRow, liveRowOf } from "./active-list.ts";
 import type { RosterSource } from "../client/roster-store.ts";
 
 /** Where the turn pump delivers: the conversation store's turn events. */
@@ -123,15 +123,17 @@ export interface GatewayOps {
 
 export interface GatewayTransport extends ConversationTransport, RosterSource, GatewayOps {
   /**
-   * `session.active_list` on `instance`'s box, read for `session`: its status
-   * there now, or `null` when the box lists no such live session. Throws when
-   * the gateway cannot say (no Bot Mode RPC, an unreadable answer, no answer).
+   * `session.active_list` on `instance`'s box, read for `session` (or its live
+   * id `runtime`, once known; `liveRowOf`): its status there now and its live
+   * id, or `null` when the box lists no such live session. Throws when the
+   * gateway cannot say (no Bot Mode RPC, an unreadable answer, no answer).
    */
   liveStatus(input: {
     instance: string;
     session: string;
+    runtime?: string | null;
     signal?: AbortSignal;
-  }): Promise<LiveStatus | null>;
+  }): Promise<LiveRow | null>;
   /**
    * Stop following every running turn (`forgetTurn` on each) and answer their
    * ids. The turns keep running on their boxes: nothing is interrupted. The
@@ -340,6 +342,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     return Promise.resolve({ turn_id });
   }
 
+  /** `false` when no pump of that turn is held here (detached, ended): the store then aborts by session. */
   async function abortTurn(turn_id: string): Promise<unknown> {
     const run = runs.get(turn_id);
     if (!run) return false;
@@ -372,8 +375,9 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
   async function liveStatus(input: {
     instance: string;
     session: string;
+    runtime?: string | null;
     signal?: AbortSignal;
-  }): Promise<LiveStatus | null> {
+  }): Promise<LiveRow | null> {
     if (!client.botModeRpc)
       throw new HermeticError("CHAT_PROTOCOL", "This gateway does not list its live sessions");
     const answer = await client.botModeRpc(
@@ -382,10 +386,10 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
       {},
       input.signal ? { signal: input.signal } : {},
     );
-    const status = liveStatusOf(answer, input.session);
-    if (status === undefined)
+    const row = liveRowOf(answer, input.session, input.runtime ?? null);
+    if (row === undefined)
       throw new HermeticError("CHAT_PROTOCOL", "session.active_list answered without a session list");
-    return status;
+    return row;
   }
 
   async function abort(input: {

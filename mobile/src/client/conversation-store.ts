@@ -266,7 +266,11 @@ export interface ConversationTransport {
    * `onTurnFrame`, and how it ended on `onTurnEnd` / `onTurnGone`.
    */
   startTurn(turn: TurnRequest): Promise<TurnStartResult>;
-  /** Stop a turn this phone started (the gateway's interrupt for its session). */
+  /**
+   * Stop a turn this phone started (the gateway's interrupt for its session).
+   * Answers `false` when the transport holds no pump for it any more; the
+   * store then stops it by session (`abort`).
+   */
   abortTurn(turn_id: string): Promise<unknown>;
   /** Stop whatever runs in a conversation (no turn of this phone's to name). */
   abort(input: { instance: string; bot: string; session?: string }): Promise<AbortResult | unknown>;
@@ -319,6 +323,12 @@ export interface TurnWhere {
   opened: boolean;
   /** Set while the box reports it still running (`onTurnRemote`). */
   remote: RemoteStatus | null;
+  /**
+   * The turn's live (runtime) session id on the box, once an answer named it
+   * (`onTurnRemote`). Upstream rotates the stored id on a mid-turn compaction;
+   * the live id stays, so a later ask matches on it too.
+   */
+  runtime: string | null;
 }
 
 /**
@@ -381,6 +391,9 @@ interface Rec {
   reconnectTimer: TimerHandle | null;
   dropped: boolean;
   remote: RemoteStatus | null;
+  /** Set by `suspend` on a turn in flight: its pump was let go, so Stop goes by session. */
+  detached: boolean;
+  runtime: string | null;
   gen: number;
   run: TurnRun | null;
   segments: string[];
@@ -505,11 +518,15 @@ export class ConversationStore {
   /**
    * Close every observation (the hint socket with it) and keep the record of
    * which conversations are on screen, for `resume`. The app went to the
-   * background: a suspended phone holds no socket open.
+   * background: a suspended phone holds no socket open. Every turn in flight
+   * is marked detached (the client let its pump go), so a Stop before the box
+   * has answered for it goes by session rather than by a pump that is gone.
    */
   suspend(): void {
-    for (const record of this.records.values())
+    for (const record of this.records.values()) {
+      if (record.run && !record.run.settled) record.detached = true;
       if (record.closeObserve) this.stopObserve(record, "off", null);
+    }
   }
 
   /**
@@ -550,6 +567,8 @@ export class ConversationStore {
     this.clearReconnect(record);
     const gen = ++record.gen;
     record.dropped = false;
+    record.detached = false;
+    record.runtime = null;
     record.turnError = null;
     this.releaseHeld(record);
     if (record.live && !answered(record.messages, record.live))
@@ -874,7 +893,13 @@ export class ConversationStore {
     const record = this.owned(turn_id);
     if (!record) return null;
     const session = record.run?.seed.session || record.resolvedSession || record.target.session;
-    return { target: record.target, session, opened: record.opened, remote: record.remote };
+    return {
+      target: record.target,
+      session,
+      opened: record.opened,
+      remote: record.remote,
+      runtime: record.runtime,
+    };
   }
 
   /**
@@ -882,12 +907,14 @@ export class ConversationStore {
    * on its box (`session.active_list` says `working`, `starting` or
    * `waiting`). It stays in flight — no frames arrive, but Steer and Stop
    * reach it by its session, and what is sent now is queued — until the box
-   * says it is idle (`onRemoteDone`). Answers whether the turn was still
-   * followed here.
+   * says it is idle (`onRemoteDone`). `runtime` is the live session id the
+   * box's row carried (`turnTarget` hands it back for the next ask). Answers
+   * whether the turn was still followed here.
    */
-  onTurnRemote(turn_id: string, status: RemoteStatus): boolean {
+  onTurnRemote(turn_id: string, status: RemoteStatus, runtime: string | null = null): boolean {
     const record = this.owned(turn_id);
     if (!record) return false;
+    if (runtime) record.runtime = runtime;
     if (record.remote === status) return true;
     record.remote = status;
     record.activity = "thinking";
@@ -896,17 +923,16 @@ export class ConversationStore {
   }
 
   /**
-   * The box says a turn `onTurnRemote` kept in flight is over (its session is
-   * idle, or gone from the list). The transcript is re-read as for a turn gone
+   * The box gave a definite answer that a turn this phone stopped following
+   * is over (its session is idle, or gone from the list), whether or not it
+   * was seen running first. The transcript is re-read as for a turn gone
    * (`onTurnGone`), but the turn ran to its end, so nothing is marked dropped
-   * and the queue drains once the read lands. A turn not in that state is
+   * and the queue drains once the read lands. No answer at all is
    * `onTurnGone`.
    */
   onRemoteDone(turn_id: string): void {
     const record = this.owned(turn_id);
-    if (!record?.run) return;
-    if (record.remote === null) this.end(record, record.run, false, null);
-    else this.end(record, record.run, false, null, true);
+    if (record?.run) this.end(record, record.run, false, null, true);
   }
 
   private owned(turn_id: string): Rec | null {
@@ -1073,6 +1099,8 @@ export class ConversationStore {
         reconnectTimer: null,
         dropped: false,
         remote: null,
+        detached: false,
+        runtime: null,
         gen: 0,
         run: null,
         segments: [],
@@ -1165,6 +1193,7 @@ export class ConversationStore {
     run.settled = true;
     if (run.turnId) this.owners.delete(run.turnId);
     record.remote = null;
+    record.detached = false;
     record.activity = "idle";
     record.segments = [];
     run.fold = { ...run.fold, openRequests: [] };
@@ -1226,17 +1255,20 @@ export class ConversationStore {
     this.clearReconnect(record);
     record.dropped = false;
     this.changed(record);
-    // A turn still running on its box unfollowed has no pump to stop: it is
-    // interrupted by its session, like one this phone never started.
+    // A turn unfollowed (detached on the way to the background, or known to
+    // run on its box) has no pump to stop: it is interrupted by its session,
+    // like one this phone never started. So is one whose pump the transport
+    // no longer holds (`abortTurn` answers `false`).
     const session = record.resolvedSession ?? record.target.session ?? (run?.seed.session || null);
+    const bySession = () =>
+      this.transport.abort({
+        instance: record.target.instance,
+        bot: record.target.bot,
+        ...(session ? { session } : {}),
+      });
     try {
-      if (run?.turnId && record.remote === null) await this.transport.abortTurn(run.turnId);
-      else
-        await this.transport.abort({
-          instance: record.target.instance,
-          bot: record.target.bot,
-          ...(session ? { session } : {}),
-        });
+      const pumped = !record.detached && record.remote === null ? run?.turnId : null;
+      if (!pumped || (await this.transport.abortTurn(pumped)) === false) await bySession();
     } catch (error) {
       if (record.gen === gen)
         record.turnError = {
@@ -1256,6 +1288,7 @@ export class ConversationStore {
         }
         record.sending = false;
         record.remote = null;
+        record.detached = false;
         record.segments = [];
         this.releaseHeld(record);
         record.activity = "idle";

@@ -381,13 +381,20 @@ export interface RemoteTurnView {
 }
 
 export function remoteTurnView(status: RemoteStatus): RemoteTurnView {
+  // TODO(mobile): answer the request here. A turn detached while away leaves
+  // its approval or question visible only in the gateway's `open_requests`,
+  // which core replays to a turn pump on reconnect and nowhere else; history
+  // has no request row, and upstream holds the request until its timeout.
+  // The fix: read `open_requests` from `session.events.since` for the turn's
+  // session, fold them into approval/question cards, and answer through the
+  // canonical `respond`.
   if (status === "waiting")
     return {
       status,
       title: "Still running on the box — waiting on you.",
       sub:
-        "The turn asked for an approval or an answer while the phone was away. Open the request " +
-        "from history to answer it. A message sent now is queued until the turn ends.",
+        "Waiting on you — answer from the desktop, or stop the turn here. A message sent now is " +
+        "queued until the turn ends.",
     };
   return {
     status,

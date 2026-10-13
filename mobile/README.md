@@ -67,6 +67,17 @@ deleted.
 The app uses native modules (camera, notifications, secure store, keyboard controller, webview), so
 it needs a development build (`bun run ios`), not Expo Go.
 
+## Chat: a request raised while the phone was away
+
+A turn the phone stopped following in the background can stop for an approval or a question. On
+the return the phone sees only that its session is `waiting` (`session.active_list`): the request
+itself lives in the gateway's `open_requests`, which is replayed only to a turn pump that
+reconnects, and history has no row for it, so the phone cannot show or answer it. The band says so
+("answer from the desktop, or stop the turn here"), Stop interrupts the turn by its session, and
+upstream otherwise keeps the request waiting until its own timeout. The fix (folding
+`open_requests` from `session.events.since` into approval and question cards, answered through the
+canonical `respond`) is marked `TODO(mobile)` in `src/client/chat-logic.ts`.
+
 ## Platforms
 
 iOS only. Android is out of scope: `app.config.ts` carries only the `android` block `expo prebuild`

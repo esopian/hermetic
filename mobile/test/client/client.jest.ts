@@ -5,6 +5,7 @@ import {
   type Alert,
   createHermeticClient,
   REMOTE_FAILURES,
+  REMOTE_MISSES,
   REMOTE_POLL_MS,
 } from "../../src/client/client.ts";
 import type { Timers } from "../../src/client/timers.ts";
@@ -375,10 +376,14 @@ describe("a turn still running on its box after the phone was away", () => {
     sessions: [{ id: "live-1", session_key: "s-1", status, message_count: 3 }],
   });
 
-  /** A held turn on screen, sent, backgrounded and brought back; `answer` is the box's list. */
-  async function away(answer: () => unknown) {
+  /**
+   * A held turn on screen, sent, backgrounded and brought back; `answer` is the
+   * box's list. `frames` is what the turn said before it was detached, and
+   * `queued` is put in the queue while it runs, before the phone goes away.
+   */
+  async function away(answer: () => unknown, opts: { frames?: ChatFrame[]; queued?: string } = {}) {
     const timers = new FakeTimers();
-    const s = await setup([delta(1, "working on it")], {
+    const s = await setup(opts.frames ?? [delta(1, "working on it")], {
       hold: true,
       timers,
       rpc: (method) => {
@@ -389,6 +394,7 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.chat.open(T);
     expect(s.client.chat.send(T, "long job")).toBe(true);
     await settle();
+    if (opts.queued) s.client.chat.enqueue(T, opts.queued);
     s.client.setPhase("background");
     await settle();
     s.client.setPhase("active");
@@ -431,14 +437,62 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.dispose();
   });
 
-  test("a session gone from the list after running is over too, not dropped", async () => {
+  test(`a session gone from the list is over only after ${REMOTE_MISSES} answers in a row, not dropped`, async () => {
     let answer: unknown = row("starting");
     const s = await away(() => answer);
     expect(s.client.chat.view(T).remote?.status).toBe("starting");
+    s.client.chat.enqueue(T, "next");
     answer = { sessions: [] };
+    // One answer without the session is not yet an answer: nothing drains into it.
+    await s.tick(REMOTE_POLL_MS);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: { status: "starting" } });
+    expect(s.chat.sent).toEqual(["long job"]);
     await s.tick(REMOTE_POLL_MS);
     await s.tick(0);
-    expect(s.client.chat.view(T)).toMatchObject({ remote: null, sending: false, dropped: false });
+    // Over: the queued message is the next turn (it holds open, so `sending` again).
+    expect(s.client.chat.view(T)).toMatchObject({ remote: null, dropped: false, queue: [] });
+    expect(s.chat.sent).toEqual(["long job", "next"]);
+    s.client.dispose();
+  });
+
+  test("a compaction renaming the stored session mid-turn is matched on the live id", async () => {
+    let answer: unknown = row("working");
+    const s = await away(() => answer);
+    s.client.chat.enqueue(T, "next");
+    // Upstream's `session_key` is the rotated stored id; the live `id` stays.
+    answer = { sessions: [{ id: "live-1", session_key: "s-1b", status: "working" }] };
+    const asked = s.chat.rpcs.length;
+    for (let i = 0; i < REMOTE_MISSES + 1; i++) await s.tick(REMOTE_POLL_MS);
+    expect(s.chat.rpcs).toHaveLength(asked + REMOTE_MISSES + 1);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: { status: "working" } });
+    expect(s.chat.sent).toEqual(["long job"]);
+    answer = { sessions: [{ id: "live-1", session_key: "s-1b", status: "idle" }] };
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    // Over: the queued message is the next turn (it holds open, so `sending` again).
+    expect(s.client.chat.view(T)).toMatchObject({ remote: null, dropped: false, queue: [] });
+    expect(s.chat.sent).toEqual(["long job", "next"]);
+    s.client.dispose();
+  });
+
+  test("Stop before the box has answered the first ask interrupts the turn by its session", async () => {
+    let answer!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      answer = resolve;
+    });
+    const s = await away(() => pending, { queued: "next" });
+    expect(s.chat.rpcs).toEqual(["session.active_list"]);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: null });
+    await s.client.chat.stop(T);
+    await settle();
+    expect(s.chat.aborts).toEqual(["atlas"]);
+    expect(s.chat.abortSessions).toEqual(["s-1"]);
+    // Parked, never drained into the session it just interrupted.
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, queueParked: true });
+    expect(s.chat.sent).toEqual(["long job"]);
+    answer(row("working"));
+    await settle();
+    expect(s.client.chat.view(T).remote).toBeNull();
     s.client.dispose();
   });
 
@@ -463,14 +517,40 @@ describe("a turn still running on its box after the phone was away", () => {
       status: "waiting",
       title: "Still running on the box — waiting on you.",
     });
-    expect(s.client.chat.view(T).remote?.sub).toContain("Open the request from history");
+    expect(s.client.chat.view(T).remote?.sub).toMatch(
+      /^Waiting on you — answer from the desktop, or stop the turn here\./,
+    );
     s.client.dispose();
   });
 
-  test("idle on the first ask is today's gone path: dropped and re-read", async () => {
-    const s = await away(() => row("idle"));
+  test("idle on the first ask finished while away: re-read, queue drained, nothing dropped", async () => {
+    // No frame before the phone left: nothing assembled to fall back on.
+    const s = await away(() => row("idle"), { frames: [], queued: "next" });
     await s.tick(0);
-    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null, dropped: true });
+    expect(s.client.chat.view(T)).toMatchObject({
+      remote: null,
+      dropped: false,
+      live: null,
+      queue: [],
+    });
+    expect(s.chat.histories.length).toBeGreaterThan(0);
+    expect(s.chat.sent).toEqual(["long job", "next"]);
+    s.client.dispose();
+  });
+
+  test(`missing from ${REMOTE_MISSES} first answers finished while away too, not dropped`, async () => {
+    const s = await away(() => ({ sessions: [] }), { frames: [] });
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: null });
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    // No "reply stopped arriving" band over a transcript the re-read made whole.
+    expect(s.client.chat.view(T)).toMatchObject({
+      sending: false,
+      dropped: false,
+      reconnecting: false,
+      live: null,
+    });
+    expect(s.chat.histories.length).toBeGreaterThan(0);
     s.client.dispose();
   });
 

@@ -79,9 +79,12 @@ describe("RemoteBand", () => {
     expect(screen.queryByTestId("band-remote")).toBeNull();
   });
 
-  test("waiting tells the operator where the request is", async () => {
+  test("waiting sends the operator to the desktop, or to Stop", async () => {
     await renderUi(<RemoteBand remote={remoteTurnView("waiting")} />);
     expect(screen.getByText("Still running on the box — waiting on you.")).toBeTruthy();
-    expect(screen.getByText(/Open the request from history/)).toBeTruthy();
+    expect(
+      screen.getByText(/^Waiting on you — answer from the desktop, or stop the turn here\./),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Open the request from history/)).toBeNull();
   });
 });

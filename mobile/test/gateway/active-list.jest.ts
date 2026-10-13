@@ -1,5 +1,5 @@
 import { HermeticError, type HermesChatClient } from "@hermetic/core/chat-client";
-import { isRunning, liveStatusOf } from "../../src/gateway/active-list.ts";
+import { isRunning, liveRowOf, liveStatusOf } from "../../src/gateway/active-list.ts";
 import { createGatewayTransport } from "../../src/gateway/transport.ts";
 
 const NOW = "2026-10-13T10:00:00.000Z";
@@ -19,6 +19,15 @@ describe("liveStatusOf", () => {
     expect(liveStatusOf(answer, "s-1")).toBe("working");
     expect(liveStatusOf(answer, "live-1")).toBe("working");
     expect(liveStatusOf(answer, "s-2")).toBe("waiting");
+  });
+
+  test("a known live id wins over a stored key a compaction rotated, and the row names it", () => {
+    const rotated = { sessions: [{ id: "live-1", session_key: "s-1b", status: "working" }] };
+    expect(liveStatusOf(rotated, "s-1")).toBeNull();
+    expect(liveStatusOf(rotated, "s-1", "live-1")).toBe("working");
+    expect(liveRowOf(answer, "s-1")).toEqual({ status: "working", id: "live-1" });
+    // A live id that is not listed falls back to the stored key.
+    expect(liveRowOf(answer, "s-2", "gone")).toEqual({ status: "waiting", id: "s-2" });
   });
 
   test("a session not listed is null; an unknown status is not running", () => {
@@ -64,7 +73,14 @@ describe("transport.liveStatus", () => {
       },
     });
     const signal = new AbortController().signal;
-    expect(await t.liveStatus({ instance: "atlas", session: "s-1", signal })).toBe("starting");
+    expect(await t.liveStatus({ instance: "atlas", session: "s-1", signal })).toEqual({
+      status: "starting",
+      id: "x",
+    });
+    expect(await t.liveStatus({ instance: "atlas", session: "s-9", runtime: "x" })).toEqual({
+      status: "starting",
+      id: "x",
+    });
     expect(await t.liveStatus({ instance: "atlas", session: "s-2" })).toBeNull();
     expect(calls[0]).toEqual({
       url: "https://fxtr0001-atlas.hermetic.ts.net/",
