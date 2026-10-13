@@ -167,7 +167,10 @@ export function expoReceiptFetcher(
         body: JSON.stringify({ ids: batch }),
         signal: outer === undefined ? timeout : AbortSignal.any([timeout, outer]),
       });
-      if (!response.ok) throw new Error(`receipts service answered ${response.status}`);
+      // A refused batch leaves its ids unresolved; the caller asks again on its
+      // next round. `shared/` cannot raise a `HermeticError` and a receipt is
+      // never worth failing a push loop over.
+      if (!response.ok) continue;
       const json = (await response.json()) as { data?: unknown };
       const data =
         typeof json?.data === "object" && json.data !== null

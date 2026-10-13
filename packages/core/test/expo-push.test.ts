@@ -142,8 +142,9 @@ describe("expoReceiptFetcher", () => {
     expect(out.has("t3")).toBe(false);
   });
 
-  test("a failed request throws, naming the status only", async () => {
+  test("a refused batch leaves its ids unresolved rather than throwing", async () => {
     const { fetch } = recorder(() => new Response("", { status: 500 }));
-    await expect(expoReceiptFetcher(fetch)(["t1"])).rejects.toThrow("receipts service answered 500");
+    const receipts = await expoReceiptFetcher(fetch)(["t1"]);
+    expect(receipts.size).toBe(0);
   });
 });
