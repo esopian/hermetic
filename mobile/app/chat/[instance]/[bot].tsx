@@ -6,7 +6,7 @@
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBridge } from "../../../src/bridge/BridgeProvider.tsx";
@@ -128,7 +128,7 @@ export default function Conversation() {
   const session = view?.sessions.find((s) => s.id === (view.resolvedSession ?? target.session)) ?? null;
   const onCanonical = target.session === null || session?.kind === "canonical";
 
-  // A clarify still open in the running turn: "Now" skips it before steering.
+  // A clarify still open in the running turn: "Send now" skips it before steering.
   const openQuestion = useMemo(() => {
     if (!live || !view) return null;
     for (const block of live.blocks)
@@ -308,57 +308,41 @@ export default function Conversation() {
     [t, fleetId, target, botTitle, session, onCanonical, avatarStatus, view],
   );
 
+  // One Stop, in the composer (iMessage-style). The header keeps only the
+  // browser button; the avatar's activity ring and the composer's footer say a
+  // turn is running.
   const headerRight = useCallback(
     () => (
-      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.xs }}>
-        {sending ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Stop turn"
-            hitSlop={8}
-            onPress={() => {
-              haptic.warning();
-              void client?.conversations.stop(target);
-            }}
-            style={{
-              borderWidth: t.border.control,
-              borderColor: t.c.bad,
-              paddingHorizontal: 8,
-              paddingVertical: 4,
-            }}
-          >
-            <Text mono variant="caption" weight={700} tone="bad">
-              {view?.aborting ? "STOPPING" : "■ STOP"}
-            </Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open browser"
-          hitSlop={8}
-          onPress={() => router.push(`/agent/${encodeURIComponent(target.instance)}`)}
-          style={{ paddingHorizontal: 8, paddingVertical: 4 }}
-        >
-          <Text mono weight={700}>
-            ◫
-          </Text>
-        </Pressable>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open browser"
+        onPress={() => router.push(`/agent/${encodeURIComponent(target.instance)}`)}
+        style={{
+          minWidth: t.touch.min,
+          minHeight: t.touch.min,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Text mono weight={700}>
+          ◫
+        </Text>
+      </Pressable>
     ),
-    [t, sending, client, target, view?.aborting],
+    [t, target],
   );
 
   const loading = !view || (view.history === "loading" && messages.length === 0 && !live);
 
   return (
     <ChatScope.Provider value={scope}>
-      {/* A row rule under the header: the transcript scrolls up beneath it. */}
+      {/* A hairline under the opaque header: the transcript scrolls up to it, not under it. */}
       <View
         style={{
           flex: 1,
           backgroundColor: t.c.bg,
-          borderTopWidth: t.border.row,
-          borderTopColor: t.c.line,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: t.c.line2,
         }}
       >
         <Stack.Screen options={{ headerTitle, headerRight, title: botTitle ?? target.bot }} />
@@ -466,8 +450,8 @@ export default function Conversation() {
               onUnqueue={(id) => client?.conversations.unqueue(target, id)}
             />
             {!sending && !composer.enabled ? null : (
-              <Kicker style={{ marginTop: t.space.xs, fontSize: 9 }}>
-                {`over the bridge · ${onCanonical ? "Bot Chat" : sessionLabel(session)}`}
+              <Kicker tone={sending ? "acc" : "fg3"} style={{ marginTop: t.space.xs, fontSize: 9 }}>
+                {`${sending ? (view?.aborting ? "stopping…" : "turn in flight") : "over the bridge"} · ${onCanonical ? "Bot Chat" : sessionLabel(session)}`}
               </Kicker>
             )}
           </View>

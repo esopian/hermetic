@@ -22,6 +22,7 @@ import { Text } from "../ui/Text.tsx";
 import { ActivityGroup } from "./blocks/Activity.tsx";
 import { Block } from "./blocks/Block.tsx";
 import { FailureCard } from "./blocks/Failure.tsx";
+import { PlainText } from "./PlainText.tsx";
 
 const GUTTER = 36;
 
@@ -68,7 +69,7 @@ function OperatorBubble({ message, now }: { message: ChatMessage; now: number })
           opacity: pending ? 0.7 : 1,
         }}
       >
-        <Text selectable>{text}</Text>
+        <PlainText text={text} />
       </View>
       <Text mono variant="caption" tone="fg3" style={{ marginTop: 2 }}>
         {[steer ? "steered" : null, pending ? "sending…" : threadTime(message.at, now)]

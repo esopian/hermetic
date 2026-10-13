@@ -4,9 +4,11 @@
  * - Idle: **Send** starts a turn.
  * - A turn running, nothing typed: **Stop** (the queue is parked, not dropped).
  * - A turn running, something typed: **Queue** adds it to this conversation's
- *   local queue (drained one at a time when the turn ends), and **Now** steers
- *   it into the running turn — falling back to the head of the queue and a
- *   stop when the box will not take a steer.
+ *   local queue (drained one at a time when the turn ends), and **Send now**
+ *   steers it into the running turn — falling back to the head of the queue
+ *   and a stop when the box will not take a steer. A line above the input says
+ *   which is which (the desktop's footer hint, "Enter queues · ⌘Enter sends now").
+ * - Stop lives here and only here: the conversation header has none.
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
  *
@@ -133,7 +135,7 @@ function QueuedRow({
           haptic.medium();
           onSendNow();
         }}
-        style={{ paddingHorizontal: t.space.sm, paddingVertical: t.space.sm }}
+        style={{ paddingHorizontal: t.space.sm, minHeight: t.touch.min, justifyContent: "center" }}
       >
         <Text mono variant="caption" weight={700} tone="acc">
           SEND NOW
@@ -147,7 +149,12 @@ function QueuedRow({
           haptic.select();
           onRemove();
         }}
-        style={{ paddingHorizontal: t.space.sm, paddingVertical: t.space.sm }}
+        style={{
+          minWidth: t.touch.min,
+          minHeight: t.touch.min,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
       >
         <Text mono tone="fg3">
           ✕
@@ -203,7 +210,11 @@ function ComposerImpl(props: ComposerProps) {
       ) : null}
       {props.questionOpen ? (
         <Text mono variant="caption" tone="warn">
-          a question is waiting above — Now skips it, Queue waits behind it
+          a question is waiting above — Send now skips it, Queue waits behind it
+        </Text>
+      ) : mode === "queue" ? (
+        <Text mono variant="caption" tone="fg3">
+          Queue sends when the agent is free · Send now steers this turn
         </Text>
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}>
@@ -213,7 +224,7 @@ function ComposerImpl(props: ComposerProps) {
           value={draft}
           onChangeText={onChange}
           editable={editable}
-          placeholder={sending ? "Queue a message, or steer with Now…" : placeholder}
+          placeholder={sending ? "Queue a message, or steer this turn…" : placeholder}
           placeholderTextColor={t.c.fg3}
           multiline
           selectionColor={t.c.acc}
@@ -252,10 +263,12 @@ function ComposerImpl(props: ComposerProps) {
         ) : mode === "queue" ? (
           <View style={{ flexDirection: "row", gap: t.space.xs }}>
             <Button
-              label="Now"
+              label="Send now"
               accessibilityLabel="Send now"
+              accessibilityHint="Steers this message into the running turn"
               variant="secondary"
               haptic={false}
+              style={{ paddingHorizontal: t.space.md }}
               onPress={() => {
                 const text = take();
                 if (!text) return;
@@ -266,7 +279,9 @@ function ComposerImpl(props: ComposerProps) {
             <Button
               label="Queue"
               accessibilityLabel="Queue"
+              accessibilityHint="Sends this message when the running turn ends"
               haptic={false}
+              style={{ paddingHorizontal: t.space.md }}
               onPress={() => {
                 const text = take();
                 if (!text) return;

@@ -4,10 +4,13 @@ import { FilterChips } from "../../src/bots/BotsList.tsx";
 import {
   groupNotifications,
   groupRow,
+  groupUnread,
   inQuietHours,
   rowDestination,
+  unackedIds,
 } from "../../src/client/inbox-logic.ts";
-import { previewLine, rosterRows } from "../../src/client/roster-rows.ts";
+import { isUnreadRow } from "../../src/client/notifications-store.ts";
+import { previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
 import { rosterLayout } from "../../src/client/roster-store.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
 import { bot, notification, swarm } from "../helpers/fixtures.ts";
@@ -67,6 +70,38 @@ describe("bots list rows", () => {
     expect(previewLine(bot({ preview: "ship it", preview_role: "user" }))).toBe("You: ship it");
     expect(previewLine(bot({ preview: "done\nnext", preview_role: "bot" }))).toBe("done next");
     expect(previewLine(bot({}))).toBe("No messages yet");
+  });
+
+  test("no last message: 'No messages yet' and no time; a last message keeps its time", () => {
+    const empty = bot({ name: "fresh" });
+    expect(previewLine(empty)).toBe("No messages yet");
+    expect(rowTime(empty, NOW)).toBe("");
+    // A watermark with nothing to quote: there *are* messages, so the row says
+    // what the desktop's bot rail says (`preview || description || name`).
+    const quoted = bot({ name: "scribe", last_message_at: new Date(NOW - 5 * 60_000).toISOString() });
+    expect(previewLine(quoted)).toBe("scribe");
+    expect(rowTime(quoted, NOW)).toBe("5m");
+    expect(previewLine({ ...quoted, description: "Writes the digest." })).toBe("Writes the digest.");
+    expect(previewLine({ ...empty, description: "Writes the digest." })).toBe("Writes the digest.");
+  });
+
+  test("BotRow: a bot with no messages shows no time", async () => {
+    await renderUi(
+      <BotRow
+        bot={bot({ name: "fresh", title: "Fresh" })}
+        fleetId="fxtr0001"
+        pinned={false}
+        badge={null}
+        reachable
+        now={NOW}
+        onPress={jest.fn()}
+        onLongPress={jest.fn()}
+      />,
+    );
+    expect(screen.getByText("No messages yet")).toBeTruthy();
+    expect(
+      screen.queryByText(/^(now|\d+m|\d\d:\d\d|Mon|Tue|Wed|Thu|Fri|Sat|Sun|[A-Z][a-z]{2} \d+)$/),
+    ).toBeNull();
   });
 
   test("BotRow: title, preview, time, badge; press and long-press", async () => {
@@ -142,6 +177,57 @@ describe("inbox", () => {
     ]);
     if (!first) throw new Error("no group");
     expect(groupRow(first).read_at).toBeNull();
+  });
+
+  test("unread means unacknowledged and still holding: the header's rule, per row and per card", () => {
+    expect(isUnreadRow(notification({}))).toBe(true);
+    expect(isUnreadRow(notification({ read_at: "x" }))).toBe(false);
+    // Resolved but never read: not in core's `unread` count, so no marker.
+    expect(isUnreadRow(notification({ resolved_at: "x" }))).toBe(false);
+    const list = [
+      notification({ id: "u", class: "warn", kind: "agent.health", source: "agent", ref: null }),
+      notification({
+        id: "r",
+        class: "warn",
+        kind: "fleet.advisory",
+        source: "fleet",
+        ref: null,
+        resolved_at: "x",
+      }),
+      notification({
+        id: "k",
+        class: "ok",
+        kind: "operation.done",
+        source: "operation",
+        ref: null,
+        read_at: "x",
+      }),
+    ];
+    const groups = groupNotifications(list);
+    // The header counts exactly the rows that carry a marker.
+    expect(groups.filter(groupUnread).length).toBe(list.filter(isUnreadRow).length);
+    expect(groups.map(groupUnread)).toEqual([true, false, false]);
+    // "Mark read" still acknowledges the resolved row.
+    expect(unackedIds(list)).toEqual(["u", "r"]);
+  });
+
+  test("InboxRow: a resolved, unread row has no unread marker and says it cleared", async () => {
+    const group = groupNotifications([
+      notification({
+        id: "v1",
+        class: "warn",
+        kind: "fleet.advisory",
+        source: "fleet",
+        ref: null,
+        title: "vol-1 has no agent",
+        resolved_at: "2026-10-13T11:00:00.000Z",
+      }),
+    ])[0];
+    if (!group) throw new Error("no group");
+    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
+    expect(screen.queryByLabelText("unread")).toBeNull();
+    expect(screen.getByText("cleared")).toBeTruthy();
+    expect(screen.getByLabelText("vol-1 has no agent")).toBeTruthy();
   });
 
   test("tap goes to the conversation, or the agent", () => {

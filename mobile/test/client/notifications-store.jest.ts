@@ -4,6 +4,7 @@ import {
   alertFor,
   chatThreadOf,
   dedupeKey,
+  isUnreadRow,
   isWatchingThread,
   unreadChatByConversation,
 } from "../../src/client/notifications-store.ts";
@@ -181,5 +182,33 @@ describe("NotificationsStore", () => {
     expect(source.ack).toHaveBeenCalledWith({ ids: ["b", "a"] });
     expect(store.getState().counts.unread).toBe(0);
     expect(store.unreadFor("atlas", "scribe")).toBe(0);
+  });
+
+  test("ack takes off only what the bridge counted: a resolved row was never in `unread`", async () => {
+    const source = {
+      list: jest.fn(async () => ({
+        notifications: [
+          notification({ id: "open", class: "needs_action", at: "2026-10-13T10:00:00Z" }),
+          notification({ id: "gone", at: "2026-10-13T09:00:00Z", resolved_at: "2026-10-13T09:30:00Z" }),
+          notification({ id: "seen", at: "2026-10-13T08:00:00Z", read_at: "2026-10-13T08:01:00Z" }),
+        ],
+        // Core's rule: read_at null and resolved_at null — only "open".
+        unread: 1,
+        needs_action: 1,
+        snoozed: 0,
+        history: 0,
+        next_snooze_at: null,
+        mutes: [],
+      })),
+      ack: jest.fn(async () => ({ acked: 2 })),
+    };
+    const store = new NotificationsStore(source);
+    await store.refresh();
+    expect(store.getState().rows.filter(isUnreadRow).length).toBe(store.getState().counts.unread);
+    await store.ack(["gone"]);
+    expect(store.getState().counts).toEqual({ unread: 1, needs_action: 1 });
+    await store.ack(["open"]);
+    expect(store.getState().counts).toEqual({ unread: 0, needs_action: 0 });
+    expect(store.getState().rows.filter(isUnreadRow)).toEqual([]);
   });
 });

@@ -6,8 +6,7 @@
  */
 import { memo } from "react";
 import { Pressable, View } from "react-native";
-import { railTime } from "../client/chat-logic.ts";
-import { previewLine } from "../client/roster-rows.ts";
+import { previewLine, rowTime } from "../client/roster-rows.ts";
 import type { Bot } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
@@ -88,7 +87,7 @@ function BotRowImpl({
           ) : null}
           <View style={{ flex: 1 }} />
           <Text mono variant="caption" tone={unread ? "fg" : "fg3"}>
-            {bot.last_message_at ? railTime(bot.last_message_at, now) : ""}
+            {rowTime(bot, now)}
           </Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>

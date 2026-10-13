@@ -4,6 +4,7 @@
  * footer. Pure: the screen renders, this decides what there is to render.
  */
 import type { Bot } from "../protocol/types.ts";
+import { railTime } from "./chat-logic.ts";
 import { botKey, type RosterLayout, rosterFooter, unreadBadge } from "./roster-store.ts";
 
 export type RosterRow =
@@ -91,9 +92,28 @@ export function rosterRows(
   return rows;
 }
 
-/** A bot's preview line: `You: …` for the operator's own last word. */
+/**
+ * A bot's preview line: `You: …` for the operator's own last word.
+ *
+ * With nothing to quote it falls back the way the desktop's bot rail does
+ * (`BotRail.tsx`: `preview || description || name`). A roster read can carry a
+ * `last_message_at` with no preview — an older Hermes, or a session whose
+ * preview the box did not send — so "No messages yet" is said only when there
+ * is no last message at all, the one case it is true.
+ */
 export function previewLine(bot: Bot): string {
   const text = (bot.preview ?? "").replace(/\s+/g, " ").trim();
-  if (!text) return bot.description?.trim() || "No messages yet";
-  return bot.preview_role === "user" ? `You: ${text}` : text;
+  if (text) return bot.preview_role === "user" ? `You: ${text}` : text;
+  const description = bot.description?.trim();
+  if (description) return description;
+  return bot.last_message_at ? bot.name : "No messages yet";
+}
+
+/**
+ * The time on a bot's row: `railTime` of its last message, and nothing when it
+ * has none. The desktop draws `—` there; on a phone row a dash beside "No
+ * messages yet" says the same thing twice, so the slot stays empty.
+ */
+export function rowTime(bot: Pick<Bot, "last_message_at">, now: number): string {
+  return bot.last_message_at ? railTime(bot.last_message_at, now) : "";
 }

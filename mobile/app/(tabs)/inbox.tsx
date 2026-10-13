@@ -7,13 +7,14 @@
 import { FlashList } from "@shopify/flash-list";
 import { router } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, RefreshControl, View } from "react-native";
+import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useInbox } from "../../src/bridge/hooks.ts";
 import {
   groupNotifications,
   type NotificationGroup,
   rowDestination,
+  unackedIds,
 } from "../../src/client/inbox-logic.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
 import type { Notification } from "../../src/protocol/types.ts";
@@ -36,7 +37,7 @@ export default function Inbox() {
   const onOpen = useCallback(
     (group: NotificationGroup<Notification>) => {
       haptic.select();
-      const ids = group.rows.filter((r) => !r.read_at).map((r) => r.id);
+      const ids = unackedIds(group.rows);
       if (ids.length) void client?.inbox.ack(ids);
       const where = rowDestination(group.latest);
       if (where?.kind === "chat")
@@ -48,7 +49,7 @@ export default function Inbox() {
 
   const onAck = useCallback(
     (group: NotificationGroup<Notification>) => {
-      const ids = group.rows.filter((r) => !r.read_at).map((r) => r.id);
+      const ids = unackedIds(group.rows);
       if (ids.length) {
         haptic.success();
         void client?.inbox.ack(ids);
@@ -58,7 +59,7 @@ export default function Inbox() {
   );
 
   const markAll = () => {
-    const ids = rows.filter((r) => !r.read_at).map((r) => r.id);
+    const ids = unackedIds(rows);
     if (!ids.length) return;
     haptic.success();
     void client?.inbox.ack(ids);
@@ -75,8 +76,8 @@ export default function Inbox() {
           paddingHorizontal: t.space.lg,
           paddingTop: t.space.md,
           paddingBottom: t.space.md,
-          borderBottomWidth: 1,
-          borderBottomColor: t.c.line,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: t.c.line2,
         }}
       >
         <View style={{ flex: 1, gap: 4 }}>
@@ -87,6 +88,8 @@ export default function Inbox() {
           accessibilityRole="button"
           accessibilityLabel="Mark all read"
           accessibilityState={{ disabled: unread === 0 }}
+          // 36pt drawn, 44pt to the thumb.
+          hitSlop={{ top: 4, bottom: 4 }}
           disabled={unread === 0}
           onPress={markAll}
           style={({ pressed }) => ({

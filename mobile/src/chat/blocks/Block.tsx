@@ -7,8 +7,8 @@ import { memo } from "react";
 import { blockKind } from "../../client/chat-logic.ts";
 import type { ClosedRequest } from "../../client/chat-requests.ts";
 import type { ChatBlock } from "../../protocol/types.ts";
-import { Text } from "../../ui/Text.tsx";
 import { Markdown } from "../Markdown.tsx";
+import { PlainText } from "../PlainText.tsx";
 import { ActivityGroup } from "./Activity.tsx";
 import { ApprovalCard } from "./Approval.tsx";
 import { QuestionCard } from "./Question.tsx";
@@ -52,7 +52,7 @@ function BlockImpl({
     case "text": {
       const markdown = block.kind === "text" ? block.markdown : "";
       return mine ? (
-        <Text selectable>{markdown}</Text>
+        <PlainText text={markdown} />
       ) : (
         <Markdown markdown={markdown} streaming={streaming} />
       );

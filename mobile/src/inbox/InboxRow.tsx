@@ -1,8 +1,9 @@
 /**
  * One inbox card: a run of rows about one conversation folded into one
- * (`groupNotifications`), unread if any member is. Class colour on the left
- * seam, an unread dot, needs-you in gold, the count of what it folded, and
- * the time. Swipe left to mark it read.
+ * (`groupNotifications`), unread if any member is (`isUnreadRow`, the rule
+ * the header's count uses). Class colour on the left seam (grey once the
+ * condition has cleared), an unread marker, needs-you in gold, the count of
+ * what it folded, and the time. Swipe left to mark it read.
  */
 import { memo, useRef } from "react";
 import { Pressable, View } from "react-native";
@@ -10,7 +11,7 @@ import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { railTime } from "../client/chat-logic.ts";
-import { groupRow, type NotificationGroup } from "../client/inbox-logic.ts";
+import { groupRow, groupUnread, type NotificationGroup } from "../client/inbox-logic.ts";
 import type { Notification } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { classColor } from "../theme/tokens.ts";
@@ -32,9 +33,14 @@ function InboxRowImpl({
   const t = useTheme();
   const swipe = useRef<SwipeableMethods>(null);
   const row = groupRow(group);
-  const unread = !row.read_at;
-  const needs = row.class === "needs_action" && !row.resolved_at;
-  const edge = classColor(t.c, row.class);
+  // The marker and the header count read one rule (`isUnreadRow`); the class
+  // colour is the left seam's job and says nothing about read state.
+  const unread = groupUnread(group);
+  const resolved = !!row.resolved_at;
+  const needs = row.class === "needs_action" && !resolved;
+  // A resolved row loses emphasis rather than gaining a colour (desktop
+  // `NotificationRow`: tone `--line2` once the condition has cleared).
+  const edge = resolved ? t.c.line2 : classColor(t.c, row.class);
   return (
     <ReanimatedSwipeable
       ref={swipe}
@@ -74,7 +80,7 @@ function InboxRowImpl({
           paddingRight: t.space.lg,
           paddingLeft: t.space.lg - t.border.seam,
           borderLeftWidth: t.border.seam,
-          borderLeftColor: unread || needs ? edge : "transparent",
+          borderLeftColor: edge,
           backgroundColor: pressed ? t.c.sel : t.c.bg,
           borderBottomWidth: 1,
           borderBottomColor: t.c.line,
@@ -111,6 +117,11 @@ function InboxRowImpl({
             {needs ? (
               <Text mono variant="caption" weight={700} tone="warn">
                 NEEDS YOU
+              </Text>
+            ) : null}
+            {resolved ? (
+              <Text mono variant="caption" tone="fg3">
+                cleared
               </Text>
             ) : null}
             {group.count > 1 ? (

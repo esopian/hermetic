@@ -7,7 +7,7 @@
  * `groupNotifications`, `groupRow`, `badgeTone`, `inQuietHours`). Pure.
  */
 import type { Notification } from "../protocol/types.ts";
-import { chatThreadOf } from "./notifications-store.ts";
+import { chatThreadOf, isUnreadRow } from "./notifications-store.ts";
 
 export function conversationKeyOf(n: { kind: string; ref?: string | null }): string | null {
   const thread = chatThreadOf(n);
@@ -54,6 +54,24 @@ export function groupRow<T extends { read_at?: string | null }>(group: Notificat
   if (group.count === 1) return group.latest;
   if (!group.latest.read_at) return group.latest;
   return group.rows.some((r) => !r.read_at) ? { ...group.latest, read_at: null } : group.latest;
+}
+
+/**
+ * Whether a card carries the unread marker: any member counts as unread by
+ * `isUnreadRow`, the same rule as the header's count. `groupRow` is the
+ * desktop's display row and keys on `read_at` alone; the marker does not.
+ */
+export function groupUnread<T extends { read_at?: string | null; resolved_at?: string | null }>(
+  group: NotificationGroup<T>,
+): boolean {
+  return group.rows.some(isUnreadRow);
+}
+
+/** Rows a "mark read" should acknowledge: everything not yet read, resolved or not. */
+export function unackedIds<T extends { id: string; read_at?: string | null }>(
+  rows: readonly T[],
+): string[] {
+  return rows.filter((r) => !r.read_at).map((r) => r.id);
 }
 
 export type BadgeTone = "quiet" | "unread" | "needs_action";

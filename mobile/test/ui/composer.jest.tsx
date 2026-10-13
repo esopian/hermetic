@@ -94,11 +94,17 @@ describe("Composer", () => {
     await fireEvent.press(screen.getByLabelText("Stop turn"));
     expect(h.onStop).toHaveBeenCalled();
     expect(screen.queryByLabelText("Send")).toBeNull();
+    expect(screen.queryByText(/Send now steers/)).toBeNull();
   });
 
-  test("sending with text: Queue queues, Now steers", async () => {
+  test("sending with text: Queue queues, Send now steers, and a line says which is which", async () => {
     const h = handlers();
     await renderUi(<Harness {...base} {...h} sending initial="first" />);
+    expect(
+      screen.getByText("Queue sends when the agent is free · Send now steers this turn"),
+    ).toBeTruthy();
+    expect(screen.getByText("Send now")).toBeTruthy();
+    expect(screen.queryByLabelText("Stop turn")).toBeNull();
     await fireEvent.press(screen.getByLabelText("Queue"));
     expect(h.onQueue).toHaveBeenCalledWith("first");
     await fireEvent.changeText(screen.getByLabelText("Message"), "redirect");
@@ -134,7 +140,7 @@ describe("Composer", () => {
 
   test("an open question is called out", async () => {
     await renderUi(<Harness {...base} {...handlers()} sending questionOpen />);
-    expect(screen.getByText(/a question is waiting above/)).toBeTruthy();
+    expect(screen.getByText(/a question is waiting above — Send now skips it/)).toBeTruthy();
   });
 });
 

@@ -49,6 +49,16 @@ export function isWatchingThread(
 
 export const isResolved = (n: { resolved_at?: string | null }): boolean => !!n.resolved_at;
 
+/**
+ * Whether a row counts as unread: not acknowledged and still holding. This is
+ * core's `counts` rule (`read_at IS NULL AND resolved_at IS NULL` over the
+ * inbox view, `packages/core/src/local/db/notifications.ts`), which is the
+ * number the bridge sends as `unread`. The inbox header, the tab badge and the
+ * row markers all read it, so the count and the marked rows always agree.
+ */
+export const isUnreadRow = (n: { read_at?: string | null; resolved_at?: string | null }): boolean =>
+  !n.read_at && !isResolved(n);
+
 /** Unread, unresolved, unmuted `chat.*` rows per `<instance>/<bot>`. */
 export function unreadChatByConversation(list: readonly Notification[]): Map<string, number> {
   const counts = new Map<string, number>();
@@ -237,15 +247,24 @@ export class NotificationsStore {
     if (ids.length === 0) return;
     const now = new Date().toISOString();
     const wanted = new Set(ids);
+    // Only rows the bridge counted come off the counts: a resolved row is
+    // unacknowledged but was never in `unread`.
     let cleared = 0;
+    let needs = 0;
     const rows = this.state.rows.map((r) => {
       if (!wanted.has(r.id) || r.read_at) return r;
-      cleared += 1;
+      if (isUnreadRow(r)) {
+        cleared += 1;
+        if (r.class === "needs_action") needs += 1;
+      }
       return { ...r, read_at: now };
     });
     this.set({
       rows,
-      counts: { ...this.state.counts, unread: Math.max(0, this.state.counts.unread - cleared) },
+      counts: {
+        unread: Math.max(0, this.state.counts.unread - cleared),
+        needs_action: Math.max(0, this.state.counts.needs_action - needs),
+      },
     });
     try {
       await this.source.ack({ ids: [...ids] });

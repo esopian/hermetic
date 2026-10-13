@@ -6,7 +6,7 @@
  */
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { ActionSheetIOS, Alert, Platform, Pressable, View } from "react-native";
+import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from "react-native";
 import { BotsList } from "../../src/bots/BotsList.tsx";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useRoster } from "../../src/bridge/hooks.ts";
@@ -111,6 +111,9 @@ export default function Bots() {
           paddingHorizontal: t.space.lg,
           paddingTop: t.space.md,
           paddingBottom: t.space.md,
+          // The list scrolls up to this rule, not under the title.
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: t.c.line2,
         }}
       >
         <View style={{ flex: 1, gap: 4 }}>
@@ -125,6 +128,8 @@ export default function Bots() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Listening: choose instances"
+          // 36pt drawn, 44pt to the thumb.
+          hitSlop={{ top: 4, bottom: 4 }}
           onPress={() => {
             haptic.select();
             router.push("/listening");

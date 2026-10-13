@@ -12,6 +12,7 @@ import { type MdList, type MdNode, type MdSpan, parseMarkdown } from "../client/
 import { useTheme } from "../theme/theme.tsx";
 import { Text } from "../ui/Text.tsx";
 import { CodePane } from "./CodePane.tsx";
+import { collapseSpaces } from "./text-layout.ts";
 
 const HEADING: Record<number, { size: number; line: number }> = {
   1: { size: 22, line: 27 },
@@ -33,7 +34,7 @@ function Spans({ spans, base }: { spans: MdSpan[]; base?: TextStyle }): ReactNod
             key={key}
             mono
             style={[base, { fontSize: 13, backgroundColor: t.c.bg3, color: t.c.fg }]}
-          >{` ${span.text} `}</Text>
+          >{` ${collapseSpaces(span.text)} `}</Text>
         );
       case "math":
         return (
@@ -44,19 +45,27 @@ function Spans({ spans, base }: { spans: MdSpan[]; base?: TextStyle }): ReactNod
       case "strong":
         return (
           <Text key={key} style={[base, { fontFamily: t.sans(700) }]}>
-            {span.spans ? <Spans spans={span.spans} base={{ fontFamily: t.sans(700) }} /> : span.text}
+            {span.spans ? (
+              <Spans spans={span.spans} base={{ fontFamily: t.sans(700) }} />
+            ) : (
+              collapseSpaces(span.text)
+            )}
           </Text>
         );
       case "em":
         return (
           <Text key={key} style={[base, { fontStyle: "italic" }]}>
-            {span.spans ? <Spans spans={span.spans} base={{ fontStyle: "italic" }} /> : span.text}
+            {span.spans ? (
+              <Spans spans={span.spans} base={{ fontStyle: "italic" }} />
+            ) : (
+              collapseSpaces(span.text)
+            )}
           </Text>
         );
       case "del":
         return (
           <Text key={key} style={[base, { textDecorationLine: "line-through", color: t.c.fg2 }]}>
-            {span.spans ? <Spans spans={span.spans} /> : span.text}
+            {span.spans ? <Spans spans={span.spans} /> : collapseSpaces(span.text)}
           </Text>
         );
       case "link": {
@@ -74,7 +83,7 @@ function Spans({ spans, base }: { spans: MdSpan[]; base?: TextStyle }): ReactNod
             onPress={() => void Linking.openURL(href).catch(() => {})}
             style={[base, { color: t.c.acc, textDecorationLine: "underline" }]}
           >
-            {span.spans ? <Spans spans={span.spans} /> : span.text}
+            {span.spans ? <Spans spans={span.spans} /> : collapseSpaces(span.text)}
           </Text>
         );
       }
@@ -84,12 +93,13 @@ function Spans({ spans, base }: { spans: MdSpan[]; base?: TextStyle }): ReactNod
             {`[${span.n}]`}
           </Text>
         );
+      // A newline inside a paragraph: the desktop's `<br>` (`breaks` semantics).
       case "br":
         return <Text key={key}>{"\n"}</Text>;
       default:
         return (
           <Text key={key} style={base}>
-            {span.text}
+            {collapseSpaces(span.text)}
           </Text>
         );
     }
