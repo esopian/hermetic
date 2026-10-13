@@ -1,0 +1,125 @@
+---
+/*
+ * The head every landing section opens with, styled as a drawing's title block: a bordered strip
+ * (orange sheet number, kicker, note, sheet count) over a large heading and its lede. It echoes
+ * the blueprint's title block so the page reads as one set of drawings. The lede is the slot.
+ */
+interface Props {
+  num: string;
+  kicker: string;
+  title: string;
+  note?: string;
+}
+
+/** Sheets on the landing page: four blueprint stages, then the sections that use this head. */
+const SHEETS = 6;
+
+const { num, kicker, title, note } = Astro.props;
+---
+<div class="sh"><div class="wrap">
+  <div class="tb">
+    <span class="n">{num}</span>
+    <span class="k">{kicker}</span>
+    <span class="w">{note}</span>
+    <span class="c">Sheet {num} of {String(SHEETS).padStart(2, "0")}</span>
+  </div>
+  <div class="bd">
+    <h2>{title}</h2>
+    <div class="ld"><slot /></div>
+  </div>
+</div></div>
+
+<style>
+  .sh {
+    position: relative;
+    padding-top: 56px;
+    padding-bottom: 36px;
+  }
+  .tb {
+    display: flex;
+    border: 2px solid var(--fg);
+    font: 700 10px / 1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg3);
+    background: var(--bg);
+  }
+  .tb > span {
+    display: flex;
+    align-items: center;
+    padding: 11px 14px;
+    border-right: 1px solid var(--line2);
+    white-space: nowrap;
+  }
+  .tb .n {
+    justify-content: center;
+    min-width: 46px;
+    background: var(--acc);
+    color: var(--acc-fg);
+    font: 900 15px / 1 var(--sans);
+    letter-spacing: 0;
+    border-right: 0;
+  }
+  .tb .k {
+    color: var(--fg);
+  }
+  .tb .w {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tb .c {
+    border-right: 0;
+  }
+  .bd {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 40px;
+    align-items: end;
+    padding-top: 32px;
+  }
+  h2 {
+    font-weight: 900;
+    font-size: clamp(34px, 4.2vw, 60px);
+    line-height: 0.9;
+    letter-spacing: -0.045em;
+    text-transform: uppercase;
+  }
+  .ld :global(p) {
+    color: var(--fg2);
+    font-size: 17px;
+    max-width: 34em;
+  }
+  .ld :global(code) {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--fg);
+    background: var(--bg3);
+    padding: 1px 5px;
+  }
+
+  @media (max-width: 1080px) {
+    .bd {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+      padding-top: 24px;
+    }
+  }
+  @media (max-width: 640px) {
+    .sh {
+      padding-top: 40px;
+      padding-bottom: 28px;
+    }
+    .tb .w,
+    .tb .c {
+      display: none;
+    }
+    .tb .k {
+      border-right: 0;
+    }
+    .ld :global(p) {
+      font-size: 16px;
+    }
+  }
+</style>

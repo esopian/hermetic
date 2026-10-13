@@ -7,7 +7,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { networkStatus } from "../../api/index.ts";
-import type { FoundationStatus, Meta, NetworkReport } from "../../api/index.ts";
+import type { FoundationStatus, Meta, NetworkReport, SettingsResult } from "../../api/index.ts";
 import { otherFleetsNeedingUpdate } from "../../nav/fleet-switch.ts";
 import { bedrockGrantLine, grantNeedsUpdate, hermesLine } from "../../logic/foundation-logic.ts";
 import { networkFactRows, networkModeLine, renetworkAvailable } from "../../logic/network-logic.ts";
@@ -15,6 +15,7 @@ import { configLabel, fleetBand } from "../../logic/skew-logic.ts";
 import { NetworkDrawer } from "../NetworkDrawer.tsx";
 import { fmtDate } from "../../logic/format.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
+import { HermeticdUpdates } from "./HermeticdUpdates.tsx";
 import { Block, Callout, Facts, Row, SettingsPage, Sq, Tally, TextAction } from "./Section.tsx";
 import type { SqTone } from "./Section.tsx";
 
@@ -443,9 +444,16 @@ export function FoundationPanel({
 
 export function FoundationSection({
   meta,
+  settings,
+  onSaved,
+  onRefreshSettings,
   onOpenUpdate,
 }: {
   meta: Meta | null;
+  /** The shell's one held settings document (`SettingsShell`), for the auto-update switch. */
+  settings: SettingsResult | null;
+  onSaved: (next: SettingsResult) => void;
+  onRefreshSettings: () => Promise<void>;
   onOpenUpdate: () => void;
 }) {
   const [network, setNetwork] = useState<NetworkReport | null>(null);
@@ -478,6 +486,18 @@ export function FoundationSection({
         onOpenUpdate={onOpenUpdate}
         onOpenNetwork={() => setDrawer(true)}
       >
+        {/*
+          Beside the per-agent hermeticd versions it governs. Held off while a
+          foundation update runs, for the same reason the update button is:
+          that operation owns the fleet, and a manifest republish is not
+          something to race it with.
+        */}
+        <HermeticdUpdates
+          settings={settings}
+          onSaved={onSaved}
+          onRefresh={onRefreshSettings}
+          disabledReason={meta?.foundation?.in_progress ? "a foundation update is running" : null}
+        />
         <OtherFleetsBehind />
       </FoundationPanel>
       {drawer && network ? (

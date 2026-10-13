@@ -17,6 +17,7 @@
  */
 import type { ElectrobunConfig } from "electrobun/bun";
 import pkg from "../../package.json" with { type: "json" };
+import { macRenderer } from "./renderer.ts";
 
 /** Set by `scripts/dev-hmr.ts`, which also starts the server it names. */
 const hmr = (process.env["HERMETIC_VIEW_URL"] ?? "") !== "";
@@ -52,7 +53,10 @@ export default {
     // `assets/icon.iconset` is rendered from `assets/icon-1024.png` with `sips`
     // (16 to 512, @1x and @2x); regenerate the set from that file, never edit
     // the sizes by hand.
-    mac: { createDmg: false, icons: "assets/icon.iconset", bundleCEF: false },
+    // The renderer keys (`bundleCEF`, `defaultRenderer`, `chromiumFlags`) come
+    // from `renderer.ts`: CEF with a loopback DevTools port in a dev build,
+    // WKWebView and no CEF in canary and stable.
+    mac: { createDmg: false, icons: "assets/icon.iconset", ...macRenderer(process.env) },
     // Code signing and notarisation are driven by ELECTROBUN_DEVELOPER_ID /
     // ELECTROBUN_APPLEID / ELECTROBUN_APPLEIDPASS / ELECTROBUN_TEAMID, so an
     // unsigned local build needs no edit here and a release needs no secret in

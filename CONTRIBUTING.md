@@ -52,10 +52,11 @@ opencode), and it makes those agents cheaper and better informed:
 
 - [graft](https://github.com/trailhq/Graft) — a context graph of the repo in `graft/`: every symbol,
   its `file:line` span, and who calls what, served to the agent as CLI commands (`graft ask`,
-  `graft callers`, `graft skeleton`), an MCP server, a Claude Code skill and hooks that keep the graph
-  fresh as files change. An agent that queries it reads far less source than one that greps.
+  `graft callers`, `graft skeleton`), an MCP server, a shared Claude Code/Codex skill and Claude
+  hooks that keep the graph fresh as files change. An agent that queries it reads far less source
+  than one that greps.
 - [rtk](https://github.com/rtk-ai/rtk) — a proxy in front of the agent's shell commands (a Claude
-  Code `PreToolUse` hook) that condenses their output; behavior and exit codes are unchanged.
+  Code and Codex `PreToolUse` hook) that condenses their output; behavior and exit codes are unchanged.
 - caveman — a terse-prose mode for the agent's replies to you, vendored in `.claude/skills/caveman/`
   (MIT). Off unless you opt in.
 
@@ -65,12 +66,13 @@ bun run agent-setup -- --caveman    # the same, plus caveman full mode for every
 bun run agent-setup:check           # report only, change nothing, exit 1 if anything is off
 ```
 
-Without the flag, `/caveman full` turns caveman on for one session.
+Without the flag, `/caveman full` in Claude Code or `$caveman` in Codex turns caveman on for one session.
 
 `scripts/agent-setup.sh` installs the two binaries (graft through `npm install -g`, rtk through its
 checksum-verifying installer into `~/.local/bin`) and then writes only git-ignored files in this
 checkout: graft's skill, hook shims and graph, `.mcp.json` and `opencode.json` for the MCP server,
-and every hook, env var and permission in `.claude/settings.local.json`. The tracked
+the `.agents/skills/graft` symlink and `.codex/config.toml` for Codex, and hooks in
+`.claude/settings.local.json` and `.codex/hooks.json`. The tracked
 `.claude/settings.json` holds tool-neutral settings only, so a fresh clone without either tool runs
 no hooks and reports no errors. When `graft init` writes its hooks into the tracked settings file, as
 it insists on doing, the script moves them to `settings.local.json`, restores the tracked file, and
@@ -83,13 +85,23 @@ machine-wide — `~/.claude/settings.json` hooks, `~/.claude.json` MCP entries, 
 so the script passes the suppressing flag on every call, then warns if a machine-wide entry turns up
 regardless. If you want either tool globally, run its own installer yourself.
 
+Codex loads repo skills from `.agents/skills/`. Small `caveman` and `create-pr` entrypoints read
+the Claude workflows. Codex has a separate `orchestrator-mode` skill because subagent controls
+differ. The generated graft symlink, MCP config and rtk hook stay
+local to each checkout. Trust the project config and review the rtk hook with `/hooks` in Codex
+before it can run. The rtk hook rewrites Bash commands and returns an allow decision, so inspect it
+before trusting it. Restart Codex after setup to pick up the MCP server and hook. The `--caveman`
+setup flag configures Claude Code's default only; invoke `$caveman` in a Codex session to enable
+that style.
+
 Conductor runs `bun install && bun run setup && bun run agent-setup` as a workspace's setup script
 (`.conductor/settings.toml`), so a new worktree arrives wired and with its own graft graph built
 (`graft/` is git-ignored, so each worktree needs one). After big changes, refresh it with
 `graft build`.
 
-To remove it: delete `.claude/helpers/`, `.claude/skills/graft/`, `graft/`, `.mcp.json` and
-`opencode.json`, and drop the graft, rtk and `CAVEMAN_DEFAULT_MODE` entries from
+To remove it: delete `.claude/helpers/`, `.claude/skills/graft/`, `.agents/skills/graft`,
+`.codex/config.toml`, `.codex/hooks.json`, `graft/`, `.mcp.json` and `opencode.json`,
+and drop the graft, rtk and `CAVEMAN_DEFAULT_MODE` entries from
 `.claude/settings.local.json`. `npm uninstall -g @nanonets/graft` and `rm ~/.local/bin/rtk` remove the
 binaries. A machine-wide install made by hand is undone with `graft uninstall -y` and
 `rtk init -g --uninstall` (repeat with `--codex` and `--opencode`).
@@ -129,9 +141,10 @@ otherwise the watcher outlives the window and keeps holding the machine-wide Ele
 and a `dev` in any other checkout waits at "Waiting for the project build lock..." until it is
 stopped (`scripts/dev-quit.ts`). Only one `dev` can run on a machine at a time. The wrappers find
 `hutch` on `PATH` or at `~/.hutch/bin`, so a shell that never sourced the installer's profile line (an
-agent's, a fresh terminal) still finds it. To inspect the page itself — DOM, styles, console, network — use Safari's Web
-Inspector: enable **Develop → Show Web Inspector** (Safari's Advanced settings expose the Develop
-menu) and attach to the running app under **Develop → ‹your Mac› → Hermetic**.
+agent's, a fresh terminal) still finds it. A dev build renders with CEF and serves Chrome DevTools at
+`http://127.0.0.1:9333` (see "Driving the dev app" below). Under `HERMETIC_RENDERER=native`, inspect the page with
+Safari's Web Inspector instead: enable **Develop → Show Web Inspector** (Safari's Advanced settings
+expose the Develop menu) and attach to the running app under **Develop → ‹your Mac› → Hermetic**.
 
 Each of the three has an `:hmr` twin — `dev:hmr`, `dev:fixture:hmr`, `dev:wizard:hmr` — which is
 Electrobun's Vite loop (its hot-reloading guide). `scripts/dev-hmr.ts` starts Vite over
@@ -144,6 +157,45 @@ honoured by a dev-channel build, only on loopback, and only if the server answer
 says why. Vite only serves in development — the shipped page is still bundled by Electrobun, so run
 the plain `dev:*` loop once before calling a UI change done. Ctrl-C (or closing the window) stops
 Vite and the app together.
+
+### Driving the dev app
+
+Dev builds and release builds use different renderers. `bun run dev*` builds the app with CEF
+(Chromium) and opens a DevTools port on `127.0.0.1:9333`, so a script or a coding agent can read and
+operate the window an operator would see. `app:build:canary` and `app:build:stable` ship the system
+WKWebView and bundle no CEF. `packages/app/renderer.ts` chooses per build, and the rules that keep
+the two renderers interchangeable are in `AGENTS.md` ("Renderers"). The first CEF dev build
+downloads Electrobun's CEF runtime into `~/.hutch` (about 300 MB, once per Electrobun version).
+
+| Variable | Effect (dev builds only) |
+| -------- | ------------------------ |
+| `HERMETIC_RENDERER=native` | Build the dev app on WKWebView with no CEF and no DevTools port: the renderer that ships |
+| `HERMETIC_CDP_PORT=<port>` | Move the DevTools port; `app:cdp` reads the same variable |
+
+`bun run app:cdp` (`scripts/app-cdp.ts`) drives the app over plain CDP, with no dependencies:
+
+```
+bun run app:cdp snapshot                  # accessibility tree, one node per line
+bun run app:cdp click "text=Chat"         # real mouse click; a CSS selector works too
+bun run app:cdp fill 'input[placeholder^="filter"]' atlas
+bun run app:cdp press Enter
+bun run app:cdp wait "text=New agent" 5000
+bun run app:cdp text main                 # innerText of a selector
+bun run app:cdp eval "location.hash"
+bun run app:cdp screenshot .context/fleet.png
+bun run app:cdp console 10                # stream console output and exceptions for 10 s
+bun run app:cdp reload
+```
+
+Playwright attaches to the same port with `chromium.connectOverCDP("http://127.0.0.1:9333")` and
+`browser.contexts()[0].pages()[0]` (no browser download: `playwright-core` is enough). Run Playwright
+scripts with Node or the repo's pinned Bun. A DevTools MCP server works too, for example
+`npx chrome-devtools-mcp --browserUrl http://127.0.0.1:9333` or
+`npx @playwright/mcp --cdp-endpoint http://127.0.0.1:9333`.
+
+CEF is only a tool for driving the app. Do the final check of any visual or input-behaviour change
+on `HERMETIC_RENDERER=native bun run dev:fixture`, and record which renderer each check ran on in the
+PR.
 
 `bun run ci` is `bun run check`, `bun run build` and `bun run audit:dependencies`, and it must be
 green before you push. GitHub Actions runs the same scripts, one per job
@@ -213,6 +265,7 @@ bun run cli -- <args>              # the CLI from source
 bun run dev:fixture                # the app against the fixture backend
 bun run dev:wizard                 # fixture backend, forced init wizard
 bun run dev:hmr                    # any of the three with `:hmr`: Vite serves the page, UI hot-reloads
+bun run app:cdp <command>          # scripts/app-cdp.ts: drive the running dev app over DevTools (CEF)
 ```
 
 Narrower than any script: `bun test packages/core` (or `cli`, `app`, `ui`, `agentd`), or a single
@@ -347,6 +400,8 @@ To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` h
 The build is unsigned today: no Apple Developer ID is configured, so `Hermetic.app` carries only an ad-hoc signature. A first launch needs `xattr -dr com.apple.quarantine /Applications/Hermetic.app` (README.md's Install section has the operator-facing version of this). Signing turns on with no other config change once `ELECTROBUN_DEVELOPER_ID`, `ELECTROBUN_APPLEID`, `ELECTROBUN_APPLEIDPASS`, and `ELECTROBUN_TEAMID` are set in the environment `bun run app:build` runs in.
 
 `bun run app:build:canary` (CI's `app` job, every push) builds the canary channel on every commit to prove the app still builds — it is verification, not distribution: nothing it produces is uploaded or published, and the canary channel is never what `release.yml` ships.
+
+A release also deploys the marketing/docs site (`.github/workflows/site.yml`, called after `publish`, which runs `site/scripts/deploy.ts --production`); one-time Cloudflare/GitHub setup is in `site/README.md`, and `bun run site:deploy` makes a verified preview deploy from a laptop.
 
 ## Running the wizard demo
 

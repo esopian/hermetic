@@ -24,10 +24,11 @@ Where to read for common tasks:
 - **Debug a failed op** — `tail -f ~/.hermetic/app.log`, `bun run cli -- runs`, the app's Runs view. See [Watching a running app](#watching-a-running-app).
 - **Debug a failure on the box** — `bun run cli -- agent history <name>` (works for a destroyed name; `agent destroyed [name]` lists tombstones): the failed stage's event carries the last 120 lines of its log (`log_tail`; `--json` for the raw field). `logs <name> --console` reads the serial console when the box's RPC never came up. Hermes-side turn errors: `bun run cli -- logs <name> --file errors` (Hermes logs to files under `$HERMES_HOME/logs/`, not the journal).
 - **Fixture mode** — `--fixture`/`HERMETIC_FIXTURE=1`, `bun run dev:fixture`/`dev:wizard`. See [Modes](#modes).
+- **See or drive the running app** — `bun run dev:fixture`, then `bun run app:cdp snapshot` / `click text=Chat` / `screenshot .context/x.png` (dev builds render with CEF, DevTools on `127.0.0.1:9333`). Check the final result on WKWebView. See [Renderers](#renderers).
 - **Add a long operation** — a module with an explicit deps object, not another function in `hermetic.ts`. See rule 5.
 - **Bump `FOUNDATION_VERSION`** — see rule 7.
 - **Bump `chrome_ref`** — take the new Chrome for Testing zip's sha256 and byte size, edit `BUILD_VERSIONS.chrome_ref`/`chrome_sha256`/`chrome_size` (`packages/core/src/build-versions.ts`), then `hermetic artifacts push` to mirror it. A box gets the new pin when its config is rendered — `agent create` or `recreate`, not `rerun` (which only resumes an `error` agent). Same owner and cadence as `hermes_ref`; Chrome for Testing does not self-update. §7.3/§3.6.
-- **Open a PR** — `/create-pr` (`.claude/skills/create-pr/SKILL.md`), every time. See Conventions.
+- **Open a PR** — use `create-pr` (`.claude/skills/create-pr/SKILL.md`, also exposed to Codex through `.agents/skills/create-pr`), every time. See Conventions.
 - **Add a second fleet** — `hermetic init --attach --fleet <id|alias>` joins an existing foundation, `init --create` makes a new one. `hermetic fleet alias <fleet-id> <alias>` labels a fleet, `--clear` unlabels it, `fleet use <fleet-id|alias>` switches the local default. `fleet_id` is the identity; the alias is display only. §4.6/§4.8.
 
 ## Layout (Bun workspaces)
@@ -39,6 +40,8 @@ packages/app      Electrobun head: desktop main process, typed RPC over core; bu
 packages/ui       React. Webview only. Talks to the main process over Electrobun RPC.
 packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema` and `@hermetic/core/shared`.
 ```
+
+`site/` — marketing + docs site, not a workspace, own toolchain, mobile in scope there (see `site/AGENTS.md`).
 
 ### Import boundaries
 
@@ -87,6 +90,20 @@ The fixture seeds two fleets: `fxtr0001` (alias `main`, 11 agents plus `oriole`,
 
 Both modes go through the same `Hermetic` interface (`openHermetic`/`openForInit` in `packages/core/src/open.ts`); heads never construct a `Backend`.
 
+## Renderers
+
+A dev build (every `bun run dev*`) renders with CEF (Chromium) and listens for DevTools on `127.0.0.1:9333`. Canary and stable builds ship the system WKWebView and bundle no CEF. `packages/app/renderer.ts` makes the choice per build from `ELECTROBUN_BUILD_ENV`. `HERMETIC_RENDERER=cef` on a release build fails it, and `packages/app/test/renderer.test.ts` pins the split. CEF is in dev builds so that an agent can drive the app. `bun run app:cdp <snapshot|text|click|fill|press|wait|eval|screenshot|console|reload>` (`scripts/app-cdp.ts`) does it with no dependencies. Playwright and the DevTools MCP servers can attach to the same port (`CONTRIBUTING.md`, "Driving the dev app"). `HERMETIC_RENDERER=native` builds a dev app on WKWebView, and `HERMETIC_CDP_PORT` moves the port. The `app starting` line in `app.log` names the renderer and the DevTools URL.
+
+The shipped renderer is WebKit, so the page is written for WebKit and works the same in either engine:
+
+1. **Use only what WKWebView supports.** Check Safari's column of a compatibility table, not Chrome's. Avoid Chromium-only APIs (`navigator.userAgentData`, `showOpenFilePicker`). A CEF dev build silently accepts code that a release build cannot run.
+2. **Never branch on the engine.** No user-agent sniffing, no `window.chrome`, no CEF-only global. Feature-detect only what both engines might lack, and then degrade the same way in both.
+3. **Nothing in the product depends on dev tooling.** The DevTools port, `app:cdp` and Playwright are for looking at the app. No page or main-process code may read the port, call `chrome.*` or rely on CEF behaviour.
+4. **Don't leave anything to engine defaults.** Form controls, scrollbars, focus rings, `<select>` and date pickers render differently in each engine: style them explicitly or use our own component. Fonts are vendored (`packages/ui/fonts`), and every `Intl`/`toLocale*` call passes an explicit locale and options.
+5. **Don't rely on timing the engines handle differently.** The main process never pushes to a page before it is live (`packages/app/src/main/page-gate.ts`), because under CEF that push aborts the process. The page never assumes it saw a push that was sent before it mounted, and it seeds its state by request.
+6. **Mind the markup CEF rewrites.** Electrobun's CEF filter injects its preload after the first literal head start tag in `packages/ui/index.html`, so keep that tag explicit and never spell it inside a comment above it. `tests/app-cdp.test.ts` checks both.
+7. **WKWebView has the last word.** Use CEF to drive and inspect. Do the final check of a visual or input-behaviour change on `HERMETIC_RENDERER=native bun run dev:fixture` (or `bun run app:build:canary`), and record which renderer each check ran on in the PR's acceptance table. The regression suite stays `packages/ui/test/flows`; `app:cdp` is not a test runner.
+
 ## Where things live
 
 **Reading `docs/design.md`.** It is ~440 KB (~110k tokens) with single lines over 10k chars — never read it whole. Find the section, then read only that range:
@@ -132,8 +149,8 @@ Commands, CI jobs, the formatter and hooks: `CONTRIBUTING.md`. `bun run check` b
 - Deferred-work markers carry an owner: `TODO(name):`, `FIXME(name):`, `PHASE2(name):`, `PHASE3(name):` — never bare (rule 4).
 - Secrets are never logged, echoed, or written to disk on the laptop. Test fixtures use only `FIXTURE` sentinel values; `packages/core/test/secrets-leak.test.ts` fails the suite on any fixture secret value, or any `tskey-…`, in captured output.
 - Commit messages: conventional commits, imperative, subject of 50 characters or fewer.
-- Pull requests: open every one through the `create-pr` skill (`.claude/skills/create-pr/SKILL.md`, `/create-pr`), never a bare `gh pr create`. An agent without skills follows that file by hand. The body is `.github/pull_request_template.md`, filled only with checks actually run; the title is the squash commit subject, so the commit-message rule applies.
-- Delegation and token discipline for agents that spawn subagents: `.claude/skills/orchestrator-mode/SKILL.md` §6.
+- Pull requests: open every one through the `create-pr` skill (`.claude/skills/create-pr/SKILL.md`, exposed to Codex at `.agents/skills/create-pr`), never a bare `gh pr create`. An agent without skills follows that file by hand. The body is `.github/pull_request_template.md`, filled only with checks actually run; the title is the squash commit subject, so the commit-message rule applies.
+- Delegation and token discipline for agents that spawn subagents: `.claude/skills/orchestrator-mode/SKILL.md` §6. Codex uses `.agents/skills/orchestrator-mode/SKILL.md` for its own subagent controls.
 
 ## Dev
 
@@ -144,9 +161,10 @@ bun run dev          # the app, real mode: wizard if uninitialized, dashboard if
 bun run dev:fixture  # the app against the fixture backend, rebuilding on ui/core edits
 bun run dev:fixture:hmr  # same, but Vite serves the page: UI edits hot-reload, no relaunch
 bun run cli -- agent ps --fixture
+bun run app:cdp snapshot   # the running dev app's accessibility tree, over DevTools (CEF)
 ```
 
-Each `dev*` script is `scripts/dev-app.ts` running `hutch run <name>` in `packages/app` and ending the session when the app is quit (a lingering `--watch` holds the machine-wide Electrobun release lock and blocks `dev` in every other checkout; `scripts/dev-quit.ts`), except the `:hmr` twins (`dev:hmr`, `dev:fixture:hmr`, `dev:wizard:hmr`), which run `scripts/dev-hmr.ts`: Vite on `127.0.0.1:5273` over `packages/ui` (`vite.config.ts`), then the app with `HERMETIC_VIEW_URL` set (`packages/app/src/main/view-url.ts` — dev channel, loopback, must answer, else the bundled page). The window's navigation rules then allow that one origin too (`mainNavigationRules`, `main/navigation.ts`). Vite is dev-only; the release page is still Electrobun's bundle. Hutch is pinned in `.hutch-version`; install and devkit notes are in `CONTRIBUTING.md`. Inspect the page with Safari's Web Inspector (Develop → ‹your Mac› → Hermetic).
+Each `dev*` script is `scripts/dev-app.ts` running `hutch run <name>` in `packages/app` and ending the session when the app is quit (a lingering `--watch` holds the machine-wide Electrobun release lock and blocks `dev` in every other checkout; `scripts/dev-quit.ts`), except the `:hmr` twins (`dev:hmr`, `dev:fixture:hmr`, `dev:wizard:hmr`), which run `scripts/dev-hmr.ts`: Vite on `127.0.0.1:5273` over `packages/ui` (`vite.config.ts`), then the app with `HERMETIC_VIEW_URL` set (`packages/app/src/main/view-url.ts` — dev channel, loopback, must answer, else the bundled page). The window's navigation rules then allow that one origin too (`mainNavigationRules`, `main/navigation.ts`). Vite is dev-only; the release page is still Electrobun's bundle. Hutch is pinned in `.hutch-version`; install and devkit notes are in `CONTRIBUTING.md`. Inspect the page with Chrome DevTools at `http://127.0.0.1:9333` (CEF, the dev default) or `bun run app:cdp`. Under `HERMETIC_RENDERER=native`, use Safari's Web Inspector (Develop → ‹your Mac› → Hermetic). See [Renderers](#renderers).
 
 `HERMETIC_FIXTURE_SLOW_STACK_MS=120000 bun run dev:wizard` stretches the fixture's foundation create over two minutes, with resource events, for long-phase progress UX.
 
@@ -162,7 +180,7 @@ The main process logs to stderr **and** a file (`packages/app/src/log.ts`), so a
 
 | Where | What |
 |---|---|
-| `~/.hermetic/app.log` (`$HERMETIC_HOME`; `app-fixture.log` in fixture mode) | every op start/outcome, every op event (`DEBUG`, file only), every failed request with code and message, stacks for anything unclassified. The path is printed at boot. |
+| `~/.hermetic/app.log` (`$HERMETIC_HOME`; `app-fixture.log` in fixture mode) | every op start/outcome, every op event (`DEBUG`, file only), every failed request with code and message, stacks for anything unclassified. The path is printed at boot, and the `app starting` line names the renderer (and, under CEF, the DevTools URL). |
 | `bun run cli -- runs` | the local `runs` table: the same ops, persisted, shared with the CLI |
 | the app's Runs view | the same ops live, with each op's buffered events |
 

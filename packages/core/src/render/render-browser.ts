@@ -16,7 +16,15 @@
  */
 import { createHash } from "node:crypto";
 import type { BrowserIdentity, RenderedFile } from "../schema/index.ts";
-import { chromeBinaryPath } from "../schema/index.ts";
+import {
+  BROWSER_CDP_ENV,
+  HERMES_ACCOUNT,
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  HERMES_USER_ENV,
+  browserCdpUrl,
+  chromeBinaryPath,
+} from "../schema/index.ts";
 
 /**
  * What a browser agent installs from apt, and what it no longer does.
@@ -180,12 +188,55 @@ export function browserManagedConfigLines(identities: readonly BrowserIdentity[]
     // Hermes attaches to this endpoint instead of launching its own browser,
     // which is what makes the operator's noVNC session and the agent's tool
     // calls the same browser.
-    `  cdp_url: ${yamlString(`http://127.0.0.1:${String(first.cdp_port)}`)}`,
+    `  cdp_url: ${yamlString(browserCdpUrl(first.cdp_port))}`,
     // Headed, because the point of the display is that a human can watch it.
     "  headed: true",
     // Chrome, not camoufox: the pinned build is the one the CDP endpoint is.
     "  engine: chrome",
   ];
+}
+
+/**
+ * Put `BROWSER_CDP_URL` in the agent's own `.env` if no line there names it.
+ *
+ * The managed `browser.cdp_url` above is not enough on its own. Upstream's
+ * `browser_exec` (`tools/browser_use_cli.py`, `_get_cdp_override` →
+ * `_browser_cfg`) reads browser config through `read_raw_config()`, which does
+ * not include the managed overlay — so it sees no endpoint, falls through to
+ * its local engine and drives a headless Chrome nobody can watch, while
+ * `hermes config get browser.cdp_url` (the merged loader) reports the managed
+ * value and every check passes. The environment variable is consulted before
+ * any config by every reader, and upstream loads `$HERMES_HOME/.env` into
+ * `os.environ`, so that is where the endpoint has to be.
+ *
+ * Seeded, never overwritten, for the reason the seed config is: after first
+ * boot the `.env` is the agent's own (§6.4), and upstream's `/browser connect`
+ * writes this same line to hand the agent a browser somewhere else. Any
+ * existing assignment — `export` form included, commented lines not — makes
+ * this a no-op; `verify-hermes`'s `cdp_override` reports a value that differs.
+ * It is an endpoint on loopback, not a secret, so the secrets rules (§8) do
+ * not apply to the line itself; the file keeps upstream's 0600 either way.
+ *
+ * Both halves run as `hermes` (`runuser`), because no privileged command
+ * creates or writes a path inside `/data/hermes` (§7.3): a root append would
+ * follow a symlink the account planted there. The newline guard keeps the line
+ * off the end of a file that does not finish with one. Idempotent, which is
+ * the §6.4 contract for `commands`: once the line is there the grep succeeds
+ * and nothing else runs. Only the first identity, as for the managed key.
+ */
+export function browserEnvSeedCommands(identities: readonly BrowserIdentity[]): string[] {
+  const first = identities[0];
+  if (first === undefined) return [];
+  const line = `${BROWSER_CDP_ENV}=${browserCdpUrl(first.cdp_port)}`;
+  const assigned = `^[[:space:]]*(export[[:space:]]+)?${BROWSER_CDP_ENV}[[:space:]]*=`;
+  const asHermes = `runuser -u ${HERMES_ACCOUNT} --`;
+  const append =
+    `${asHermes} sh -c 'umask 077 && ` +
+    `{ [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "${line}"; } >>"$0"' ` +
+    HERMES_USER_ENV;
+  // Both units read the `.env` at start, exactly as they read the seed config.
+  const restart = `systemctl try-restart ${HERMES_DASHBOARD_UNIT} ${HERMES_GATEWAY_UNIT}`;
+  return [`${asHermes} grep -qsE '${assigned}' ${HERMES_USER_ENV} || { ${append} && ${restart}; }`];
 }
 
 /**

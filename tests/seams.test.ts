@@ -34,7 +34,12 @@ import { fleetManifestFrom, pushRelease } from "../packages/core/src/release/art
 import { MemoryBackend } from "../packages/core/src/backend/memory.ts";
 import type { FleetManifestInput } from "../packages/core/src/release/artifacts.ts";
 import type { FleetItem } from "../packages/core/src/schema/fleet.ts";
-import { hermesBundleKey, isReleaseObjectKey } from "../packages/core/src/schema/fleet.ts";
+import {
+  autoUpdateHermeticd,
+  defaultFleetSettings,
+  hermesBundleKey,
+  isReleaseObjectKey,
+} from "../packages/core/src/schema/fleet.ts";
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
 import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
@@ -51,6 +56,7 @@ import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
   HERMES_LEGACY_DASHBOARD_UNIT,
+  HERMES_USER_ENV,
 } from "../packages/core/src/schema/hermes.ts";
 import { renderAgentConfig } from "../packages/core/src/render/render.ts";
 import type { RenderInput } from "../packages/core/src/render/render.ts";
@@ -70,6 +76,8 @@ import {
 } from "../packages/agentd/src/apply/index.ts";
 import { HERMETICD_CAPABILITIES, parseManifest } from "../packages/agentd/src/manifest.ts";
 import { HERMES_HEALTH_URL } from "../packages/agentd/src/heartbeat.ts";
+import { checkHermes } from "../packages/agentd/src/hermes-check.ts";
+import { FakeHost } from "../packages/agentd/test/fake-host.ts";
 import { SECRET_SLOTS, isKnownSlot } from "../packages/agentd/src/main.ts";
 import { releaseStages, stageEnv } from "../packages/agentd/src/stages.ts";
 import type { StagesDeps } from "../packages/agentd/src/stages.ts";
@@ -236,6 +244,36 @@ describe("seam: the fleet manifest core writes is the one hermeticd reads", () =
    * resources block that lost a key would not fail here — it would fail eight
    * minutes into a first boot, as a DynamoDB call against `undefined`.
    */
+  /**
+   * §6.5: the auto-update switch lives on `_fleet`, which the box cannot read,
+   * so the manifest carries a copy derived from the row on every write — and
+   * the box decides from it whether to check for a new release every few
+   * minutes or only at its nightly slot. Both sides read absence as *on*
+   * through the one helper (`autoUpdateHermeticd`), so a manifest written by an
+   * older laptop means what the setting's default means.
+   */
+  test("the hermeticd auto-update switch reaches the box, off and default", () => {
+    const base = INPUT.fleet;
+    const settings = defaultFleetSettings(base.defaults, base.created_by, base.created_at);
+    const { auto_update_hermeticd: _drop, ...unstated } = settings;
+    const cases: Array<[FleetItem, boolean]> = [
+      [{ ...base, settings: { ...settings, auto_update_hermeticd: false } }, false],
+      [{ ...base, settings: { ...settings, auto_update_hermeticd: true } }, true],
+      [{ ...base, settings: unstated }, true],
+      [{ ...base, settings: undefined }, true],
+    ];
+    for (const [fleet, expected] of cases) {
+      const read = parseFleetManifest(JSON.stringify(fleetManifestFrom({ ...INPUT, fleet })));
+      expect(read.auto_update_hermeticd).toBe(expected);
+      expect(autoUpdateHermeticd(read)).toBe(expected);
+    }
+    // A manifest from before the field: parsed, and read as on.
+    const { auto_update_hermeticd: _absent, ...older } = fleetManifestFrom(INPUT);
+    const read = parseFleetManifest(JSON.stringify(older));
+    expect(read.auto_update_hermeticd).toBeUndefined();
+    expect(autoUpdateHermeticd(read)).toBe(true);
+  });
+
   test("the resources block the box boots from is complete", () => {
     const read = parseFleetManifest(JSON.stringify(fleetManifestFrom(INPUT)));
     for (const [key, value] of Object.entries(read.resources)) {
@@ -984,6 +1022,29 @@ describe("seam: the browser stack: what the laptop renders is what the box watch
     expect(identity).toBeDefined();
     const wsPath = `${identity?.serve_path.replace(/^\//, "")}/websockify`;
     expect(index).toContain(`path=${wsPath}`);
+  });
+
+  /**
+   * The `.env` line the laptop seeds is the one `verify-hermes` accepts. The
+   * render spells it from the first identity's port, the box's `cdp_override`
+   * check compares against the same identity — and a drift between the two is
+   * every browser agent failing its boot on a line hermetic itself wrote.
+   */
+  test("the BROWSER_CDP_URL line the render seeds passes the box's cdp_override check", async () => {
+    const command = manifest.commands.find((c) => c.includes("BROWSER_CDP_URL")) ?? "";
+    const line = /echo "(BROWSER_CDP_URL=[^"]+)"/.exec(command)?.[1];
+    expect(line).toBe(`BROWSER_CDP_URL=http://127.0.0.1:${String(identities[0]?.cdp_port)}`);
+    // The command's own guard must recognise the line it appends, or every
+    // apply would append another copy.
+    const guard = /grep -qsE '([^']+)'/.exec(command)?.[1] ?? "";
+    expect(new RegExp(guard.replaceAll("[[:space:]]", "\\s")).test(line ?? "")).toBe(true);
+
+    const host = new FakeHost();
+    host.seed(HERMES_USER_ENV, `${line}\n`, "0600");
+    const checks = await checkHermes(host, parseManifest(manifest));
+    const override = checks.find((c) => c.name === "cdp_override");
+    expect(override?.ok).toBe(true);
+    expect(override?.advisory).toBeUndefined();
   });
 
   test("the Serve route for the identity's path targets its own websockify port", () => {

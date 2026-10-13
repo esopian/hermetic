@@ -1,0 +1,92 @@
+---
+/* The landing page's closing call to action, carried over from mockup D. */
+import { docs, explainer } from "../../data/links";
+import { dmgUrl, tag } from "../../data/release";
+---
+<section class="cta">
+  <div class="in">
+    <h2>Seal your<br />first agent</h2>
+    <div class="r">
+      {/* design.md §3.6 (macos-arm64 DMG, unsigned builds); README "Status" (pre-alpha) */}
+      <div class="c-ctas">
+        <a class="btn btn-p" href={dmgUrl}>↓ Download {tag}</a>
+        <a class="btn btn-s" href={docs.gettingStarted}>Getting started →</a>
+      </div>
+      <a class="watch" href={explainer.overview}>▶ Or watch the six minute overview</a>
+      <div class="m">Pre-alpha · Apple silicon · unsigned build</div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .cta {
+    background: var(--acc);
+    color: var(--acc-fg);
+    border-bottom: 3px solid var(--fg);
+    background-image:
+      linear-gradient(rgb(14 14 13 / 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(14 14 13 / 0.07) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .in {
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 64px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  h2 {
+    font-weight: 900;
+    font-size: clamp(48px, 8vw, 120px);
+    line-height: 0.84;
+    letter-spacing: -0.055em;
+    text-transform: uppercase;
+  }
+  .c-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .cta .btn {
+    border-color: var(--acc-fg);
+  }
+  .cta .btn-p {
+    background: var(--acc-fg);
+    color: var(--fg);
+  }
+  .cta .btn-p:hover {
+    background: var(--fg);
+    color: var(--acc-fg);
+  }
+  .cta .btn-s {
+    color: var(--acc-fg);
+  }
+  .cta .btn-s:hover {
+    background: var(--acc-fg);
+    color: var(--acc);
+  }
+  .watch {
+    display: inline-block;
+    margin-top: 16px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .watch:hover {
+    text-decoration: underline;
+  }
+  .m {
+    margin-top: 10px;
+    font: 700 11px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  @media (max-width: 640px) {
+    .in {
+      padding: 48px 16px;
+    }
+  }
+</style>

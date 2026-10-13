@@ -344,8 +344,14 @@ describe("verify-hermes", () => {
 
     const browserAgent = () => makeManifest({ provider: "nous", browser: true });
 
+    /** The line hermetic's post-step leaves in the agent's `.env`. */
+    function envSeeded(): void {
+      host.seed(USER_ENV, `BROWSER_CDP_URL=${CDP_URL}\n`, "0600");
+    }
+
     test("a browser agent is asked what Hermes resolves browser.cdp_url to", async () => {
       await wellConfigured(host);
+      envSeeded();
       cdpResolves(CDP_URL);
 
       const checks = await checkHermes(host, browserAgent());
@@ -367,6 +373,7 @@ describe("verify-hermes", () => {
      */
     test("a Hermes that resolves no browser.cdp_url fails and says what that means", async () => {
       await wellConfigured(host);
+      envSeeded();
       cdpResolves(null);
 
       const checks = await checkHermes(host, browserAgent());
@@ -379,6 +386,7 @@ describe("verify-hermes", () => {
 
     test("a browser.cdp_url pointing somewhere else fails, naming the value", async () => {
       await wellConfigured(host);
+      envSeeded();
       cdpResolves("http://10.0.0.9:9222");
 
       const checks = await checkHermes(host, browserAgent());
@@ -390,12 +398,52 @@ describe("verify-hermes", () => {
     });
 
     /**
-     * `BROWSER_CDP_URL` in the agent's own `.env` beats managed config — and
-     * that is upstream's `/browser connect` working as designed, so the finding
-     * says what it costs rather than telling the operator to delete a line they
-     * may have meant to write.
+     * The blind spot `cdp_override` closes: `config get` resolves through the
+     * merged loader and sees the managed key, while `browser_exec` reads
+     * `read_raw_config()`, sees nothing, and launches its own headless Chrome.
+     * With no `BROWSER_CDP_URL` in the `.env` the agent drives an invisible
+     * browser, so a missing line fails the boot even though
+     * `resolved_cdp_url` passes.
      */
-    test("BROWSER_CDP_URL in the agent's .env is reported as the hand-over it is", async () => {
+    test("a .env without BROWSER_CDP_URL is a verdict, even when config get resolves", async () => {
+      await wellConfigured(host);
+      cdpResolves(CDP_URL);
+
+      const checks = await checkHermes(host, browserAgent());
+
+      expect(failedNames(checks)).toEqual(["cdp_override"]);
+      const override = checks.find((c) => c.name === "cdp_override")!;
+      expect(override.advisory).toBeUndefined();
+      expect(override.detail).toContain("does not set BROWSER_CDP_URL");
+      expect(override.detail).toContain("headless Chrome");
+      expect(checks.find((c) => c.name === "resolved_cdp_url")!.ok).toBe(true);
+    });
+
+    test("BROWSER_CDP_URL naming this box's browser passes, export form and quotes included", async () => {
+      await wellConfigured(host);
+      cdpResolves(CDP_URL);
+      host.seed(
+        USER_ENV,
+        `# BROWSER_CDP_URL=http://elsewhere\nBROWSER_CDP_URL=http://10.0.0.9:9222\nexport BROWSER_CDP_URL="${CDP_URL}"\n`,
+        "0600",
+      );
+
+      const checks = await checkHermes(host, browserAgent());
+
+      // The last assignment wins, as it does when python-dotenv loads the file.
+      expect(failedNames(checks)).toEqual([]);
+      const override = checks.find((c) => c.name === "cdp_override")!;
+      expect(override.advisory).toBeUndefined();
+      expect(override.detail).toBe(`${USER_ENV} sets BROWSER_CDP_URL to ${CDP_URL}`);
+    });
+
+    /**
+     * A different endpoint is upstream's `/browser connect` working as
+     * designed — hermetic seeds the line and never overwrites it — so the
+     * finding says what it costs rather than telling the operator to delete a
+     * line they may have meant to write.
+     */
+    test("BROWSER_CDP_URL naming another endpoint is reported as the hand-over it is", async () => {
       await wellConfigured(host);
       cdpResolves(CDP_URL);
       host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
@@ -407,6 +455,7 @@ describe("verify-hermes", () => {
       const override = checks.find((c) => c.name === "cdp_override")!;
       expect(override.advisory).toBe(true);
       expect(override.detail).toContain("BROWSER_CDP_URL");
+      expect(override.detail).toContain("http://127.0.0.1:9333");
       expect(override.detail).toContain("/browser connect");
       expect(override.detail).toContain("hermetic-browser@default");
       // And it is no longer smuggled into the key check.
@@ -434,33 +483,30 @@ describe("verify-hermes", () => {
     });
 
     /**
-     * One browser probe stays advisory and one no longer is, for reasons that
-     * are not the same. `cdp_override` reports a seam an operator may have used
-     * on purpose (`/browser connect` writes that very line), so a finding there
-     * is information, not a fault. `resolved_cdp_url` was advisory only while
-     * the probe's own exit code was a guess, until it was watched answering on
-     * a live box, so a Hermes that does not resolve this box's endpoint is now
-     * a failed boot rather than a printed remark.
+     * Both browser checks are verdicts on a box in the state hermetic leaves
+     * it. `cdp_override` turns advisory only for an endpoint an operator chose
+     * (`/browser connect` writes that very line), which is information, not a
+     * fault. `resolved_cdp_url` was advisory only while the probe's own exit
+     * code was a guess, until it was watched answering on a live box.
      *
-     * `approvals` is advisory for `cdp_override`'s reason rather than its own:
-     * the key is seed-only, so the agent owns it once it is written, and what
-     * the operator stated is a starting position rather than a hold.
+     * `approvals` is advisory for the operator-choice reason: the key is
+     * seed-only, so the agent owns it once it is written, and what the
+     * operator stated is a starting position rather than a hold.
      */
-    test("cdp_override and approvals are advisory; the rest are verdicts", async () => {
+    test("approvals is advisory; the rest, cdp_override included, are verdicts", async () => {
       await wellConfigured(host);
+      envSeeded();
       cdpResolves(CDP_URL);
 
       const checks = await checkHermes(host, browserAgent());
 
-      expect(checks.filter((c) => c.advisory === true).map((c) => c.name)).toEqual([
-        "cdp_override",
-        "approvals",
-      ]);
+      expect(checks.filter((c) => c.advisory === true).map((c) => c.name)).toEqual(["approvals"]);
       expect(checks.filter((c) => c.advisory !== true).map((c) => c.name)).toEqual([
         "provider",
         "model",
         "key",
         "env_shadow",
+        "cdp_override",
         "resolved_model",
         "resolved_cdp_url",
       ]);
@@ -567,6 +613,7 @@ describe("verify-hermes", () => {
     });
 
     test("a non-advisory failure on a browser agent still fails the stage", async () => {
+      host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
       host.seed(MANIFEST_PATH, JSON.stringify(makeManifest({ provider: "nous", browser: true })));
 
       const error = (await run(["stage", "verify-hermes"], host).catch(

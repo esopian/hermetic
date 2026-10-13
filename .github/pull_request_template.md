@@ -45,6 +45,7 @@ its reason; never describe planned testing as completed. Use a table:
 |   ✅   | `bun run check` | Passed on HEAD |
 |   ✅   | `bun test tests/parity.test.ts` | Passed; new `agents.foo` command and handler agree |
 |   ✅   | `agent recreate lisbon` on a real fleet | Box reached `ready`; `agent history` clean |
+|   ✅   | Board filter on WKWebView (`HERMETIC_RENDERER=native bun run dev:fixture`) | Renders and filters as on CEF |
 |   ⏭️   | `bun run audit:dependencies` | Not run; offline, no dependency changes |
 -->
 

@@ -137,8 +137,20 @@ export {
   isProviderKeySlot,
   providerKeyRefOf,
 } from "./box.ts";
-export { FLEET_MANIFEST_KEY, isChromeRef, isReleaseObjectKey, orderStages } from "./release.ts";
-export { CHROME_INSTALL_ROOT, chromeBinaryPath, chromeInstallDir } from "./browser.ts";
+export {
+  FLEET_MANIFEST_KEY,
+  autoUpdateHermeticd,
+  isChromeRef,
+  isReleaseObjectKey,
+  orderStages,
+} from "./release.ts";
+export {
+  BROWSER_CDP_ENV,
+  CHROME_INSTALL_ROOT,
+  browserCdpUrl,
+  chromeBinaryPath,
+  chromeInstallDir,
+} from "./browser.ts";
 export {
   HERMETICD_RPC_PORT,
   RPC_CONTENT_TYPE,

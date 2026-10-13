@@ -39,6 +39,25 @@ export function browserServePath(name: string): string {
   return name === DEFAULT_BROWSER_NAME ? BROWSER_SERVE_ROOT : `${BROWSER_SERVE_ROOT}/${name}`;
 }
 
+/**
+ * The environment variable upstream reads as the CDP endpoint override, ahead
+ * of `browser.cdp_url` in any config (`_get_cdp_override`).
+ *
+ * hermetic writes it into the agent's own `.env` as well as rendering the
+ * managed `browser.cdp_url`, because not every upstream reader sees the managed
+ * overlay: `browser_exec` (`tools/browser_use_cli.py`) reads its browser config
+ * through `read_raw_config()`, finds no `cdp_url`, and launches a headless
+ * Chrome of its own. The environment is the one channel every reader consults.
+ * Shared so the line the laptop renders and the line `verify-hermes` reads on
+ * the box are spelled once.
+ */
+export const BROWSER_CDP_ENV = "BROWSER_CDP_URL";
+
+/** The loopback CDP endpoint of a browser listening on `cdpPort`. */
+export function browserCdpUrl(cdpPort: number): string {
+  return `http://127.0.0.1:${String(cdpPort)}`;
+}
+
 /** Where a mirrored Chrome for Testing build is unpacked on the box. */
 export const CHROME_INSTALL_ROOT = "/opt/hermetic/chrome";
 

@@ -1174,7 +1174,9 @@ describe("foundation.update", () => {
     const last = events.filter((e) => e.phase === "rollout").at(-1)!;
     expect(last.level).toBe("warn");
     expect(last.message).toContain("slowpoke");
-    expect(last.message).toContain("nightly check");
+    // The fixture fleet auto-updates hermeticd (the default), so the straggler
+    // is told it takes the release at its next check, minutes away (§6.5).
+    expect(last.message).toContain("next update check");
     // Still `ok`: the op finishes, and the fleet is on the new version.
     expect(events.at(-1)).toMatchObject({ phase: "done", progress: 1 });
     expect(fleetOf(backend).foundation_version).toBe(FOUNDATION_VERSION);
