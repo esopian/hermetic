@@ -171,23 +171,45 @@
   align-items: center;
   justify-content: center;
 }
+/* The last line of the toolbar's left column on the agents lens; the view
+   controls on the right are bottom-aligned with it (`Toolbar.tsx`). */
 .listening-toolbar-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  grid-column: 1 / -1;
   padding-top: 12px;
 }
-.listening-toolbar-count {
+/* `N listening` is the control that opens the manager: a text link, styled in
+   full so neither engine's button defaults show through. */
+.listening-toolbar-link {
+  all: unset;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding: 2px 0;
+  font-family: var(--mono);
   font-size: 11px;
+  line-height: 16px;
   color: var(--listen);
+  cursor: pointer;
 }
-.listening-toolbar-help {
+.listening-toolbar-text {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.listening-toolbar-link:hover .listening-toolbar-text,
+.listening-toolbar-link:focus-visible .listening-toolbar-text {
+  text-decoration-color: currentColor;
+}
+.listening-toolbar-link:focus-visible {
+  outline: 2px solid var(--listen);
+  outline-offset: 2px;
+}
+.listening-toolbar-link:disabled {
+  cursor: default;
   color: var(--text-muted);
-  margin-left: -4px;
 }
 /* Add one control column to agent rows, retaining the production volume rows. */
 .listening-table .trow:not(.vol-row) {

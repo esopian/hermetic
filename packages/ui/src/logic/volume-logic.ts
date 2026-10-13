@@ -13,14 +13,15 @@ import type { AgentView, VolumeGroup, VolumeView } from "../api/index.ts";
 export const VOLUME_LANES: ReadonlyArray<{
   group: VolumeGroup;
   title: string;
-  hint: string;
+  /** What the lane means, when the title alone does not say. */
+  hint?: string;
   color: string;
 }> = [
   {
     group: "no_agent",
     title: "No agent",
     hint: "Memory whose agent is gone. Put a new agent on one, or delete it. These are the tombstones on the board.",
-    color: "var(--acc)",
+    color: "var(--warn)",
   },
   {
     group: "ambiguous",
@@ -37,7 +38,6 @@ export const VOLUME_LANES: ReadonlyArray<{
   {
     group: "attached",
     title: "Attached",
-    hint: "Live agent memory. Nothing to do here — the agent owns it.",
     color: "var(--ok)",
   },
   {

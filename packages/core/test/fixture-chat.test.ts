@@ -380,6 +380,23 @@ describe("the five methods", () => {
   });
 });
 
+describe("context window figures", () => {
+  const last = async (instance: string, bot: string, session: string) =>
+    (await client.history(box(instance), bot, { session })).findLast((m) => m.usage)?.usage;
+
+  test("one conversation sits in each band the composer meter draws", async () => {
+    // The portal thread's rows are stored-shaped, with no window; its figure is
+    // the live gateway session's, as a reopened conversation's is on a real box.
+    expect((await last("atlas", "default", "sx-atlas-portal"))?.context_percent).toBeUndefined();
+    expect(
+      (await client.liveUsage?.(box("atlas"), "default", "sx-atlas-portal"))?.context_percent,
+    ).toBe(12);
+    expect(await client.liveUsage?.(box("atlas"), "default", "sx-atlas-cli")).toBeNull();
+    expect((await last("granite", "quarry", "sx-granite-quarry-cli"))?.context_percent).toBe(84);
+    expect((await last("atlas", "default", "sx-atlas-cli"))?.context_percent).toBe(99);
+  });
+});
+
 describe("send streams like a real turn", () => {
   test("it opens a text block, streams deltas, runs a tool and finishes with usage", async () => {
     const frames = await collect(client.send(box("atlas"), "default", "what is wrong with granite?"));
@@ -394,6 +411,13 @@ describe("send streams like a real turn", () => {
 
     const done = frames.at(-1);
     expect(done?.type === "done" && done.usage?.model).toBe("claude-sonnet-5");
+    // The window as the gateway reports it: the last prompt against the model's.
+    expect(done?.type === "done" && done.usage).toMatchObject({
+      context_used: 12_040,
+      context_max: 200_000,
+      context_percent: 6,
+      context_estimated: false,
+    });
     expect(done?.type === "done" && done.incomplete).toBeNull();
   });
 

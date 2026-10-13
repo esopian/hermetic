@@ -460,6 +460,23 @@ describe("the composer during and after a failed session read", () => {
 
 /* ── stopping a turn ─────────────────────────────────────────────────────── */
 
+test("Stop is in the composer's footer, only while a turn runs, and never in the header", async () => {
+  const h = harness();
+  const { container } = mount(h);
+  await userEvent.type(await sendable(container), "hello");
+  expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+  await userEvent.click(screen.getByTitle(/Send/));
+
+  const stop = await screen.findByRole("button", { name: "Stop turn" });
+  expect(stop.closest(".ch-composer-foot")).not.toBeNull();
+  expect(screen.getAllByRole("button", { name: /Stop/ })).toHaveLength(1);
+  expect(container.querySelector(".ch-thead")?.textContent ?? "").not.toContain("Stop");
+
+  await userEvent.click(stop);
+  expect(h.calls.abort).toBe(1);
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull());
+});
+
 test("stop does not report itself as a dropped box", async () => {
   // Core's generator returning closes the SSE response without a `done`, which
   // is byte-for-byte what a box going away looks like — so an intentional stop
@@ -584,7 +601,7 @@ describe("the states", () => {
 
   test("a stopped agent is read-only, and the composer says why", () => {
     const { container } = render(<Thread {...base} state="stopped" />);
-    expect(container.querySelector(".ch-band.warn")?.textContent).toContain("is stopped");
+    expect(container.querySelector(".ch-band.mute")?.textContent).toContain("is stopped");
     const input = container.querySelector(".ch-input") as HTMLTextAreaElement;
     expect(input.disabled).toBe(true);
     expect(input.placeholder).toContain("start it");
@@ -611,7 +628,7 @@ describe("the states", () => {
 
   test("a destroyed agent is terminal, and says the volume outlived it", () => {
     const { container } = render(<Thread {...base} state="destroyed" />);
-    expect(container.querySelector(".ch-band.acc")?.textContent).toContain("is gone");
+    expect(container.querySelector(".ch-band.warn")?.textContent).toContain("is gone");
     expect((container.querySelector(".ch-input") as HTMLTextAreaElement).placeholder).toContain(
       "read-only",
     );

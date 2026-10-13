@@ -292,6 +292,7 @@ describe("openStream", () => {
     for (const seq of [1, 2, 3]) {
       bridge.push("op.event", {
         op_id: "op1",
+        stream_id: "op-stream-1",
         msg: { event: "event", id: `1:${seq}`, data: { phase: "create", seq } },
       });
     }
@@ -363,30 +364,35 @@ describe("page visibility", () => {
  * reader and what a shared bridge has to arrange for itself.
  */
 describe("concurrency", () => {
-  test("two readers of one op both get its frames, and one closing spares the other", async () => {
+  test("two readers of one op each get their own frames, and one closing spares the other", async () => {
     const bridge = makeBridge();
-    bridge.answers.set("ops.subscribe", { stream_id: "op-stream-1" });
     const transport = createRpcTransport({ Electroview: bridge.Electroview });
 
     const first = recorder();
     const second = recorder();
+    bridge.answers.set("ops.subscribe", { stream_id: "s1" });
     const closeFirst = transport.openStream("ops.subscribe", { op_id: "op1" }, first.handlers);
+    bridge.answers.set("ops.subscribe", { stream_id: "s2" });
     transport.openStream("ops.subscribe", { op_id: "op1" }, second.handlers);
     await settle();
 
+    // Each subscription is sent every frame of the op, under its own name.
     const push = (seq: number) => {
-      bridge.push("op.event", {
-        op_id: "op1",
-        msg: { event: "event", id: `1:${seq}`, data: { seq } },
-      });
+      for (const stream_id of ["s1", "s2"]) {
+        bridge.push("op.event", {
+          op_id: "op1",
+          stream_id,
+          msg: { event: "event", id: `1:${seq}`, data: { seq } },
+        });
+      }
     };
     push(1);
     closeFirst();
+    // Still in flight for the first when it closed: nobody's.
     push(2);
 
     expect(first.frames.map((f) => f.id)).toEqual(["1:1"]);
-    // Without the fan-out, the second reader either never registered or was
-    // deleted along with the first, and this is empty or one frame short.
+    // Each frame once: the second reader is sent its own and not the first's.
     expect(second.frames.map((f) => f.id)).toEqual(["1:1", "1:2"]);
   });
 
@@ -443,6 +449,52 @@ describe("concurrency", () => {
   });
 });
 
+/**
+ * A stream the page closed is one nobody will claim, but the app goes on
+ * pushing for it until the close request lands. Those frames used to be held as
+ * orphans under its id — waiting for an answer that had already come — for the
+ * life of the window. Held frames are observable only by a later stream that
+ * answers with the same id, which ids never do in practice, so that is the
+ * probe: it would be handed frames that belonged to the closed one.
+ */
+describe("frames for a stream the page closed", () => {
+  const line = (bridge: Bridge, text: string) => {
+    bridge.push("logs.line", { stream_id: "s1", line: { text } });
+  };
+
+  test("are dropped when the close beat the open's answer", async () => {
+    const bridge = makeBridge();
+    bridge.answers.set("logs.open", { stream_id: "s1" });
+    const transport = createRpcTransport({ Electroview: bridge.Electroview });
+
+    transport.openStream("logs.open", { name: "atlas" }, recorder().handlers)();
+    await settle();
+    expect(bridge.sent.map((s) => s.name)).toEqual(["logs.open", "logs.close"]);
+    line(bridge, "after the close");
+
+    const later = recorder();
+    transport.openStream("logs.open", { name: "atlas" }, later.handlers);
+    await settle();
+    expect(later.frames).toEqual([]);
+  });
+
+  test("are dropped when the close came after the answer", async () => {
+    const bridge = makeBridge();
+    bridge.answers.set("logs.open", { stream_id: "s1" });
+    const transport = createRpcTransport({ Electroview: bridge.Electroview });
+
+    const close = transport.openStream("logs.open", { name: "atlas" }, recorder().handlers);
+    await settle();
+    close();
+    line(bridge, "in flight when it closed");
+
+    const later = recorder();
+    transport.openStream("logs.open", { name: "atlas" }, later.handlers);
+    await settle();
+    expect(later.frames).toEqual([]);
+  });
+});
+
 describe("the op cursor", () => {
   test("does not advance past frames that reached no reader", async () => {
     const bridge = makeBridge();
@@ -455,6 +507,7 @@ describe("the op cursor", () => {
     const push = (seq: number) => {
       bridge.push("op.event", {
         op_id: "op1",
+        stream_id: "op-stream-1",
         msg: { event: "event", id: `1:${seq}`, data: { seq } },
       });
     };
@@ -475,35 +528,39 @@ describe("the op cursor", () => {
 
   test("is not moved by a reader that does not resume the op, but is cleared by its `done`", async () => {
     const bridge = makeBridge();
-    bridge.answers.set("ops.subscribe", { stream_id: "op-stream-1" });
     const transport = createRpcTransport({ Electroview: bridge.Electroview });
-    const push = (seq: number, event = "event") => {
+    const push = (streamId: string, seq: number, event = "event") => {
       bridge.push("op.event", {
         op_id: "op1",
+        stream_id: streamId,
         msg: { event, id: `1:${seq}`, data: event === "done" ? { ok: true, error: null } : { seq } },
       });
     };
 
     // A drawer, and the board's watcher that only wants the op's end.
+    bridge.answers.set("ops.subscribe", { stream_id: "drawer" });
     const closeDrawer = transport.openStream("ops.subscribe", { op_id: "op1" }, recorder().handlers);
     const watcher = recorder();
+    bridge.answers.set("ops.subscribe", { stream_id: "watcher" });
     transport.openStream("ops.subscribe", { op_id: "op1" }, { ...watcher.handlers, resumes: false });
     await settle();
-    push(1);
+    push("drawer", 1);
+    push("watcher", 1);
     closeDrawer();
     // The drawer is shut; only the watcher reads these.
-    push(2);
-    push(3);
+    push("watcher", 2);
+    push("watcher", 3);
     expect(watcher.frames.map((f) => f.id)).toEqual(["1:1", "1:2", "1:3"]);
 
     // The drawer reopened mid-op resumes where *it* stopped, not where the watcher did.
+    bridge.answers.set("ops.subscribe", { stream_id: "reopened" });
     transport.openStream("ops.subscribe", { op_id: "op1" }, recorder().handlers).call(null);
     await settle();
     let subscribes = bridge.sent.filter((s) => s.name === "ops.subscribe");
     expect(subscribes[2]?.params).toEqual({ op_id: "op1", after: { generation: 1, seq: 1 } });
 
     // The watcher's `done` still counts: the finished op replays whole.
-    push(4, "done");
+    push("watcher", 4, "done");
     expect(watcher.ends).toEqual([{ ok: true, failure: null }]);
     transport.openStream("ops.subscribe", { op_id: "op1" }, recorder().handlers);
     await settle();
@@ -519,9 +576,14 @@ describe("the op cursor", () => {
     const reader = recorder();
     transport.openStream("ops.subscribe", { op_id: "op1" }, reader.handlers);
     await settle();
-    bridge.push("op.event", { op_id: "op1", msg: { event: "event", id: "1:1", data: {} } });
     bridge.push("op.event", {
       op_id: "op1",
+      stream_id: "op-stream-1",
+      msg: { event: "event", id: "1:1", data: {} },
+    });
+    bridge.push("op.event", {
+      op_id: "op1",
+      stream_id: "op-stream-1",
       msg: { event: "done", id: "1:2", data: { ok: true, error: null } },
     });
     expect(reader.ends).toEqual([{ ok: true, failure: null }]);
@@ -533,6 +595,60 @@ describe("the op cursor", () => {
     expect(subscribes[1]?.params).toEqual({ op_id: "op1" });
   });
 
+  /**
+   * Two readers of one op used to share every push, routed by `op_id`. A drawer
+   * reopened mid-op asks for the op whole (`replay`), but joins the op's
+   * readers before its own subscribe answers — so a live frame the fleet's
+   * watcher was sent got to it first, and `followOp`'s filter, now past that
+   * sequence number, dropped the whole replay behind it: the reopened rail drew
+   * only the tail. A frame names the subscription that produced it, and only
+   * that subscription's reader gets it.
+   */
+  test("a reader gets its own subscription's frames, not another reader's of the same op", async () => {
+    const bridge = makeBridge();
+    const transport = createRpcTransport({ Electroview: bridge.Electroview });
+    const push = (streamId: string, seq: number) => {
+      bridge.push("op.event", {
+        op_id: "op1",
+        stream_id: streamId,
+        msg: { event: "event", id: `1:${seq}`, data: { seq } },
+      });
+    };
+
+    bridge.answers.set("ops.subscribe", { stream_id: "watcher" });
+    const watcher = recorder();
+    transport.openStream("ops.subscribe", { op_id: "op1" }, { ...watcher.handlers, resumes: false });
+    await settle();
+
+    bridge.answers.set("ops.subscribe", { stream_id: "drawer" });
+    const drawer = recorder();
+    transport.openStream("ops.subscribe", { op_id: "op1" }, { ...drawer.handlers, replay: true });
+    // The op moves on before the drawer's subscribe has answered.
+    push("watcher", 3);
+    await settle();
+    // The drawer's own subscription replays the op from the start.
+    for (const seq of [1, 2, 3]) push("drawer", seq);
+
+    expect(drawer.frames.map((f) => f.id)).toEqual(["1:1", "1:2", "1:3"]);
+    expect(watcher.frames.map((f) => f.id)).toEqual(["1:3"]);
+  });
+
+  test("a frame for a subscription that has not answered yet waits for it", async () => {
+    const bridge = makeBridge();
+    bridge.answers.set("ops.subscribe", { stream_id: "drawer" });
+    const transport = createRpcTransport({ Electroview: bridge.Electroview });
+    const drawer = recorder();
+    transport.openStream("ops.subscribe", { op_id: "op1" }, drawer.handlers);
+    bridge.push("op.event", {
+      op_id: "op1",
+      stream_id: "drawer",
+      msg: { event: "event", id: "1:1", data: {} },
+    });
+    expect(drawer.frames).toEqual([]);
+    await settle();
+    expect(drawer.frames.map((f) => f.id)).toEqual(["1:1"]);
+  });
+
   test("is bounded, evicting the op followed longest ago", async () => {
     const bridge = makeBridge();
     bridge.answers.set("ops.subscribe", { stream_id: "op-stream-1" });
@@ -541,8 +657,13 @@ describe("the op cursor", () => {
     // One frame each for more ops than the cap, oldest first.
     for (let n = 0; n < 70; n += 1) {
       const opId = `op${n}`;
+      bridge.answers.set("ops.subscribe", { stream_id: `stream-${n}` });
       transport.openStream("ops.subscribe", { op_id: opId }, recorder().handlers);
-      bridge.push("op.event", { op_id: opId, msg: { event: "event", id: "1:1", data: {} } });
+      bridge.push("op.event", {
+        op_id: opId,
+        stream_id: `stream-${n}`,
+        msg: { event: "event", id: "1:1", data: {} },
+      });
     }
     await settle();
     const before = bridge.sent.length;

@@ -281,8 +281,13 @@ export const REQUEST_NAMES: readonly RequestName[] = [...PUBLIC_METHODS, ...MACH
  * socket here (`streams.ts`).
  */
 export type WebviewMessages = {
-  /** Correlated by the op, not the stream: the page asked about a named op. */
-  "op.event": { op_id: string; msg: StreamFrame };
+  /**
+   * Named by the op and by the subscription that produced it. Two readers of
+   * one op each have their own subscription, and a frame goes to its own
+   * reader only: shared by `op_id`, a live frame meant for one could reach a
+   * reader still waiting for its replay and put it out of order.
+   */
+  "op.event": { op_id: string; stream_id: string; msg: StreamFrame };
   "fleet.event": { event: StreamFrame };
   "chat.event": { event: StreamFrame };
   /** `frame` and `done` are core's `ChatFrame`s; see `PublicRequests` on why they are not typed. */

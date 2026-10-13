@@ -49,6 +49,8 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
+import { TargetScopeContext } from "./chat-target-scope.tsx";
+import { targetDestination } from "./chat-target-destination.ts";
 import {
   chatOpen,
   abortTurn,
@@ -84,6 +86,7 @@ import type { Destination, RailFilter, RailScope } from "./chat-logic.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
 import { useNotifyIfAvailable } from "../state/notify-state.tsx";
 import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../lib/visibility.ts";
+import type { ContextReading } from "./context-usage.ts";
 
 /** How often the relative timestamps in the rail are recomputed. */
 const CLOCK_MS = 30_000;
@@ -268,7 +271,7 @@ export interface Chat {
   draft: string;
   setDraft: (text: string) => void;
   stageDraft: (target: ChatSelection, text: string) => void;
-  showThread: () => () => void;
+  showThread: (target?: ChatSelection) => () => void;
   selectionError: string | null;
 
   sessions: SessionView[];
@@ -299,6 +302,11 @@ export interface Chat {
 
   /** The turn in flight, assembled from frames. Never persisted; see the header. */
   live: ChatMessageView | null;
+  /**
+   * The conversation's newest context-window figure, held on its record
+   * because the box's stored rows carry none (`Conversation.context`).
+   */
+  context: ContextReading | null;
   sending: boolean;
   /** The selected conversation’s observed work, independent of its transport lock. */
   activity: TurnActivity;
@@ -328,6 +336,8 @@ export interface Chat {
   /** Start a turn; `false` when the store refused to, and nothing was sent. */
   send: (text: string) => boolean;
   abort: () => Promise<void>;
+  /** Stop the turn shown in a particular dock pane. */
+  stopTarget: (target: ChatSelection) => Promise<void>;
   /**
    * Close a server request's card: a finished notice for `request_id` folded
    * into the message that holds the card, as a `request.cancel` would be. The
@@ -380,6 +390,8 @@ export interface Chat {
   /** Steer and Stop for one delegated child, and its unsent steer (`chat-subagent-control.ts`). */
   subagents: SubagentControls;
 }
+
+export { ChatTargetScope } from "./chat-target-scope.tsx";
 
 /** The four calls, injectable so a DOM test can drive the provider without a fetch stub. */
 export interface ChatApi {
@@ -670,11 +682,17 @@ export function ChatProvider({
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [active, setActive] = useState(eager);
   const activate = useCallback(() => setActive(true), []);
+  const visibleThreads = useRef(new Map<symbol, ChatSelection | null>());
   const [threadCount, setThreadCount] = useState(0);
-  const showThread = useCallback(() => {
+  const showThread = useCallback((target?: ChatSelection) => {
+    const id = Symbol("chat view");
+    visibleThreads.current.set(id, target ?? null);
     setActive(true);
     setThreadCount((n) => n + 1);
-    return () => setThreadCount((n) => n - 1);
+    return () => {
+      visibleThreads.current.delete(id);
+      setThreadCount((n) => n - 1);
+    };
   }, []);
   const [roster, setSwarms] = useState<SwarmView[]>([]);
   /** Stream-delivered activity the roster has not caught up with yet; see `RailBump`. */
@@ -925,7 +943,23 @@ export function ChatProvider({
     });
   }, []);
 
-  const conversations = useConversations(api, refreshSwarms, applyFrame, instances, noteArrival);
+  const selectedForVisibility = useRef<ChatSelection | null>(null);
+  const isThreadShown = useCallback((instance: string, bot: string) => {
+    if (!isVisible() || !document.hasFocus()) return false;
+    for (const target of visibleThreads.current.values()) {
+      const showing = target ?? selectedForVisibility.current;
+      if (showing?.instance === instance && showing.bot === bot) return true;
+    }
+    return false;
+  }, []);
+  const conversations = useConversations(
+    api,
+    refreshSwarms,
+    applyFrame,
+    instances,
+    noteArrival,
+    isThreadShown,
+  );
   const {
     selection,
     sessions,
@@ -937,6 +971,7 @@ export function ChatProvider({
     historyError,
     historyRead,
     live,
+    context,
     sending,
     activity,
     turnActivities,
@@ -963,18 +998,40 @@ export function ChatProvider({
     stageDraft,
     subagents,
   } = conversations;
+  selectedForVisibility.current = selection;
 
   /* ── the send queue (§9.2 "one active turn", "sending waits"), `chat-queue.ts` ── */
-  const { queued, queueMessage, unqueue, queueParked, sendMessage, stopTurn, sendNow, sendQueuedNow } =
-    useSendQueue({
-      selection,
-      sending,
-      turnError,
-      reconnecting,
-      send,
-      abort,
-      steer,
-    });
+  const {
+    queued,
+    queueMessage,
+    unqueue,
+    queueParked,
+    sendMessage,
+    stopTurn,
+    sendNow,
+    sendQueuedNow,
+    forTarget: queueForTarget,
+    watch: watchQueueTarget,
+  } = useSendQueue({
+    selection,
+    sending,
+    turnError,
+    reconnecting,
+    send,
+    abort,
+    steer,
+    stateFor: (target) => {
+      const record = conversations.view(target);
+      return {
+        sending: record.sending,
+        turnError: record.turnError,
+        reconnecting: record.reconnecting,
+      };
+    },
+    sendTo: (text, target) => conversations.send(text, target),
+    abortTo: (target) => conversations.abort(target),
+    steerTo: (text, target) => conversations.steer(text, target),
+  });
 
   /**
    * Opening a thread retracts the badge this browser raised for it.
@@ -1188,18 +1245,27 @@ export function ChatProvider({
    */
   const notify = useNotifyIfAvailable();
   const setWatching = notify?.setWatching;
+  const setWatchingThreads = notify?.setWatchingThreads;
   useEffect(() => {
-    if (!setWatching) return;
+    if (!setWatching && !setWatchingThreads) return;
     const report = (): void => {
-      if (!selection || threadCount === 0) {
-        setWatching(null);
+      if (threadCount === 0) {
+        if (setWatchingThreads) setWatchingThreads([]);
+        else setWatching?.(null);
         return;
       }
-      setWatching({
-        instance: selection.instance,
-        bot: selection.bot,
-        focused: isVisible() && document.hasFocus(),
-      });
+      const targets = [...visibleThreads.current.values()]
+        .map((target) => target ?? selection)
+        .filter((target): target is ChatSelection => target !== null);
+      const unique = new Map(targets.map((target) => [`${target.instance}/${target.bot}`, target]));
+      const focused = isVisible() && document.hasFocus();
+      const showing = [...unique.values()].map((target) => ({
+        instance: target.instance,
+        bot: target.bot,
+        focused,
+      }));
+      if (setWatchingThreads) setWatchingThreads(showing);
+      else setWatching?.(showing[0] ?? null);
     };
     report();
     window.addEventListener("focus", report);
@@ -1209,9 +1275,10 @@ export function ChatProvider({
       window.removeEventListener("focus", report);
       window.removeEventListener("blur", report);
       document.removeEventListener("visibilitychange", report);
-      setWatching(null);
+      if (setWatchingThreads) setWatchingThreads([]);
+      else setWatching?.(null);
     };
-  }, [selection, setWatching, threadCount]);
+  }, [selection, setWatching, setWatchingThreads, threadCount]);
 
   const value = useMemo<Chat>(
     () => ({
@@ -1247,6 +1314,7 @@ export function ChatProvider({
       reloadHistory,
       reloadTranscript,
       live,
+      context,
       sending,
       activity,
       turnActivities,
@@ -1259,6 +1327,8 @@ export function ChatProvider({
       resumeObservation,
       send: sendMessage,
       abort: stopTurn,
+      stopTarget: (target) =>
+        conversations.view(target).sending ? queueForTarget(target).stopTurn() : Promise.resolve(),
       settleRequest,
       releaseRequest,
       openRequest,
@@ -1300,6 +1370,7 @@ export function ChatProvider({
       reloadHistory,
       reloadTranscript,
       live,
+      context,
       sending,
       activity,
       turnActivities,
@@ -1312,6 +1383,8 @@ export function ChatProvider({
       resumeObservation,
       sendMessage,
       stopTurn,
+      queueForTarget,
+      conversations.view,
       settleRequest,
       releaseRequest,
       openRequest,
@@ -1327,7 +1400,82 @@ export function ChatProvider({
     ],
   );
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  const showScopedThread = useCallback(
+    (target: ChatSelection) => {
+      const hide = showThread(target);
+      const stopWatchingQueue = watchQueueTarget(target);
+      return () => {
+        stopWatchingQueue();
+        hide();
+      };
+    },
+    [showThread, watchQueueTarget],
+  );
+  const targetChat = (target: ChatSelection, onSelect?: (target: ChatSelection) => void): Chat => {
+    const record = conversations.view(target);
+    const { session, destination } = targetDestination(record, target);
+    const queue = queueForTarget(target);
+    return {
+      ...value,
+      selection: target,
+      selectionError: null,
+      select: (instance, bot, nextSession = null) => {
+        const next = { instance, bot, session: nextSession };
+        if (onSelect) {
+          onSelect(next);
+          return true;
+        }
+        return value.select(instance, bot, nextSession);
+      },
+      draft: record.draft,
+      setDraft: (text) => conversations.stageDraft(target, text),
+      sessions: record.sessions,
+      session,
+      destination,
+      messages: record.messages,
+      context: record.context,
+      historyLoading: record.historyLoading,
+      historyError: record.historyError,
+      historyRead: record.historyRead,
+      reloadHistory: () => conversations.reloadHistory(target),
+      reloadTranscript: () => conversations.reloadTranscript(target),
+      live: record.live,
+      sending: record.sending,
+      activity: record.activity,
+      turnError: record.turnError,
+      released: record.released,
+      turnPrompts: record.turnPrompts,
+      reconnecting: record.reconnecting,
+      reconnectAttempt: record.reconnectAttempt,
+      observation: {
+        state: record.observe,
+        attempt: record.observeAttempt,
+        error: record.observeError,
+      },
+      resumeObservation: () => conversations.resumeObservation(target),
+      send: queue.sendMessage,
+      abort: queue.stopTurn,
+      stopTarget: value.stopTarget,
+      settleRequest: (id, outcome, requested) =>
+        conversations.settleRequest(id, outcome, requested ?? target),
+      releaseRequest: (id, requested) => conversations.releaseRequest(id, requested ?? target),
+      openRequest: () => conversations.openRequest(target),
+      queued: queue.queued,
+      queueMessage: queue.queueMessage,
+      unqueue: queue.unqueue,
+      sendNow: queue.sendNow,
+      sendQueuedNow: queue.sendQueuedNow,
+      queueParked: queue.queueParked,
+      subagents: conversations.subagents.forTarget(target),
+    };
+  };
+  return (
+    <TargetScopeContext.Provider
+      value={{ chat: targetChat, ensure: conversations.ensure, showThread: showScopedThread }}
+    >
+      <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
+    </TargetScopeContext.Provider>
+  );
 }
 
 export function useChat(): Chat {

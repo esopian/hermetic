@@ -15,6 +15,7 @@ import { parseProcessNotice } from "../../chat/hermes/process-notice.ts";
 import { HermeticError } from "../../errors.ts";
 import type { ChatBlock, ChatMessage, ProcessEventBlock } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { usage } from "./fixture-chat-usage.ts";
 
 /** The session this transcript is. `fixture-chat-roster.ts` lists it as kestrel's Bot Chat. */
 export const KESTREL_EVENTS_SESSION = "sx-kestrel-events";
@@ -300,7 +301,7 @@ export const KESTREL_EVENTS_TRANSCRIPT: readonly ChatMessage[] = [
         "Asked lead-qa to check the byte-identical claim, and started the build and UI tests in the background. I'll post the results as they come in.",
       ),
     ],
-    usage: { input_tokens: 9_840, output_tokens: 312, cost_usd: 0.0081, model: "claude-sonnet-5" },
+    usage: usage(9_840, 312, 0.0081, "claude-sonnet-5"),
     error: null,
     incomplete: null,
   },
@@ -316,7 +317,7 @@ export const KESTREL_EVENTS_TRANSCRIPT: readonly ChatMessage[] = [
         "lead-qa confirms it: the chrome binary is identical. Only two package manifests differ, and neither is used at runtime. Nothing to correct in the wiki. Build and tests are still running.",
       ),
     ],
-    usage: { input_tokens: 10_420, output_tokens: 58, cost_usd: 0.0034, model: "claude-sonnet-5" },
+    usage: usage(10_420, 58, 0.0034, "claude-sonnet-5"),
     error: null,
     incomplete: null,
   },

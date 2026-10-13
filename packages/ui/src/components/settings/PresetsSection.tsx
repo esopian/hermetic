@@ -163,7 +163,7 @@ export function PresetsSection() {
     <SettingsPage
       section="presets"
       scope="laptop"
-      desc="The four starting points the New agent panel offers. Other laptops keep their own."
+      desc="The starting points the New agent panel offers. Other laptops keep their own."
       primary={
         <button type="button" className="btn btn-primary" onClick={startNew}>
           + New preset

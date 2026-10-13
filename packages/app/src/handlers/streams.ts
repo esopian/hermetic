@@ -93,24 +93,52 @@ export interface StreamRegistry {
   has(id: string): boolean;
   /** Closes every open stream: what a window closing means for the streams it asked for. */
   closeAll(): void;
+  /**
+   * Whether `close()` reached this handle before its source ran out: the reader
+   * hung up, as opposed to the source ending on its own.
+   *
+   * A binding that closes a silent stream with a synthetic terminal
+   * (`rpc/bind.ts`, `STREAM_ENDED`) reads this so that it does not write one
+   * for a reader that asked to stop: that reader is not waiting for anything.
+   * When `op.event` was routed by `op_id` alone, a terminal written for the one
+   * that left ended the op for every other reader of it in the window. Frames
+   * now name their subscription and the page drops those for a stream it
+   * closed, so this is defence in depth: the bridge does not send a terminal
+   * nobody asked for.
+   */
+  hungUp(handle: StreamHandle): boolean;
 }
 
 export function createStreamRegistry(): StreamRegistry {
   const open = new Map<string, StreamHandle>();
+  /** Handles whose source has run out. */
+  const settled = new WeakSet<StreamHandle>();
+  /** Handles closed while their source was still running. */
+  const hungUp = new WeakSet<StreamHandle>();
   return {
     open(handle) {
       // Same shape of id as an op's, and for the same reason: it is handed to a
       // caller that will send it back, and nothing may infer anything from it.
       const id = randomUUID();
       open.set(id, handle);
+      // Registered before the caller can attach its own `done.then(close)` — the
+      // handlers forget a finished stream that way — so by the time that close
+      // runs, the source is already known to have ended by itself.
+      void handle.done.then(() => {
+        settled.add(handle);
+      });
       return id;
     },
     close(id) {
       const handle = open.get(id);
       if (handle === undefined) return false;
       open.delete(id);
+      if (!settled.has(handle)) hungUp.add(handle);
       handle.close();
       return true;
+    },
+    hungUp(handle) {
+      return hungUp.has(handle);
     },
     get(id) {
       return open.get(id);

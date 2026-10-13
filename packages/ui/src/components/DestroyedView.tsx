@@ -30,19 +30,23 @@ export interface DestroyedAudit {
   tombstones: AgentTombstone[] | null;
   error: string | null;
   loading: boolean;
-  /** Read again now: on lens entry, the refresh button, and a destroy settling. */
+  /** A read has come back, good or failed: `null` tombstones then mean "unknown", not "reading". */
+  hasRead: boolean;
+  /** Read again now: the refresh button, and a destroy settling. */
   refresh: () => void;
   /** Forget the last read — a fleet switch, where it describes the wrong fleet. */
   reset: () => void;
 }
 
 /**
- * `agents.destroyed`, read only while the lens is up (`enabled`) and again on
- * every `refresh`. No poll: tombstones change only when a destroy finishes,
- * and the shell calls `refresh` when one does. A failed read keeps the last
- * good list on screen and says so, the way the volume inventory does.
+ * `agents.destroyed`, read once as soon as `enabled` (the fleet is
+ * initialized), so the toolbar's `<n> DESTROYED` has its number before the
+ * lens is ever opened; again on every entry to the lens (`lensUp` turning
+ * true) and on every `refresh`. No poll: tombstones change only when a destroy
+ * finishes, and the shell calls `refresh` when one does. A failed read keeps
+ * the last good list on screen and says so, the way the volume inventory does.
  */
-export function useDestroyedAudit(enabled: boolean): DestroyedAudit {
+export function useDestroyedAudit(enabled: boolean, lensUp = false): DestroyedAudit {
   const [tombstones, setTombstones] = useState<AgentTombstone[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -53,6 +57,13 @@ export function useDestroyedAudit(enabled: boolean): DestroyedAudit {
     setError(null);
     setEpoch((n) => n + 1);
   }, []);
+  // Entering the lens is a read; leaving it is not. Derived during render (the
+  // previous value kept in state), so a mount already on the lens reads once.
+  const [wasUp, setWasUp] = useState(lensUp);
+  if (lensUp !== wasUp) {
+    setWasUp(lensUp);
+    if (lensUp) setEpoch((n) => n + 1);
+  }
 
   useEffect(() => {
     // `epoch` is read so a refresh re-runs the effect; it carries no value.
@@ -77,9 +88,10 @@ export function useDestroyedAudit(enabled: boolean): DestroyedAudit {
     };
   }, [enabled, epoch]);
 
+  const hasRead = tombstones !== null || error !== null;
   return useMemo(
-    () => ({ tombstones, error, loading, refresh, reset }),
-    [tombstones, error, loading, refresh, reset],
+    () => ({ tombstones, error, loading, hasRead, refresh, reset }),
+    [tombstones, error, loading, hasRead, refresh, reset],
   );
 }
 

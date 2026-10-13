@@ -5,7 +5,7 @@
  * The fleet switcher and the account and region cells used to sit here; they
  * moved to the env strip (`EnvStrip.tsx`, `FleetMenu.tsx`), which is the line
  * that names where an action lands. That freed the header for
- * `FLEET | CHAT | SETTINGS`, which used to take a 44px row of its own.
+ * `CHAT | FLEET | SETTINGS`, which used to take a 44px row of its own.
  */
 import type { ReactNode } from "react";
 import { useTheme } from "../state/state.tsx";

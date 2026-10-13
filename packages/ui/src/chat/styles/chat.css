@@ -704,7 +704,7 @@
   flex-wrap: wrap;
   gap: 8px;
 }
-/* The header keeps its height when the actions column gains a chip (Stop turn):
+/* The header keeps its height whatever chips the actions column carries:
    the identity rows stay on one line and the long text items ellipsise, so the
    squeeze lands on the label, never on a second row. The compact layout moves
    the actions to their own row and keeps its wrapping. */
@@ -737,16 +737,6 @@
 .ch-thead-name > .ch-title-form {
   flex: 1 1 auto;
   min-width: 0;
-}
-/* In a pane this narrow the density switch's "Events" caption is what the
-   identity column pays for; the three options carry their own labels. */
-.ch-thead {
-  container-type: inline-size;
-}
-@container (max-width: 720px) {
-  .ch-body:not(.ch-compact) .ch-thead-actions .ch-ev-density .kicker {
-    display: none;
-  }
 }
 /* The rename pencil sits beside the name it edits, quiet until pointed at.
    The field replaces the name in place: square, 2px rule, the name's own size. */
@@ -864,6 +854,10 @@
 }
 .ch-band.acc {
   border-left: 4px solid var(--acc);
+}
+/* A plain state (stopped): a neutral rule, so it reads as information. */
+.ch-band.mute {
+  border-left: 4px solid var(--fg3);
 }
 .ch-band .sub {
   font-family: var(--mono);
@@ -1640,6 +1634,50 @@
   resize: none;
   width: 100%;
 }
+/* The thread composer's input: the box draws the border and the padding, and
+   the textarea inside it has neither, so text scrolled past the autosize cap
+   (`autosize.ts`) is clipped inside the padding, never against the border.
+   The right padding is split so the scrollbar sits near the edge while the
+   text keeps its distance from it. */
+.ch-input-box {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 46px;
+  padding: 12px 6px 12px 16px;
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  cursor: text;
+}
+.ch-input-box:focus-within {
+  outline: 2px solid var(--text-accent);
+  outline-offset: -2px;
+}
+.ch-input-box > textarea.ch-input {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 0 10px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow-y: hidden;
+}
+/* The ring is the box's (above), so it frames the padding, not the text. */
+.ch-input-box > textarea.ch-input:focus-visible {
+  outline: none;
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar {
+  width: 10px;
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar-thumb {
+  background: var(--line2);
+}
+.ch-input-box > textarea.ch-input::-webkit-scrollbar-track {
+  background: transparent;
+}
 .ch-send {
   height: 46px;
   min-width: 46px;
@@ -1657,12 +1695,6 @@
 .ch-send:hover {
   background: var(--acc);
   color: var(--acc-fg);
-}
-/* Mid-turn the same control stops the turn, so it takes the destructive fill
-   rather than moving or changing size. */
-.ch-send.stop {
-  background: var(--bad);
-  color: var(--danger-text);
 }
 /* A send whose reply does something the operator may not have meant — a new
    session, a robot, somebody's Slack — says so in words, at the same height
@@ -1699,10 +1731,103 @@
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-muted);
-  flex-wrap: wrap;
+}
+/* One line: the key hints give way first (they ellipsize), then what the
+   right end says, and Stop never does — so it sits on the hints' line rather
+   than wrapping onto one of its own. */
+.ch-composer-foot > span:first-child {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ch-composer-foot .right {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The context-window meter: a ring and a percentage, neutral until the window
+   nears full (`context-usage.ts`). Its exact figures are a tooltip above it. */
+.ch-window {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.ch-window svg {
+  display: block;
+}
+.ch-window circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.ch-window .track {
+  stroke: var(--line2);
+}
+.ch-window .arc {
+  stroke: currentColor;
+}
+.ch-window.warn {
+  color: var(--text-warn);
+}
+.ch-window.bad {
+  color: var(--bad);
+  font-weight: 700;
+}
+.ch-window:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  white-space: pre;
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 6px;
+  z-index: 5;
+  pointer-events: none;
+}
+/* Stop, while a turn runs: the footer's last word, small and red-outlined so it
+   reads as the one destructive control here without competing with Send. */
+.ch-stop {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--bad);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--bad);
+  vertical-align: middle;
+}
+.ch-stop > i {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+}
+.ch-stop:hover {
+  background: var(--bad);
+  color: var(--danger-text);
+}
+.ch-stop:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
 }
 /* While a clarify waits: what Enter and ⌘Enter do to it (D4a). */
 .ch-composer-question {
@@ -2076,6 +2201,11 @@
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
+/* One glyph column for `>`, `#` and `↗`, so every row's name starts at the same x. */
+.qj-row > span:first-child {
+  width: 1.2em;
+  text-align: center;
+}
 .qj-row > span:nth-child(2) {
   display: block;
   min-width: 0;
@@ -2424,6 +2554,7 @@ body:has(.app > .ch-body) {
   min-width: 0;
 }
 .ch-input-wrap:has(> .ch-queue) > .ch-input,
+.ch-input-wrap:has(> .ch-queue) > .ch-input-box,
 .ch-input-wrap:has(> .ch-queue) > .ch-send {
   grid-row: 2;
 }

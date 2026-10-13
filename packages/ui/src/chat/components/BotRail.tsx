@@ -17,6 +17,7 @@ import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { Face } from "./Face.tsx";
 import { RedactedText } from "./RedactedText.tsx";
 import { SILENT_LABEL, isSilentPreview } from "../chat-silence.ts";
+import { matchesQuery } from "../conversation-search.ts";
 
 export function BotRail({
   swarms,
@@ -55,7 +56,6 @@ export function BotRail({
 }) {
   const [tab, setTab] = useState<"bots" | "sessions">("bots");
   const [filter, setFilter] = useState<"all" | "unread" | "needs">("all");
-  const matches = (value: string) => value.toLowerCase().includes(query.trim().toLowerCase());
   const bots = swarms.flatMap((swarm) => swarm.bots);
   /**
    * The inbox's unread `chat.*` rows, added to the roster's own count: the two
@@ -83,7 +83,7 @@ export function BotRail({
   const pinned = new Set(prefs.pinned);
   const collapsed = new Set(prefs.collapsed);
   const shown = (bot: BotView) =>
-    matches(`${bot.title} ${bot.name} ${bot.instance}`) &&
+    matchesQuery(query, bot.title, bot.name, bot.instance) &&
     (filter === "all" ||
       (filter === "needs" && bot.needs_action) ||
       (filter === "unread" && railUnread(bot, unreadOf(bot.instance, bot.name)) > 0));
@@ -351,7 +351,7 @@ export function BotRail({
               </button>
             </div>
             {rooms
-              .filter((item) => matches(`${item.name} ${item.instance}`))
+              .filter((item) => matchesQuery(query, item.name, item.instance))
               .map((item) => (
                 <button
                   type="button"
@@ -389,7 +389,7 @@ export function BotRail({
               <span className="ch-time">{ordinary.length}</span>
             </div>
             {ordinary
-              .filter((session) => matches(`${session.title} ${session.origin}`))
+              .filter((session) => matchesQuery(query, session.title, session.origin))
               .map((session) => (
                 <button
                   type="button"

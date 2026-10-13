@@ -59,6 +59,11 @@ export type { ProcessEventLike } from "./process-event.ts";
 // the inbox, the UI draws it as a marker and holds back a streamed prefix.
 export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "./silence.ts";
 
+// --- Hermes gateway internal signals (§9.2) ------------------------------
+// Events Hermes Desktop consumes without drawing: core drops them before they
+// become `unknown` blocks, the UI skips any already stored.
+export { HERMES_INTERNAL_EVENTS, isHermesInternalEvent } from "./hermes-internal-events.ts";
+
 // --- Bot handles and @-mentions (§9.2) -----------------------------------
 // The composer's mention picker and core's `message_agent` target mapping
 // must agree on which tag names which bot.

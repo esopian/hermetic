@@ -9,6 +9,7 @@ import {
   RECREATE_PHASES,
   currentPhaseOf,
   labelsForOp,
+  opPercent,
   phaseLabel,
   phasesForOp,
 } from "../src/lib/useOp.ts";
@@ -137,5 +138,22 @@ describe("labelsForOp", () => {
     expect(labelsForOp("operation")).toEqual({});
     // Which still answers for the phases the non-lifecycle ops emit.
     expect(phaseLabel("archive")).not.toBe("archive");
+  });
+});
+
+/**
+ * A one-agent `upgrade --now` used to report 1.0 from the config upload on, and
+ * the drawer's bar read 100% through the minute and a half the box spent
+ * restarting Hermes (real mode, 2026-10-12). Only the op's end may fill it.
+ */
+describe("opPercent", () => {
+  test("a running op never reads 100%, whatever its last event said", () => {
+    expect(opPercent(false, true, 1)).toBe(99);
+    expect(opPercent(false, true, 0.525)).toBe(53);
+  });
+
+  test("a finished op reads 100% when it succeeded, and where it stopped when it failed", () => {
+    expect(opPercent(true, true, 0.5)).toBe(100);
+    expect(opPercent(true, false, 0.5)).toBe(50);
   });
 });

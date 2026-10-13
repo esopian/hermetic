@@ -269,7 +269,7 @@ export function FleetTable({
         {loose.length > 0 || board.overflow.count > 0 ? (
           <>
             <div className="tsub" role="row">
-              <span className="kicker" style={{ color: "var(--acc)" }}>
+              <span className="kicker" style={{ color: "var(--text-warn, var(--warn))" }}>
                 Volumes · no agent
               </span>
               <span className="mono dim">
@@ -288,8 +288,8 @@ export function FleetTable({
                   <span className="nm dim">{v.agent ?? "untagged"}</span>
                   <span className="tag ghost">volume</span>
                 </span>
-                <span className="cell-status" style={{ color: "var(--acc)" }}>
-                  <i style={{ background: "var(--acc)" }} />
+                <span className="cell-status" style={{ color: "var(--text-warn, var(--warn))" }}>
+                  <i style={{ background: "var(--warn)" }} />
                   memory kept
                 </span>
                 <span className="mono dim">

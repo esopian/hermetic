@@ -224,6 +224,14 @@ export interface StreamHandlers {
    */
   resumes?: boolean;
   /**
+   * An op stream only: true for a reader that has drawn none of the op yet, so
+   * it is sent the whole buffer whatever cursor the window holds. The cursor is
+   * the window's, not the reader's — another reader of the same op may have
+   * moved it — and resuming from it would hand a drawer that was closed and
+   * reopened mid-op an empty rail: every phase it has to draw already ran.
+   */
+  replay?: boolean;
+  /**
    * The stream's name on the other side, once the open has answered. Only a
    * reader that must *say* something about its stream needs it — the
    * terminal's acks name the attach they are for (`api/terminal.ts`).

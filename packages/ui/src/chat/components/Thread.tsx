@@ -27,11 +27,12 @@ import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts
 import type { Observation } from "../chat-conversations.ts";
 import { composerState, hasKnownOrigin, originClass, railTime } from "../chat-logic.ts";
 import { turnRows } from "../chat-turns.ts";
-import { eventAnchors, hasProcessEvents, processStarts, threadItems } from "../process-events.ts";
-import type { EventDensity } from "../process-events.ts";
-import { densityThreadKey, useEventDensity } from "../event-density.ts";
+import { latestContextReading, newerReading } from "../context-usage.ts";
+import type { ContextReading } from "../context-usage.ts";
+import { eventAnchors, processStarts, threadItems } from "../process-events.ts";
 import { ProcessBurst, ProcessEventContext, ProcessEventRow } from "./blocks/ProcessEvent.tsx";
 import { useNotifyIfAvailable } from "../../state/notify-state.tsx";
+import { useOpenAgentSection } from "../agent-sections.ts";
 import { useViewAck } from "../../nav/view-ack.ts";
 import { pinToBottom, useStickToBottom } from "../stick-to-bottom.ts";
 import type { Pin } from "../stick-to-bottom.ts";
@@ -45,7 +46,6 @@ import { BotExchange } from "./BotExchange.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
 import { SubagentScope } from "./blocks/SubagentModal.tsx";
-import { hasSubagents } from "../chat-subagents.ts";
 import { useChatIfAvailable } from "../chat-state.tsx";
 
 /** The avatar status for a thread, read off the fleet row rather than guessed. */
@@ -70,6 +70,26 @@ function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status
 }
 
 const NO_TEAMMATES: readonly DmBot[] = [];
+
+/**
+ * Whether the header offers the box's Desktop and Terminal: only while the box
+ * is up. Bootstrapping, ready and degraded have something to look at; error
+ * and unreachable keep the links because the terminal and the console are how
+ * such a box is debugged, and the section says what is not there. A box being
+ * created, stopping, stopped, being destroyed or gone has neither, and a
+ * thread with no fleet row has no agent to open them on.
+ */
+const LINKED_STATUSES: ReadonlySet<AgentView["display_status"]> = new Set<AgentView["display_status"]>([
+  "bootstrapping",
+  "ready",
+  "degraded",
+  "error",
+  "unreachable",
+]);
+
+function linksSections(agent: AgentView | null): boolean {
+  return agent !== null && LINKED_STATUSES.has(agent.display_status);
+}
 
 /** A watch that is working — what a surface with no observation of its own passes. */
 const LIVE_OBSERVATION: Observation = { state: "live", attempt: 0, error: null };
@@ -165,16 +185,18 @@ function Band({
 }) {
   switch (state) {
     case "stopped":
+      // Neutral: a stopped box is a state, not something that needs attention.
       return (
-        <div className="ch-band warn" role="note">
+        <div className="ch-band mute" role="note">
           <i className="dot" />
           <span>{`${instance} is stopped.`}</span>
           <span className="sub">Its transcript is on the data volume and comes back with it.</span>
         </div>
       );
     case "destroyed":
+      // Warn: the box is gone and its kept volume is a decision left to make.
       return (
-        <div className="ch-band acc" role="note">
+        <div className="ch-band warn" role="note">
           <i className="dot" />
           <span>{`${instance} is gone, but its memory is not.`}</span>
           <span className="sub">
@@ -270,38 +292,6 @@ export function NoRoute({ detail }: { detail?: string | null }) {
   );
 }
 
-/**
- * The thread's "background events" density. Drawn only in a thread that has
- * any: a switch for rows that are not there is a question nobody asked.
- */
-function DensitySwitch({
-  density,
-  onChange,
-}: {
-  density: EventDensity;
-  onChange: (density: EventDensity) => void;
-}) {
-  const options: [EventDensity, string][] = [
-    ["compact", "compact"],
-    ["failures", "failures only"],
-  ];
-  return (
-    <div className="ch-ev-density" role="group" aria-label="Background events">
-      <span className="kicker">events</span>
-      {options.map(([value, label]) => (
-        <button
-          key={value}
-          type="button"
-          aria-pressed={density === value}
-          onClick={() => onChange(value)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /** What fills the log when there is no transcript to draw. */
 function Empty({
   state,
@@ -366,6 +356,7 @@ export function Thread({
   state,
   messages,
   live,
+  context: contextHeld = null,
   sending,
   activity = sending ? "thinking" : "idle",
   historyError,
@@ -397,6 +388,8 @@ export function Thread({
   state: ThreadState;
   messages: ChatMessageView[];
   live: ChatMessageView | null;
+  /** The conversation's held context-window figure (`Chat.context`). */
+  context?: ContextReading | null;
   sending: boolean;
   activity?: TurnActivity;
   historyError: string | null;
@@ -443,16 +436,20 @@ export function Thread({
   // message never folds into the turn above it.
   const all = live ? [...messages, live] : messages;
   const rows = turnRows(all, now, { breakBefore: live?.id });
-  // Background-process events (§9.2): folded into bursts, filtered by the
-  // thread's density, and linked to the calls that started them. The switch
-  // only exists in a thread that has events, so a thread without them is drawn
-  // exactly as it always was whatever this browser once stored for it. A
-  // thread that delegated has it too: under FAILURES ONLY a child that
-  // succeeded is a dimmed line with no detail (Q9).
-  const eventful = hasProcessEvents(all) || hasSubagents(all);
+  // The window as of the newest turn or live tick, for the composer's meter:
+  // the newer of what these rows carry and what the conversation's record holds
+  // (`Conversation.context`), since the box's stored rows carry none.
+  const context = useMemo(
+    () =>
+      newerReading(latestContextReading(live ? [...messages, live] : messages), contextHeld)?.usage ??
+      null,
+    [messages, live, contextHeld],
+  );
+  // Background-process events (§9.2): folded into bursts and linked to the
+  // calls that started them. One rendering, with no viewer switch: every event
+  // row keeps its output collapsed, and a failure is already drawn in red.
+  const items = threadItems(rows);
   const subagents = useChatIfAvailable()?.subagents ?? null;
-  const [density, setDensity] = useEventDensity(densityThreadKey(fleetId, instance, bot, session?.id));
-  const items = threadItems(rows, eventful ? density : "compact");
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
   // Refused DMs a later call already sent again, and the ones Retry was asked
   // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
@@ -479,6 +476,7 @@ export function Thread({
   };
 
   const notify = useNotifyIfAvailable();
+  const openSection = useOpenAgentSection();
   /**
    * Whether the reader is at the live end of the transcript.
    *
@@ -619,15 +617,29 @@ export function Thread({
           </div>
         </div>
         <div className="ch-thead-actions">
-          {eventful ? <DensitySwitch density={density} onChange={setDensity} /> : null}
           {actions}
+          {openSection && linksSections(agent) ? (
+            <>
+              <button
+                type="button"
+                className="ch-chip"
+                title={`Open ${instance}'s desktop over this conversation`}
+                onClick={() => openSection(instance, "desktop")}
+              >
+                Desktop
+              </button>
+              <button
+                type="button"
+                className="ch-chip"
+                title={`Open a terminal on ${instance} over this conversation`}
+                onClick={() => openSection(instance, "terminal")}
+              >
+                Terminal
+              </button>
+            </>
+          ) : null}
           {fixture ? <span className="ch-chip static">canned</span> : null}
           {agent ? <span className="ch-chip static">{agent.display_status}</span> : null}
-          {sending ? (
-            <button type="button" className="ch-chip" onClick={onAbort}>
-              Stop turn
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -666,7 +678,6 @@ export function Thread({
         messages={all}
         liveId={live?.id ?? null}
         sending={sending}
-        failuresOnly={eventful && density === "failures"}
         controls={subagents}
       >
         <div className="ch-log" ref={log} data-autoscroll>
@@ -674,9 +685,6 @@ export function Thread({
             <ProcessEventContext.Provider value={processContext}>
               {rows.length === 0 ? (
                 <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
-              ) : items.length === 0 ? (
-                // Every row here is a routine event and "failures only" hides them all.
-                <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
               ) : (
                 items.map((item) => {
                   // Keyed on the row's *first* source id: the merged row is named by
@@ -766,6 +774,7 @@ export function Thread({
         onAbort={onAbort}
         mentions={mentions}
         mentionHint={mentionHint}
+        context={context}
       />
     </section>
   );

@@ -9,6 +9,7 @@
  */
 import { checkAbort } from "../../abort.ts";
 import { HermeticError } from "../../errors.ts";
+import { isHermesInternalEvent } from "../../shared/hermes-internal-events.ts";
 import {
   CHAT_ERROR_CODES,
   chatError,
@@ -18,7 +19,7 @@ import {
   type SendOptions,
 } from "./hermes-chat-types.ts";
 import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
-import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
+import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
@@ -30,44 +31,6 @@ import {
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
-
-/**
- * Events that carry no transcript content and are dropped rather than turned
- * into an `unknown` block.
- *
- * **Every entry here was observed on the wire.** That rule is the whole of the
- * list's design, and it was learned the expensive way: an earlier version also
- * dropped `tool.started`, `tool.generating`, `status.update`, `message.interim`,
- * `session.status` and `session.usage`, every one of them taken from a *list of
- * declared RPC method names* in upstream's source rather than from a frame
- * anybody had seen. `tool.started` and `tool.start` are both declared. If the
- * spelling upstream actually emits is the one on the drop list, every tool call
- * in every transcript disappears silently, and the symptom is a transcript that
- * merely looks a bit thin.
- *
- * Other recognized events are normalized by hermes-chat-activity.ts without
- * discarding their payload. Unfamiliar events survive as unknown blocks.
- * The four below are the four
- * whose frames the probe counted in its single recorded turn (§8 — `gateway.ready`
- * ×1, `session.info` ×2, `session.title` ×2, `sessions.changed` ×5): nine frames
- * of pure chatter around a four-token answer, which is what makes dropping them
- * worth the risk that the list is wrong.
- *
- * Adding an entry means recording a frame first.
- */
-const CONTROL_EVENTS = new Set([
-  // Observed ×1. Emitted immediately after the socket is accepted. The adapter
-  // mints its own status frames instead, so this is redundant rather than new.
-  "gateway.ready",
-  // Observed ×2. Model, toolsets, cwd, approval mode. Useful, but not a
-  // transcript block — and the model it names also rides on `done`'s usage.
-  "session.info",
-  // Observed ×2. The box renaming the conversation; a head reads titles from
-  // `sessions()`.
-  "session.title",
-  // Observed ×5, for one four-token answer.
-  "sessions.changed",
-]);
 
 /**
  * `prompt.submit`'s reply, mapped onto a status the transcript can show.
@@ -163,7 +126,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
   const activeTurns = new Map<string, Set<{ runtime: string; stored: string | null }>>();
   const turnKey = (box: BoxAddress, bot: string): string => JSON.stringify([box.baseUrl, bot]);
 
-  async function resume(rpc: Rpc, box: BoxAddress, bot: string, stored: string): Promise<string> {
+  async function resume(
+    rpc: Rpc,
+    box: BoxAddress,
+    bot: string,
+    stored: string,
+  ): Promise<{ runtime: string; info: Record<string, unknown> | null }> {
     const result = rec(
       await rpc.request("session.resume", {
         session_id: stored,
@@ -179,7 +147,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         CHAT_ERROR_CODES.PROTOCOL,
         `${box.instance}: session.resume named no runtime session`,
       );
-    return runtime;
+    return { runtime, info: rec(result?.info) };
   }
 
   async function* turn(
@@ -220,8 +188,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await advertiseServerRequests(rpc, opts.signal);
       let session: string;
       let stored = opts.session ?? null;
+      let info: Record<string, unknown> | null;
       if (opts.session) {
-        session = await resume(rpc, box, bot, opts.session);
+        ({ runtime: session, info } = await resume(rpc, box, bot, opts.session));
       } else {
         // Stamped so `session.list` can tell this session from the box's own TUI
         // (`HERMETIC_SESSION_SOURCE`); `portal` still comes only from the local record.
@@ -236,7 +205,15 @@ export function createChatTurn(deps: ChatTurnDeps) {
           );
         session = runtime;
         stored = str(created?.stored_session_id);
+        info = rec(created?.info);
       }
+      // The window the gateway already holds for this session, said before the
+      // prompt goes in. A session still live on the box answers its resume with
+      // the figure its last turn left (`contextUsageBlock`), so the composer's
+      // meter is right from the turn's first frame instead of from its first
+      // tick. Adapter-minted, so `seq: 0`, like the status frames.
+      const known = contextUsageBlock(info);
+      if (known) yield { type: "block", seq: 0, message, block: known };
       active = { runtime: session, stored };
       // Registered now, before the prompt: a background delegation's children
       // may first report after this turn has ended, on the observation stream,
@@ -489,9 +466,27 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (!type) continue;
       const sourceSeq = num(ev.seq) ?? 0;
       const payload = rec(ev.payload) ?? {};
-      if (CONTROL_EVENTS.has(type)) continue;
-
       const evSession = typeof ev.session_id === "string" ? ev.session_id : null;
+      // `session.info` is chatter except for its usage's context window, which
+      // is the one figure the meter can have before the turn's first tick.
+      // Only this session's: a subagent's window is not the conversation's.
+      const infoUsage =
+        type === "session.info" && (evSession === null || evSession === session)
+          ? contextUsageBlock(payload)
+          : null;
+      // The gateway's internal signals (`shared/hermes-internal-events.ts`) are
+      // dropped here, before seq bookkeeping and before `seenContent`, so they
+      // never become `unknown` blocks and never satisfy the first-frame
+      // deadline. The list is what Hermes Desktop consumes without drawing
+      // anything, cited from Desktop's source — not upstream's declared method
+      // names: an earlier drop list built from declared names held
+      // `tool.started` and `status.update`, and a dropped spelling that
+      // upstream really emits makes every tool call vanish silently. Anything
+      // unlisted is mapped by hermes-chat-activity.ts or survives as `unknown`.
+      // It also runs before the child-session `subagent` wrap below, so a
+      // listed event from a child session is dropped too, by intent.
+      if (isHermesInternalEvent(type) && !infoUsage) continue;
+
       // Reclamation is broadcast globally, but its payload addresses one runtime.
       // A different conversation releasing a slot is not a failure of this turn.
       if (type === "session.reclaimed" && str(payload.session_id) !== session) continue;
@@ -540,6 +535,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
           rec(payload.params) ?? {},
         ))
           yield* emit(seq, block);
+        continue;
+      }
+      if (infoUsage) {
+        // A status snapshot, not content: the session describing itself says
+        // nothing about whether the model has started, so the first-frame
+        // deadline keeps running.
+        yield { type: "block", seq, message, block: infoUsage };
         continue;
       }
       if (isSubagentEvent(type)) {

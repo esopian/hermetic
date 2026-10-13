@@ -17,6 +17,7 @@ import type { ReactNode } from "react";
 import { useChatIfAvailable } from "../chat/chat-state.tsx";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { ChatView } from "../chat/components/ChatView.tsx";
+import { AgentSectionContext } from "../chat/agent-sections.ts";
 import { isTopmostOverlay, keyboardOwned } from "../lib/focus.ts";
 import { openExternal } from "../lib/open-external.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
@@ -58,6 +59,49 @@ import { DrawerEnvStrip } from "./EnvStrip.tsx";
 const REBOOT_WAIT_MS = 5 * 60_000;
 
 /**
+ * The drawer's usual width. Maximized, it drops the inline width for
+ * `.dr-maximized` (`styles/drawer.css`): the window less a strip of the page,
+ * never narrower than this.
+ */
+const DRAWER_WIDTH = 840;
+
+/**
+ * Whether the drawer is maximized, for the life of the page. Module state rather
+ * than component state because `App` keys the drawer by agent, so moving to
+ * another agent remounts it, and an operator who widened the drawer to read a
+ * terminal expects the next agent to open just as wide. Deliberately not
+ * persisted past a reload: maximized is a mode for the task at hand, and a
+ * fresh launch opens at the size the layout was drawn for.
+ */
+let sessionMaximized = false;
+
+/**
+ * The maximize toggle's glyph: arrows out to the corners, or back in. Drawn
+ * rather than typed, because the arrow characters for it are not in the
+ * vendored fonts and would fall back to whatever each engine's system font has.
+ */
+function SizeGlyph({ maximized }: { maximized: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="square"
+    >
+      {maximized ? (
+        <path d="M9 3v4h4M9 7l5-5M7 13V9H3M7 9l-5 5" />
+      ) : (
+        <path d="M10 2h4v4M14 2L9 7M6 14H2v-4M2 14l5-5" />
+      )}
+    </svg>
+  );
+}
+
+/**
  * Is focus inside the desktop viewer's frame rather than on one of the drawer's
  * own controls?
  *
@@ -96,6 +140,7 @@ export function AgentDrawer({
   onSession,
   onSettings,
   covered = false,
+  onChatBehind,
 }: {
   agent: AgentView;
   /** When true, the drawer opens straight onto its Chat section. */
@@ -136,6 +181,12 @@ export function AgentDrawer({
    * overlays.
    */
   covered?: boolean;
+  /**
+   * Set when this drawer was raised over the Chat view (a thread's Desktop or
+   * Terminal link): the conversation is already on screen underneath, so Chat
+   * (the tab, or `t`) goes back to it rather than mounting a second copy here.
+   */
+  onChatBehind?: () => void;
 }) {
   const chat = useChatIfAvailable();
   const entry = useChatEntry();
@@ -144,6 +195,11 @@ export function AgentDrawer({
   const name = agent.name;
 
   const [section, setSection] = useState<AgentTab>(chatInitiallyOpen && watched ? "chat" : tab);
+  const [maximized, setMaximized] = useState(sessionMaximized);
+  const toggleMaximized = () => {
+    sessionMaximized = !maximized;
+    setMaximized(sessionMaximized);
+  };
   useEffect(() => {
     setSection(tab);
   }, [tab]);
@@ -189,8 +245,12 @@ export function AgentDrawer({
   /** Chat needs the conversation selected before it can show it; the entry does both. */
   const openChat = useCallback(() => {
     if (!watched) return;
+    if (onChatBehind) {
+      onChatBehind();
+      return;
+    }
     if (entry?.open(chatTarget(), "drawer")) go("chat");
-  }, [entry, chatTarget, watched, go]);
+  }, [entry, chatTarget, watched, go, onChatBehind]);
 
   const selectSection = useCallback(
     (next: AgentTab) => (next === "chat" ? openChat() : go(next)),
@@ -440,7 +500,10 @@ export function AgentDrawer({
             </div>
             {chat.selection?.instance === name ? (
               <div className="ch-drawer-chat">
-                <ChatView withContext={false} withRail={false} />
+                {/* The thread's Desktop/Terminal links move this drawer, not open another. */}
+                <AgentSectionContext.Provider value={(_, next) => go(next)}>
+                  <ChatView withContext={false} withRail={false} />
+                </AgentSectionContext.Provider>
               </div>
             ) : null}
           </div>
@@ -452,7 +515,7 @@ export function AgentDrawer({
               <div className="kicker">Chat</div>
               <p>
                 <b>{chat ? "Not listening." : "Chat is not available here."}</b>{" "}
-                {chat ? "Listen to this instance to connect its bots to chat and alerts." : ""}
+                {chat ? "Listen to connect its bots to chat and alerts." : ""}
               </p>
             </div>
             {chat ? <ListenButton instance={name} /> : null}
@@ -555,7 +618,8 @@ export function AgentDrawer({
 
   return (
     <Drawer
-      width={840}
+      width={maximized ? null : DRAWER_WIDTH}
+      className={maximized ? "dr-maximized" : undefined}
       onClose={onClose}
       onEscape={() => {
         // While the desktop frame has focus, Esc belongs to whatever is running
@@ -641,6 +705,27 @@ export function AgentDrawer({
               </a>
             </>
           ) : null}
+          {/*
+            A toggle, so one name and `aria-pressed` carry the state: a name
+            that flipped to "Restore" as well would read "Restore drawer,
+            pressed", which says the opposite. The tooltip names the action.
+
+            The terminal refits through its own ResizeObserver and the desktop
+            view re-syncs its native frame on the devkit's polling sync, so a
+            width change needs no nudge from here.
+          */}
+          <button
+            type="button"
+            className="btn btn-box dr-size-toggle"
+            onClick={toggleMaximized}
+            aria-label="Maximize drawer"
+            aria-pressed={maximized}
+            title={
+              maximized ? "Restore the drawer to its usual width" : "Widen the drawer to the window"
+            }
+          >
+            <SizeGlyph maximized={maximized} />
+          </button>
           <button type="button" className="btn btn-box" onClick={onClose} aria-label="Close">
             ×
           </button>

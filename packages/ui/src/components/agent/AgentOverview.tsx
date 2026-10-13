@@ -465,10 +465,6 @@ export function AgentOverview({
             <span className="v">{agent.instance_id ?? "—"}</span>
           </div>
         </div>
-        <div className="hint">
-          Full ids, versions and the Tailscale node are under Config; logs and the full history under
-          Logs.
-        </div>
       </section>
 
       <section>

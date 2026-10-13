@@ -20,7 +20,7 @@ import { FakeStream } from "./fake-stream.ts";
 let server: FakeServer | null = null;
 
 beforeEach(() => {
-  window.location.hash = "";
+  window.location.hash = "#fleet";
 });
 afterEach(() => {
   cleanup();
@@ -71,12 +71,12 @@ async function mount(overrides: Record<string, unknown> = {}) {
   );
   // The dashboard only replaces the wizard once `meta.get` says this home is
   // bound, so every assertion below is about the real shell.
-  const footer = await screen.findByRole("button", { name: /shortcuts/i });
+  await screen.findByRole("button", { name: /New agent/i });
   // The fleet stream is a fake one that is never fed: the shortcuts
   // sheet is a property of the shell, not of the fleet, and it has to work on
   // a dashboard that is still waiting for its first scan.
   await waitFor(() => expect(FakeStream.last("fleet")).toBeTruthy());
-  return { user, footer };
+  return { user };
 }
 
 const sheet = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
@@ -325,16 +325,18 @@ describe("the `?` shortcut", () => {
     expect(sheet()).toBeNull();
   });
 
-  test("the footer's own control opens the same sheet, and gets focus back", async () => {
-    const { user, footer } = await mount();
-    await user.click(footer);
+  test("the footer omits the shortcut hint while `?` still opens the sheet", async () => {
+    const { user } = await mount();
+    const footer = document.querySelector(".footer");
+    expect(footer).not.toBeNull();
+    expect(footer?.textContent?.toLowerCase()).not.toContain("shortcuts");
+    expect(within(footer as HTMLElement).queryByRole("button", { name: /shortcuts/i })).toBeNull();
+
+    await user.keyboard("?");
     await waitFor(() => expect(sheet()).not.toBeNull());
 
     await user.keyboard("{Escape}");
     expect(sheet()).toBeNull();
-    // Compared by identity rather than with `toBe`, which would print the
-    // whole happy-dom node on a mismatch.
-    expect(document.activeElement === footer).toBe(true);
   });
 
   test("`?` typed into a field is a character, not a shortcut", async () => {

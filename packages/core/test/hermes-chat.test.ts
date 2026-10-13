@@ -29,8 +29,10 @@ import type {
   ChatSocket,
   HermesChatDeps,
 } from "../src/chat/hermes/hermes-chat.ts";
+import { createLiveUsage, LIVE_USAGE_DEADLINE_MS } from "../src/chat/hermes/hermes-chat-live-usage.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
+import { HERMES_INTERNAL_EVENTS } from "../src/shared/hermes-internal-events.ts";
 import { Bot, ChatFrame, ChatMessage } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
@@ -424,6 +426,10 @@ describe("hermes-chat · the recorded turn", () => {
       // price it guessed (`ChatUsage`).
       cost_usd: null,
       model: "deepseek/deepseek-v4.1-flash",
+      // The window as of the last prompt, passed through as upstream sent it.
+      context_used: 13780,
+      context_max: 1000000,
+      context_percent: 1,
     });
     expect(done.incomplete).toBeNull();
   });
@@ -479,6 +485,24 @@ describe("hermes-chat · the recorded turn", () => {
     expect(names).not.toContain("session.title");
     expect(names).not.toContain("session.info");
     expect(names).not.toContain("gateway.ready");
+  });
+
+  test("every gateway internal signal is dropped, sessioned or broadcast, and content still renders", async () => {
+    // Broadcasts arrive with `session_id: ""` (upstream `tui_gateway/server.py`),
+    // so the subagent check does not catch them; the name check must.
+    let seq = 2;
+    const internal = HERMES_INTERNAL_EVENTS.flatMap((name) => [
+      eventFrame(name, seq++, {}),
+      eventFrame(name, 0, {}, ""),
+    ]);
+    const complete = eventFrame("message.complete", seq, { text: "pong", status: "complete" });
+    const h = harness(turnScript([...internal, complete]));
+    const frames = body(await collect(createHermesChat(h.deps).send(BOX, "default", "hi")));
+    const names = new Set(blocks(frames).flatMap((b) => (b.kind === "unknown" ? [b.name] : [])));
+    for (const name of HERMES_INTERNAL_EVENTS) expect(names.has(name)).toBe(false);
+    // Nothing was wrapped as a subagent either.
+    expect(names.has("subagent")).toBe(false);
+    expect(frames.flatMap((f) => (f.type === "delta" ? [f.text] : []))).toEqual(["pong"]);
   });
 
   test("a turn whose text arrives only on message.complete still renders", async () => {
@@ -1398,6 +1422,21 @@ describe("hermes-chat · warm slots", () => {
     expect(last?.type).toBe("error");
     expect(last?.type === "error" ? last.code : null).toBe("CHAT_TURN_FAILED");
     expect(h.sockets[0]?.sent.map((c) => c.method)).toContain("session.interrupt");
+  });
+
+  test("internal signals alone are not content: the first-frame deadline still fires", async () => {
+    // The gateway did talk, so this is not CHAT_NO_SLOT — but nothing it said
+    // was about the turn, so it is not a silently running answer either.
+    const frames = HERMES_INTERNAL_EVENTS.flatMap((name, i) => [
+      eventFrame(name, i + 3, {}),
+      eventFrame(name, 0, {}, ""),
+    ]);
+    const h = harness(turnScript(frames));
+    const out = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    const last = out.at(-1);
+    expect(last?.type).toBe("error");
+    expect(last?.type === "error" ? last.code : null).toBe("CHAT_TURN_FAILED");
+    expect(blocks(body(out)).filter((b) => b.kind === "unknown")).toEqual([]);
   });
 
   test("a long tool call after the first frame is not a timeout", async () => {
@@ -2820,7 +2859,8 @@ describe("semantic live activity and requests", () => {
     const h = harness(
       turnScript([
         eventFrame("notice", 1000, { message: "Capabilities refreshed" }, ""),
-        eventFrame("skin.changed", 1001, { name: "future skin" }, ""),
+        eventFrame("workspace.checkpoint", 1001, { name: "future checkpoint" }, ""),
+        eventFrame("skin.changed", 1002, { name: "future skin" }, ""),
         eventFrame("session.reclaimed", 0, { session_id: "other-runtime", reason: "idle_timeout" }, ""),
         eventFrame(
           "message.complete",
@@ -2836,6 +2876,10 @@ describe("semantic live activity and requests", () => {
       expect.objectContaining({ kind: "activity", title: "Capabilities refreshed" }),
     );
     expect(blocks(frames)).toContainEqual(
+      expect.objectContaining({ kind: "unknown", name: "workspace.checkpoint" }),
+    );
+    // A gateway internal signal (`shared/hermes-internal-events.ts`) is not one.
+    expect(blocks(frames)).not.toContainEqual(
       expect.objectContaining({ kind: "unknown", name: "skin.changed" }),
     );
     expect(
@@ -2870,6 +2914,181 @@ describe("semantic live activity and requests", () => {
     ]);
     const done = frames.at(-1);
     expect(done?.type === "done" && done.usage?.input_tokens).toBeGreaterThan(4);
+  });
+});
+
+/* ── the context window before the first tick ─────────────────────────────── */
+
+describe("hermes-chat · usage on resume and session.info", () => {
+  const WINDOW = {
+    input: 48_000,
+    output: 900,
+    context_used: 50_000,
+    context_max: 200_000,
+    context_percent: 25,
+  };
+
+  const usageBlocks = (frames: ChatFrame[]) =>
+    frames.flatMap((f) =>
+      f.type === "block" && f.block.kind === "activity" && f.block.category === "usage" ? [f] : [],
+    );
+
+  test("a resume reply's info.usage is a usage block before the prompt goes in", async () => {
+    const h = harness({
+      results: {
+        "session.resume": { session_id: SESSION_ID, running: false, info: { usage: WINDOW } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+      after: { "prompt.submit": [RECORDED_MESSAGE_COMPLETE] },
+    });
+    const frames = await collect(
+      createHermesChat(h.deps).send(BOX, "default", "again", { session: "durable-1" }),
+    );
+    const kinds = frames.map((f) =>
+      f.type === "block" && f.block.kind === "activity" ? f.block.category : f.type,
+    );
+    // connecting, the window the session already had, then the submit's answer.
+    expect(kinds.slice(0, 3)).toEqual(["connection", "usage", "queue"]);
+    const [known] = usageBlocks(frames);
+    expect(known?.seq).toBe(0);
+    expect(known?.block).toMatchObject({ role: "status", payload: { usage: WINDOW } });
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+
+  test("a create reply's info.usage is read the same way; a lazy info without one is not", async () => {
+    const withWindow = harness({
+      ...turnScript([RECORDED_MESSAGE_COMPLETE]),
+      results: {
+        "session.create": { ...SESSION_CREATE_RESULT, info: { usage: WINDOW } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    const created = await collect(createHermesChat(withWindow.deps).send(BOX, "default", "hi"));
+    expect(usageBlocks(created)).toHaveLength(1);
+
+    // `SESSION_CREATE_RESULT.info` is upstream's lazy info: no usage at all.
+    const lazy = harness(turnScript([RECORDED_MESSAGE_COMPLETE]));
+    expect(usageBlocks(await collect(createHermesChat(lazy.deps).send(BOX, "default", "hi")))).toEqual(
+      [],
+    );
+
+    // A window-less usage (a fresh agent before its first call) says nothing either.
+    const fresh = harness({
+      ...turnScript([RECORDED_MESSAGE_COMPLETE]),
+      results: {
+        "session.create": { ...SESSION_CREATE_RESULT, info: { usage: { input: 0, output: 0 } } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    expect(usageBlocks(await collect(createHermesChat(fresh.deps).send(BOX, "default", "hi")))).toEqual(
+      [],
+    );
+  });
+
+  test("a session.info carrying a window is a usage block at its seq; other session.info is chatter", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("session.info", 2, { model: "m", usage: WINDOW }),
+        eventFrame("session.info", 3, { model: "m" }),
+        // A subagent's window is not the conversation's.
+        eventFrame("session.info", 4, { usage: { context_used: 1, context_max: 2 } }, "child-1"),
+        RECORDED_MESSAGE_DELTA_1,
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    const usage = usageBlocks(frames);
+    expect(usage.map((f) => f.seq)).toEqual([2]);
+    expect(usage[0]?.block).toMatchObject({ payload: { usage: WINDOW } });
+    expect(
+      blocks(frames).some(
+        (b) => b.kind === "unknown" && (b.name === "session.info" || b.name === "subagent"),
+      ),
+    ).toBe(false);
+  });
+
+  test("a session.info window is not content: the first-frame deadline still runs", async () => {
+    const h = harness(turnScript([eventFrame("session.info", 2, { usage: WINDOW })]));
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    expect(usageBlocks(frames)).toHaveLength(1);
+    expect(frames.at(-1)?.type).toBe("error");
+  });
+});
+
+describe("hermes-chat · liveUsage", () => {
+  const LIVE = {
+    sessions: [
+      { id: "rt-other", session_key: "durable-2", status: "idle" },
+      { id: "rt-1", session_key: "durable-1", status: "idle" },
+    ],
+  };
+  const sent = (h: Harness) => h.sockets.flatMap((socket) => socket.sent.map((call) => call));
+
+  test("reads a live session's usage by its runtime id, without resuming it", async () => {
+    const h = harness({
+      results: {
+        "session.active_list": LIVE,
+        "session.usage": { input: 48_000, output: 900, context_used: 50_000, context_max: 200_000 },
+      },
+    });
+    const usage = await createHermesChat(h.deps).liveUsage?.(BOX, "default", "durable-1");
+    expect(usage).toMatchObject({ input_tokens: 48_000, context_used: 50_000, context_percent: 25 });
+    const calls = sent(h).filter((call) => call.method !== "client.capabilities");
+    expect(calls.map((call) => call.method)).toEqual(["session.active_list", "session.usage"]);
+    expect(calls[1]?.params).toEqual({ session_id: "rt-1", profile: "default" });
+  });
+
+  test("a session not live on the gateway, or one with no window, has no figure", async () => {
+    const h = harness({ results: { "session.active_list": LIVE } });
+    const chat = createHermesChat(h.deps);
+    expect(await chat.liveUsage?.(BOX, "default", "durable-9")).toBeNull();
+    expect(sent(h).some((call) => call.method === "session.usage")).toBe(false);
+    const cold = harness({
+      results: { "session.active_list": LIVE, "session.usage": { calls: 0, input: 0, output: 0 } },
+    });
+    expect(await createHermesChat(cold.deps).liveUsage?.(BOX, "default", "durable-1")).toBeNull();
+    expect(sent(cold).some((call) => /^session\.(resume|create)$/.test(call.method))).toBe(false);
+  });
+
+  test("each lookup request carries its own short deadline, not the pool's slot wait", async () => {
+    const deadlines: Array<number | undefined> = [];
+    const live = createLiveUsage({
+      rpc: async (_box, method, _params, opts) => {
+        deadlines.push(opts?.deadlineMs);
+        return method === "session.active_list"
+          ? LIVE
+          : { input: 1, output: 1, context_used: 10, context_max: 100 };
+      },
+    });
+    expect(await live.liveUsage(BOX, "default", "durable-1")).toMatchObject({ context_used: 10 });
+    expect(deadlines).toEqual([LIVE_USAGE_DEADLINE_MS, LIVE_USAGE_DEADLINE_MS]);
+  });
+
+  test("a lookup that never settles (a hung dial) gives up on the total budget", async () => {
+    // The pool awaits the socket's dial before a request's own deadline
+    // starts, so only a budget over the whole lookup bounds `chat.history`.
+    const live = createLiveUsage({ rpc: () => new Promise<never>(() => {}) }, { budgetMs: 20 });
+    const started = performance.now();
+    expect(await live.liveUsage(BOX, "default", "durable-1")).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("an aborted lookup still rejects inside the budget", async () => {
+    const controller = new AbortController();
+    const live = createLiveUsage(
+      {
+        rpc: (_box, _method, _params, opts) =>
+          new Promise<never>((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), {
+              once: true,
+            });
+          }),
+      },
+      { budgetMs: 60_000 },
+    );
+    const pending = live.liveUsage(BOX, "default", "durable-1", { signal: controller.signal });
+    controller.abort(new Error("page left"));
+    await expect(pending).rejects.toThrow("page left");
   });
 });
 

@@ -224,7 +224,8 @@
 }
 [data-skin="soft"] .ch-band.warn,
 [data-skin="soft"] .ch-band.bad,
-[data-skin="soft"] .ch-band.acc {
+[data-skin="soft"] .ch-band.acc,
+[data-skin="soft"] .ch-band.mute {
   border-left-width: 3px;
 }
 [data-skin="soft"] .ch-band.slim {
@@ -569,6 +570,26 @@
   border-color: var(--fg3);
   box-shadow: 0 0 0 1px var(--fg3);
 }
+/* The thread composer's box takes the skin's hairline, and its input none: the
+   rules above would otherwise draw a second border inside the box. */
+[data-skin="soft"] .ch-input-box {
+  min-height: 50px;
+  padding: 13px 6px 13px 18px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+}
+[data-skin="soft"] .ch-input-box:focus-within {
+  border-color: var(--fg3);
+  box-shadow: 0 0 0 1px var(--fg3);
+}
+[data-skin="soft"] .ch-input-box > .ch-input,
+[data-skin="soft"] .ch-input-box > .ch-input:focus {
+  min-height: 0;
+  padding: 0 12px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
 [data-skin="soft"] .ch-send {
   height: 50px;
   min-width: 50px;
@@ -595,15 +616,17 @@
   border-color: var(--warn);
   color: var(--bg);
 }
-/* Stop is still destructive in either skin. */
-[data-skin="soft"] .ch-send.stop {
-  background: var(--bad);
-  border-color: var(--bad);
-  color: var(--danger-text);
-}
 [data-skin="soft"] .ch-composer-foot {
   padding: 4px 20px 11px;
+}
+/* The footer's words are dimmed; Stop, a control, stays at full strength. */
+[data-skin="soft"] .ch-composer-foot > span {
   opacity: 0.8;
+}
+/* A context meter past the warn line is a signal, not a footnote. */
+[data-skin="soft"] .ch-composer-foot > .ch-window.warn,
+[data-skin="soft"] .ch-composer-foot > .ch-window.bad {
+  opacity: 1;
 }
 [data-skin="soft"] .ch-kbd {
   border-color: var(--line);

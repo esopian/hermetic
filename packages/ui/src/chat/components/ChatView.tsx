@@ -21,6 +21,7 @@ import { useFleetIfAvailable } from "../../state/state.tsx";
 import type { AvatarStatus } from "./avatar/Avatar.tsx";
 import { useChat } from "../chat-state.tsx";
 import { chatHash, isChatHash } from "../chat-routing.ts";
+import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 import { threadState } from "../chat-logic.ts";
 import { Context } from "./Context.tsx";
 import { Rail } from "./Rail.tsx";
@@ -136,7 +137,7 @@ export function ChatView({
                 type="button"
                 className="btn"
                 onClick={() => {
-                  window.location.hash = "";
+                  window.location.hash = FLEET_HASH;
                 }}
               >
                 Go to fleet
@@ -157,6 +158,7 @@ export function ChatView({
           state={state}
           messages={chat.messages}
           live={chat.live}
+          context={chat.context}
           sending={chat.sending}
           activity={chat.activity}
           historyError={chat.historyError}
@@ -204,11 +206,9 @@ export function ChatView({
               </p>
               <div className="ch-prompts">
                 {/*
-                  The fleet view is this portal's own first page rather than a
-                  hash-addressed one, so leaving `#chat` is how it is reached —
-                  which is exactly what the view nav above this does, and why
-                  this restates the destination rather than offering a second
-                  control for it.
+                  The fleet view is one click away in the view nav above this,
+                  which is why this restates the destination rather than
+                  offering a second control for it.
                 */}
                 <span className="ch-prompt">
                   <b>go</b>Fleet — the status of every box, read over AWS

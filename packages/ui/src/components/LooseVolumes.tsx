@@ -13,7 +13,7 @@
 import type { VolumeView } from "../api/index.ts";
 import { fmtDuration } from "../logic/format.ts";
 import type { BoardVolumes } from "../logic/volume-logic.ts";
-import { CopyId, StatusDot } from "./primitives.tsx";
+import { CopyId } from "./primitives.tsx";
 
 /**
  * A volume whose agent is gone: drawn where that agent used to be. One action —
@@ -41,8 +41,8 @@ export function VolumeTombstone({ v, onCreate }: { v: VolumeView; onCreate: (v: 
         </div>
         <span className="tag ghost">volume</span>
       </div>
-      <div className="cell-status" style={{ color: "var(--acc)" }}>
-        <StatusDot status="creating" />
+      <div className="cell-status" style={{ color: "var(--text-warn, var(--warn))" }}>
+        <i style={{ background: "var(--warn)" }} />
         memory kept
         <span className="mono" style={{ color: "var(--fg3)", fontWeight: 500, textTransform: "none" }}>
           · {v.size_gib} GiB · ${v.monthly_cost_usd.toFixed(0)}/mo
@@ -125,8 +125,8 @@ export function LooseVolumesGroup({
   return (
     <div className="group">
       <div className="group-side">
-        <div className="group-label" style={{ color: "var(--acc)" }}>
-          <i style={{ background: "var(--acc)" }} />
+        <div className="group-label" style={{ color: "var(--text-warn, var(--warn))" }}>
+          <i style={{ background: "var(--warn)" }} />
           volumes · no agent
         </div>
         <div className="group-count">{count}</div>

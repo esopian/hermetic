@@ -1,7 +1,13 @@
 /** Conversation records outlive the frame displaying them, but never their fleet provider. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatApi, ChatSelection } from "./chat-state.tsx";
-import type { BotView, ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
+import type {
+  BotView,
+  ChatConversationView,
+  ChatMessageView,
+  ChatObserveView,
+  SessionView,
+} from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
 import {
@@ -26,12 +32,15 @@ import {
   insertByStamp,
   isLocal,
   key,
+  noteContext,
+  noteRows,
   releaseHeld,
   sessionOf,
   stillPending,
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
+import { frameContext, usageContext } from "./context-usage.ts";
 import {
   noteSubagentFrame,
   observeSubagent,
@@ -181,9 +190,12 @@ export function useConversations(
   assemble: Assemble,
   instances?: readonly string[],
   onArrival?: (arrival: ChatArrival) => void,
+  isThreadShown?: (instance: string, bot: string) => boolean,
 ) {
   const arrived = useRef(onArrival);
   arrived.current = onArrival;
+  const shown = useRef(isThreadShown);
+  shown.current = isThreadShown;
   /**
    * The injected calls, reached through a ref rather than closed over.
    *
@@ -301,15 +313,26 @@ export function useConversations(
             const previous = { ...record, target: { ...target, session: record.resolvedSession } };
             for (const [alias, value] of records.current)
               if (value === record && alias !== key(target)) records.current.set(alias, previous);
+            // A new conversation (an archive's replacement) starts with no
+            // figure; the old one keeps its own on `previous`.
+            record.context = null;
           }
           session = opened.session;
         }
+        // The first read of a conversation with no figure also asks the box for
+        // the window its live session holds: the stored rows carry none, so a
+        // reopened conversation would otherwise show no meter until its next
+        // turn. Once only — a poll does not pay for it. Stamped with when it was
+        // asked, so a turn frame that lands while it is in flight stays newer.
+        const askUsage = !record.historyRead && record.context === null;
+        const asked = new Date().toISOString();
         const result = await apiRef.current.fetchHistory(
           target.instance,
           target.bot,
           {
             ...(session ? { session } : {}),
             limit: 200,
+            ...(askUsage ? { usage: true } : {}),
           },
           controller.signal,
         );
@@ -330,6 +353,7 @@ export function useConversations(
               if (candidate === loser) records.current.set(alias, winner);
             }
             if (!winner.draft) winner.draft = loser.draft;
+            noteContext(winner, loser.context);
             if (winner !== record) {
               changed();
               return true;
@@ -342,18 +366,25 @@ export function useConversations(
           !record.sessions.some((s) => s.id === result.conversation!.session)
         ) {
           const c = result.conversation;
-          record.sessions.push({
-            id: c.session,
-            instance: c.instance,
-            bot: c.bot,
-            kind: c.kind,
-            origin: "desktop",
-            title: c.kind === "canonical" ? "Bot Chat" : "Chat",
-            unread: 0,
-            turn_count: 0,
-          });
+          // This record's own entry only: the list is shared with the bot's
+          // other records once read, so it is replaced, never pushed into.
+          record.sessions = [
+            ...record.sessions,
+            {
+              id: c.session,
+              instance: c.instance,
+              bot: c.bot,
+              kind: c.kind,
+              origin: "desktop",
+              title: c.kind === "canonical" ? "Bot Chat" : "Chat",
+              unread: 0,
+              turn_count: 0,
+            },
+          ];
         }
         record.messages = absorbEarly(record, result.messages);
+        noteRows(record, record.messages);
+        noteContext(record, usageContext(result.usage, asked));
         record.resolvedSession = result.session ?? record.resolvedSession;
         record.historyRead = true;
         record.historyError = null;
@@ -387,13 +418,48 @@ export function useConversations(
     [changed, permits],
   );
 
+  /**
+   * Every record of the same bot as `record`, itself excluded. A bot's Bot Chat
+   * and each of its additional sessions are separate records, but the list of
+   * the bot's sessions is one fact about the bot, so a read made through any of
+   * them is the answer for all of them.
+   */
+  const siblingsOf = useCallback((record: Conversation): Conversation[] => {
+    const out: Conversation[] = [];
+    for (const other of new Set(records.current.values())) {
+      if (other === record) continue;
+      if (other.target.instance !== record.target.instance) continue;
+      if (other.target.bot !== record.target.bot) continue;
+      out.push(other);
+    }
+    return out;
+  }, []);
+  /** The bot's session list, as every record of the bot now holds it. */
+  const setSessions = useCallback(
+    (record: Conversation, sessions: SessionView[]) => {
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessions = sessions;
+        each.sessionsState = "ready";
+        each.sessionsError = null;
+      }
+    },
+    [siblingsOf],
+  );
+
   const readSessions = useCallback(
     async (record: Conversation) => {
       if (!alive.current || !permits(record.target.instance)) return;
-      record.sessionsController?.abort();
+      // A read for any record of this bot answers for all of them, so one in
+      // flight through a sibling is superseded here rather than left to land
+      // later with a list that may predate a session this one will name.
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessionsController?.abort();
+        each.sessionsController = null;
+        each.sessionsGen += 1;
+      }
       const controller = new AbortController();
       record.sessionsController = controller;
-      const gen = ++record.sessionsGen;
+      const gen = record.sessionsGen;
       record.sessionsState = "pending";
       changed();
       try {
@@ -403,17 +469,23 @@ export function useConversations(
           controller.signal,
         );
         if (!alive.current || gen !== record.sessionsGen) return;
-        record.sessions = result.sessions;
-        record.sessionsState = "ready";
-        record.sessionsError = null;
+        setSessions(record, result.sessions);
       } catch (error) {
         if (!alive.current || gen !== record.sessionsGen) return;
+        const message = error instanceof Error ? error.message : String(error);
         record.sessionsState = "failed";
-        record.sessionsError = error instanceof Error ? error.message : String(error);
+        record.sessionsError = message;
+        // A sibling still waiting on this read has no list of its own to fall
+        // back on; one that already holds a list keeps it.
+        for (const each of siblingsOf(record)) {
+          if (each.sessionsState !== "pending") continue;
+          each.sessionsState = "failed";
+          each.sessionsError = message;
+        }
       }
       changed();
     },
-    [changed, permits],
+    [changed, permits, setSessions, siblingsOf],
   );
 
   const select = useCallback(
@@ -563,9 +635,15 @@ export function useConversations(
                   sessions: [...record.sessions],
                   sessionsState: record.sessionsState,
                   sessionsError: record.sessionsError,
+                  context: record.context,
                   ...children,
                 });
               }
+              // The figure stays with the conversation it described. The new
+              // session starts with none: a rollover follows a compaction or an
+              // archive, so the old figure no longer describes the window, and
+              // the turn's next tick or `done` says what does.
+              record.context = null;
             }
             record.resolvedSession = event.session;
             // A record's own `target` can name a session too — `readHistory`'s
@@ -612,6 +690,7 @@ export function useConversations(
                 // against it, so a row the box already sent here is not doubled.
                 record.observedEarly = [...record.observedEarly, ...takeHeld(existing, true)];
                 adopted = existing.messages;
+                noteContext(record, existing.context);
                 existing.historyGen += 1;
                 existing.sessionsGen += 1;
                 existing.historyController?.abort();
@@ -628,8 +707,16 @@ export function useConversations(
             // frame can correct it. Same refresh, for the same reason, as the
             // one a send does when its history response names a new session.
             // Only on a rollover away from a session: a first snapshot is
-            // already behind a read that refreshes the list itself.
-            if (retiredSession) void readSessions(record);
+            // already behind a read that refreshes the list itself — unless
+            // that read was the collided record's, cancelled just above while
+            // this record's own had already been superseded by it (a sibling's
+            // read answers for every record of the bot). Nothing else would
+            // read for it then, and `pending` would hold the composer closed.
+            if (
+              retiredSession ||
+              (record.sessionsState === "pending" && record.sessionsController === null)
+            )
+              void readSessions(record);
           }
           // Anything observed before this transcript existed is folded into it
           // first, so the reconciliation below sees every message this browser
@@ -648,6 +735,7 @@ export function useConversations(
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
           ];
+          noteRows(record, messages);
           record.historyRead = true;
           record.historyError = null;
           if (record.live && messages.some((m) => m.id === record.live?.id)) {
@@ -676,9 +764,10 @@ export function useConversations(
            * a count the roster already owns, and the roster read reconciles it.
            */
           const note = (): void => {
-            const open =
-              selected.current?.instance === conversation.instance &&
-              selected.current?.bot === conversation.bot;
+            const open = shown.current
+              ? shown.current(conversation.instance, conversation.bot)
+              : selected.current?.instance === conversation.instance &&
+                selected.current?.bot === conversation.bot;
             arrived.current?.({
               instance: conversation.instance,
               bot: conversation.bot,
@@ -714,6 +803,7 @@ export function useConversations(
           if (record.messages.some((m) => m.id === message.id)) break;
           if (record.observedDuringTurn.some((held) => held.message.id === message.id)) break;
           note();
+          noteRows(record, [message]);
           // The box records a turn as it runs, so while this browser is
           // streaming one the rows for that same reply arrive here. They are
           // held rather than appended: the live message is already drawing
@@ -916,83 +1006,88 @@ export function useConversations(
    * Then the transcript is read, because whatever arrived while nothing was
    * watching is missing from the copy on screen.
    */
-  const resumeObservation = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
-    record.observeQuietTimer = null;
-    record.observe = "reconnecting";
-    record.observeError = null;
-    record.observeAttempt = 0;
-    changed();
-    const fail = (code: string, message: string): void => {
-      record.observe = "failed";
-      record.observeError = { code, message };
+  const resumeObservation = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
+      record.observeQuietTimer = null;
+      record.observe = "reconnecting";
+      record.observeError = null;
+      record.observeAttempt = 0;
       changed();
-    };
-    const ask = apiRef.current.resumeObservation;
-    if (!ask) {
-      // Optional for the same reason `chatStream` is: a tree mounted without a
-      // fan-in has no observation to ask back. Nothing falls through to the
-      // fleet-wide listen write — that is the call this route replaced.
-      fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
-      return;
-    }
-    let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
-    try {
+      const fail = (code: string, message: string): void => {
+        record.observe = "failed";
+        record.observeError = { code, message };
+        changed();
+      };
+      const ask = apiRef.current.resumeObservation;
+      if (!ask) {
+        // Optional for the same reason `chatStream` is: a tree mounted without a
+        // fan-in has no observation to ask back. Nothing falls through to the
+        // fleet-wide listen write — that is the call this route replaced.
+        fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
+        return;
+      }
+      let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
+      try {
+        /**
+         * The record's *identity*, not the session it happens to be reading.
+         *
+         * Every other address in this file is `resolvedSession ?? target.session`
+         * because those calls read a conversation, and reading wants the
+         * concrete session. A resume names a *subscription*, and the server keys
+         * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
+         * canonical record has `resolvedSession` filled in by the history read
+         * and moved by every rollover, so sending it here asked the server for a
+         * conversation it does not hold: it started a second pinned observation
+         * of one conversation, left the canonical key's remembered failure in
+         * place, and lost the new subscription again at the next reconcile.
+         * `target.session` is the identity, and the rollover block above keeps it
+         * current for a record that names a session at all.
+         */
+        answer = await ask(record.target.instance, record.target.bot, record.target.session);
+      } catch (error) {
+        fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
+        return;
+      }
+      if (!alive.current || !permits(record.target.instance)) return;
       /**
-       * The record's *identity*, not the session it happens to be reading.
-       *
-       * Every other address in this file is `resolvedSession ?? target.session`
-       * because those calls read a conversation, and reading wants the
-       * concrete session. A resume names a *subscription*, and the server keys
-       * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
-       * canonical record has `resolvedSession` filled in by the history read
-       * and moved by every rollover, so sending it here asked the server for a
-       * conversation it does not hold: it started a second pinned observation
-       * of one conversation, left the canonical key's remembered failure in
-       * place, and lost the new subscription again at the next reconcile.
-       * `target.session` is the identity, and the rollover block above keeps it
-       * current for a record that names a session at all.
+       * The one answer a resume cannot fix by itself. Observations exist only for
+       * boxes this operator has chosen to monitor, so a box that is not listened
+       * to has nothing to resume — and turning listening on from here would be
+       * this store writing a preference that `listening-state.tsx` owns, silently,
+       * off a button that says "Watch again". It is said instead, naming the
+       * screen where the choice lives. (`observing: false` with `listening: true`
+       * is not a state the route can return.)
        */
-      answer = await ask(record.target.instance, record.target.bot, record.target.session);
-    } catch (error) {
-      fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
-      return;
-    }
-    if (!alive.current || !permits(record.target.instance)) return;
-    /**
-     * The one answer a resume cannot fix by itself. Observations exist only for
-     * boxes this operator has chosen to monitor, so a box that is not listened
-     * to has nothing to resume — and turning listening on from here would be
-     * this store writing a preference that `listening-state.tsx` owns, silently,
-     * off a button that says "Watch again". It is said instead, naming the
-     * screen where the choice lives. (`observing: false` with `listening: true`
-     * is not a state the route can return.)
-     */
-    if (!answer.listening) {
-      fail(
-        "OBSERVE_NOT_LISTENING",
-        `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
-      );
-      return;
-    }
-    if (!answer.observing) {
-      fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
-      return;
-    }
-    await readHistory(record);
-    if (record.observe === "reconnecting") {
-      record.observe = "live";
-      changed();
-    }
-  }, [changed, get, permits, readHistory]);
+      if (!answer.listening) {
+        fail(
+          "OBSERVE_NOT_LISTENING",
+          `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
+        );
+        return;
+      }
+      if (!answer.observing) {
+        fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
+        return;
+      }
+      await readHistory(record);
+      if (record.observe === "reconnecting") {
+        record.observe = "live";
+        changed();
+      }
+    },
+    [changed, get, permits, readHistory],
+  );
 
   /** Start a turn. `false` when this store refused to, and nothing was sent. */
   const send = useCallback(
-    (text: string): boolean => {
-      if (!selected.current || !permits(selected.current.instance)) return false;
-      const record = get(selected.current);
+    (text: string, requested?: ChatSelection): boolean => {
+      const where = requested ?? selected.current;
+      if (!where || !permits(where.instance)) return false;
+      const record = get(where);
       const body = text.trim();
       if (!body || record.sending || record.aborting) return false;
       clearReconnect(record);
@@ -1125,6 +1220,7 @@ export function useConversations(
             const merged = frame.type === "block" && block ? { ...frame, block } : frame;
             if ((frame.type !== "block" || block) && !landOnSegment(record, merged, seed, assemble))
               record.live = assemble(record.live, merged, { ...seed, at: record.segmentAt ?? seed.at });
+            noteContext(record, frameContext(frame, new Date().toISOString()));
             changed();
           },
           onEnd: end,
@@ -1162,9 +1258,10 @@ export function useConversations(
    * message through means (`useSendQueue`).
    */
   const steer = useCallback(
-    async (text: string): Promise<SteerOutcome> => {
-      if (!selected.current || !permits(selected.current.instance)) return "refused";
-      const record = get(selected.current);
+    async (text: string, target?: ChatSelection): Promise<SteerOutcome> => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return "refused";
+      const record = get(where);
       const body = text.trim();
       if (!body) return "refused";
       if (!record.sending || record.aborting) return "idle";
@@ -1246,52 +1343,60 @@ export function useConversations(
    * Read at call time, so a caller acting on a keypress sees the record as it
    * is rather than as the last render left it.
    */
-  const openRequest = useCallback((): string | null => {
-    if (!selected.current || !permits(selected.current.instance)) return null;
-    return openRequestIn(get(selected.current));
-  }, [get, permits]);
+  const openRequest = useCallback(
+    (target?: ChatSelection): string | null => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return null;
+      return openRequestIn(get(where));
+    },
+    [get, permits],
+  );
 
-  const abort = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.aborting) return;
-    record.aborting = true;
-    const turn = record.turn;
-    const cancel = record.cancel;
-    clearReconnect(record);
-    record.dropped = false;
-    changed();
-    try {
-      await apiRef.current.abortTurn(
-        record.target.instance,
-        record.target.bot,
-        record.resolvedSession ?? record.target.session,
-      );
-    } catch (error) {
-      if (alive.current && record.turn === turn)
-        record.turnError = {
-          code: "ABORT_FAILED",
-          message: error instanceof Error ? error.message : String(error),
-        };
-    } finally {
-      if (alive.current && record.turn === turn) {
-        // Invalidate the old stream before cancelling, since cancellation can
-        // synchronously report an end and must not schedule reconnect retries.
-        record.turn += 1;
-        cancel?.();
-        record.cancel = null;
-        record.sending = false;
-        record.segments = [];
-        record.openRequests.clear();
-        record.rearm = null;
-        releaseHeld(record);
-        record.activity = "idle";
-        record.aborting = false;
-        changed();
-        await Promise.all([readHistory(record), readSessions(record)]);
+  const abort = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.aborting) return;
+      record.aborting = true;
+      const turn = record.turn;
+      const cancel = record.cancel;
+      clearReconnect(record);
+      record.dropped = false;
+      changed();
+      try {
+        await apiRef.current.abortTurn(
+          record.target.instance,
+          record.target.bot,
+          record.resolvedSession ?? record.target.session,
+        );
+      } catch (error) {
+        if (alive.current && record.turn === turn)
+          record.turnError = {
+            code: "ABORT_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+          };
+      } finally {
+        if (alive.current && record.turn === turn) {
+          // Invalidate the old stream before cancelling, since cancellation can
+          // synchronously report an end and must not schedule reconnect retries.
+          record.turn += 1;
+          cancel?.();
+          record.cancel = null;
+          record.sending = false;
+          record.segments = [];
+          record.openRequests.clear();
+          record.rearm = null;
+          releaseHeld(record);
+          record.activity = "idle";
+          record.aborting = false;
+          changed();
+          await Promise.all([readHistory(record), readSessions(record)]);
+        }
       }
-    }
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
 
   /**
    * The transcript alone, for a caller that runs on a tick.
@@ -1303,21 +1408,29 @@ export function useConversations(
    * pairing the two put a second gateway read on the tailnet for every tick of
    * a poll that exists to catch new *messages*.
    */
-  const reloadTranscript = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await readHistory(record);
-  }, [changed, clearReconnect, get, readHistory, permits]);
+  const reloadTranscript = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await readHistory(record);
+    },
+    [changed, clearReconnect, get, readHistory, permits],
+  );
 
-  const reloadHistory = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await Promise.all([readHistory(record), readSessions(record)]);
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+  const reloadHistory = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await Promise.all([readHistory(record), readSessions(record)]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
   const stageDraft = useCallback(
     (target: ChatSelection, text: string) => {
       if (!permits(target.instance)) return;
@@ -1345,6 +1458,17 @@ export function useConversations(
     () => ({ state: current.observe, attempt: current.observeAttempt, error: current.observeError }),
     [current.observe, current.observeAttempt, current.observeError],
   );
+  const view = useCallback((target: ChatSelection) => get(target), [get]);
+  const ensure = useCallback(
+    (target: ChatSelection) => {
+      if (!permits(target.instance)) return;
+      const record = get(target);
+      if (!record.historyLoading && !record.historyRead && !record.sending && !record.aborting)
+        void readHistory(record);
+      if (record.sessionsState === "pending") void readSessions(record);
+    },
+    [get, permits, readHistory, readSessions],
+  );
   return {
     ...current,
     turnActivities,
@@ -1366,5 +1490,9 @@ export function useConversations(
     observeTransport,
     resumeObservation,
     subagents,
+    /** A pane reads a record without changing the full view's selection. */
+    view,
+    /** Opening a pane performs the same first reads as selecting a full-view thread. */
+    ensure,
   };
 }

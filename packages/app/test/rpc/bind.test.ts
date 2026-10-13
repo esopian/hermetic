@@ -225,13 +225,23 @@ describe("the stream pump", () => {
     expect(sent[0]?.payload).toEqual({ stream_id: "s1", done: { ok: true } });
   });
 
-  test("an op subscription correlates on the op the page named, not on the stream", async () => {
+  /**
+   * Correlated by `op_id` alone, an op's frames went to every reader of that
+   * op in the window: a live frame sent for the fleet's watcher reached a
+   * reopened drawer before its own replay and put the replay behind it.
+   */
+  test("an op subscription's frames name the subscription as well as the op", async () => {
     const { send, sent } = recorder();
     const pump = createStreamPump("op.event", { op_id: "op-7" }, send);
-    // Nothing is buffered: the correlator arrived with the request.
     await pump.sink(frame("event", { phase: "plan" }));
+    // Held like any stream's until the page has been told its name.
+    expect(sent).toEqual([]);
+    pump.settle({ stream_id: "s1" });
     expect(sent).toEqual([
-      { name: "op.event", payload: { op_id: "op-7", msg: frame("event", { phase: "plan" }) } },
+      {
+        name: "op.event",
+        payload: { op_id: "op-7", stream_id: "s1", msg: frame("event", { phase: "plan" }) },
+      },
     ]);
   });
 
@@ -334,6 +344,59 @@ describe("a stream that ends without saying so", () => {
     await until(() => sent.length > 0);
     expect(sent).toEqual([
       { name: "logs.line", payload: { stream_id: opened.stream_id, done: STREAM_ENDED } },
+    ]);
+  });
+});
+
+describe("a reader that hangs up", () => {
+  /**
+   * The drawer's "Upgrade now" that reopened as `STREAM_ENDED` (real mode,
+   * 2026-10-12). `op.event` was routed by `op_id` alone, so every reader of
+   * one op in a window shared its pushes: the fleet's op watcher, a drawer, and
+   * that drawer's StrictMode second mount. When one of them unsubscribed, its
+   * pump saw the source stop and wrote a synthetic `STREAM_ENDED` terminal
+   * tagged with the op — and the readers still following took it as the op
+   * failing, while core went on to finish it. Frames now name their
+   * subscription too; this holds the bridge to not sending the terminal at
+   * all. Verified red by dropping the `hungUp` check from `watchForSilence`.
+   */
+  test("ends nothing for the other readers of the same op", async () => {
+    const { ctx, request, sent } = await bound();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const op = ctx.ops.start("upgrade", "fathom", async function* () {
+      yield {
+        phase: "requested",
+        progress: 0.5,
+        message: "asked to apply",
+        at: new Date().toISOString(),
+      };
+      await gate;
+      yield { phase: "done", progress: 1, message: "converged", at: new Date().toISOString() };
+    });
+    const doneFrames = () =>
+      sent.filter(
+        (s) =>
+          s.name === "op.event" &&
+          (s.payload as WebviewMessages["op.event"]).op_id === op.id &&
+          (s.payload as WebviewMessages["op.event"]).msg.event === "done",
+      );
+
+    const first = (await request("ops.subscribe", { op_id: op.id })) as { stream_id: string };
+    await request("ops.subscribe", { op_id: op.id });
+    await until(() => sent.length >= 2);
+
+    await request("ops.unsubscribe", { stream_id: first.stream_id });
+    // Long enough for the aborted follow to return and its `done` to settle.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(doneFrames()).toEqual([]);
+
+    release();
+    await until(() => doneFrames().length > 0);
+    expect(doneFrames().map((s) => (s.payload as WebviewMessages["op.event"]).msg.data)).toEqual([
+      { ok: true, error: null },
     ]);
   });
 });

@@ -111,7 +111,7 @@ export function ChatSection() {
     <SettingsPage
       section="chat"
       scope="laptop"
-      desc="How chat looks on this laptop. Changes apply at once; the avatar style is kept in this browser."
+      desc="Changes apply at once; the avatar style is kept in this browser."
     >
       <Block title="Appearance" right={<SavedTick on={ticked} />}>
         <fieldset className="chat-avatar-options">

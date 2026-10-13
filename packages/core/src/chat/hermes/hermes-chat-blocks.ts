@@ -13,6 +13,7 @@ import type {
   ChatUsage,
   ToolRender,
 } from "../../schema/index.ts";
+import { hermesActivity } from "./hermes-chat-activity.ts";
 import { nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
@@ -217,5 +218,49 @@ export function mapUsage(usage: Record<string, unknown> | null): ChatUsage | nul
     output_tokens: nonNegative(output),
     cost_usd: num(usage.cost_usd) ?? num(usage.cost),
     model: str(usage.model),
+    ...mapContext(usage),
+  };
+}
+
+/**
+ * The context window a session's `info` carries, as the same `usage` activity
+ * block a live `session.usage` tick becomes, or null when it carries none.
+ *
+ * `info` is either a `session.info` event's payload or the `info` of a
+ * `session.resume`/`session.create` reply: upstream builds both with
+ * `_session_info`, whose `usage` is `_session_usage_snapshot` — the figure the
+ * gateway holds for a session that is already live. A cold or lazy resume's
+ * `info` has no `usage` at all, and a fresh agent's has no window until its
+ * first model call; both come back null, so a head shows nothing rather than
+ * zero. Usage without a window is dropped as well: these frames are read for
+ * the composer's meter, and the turn's own ticks and `done` carry the tokens.
+ */
+export function contextUsageBlock(info: Record<string, unknown> | null): ChatBlock | null {
+  const usage = rec(info?.usage);
+  if (!usage || mapUsage(usage)?.context_used == null) return null;
+  return hermesActivity("session.usage", { usage });
+}
+
+/**
+ * The context-window figures upstream's usage carries (`_get_usage` in
+ * `tui_gateway/server.py`): the last prompt's size against the model's window.
+ *
+ * Kept as a pair or not at all — a used figure with no window, or a window of
+ * zero, says nothing a head could draw. `context_percent` is upstream's own
+ * figure when it sent one, else derived here from the pair, rounded either way. Absent fields
+ * stay absent rather than null, so a usage with no window has its old shape.
+ */
+function mapContext(usage: Record<string, unknown>): Partial<ChatUsage> {
+  const used = nonNegative(num(usage.context_used));
+  const max = nonNegative(num(usage.context_max));
+  if (used === null || max === null || max <= 0) return {};
+  const sent = num(usage.context_percent);
+  const percent = Math.min(100, Math.max(0, Math.round(sent ?? (used / max) * 100)));
+  const estimated = usage.context_estimated;
+  return {
+    context_used: used,
+    context_max: max,
+    context_percent: percent,
+    ...(typeof estimated === "boolean" ? { context_estimated: estimated } : {}),
   };
 }

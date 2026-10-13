@@ -454,7 +454,7 @@ export function SubagentModal({
 
 /**
  * The thread's subagent scope: the context the inline lines read (how to open
- * a child, the density, the results turns), and the modal when one is open.
+ * a child, the results turns), and the modal when one is open.
  * `groups` are the thread's presented turns, so a child's siblings are the
  * ones its line is drawn with.
  */
@@ -463,7 +463,6 @@ export function SubagentScope({
   messages,
   liveId,
   sending,
-  failuresOnly,
   controls,
   children,
 }: {
@@ -471,7 +470,6 @@ export function SubagentScope({
   messages: Parameters<typeof delegationResults>[0];
   liveId: string | null;
   sending: boolean;
-  failuresOnly: boolean;
   controls: SubagentControls | null;
   children: ReactNode;
 }) {
@@ -502,7 +500,7 @@ export function SubagentScope({
     );
     button?.focus({ preventScroll: true });
   }, [openId]);
-  const value = useMemo(() => ({ open, failuresOnly, results }), [open, failuresOnly, results]);
+  const value = useMemo(() => ({ open, results }), [open, results]);
   return (
     <SubagentContext.Provider value={value}>
       {children}

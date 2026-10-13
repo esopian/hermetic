@@ -91,7 +91,7 @@ export function fetchSessions(
 export function fetchHistory(
   instance: string,
   bot: string,
-  input: { session?: string; limit?: number } = {},
+  input: { session?: string; limit?: number; usage?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<ChatHistoryResult> {
   return transport().request<ChatHistoryResult>(

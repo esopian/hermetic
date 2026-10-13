@@ -19,7 +19,7 @@ beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
   window.sessionStorage.clear();
   resetPresetsStore();
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {

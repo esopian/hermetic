@@ -26,7 +26,7 @@ import { withNav } from "./nav.tsx";
 let server: FakeServer | null = null;
 
 beforeEach(() => {
-  window.location.hash = "";
+  window.location.hash = "#fleet";
 });
 afterEach(() => {
   cleanup();

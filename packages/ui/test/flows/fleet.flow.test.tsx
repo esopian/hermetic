@@ -89,7 +89,7 @@ let harness: FlowHarness | null = null;
  */
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {
@@ -132,6 +132,26 @@ describe("the fleet, over a real head", () => {
     await waitFor(() => {
       expect(within(audit).getByRole("row", { name: /^oriole · destroyed / })).toBeDefined();
     });
+  });
+
+  /**
+   * The count is the control: `N listening` opens the manager drawer, and there
+   * is no separate "Manage listening" button beside it.
+   */
+  test("`N listening` opens the listening manager", async () => {
+    harness = await flowHarness();
+    mountPortal();
+    const user = userEvent.setup();
+
+    const link = await waitFor(() =>
+      screen.getByRole("button", { name: /^\d+ listening — manage listening$/ }),
+    );
+    expect(screen.queryByRole("button", { name: "Manage listening" })).toBeNull();
+    expect(screen.queryByText(/chat & alerts/)).toBeNull();
+
+    await user.click(link);
+    const drawer = await screen.findByRole("dialog", { name: "Listening" });
+    expect(within(drawer).getByRole("checkbox", { name: "Listen to atlas" })).toBeDefined();
   });
 
   test("the account header is present on every page", async () => {
@@ -192,7 +212,7 @@ describe("the fleet, over a real head", () => {
 
     await user.click(screen.getByRole("button", { name: /^\d+ agents$/ }));
     await screen.findByRole("textbox", { name: "Filter agents" });
-    expect(window.location.hash).toBe("");
+    expect(window.location.hash).toBe("#fleet");
   });
 
   test("the fleet stream carries a status change into the fleet without a re-read", async () => {

@@ -19,7 +19,7 @@ let harness: FlowHarness | null = null;
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
   window.sessionStorage.clear();
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {

@@ -243,13 +243,15 @@ export function AgentTerminal({
   const onExternal = fixture ? undefined : external;
 
   /* ── what to show ── */
-  const lead = (
-    <p className="term-lead">
-      A shell on {name}, over the tailnet.
-      {cold ? " It keeps running while you read other sections." : ""}
-      {fixture ? <span className="term-tag">fixture · nothing leaves this Mac</span> : null}
-    </p>
-  );
+  // Only what the panel below does not already say: that a session outlives
+  // the section, and that fixture mode reaches no box.
+  const lead =
+    cold || fixture ? (
+      <p className="term-lead">
+        {cold ? "A session keeps running while you read other sections." : ""}
+        {fixture ? <span className="term-tag">fixture · nothing leaves this Mac</span> : null}
+      </p>
+    ) : null;
 
   let body: ReactNode;
   if (off) {

@@ -170,9 +170,11 @@ const STREAM: Record<StreamName, { close: RpcName }> = {
 /**
  * The pushes this transport reads (`app/src/rpc/schema.ts`, `WebviewMessages`).
  *
- * Every envelope names the stream its frame belongs to: by `op_id` for an op,
- * because the page knows that before the `stream_id` comes back, and by
- * `stream_id` for the two whose name it only learns from the answer.
+ * Every envelope names the stream its frame belongs to by the `stream_id` its
+ * open request answered with. An op's frames also name the op, which is what
+ * its replay cursor is kept by; they are never routed by it, because two
+ * readers of one op each have their own subscription and a frame meant for one
+ * would reach the other out of order.
  *
  * The frame inside is carried two ways, and the split is the app's rather than
  * this module's. `op.event`, `fleet.event` and `chat.event` carry the whole sink
@@ -199,6 +201,15 @@ const KEEPALIVE = "keepalive";
  * and the cost of forgetting one is a replay a first subscribe pays anyway.
  */
 const MAX_CURSORS = 64;
+
+/**
+ * How many closed stream ids one window remembers, to drop the frames the app
+ * pushed before its close landed. An id usually leaves by the cap: a stream the
+ * page hung up on gets no terminal frame (the app writes none for a reader that
+ * left, and an aborted source writes nothing), so only a `done` already in
+ * flight when the page closed removes it early.
+ */
+const MAX_DISCARDED = 64;
 
 /* ── frames ──────────────────────────────────────────────────────────────── */
 
@@ -377,16 +388,30 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
   setPageVisible(true);
 
   /**
-   * Op streams, keyed by `op_id` — known before the stream has a name.
+   * Op readers, keyed by `op_id` — known before the stream has a name.
    *
    * A *set* per op, because two readers of one op is ordinary: a drawer and the
-   * fleet board can both follow the same create. They share one push, so the
-   * fan-out is this map's job; each reader still opens and closes its own
-   * subscription on the other side — this is routing, not sharing.
+   * fleet board can both follow the same create. Each has its own subscription
+   * and is sent its own frames (`byStreamId`); this map only answers whether a
+   * reader of an op is still waiting for its subscribe to answer, which is how
+   * long a frame for an unnamed stream of that op is worth holding.
    */
   const ops = new Map<string, Set<OpenStream>>();
-  /** Turn and console streams, keyed by the `stream_id` the open request answered with. */
+  /** Every open stream, keyed by the `stream_id` its open request answered with. */
   const byStreamId = new Map<string, OpenStream>();
+  /**
+   * `orphans` for op streams, per op, so they can be dropped the moment no
+   * reader of that op is waiting for an answer any more: a frame still held
+   * then belongs to a subscription that was closed, and nothing will claim it.
+   */
+  const opOrphans = new Map<string, Map<string, StreamFrame[]>>();
+  /**
+   * Streams the page closed. The app goes on pushing for one until the close
+   * request lands, and a frame for an id that is in neither `byStreamId` nor
+   * here is held as an orphan for an answer that is never coming — for the
+   * life of the window. A frame for an id here is dropped instead.
+   */
+  const discarded = new Set<string>();
   /**
    * Frames for a `stream_id` whose open request has not resolved yet.
    *
@@ -447,6 +472,44 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
     return true;
   };
 
+  const discard = (streamId: string): void => {
+    discarded.add(streamId);
+    while (discarded.size > MAX_DISCARDED) {
+      const oldest = discarded.values().next();
+      if (oldest.done === true) break;
+      discarded.delete(oldest.value);
+    }
+  };
+
+  /** True when the frame is for a closed stream, and so for nobody. Its last word forgets it. */
+  const isDiscarded = (streamId: string, frame: StreamFrame): boolean => {
+    if (!discarded.has(streamId)) return false;
+    if (frame.event === "done") discarded.delete(streamId);
+    return true;
+  };
+
+  /** Whether a reader of `opId` has opened its subscription and not been answered yet. */
+  const awaiting = (opId: string): boolean =>
+    [...(ops.get(opId) ?? [])].some((stream) => stream.streamId === null && !stream.closed);
+
+  const dropOpOrphansIfUnclaimed = (opId: string): void => {
+    if (!awaiting(opId)) opOrphans.delete(opId);
+  };
+
+  /** One op frame to the reader whose subscription produced it, moving the op's cursor. */
+  const toOp = (opId: string, stream: OpenStream, frame: StreamFrame): void => {
+    // A reader that does not resume the op (`StreamHandlers.resumes`) may end
+    // it, but never moves where the next open picks up.
+    const counts = stream.handlers.resumes !== false || frame.event === "done";
+    if (!deliver(stream, frame) || !counts) return;
+    if (frame.event === "done") {
+      cursors.delete(opId);
+      return;
+    }
+    const cursor = parseCursor(frame.id);
+    if (cursor !== null) remember(opId, cursor);
+  };
+
   const toFeed = (kind: SubscriptionKind, frame: StreamFrame): void => {
     if (frame.event === KEEPALIVE) return;
     for (const handlers of [...feeds[kind]]) handlers.onFrame(frame);
@@ -466,20 +529,20 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
         },
         [OP_EVENT]: (payload) => {
           const frame = frameOf(payload.msg);
-          let delivered = false;
-          for (const stream of [...(ops.get(payload.op_id) ?? [])]) {
-            // A reader that does not resume the op (`StreamHandlers.resumes`)
-            // may end it, but never moves where the next open picks up.
-            const counts = stream.handlers.resumes !== false || frame.event === "done";
-            if (deliver(stream, frame) && counts) delivered = true;
-          }
-          if (!delivered) return;
-          if (frame.event === "done") {
-            cursors.delete(payload.op_id);
+          if (isDiscarded(payload.stream_id, frame)) return;
+          const stream = byStreamId.get(payload.stream_id);
+          if (stream !== undefined) {
+            toOp(payload.op_id, stream, frame);
             return;
           }
-          const cursor = parseCursor(frame.id);
-          if (cursor !== null) remember(payload.op_id, cursor);
+          // Its subscribe has not answered yet — or it was closed, and then no
+          // reader of the op is waiting and the frame belongs to nobody.
+          if (!awaiting(payload.op_id)) return;
+          const byStream = opOrphans.get(payload.op_id) ?? new Map<string, StreamFrame[]>();
+          const held = byStream.get(payload.stream_id) ?? [];
+          held.push(frame);
+          byStream.set(payload.stream_id, held);
+          opOrphans.set(payload.op_id, byStream);
         },
         [CHAT_FRAME]: (payload) => {
           routeById(payload.stream_id, valueFrameOf(payload.frame, payload.done, null));
@@ -539,7 +602,7 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
   }
 
   function routeById(streamId: string, frame: StreamFrame | null): void {
-    if (frame === null) return;
+    if (frame === null || isDiscarded(streamId, frame)) return;
     const stream = byStreamId.get(streamId);
     if (stream === undefined) {
       const held = orphans.get(streamId) ?? [];
@@ -694,44 +757,64 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
        * op stream reopened after the last one stopped must resume where it
        * stopped, and nothing below this seam remembers where that was — the
        * page asks for "this op" and the head answers from whatever cursor it
-       * is handed. A first open has no cursor and replays the buffer whole.
+       * is handed. A first open has no cursor and replays the buffer whole, and
+       * so does a reader that says it has drawn nothing yet
+       * (`StreamHandlers.replay`).
        */
-      const sent =
-        opId === null
-          ? params
-          : { ...params, ...(cursors.has(opId) ? { after: cursors.get(opId) } : {}) };
+      const resume = opId !== null && handlers.replay !== true && cursors.has(opId);
+      const sent = opId === null || !resume ? params : { ...params, after: cursors.get(opId) };
       if (opId !== null) {
         const readers = ops.get(opId) ?? new Set<OpenStream>();
         readers.add(stream);
         ops.set(opId, readers);
       }
 
-      /** Stop routing this op's pushes here, without disturbing the other readers. */
+      /** Take this reader out of its op's set, without disturbing the other readers. */
       const forget = (): void => {
         if (opId === null) return;
         const readers = ops.get(opId);
-        if (readers === undefined) return;
-        readers.delete(stream);
-        if (readers.size === 0) ops.delete(opId);
+        if (readers !== undefined) {
+          readers.delete(stream);
+          if (readers.size === 0) ops.delete(opId);
+        }
+        dropOpOrphansIfUnclaimed(opId);
+      };
+
+      /** The frames pushed for this stream before its name was known here. */
+      const takeHeld = (streamId: string): StreamFrame[] => {
+        if (opId === null) {
+          const held = orphans.get(streamId) ?? [];
+          orphans.delete(streamId);
+          return held;
+        }
+        const held = opOrphans.get(opId)?.get(streamId) ?? [];
+        opOrphans.get(opId)?.delete(streamId);
+        dropOpOrphansIfUnclaimed(opId);
+        return held;
       };
 
       void send(name, sent).then(
         (answer) => {
           const streamId = streamIdOf(answer);
           stream.streamId = streamId;
-          if (streamId === null) return;
-          if (!stream.closed) handlers.onOpen?.(streamId);
-          if (opId === null) {
-            byStreamId.set(streamId, stream);
-            const held = orphans.get(streamId);
-            if (held !== undefined) {
-              orphans.delete(streamId);
-              for (const frame of held) deliver(stream, frame);
-            }
+          if (streamId === null) {
+            if (opId !== null) dropOpOrphansIfUnclaimed(opId);
+            return;
           }
+          const held = takeHeld(streamId);
           // The caller closed while the open request was in flight: the stream
           // exists on the other side now and nobody is reading it.
-          if (stream.closed) close(streamId);
+          if (stream.closed) {
+            discard(streamId);
+            close(streamId);
+            return;
+          }
+          handlers.onOpen?.(streamId);
+          byStreamId.set(streamId, stream);
+          for (const frame of held) {
+            if (opId === null) deliver(stream, frame);
+            else toOp(opId, stream, frame);
+          }
         },
         (reason: unknown) => {
           forget();
@@ -755,7 +838,10 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
         if (stream.streamId !== null) {
           byStreamId.delete(stream.streamId);
           orphans.delete(stream.streamId);
-          if (!stream.ended) close(stream.streamId);
+          if (!stream.ended) {
+            discard(stream.streamId);
+            close(stream.streamId);
+          }
         }
       };
     },

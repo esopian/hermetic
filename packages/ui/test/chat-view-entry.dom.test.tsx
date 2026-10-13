@@ -6,18 +6,19 @@
  * exercised with the real store and compositor. Only its server calls are
  * substituted, so remounts and keyboard propagation are real.
  */
-import { act, cleanup, fireEvent, render, screen, userEvent, waitFor } from "./dom.ts";
+import { act, cleanup, fireEvent, render, screen, userEvent, waitFor, within } from "./dom.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ChatProvider, useChat } from "../src/chat/chat-state.tsx";
 import { ChatView } from "../src/chat/components/ChatView.tsx";
 import { useRef } from "react";
 import { useFocusTrap } from "../src/lib/focus.ts";
-import { harness, mount, sendable, sessionOf, swarmOf } from "./chat-fixtures.tsx";
+import { botOf, harness, mount, sendable, sessionOf, swarmOf } from "./chat-fixtures.tsx";
 import type { Harness } from "./chat-fixtures.tsx";
 import { useEffect, useState } from "react";
 import { ChatShell } from "../src/chat/components/ChatShell.tsx";
 import { useChatEntry } from "../src/chat/chat-entry-state.tsx";
 import { Drawer } from "../src/components/Drawer.tsx";
+import { Footer } from "../src/components/Footer.tsx";
 import { chatHash } from "../src/chat/chat-routing.ts";
 
 afterEach(cleanup);
@@ -74,6 +75,7 @@ function mountEntry(h: Harness) {
     <ChatProvider api={h.api} eager={false}>
       <ChatShell>
         <EntryFrames />
+        <Footer lastPollAt={null} connected={false} />
       </ChatShell>
     </ChatProvider>,
   );
@@ -288,6 +290,40 @@ describe("persistent entry frames", () => {
     expect((await sendable(container)).value).toBe("");
   });
 
+  test("in the Chat view, quick text leads a conversation its words also match, and Enter sends it", async () => {
+    window.history.replaceState(null, "", "/#chat/atlas/atlas");
+    const h = harness({ sessions: [sessionOf({ title: "atlas hello notes" })] });
+    const { container } = mountEntry(h);
+    await sendable(container);
+    await userEvent.click(screen.getByText("Jump"));
+    const input = screen.getByRole("combobox");
+    await userEvent.type(input, "atlas hello");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    expect(screen.getAllByRole("option")[0]!.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("option")[1]!.textContent).toContain("atlas hello notes");
+    key(input, "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+    expect(h.turns[0]!.message).toBe("hello");
+  });
+
+  test("quick jump's highlight stays on its row when conversation rows arrive late", async () => {
+    window.history.replaceState(null, "", "/#chat/atlas/atlas");
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    h.sessionsMode = "hang";
+    mountEntry(h);
+    await waitFor(() => expect(h.releaseSessions).not.toBeNull());
+    await userEvent.click(screen.getByText("Jump"));
+    const input = screen.getByRole("combobox");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    key(input, "ArrowDown");
+    const highlighted = () =>
+      screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true");
+    await waitFor(() => expect(highlighted()?.textContent).toContain("granite"));
+    await act(async () => h.releaseSessions?.());
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    expect(highlighted()?.textContent).toContain("granite");
+  });
+
   test("foreign quick text remains beside its warning and Enter requires a deliberate composer send", async () => {
     const h = harness({ sessions: [sessionOf({ origin: "channel", origin_detail: "#acme-support" })] });
     const { container } = mountEntry(h);
@@ -362,6 +398,227 @@ describe("persistent entry frames", () => {
     await act(async () => {
       await new Promise((done) => setTimeout(done, 0));
     });
+  });
+});
+
+describe("chat dock panels and activity", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/"));
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  test("a tab swaps one panel, while a new panel keeps both conversations visible", async () => {
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    h.sessions["granite/granite"] = [sessionOf({ id: "g1", instance: "granite", bot: "granite" })];
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+
+    const panels = () => [...container.querySelectorAll<HTMLElement>(".ch-dock-pane")];
+    await waitFor(() => expect(panels()).toHaveLength(1));
+    await userEvent.type(await sendable(container), "atlas draft");
+
+    await userEvent.click(within(panels()[0]!).getByRole("button", { name: "+ Tab" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Add tab to panel 1" })).getByRole("button", {
+        name: /granite/i,
+      }),
+    );
+    expect(panels()).toHaveLength(1);
+    expect(within(panels()[0]!).getAllByRole("tab")).toHaveLength(2);
+    expect(
+      within(panels()[0]!)
+        .getByRole("tab", { name: /granite/i })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    await userEvent.type(await sendable(container), "granite draft");
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Panel" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Open in new panel" })).getByRole("button", {
+        name: /atlas in panel 1/i,
+      }),
+    );
+    await waitFor(() => expect(panels()).toHaveLength(2));
+    expect(panels()[0]!.getAttribute("aria-label")).toContain("granite");
+    expect(panels()[1]!.getAttribute("aria-label")).toContain("atlas");
+    expect((panels()[0]!.querySelector(".ch-input") as HTMLTextAreaElement).value).toBe(
+      "granite draft",
+    );
+    expect((panels()[1]!.querySelector(".ch-input") as HTMLTextAreaElement).value).toBe("atlas draft");
+    expect(h.calls.send).toBe(0);
+  });
+
+  test("closing a tab or panel hides its view without stopping a running turn", async () => {
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.type(await sendable(container), "keep working");
+    key(await sendable(container), "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Panel" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Open in new panel" })).getByRole("button", {
+        name: /granite/i,
+      }),
+    );
+    expect(container.querySelectorAll(".ch-dock-pane")).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "Close atlas tab" }));
+    expect(container.querySelectorAll(".ch-dock-pane")).toHaveLength(1);
+    expect(h.turns[0]!.cancelled).toBe(false);
+    expect(h.calls.abort).toBe(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Close panel 1" }));
+    expect(container.querySelectorAll(".ch-dock-pane")).toHaveLength(0);
+    expect(h.turns[0]!.cancelled).toBe(false);
+    expect(h.calls.abort).toBe(0);
+  });
+
+  test("Escape stops the turn in the focused pane, not the other running pane", async () => {
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    h.sessions["granite/granite"] = [sessionOf({ id: "g1", instance: "granite", bot: "granite" })];
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.type(await sendable(container), "atlas work");
+    key(await sendable(container), "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "+ Panel" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Open in new panel" })).getByRole("button", {
+        name: /granite/i,
+      }),
+    );
+    const panels = [...container.querySelectorAll<HTMLElement>(".ch-dock-pane")];
+    expect(panels).toHaveLength(2);
+    const graniteInput = panels[1]!.querySelector(".ch-input") as HTMLTextAreaElement;
+    await userEvent.type(graniteInput, "granite work{Enter}");
+    await waitFor(() => expect(h.calls.send).toBe(2));
+
+    const atlasInput = panels[0]!.querySelector(".ch-input") as HTMLTextAreaElement;
+    await userEvent.click(atlasInput);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(h.calls.abort).toBe(1));
+    expect(h.turns[0]!.cancelled).toBe(true);
+    expect(h.turns[1]!.cancelled).toBe(false);
+  });
+
+  test("Expand opens the last active pane in full view", async () => {
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.click(screen.getByRole("button", { name: "+ Panel" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Open in new panel" })).getByRole("button", {
+        name: /granite/i,
+      }),
+    );
+    const granitePane = container.querySelectorAll<HTMLElement>(".ch-dock-pane")[1]!;
+    await userEvent.click(within(granitePane).getByRole("tab", { name: /granite/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand chat" }));
+    await waitFor(() => expect(window.location.hash).toBe("#chat/granite/granite"));
+    expect(screen.getByTestId("selection").textContent).toBe("#chat/granite/granite");
+  });
+
+  test("minimizing leaves an idle footer that reopens the dock", async () => {
+    const h = harness();
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+    expect(container.querySelector(".ch-dock-pane")).toBeNull();
+    const footer = screen.getByRole("button", { name: "Open chat dock" });
+    expect(within(footer).getByText("Idle")).toBeDefined();
+    await userEvent.click(footer);
+    await waitFor(() => expect(container.querySelector(".ch-dock-pane")).not.toBeNull());
+  });
+
+  test("unread count stays legible on an open tab and the minimized footer", async () => {
+    const h = harness({
+      swarms: [swarmOf("atlas", { bots: [botOf("atlas", "atlas", { unread: 2 })] })],
+    });
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await waitFor(() =>
+      expect(within(screen.getByRole("tab", { name: /atlas/i })).getByText("2")).toBeDefined(),
+    );
+    expect(container.querySelector(".ch-footer-chat")?.textContent).toContain("2 unread");
+
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+    expect(
+      within(screen.getByRole("button", { name: "Open chat dock" })).getByText("2 unread"),
+    ).toBeDefined();
+  });
+
+  test("a running turn reveals the activity rail with no unread messages", async () => {
+    const h = harness();
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    expect(screen.queryByLabelText("Chat activity")).toBeNull();
+
+    await userEvent.type(await sendable(container), "review the rollout");
+    key(await sendable(container), "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+
+    const rail = await screen.findByLabelText("Chat activity");
+    expect(within(rail).getByRole("button", { name: /atlas/i })).toBeDefined();
+    expect(h.turns[0]!.cancelled).toBe(false);
+  });
+
+  test("activity rail returns to the explicit session whose turn is running", async () => {
+    const h = harness();
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.type(await sendable(container), "review this session");
+    key(await sendable(container), "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+    expect(h.turns[0]!.session).toBe("s1");
+
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+    await userEvent.click(
+      within(await screen.findByLabelText("Chat activity")).getByRole("button", { name: /atlas/i }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("selection").textContent).toBe("#chat/atlas/atlas?session=s1"),
+    );
+    expect(container.querySelector(".ch-dock-pane")?.getAttribute("aria-label")).toContain("atlas");
+  });
+
+  test("unread and running chats raise the activity rail, whose agent opens the dock", async () => {
+    const h = harness({
+      swarms: [
+        swarmOf("atlas"),
+        swarmOf("granite", { bots: [botOf("granite", "granite", { unread: 2 })] }),
+      ],
+    });
+    const { container } = mountEntry(h);
+    await userEvent.click(screen.getByText("Open explicit"));
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+
+    const rail = await screen.findByLabelText("Chat activity");
+    expect(within(rail).getByText("2")).toBeDefined();
+    await userEvent.click(within(rail).getByRole("button", { name: /granite/i }));
+    await waitFor(() =>
+      expect(container.querySelector(".ch-dock-pane")?.getAttribute("aria-label")).toContain("granite"),
+    );
+
+    await userEvent.type(await sendable(container), "still working");
+    key(await sendable(container), "Enter");
+    await waitFor(() => expect(h.calls.send).toBe(1));
+    await userEvent.click(
+      within(screen.getByTestId("chat-dock")).getByRole("button", { name: "Minimize chat dock" }),
+    );
+    expect(screen.getByLabelText("Chat activity")).toBeDefined();
+    expect(h.turns[0]!.cancelled).toBe(false);
   });
 });
 

@@ -57,10 +57,17 @@ test("a finished foundation update clears the switcher's update-available badge"
 
   await user.click(await screen.findByRole("button", { name: "Update foundation…" }));
   const drawer = await screen.findByRole("dialog");
+  // The review stages scroll as one body; the progress stage locks it so only
+  // the log scrolls (`op-drawer-layout.test.ts` pins the CSS behind the class).
+  const body = () => drawer.querySelector<HTMLElement>(".drawer-body");
+  expect(body()?.classList.contains("op-body")).toBe(false);
   await user.click(await within(drawer).findByRole("button", { name: "Continue →" }));
+  expect(body()?.classList.contains("op-body")).toBe(false);
   await user.click(within(drawer).getByRole("button", { name: "Update the foundation" }));
   // The drawer's foot says where the op ended; `Close` only appears once it has.
   await within(drawer).findByText(/^foundation is on v/, undefined, { timeout: 10_000 });
+  expect(body()?.classList.contains("op-body")).toBe(true);
+  expect(body()?.querySelector(".wiz-progress .logpane.progress-log")).not.toBeNull();
   // The header's × and the footer's button both read "Close"; the footer's is
   // the one a finished update offers.
   const closers = within(drawer).getAllByRole("button", { name: "Close" });
