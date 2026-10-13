@@ -280,3 +280,48 @@ export * from "./aws/index.ts";
  */
 export * from "./fleet/policy.ts";
 export { aclSnippet as acl_snippet, aclSnippetParts as acl_snippet_parts } from "./fleet/policy.ts";
+/**
+ * The phone companion's bridge (`mobile/`): the wire constants the phone
+ * mirrors, the lower-level server a desktop head hosts without iterating
+ * `mobile.serve`, the side door that reaches it on an open `Hermetic`, the
+ * stores, and the push senders (the recording one is fixture mode's and the
+ * tests').
+ */
+export {
+  MOBILE_ALLOWED_METHODS,
+  MOBILE_APPROVAL_ACTIONS,
+  MOBILE_CLIENT_FRAMES,
+  MOBILE_CLOSE_CODES,
+  MOBILE_HTTP_STATUS,
+  MOBILE_PLATFORMS,
+  MOBILE_PROTOCOL,
+  MOBILE_PUSH_CATEGORIES,
+  MOBILE_PUSH_KINDS,
+  MOBILE_ROUTES,
+  MOBILE_SERVER_FRAMES,
+  MOBILE_TURN_STATES,
+  PAIR_CODE_ALPHABET,
+} from "./mobile/protocol.ts";
+export {
+  bridgeUrl,
+  mobileBridgeHost,
+  startMobileBridge,
+  type MobileBridge,
+  type MobileBridgeEvent,
+  type MobileBridgeHost,
+  type MobileHostStart,
+  type StartMobileBridgeOptions,
+} from "./mobile/index.ts";
+export {
+  MemoryMobileStore,
+  SqliteMobileStore,
+  type MobileStore,
+} from "./mobile/device-store.ts";
+export {
+  expoPushSender,
+  memoryPushSender,
+  type ExpoPushMessage,
+  type MemoryPushSender,
+  type PushReceipt,
+  type PushSender,
+} from "./mobile/push.ts";

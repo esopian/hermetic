@@ -33,6 +33,7 @@ import {
   runRecorderFor,
 } from "@hermetic/core";
 import { createChatOwner } from "../chat-owner.ts";
+import { createMobileHost } from "../mobile-host.ts";
 import { dispatch } from "../handlers/dispatch.ts";
 import { createStreamRegistry } from "../handlers/streams.ts";
 import type { HandlerContext } from "../handlers/ctx.ts";
@@ -167,6 +168,13 @@ const terminals = new TerminalHost({
   },
   log,
 });
+
+/**
+ * The phone companion's bridge, one for the process like the terminals: it
+ * serves whichever fleet the state holds, and is started below when
+ * `mobile.settings` says `enabled` (`mobile-host.ts`).
+ */
+const mobileHost = createMobileHost({ hermetic: () => state.hermetic, log });
 
 /**
  * The renderer this bundle was built with (`renderer.ts`), and in a dev CEF
@@ -373,6 +381,7 @@ const windows = createWindows({
       opts: { fixture, ops, chatOwner, log },
       streams: createStreamRegistry(),
       terminals,
+      mobile: mobileHost,
       /**
        * What makes this head the desktop one: the same five capabilities the
        * HTTP head has none of, so `handlers/app.ts` answers instead of
@@ -470,8 +479,11 @@ const closingWindows: StoppableServer = {
 };
 
 /** Poller, chat, pools, windows — but not the process; the close guard exits. */
-const teardown = (reason: string): Promise<void> =>
-  shutdown({ server: closingWindows, state, log, chat: chatOwner, terminals }, reason);
+const teardown = async (reason: string): Promise<void> => {
+  // The bridge first: its phones are told 1001 before the windows go.
+  await mobileHost.stop("app quitting").catch(() => {});
+  await shutdown({ server: closingWindows, state, log, chat: chatOwner, terminals }, reason);
+};
 
 /**
  * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
@@ -641,6 +653,9 @@ updater.start();
  * observe" and says so in the log.
  */
 void chatOwner.sync();
+
+/** The mobile bridge, if the operator turned it on (`mobile.settings`). Never throws. */
+void mobileHost.sync();
 
 /**
  * Last of all, and only on a dev build: the shell's way in

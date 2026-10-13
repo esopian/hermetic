@@ -1,0 +1,257 @@
+/**
+ * `startMobileBridge`: one `Bun.serve` with the HTTP routes and the WebSocket
+ * hub, the turn registry, a shared observe pool, the inbox poll and the push
+ * notifier, started together and stopped together.
+ *
+ * Bound where it is told. The default host (the laptop's Tailscale IPv4, else
+ * loopback) is chosen by the caller (`mobile/index.ts`); nothing here ever
+ * picks `0.0.0.0` on its own.
+ *
+ * Core never logs (§3.2 rule 1): the bridge reports what happens through
+ * `MobileBridgeEvent`s, and those never carry a token, a code, a message or a
+ * request's params.
+ */
+import { createObservePool } from "../chat/observe-pool.ts";
+import type { ChatBlock, MobileServeStatus } from "../schema/index.ts";
+import type { BridgeCtx, MobileBridgeEvent } from "./bridge-ctx.ts";
+import { notificationFrame } from "./bridge-ctx.ts";
+import type { MobileCore } from "./core.ts";
+import type { MobileStore } from "./device-store.ts";
+import { handleHttp } from "./http.ts";
+import { createNotifyLoop } from "./notify-loop.ts";
+import { createPairLimiter } from "./pairing.ts";
+import { MOBILE_CLOSE_CODES, MOBILE_PROTOCOL, MOBILE_ROUTES } from "./protocol.ts";
+import { createPushNotifier, type PushSender } from "./push.ts";
+import { createTurnRegistry } from "./turns.ts";
+import { createSocketHub, newSocketData, type SocketData } from "./ws.ts";
+
+export type { MobileBridgeEvent } from "./bridge-ctx.ts";
+
+export interface StartMobileBridgeOptions {
+  core: () => MobileCore;
+  store: MobileStore;
+  push: PushSender;
+  host: string;
+  /** 0 picks a free port; read the bound one off the result. */
+  port: number;
+  app: "desktop" | "cli";
+  version: string;
+  fixture: boolean;
+  /** Tick `chat.swarms` so core raises `chat.message` rows (a headless bridge). */
+  tickSwarms?: boolean;
+  clock?: () => number;
+  heartbeatMs?: number;
+  authDeadlineMs?: number;
+  notifyPollMs?: number;
+  turnRetentionMs?: number;
+}
+
+export interface MobileBridge {
+  readonly host: string;
+  readonly port: number;
+  readonly url: string;
+  readonly started_at: string;
+  status(): MobileServeStatus;
+  on(listener: (event: MobileBridgeEvent) => void): () => void;
+  /** One inbox read now, instead of on the next tick. */
+  pollNotifications(): Promise<void>;
+  /** Close a revoked device's sockets now. */
+  dropDevice(deviceId: string): void;
+  /** Close every socket (1001), abort running turns, stop listening. Idempotent. */
+  close(reason?: string): Promise<void>;
+  readonly closed: Promise<void>;
+}
+
+/** `http://host:port`, with an IPv6 literal bracketed. */
+export function bridgeUrl(host: string, port: number): string {
+  return `http://${host.includes(":") ? `[${host}]` : host}:${port}`;
+}
+
+type ApprovalOrQuestion = Extract<ChatBlock, { kind: "approval" | "question" }>;
+
+export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise<MobileBridge> {
+  const clock = opts.clock ?? (() => Date.now());
+  const listeners = new Set<(event: MobileBridgeEvent) => void>();
+  const emit = (event: MobileBridgeEvent): void => {
+    for (const listener of [...listeners]) {
+      try {
+        listener(event);
+      } catch {
+        /* a listener's failure is its own */
+      }
+    }
+  };
+
+  let tailnet: string | null = null;
+  // Hub-bound, assigned below once the hub exists.
+  let broadcast: (frame: Record<string, unknown>) => void = () => {};
+  let isLive: (deviceId: string) => boolean = () => false;
+
+  const push = createPushNotifier({
+    store: opts.store,
+    sender: opts.push,
+    isLive: (id) => isLive(id),
+  });
+
+  const turns = createTurnRegistry({
+    send: (input, o) => opts.core().chat.send(input, o),
+    abort: (input) => opts.core().chat.abort(input),
+    clock,
+    ...(opts.turnRetentionMs !== undefined ? { retentionMs: opts.turnRetentionMs } : {}),
+    onFrame: (turn, frame) => {
+      if (frame.type !== "block") return;
+      if (frame.block.kind !== "approval" && frame.block.kind !== "question") return;
+      void push.notify({
+        kind: "needs_action",
+        instance: turn.instance,
+        bot: turn.bot,
+        session: turn.session,
+        block: frame.block as ApprovalOrQuestion,
+      });
+    },
+    onEnd: (turn, info) => {
+      if (turn.state === "done") void push.notify({ kind: "turn.done", turn, reply: info.reply });
+      else if (turn.state === "error") {
+        void push.notify({ kind: "turn.error", turn, code: info.error?.code ?? "INTERNAL" });
+      }
+    },
+  });
+
+  const pool = createObservePool({
+    observe: (input, o) => opts.core().chat.observe(input, o),
+  });
+
+  const ctx: BridgeCtx = {
+    core: opts.core,
+    store: opts.store,
+    turns,
+    pool,
+    push,
+    limiter: createPairLimiter(),
+    clock,
+    app: opts.app,
+    version: opts.version,
+    fixture: opts.fixture,
+    tailnet: () => tailnet,
+    emit,
+    broadcast: (frame) => broadcast(frame),
+    isLive: (id) => isLive(id),
+    heartbeatMs: opts.heartbeatMs ?? MOBILE_PROTOCOL.HEARTBEAT_MS,
+    authDeadlineMs: opts.authDeadlineMs ?? MOBILE_PROTOCOL.AUTH_DEADLINE_MS,
+  };
+  const hub = createSocketHub(ctx);
+  broadcast = hub.broadcast;
+  isLive = hub.isLive;
+
+  const notify = createNotifyLoop({
+    list: (since) => opts.core().notifications.list({ since }),
+    swarms: opts.tickSwarms === true ? () => opts.core().chat.swarms({}) : undefined,
+    onRow: (row, counts) => {
+      hub.broadcast(notificationFrame(row, counts));
+      void push.notify({ kind: "notification", row });
+    },
+    clock,
+    ...(opts.notifyPollMs !== undefined ? { pollMs: opts.notifyPollMs } : {}),
+  });
+
+  const server = Bun.serve<SocketData>({
+    hostname: opts.host,
+    port: opts.port,
+    // Turns and observations are long and quiet; the heartbeat decides liveness.
+    idleTimeout: 0,
+    // The transport refuses an oversized body before a route reads it.
+    maxRequestBodySize: MOBILE_PROTOCOL.MAX_PAYLOAD_BYTES,
+    async fetch(req, srv) {
+      const source = srv.requestIP(req)?.address ?? "";
+      const url = new URL(req.url);
+      if (url.pathname === MOBILE_ROUTES.ws) {
+        if (srv.upgrade(req, { data: newSocketData(source, clock()) })) return undefined;
+        return new Response(
+          JSON.stringify({ code: "VALIDATION", message: "expected a WebSocket upgrade" }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return await handleHttp(ctx, req, source);
+    },
+    websocket: {
+      maxPayloadLength: MOBILE_PROTOCOL.MAX_PAYLOAD_BYTES,
+      idleTimeout: 0,
+      open: (ws) => hub.open(ws),
+      message: (ws, raw) => hub.message(ws, raw),
+      close: (ws) => hub.close(ws),
+    },
+  });
+
+  const port = server.port ?? opts.port;
+  const url = bridgeUrl(opts.host, port);
+  const started_at = new Date(clock()).toISOString();
+
+  const heartbeat = setInterval(() => hub.heartbeat(), ctx.heartbeatMs);
+  const sweep = setInterval(() => turns.sweep(), 60_000);
+  notify.start();
+  // The tailnet names the noVNC host on the phone; read once, never fatal.
+  void opts
+    .core()
+    .config.show()
+    .then((c) => {
+      tailnet = c.tailnet;
+    })
+    .catch(() => {});
+
+  let resolveClosed: () => void = () => {};
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  let closing: Promise<void> | null = null;
+
+  const bridge: MobileBridge = {
+    host: opts.host,
+    port,
+    url,
+    started_at,
+    status: () => ({
+      host: opts.host,
+      port,
+      url,
+      started_at,
+      connected: hub.connected(),
+      app: opts.app,
+    }),
+    on(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    pollNotifications: () => notify.poll(),
+    dropDevice(deviceId) {
+      hub.dropDevice(deviceId);
+      emit({ type: "device", device_id: deviceId, action: "revoked" });
+    },
+    close(reason = "stopped") {
+      closing ??= (async () => {
+        clearInterval(heartbeat);
+        clearInterval(sweep);
+        notify.stop();
+        hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
+        turns.stopAll();
+        await pool.stop();
+        // Let the 1001s reach their sockets before the listener goes.
+        const deadline = Date.now() + 1_000;
+        while (hub.size() > 0 && Date.now() < deadline) await Bun.sleep(10);
+        // Bounded: under Bun 1.3 `stop()` stops listening at once but its
+        // promise never settles once the server has closed a socket itself.
+        await Promise.race([server.stop(true), Bun.sleep(250)]);
+        emit({ type: "stopped", reason });
+        listeners.clear();
+        resolveClosed();
+      })();
+      return closing;
+    },
+    closed,
+  };
+  // No `listening` event: the caller holds `host`, `port` and `url` the moment
+  // this resolves, and an event fired before it could subscribe would be lost.
+  return bridge;
+}

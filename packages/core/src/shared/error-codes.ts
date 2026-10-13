@@ -242,6 +242,20 @@ export const ERROR_CODES = [
    * per app (issue #18). Ending a session is the remedy.
    */
   "TERMINAL_LIMIT",
+  /**
+   * The mobile bridge's refusals (`mobile/`). A phone spoke a protocol version
+   * this bridge does not (426); presented no device token, or one that is
+   * unknown or revoked (401); named a pair code that is unknown, expired or
+   * already used (409); resumed a turn whose buffer is gone (404); tried too
+   * many pair codes from one source (429); or sent a body over the payload
+   * limit (413). None of them ever carries the token or the code it refused.
+   */
+  "PROTOCOL_MISMATCH",
+  "UNAUTHORIZED",
+  "PAIR_CODE_INVALID",
+  "TURN_GONE",
+  "RATE_LIMITED",
+  "PAYLOAD_TOO_LARGE",
   /** Input failed schema validation at the boundary — heads map it to 400. */
   "VALIDATION",
   "UNSUPPORTED",

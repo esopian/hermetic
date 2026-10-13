@@ -160,6 +160,13 @@ const SURFACE: Record<PublicMethod, string> = {
   // outgoing message at all. It writes nothing — that is the property the whole
   // design rests on, and `chat watch` is named for it.
   "chat.observe": "chat watch",
+  // The phone companion's bridge: pairing and paired devices are this laptop's,
+  // and `mobile serve` is the bridge itself, run in the foreground.
+  "mobile.pair": "mobile pair",
+  "mobile.devices": "mobile devices",
+  "mobile.revoke": "mobile revoke",
+  "mobile.settings": "mobile settings",
+  "mobile.serve": "mobile serve",
   "artifacts.push": "artifacts push",
   teardown: "teardown",
   doctor: "doctor",

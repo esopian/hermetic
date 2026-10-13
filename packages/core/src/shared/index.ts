@@ -169,3 +169,7 @@ export {
   sanitizeProgramName,
 } from "./shell-markers.ts";
 export type { ShellMarker } from "./shell-markers.ts";
+
+// --- QR codes (the mobile pair URL) -----------------------------------------
+export { encodeQr, qrToSvg, qrToTerminal } from "./qr.ts";
+export type { QrMatrix } from "./qr.ts";

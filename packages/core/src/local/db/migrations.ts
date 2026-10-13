@@ -547,6 +547,38 @@ const MIGRATIONS: Migration[] = [
     statements: [],
     columns: [{ table: "notifications", column: "restored_at", type: "TEXT" }],
   },
+  {
+    /**
+     * The mobile bridge's paired phones and one-time pair codes (`mobile/`).
+     * Local for the reason the inbox is: a phone pairs with *this laptop*, and
+     * a colleague on the same fleet pairs their own. Neither table ever holds
+     * a raw secret — a device is found by the sha256 of its token and a code
+     * by the sha256 of the code — so a copied database pairs nothing.
+     */
+    name: "mobile-devices",
+    version: 16,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS mobile_devices (
+         device_id       TEXT PRIMARY KEY,
+         name            TEXT NOT NULL,
+         platform        TEXT NOT NULL,
+         token_sha256    TEXT NOT NULL UNIQUE,
+         created_at      TEXT NOT NULL,
+         last_seen_at    TEXT,
+         expo_push_token TEXT,
+         previews        INTEGER NOT NULL DEFAULT 1,
+         enabled         INTEGER NOT NULL DEFAULT 1,
+         revoked_at      TEXT
+       )`,
+      `CREATE TABLE IF NOT EXISTS mobile_pair_codes (
+         code_sha256 TEXT PRIMARY KEY,
+         created_at  TEXT NOT NULL,
+         expires_at  TEXT NOT NULL,
+         used_at     TEXT,
+         name_hint   TEXT
+       )`,
+    ],
+  },
 ];
 
 /**

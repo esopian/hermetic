@@ -136,6 +136,18 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   TAILSCALE_STOPPED: 9,
   TAILSCALE_WRONG_TAILNET: 9,
   TERMINAL_LIMIT: 7,
+  /**
+   * The mobile bridge's refusals, answered to a phone over HTTP and never
+   * raised by a CLI command against core — but the table is exhaustive. A
+   * version skew and a rate limit are preconditions of the environment; a bad
+   * token, a spent pair code and a vanished turn are conflicts with what is.
+   */
+  PROTOCOL_MISMATCH: 9,
+  RATE_LIMITED: 9,
+  UNAUTHORIZED: 7,
+  PAIR_CODE_INVALID: 7,
+  TURN_GONE: 7,
+  PAYLOAD_TOO_LARGE: EXIT_VALIDATION,
   UNSUPPORTED: 10,
   /** The stack update itself failed or rolled back: a plain failure (§6.6 step 3). */
   FOUNDATION_UPDATE_FAILED: EXIT_FAILURE,

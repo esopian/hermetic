@@ -58,6 +58,12 @@ const UNSCOPED: Record<string, string> = {
   // A provider's model catalogue, read with a key the request carried. It
   // reaches the provider and never AWS.
   "providers.models": "a provider read that carries a secret",
+  // The phone companion's bridge: this laptop's paired devices and settings.
+  // The bridge guards each phone request's fleet itself (`mobile/`).
+  "mobile.pair": "mints a pair code in this laptop's database",
+  "mobile.revoke": "revokes a phone in this laptop's database",
+  "mobile.settings": "changes this laptop's bridge settings",
+  "mobile.serve": "follows the bridge this head hosts",
 };
 
 /**
@@ -90,6 +96,7 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "logs.close": "closes a stream this head opened",
   "logs.open": "a second transport of `logs`, whose own entry carries the guard",
   "meta.get": "describes this head",
+  "mobile.unsubscribe": "closes a stream this head opened",
   "ops.abort": "names an op on this head, which is already this head's fleet",
   "ops.get": "reads this head's op registry",
   "ops.list": "reads this head's op registry",
