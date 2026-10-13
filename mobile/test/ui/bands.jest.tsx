@@ -1,5 +1,5 @@
 import { fireEvent, screen } from "@testing-library/react-native";
-import { SocketBand } from "../../src/chat/Bands.tsx";
+import { SocketBand, ThreadBand } from "../../src/chat/Bands.tsx";
 import { ThemeProvider } from "../../src/theme/theme.tsx";
 import { renderUi } from "../helpers/render.tsx";
 
@@ -47,5 +47,18 @@ describe("SocketBand — wrong fleet", () => {
     await renderUi(<SocketBand state="unauthorized" />);
     expect(screen.getByText("The bridge no longer knows this phone.")).toBeTruthy();
     expect(screen.getByText(/never re-paired after a laptop upgrade/)).toBeTruthy();
+  });
+});
+
+describe("ThreadBand — missing bot", () => {
+  test("names the instance and the bot, once", async () => {
+    await renderUi(<ThreadBand state="missing" instance="atlas" bot="ghost" />);
+    expect(screen.getByText("atlas has no bot named ghost.")).toBeTruthy();
+    expect(screen.getByText(/link may be out of date/)).toBeTruthy();
+  });
+
+  test("a missing session says so instead", async () => {
+    await renderUi(<ThreadBand state="missing" instance="atlas" bot="scribe" session="s-9" />);
+    expect(screen.getByText("scribe on atlas has no such session.")).toBeTruthy();
   });
 });

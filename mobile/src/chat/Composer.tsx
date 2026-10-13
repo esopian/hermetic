@@ -219,6 +219,7 @@ function ComposerImpl(props: ComposerProps) {
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}>
         <TextInput
+          keyboardAppearance={t.scheme}
           ref={input}
           accessibilityLabel="Message"
           value={draft}

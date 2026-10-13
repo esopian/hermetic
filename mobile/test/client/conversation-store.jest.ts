@@ -47,12 +47,16 @@ function setup() {
     end: (e: { code: string; message: string } | null) => void;
   } | null = null;
   let historyFails = 0;
+  let historyFailCode = "NETWORK";
   const transport: ConversationTransport = {
     history: async (input) => {
       calls.push({ method: "chat.history", input });
       if (historyFails > 0) {
         historyFails -= 1;
-        throw new BridgeError("NETWORK", "offline");
+        throw new BridgeError(
+          historyFailCode,
+          historyFailCode === "NOT_FOUND" ? "Profile not found" : "offline",
+        );
       }
       return { ...history, messages: [...history.messages] };
     },
@@ -119,8 +123,9 @@ function setup() {
     setSteer: (s: SteerStatus) => {
       steerStatus = s;
     },
-    failHistory: (n: number) => {
+    failHistory: (n: number, code = "NETWORK") => {
       historyFails = n;
+      historyFailCode = code;
     },
     observe: () => observer!,
     method: (m: string) => calls.filter((c) => c.method === m),
@@ -485,6 +490,20 @@ describe("observation", () => {
     s.failHistory(1);
     await s.store.stop(T);
     expect(s.view().messages.some((m) => m.id === "cron")).toBe(true);
+  });
+
+  test("a failed read keeps the bridge's code, and a good read clears it", async () => {
+    const s = setup();
+    s.failHistory(1, "NOT_FOUND");
+    s.store.open(T);
+    await flush();
+    expect(s.view()).toMatchObject({
+      history: "failed",
+      historyCode: "NOT_FOUND",
+      historyError: "Profile not found",
+    });
+    await s.store.reload(T);
+    expect(s.view()).toMatchObject({ history: "ready", historyCode: null, historyError: null });
   });
 
   test("a snapshot on a new session rolls the conversation over", async () => {

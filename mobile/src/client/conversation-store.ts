@@ -221,6 +221,8 @@ export interface ConversationView {
   readonly live: ChatMessage | null;
   readonly history: HistoryState;
   readonly historyError: string | null;
+  /** The bridge's error code for a failed read (`NOT_FOUND`: no such bot or session). */
+  readonly historyCode: string | null;
   readonly sessions: readonly Session[];
   readonly sending: boolean;
   readonly aborting: boolean;
@@ -340,6 +342,7 @@ interface Rec {
   live: ChatMessage | null;
   history: HistoryState;
   historyError: string | null;
+  historyCode: string | null;
   historyGen: number;
   historyRead: boolean;
   sessions: Session[];
@@ -839,6 +842,7 @@ export class ConversationStore {
         record.historyRead = true;
         record.history = "ready";
         record.historyError = null;
+        record.historyCode = null;
         if (record.live && messages.some((m) => m.id === record.live?.id) && !record.sending) {
           record.live = null;
           record.dropped = false;
@@ -946,6 +950,7 @@ export class ConversationStore {
         live: null,
         history: "idle",
         historyError: null,
+        historyCode: null,
         historyGen: 0,
         historyRead: false,
         sessions: [],
@@ -987,6 +992,7 @@ export class ConversationStore {
       live: r.live,
       history: r.history,
       historyError: r.historyError,
+      historyCode: r.historyCode,
       sessions: r.sessions,
       sending: r.sending,
       aborting: r.aborting,
@@ -1271,6 +1277,7 @@ export class ConversationStore {
       if (gen !== record.historyGen) return false;
       record.history = "failed";
       record.historyError = error instanceof Error ? error.message : String(error);
+      record.historyCode = errorCode(error);
       this.changed(record);
       return false;
     }
@@ -1281,6 +1288,7 @@ export class ConversationStore {
     record.historyRead = true;
     record.history = "ready";
     record.historyError = null;
+    record.historyCode = null;
     if (!record.sending && record.live && answered(recorded, record.live)) {
       record.live = null;
       record.dropped = false;
@@ -1349,4 +1357,11 @@ export class ConversationStore {
     if (record.observeQuiet !== null) this.timers.clearTimeout(record.observeQuiet);
     record.observeQuiet = null;
   }
+}
+
+/** A thrown value's string `code`, when it carries one (the bridge's errors do). */
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  const code = (error as { code: unknown }).code;
+  return typeof code === "string" ? code : null;
 }

@@ -105,7 +105,7 @@ describe("PairConfirm", () => {
       />,
     );
     expect(screen.getByText("[fd7a:115c:a1e0::9]:7877")).toBeTruthy();
-    expect(screen.getByText(/not named by the code/)).toBeTruthy();
+    expect(screen.getByText("Shown once paired")).toBeTruthy();
     expect(screen.getByText(/replaces the current pairing/)).toBeTruthy();
     expect(screen.getByLabelText("Replace…")).toBeTruthy();
   });
@@ -145,7 +145,7 @@ describe("PairConfirm", () => {
       />,
     );
     expect(screen.queryByText(/evil fleet/)).toBeNull();
-    expect(screen.getByText(/not named by the code/)).toBeTruthy();
+    expect(screen.getByText("Shown once paired")).toBeTruthy();
   });
 
   test("an off-tailnet host is flagged under the form", async () => {

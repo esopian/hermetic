@@ -142,14 +142,14 @@ export default function Listening() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Open ${item.name}'s browser`}
-              hitSlop={8}
               onPress={() => {
                 // Close the sheet first: pushed from inside it, the browser
                 // lands in the sheet's own context with no back button.
                 router.back();
                 router.push(`/agent/${encodeURIComponent(item.name)}`);
               }}
-              style={{ paddingHorizontal: t.space.sm }}
+              // A 44pt target around a one-glyph label.
+              style={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
             >
               <Text mono tone="fg2">
                 ◫

@@ -388,7 +388,8 @@ export type ThreadState =
   | "destroyed"
   | "unreachable"
   | "no_tailnet"
-  | "dropped";
+  | "dropped"
+  | "missing";
 
 export interface ThreadStateInput {
   /** `display_status` of the instance's agent row, or `null` when unknown. */
@@ -397,6 +398,8 @@ export interface ThreadStateInput {
   reconnecting: boolean;
   empty: boolean;
   fleetUnreachable?: boolean;
+  /** The bridge said this bot (or this session) does not exist (`NOT_FOUND` on the read). */
+  missing?: boolean;
 }
 
 export function threadState(input: ThreadStateInput): ThreadState {
@@ -404,6 +407,7 @@ export function threadState(input: ThreadStateInput): ThreadState {
   if (input.status === "stopped" || input.status === "stopping") return "stopped";
   if (input.status === "creating" || input.status === "bootstrapping" || input.status === "pending")
     return "bootstrapping";
+  if (input.missing) return "missing";
   if (input.fleetUnreachable) return "no_tailnet";
   if (input.reconnecting) return "dropped";
   if (!input.reachable) return "unreachable";
@@ -420,6 +424,8 @@ export function composerState(state: ThreadState): { enabled: boolean; placehold
       return { enabled: false, placeholder: "the agent is stopped — start it to send a message" };
     case "dropped":
       return { enabled: false, placeholder: "reconnecting…" };
+    case "missing":
+      return { enabled: false, placeholder: "nothing to send to" };
     case "unreachable":
     case "no_tailnet":
       return { enabled: false, placeholder: "no route to this box" };

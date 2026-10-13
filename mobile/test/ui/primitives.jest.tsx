@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import { Appearance } from "react-native";
 import { buildTheme, ThemeProvider } from "../../src/theme/theme.tsx";
 import { palettes, statusColor } from "../../src/theme/tokens.ts";
 import { buildBlob } from "../../src/ui/avatar/Avatar.tsx";
@@ -32,6 +33,15 @@ describe("theme", () => {
 
   test("buildTheme picks the palette", () => {
     expect(buildTheme("light").c.bg).toBe("#f1efe9");
+  });
+
+  test("native chrome follows the app's scheme, and the system's when the app defers", async () => {
+    const set = jest.spyOn(Appearance, "setColorScheme").mockImplementation(() => {});
+    await render(<ThemeProvider initial="light">{null}</ThemeProvider>);
+    expect(set).toHaveBeenLastCalledWith("light");
+    await render(<ThemeProvider initial="system">{null}</ThemeProvider>);
+    expect(set).toHaveBeenLastCalledWith("unspecified");
+    set.mockRestore();
   });
 });
 

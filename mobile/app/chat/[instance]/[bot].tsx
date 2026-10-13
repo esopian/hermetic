@@ -25,6 +25,7 @@ import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentS
 import { Transcript, transcriptItems } from "../../../src/chat/Transcript.tsx";
 import { subagentsIn } from "../../../src/client/chat-activity.ts";
 import { composerState, type ThreadState, threadState } from "../../../src/client/chat-logic.ts";
+import { turnErrorNeedsBand } from "../../../src/client/chat-recovery.ts";
 import { questionsOf } from "../../../src/client/chat-requests.ts";
 import type { ConversationTarget, RespondInput } from "../../../src/client/conversation-store.ts";
 import type {
@@ -53,6 +54,7 @@ const AVATAR_STATUS: Record<ThreadState, AvatarStatus> = {
   unreachable: "error",
   no_tailnet: "error",
   dropped: "degraded",
+  missing: "destroyed",
 };
 
 const chatPath = (instance: string, bot: string, session: string | null) =>
@@ -132,15 +134,19 @@ export default function Conversation() {
     reachable: swarm?.reachable ?? true,
     reconnecting: view?.reconnecting ?? false,
     empty: view?.history === "ready" && messages.length === 0 && !live,
+    missing: view?.history === "failed" && view.historyCode === "NOT_FOUND",
   });
+  const missing = state === "missing";
   const composer = composerState(state);
   const avatarStatus = AVATAR_STATUS[state];
 
   // Stable props for the memoised transcript: a streaming turn re-renders this
   // screen on every delta, and a fresh element or closure here would redraw
   // the whole list each time (`Transcript` is `memo`).
-  const historyLine =
-    view?.history === "failed"
+  // A missing bot is the thread band's to say; the body repeats nothing.
+  const historyLine = missing
+    ? null
+    : view?.history === "failed"
       ? `The transcript could not be read: ${view.historyError ?? "unknown error"}. Pull to retry.`
       : "Nothing said yet.";
   const empty = useMemo(
@@ -154,9 +160,11 @@ export default function Conversation() {
           status={avatarStatus}
         />
         <Text variant="title">{botTitle ?? target.bot}</Text>
-        <Text tone="fg3" variant="bodySmall" style={{ textAlign: "center", maxWidth: 260 }}>
-          {historyLine}
-        </Text>
+        {historyLine ? (
+          <Text tone="fg3" variant="bodySmall" style={{ textAlign: "center", maxWidth: 260 }}>
+            {historyLine}
+          </Text>
+        ) : null}
       </View>
     ),
     [t, fleetId, target.instance, target.bot, avatarStatus, botTitle, historyLine],
@@ -403,9 +411,12 @@ export default function Conversation() {
         <ThreadBand
           state={state}
           instance={target.instance}
+          bot={target.bot}
+          session={target.session}
           reconnectAttempt={view?.reconnectAttempt ?? 0}
         />
-        {view ? (
+        {/* The watch on a missing bot only retries; the thread band already says why. */}
+        {view && !missing ? (
           <ObservationBand
             state={view.observe}
             error={view.observeError}
@@ -449,8 +460,10 @@ export default function Conversation() {
           />
         )}
         <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
-          {view?.turnError ? <TurnErrorBand error={view.turnError} /> : null}
-          {view?.dropped && !sending ? <DroppedBand truncated={view.truncated} /> : null}
+          {view?.turnError && !missing && turnErrorNeedsBand(messages, view.live) ? (
+            <TurnErrorBand error={view.turnError} />
+          ) : null}
+          {view?.dropped && !sending && !missing ? <DroppedBand truncated={view.truncated} /> : null}
           <View
             style={{
               borderTopWidth: t.border.control,

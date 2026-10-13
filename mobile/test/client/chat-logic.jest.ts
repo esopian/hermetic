@@ -1,6 +1,7 @@
 import { activeGroup, groupSummary, sections } from "../../src/client/chat-activity.ts";
 import {
   blockKind,
+  composerState,
   failureCopy,
   messageRows,
   openableHref,
@@ -14,6 +15,7 @@ import {
   failureOf,
   isLatestFailure,
   recoveryPlan,
+  turnErrorNeedsBand,
 } from "../../src/client/chat-recovery.ts";
 import { toolSummary, turnRows } from "../../src/client/chat-turns.ts";
 import { vncScaleScript } from "../../src/client/vnc.ts";
@@ -136,6 +138,17 @@ describe("failures", () => {
   });
 });
 
+describe("turn error band", () => {
+  test("only when no message carries the failure, as on the desktop", () => {
+    const asked = msg({ id: "u", role: "user", text: "hi" });
+    const failed = msg({ id: "b", role: "bot", error: "CHAT_TURN_FAILED · rate limited" });
+    expect(turnErrorNeedsBand([asked], null)).toBe(true);
+    expect(turnErrorNeedsBand([asked, failed], null)).toBe(false);
+    expect(turnErrorNeedsBand([asked], failed)).toBe(false);
+    expect(turnErrorNeedsBand([], null)).toBe(true);
+  });
+});
+
 describe("thread state", () => {
   test("the fleet row wins over what chat learned", () => {
     const base = { reachable: true, reconnecting: false, empty: false };
@@ -143,6 +156,14 @@ describe("thread state", () => {
     expect(threadState({ ...base, status: "ready", reconnecting: true })).toBe("dropped");
     expect(threadState({ ...base, status: null, reachable: false })).toBe("unreachable");
     expect(threadState({ ...base, status: "ready", empty: true })).toBe("empty");
+  });
+
+  test("a bot the bridge does not know is missing, with nothing to send to", () => {
+    const base = { reachable: true, reconnecting: true, empty: false, missing: true };
+    // A destroyed or stopped instance still says so first.
+    expect(threadState({ ...base, status: "destroyed" })).toBe("destroyed");
+    expect(threadState({ ...base, status: "ready" })).toBe("missing");
+    expect(composerState("missing").enabled).toBe(false);
   });
 });
 

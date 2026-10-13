@@ -12,7 +12,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { useColorScheme } from "react-native";
+import { Appearance, useColorScheme } from "react-native";
 import type { PrefStorage } from "../bridge/storage.ts";
 import { mono, sans } from "./fonts.ts";
 import { border, motion, space, touch, type } from "./scale.ts";
@@ -90,6 +90,12 @@ export function ThemeProvider({
     },
     [storage],
   );
+
+  // Native chrome (alerts, action sheets, the keyboard) follows the app's
+  // choice, not the system's, so a confirm never flashes the other scheme.
+  useEffect(() => {
+    Appearance.setColorScheme?.(preference === "system" ? "unspecified" : preference);
+  }, [preference]);
 
   // Dark is the product's default, as on the desktop, when the system says nothing.
   const scheme: SchemeName =

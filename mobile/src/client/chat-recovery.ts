@@ -144,3 +144,17 @@ export function failureDetails(failure: ChatFailure, at: string): string {
     .filter((line): line is string => line !== null)
     .join("\n");
 }
+
+/**
+ * Whether a turn error still needs its band (desktop `Thread.tsx`): not when
+ * the last message already carries the failure, because its card says it there
+ * with what to do about it. The band is for a turn refused before it got that
+ * far, which has no message to carry it.
+ */
+export function turnErrorNeedsBand(
+  messages: readonly ChatMessage[],
+  live: ChatMessage | null,
+): boolean {
+  const last = live ?? messages[messages.length - 1];
+  return !(last?.failure || last?.error);
+}

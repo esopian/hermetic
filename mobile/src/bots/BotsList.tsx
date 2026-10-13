@@ -7,7 +7,7 @@ import { FlashList } from "@shopify/flash-list";
 import { memo, useCallback } from "react";
 import { Pressable, RefreshControl, TextInput, View } from "react-native";
 import type { RailFilter } from "../client/roster-store.ts";
-import type { RosterRow } from "../client/roster-rows.ts";
+import { botsEmpty, type RosterRow } from "../client/roster-rows.ts";
 import type { Bot } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Badge } from "../ui/Badge.tsx";
@@ -133,6 +133,8 @@ export interface BotsListProps {
   rows: RosterRow[];
   loading: boolean;
   error: string | null;
+  /** A socket band above the list already says why nothing could be read. */
+  banded: boolean;
   query: string;
   filter: RailFilter;
   needs: number;
@@ -193,40 +195,47 @@ function BotsListImpl(props: BotsListProps) {
   );
 
   const searching = props.query.trim().length > 0 || props.filter !== "all";
-  const empty = props.loading ? (
-    <View>
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <SkeletonRow key={i} />
-      ))}
-    </View>
-  ) : props.error ? (
-    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
-      <Text tone="bad" weight={700}>
-        Could not read the bots.
-      </Text>
-      <Text variant="bodySmall" tone="fg2">
-        {props.error}
-      </Text>
-      <Button label="Try again" variant="secondary" onPress={props.onRefresh} />
-    </View>
-  ) : searching ? (
-    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.sm }}>
-      <Text tone="fg2">Nothing matches.</Text>
-      <Text variant="bodySmall" tone="fg3">
-        {props.filter === "needs" ? "No bot is waiting on you." : "Try another search or filter."}
-      </Text>
-    </View>
-  ) : (
-    <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
-      <Text variant="title">
-        {props.listening === 0 ? "Not listening to any instance." : "No bots yet."}
-      </Text>
-      <Text variant="bodySmall" tone="fg2">
-        Only instances you listen to show their bots here, and only they raise notifications.
-      </Text>
-      <Button label="Choose instances" onPress={props.onPickInstances} />
-    </View>
-  );
+  const emptyKind = botsEmpty({
+    loading: props.loading,
+    error: props.error,
+    banded: props.banded,
+    searching,
+  });
+  const empty =
+    emptyKind === "covered" ? null : emptyKind === "loading" ? (
+      <View>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <SkeletonRow key={i} />
+        ))}
+      </View>
+    ) : emptyKind === "error" ? (
+      <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
+        <Text tone="bad" weight={700}>
+          Could not read the bots.
+        </Text>
+        <Text variant="bodySmall" tone="fg2">
+          {props.error}
+        </Text>
+        <Button label="Try again" variant="secondary" onPress={props.onRefresh} />
+      </View>
+    ) : emptyKind === "nomatch" ? (
+      <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.sm }}>
+        <Text tone="fg2">Nothing matches.</Text>
+        <Text variant="bodySmall" tone="fg3">
+          {props.filter === "needs" ? "No bot is waiting on you." : "Try another search or filter."}
+        </Text>
+      </View>
+    ) : (
+      <View style={{ paddingHorizontal: t.space.lg, paddingVertical: t.space.xl, gap: t.space.md }}>
+        <Text variant="title">
+          {props.listening === 0 ? "Not listening to any instance." : "No bots yet."}
+        </Text>
+        <Text variant="bodySmall" tone="fg2">
+          Only instances you listen to show their bots here, and only they raise notifications.
+        </Text>
+        <Button label="Choose instances" onPress={props.onPickInstances} />
+      </View>
+    );
 
   return (
     <FlashList
@@ -238,7 +247,15 @@ function BotsListImpl(props: BotsListProps) {
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
-        <View style={{ paddingHorizontal: t.space.lg, paddingBottom: t.space.md, gap: t.space.sm }}>
+        <View
+          style={{
+            paddingHorizontal: t.space.lg,
+            // Clear of the header rule (or a band) above, not flush against it.
+            paddingTop: t.space.md,
+            paddingBottom: t.space.md,
+            gap: t.space.sm,
+          }}
+        >
           <View
             style={{
               flexDirection: "row",
@@ -252,6 +269,7 @@ function BotsListImpl(props: BotsListProps) {
               ⌕
             </Text>
             <TextInput
+              keyboardAppearance={t.scheme}
               accessibilityLabel="Search bots"
               selectionColor={t.c.acc}
               cursorColor={t.c.acc}

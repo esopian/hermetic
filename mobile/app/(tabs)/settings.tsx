@@ -115,6 +115,7 @@ function TimeField({
         {label}
       </Text>
       <TextInput
+        keyboardAppearance={t.scheme}
         accessibilityLabel={`Quiet hours ${label}`}
         selectionColor={t.c.acc}
         cursorColor={t.c.acc}
@@ -167,7 +168,7 @@ export default function Settings() {
     haptic.warning();
     Alert.alert(
       "Sign out of this bridge?",
-      "This phone forgets its token. Nothing on the laptop changes; revoke the device there with `hermetic mobile revoke` if you want it gone.",
+      "This phone forgets its token. Nothing on the laptop changes; run “hermetic mobile revoke” there if you want the device gone.",
       [
         { text: "Cancel", style: "cancel" },
         {

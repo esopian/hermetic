@@ -320,6 +320,7 @@ export function QuestionCard({
                 />
               ))}
               <TextInput
+                keyboardAppearance={t.scheme}
                 accessibilityLabel={`Answer: ${q.prompt}`}
                 selectionColor={t.c.acc}
                 cursorColor={t.c.acc}

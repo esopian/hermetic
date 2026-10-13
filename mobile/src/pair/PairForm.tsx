@@ -83,6 +83,7 @@ export function PairForm({
     <View style={{ gap: t.space.md }}>
       <Kicker>Paste the link</Kicker>
       <TextInput
+        keyboardAppearance={t.scheme}
         accessibilityLabel="Pairing link"
         value={link}
         onChangeText={(v) => {
@@ -106,6 +107,7 @@ export function PairForm({
       <Kicker>Or enter it by hand</Kicker>
       <View style={{ flexDirection: "row", gap: t.space.sm }}>
         <TextInput
+          keyboardAppearance={t.scheme}
           accessibilityLabel="Host"
           value={host}
           onChangeText={setHost}
@@ -119,6 +121,7 @@ export function PairForm({
           style={[input, { flex: 1, borderColor: host && !validHost(host) ? t.c.bad : t.c.line2 }]}
         />
         <TextInput
+          keyboardAppearance={t.scheme}
           accessibilityLabel="Port"
           value={port}
           onChangeText={(v) => setPort(v.replace(/[^0-9]/g, ""))}
@@ -134,6 +137,7 @@ export function PairForm({
         </Text>
       ) : null}
       <TextInput
+        keyboardAppearance={t.scheme}
         accessibilityLabel="Pairing code"
         value={code}
         onChangeText={(v) => setCode(v.toUpperCase())}

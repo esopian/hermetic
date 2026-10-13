@@ -12,13 +12,24 @@ import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
 import type { PairTarget } from "./PairForm.tsx";
 
-function Line({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Line({
+  label,
+  value,
+  mono,
+  unknown = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  /** A placeholder for a value not known yet: muted, not bold. */
+  unknown?: boolean;
+}) {
   return (
     <View style={{ gap: 2 }}>
       <Text variant="caption" tone="fg3" uppercase style={{ letterSpacing: 1 }}>
         {label}
       </Text>
-      <Text mono={mono} weight={700} selectable>
+      <Text mono={mono} weight={unknown ? 400 : 700} tone={unknown ? "fg2" : undefined} selectable>
         {value}
       </Text>
     </View>
@@ -57,11 +68,7 @@ export function PairConfirm({
     >
       <Kicker>Confirm pairing</Kicker>
       <Line label="Bridge" value={bridge} mono />
-      <Line
-        label="Fleet"
-        value={fleet ?? "not named by the code — the bridge says after pairing"}
-        mono={!!fleet}
-      />
+      <Line label="Fleet" value={fleet ?? "Shown once paired"} mono={!!fleet} unknown={!fleet} />
       <Line label="This phone will be called" value={deviceName} />
       <Text variant="bodySmall" tone="fg2">
         Only pair with a bridge you started. It will be able to send this phone notifications, and this

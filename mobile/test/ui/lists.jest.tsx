@@ -10,7 +10,7 @@ import {
   unackedIds,
 } from "../../src/client/inbox-logic.ts";
 import { isUnreadRow } from "../../src/client/notifications-store.ts";
-import { previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
+import { botsEmpty, previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
 import { rosterLayout } from "../../src/client/roster-store.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
 import { bot, notification, swarm } from "../helpers/fixtures.ts";
@@ -161,6 +161,22 @@ describe("bots list rows", () => {
     await fireEvent.press(screen.getByText("Needs you"));
     expect(onChange).toHaveBeenCalledWith("needs");
     expect(screen.getByLabelText("needs you")).toBeTruthy();
+  });
+});
+
+describe("bots list, nothing to show", () => {
+  const base = { loading: false, error: null, banded: false, searching: false };
+
+  test("a socket band covers a read that failed or never finished: one message, not two", () => {
+    expect(botsEmpty({ ...base, banded: true, error: "unknown or revoked device token" })).toBe(
+      "covered",
+    );
+    expect(botsEmpty({ ...base, banded: true, loading: true })).toBe("covered");
+    expect(botsEmpty({ ...base, error: "unknown or revoked device token" })).toBe("error");
+    expect(botsEmpty({ ...base, loading: true })).toBe("loading");
+    // With the band up but nothing failed, an empty roster is still worth saying.
+    expect(botsEmpty({ ...base, banded: true })).toBe("empty");
+    expect(botsEmpty({ ...base, searching: true })).toBe("nomatch");
   });
 });
 

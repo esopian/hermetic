@@ -11,7 +11,7 @@ import { BotsList } from "../../src/bots/BotsList.tsx";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useRoster } from "../../src/bridge/hooks.ts";
 import { SocketBand } from "../../src/chat/Bands.tsx";
-import { rosterRows } from "../../src/client/roster-rows.ts";
+import { BANDED_SOCKET_STATES, rosterRows } from "../../src/client/roster-rows.ts";
 import type { Bot } from "../../src/protocol/types.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
@@ -100,6 +100,7 @@ export default function Bots() {
   }, [client]);
 
   const live = socketState === "open";
+  const banded = BANDED_SOCKET_STATES.has(socketState);
   const loading = !state?.readAt && (state?.loading ?? true) && !state?.error;
 
   return (
@@ -149,10 +150,7 @@ export default function Bots() {
         </Pressable>
       </View>
       {/* Only the states that last: "connecting" flickers by on every resume. */}
-      {socketState === "unavailable" ||
-      socketState === "unauthorized" ||
-      socketState === "mismatch" ||
-      socketState === "wrong_fleet" ? (
+      {banded ? (
         <SocketBand
           state={socketState}
           onRetry={reconnect}
@@ -165,6 +163,7 @@ export default function Bots() {
         rows={rows}
         loading={loading}
         error={state?.readAt ? null : (state?.error ?? null)}
+        banded={banded}
         query={state?.query ?? ""}
         filter={state?.filter ?? "all"}
         needs={layout?.needsYou ?? 0}

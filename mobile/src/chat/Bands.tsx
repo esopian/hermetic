@@ -77,13 +77,30 @@ export function BandShell({
 export function ThreadBand({
   state,
   instance,
+  bot,
+  session = null,
   reconnectAttempt = 0,
 }: {
   state: ThreadState;
   instance: string;
+  bot: string;
+  session?: string | null;
   reconnectAttempt?: number;
 }) {
   switch (state) {
+    case "missing":
+      return (
+        <BandShell
+          tone="bad"
+          testID="band-missing"
+          title={
+            session
+              ? `${bot} on ${instance} has no such session.`
+              : `${instance} has no bot named ${bot}.`
+          }
+          sub="The link may be out of date, or the bot was removed. Pull down to check again."
+        />
+      );
     case "stopped":
       return (
         <BandShell

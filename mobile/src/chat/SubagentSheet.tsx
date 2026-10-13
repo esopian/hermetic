@@ -213,6 +213,7 @@ export function SubagentSheet({
             ) : null}
             <View style={{ flexDirection: "row", gap: t.space.sm, alignItems: "flex-end" }}>
               <TextInput
+                keyboardAppearance={t.scheme}
                 accessibilityLabel="Steer this subagent"
                 selectionColor={t.c.acc}
                 cursorColor={t.c.acc}
