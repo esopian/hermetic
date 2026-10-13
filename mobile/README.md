@@ -7,7 +7,8 @@ notification store and push. The one exception is the agent browser: noVNC is lo
 the box over the tailnet, so the phone must be on the tailnet (Tailscale iOS app).
 
 `mobile/` is **not** a root workspace (same as `site/`): it has its own `package.json`, `bun.lock`,
-TypeScript config, Biome config and Jest. Root `bun install`, `bun run check` and CI do not touch it.
+TypeScript config, Biome config and Jest. Root `bun install` and `bun run check` do not touch it (CI has its own `mobile` job); from the repo root, `bun run mobile:check`
+(`mobile:test`, `mobile:ios`) runs the matching script here.
 
 ## Run it
 
@@ -89,8 +90,8 @@ test/                jest suites
 - **Never import from `packages/`** (or anything outside `mobile/`). Metro bundles only this
   directory, and core pulls in Zod, AWS and node. What the phone shares with core and the desktop
   is *mirrored*, and each mirror is pinned by a seam test at the repo root:
-  - `src/protocol/constants.ts` ↔ `packages/core/src/mobile/protocol.ts` — `tests/mobile-protocol.test.ts`
-    deep-compares every export (names listed in `.context/mobile-protocol.md`, "Export names").
+  - `src/protocol/constants.ts` ↔ `packages/core/src/mobile/protocol.ts` — `tests/mobile-seams.test.ts`
+    deep-compares every export (the contract is `docs/design.md` §9.4, "Mobile bridge").
   - `src/client/markdown.ts` ↔ `packages/ui/src/chat/chat-markdown.ts` — byte-identical; Biome is
     told not to format it. Edit the desktop file and copy it over.
   - `src/protocol/types.ts` mirrors `packages/core/src/schema/{chat,notification,agent}.ts` by field name.
