@@ -3,7 +3,7 @@
  *
  * Mirror of `packages/core/src/mobile/protocol.ts`, value for value and name
  * for name. The phone cannot import core — it is its own toolchain, bundled by
- * Metro — so the root seam test `tests/mobile-protocol.test.ts` imports both
+ * Metro — so the root seam test `tests/mobile-seams.test.ts` imports both
  * files and deep-compares every export. Change the contract
  * (`.context/mobile-protocol.md`) first, then both copies.
  *

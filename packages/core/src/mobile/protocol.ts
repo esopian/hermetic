@@ -3,7 +3,7 @@
  * protocol read.
  *
  * The phone keeps a mirror of this file (`mobile/src/protocol/constants.ts`),
- * and `tests/mobile-protocol.test.ts` compares the two value by value, so a
+ * and `tests/mobile-seams.test.ts` compares the two value by value, so a
  * change here is a change to the protocol. Edit `.context/mobile-protocol.md`
  * (the contract) first, then both copies.
  *

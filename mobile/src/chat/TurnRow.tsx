@@ -1,0 +1,226 @@
+/**
+ * One row of the transcript (desktop `Message.tsx`): the operator's bubble
+ * (`.me`, plain text, right-aligned), a bot turn (avatar, name, meta, then its
+ * sections — one activity group per run of steps and one block per thing
+ * addressed to the reader — then the failure card and the turn meter), or the
+ * box speaking for itself (a system row).
+ */
+import { memo } from "react";
+import { View } from "react-native";
+import { activeGroup, sections } from "../client/chat-activity.ts";
+import { fmtCount, threadTime } from "../client/chat-logic.ts";
+import { failureOf } from "../client/chat-recovery.ts";
+import { closedRequests, keepsCard, openRequests } from "../client/chat-requests.ts";
+import type { TurnRow as TurnRowType } from "../client/chat-turns.ts";
+import { isLocal } from "../client/conversation-store.ts";
+import type { TurnActivity } from "../client/turn-reducer.ts";
+import type { ChatMessage } from "../protocol/types.ts";
+import { useTheme } from "../theme/theme.tsx";
+import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
+import { Avatar } from "../ui/avatar/Avatar.tsx";
+import { Text } from "../ui/Text.tsx";
+import { ActivityGroup } from "./blocks/Activity.tsx";
+import { Block } from "./blocks/Block.tsx";
+import { FailureCard } from "./blocks/Failure.tsx";
+
+const GUTTER = 36;
+
+function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
+  const t = useTheme();
+  const parts = [
+    usage.input_tokens ? `${fmtCount(usage.input_tokens)} in` : null,
+    usage.output_tokens ? `${fmtCount(usage.output_tokens)} out` : null,
+    usage.cost_usd !== null && usage.cost_usd !== undefined ? `$${usage.cost_usd.toFixed(4)}` : null,
+    usage.model ?? null,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <Text mono variant="caption" tone="fg3" style={{ marginTop: t.space.xs }} numberOfLines={1}>
+      {parts.join(" · ")}
+    </Text>
+  );
+}
+
+function OperatorBubble({ message, now }: { message: ChatMessage; now: number }) {
+  const t = useTheme();
+  const pending = isLocal(message);
+  const text = message.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("");
+  const steer = message.id.startsWith("local:steer:");
+  return (
+    <View style={{ alignItems: "flex-end", paddingLeft: 48, marginVertical: t.space.xs }}>
+      <View
+        style={{
+          backgroundColor: t.c.bg3,
+          borderWidth: 1,
+          borderColor: steer ? t.c.acc : t.c.line,
+          paddingHorizontal: t.space.md,
+          paddingVertical: t.space.sm,
+          maxWidth: "100%",
+          opacity: pending ? 0.7 : 1,
+        }}
+      >
+        <Text selectable>{text}</Text>
+      </View>
+      <Text mono variant="caption" tone="fg3" style={{ marginTop: 2 }}>
+        {[steer ? "steered" : null, pending ? "sending…" : threadTime(message.at, now)]
+          .filter(Boolean)
+          .join(" · ")}
+      </Text>
+    </View>
+  );
+}
+
+export interface TurnRowProps {
+  row: TurnRowType;
+  fleetId: string;
+  instance: string;
+  bot: string;
+  botTitle?: string | null;
+  status: AvatarStatus;
+  now: number;
+  streaming?: boolean;
+  activity?: TurnActivity;
+  released?: readonly string[];
+}
+
+function TurnRowImpl({
+  row,
+  fleetId,
+  instance,
+  bot,
+  botTitle,
+  status,
+  now,
+  streaming = false,
+  activity = streaming ? "streaming" : "idle",
+  released = [],
+}: TurnRowProps) {
+  const t = useTheme();
+  const { message, continuation } = row;
+  const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
+  if (message.role === "user" && !fromBot) return <OperatorBubble message={message} now={now} />;
+
+  const failure = failureOf(message);
+  const broken = !!failure || !!message.incomplete;
+  if (message.blocks.length === 0 && !broken && !message.usage && !streaming) return null;
+
+  if (message.role === "system" && !message.author) {
+    return (
+      <View
+        style={{
+          marginVertical: t.space.xs,
+          paddingHorizontal: t.space.md,
+          paddingVertical: t.space.sm,
+          borderLeftWidth: t.border.control,
+          borderLeftColor: t.c.line2,
+          gap: t.space.xs,
+        }}
+      >
+        <Text mono variant="caption" tone="fg3">{`system · ${threadTime(message.at, now)}`}</Text>
+        {message.blocks.map((block, i) => (
+          <Block key={i} block={block} now={now} />
+        ))}
+      </View>
+    );
+  }
+
+  const author = message.author ?? null;
+  const who = fromBot
+    ? fromBot.name
+    : author && (author.instance !== instance || author.bot !== bot)
+      ? author.bot
+      : (botTitle ?? bot);
+  const closed = closedRequests(message.blocks);
+  const open = openRequests(message.blocks, closed, released, now);
+  const waiting = open.length > 0;
+  const blocks = message.blocks.filter(
+    (block) =>
+      (block.kind !== "text" || block.markdown.trim().length > 0) &&
+      !(
+        (block.kind === "approval" || block.kind === "question") &&
+        block.request_id &&
+        !keepsCard(block, closed.get(block.request_id))
+      ),
+  );
+  const pending = open.filter((b) => b.kind === "approval").length;
+  const list = sections(blocks);
+  const live = activeGroup(list, streaming, activity, waiting);
+  const meta = [
+    threadTime(message.at, now),
+    message.incomplete && !message.error ? "incomplete" : null,
+    streaming ? (waiting ? "waiting" : activity === "idle" ? null : activity) : null,
+    author && author.instance !== instance ? `@ ${author.instance}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <View style={{ flexDirection: "row", gap: t.space.sm, marginTop: continuation ? 2 : t.space.md }}>
+      <View style={{ width: GUTTER }}>
+        {continuation ? null : (
+          <Avatar
+            fleet_id={fleetId}
+            instance={author?.instance ?? instance}
+            bot={fromBot?.name ?? author?.bot ?? bot}
+            size={GUTTER}
+            status={status}
+            activity={streaming ? activity : "idle"}
+          />
+        )}
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        {continuation ? null : (
+          <View
+            style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm, marginBottom: 2 }}
+          >
+            <Text weight={800} variant="bodySmall" numberOfLines={1} style={{ flexShrink: 1 }}>
+              {who}
+            </Text>
+            <Text mono variant="caption" tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
+              {meta}
+            </Text>
+          </View>
+        )}
+        {list.map((section, index) =>
+          section.activity ? (
+            <ActivityGroup
+              key={`a${index}`}
+              blocks={section.blocks}
+              streaming={streaming && index === live && (activity !== "idle" || waiting)}
+              activity={activity}
+              waiting={waiting}
+            />
+          ) : (
+            <Block
+              key={`b${index}`}
+              block={section.blocks[0] as ChatMessage["blocks"][number]}
+              now={now}
+              streaming={streaming && activity === "streaming" && index === list.length - 1}
+              closed={(() => {
+                const b = section.blocks[0];
+                return (b?.kind === "approval" || b?.kind === "question") && b.request_id
+                  ? closed.get(b.request_id)
+                  : undefined;
+              })()}
+              pending={pending}
+              session={message.session || null}
+              released={released}
+            />
+          ),
+        )}
+        {streaming && list.length === 0 ? (
+          <Text mono variant="caption" tone="acc">
+            {activity === "streaming" ? "▍" : "thinking…"}
+          </Text>
+        ) : null}
+        {broken ? <FailureCard failure={failure} ids={row.ids} at={message.at} /> : null}
+        {message.usage && !streaming ? <Meter usage={message.usage} /> : null}
+        {fromBot ? (
+          <Text mono variant="caption" tone="fg3">{`Message from ${fromBot.name} ⇄`}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+export const TurnRow = memo(TurnRowImpl);

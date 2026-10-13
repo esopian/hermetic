@@ -1,90 +1,146 @@
 /**
  * Pair: scan the QR the laptop shows (`hermetic mobile pair`, or Settings →
- * Mobile on the desktop), or paste its link / type host, port and code.
- * The full screen is a later phase; this one already pairs.
+ * Mobile on the desktop), follow the same `hermetic://pair?…` link opened as
+ * a deep link, or paste it / type host, port and code. The token goes to the
+ * keychain through the provider; nothing else is kept.
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Device from "expo-device";
-import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
-import { useState } from "react";
-import { TextInput, View } from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useBridge } from "../src/bridge/BridgeProvider.tsx";
-import { isBridgeError } from "../src/client/errors.ts";
 import { baseUrlFor, normalisePairCode, parsePairLink } from "../src/client/http.ts";
+import { type PairErrorCopy, pairErrorCopy } from "../src/client/pairing.ts";
+import { PairForm, type PairTarget } from "../src/pair/PairForm.tsx";
 import { MOBILE_PROTOCOL } from "../src/protocol/constants.ts";
 import { useTheme } from "../src/theme/theme.tsx";
+import { haptic } from "../src/ui/haptics.ts";
 import { Button, Kicker, Screen, Text } from "../src/ui/index.ts";
 
 export default function Pair() {
   const t = useTheme();
-  const { pair } = useBridge();
-  const [link, setLink] = useState("");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState(String(MOBILE_PROTOCOL.DEFAULT_PORT));
-  const [code, setCode] = useState("");
+  const { pair, status, credentials } = useBridge();
+  const params = useLocalSearchParams<{ host?: string; port?: string; code?: string; name?: string }>();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PairErrorCopy | null>(null);
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+  const scanned = useRef(false);
+  const linked = useRef(false);
 
-  const submit = async (input: { host: string; port: number; code: string }) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await pair({
-        baseUrl: baseUrlFor(input.host, input.port),
-        code: normalisePairCode(input.code),
-        deviceName: Device.deviceName ?? "iPhone",
+  const deepLink: PairTarget | null =
+    params.host && params.code
+      ? {
+          host: String(params.host),
+          port: Number(params.port) || MOBILE_PROTOCOL.DEFAULT_PORT,
+          code: normalisePairCode(String(params.code)),
+        }
+      : null;
+
+  const submit = useCallback(
+    async (target: PairTarget) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await pair({
+          baseUrl: baseUrlFor(target.host, target.port),
+          code: normalisePairCode(target.code),
+          deviceName: Device.deviceName ?? "iPhone",
+        });
+        haptic.success();
+        router.replace("/(tabs)");
+      } catch (e) {
+        haptic.error();
+        setError(pairErrorCopy(e, `${target.host}:${target.port}`));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, pair],
+  );
+
+  // A deep link pairs at once when this phone is not paired yet; a paired
+  // phone shows the link's values and waits for a deliberate tap.
+  useEffect(() => {
+    if (!deepLink || linked.current || status === "loading") return;
+    linked.current = true;
+    if (status === "unpaired") void submit(deepLink);
+  }, [deepLink, status, submit]);
+
+  const startScan = async () => {
+    haptic.select();
+    if (scanning) return setScanning(false);
+    const ok = permission?.granted || (await requestPermission()).granted;
+    if (ok) {
+      scanned.current = false;
+      setScanning(true);
+    } else
+      setError({
+        title: "Camera access is off.",
+        detail: "Allow it in iOS Settings → Hermetic, or paste the link / enter the code below.",
       });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      router.replace("/(tabs)");
-    } catch (e) {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-      setError(isBridgeError(e) ? `${e.code}: ${e.message}` : String(e));
-    } finally {
-      setBusy(false);
-    }
   };
-
-  const fromLink = (text: string) => {
-    const parsed = parsePairLink(text);
-    if (!parsed) {
-      setError("That is not a hermetic://pair link.");
-      return;
-    }
-    void submit(parsed);
-  };
-
-  const input = {
-    borderWidth: t.border.control,
-    borderColor: t.c.line2,
-    color: t.c.fg,
-    fontFamily: t.mono(400),
-    fontSize: 15,
-    paddingHorizontal: t.space.md,
-    minHeight: t.touch.min,
-    borderRadius: 0,
-  } as const;
 
   return (
     <Screen edges={["top", "bottom"]}>
-      <KeyboardAwareScrollView contentContainerStyle={{ padding: t.space.xl, gap: t.space.lg }}>
+      <KeyboardAwareScrollView
+        bottomOffset={24}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ padding: t.space.xl, gap: t.space.lg }}
+      >
         <Kicker>Hermetic</Kicker>
         <Text variant="display">Pair this phone</Text>
         <Text tone="fg2">
-          On your laptop run <Text mono>hermetic mobile pair</Text>, or open Settings → Mobile, then
-          scan the code.
+          On your laptop run <Text mono>hermetic mobile pair</Text>, or open Settings → Mobile in the
+          desktop app, then scan the code it shows.
         </Text>
+        {status === "paired" && credentials ? (
+          <View
+            style={{
+              borderLeftWidth: t.border.control,
+              borderLeftColor: t.c.warn,
+              paddingLeft: t.space.md,
+            }}
+          >
+            <Text variant="bodySmall" tone="warn">
+              {`Paired with ${credentials.fleet.alias ?? credentials.fleet.fleet_id}. Pairing again replaces it.`}
+            </Text>
+          </View>
+        ) : null}
+        {deepLink && params.name ? (
+          <Text variant="bodySmall" tone="fg2">{`From the link: fleet ${String(params.name)}`}</Text>
+        ) : null}
         {scanning && permission?.granted ? (
-          <View style={{ height: 280, borderWidth: t.border.seam, borderColor: t.c.fg }}>
+          <View
+            style={{ height: 300, borderWidth: t.border.seam, borderColor: t.c.fg, overflow: "hidden" }}
+          >
             <CameraView
               style={{ flex: 1 }}
+              facing="back"
               barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
               onBarcodeScanned={({ data }) => {
+                if (scanned.current) return;
+                const parsed = parsePairLink(data);
+                if (!parsed) return;
+                scanned.current = true;
+                haptic.medium();
                 setScanning(false);
-                fromLink(data);
+                void submit({ host: parsed.host, port: parsed.port, code: parsed.code });
+              }}
+            />
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                top: 50,
+                bottom: 50,
+                left: 50,
+                right: 50,
+                borderWidth: t.border.control,
+                borderColor: t.c.acc,
               }}
             />
           </View>
@@ -92,69 +148,15 @@ export default function Pair() {
         <Button
           label={scanning ? "Cancel scan" : "Scan QR code"}
           variant={scanning ? "secondary" : "primary"}
-          onPress={async () => {
-            if (scanning) return setScanning(false);
-            const ok = permission?.granted || (await requestPermission()).granted;
-            if (ok) setScanning(true);
-            else setError("Camera access is off. Paste the link or enter the code instead.");
-          }}
+          haptic={false}
+          busy={busy && scanned.current}
+          onPress={() => void startScan()}
         />
-        <Kicker>Or paste the link</Kicker>
-        <TextInput
-          accessibilityLabel="Pairing link"
-          value={link}
-          onChangeText={setLink}
-          placeholder="hermetic://pair?host=…"
-          placeholderTextColor={t.c.fg3}
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={input}
-          onSubmitEditing={() => fromLink(link)}
-        />
-        <Kicker>Or enter it by hand</Kicker>
-        <View style={{ flexDirection: "row", gap: t.space.sm }}>
-          <TextInput
-            accessibilityLabel="Host"
-            value={host}
-            onChangeText={setHost}
-            placeholder="100.x.y.z"
-            placeholderTextColor={t.c.fg3}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            style={[input, { flex: 1 }]}
-          />
-          <TextInput
-            accessibilityLabel="Port"
-            value={port}
-            onChangeText={setPort}
-            keyboardType="number-pad"
-            style={[input, { width: 90 }]}
-          />
-        </View>
-        <TextInput
-          accessibilityLabel="Pairing code"
-          value={code}
-          onChangeText={(v) => setCode(v.toUpperCase())}
-          placeholder="8-character code"
-          placeholderTextColor={t.c.fg3}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          maxLength={12}
-          style={[input, { letterSpacing: 3 }]}
-        />
-        {error ? (
-          <Text tone="bad" variant="bodySmall">
-            {error}
-          </Text>
-        ) : null}
-        <Button
-          label="Pair"
+        <PairForm
+          initial={deepLink}
           busy={busy}
-          disabled={!host || !code}
-          onPress={() =>
-            void submit({ host: host.trim(), port: Number(port) || MOBILE_PROTOCOL.DEFAULT_PORT, code })
-          }
+          error={error}
+          onSubmit={(target) => void submit(target)}
         />
       </KeyboardAwareScrollView>
     </Screen>

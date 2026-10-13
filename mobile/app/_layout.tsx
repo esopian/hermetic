@@ -15,6 +15,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { BridgeProvider, useBridge } from "../src/bridge/BridgeProvider.tsx";
 import { routeFor } from "../src/bridge/notifications.ts";
 import { secureStorage } from "../src/bridge/storage.ts";
+import { PrefsProvider } from "../src/prefs/prefs.tsx";
 import { FONT_ASSETS } from "../src/theme/fonts.ts";
 import { ThemeProvider, useTheme } from "../src/theme/theme.tsx";
 import { Banner } from "../src/ui/Banner.tsx";
@@ -32,9 +33,11 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <KeyboardProvider>
           <ThemeProvider storage={secureStorage}>
-            <BridgeProvider>
-              <Shell />
-            </BridgeProvider>
+            <PrefsProvider storage={secureStorage}>
+              <BridgeProvider>
+                <Shell />
+              </BridgeProvider>
+            </PrefsProvider>
           </ThemeProvider>
         </KeyboardProvider>
       </SafeAreaProvider>
@@ -66,6 +69,16 @@ function Shell() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
         <Stack.Screen name="agent/[name]" options={{ title: "Browser" }} />
+        <Stack.Screen
+          name="listening"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.6, 1],
+            sheetGrabberVisible: true,
+            contentStyle: { backgroundColor: t.c.bg },
+          }}
+        />
       </Stack>
       <Banner
         alert={banner}

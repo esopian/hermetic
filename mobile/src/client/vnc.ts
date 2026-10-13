@@ -41,3 +41,15 @@ export function noVncUrl(
   const view = opts.viewOnly ? "&view_only=true" : "";
   return `https://${host}${path}/vnc.html?path=${socket}&autoconnect=true&resize=scale&reconnect=true${view}`;
 }
+
+export type VncScale = "fit" | "actual";
+
+/**
+ * JavaScript run inside the noVNC page to switch its scaling: `fit` is noVNC's
+ * `resize=scale` (the remote screen shrinks to the view), `actual` is `off`
+ * (1:1, pan and pinch). Sets the settings control and the live client both.
+ */
+export function vncScaleScript(scale: VncScale): string {
+  const mode = scale === "fit" ? "scale" : "off";
+  return `(function(){try{var m=${JSON.stringify(mode)};var s=document.getElementById('noVNC_setting_resize');if(s){s.value=m;s.dispatchEvent(new Event('change'));}if(window.UI&&UI.rfb){UI.rfb.scaleViewport=(m==='scale');UI.rfb.clipViewport=(m!=='scale');}}catch(e){}})();true;`;
+}

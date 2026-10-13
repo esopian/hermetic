@@ -1,22 +1,21 @@
 /**
- * Bots list (placeholder for the next phase): pinned block, then one bucket
- * per listened instance, ordered by the desktop's rail rules. Pull to refresh;
- * polled every 60 s while in front (`.context/mobile-protocol.md`).
+ * Bots (home): the listened instances' bots, grouped and ordered by the
+ * desktop rail's rules — pinned block on top, one collapsible bucket per
+ * instance, needs-you first. Pull to refresh (`chat.swarms`); polled every
+ * 60 s while in front. "Listening" opens the instance picker.
  */
-import { FlashList } from "@shopify/flash-list";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, RefreshControl, View } from "react-native";
+import { ActionSheetIOS, Alert, Platform, Pressable, View } from "react-native";
+import { BotsList } from "../../src/bots/BotsList.tsx";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useRoster } from "../../src/bridge/hooks.ts";
-import { rosterFooter, unreadBadge } from "../../src/client/roster-store.ts";
+import { rosterRows } from "../../src/client/roster-rows.ts";
 import type { Bot } from "../../src/protocol/types.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
-import { Avatar, Badge, Kicker, Screen, SkeletonRow, StatusSquare, Text } from "../../src/ui/index.ts";
-
-type Row =
-  | { kind: "head"; key: string; label: string; reachable: boolean }
-  | { kind: "bot"; key: string; bot: Bot; pinned: boolean };
+import { haptic } from "../../src/ui/haptics.ts";
+import { Kicker, Screen, StatusSquare, Text } from "../../src/ui/index.ts";
+import { useNow } from "../../src/ui/useNow.ts";
 
 const POLL_MS = 60_000;
 
@@ -24,6 +23,7 @@ export default function Bots() {
   const t = useTheme();
   const { client, credentials, socketState } = useBridge();
   const { state, layout } = useRoster();
+  const now = useNow();
   const [refreshing, setRefreshing] = useState(false);
 
   useFocusEffect(
@@ -35,143 +35,124 @@ export default function Bots() {
     }, [client]),
   );
 
-  const rows = useMemo<Row[]>(() => {
-    if (!layout) return [];
-    const out: Row[] = [];
-    if (layout.pinned.length > 0) {
-      out.push({ kind: "head", key: "h:pinned", label: "★ Pinned", reachable: true });
-      for (const bot of layout.pinned)
-        out.push({ kind: "bot", key: `p:${bot.instance}/${bot.name}`, bot, pinned: true });
-    }
-    for (const bucket of layout.buckets) {
-      out.push({
-        kind: "head",
-        key: `h:${bucket.instance}`,
-        label: bucket.reachable
-          ? bucket.instance
-          : `${bucket.instance} · ${bucket.reason ?? "unreachable"}`,
-        reachable: bucket.reachable,
-      });
-      if (!bucket.folded)
-        for (const bot of bucket.bots)
-          out.push({ kind: "bot", key: `b:${bot.instance}/${bot.name}`, bot, pinned: false });
-    }
-    return out;
-  }, [layout]);
+  const rows = useMemo(() => {
+    if (!layout || !client) return [];
+    const reachable = new Map((state?.swarms ?? []).map((s) => [s.instance, s.reachable]));
+    return rosterRows(layout, client.inbox.unreadFor, (i) => reachable.get(i) ?? true);
+  }, [layout, client, state?.swarms]);
 
-  const fleetId = credentials?.fleet.fleet_id ?? "";
-  const loading = !state?.readAt && (state?.loading ?? true);
+  const onOpen = useCallback(
+    (bot: Bot) => {
+      haptic.select();
+      client?.roster.markSeen(bot.instance, bot.name);
+      router.push(`/chat/${encodeURIComponent(bot.instance)}/${encodeURIComponent(bot.name)}`);
+    },
+    [client],
+  );
+
+  const onMenu = useCallback(
+    (bot: Bot, pinned: boolean) => {
+      haptic.medium();
+      const toggle = () => {
+        haptic.success();
+        client?.roster.togglePinned(bot.instance, bot.name);
+      };
+      const pinLabel = pinned ? "Unpin" : "Pin to top";
+      const title = `${bot.title || bot.name} · ${bot.instance}`;
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          { title, options: [pinLabel, "Open browser", "Cancel"], cancelButtonIndex: 2 },
+          (index) => {
+            if (index === 0) toggle();
+            else if (index === 1) router.push(`/agent/${encodeURIComponent(bot.instance)}`);
+          },
+        );
+      } else {
+        Alert.alert(title, undefined, [
+          { text: pinLabel, onPress: toggle },
+          {
+            text: "Open browser",
+            onPress: () => router.push(`/agent/${encodeURIComponent(bot.instance)}`),
+          },
+          { text: "Cancel", style: "cancel" },
+        ]);
+      }
+    },
+    [client],
+  );
+
+  const onRefresh = useCallback(() => {
+    if (!client) return;
+    setRefreshing(true);
+    haptic.light();
+    void Promise.all([client.roster.refresh(), client.inbox.refresh()]).finally(() =>
+      setRefreshing(false),
+    );
+  }, [client]);
+
+  const live = socketState === "open";
+  const loading = !state?.readAt && (state?.loading ?? true) && !state?.error;
 
   return (
     <Screen>
       <View
         style={{
+          flexDirection: "row",
+          alignItems: "flex-end",
           paddingHorizontal: t.space.lg,
           paddingTop: t.space.md,
-          paddingBottom: t.space.sm,
-          gap: 4,
+          paddingBottom: t.space.md,
         }}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-          <StatusSquare
-            size={8}
-            color={socketState === "open" ? t.c.ok : t.c.warn}
-            pulse={socketState !== "open"}
-          />
-          <Kicker>{credentials?.fleet.alias ?? fleetId}</Kicker>
+        <View style={{ flex: 1, gap: 4 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+            <StatusSquare size={8} color={live ? t.c.ok : t.c.warn} pulse={!live} />
+            <Kicker numberOfLines={1}>
+              {`${credentials?.fleet.alias ?? credentials?.fleet.fleet_id ?? ""}${live ? "" : " · connecting"}`}
+            </Kicker>
+          </View>
+          <Text variant="display">Bots</Text>
         </View>
-        <Text variant="heading">Bots</Text>
-        {layout ? (
-          <Text variant="caption" mono tone="fg3">
-            {rosterFooter(layout).roster} · {rosterFooter(layout).attention}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Listening: choose instances"
+          onPress={() => {
+            haptic.select();
+            router.push("/listening");
+          }}
+          style={({ pressed }) => ({
+            borderWidth: t.border.control,
+            borderColor: t.c.fg,
+            paddingHorizontal: t.space.md,
+            height: 36,
+            justifyContent: "center",
+            backgroundColor: pressed ? t.c.sel : "transparent",
+          })}
+        >
+          <Text variant="caption" weight={800} uppercase style={{ letterSpacing: 1 }}>
+            {`Listening · ${state?.listening.length ?? 0}`}
           </Text>
-        ) : null}
+        </Pressable>
       </View>
-      {loading ? (
-        <View>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <SkeletonRow key={i} />
-          ))}
-        </View>
-      ) : (
-        <FlashList
-          data={rows}
-          keyExtractor={(row) => row.key}
-          getItemType={(row) => row.kind}
-          refreshControl={
-            <RefreshControl
-              tintColor={t.c.fg3}
-              refreshing={refreshing}
-              onRefresh={async () => {
-                setRefreshing(true);
-                await client?.roster.refresh();
-                setRefreshing(false);
-              }}
-            />
-          }
-          ListEmptyComponent={
-            <View style={{ padding: t.space.xl, gap: t.space.sm }}>
-              <Text tone="fg2">No listened instances.</Text>
-              <Text variant="bodySmall" tone="fg3">
-                Turn listening on for an instance in Settings to see its bots here.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) =>
-            item.kind === "head" ? (
-              <View
-                style={{
-                  paddingHorizontal: t.space.lg,
-                  paddingVertical: t.space.sm,
-                  backgroundColor: t.c.bg2,
-                  borderBottomWidth: t.border.row,
-                  borderBottomColor: t.c.line,
-                }}
-              >
-                <Kicker tone={item.reachable ? "fg3" : "bad"}>{item.label}</Kicker>
-              </View>
-            ) : (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => {
-                  client?.roster.markSeen(item.bot.instance, item.bot.name);
-                  router.push(
-                    `/chat/${encodeURIComponent(item.bot.instance)}/${encodeURIComponent(item.bot.name)}`,
-                  );
-                }}
-                onLongPress={() => client?.roster.togglePinned(item.bot.instance, item.bot.name)}
-                style={({ pressed }) => ({
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: t.space.md,
-                  paddingHorizontal: t.space.lg,
-                  minHeight: 60,
-                  backgroundColor: pressed ? t.c.sel : t.c.bg,
-                  borderBottomWidth: t.border.row,
-                  borderBottomColor: t.c.line,
-                })}
-              >
-                <Avatar fleet_id={fleetId} instance={item.bot.instance} bot={item.bot.name} size={34} />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text weight={700} numberOfLines={1}>
-                    {item.pinned ? `${item.bot.instance} / ` : ""}
-                    {item.bot.title}
-                  </Text>
-                  <Text variant="bodySmall" tone="fg3" numberOfLines={1}>
-                    {item.bot.preview ?? item.bot.description ?? item.bot.name}
-                  </Text>
-                </View>
-                <Badge
-                  label={unreadBadge(
-                    item.bot,
-                    client?.inbox.unreadFor(item.bot.instance, item.bot.name) ?? 0,
-                  )}
-                />
-              </Pressable>
-            )
-          }
-        />
-      )}
+      <BotsList
+        rows={rows}
+        loading={loading}
+        error={state?.readAt ? null : (state?.error ?? null)}
+        query={state?.query ?? ""}
+        filter={state?.filter ?? "all"}
+        needs={layout?.needsYou ?? 0}
+        listening={state?.listening.length ?? 0}
+        fleetId={credentials?.fleet.fleet_id ?? ""}
+        now={now}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        onQuery={(q) => client?.roster.setQuery(q)}
+        onFilter={(f) => client?.roster.setFilter(f)}
+        onOpen={onOpen}
+        onMenu={onMenu}
+        onToggle={(instance) => client?.roster.toggleFolded(instance)}
+        onPickInstances={() => router.push("/listening")}
+      />
     </Screen>
   );
 }

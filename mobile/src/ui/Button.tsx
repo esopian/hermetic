@@ -3,7 +3,6 @@
  * and turns accent when pressed; secondary is a 2px fg outline; destructive is
  * a bad outline that fills when pressed. Zero radius. 44pt tall minimum.
  */
-import * as Haptics from "expo-haptics";
 import {
   ActivityIndicator,
   Pressable,
@@ -12,6 +11,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useTheme } from "../theme/theme.tsx";
+import { haptic as tap } from "./haptics.ts";
 
 export type ButtonVariant = "primary" | "secondary" | "destructive";
 
@@ -45,7 +45,7 @@ export function Button({
       accessibilityState={{ disabled: off, busy }}
       disabled={off}
       onPress={(e) => {
-        if (haptic) void Haptics.selectionAsync().catch(() => {});
+        if (haptic) tap.select();
         onPress?.(e);
       }}
       {...rest}

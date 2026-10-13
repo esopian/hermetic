@@ -217,6 +217,8 @@ export interface ConversationView {
   /** The bridge's buffer lost frames; history will be re-read when the turn ends. */
   readonly truncated: boolean;
   readonly openRequests: readonly string[];
+  /** Requests the operator answered from this phone (the box never closes those in the stream). */
+  readonly released: readonly string[];
   readonly queue: readonly QueuedMessage[];
   readonly queueParked: boolean;
   readonly observe: ObserveState;
@@ -957,6 +959,7 @@ export class ConversationStore {
       dropped: r.dropped,
       truncated: r.truncated,
       openRequests: r.run?.fold.openRequests ?? [],
+      released: [...r.released],
       queue: r.queue,
       queueParked: r.parked && r.queue.length > 0,
       observe: r.observe,

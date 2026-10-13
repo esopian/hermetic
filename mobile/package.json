@@ -7,6 +7,7 @@
     "expo": "~57.0.28",
     "expo-background-task": "~57.0.21",
     "expo-camera": "~57.0.6",
+    "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.21",
     "expo-device": "~57.0.2",
     "expo-font": "~57.0.4",
@@ -61,7 +62,7 @@
       "<rootDir>/test/**/*.jest.tsx"
     ],
     "setupFiles": [
-      "<rootDir>/test/setup.ts"
+      "<rootDir>/test/setup.tsx"
     ]
   }
 }

@@ -64,15 +64,22 @@ file under the repo, and these are Jest suites.
 
 ```
 app/                 expo-router screens: pair, (tabs)/{index (Bots), inbox, settings},
-                     chat/[instance]/[bot], agent/[name] (noVNC)
+                     chat/[instance]/[bot], agent/[name] (noVNC), listening (instance picker sheet)
 src/protocol/        constants.ts (bridge wire constants) + types.ts (structural mirrors of core schemas)
 src/client/          pure TypeScript client layer — no React, no React Native:
                      http, socket (auth, resume, backoff), turn-reducer, conversation-store,
-                     roster-store, notifications-store, vnc, markdown (desktop parser, byte-identical)
+                     roster-store, notifications-store, vnc, markdown (desktop parser, byte-identical),
+                     and the desktop's transcript rules as mirrors: chat-logic, chat-turns,
+                     chat-requests, chat-recovery, chat-activity, inbox-logic, roster-rows, pairing
 src/bridge/          React glue: BridgeProvider (client, SecureStore credentials, AppState,
                      alerts), hooks, notifications (expo-notifications), background refresh
+src/chat/            the conversation: block renderers (blocks/), markdown → native, turn rows,
+                     transcript list, composer, bands, session and subagent sheets, ChatScope
+src/bots/            Bots list rows and body;  src/inbox/  inbox card;  src/pair/  pairing form
+src/prefs/           phone-only preferences (haptics, local alerts, quiet hours)
 src/theme/           desktop tokens (both schemes), fonts, scale, useTheme()
-src/ui/              primitives: Text, Kicker, Button, Avatar (seeded blob), StatusSquare, Skeleton, Badge
+src/ui/              primitives: Text, Kicker, Button, Avatar (seeded blob), StatusSquare, Skeleton, Badge,
+                     haptics (one switch for every tap), useNow
 assets/fonts/        Archivo + JetBrains Mono static TTFs (OFL)
 test/                jest suites
 ```

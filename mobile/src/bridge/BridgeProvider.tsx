@@ -25,7 +25,8 @@ import {
   pairDevice,
 } from "../client/client.ts";
 import type { SocketState, WebSocketLike } from "../client/socket.ts";
-import type { MobilePlatform } from "../protocol/types.ts";
+import type { Hello, MobilePlatform } from "../protocol/types.ts";
+import { usePrefs } from "../prefs/prefs.tsx";
 import { registerBackgroundRefresh, unregisterBackgroundRefresh } from "./background.ts";
 import {
   handleAction,
@@ -66,9 +67,15 @@ export interface BridgeContextValue {
   setPreviews(previews: boolean): Promise<void>;
   push: PushRegistration | null;
   enablePush(): Promise<PushRegistration | null>;
+  /** The bridge's last `Hello` (device name, host app, protocol), once the socket authenticated. */
+  hello: Hello | null;
+  /** Drop the socket and dial again now (Settings → Reconnect). */
+  reconnect(): void;
+  /** Ask the bridge to stop (or resume) pushing to this device. */
+  setPushEnabled(enabled: boolean): Promise<boolean>;
 }
 
-const BridgeContext = createContext<BridgeContextValue | null>(null);
+export const BridgeContext = createContext<BridgeContextValue | null>(null);
 
 const PREVIEWS_KEY = "hermetic.previews";
 
@@ -91,6 +98,10 @@ export function BridgeProvider({
   const [banner, setBanner] = useState<Alert | null>(null);
   const [previews, setPreviewsState] = useState(true);
   const [push, setPush] = useState<PushRegistration | null>(null);
+  const [hello, setHello] = useState<Hello | null>(null);
+  const { mayAlert } = usePrefs();
+  const mayAlertRef = useRef(mayAlert);
+  mayAlertRef.current = mayAlert;
   const clientRef = useRef<HermeticClient | null>(null);
   const previewsRef = useRef(true);
   const linger = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,6 +115,8 @@ export function BridgeProvider({
         rosterPrefs: rosterPrefsStorage(storage),
         previews: () => previewsRef.current,
         onAlert: (alert) => {
+          // Local delivery off, or inside quiet hours: the inbox still has the row.
+          if (!mayAlertRef.current()) return;
           if (alert.decision === "local") void presentLocal(alert);
           else setBanner(alert);
         },
@@ -150,9 +163,11 @@ export function BridgeProvider({
     setSocketState(client.socket.state);
     const offState = client.socket.on("state", setSocketState);
     const offBadge = client.inbox.subscribe(() => void setBadge(client.inbox.badgeCount()));
+    const offHello = client.socket.on("hello", setHello);
     return () => {
       offState();
       offBadge();
+      offHello();
     };
   }, [client]);
 
@@ -215,6 +230,7 @@ export function BridgeProvider({
     setClient(null);
     setCredentials(null);
     setPush(null);
+    setHello(null);
     await clearCredentials(storage);
     await unregisterBackgroundRefresh();
     await setBadge(0);
@@ -239,6 +255,24 @@ export function BridgeProvider({
     return result;
   }, []);
 
+  const reconnect = useCallback(() => {
+    const c = clientRef.current;
+    if (!c) return;
+    c.disconnect();
+    c.connect();
+  }, []);
+
+  const setPushEnabled = useCallback(async (enabled: boolean) => {
+    const c = clientRef.current;
+    if (!c) return false;
+    try {
+      await c.http.pushSettings({ enabled });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const value = useMemo<BridgeContextValue>(
     () => ({
       status,
@@ -253,8 +287,14 @@ export function BridgeProvider({
       setPreviews,
       push,
       enablePush,
+      hello,
+      reconnect,
+      setPushEnabled,
     }),
     [
+      hello,
+      reconnect,
+      setPushEnabled,
       status,
       credentials,
       client,
