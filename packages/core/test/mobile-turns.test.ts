@@ -337,4 +337,33 @@ describe("turn registry", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(chat.signal()?.aborted).toBe(true);
   });
+
+  test("a stop during chat.open aborts the open and registers no turn, now or later", async () => {
+    const chat = manualSend();
+    let openSignal: AbortSignal | null = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reg = createTurnRegistry({
+      open: async (input, opts) => {
+        openSignal = opts.signal;
+        await gate;
+        return await chat.open(input);
+      },
+      send: chat.send,
+      abort: async () => ({}),
+    });
+    const starting = reg.start(INPUT);
+    await settle();
+    await reg.stopAll({ timeoutMs: 50 });
+    expect((openSignal as AbortSignal | null)?.aborted).toBe(true);
+    release();
+    await expect(starting).rejects.toMatchObject({ code: "ABORTED" });
+    expect(chat.sent).toEqual([]);
+    expect(reg.list()).toEqual([]);
+    // A stopped registry stays stopped.
+    await expect(reg.start(INPUT)).rejects.toMatchObject({ code: "ABORTED" });
+    expect(chat.sent).toEqual([]);
+  });
 });

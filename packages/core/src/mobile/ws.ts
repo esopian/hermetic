@@ -2,10 +2,11 @@
  * The bridge's WebSocket side: one hub for every phone socket.
  *
  * A socket is nobody until it sends `auth` within `AUTH_DEADLINE_MS`; until
- * then any other frame closes it 4401. After `auth.ok` it may call allowlisted
- * methods (`rpc`), start, resume and abort turns, and open observations. A
- * bridge that cannot build `Hello` (no fleet, a teardown or the wizard) closes
- * 4503 instead: 4401 is only ever a token the bridge does not honour.
+ * then any other frame, or one that does not validate, closes it 4400. After
+ * `auth.ok` it may call allowlisted methods (`rpc`), start, resume and abort
+ * turns, and open observations. A good token paired for another fleet closes
+ * 4403; a bridge that cannot build `Hello` (no fleet, a teardown or the
+ * wizard) closes 4503: 4401 is only ever a token the bridge does not honour.
  *
  * A socket also says whether its app is in the foreground (`phase`). Only a
  * foreground socket makes its device "live" for push suppression: a
@@ -14,7 +15,15 @@
  * Nothing a handler throws reaches the process: a store or core failure
  * outside a request's own error path closes that one socket 1011. A frame the
  * transport would not take closes it 1013, so the phone reconnects and resumes
- * from its last `n` rather than missing a frame silently.
+ * from its last `n` rather than missing a frame silently. A socket the hub
+ * closes is torn down at once — no more frames, no turn listeners — without
+ * waiting for the transport's `close`.
+ *
+ * A replay (a resume, or a turn's opening frames) goes out `REPLAY_CHUNK`
+ * frames at a time, yielding to the event loop between slices and waiting for
+ * the transport to drain when a send reported backpressure, so a 20,000-frame
+ * buffer cannot push the socket past Bun's backpressure limit. Live frames that
+ * arrive meanwhile are held and sent after it, in order.
  *
  * Turns outlive sockets (`turns.ts`): a socket only *attaches* to a turn, and
  * closing it detaches. Observations do not: each is a guest of the shared
@@ -27,8 +36,8 @@
 import { randomUUID } from "node:crypto";
 import type { ChatObserveEvent, MobileAppPhase } from "../schema/index.ts";
 import { ChatObserveInput, MobileClientFrame } from "../schema/index.ts";
-import { HermeticError } from "../errors.ts";
-import { type BridgeCtx, buildHello, guardFleet, wireError } from "./bridge-ctx.ts";
+import { HermeticError, isHermeticError } from "../errors.ts";
+import { type BridgeCtx, buildHello, guardDeviceFleet, guardFleet, wireError } from "./bridge-ctx.ts";
 import { forwardRpc } from "./core.ts";
 import type { MobileDeviceRow } from "./device-store.ts";
 import { verifyToken } from "./pairing.ts";
@@ -50,6 +59,10 @@ export interface SocketData {
   /** The app's phase as the phone last reported it; foreground from `auth` until told otherwise. */
   phase: MobileAppPhase;
   closed: boolean;
+  /** The last send was queued under backpressure and no `drain` has come since. */
+  pressured: boolean;
+  /** Replays waiting on `drain`; woken by it, or by the socket closing. */
+  drainWaiters: Set<() => void>;
 }
 
 export interface MobileSocket {
@@ -71,6 +84,8 @@ export function newSocketData(source: string, now: number): SocketData {
     rpcs: new Set(),
     phase: "foreground",
     closed: false,
+    pressured: false,
+    drainWaiters: new Set(),
   };
 }
 
@@ -83,12 +98,19 @@ export interface SocketHubLimits {
 
 export const DEFAULT_SOCKET_LIMITS: SocketHubLimits = { maxSockets: 64, maxPreAuthPerSource: 8 };
 
+/** Replayed frames sent per slice before the hub yields to the event loop. */
+export const REPLAY_CHUNK = 200;
+/** The longest a replay waits for a `drain` before sending its next slice anyway. */
+export const REPLAY_DRAIN_WAIT_MS = 2_000;
+
 export interface SocketHub {
   /** Would one more socket from `source` fit under the caps? */
   admits(source: string): boolean;
   open(ws: MobileSocket): void;
   message(ws: MobileSocket, raw: string | Buffer): Promise<void>;
   close(ws: MobileSocket): void;
+  /** The transport's send buffer emptied (Bun's `drain`). */
+  drain(ws: MobileSocket): void;
   broadcast(frame: Record<string, unknown>): void;
   /** Does this device have an open socket whose app is in the foreground? */
   isLive(deviceId: string): boolean;
@@ -99,17 +121,28 @@ export interface SocketHub {
   closeAll(code: number, reason: string): void;
   /** Authenticated sockets. */
   connected(): number;
-  /** Every socket not yet closed, authenticated or not. */
+  /** Every socket the transport has not yet reported closed, authenticated or not. */
   size(): number;
 }
 
 type ClientFrame = MobileClientFrame;
+
+/** Live frames held while a replay is still going out; `null` once it has. */
+interface ReplayGate {
+  held: TurnEvent[] | null;
+  /** A newer attach to the same turn, or a close, took over. */
+  cancelled: boolean;
+}
+
+type Attachment = TurnAttach & { gate: ReplayGate };
 
 export function createSocketHub(
   ctx: BridgeCtx,
   limits: SocketHubLimits = DEFAULT_SOCKET_LIMITS,
 ): SocketHub {
   const sockets = new Set<MobileSocket>();
+  /** Torn down by the hub, not yet reported closed by the transport. */
+  const closing = new Set<MobileSocket>();
 
   /**
    * One frame to one socket. A frame the transport dropped (`0`) or refused
@@ -125,8 +158,14 @@ export function createSocketHub(
       sent = 0;
     }
     if (sent === 0) shut(ws, MOBILE_CLOSE_CODES.SLOW_CONSUMER, "send failed");
+    else if (sent === -1) ws.data.pressured = true;
   }
 
+  /**
+   * Close a socket and tear it down now. The transport's `close` comes later
+   * (or, for a fake, at once); until it does the socket is in `closing`, so it
+   * still counts in `size()` for a shutdown waiting on its 1001s.
+   */
   function shut(ws: MobileSocket, code: number, reason: string): void {
     if (ws.data.closed) return;
     try {
@@ -134,10 +173,42 @@ export function createSocketHub(
     } catch {
       /* already gone */
     }
+    if (ws.data.closed) return;
+    teardown(ws);
+    closing.add(ws);
+  }
+
+  /** Everything `close` does, once: no more frames, no listeners, no work in flight. */
+  function teardown(ws: MobileSocket): void {
+    if (ws.data.closed) return;
+    ws.data.closed = true;
+    sockets.delete(ws);
+    if (ws.data.deadline !== null) clearTimeout(ws.data.deadline);
+    for (const detach of ws.data.turns.values()) detach();
+    ws.data.turns.clear();
+    for (const controller of ws.data.subs.values()) controller.abort();
+    ws.data.subs.clear();
+    for (const controller of ws.data.rpcs) controller.abort();
+    ws.data.rpcs.clear();
+    wakeDrainWaiters(ws);
+    const device = ws.data.device;
+    if (device !== null) {
+      ctx.emit({ type: "device", device_id: device.device_id, action: "disconnected" });
+    }
   }
 
   function protocolError(ws: MobileSocket, message: string): void {
     send(ws, { type: "error", error: { code: "VALIDATION", message } });
+    shut(ws, MOBILE_CLOSE_CODES.BAD_FRAME, "bad frame");
+  }
+
+  /**
+   * Before `auth.ok`, a frame that does not validate or is not `auth` is a bad
+   * frame, not a bad token: 4400, so the phone keeps its pairing. 4401 is only
+   * ever `verifyToken` refusing.
+   */
+  function preAuthRefusal(ws: MobileSocket, message: string): void {
+    send(ws, { type: "auth.error", error: { code: "VALIDATION", message } });
     shut(ws, MOBILE_CLOSE_CODES.BAD_FRAME, "bad frame");
   }
 
@@ -158,18 +229,72 @@ export function createSocketHub(
     send(ws, { type: "turn.end", turn_id: event.turn_id, n: event.n, state: event.state });
   }
 
-  /** Attach a socket to a turn; the caller sends `res`, then `replay`. */
-  function attachTurn(ws: MobileSocket, turnId: string, after: number): TurnAttach | null {
+  /**
+   * Attach a socket to a turn; the caller sends `res`, then `replay`. Live
+   * frames are held until the replay has gone out, so `n` stays in order.
+   */
+  function attachTurn(ws: MobileSocket, turnId: string, after: number): Attachment | null {
     ws.data.turns.get(turnId)?.();
-    const attached = ctx.turns.attach(turnId, after, (event) => turnFrame(ws, event));
+    const gate: ReplayGate = { held: [], cancelled: false };
+    const attached = ctx.turns.attach(turnId, after, (event) => {
+      if (gate.held !== null) gate.held.push(event);
+      else turnFrame(ws, event);
+    });
     if (attached === null) return null;
-    if (attached.summary.state === "running") ws.data.turns.set(turnId, attached.detach);
-    else ws.data.turns.delete(turnId);
-    return attached;
+    if (attached.summary.state === "running") {
+      ws.data.turns.set(turnId, () => {
+        gate.cancelled = true;
+        attached.detach();
+      });
+    } else ws.data.turns.delete(turnId);
+    return { ...attached, gate };
   }
 
-  function replay(ws: MobileSocket, attached: TurnAttach): void {
-    for (const event of attached.replay) turnFrame(ws, event);
+  /** Let the transport breathe between slices: wait for `drain` under backpressure, else one tick. */
+  async function pace(ws: MobileSocket): Promise<void> {
+    if (!ws.data.pressured) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: () => void = () => {};
+    await new Promise<void>((resolve) => {
+      wake = resolve;
+      ws.data.drainWaiters.add(resolve);
+      timer = setTimeout(resolve, REPLAY_DRAIN_WAIT_MS);
+    });
+    clearTimeout(timer);
+    ws.data.drainWaiters.delete(wake);
+  }
+
+  function wakeDrainWaiters(ws: MobileSocket): void {
+    for (const wake of [...ws.data.drainWaiters]) wake();
+    ws.data.drainWaiters.clear();
+  }
+
+  /**
+   * The buffered frames, `REPLAY_CHUNK` at a time, then whatever arrived live
+   * meanwhile; after that the listener sends straight through. Stops when the
+   * socket closes or a newer attach to the same turn replaces this one.
+   */
+  async function replay(ws: MobileSocket, attached: Attachment): Promise<void> {
+    const { gate } = attached;
+    const stale = (): boolean => ws.data.closed || gate.cancelled;
+    try {
+      const events = attached.replay;
+      for (let i = 0; i < events.length; i += REPLAY_CHUNK) {
+        if (i > 0) await pace(ws);
+        if (stale()) return;
+        for (const event of events.slice(i, i + REPLAY_CHUNK)) turnFrame(ws, event);
+      }
+      while (gate.held !== null && gate.held.length > 0) {
+        if (stale()) return;
+        for (const event of gate.held.splice(0, REPLAY_CHUNK)) turnFrame(ws, event);
+        if (gate.held.length > 0) await pace(ws);
+      }
+    } finally {
+      gate.held = null;
+    }
   }
 
   function preAuthFrom(source: string): number {
@@ -179,7 +304,11 @@ export function createSocketHub(
   }
 
   function admits(source: string): boolean {
-    return sockets.size < limits.maxSockets && preAuthFrom(source) < limits.maxPreAuthPerSource;
+    // A socket still closing holds its transport until the close lands.
+    return (
+      sockets.size + closing.size < limits.maxSockets &&
+      preAuthFrom(source) < limits.maxPreAuthPerSource
+    );
   }
 
   async function onAuth(ws: MobileSocket, frame: Extract<ClientFrame, { type: "auth" }>) {
@@ -199,6 +328,21 @@ export function createSocketHub(
         error: { code: "UNAUTHORIZED", message: "unknown or revoked device token" },
       });
       shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
+      return;
+    }
+    // A pairing is per fleet: refused before the socket counts as connected.
+    try {
+      guardDeviceFleet(ctx.core(), device);
+    } catch (e) {
+      send(ws, { type: "auth.error", error: wireError(e).body });
+      if (isHermeticError(e) && e.code === "WRONG_FLEET") {
+        shut(ws, MOBILE_CLOSE_CODES.WRONG_FLEET, "wrong fleet");
+      } else if (isHermeticError(e) && e.code === "UNAUTHORIZED") {
+        shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
+      } else {
+        // No core to ask right now: the token may well be good.
+        shut(ws, MOBILE_CLOSE_CODES.UNAVAILABLE, "unavailable");
+      }
       return;
     }
     if (ws.data.deadline !== null) clearTimeout(ws.data.deadline);
@@ -230,7 +374,7 @@ export function createSocketHub(
         );
         continue;
       }
-      replay(ws, attached);
+      await replay(ws, attached);
     }
   }
 
@@ -327,7 +471,7 @@ export function createSocketHub(
         }
         const attached = attachTurn(ws, summary.turn_id, 0);
         res(ws, frame.id, { turn_id: summary.turn_id });
-        if (attached !== null) replay(ws, attached);
+        if (attached !== null) await replay(ws, attached);
         broadcast({ type: "turn.started", turn: summary });
         return;
       }
@@ -343,7 +487,7 @@ export function createSocketHub(
           last_n: attached.summary.last_n,
           truncated: attached.truncated,
         });
-        replay(ws, attached);
+        await replay(ws, attached);
         return;
       }
       case "turn.abort": {
@@ -411,27 +555,15 @@ export function createSocketHub(
     }
     const parsed = MobileClientFrame.safeParse(value);
     if (!parsed.success) {
-      // Before auth, a frame that is not a well-formed `auth` is an unauthorized socket.
-      if (ws.data.device === null) {
-        send(ws, {
-          type: "auth.error",
-          error: { code: "UNAUTHORIZED", message: "authenticate first" },
-        });
-        shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
-        return;
-      }
-      protocolError(ws, "frame does not validate");
+      if (ws.data.device === null) preAuthRefusal(ws, "frame does not validate");
+      else protocolError(ws, "frame does not validate");
       return;
     }
     const frame = parsed.data;
     const device = ws.data.device;
     if (device === null) {
       if (frame.type !== "auth") {
-        send(ws, {
-          type: "auth.error",
-          error: { code: "UNAUTHORIZED", message: "authenticate first" },
-        });
-        shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
+        preAuthRefusal(ws, "authenticate first");
         return;
       }
       await onAuth(ws, frame);
@@ -466,20 +598,13 @@ export function createSocketHub(
     },
 
     close(ws) {
-      if (ws.data.closed) return;
-      ws.data.closed = true;
-      sockets.delete(ws);
-      if (ws.data.deadline !== null) clearTimeout(ws.data.deadline);
-      for (const detach of ws.data.turns.values()) detach();
-      ws.data.turns.clear();
-      for (const controller of ws.data.subs.values()) controller.abort();
-      ws.data.subs.clear();
-      for (const controller of ws.data.rpcs) controller.abort();
-      ws.data.rpcs.clear();
-      const device = ws.data.device;
-      if (device !== null) {
-        ctx.emit({ type: "device", device_id: device.device_id, action: "disconnected" });
-      }
+      closing.delete(ws);
+      teardown(ws);
+    },
+
+    drain(ws) {
+      ws.data.pressured = false;
+      wakeDrainWaiters(ws);
     },
 
     broadcast,
@@ -528,7 +653,7 @@ export function createSocketHub(
     },
 
     size() {
-      return sockets.size;
+      return sockets.size + closing.size;
     },
 
     connected() {

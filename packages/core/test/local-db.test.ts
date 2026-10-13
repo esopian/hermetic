@@ -252,7 +252,7 @@ describe("the local database", () => {
       .query(`SELECT version FROM schema_migrations ORDER BY version`)
       .all() as Array<{ version: number }>;
     expect(applied.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
     ]);
 
     const tables = (
@@ -607,6 +607,7 @@ describe("the migration ledger", () => {
     "notifications-cleared-snoozed",
     "notifications-restored",
     "mobile-devices",
+    "mobile-devices-fleet",
   ];
 
   test("a fresh home gets every table, and a named ledger row for each migration", () => {
@@ -614,7 +615,9 @@ describe("the migration ledger", () => {
 
     const rows = ledger(local.db);
     expect(rows.map((r) => r.name)).toEqual(NAMES);
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    expect(rows.map((r) => r.version)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+    ]);
 
     const tables = tablesIn(local.db);
     for (const table of [

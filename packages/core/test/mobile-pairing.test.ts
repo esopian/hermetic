@@ -33,7 +33,16 @@ const T0 = Date.parse("2026-10-13T12:00:00.000Z");
 const REQUEST = { device_name: "FIXTURE phone", platform: "ios" as const };
 
 function redeem(store: MobileStore, code: string, now = T0, limiter = createPairLimiter()) {
-  return redeemPairCode(store, { ...REQUEST, code }, { now, source: "100.64.0.9", limiter });
+  return redeemPairCode(
+    store,
+    { ...REQUEST, code },
+    {
+      now,
+      source: "100.64.0.9",
+      limiter,
+      fleet_id: "fxtr0001",
+    },
+  );
 }
 
 function refusedWith(fn: () => unknown, code: Parameters<typeof hasCode>[1]): boolean {
@@ -120,7 +129,7 @@ describe("pairing", () => {
       redeemPairCode(
         store,
         { ...REQUEST, code: other.code },
-        { now: T0 + 10, source: "100.64.0.10", limiter },
+        { now: T0 + 10, source: "100.64.0.10", limiter, fleet_id: "fxtr0001" },
       ).device.platform,
     ).toBe("ios");
     const later = T0 + 10 + MOBILE_PROTOCOL.PAIR_LOCKOUT_MS;

@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL,
   MOBILE_ROUTES,
   fleetTargetOf,
@@ -22,6 +23,7 @@ import type { HandlerContext } from "../../src/handlers/ctx.ts";
 import { dispatch } from "../../src/handlers/dispatch.ts";
 import { createStreamRegistry, type StreamFrame } from "../../src/handlers/streams.ts";
 import { memoryLog } from "../../src/log.ts";
+import { afterTeardown } from "../../src/handlers/shared.ts";
 import { createMobileHost, type MobileHost } from "../../src/mobile-host.ts";
 import { OpRegistry } from "../../src/ops.ts";
 import { AppState, fixedInstance, openState } from "../../src/state.ts";
@@ -66,6 +68,14 @@ async function authedSocket(url: string, token: string): Promise<{ closed: Promi
   ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "auth", token, protocol: 1 })));
   await authed;
   return { closed };
+}
+
+/** A socket that authenticates and is refused: the close code. */
+async function refusedSocket(url: string, token: string): Promise<number> {
+  const ws = new WebSocket(`${url.replace("http", "ws")}${MOBILE_ROUTES.ws}`);
+  const closed = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code)));
+  ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "auth", token, protocol: 1 })));
+  return await closed;
 }
 
 /** Resolves to the close code, or `null` if the socket is still open after `ms`. */
@@ -161,6 +171,9 @@ describe("mobile handlers", () => {
     const before = host.status();
     if (before === null) throw new Error("enabling did not start the bridge");
     expect(mobileBridgeHost(main).active()?.url).toBe(before.url);
+    // A phone paired on the fleet before the switch.
+    const first = (await dispatch(ctx, "mobile.pair", {})) as { code: string };
+    const onMain = await redeem(before.url, first.code);
 
     await dispatch(ctx, "fleets.switch", { fleet: "staging" });
     const staging = state.hermetic;
@@ -176,6 +189,23 @@ describe("mobile handlers", () => {
     const { hello } = await redeem(after.url, code);
     expect(hello.fleet.fleet_id).toBe(staging.target?.fleet_id ?? "");
     expect(hello.fleet.fleet_id).not.toBe(main.target?.fleet_id ?? "");
+
+    // The phone paired on `main` is not let into `staging`, over HTTP or the socket.
+    const refused = await fetch(`${after.url}${MOBILE_ROUTES.hello}`, {
+      headers: { ...HEADER, authorization: `Bearer ${onMain.token}` },
+    });
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { code: string }).code).toBe("WRONG_FLEET");
+    expect(await refusedSocket(after.url, onMain.token)).toBe(MOBILE_CLOSE_CODES.WRONG_FLEET);
+
+    // The device list says which fleet each phone paired for.
+    const listed = (await dispatch(ctx, "mobile.devices", {})) as {
+      devices: Array<{ device_id: string; fleet_id: string | null }>;
+    };
+    expect(listed.devices.map((d) => d.fleet_id)).toEqual([
+      main.target?.fleet_id ?? "",
+      staging.target?.fleet_id ?? "",
+    ]);
     await host.stop("test");
   }, 20_000);
 
@@ -212,6 +242,90 @@ describe("mobile handlers", () => {
     const idB = listed.devices.find((d) => d.device_id !== idA)?.device_id ?? "";
     expect(await dispatch(ctx, "mobile.revoke", { device_id: idB })).toEqual({ revoked: true });
     expect(await closedWithin(socketB.closed, 2_000)).toBe(4401);
+    await host.stop("test");
+  }, 20_000);
+
+  test("a start that fails retries once, then tells followers why", async () => {
+    const hermetic = await openHermetic({ fixture: true, home: testHome("mobile-retry-") });
+    // Another listener holds the port the bridge is told to bind.
+    const blocker = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+    const port = blocker.port ?? 0;
+    const log = memoryLog();
+    const host = createMobileHost({
+      hermetic: () => hermetic,
+      log,
+      bind: { host: "127.0.0.1", port },
+      retryMs: 20,
+    });
+    const ctx = contextFor(hermetic, host);
+    const frames: StreamFrame[] = [];
+    const follow = host.follow((f) => {
+      frames.push(f);
+    });
+    await dispatch(ctx, "mobile.settings", { enabled: true });
+    expect(host.status()).toBeNull();
+    expect(log.lines.some((l) => l.includes("retrying"))).toBe(true);
+    const error = frames.find((f) => f.event === "error");
+    expect(typeof (error?.data as { code?: unknown } | undefined)?.code).toBe("string");
+    expect(frames.at(-2)).toEqual({ event: "status", data: null });
+    // A follower arriving now is told too.
+    const late: StreamFrame[] = [];
+    host
+      .follow((f) => {
+        late.push(f);
+      })
+      .close();
+    expect(late.map((f) => f.event)).toEqual(["status", "error"]);
+
+    // The port frees up between the two tries: the retry starts it.
+    const kick = host.sync();
+    for (let i = 0; i < 100 && !log.lines.filter((l) => l.includes("retrying")).at(1); i++) {
+      await Bun.sleep(2);
+    }
+    await blocker.stop(true);
+    await kick;
+    expect(host.status()?.port).toBe(port);
+    follow.close();
+    await host.stop("test");
+  }, 20_000);
+
+  test("a teardown stops the bridge as it starts; sync keeps it off until the teardown ends", async () => {
+    const hermetic = await openHermetic({ fixture: true, home: testHome("mobile-teardown-") });
+    let teardownHeld = false;
+    const host = createMobileHost({
+      hermetic: () => hermetic,
+      bind: { port: 0 },
+      held: () => teardownHeld,
+    });
+    const ctx = contextFor(hermetic, host);
+    await dispatch(ctx, "mobile.settings", { enabled: true });
+    expect(host.status()).not.toBeNull();
+
+    let finish: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const op = ctx.ops.start("teardown", null, async function* () {
+      await gate;
+      yield* [];
+    });
+    teardownHeld = true;
+    ctx.state.beginTeardown(op.id);
+    afterTeardown(ctx, op.id, { warnings: [] }, false);
+    // Stopped by the teardown's start itself, not by a later sync.
+    for (let i = 0; i < 100 && host.status() !== null; i++) await Bun.sleep(10);
+    expect(host.status()).toBeNull();
+    // While the teardown holds it, a settings write does not bring it back.
+    await dispatch(ctx, "mobile.settings", {});
+    expect(host.status()).toBeNull();
+    expect(await host.ensureStarted()).toBeNull();
+
+    // The teardown ends without a reset: the fleet is still there, so it serves again.
+    teardownHeld = false;
+    finish();
+    await ctx.ops.wait(op.id);
+    for (let i = 0; i < 100 && host.status() === null; i++) await Bun.sleep(10);
+    expect(host.status()).not.toBeNull();
     await host.stop("test");
   }, 20_000);
 });

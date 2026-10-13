@@ -26,6 +26,8 @@ import { join } from "node:path";
 import * as coreProtocol from "../packages/core/src/mobile/protocol.ts";
 import { MobileClientFrame, MobileServerFrame } from "../packages/core/src/schema/mobile.ts";
 import { PUBLIC_METHODS } from "../packages/core/src/surface.ts";
+import { FLEET_ID_ALPHABET } from "../packages/core/src/schema/common.ts";
+import { FLEET_ID_RE } from "../mobile/src/client/pairing.ts";
 import * as phoneProtocol from "../mobile/src/protocol/constants.ts";
 import type {
   ClientFrame as PhoneClientFrame,
@@ -166,5 +168,12 @@ describe("the phone's rpc allowlist", () => {
     expect([...surface].some((m) => m.startsWith("plan."))).toBe(true);
     expect([...surface].some((m) => m.startsWith("secrets."))).toBe(true);
     expect([...surface].some((m) => m.startsWith("providers."))).toBe(true);
+  });
+});
+
+describe("the phone's fleet-id rule", () => {
+  test("FLEET_ID_RE is core's alphabet, eight characters, nothing else", () => {
+    expect(FLEET_ID_RE.source).toBe(`^[${FLEET_ID_ALPHABET}]{8}$`);
+    expect(FLEET_ID_RE.flags).toBe("");
   });
 });

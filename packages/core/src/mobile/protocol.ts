@@ -128,13 +128,19 @@ export type MobileServerFrameType = (typeof MOBILE_SERVER_FRAMES)[number];
  * `UNAUTHORIZED` (4401) is only ever a token failure — the phone forgets its
  * pairing on it. `UNAVAILABLE` (4503) is a bridge that cannot answer for a fleet
  * right now (core not initialised, mid-teardown, the wizard showing): the phone
- * keeps its token and retries. `TOO_MANY_SOCKETS` (4429) is the per-source or
+ * keeps its token and retries. `WRONG_FLEET` (4403) is a good token paired for
+ * another fleet than the one the bridge serves now (the laptop switched): the
+ * phone keeps its token, since a switch back honours it, but only a re-pair
+ * helps here. `BAD_FRAME` (4400) is a frame that is not JSON, does not
+ * validate, or is not `auth` before authentication; it says nothing about the
+ * token. `TOO_MANY_SOCKETS` (4429) is the per-source or
  * total socket cap, `SLOW_CONSUMER` (1013) a socket whose send buffer filled,
  * and `INTERNAL` (1011) a bridge-side failure; all three are worth a retry.
  */
 export const MOBILE_CLOSE_CODES = Object.freeze({
   BAD_FRAME: 4400,
   UNAUTHORIZED: 4401,
+  WRONG_FLEET: 4403,
   AUTH_DEADLINE: 4408,
   PROTOCOL_MISMATCH: 4426,
   TOO_MANY_SOCKETS: 4429,
@@ -162,6 +168,7 @@ export const MOBILE_HTTP_STATUS = Object.freeze({
   FORBIDDEN: 403,
   FLEET_MISMATCH: 403,
   ACCOUNT_MISMATCH: 403,
+  WRONG_FLEET: 403,
   NOT_FOUND: 404,
   TURN_GONE: 404,
   PAIR_CODE_INVALID: 409,

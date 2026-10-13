@@ -249,9 +249,14 @@ export const ERROR_CODES = [
    * already used (409); resumed a turn whose buffer is gone (404); tried too
    * many pair codes from one source (429); or sent a body over the payload
    * limit (413). None of them ever carries the token or the code it refused.
+   * `WRONG_FLEET` (403) is a good device token paired for another fleet than
+   * the one the bridge serves now: the laptop switched fleets after the phone
+   * paired. The token is not revoked, and only a re-pair (or a switch back)
+   * lets the phone in.
    */
   "PROTOCOL_MISMATCH",
   "UNAUTHORIZED",
+  "WRONG_FLEET",
   "PAIR_CODE_INVALID",
   "TURN_GONE",
   "RATE_LIMITED",

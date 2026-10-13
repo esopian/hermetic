@@ -31,6 +31,8 @@ export const MobileDevice = z.object({
   push_registered: z.boolean(),
   previews: z.boolean(),
   enabled: z.boolean(),
+  /** The fleet the phone paired for; `null` for a pairing older than the field, which the bridge refuses. */
+  fleet_id: FleetIdSchema.nullable(),
 });
 export type MobileDevice = z.infer<typeof MobileDevice>;
 

@@ -35,6 +35,7 @@ describe("mobile rendering", () => {
           push_registered: true,
           previews: false,
           enabled: true,
+          fleet_id: "fxtr0001",
         },
       ],
       serving: null,

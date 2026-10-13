@@ -406,10 +406,11 @@ describe("the phone's client layer against a real bridge", () => {
       const overSocket = await refusal(phoneA.client.socket.rpc("agents.create", {}));
       expect(overSocket.code).toBe("FORBIDDEN");
 
+      // Over the socket the phone checks `auth.ok`'s fleet itself and stops
+      // before it could send a request naming the wrong one; the bridge's own
+      // socket guard is covered in `mobile-server.test.ts`.
       elsewhere.client.connect();
-      await until("the other fleet's socket", () => elsewhere.client.socket.state === "open");
-      const socketMismatch = await refusal(elsewhere.client.socket.rpc("chat.listening", {}));
-      expect(socketMismatch.code).toBe("FLEET_MISMATCH");
+      await until("the other fleet's socket", () => elsewhere.client.socket.state === "wrong_fleet");
     },
     STEP_MS,
   );

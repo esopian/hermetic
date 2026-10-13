@@ -40,6 +40,7 @@ function device(id: string, over: Partial<MobileDeviceRow> = {}): MobileDeviceRo
     previews: true,
     enabled: true,
     revoked_at: null,
+    fleet_id: "fxtr0001",
     ...over,
   };
 }
@@ -160,6 +161,21 @@ describe("the notifier", () => {
     await notifier.notify({ kind: "turn.done", turn: TURN, reply: "ok" });
     await notifier.notify({ kind: "turn.done", turn: TURN, reply: "ok" });
     expect(sender.sent.map((m) => m.to)).toEqual(["ExponentPushToken[FIXTURE-a]"]);
+  });
+
+  test("only phones paired for the fleet served now are pushed to, and none with no fleet", async () => {
+    const store = new MemoryMobileStore();
+    store.insertDevice(device("a"));
+    store.insertDevice(device("b", { fleet_id: "zzzz9999" }));
+    store.insertDevice(device("c", { fleet_id: null }));
+    const sender = memoryPushSender();
+    let fleet: string | null = "fxtr0001";
+    const notifier = createPushNotifier({ store, sender, isLive: () => false, fleetId: () => fleet });
+    await notifier.notify({ kind: "notification", row: ROW });
+    expect(sender.sent.map((m) => m.to)).toEqual(["ExponentPushToken[FIXTURE-a]"]);
+    fleet = null;
+    await notifier.notify({ kind: "turn.done", turn: TURN, reply: "ok" });
+    expect(sender.sent).toHaveLength(1);
   });
 
   test("DeviceNotRegistered forgets the push token", async () => {

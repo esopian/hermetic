@@ -355,6 +355,7 @@ describe("the mobile bridge over loopback", () => {
   }, 30_000);
 
   test("a bad token, a wrong protocol and a frame before auth close the socket", async () => {
+    // Only a token the bridge refuses is 4401; a frame before auth is a bad frame (4400).
     const bad = new Phone();
     await bad.send({ type: "auth", token: "hmt_FIXTURE-nope", protocol: 1 });
     expect(await bad.closed).toBe(4401);
@@ -367,7 +368,12 @@ describe("the mobile bridge over loopback", () => {
 
     const early = new Phone();
     await early.send({ type: "pong" });
-    expect(await early.closed).toBe(4401);
+    expect(await early.closed).toBe(4400);
+    expect(early.frames[0]).toMatchObject({ type: "auth.error", error: { code: "VALIDATION" } });
+
+    const garbled = new Phone();
+    await garbled.send({ type: "auth", token: 42, protocol: 1 });
+    expect(await garbled.closed).toBe(4400);
 
     const junk = new Phone();
     await junk.send({ type: "auth", token, protocol: 1 });

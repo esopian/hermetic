@@ -27,6 +27,12 @@ export interface MobileDeviceRow {
   previews: boolean;
   enabled: boolean;
   revoked_at: string | null;
+  /**
+   * The fleet the phone paired for; the bridge honours the token only while it
+   * serves that fleet. `null` is a row paired before the column existed, and
+   * is refused.
+   */
+  fleet_id: string | null;
 }
 
 export interface MobilePairCodeRow {
@@ -82,6 +88,7 @@ export function deviceView(row: MobileDeviceRow): MobileDevice {
     push_registered: row.expo_push_token !== null,
     previews: row.previews,
     enabled: row.enabled,
+    fleet_id: row.fleet_id,
   };
 }
 
@@ -186,6 +193,7 @@ interface DeviceSqlRow {
   previews: number;
   enabled: number;
   revoked_at: string | null;
+  fleet_id: string | null;
 }
 
 function platformOf(value: string): MobilePlatform {
@@ -205,6 +213,7 @@ function fromSql(row: DeviceSqlRow | null): MobileDeviceRow | null {
     previews: row.previews !== 0,
     enabled: row.enabled !== 0,
     revoked_at: row.revoked_at,
+    fleet_id: row.fleet_id ?? null,
   };
 }
 
@@ -215,8 +224,8 @@ export class SqliteMobileStore implements MobileStore {
   insertDevice(row: MobileDeviceRow): void {
     this.db.run(
       `INSERT INTO mobile_devices (device_id, name, platform, token_sha256, created_at,
-         last_seen_at, expo_push_token, previews, enabled, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         last_seen_at, expo_push_token, previews, enabled, revoked_at, fleet_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         row.device_id,
         row.name,
@@ -228,6 +237,7 @@ export class SqliteMobileStore implements MobileStore {
         row.previews ? 1 : 0,
         row.enabled ? 1 : 0,
         row.revoked_at,
+        row.fleet_id,
       ],
     );
   }

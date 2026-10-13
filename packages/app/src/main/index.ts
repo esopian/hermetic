@@ -172,9 +172,14 @@ const terminals = new TerminalHost({
 /**
  * The phone companion's bridge, one for the process like the terminals: it
  * serves whichever fleet the state holds, and is started below when
- * `mobile.settings` says `enabled` (`mobile-host.ts`).
+ * `mobile.settings` says `enabled` (`mobile-host.ts`). It serves nothing while
+ * a teardown holds the fleet it would serve.
  */
-const mobileHost = createMobileHost({ hermetic: () => state.hermetic, log });
+const mobileHost = createMobileHost({
+  hermetic: () => state.hermetic,
+  log,
+  held: () => state.teardownOpId !== null,
+});
 
 /**
  * The renderer this bundle was built with (`renderer.ts`), and in a dev CEF

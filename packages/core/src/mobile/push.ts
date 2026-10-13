@@ -273,6 +273,12 @@ export interface PushNotifierDeps {
   sender: PushSender;
   /** A device with a foreground socket gets the frame instead. */
   isLive: (deviceId: string) => boolean;
+  /**
+   * The fleet the bridge serves now. When given, only phones paired for it
+   * are pushed to (and none while it is `null`): a phone paired on another
+   * fleet must not read this one's previews.
+   */
+  fleetId?: () => string | null;
   /** How many `(device, dedupe)` pairs to remember. */
   remember?: number;
 }
@@ -294,8 +300,10 @@ export function createPushNotifier(deps: PushNotifierDeps): PushNotifier {
     async notify(event) {
       try {
         const targets: Array<{ device: MobileDeviceRow; message: ExpoPushMessage }> = [];
+        const fleet = deps.fleetId === undefined ? undefined : deps.fleetId();
         for (const device of deps.store.listDevices()) {
           if (!device.enabled || device.expo_push_token === null) continue;
+          if (fleet !== undefined && (fleet === null || device.fleet_id !== fleet)) continue;
           if (deps.isLive(device.device_id)) continue;
           const built = buildPush(event, device);
           if (built === null) continue;

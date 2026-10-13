@@ -4,7 +4,8 @@
  *
  * Every request carries `X-Hermetic-Mobile: 1` or is refused 426; every body is
  * capped at `MAX_PAYLOAD_BYTES`; every route but `health` and `pair` wants a
- * device token. Errors are `{code, message, details?}` — wrapped as
+ * device token paired for the fleet this bridge serves (else 403 `WRONG_FLEET`).
+ * Errors are `{code, message, details?}` — wrapped as
  * `{ok:false, error}` on `rpc`, whose success body is `{ok:true, result}`.
  */
 import { HermeticError } from "../errors.ts";
@@ -15,7 +16,7 @@ import {
   MobileRpcRequest,
 } from "../schema/index.ts";
 import type { ZodType } from "zod";
-import { type BridgeCtx, buildHello, guardFleet, wireError } from "./bridge-ctx.ts";
+import { type BridgeCtx, buildHello, guardDeviceFleet, guardFleet, wireError } from "./bridge-ctx.ts";
 import { forwardRpc } from "./core.ts";
 import type { MobileDeviceRow } from "./device-store.ts";
 import { bearerOf, redeemPairCode, verifyToken } from "./pairing.ts";
@@ -56,6 +57,8 @@ function authenticate(ctx: BridgeCtx, req: Request): MobileDeviceRow {
   const token = bearerOf(req.headers.get("authorization"));
   const device = verifyToken(ctx.store, token ?? "");
   if (device === null) throw new HermeticError("UNAUTHORIZED", "unknown or revoked device token");
+  // A phone paired for another fleet is refused before anything is read or written for it.
+  guardDeviceFleet(ctx.core(), device);
   ctx.store.touch(device.device_id, new Date(ctx.clock()).toISOString());
   return device;
 }
@@ -96,13 +99,16 @@ export async function handleHttp(
         const body = await readBody(req, MobilePairRequest);
         // A bridge with no fleet cannot build the `Hello` a pairing answers
         // with; refusing before the code is spent leaves it for a retry.
-        if (ctx.core().target === null) {
+        const target = ctx.core().target;
+        if (target === null) {
           throw new HermeticError("NOT_INITIALIZED", "this laptop has no fleet to serve");
         }
+        // The pairing is for the fleet served now, and is honoured only while it is.
         const { token, device } = redeemPairCode(ctx.store, body, {
           now: ctx.clock(),
           source,
           limiter: ctx.limiter,
+          fleet_id: target.fleet_id,
         });
         ctx.emit({ type: "paired", device_id: device.device_id, name: device.name });
         return json({ token, device_id: device.device_id, hello: await buildHello(ctx, device) });

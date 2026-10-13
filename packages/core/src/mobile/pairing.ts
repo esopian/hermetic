@@ -139,14 +139,14 @@ export interface Redeemed {
 }
 
 /**
- * Spend a code and mint a device. Every refusal of the code itself — unknown,
- * expired, used, malformed — is the same `PAIR_CODE_INVALID`, and counts
- * against the source.
+ * Spend a code and mint a device for `fleet_id`, the fleet the bridge serves
+ * at this moment. Every refusal of the code itself — unknown, expired, used,
+ * malformed — is the same `PAIR_CODE_INVALID`, and counts against the source.
  */
 export function redeemPairCode(
   store: MobileStore,
   request: MobilePairRequest,
-  opts: { now: number; source: string; limiter: PairLimiter },
+  opts: { now: number; source: string; limiter: PairLimiter; fleet_id: string },
 ): Redeemed {
   opts.limiter.check(opts.source, opts.now);
   const nowIso = new Date(opts.now).toISOString();
@@ -169,6 +169,7 @@ export function redeemPairCode(
     previews: true,
     enabled: true,
     revoked_at: null,
+    fleet_id: opts.fleet_id,
   };
   store.insertDevice(device);
   return { token, device };

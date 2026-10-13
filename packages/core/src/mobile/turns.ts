@@ -23,10 +23,12 @@
  * `stopAll` (a bridge shutting down) asks the box to stop every running turn
  * with `chat.abort`, waits a short, bounded while for those to land, then ends
  * the reads: a phone-started turn does not keep spending tokens on a box after
- * the bridge that started it is gone.
+ * the bridge that started it is gone. It is final: a `start` still waiting on
+ * `chat.open` when it runs refuses `ABORTED` instead of registering a turn
+ * nobody would see or stop, and so does every `start` after it.
  */
 import { randomUUID } from "node:crypto";
-import { isHermeticError } from "../errors.ts";
+import { HermeticError, isHermeticError } from "../errors.ts";
 import type { ChatFrame, ChatOpenInput, ChatSendInput, TurnSummary } from "../schema/index.ts";
 import { redactText } from "../chat/chat-redact.ts";
 import { MOBILE_PROTOCOL, type MobileTurnState } from "./protocol.ts";
@@ -52,8 +54,11 @@ export interface TurnStartInput {
 }
 
 export interface TurnRegistryDeps {
-  /** `chat.open`: the conversation a turn runs in, created when `new_session` asks. */
-  open: (input: ChatOpenInput) => Promise<{ session: string }>;
+  /**
+   * `chat.open`: the conversation a turn runs in, created when `new_session`
+   * asks. `signal` aborts when the registry is stopped mid-open.
+   */
+  open: (input: ChatOpenInput, opts: { signal: AbortSignal }) => Promise<{ session: string }>;
   send: (input: ChatSendInput, opts: { signal: AbortSignal }) => AsyncIterable<ChatFrame>;
   abort: (input: { instance: string; bot: string; session?: string }) => Promise<unknown>;
   clock?: () => number;
@@ -141,6 +146,12 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
   const maxFrames = deps.maxFrames ?? MOBILE_PROTOCOL.TURN_MAX_FRAMES;
   const retentionMs = deps.retentionMs ?? MOBILE_PROTOCOL.TURN_RETENTION_MS;
   const turns = new Map<string, Turn>();
+  /** Aborted by `stopAll`; nothing starts once it has. */
+  const life = new AbortController();
+
+  function refuseStopped(): HermeticError {
+    return new HermeticError("ABORTED", "the mobile bridge stopped before the turn started");
+  }
 
   function emit(t: Turn, event: TurnEvent): void {
     for (const listener of [...t.listeners]) {
@@ -217,16 +228,23 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
 
   return {
     async start(input) {
+      if (life.signal.aborted) throw refuseStopped();
       sweep();
       const controller = new AbortController();
       // The conversation first: a refusal here is the caller's error, and what
       // it answers is the session every later frame, abort and push names.
-      const conversation = await deps.open({
-        instance: input.instance,
-        bot: input.bot,
-        ...(input.session !== undefined ? { session: input.session } : {}),
-        ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
-      });
+      const conversation = await deps.open(
+        {
+          instance: input.instance,
+          bot: input.bot,
+          ...(input.session !== undefined ? { session: input.session } : {}),
+          ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
+        },
+        { signal: life.signal },
+      );
+      // `stopAll` ran while `chat.open` was out: registering now would leave a
+      // turn running that no stop will ever reach.
+      if (life.signal.aborted) throw refuseStopped();
       const request: ChatSendInput = {
         instance: input.instance,
         bot: input.bot,
@@ -308,6 +326,7 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
     sweep,
 
     async stopAll(opts = {}) {
+      life.abort();
       const running = [...turns.values()].filter((t) => t.state === "running");
       turns.clear();
       for (const t of running) t.abortRequested = true;

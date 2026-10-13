@@ -125,10 +125,17 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
     store: opts.store,
     sender: opts.push,
     isLive: (id) => isLive(id),
+    fleetId: () => {
+      try {
+        return opts.core().target?.fleet_id ?? null;
+      } catch {
+        return null;
+      }
+    },
   });
 
   const turns = createTurnRegistry({
-    open: (input) => opts.core().chat.open(input),
+    open: (input, o) => opts.core().chat.open(input, o),
     send: (input, o) => opts.core().chat.send(input, o),
     abort: (input) => opts.core().chat.abort(input),
     clock,
@@ -235,6 +242,8 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
       open: (ws) => hub.open(ws),
       message: (ws, raw) => hub.message(ws, raw),
       close: (ws) => hub.close(ws),
+      // A replay paced on backpressure resumes here.
+      drain: (ws) => hub.drain(ws),
     },
   });
 

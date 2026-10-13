@@ -83,6 +83,28 @@ export function guardFleet(core: MobileCore, target: FleetTarget): void {
   }
 }
 
+/**
+ * Throws unless `device` was paired for the fleet this bridge serves now: a
+ * token is home-wide but a pairing is per fleet, and the desktop's bridge
+ * follows its fleet switch. `WRONG_FLEET` for another fleet (the token stays
+ * good: a switch back honours it); `UNAUTHORIZED` for a row paired before
+ * pairings named a fleet, which can only pair again. No fleet at all is left
+ * to the caller, which answers `NOT_INITIALIZED` where it needs one.
+ */
+export function guardDeviceFleet(core: MobileCore, device: MobileDeviceRow): void {
+  if (device.fleet_id === null) {
+    throw new HermeticError(
+      "UNAUTHORIZED",
+      "this phone was paired before pairings named a fleet; pair it again",
+    );
+  }
+  const own = core.target;
+  if (own !== null && own.fleet_id !== device.fleet_id) {
+    // Nothing about the fleet now served: the phone is not paired for it.
+    throw new HermeticError("WRONG_FLEET", "this phone was paired for another fleet; pair it again");
+  }
+}
+
 export async function buildHello(ctx: BridgeCtx, device: MobileDeviceRow): Promise<MobileHello> {
   const core = ctx.core();
   const target = core.target;

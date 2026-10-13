@@ -582,6 +582,20 @@ const MIGRATIONS: Migration[] = [
        )`,
     ],
   },
+  {
+    /**
+     * The fleet a phone was paired for. A device token is home-wide, but the
+     * bridge follows the desktop's fleet switch, so without this a phone
+     * paired on one fleet would authenticate on the next and be shown it. The
+     * bridge refuses a device whose `fleet_id` is not the fleet it serves
+     * (`WRONG_FLEET`), and a row from before this column (`NULL`) is refused
+     * outright: such a phone pairs again.
+     */
+    name: "mobile-devices-fleet",
+    version: 17,
+    statements: [],
+    columns: [{ table: "mobile_devices", column: "fleet_id", type: "TEXT" }],
+  },
 ];
 
 /**
