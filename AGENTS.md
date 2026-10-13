@@ -28,6 +28,7 @@ Where to read for common tasks:
 - **Add a long operation** — a module with an explicit deps object, not another function in `hermetic.ts`. See rule 5.
 - **Bump `FOUNDATION_VERSION`** — see rule 7.
 - **Bump `chrome_ref`** — take the new Chrome for Testing zip's sha256 and byte size, edit `BUILD_VERSIONS.chrome_ref`/`chrome_sha256`/`chrome_size` (`packages/core/src/build-versions.ts`), then `hermetic artifacts push` to mirror it. A box gets the new pin when its config is rendered — `agent create` or `recreate`, not `rerun` (which only resumes an `error` agent). Same owner and cadence as `hermes_ref`; Chrome for Testing does not self-update. §7.3/§3.6.
+- **Mobile bridge** — `bun run cli -- mobile serve --fixture` (add `--host 127.0.0.1` for a simulator) serves the phone bridge over the fixture fleet, `mobile pair --fixture` prints the one-time code and QR, and Settings → Mobile does both from the desktop app. The wire protocol is design.md §9.4; its constants are `packages/core/src/mobile/protocol.ts`. Only `MOBILE_ALLOWED_METHODS` is reachable from a phone; `chat.send` and `chat.observe` run only as ws turns and subscriptions. Push goes through an injectable `PushSender` (`MobileDeps.push` / `StartMobileBridgeOptions.push`, `packages/core/src/mobile/push.ts`): Expo in real mode, an in-memory recorder in fixture mode, so nothing in a test reaches Expo. The phone app is `mobile/` and never imports `packages/`; `tests/mobile-seams.test.ts` pins its mirrors and `tests/mobile-bridge-e2e.test.ts` drives its client against the real bridge. Setup: [Phone app and mobile bridge](CONTRIBUTING.md#phone-app-and-mobile-bridge).
 - **Open a PR** — use `create-pr` (`.claude/skills/create-pr/SKILL.md`, also exposed to Codex through `.agents/skills/create-pr`), every time. See Conventions.
 - **Add a second fleet** — `hermetic init --attach --fleet <id|alias>` joins an existing foundation, `init --create` makes a new one. `hermetic fleet alias <fleet-id> <alias>` labels a fleet, `--clear` unlabels it, `fleet use <fleet-id|alias>` switches the local default. `fleet_id` is the identity; the alias is display only. §4.6/§4.8.
 
@@ -42,6 +43,8 @@ packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema` and
 ```
 
 `site/` — marketing + docs site, not a workspace, own toolchain, mobile in scope there (see `site/AGENTS.md`).
+
+`mobile/` — the Expo phone app, a remote head of the laptop's core through the mobile bridge. Not a workspace, own toolchain (bun, jest-expo, biome), never imports `packages/` (see `mobile/AGENTS.md`).
 
 ### Import boundaries
 
@@ -140,7 +143,7 @@ Commands, CI jobs, the formatter and hooks: `CONTRIBUTING.md`. `bun run check` b
 ## Conventions
 
 - Bun per `.bun-version`, TypeScript strict, ESM. Run everything with `bun`.
-- **Mobile is out of scope** — no phone breakpoints, no touch-only affordances, no phone-width tests. The app targets a desktop window; breakpoints for narrow windows (760px and up) are fine.
+- **The desktop app is desktop-only** — no phone breakpoints, no touch-only affordances, no phone-width tests in `packages/ui`; breakpoints for narrow windows (760px and up) are fine. The phone app lives in `mobile/` and follows its own conventions (`mobile/AGENTS.md`); mobile layout is in scope there, not in the desktop page.
 - Edit-scope discipline: stay inside the files and packages you were given, even when you spot something else worth fixing — flag it, no drive-by edits.
 - Zod schemas live in core and are the single source of types (`z.infer`). The CLI validates parsed options against the same schema core uses.
 - AWS SDK v3 clients are constructed via `aws.client()` in core (the account guard, `packages/core/src/aws/client.ts`). One documented exception: `resolveIdentity` (`aws/identity.ts`) runs before any account is frozen, so it has nothing to guard against. Never read `AWS_PROFILE` elsewhere.

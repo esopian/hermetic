@@ -201,7 +201,7 @@ PR.
 green before you push. GitHub Actions runs the same scripts, one per job
 (`.github/workflows/ci.yml`: `typecheck`, `test`, `lint:biome`, `lint`, `lint:cfn`, `lint:sh`,
 `build`, `audit:dependencies`), so a red check names the step that failed and the slow jobs do not
-queue behind the fast ones. CI also runs three things `bun run ci` does not:
+queue behind the fast ones. CI also runs four things `bun run ci` does not:
 
 - The `test` job is a matrix over the two shards in `scripts/test-shard.ts` — `cli`
   (`packages/cli`, which spawns a real process per test) and `non-cli` (everything else) — run as
@@ -221,6 +221,14 @@ queue behind the fast ones. CI also runs three things `bun run ci` does not:
 - The `app` job builds the desktop app on a `macos-14` runner with `bun run app:build:canary`, then
   lists `packages/app/artifacts`. It proves the app still builds; nothing it produces is published.
   Locally: `bun run app:build:canary`.
+- The `mobile` job checks the phone app: `bun install --frozen-lockfile` and `bun run check` in
+  `mobile/` (typecheck, Jest, Biome), then `npx expo export --platform ios` to prove the Metro bundle
+  builds, on an ubuntu runner (no iOS binary is built or signed). It always reports, like `site`, and
+  does the work only when a PR touches `mobile/`, `packages/core/src/mobile/`,
+  `packages/core/src/schema/mobile.ts` or `packages/ui/src/chat/chat-markdown.ts` (the file the
+  phone copies byte for byte); a push to `master` always runs it. The root seam tests that guard the
+  mirrors, `tests/mobile-seams.test.ts` and `tests/mobile-bridge-e2e.test.ts`, run in `test`.
+  Locally: `bun run mobile:check`.
 
 The `ci` job aggregates the rest into a single green/red check for branch protection, and it fails
 unless *every* job it needs reported `success` — skipped, cancelled and missing all count as failure
@@ -266,6 +274,10 @@ bun run dev:fixture                # the app against the fixture backend
 bun run dev:wizard                 # fixture backend, forced init wizard
 bun run dev:hmr                    # any of the three with `:hmr`: Vite serves the page, UI hot-reloads
 bun run app:cdp <command>          # scripts/app-cdp.ts: drive the running dev app over DevTools (CEF)
+bun run site:dev | site:build | site:check | site:deploy   # cd site && bun run <dev|build|check|deploy>
+bun run mobile:check               # cd mobile && bun run check: typecheck + jest + biome (needs `bun install` there)
+bun run mobile:test                # cd mobile && bun run test: jest only
+bun run mobile:ios                 # cd mobile && bun run ios: dev client in the iOS simulator
 ```
 
 Narrower than any script: `bun test packages/core` (or `cli`, `app`, `ui`, `agentd`), or a single
@@ -309,6 +321,101 @@ workflows default to `permissions: contents: read`, and `.github/dependabot.yml`
 updates weekly. `tests/ci-contract.test.ts` enforces all of that, plus the agreement between the
 workflow's jobs, the `ci` aggregate's `needs`, and `EXPECTED_JOBS` in `scripts/ci-results.ts` — so
 adding a CI job without requiring it fails the suite rather than quietly widening the gap.
+
+## Phone app and mobile bridge
+
+`mobile/` is the Expo phone app, a remote head of your laptop's core. It is not a root workspace
+(like `site/`): its own `package.json`, `bun.lock`, Jest and Biome, and root `bun install`,
+`bun run check` and `bun run ci` never touch it. It never imports `packages/`; what it shares with
+core is mirrored and pinned by the root seam tests. `mobile/README.md` has the layout and
+`mobile/AGENTS.md` the conventions; the wire protocol is design.md §9.4. None of this is needed for
+the desktop app, the CLI or a green `bun run ci`.
+
+Prerequisites, only to run the app in the iOS simulator:
+
+- macOS with **Xcode** (the full app, not only the command line tools) and an iOS simulator runtime
+  installed from Xcode → Settings → Components.
+- **CocoaPods** (`brew install cocoapods`): the first `bun run ios` generates `mobile/ios/` and runs
+  `pod install`. `ios/` is generated and git-ignored.
+- Node, which Expo's CLI runs on, alongside Bun.
+
+```
+cd mobile && bun install     # once; not part of the root install
+bun run ios                  # expo run:ios: builds a dev client, opens the simulator
+bun run check                # typecheck + jest + biome; what the `mobile` CI job runs
+bun run export:ios           # expo export: proves the Metro bundle builds
+```
+
+From the repo root, `bun run mobile:ios`, `mobile:test` and `mobile:check` do the same. The app
+uses native modules (camera, notifications, secure store, webview), so it needs a development build,
+not Expo Go.
+
+**Run the bridge.** The phone talks to the mobile bridge on your laptop, hosted two ways:
+
+```
+bun run cli -- mobile serve --fixture     # headless, over the fixture fleet; Ctrl-C stops it
+bun run cli -- mobile serve               # headless, over your real fleet
+```
+
+or from the desktop app: **Settings → Mobile**, switch the bridge on. In fixture mode the default
+host is `127.0.0.1`, which the simulator reaches; in real mode it is your Tailscale IPv4, so a real
+phone must be on the tailnet. The bridge never binds `0.0.0.0` unless you pass `--host 0.0.0.0`,
+and then it warns. One process serves one port: do not enable Settings → Mobile and run `mobile
+serve` on the same port. `mobile serve` ticks `chat.swarms` so chat rows reach the inbox; pass
+`--no-tick` beside a running desktop app, whose poller already does.
+
+**Pair a phone.** `bun run cli -- mobile pair --fixture` (or **Settings → Mobile → Pair a phone**)
+prints a one-time code, a `hermetic://pair?…` link and a QR. Scan it from the app, paste the link,
+or type host, port and the eight characters. A code is single use and lasts ten minutes. Then
+`mobile devices` lists paired phones and `mobile revoke <device_id>` ends one. The simulator has no
+camera, so type or paste.
+
+**Push needs an EAS project id.** No Expo or EAS account is configured for this repo, and nothing
+here creates one. Remote push needs a project id at build time, from `EXPO_PUBLIC_PROJECT_ID`, or
+`EAS_PROJECT_ID`, which EAS sets itself (`mobile/app.config.ts` copies it into `extra.eas`):
+
+```
+EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios
+```
+
+Without it the app still pairs and chats, and alerts locally while it holds its socket; Settings
+says push is unavailable. Tests and the fixture never reach Expo: the bridge's `PushSender` is
+injected, an in-memory recorder in fixture mode.
+
+**An always-on bridge on a Mac.** To keep the bridge up with no desktop app open, run `hermetic
+mobile serve` under launchd. This is a sketch, not something the repo installs; save it as
+`~/Library/LaunchAgents/com.hermetic.mobile-bridge.plist`:
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.hermetic.mobile-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/hermetic</string>
+    <string>mobile</string>
+    <string>serve</string>
+    <string>--host</string><string>100.64.0.1</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/hermetic-mobile-bridge.log</string>
+  <key>StandardErrorPath</key><string>/tmp/hermetic-mobile-bridge.log</string>
+</dict>
+</plist>
+```
+
+Replace `100.64.0.1` with `tailscale ip -4`. Pass the host explicitly: launchd starts the job before
+Tailscale may be up, and with no host the bridge falls back to loopback and a phone cannot reach it.
+The job needs the same AWS credentials as any real-mode command. Load it with `launchctl bootstrap
+gui/$(id -u) ~/Library/LaunchAgents/com.hermetic.mobile-bridge.plist` and remove it with
+`launchctl bootout gui/$(id -u)/com.hermetic.mobile-bridge`.
 
 ## Formatting and hooks
 

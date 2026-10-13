@@ -260,6 +260,65 @@ jobs:
         working-directory: site
         run: bun run check && bun run build
 
+  # Checks and bundles mobile/ (the Expo phone app: its own toolchain and
+  # bun.lock, not a root workspace). Gated by the same `changes` pattern as
+  # `site` and for the same reason: it always runs, so the `ci` aggregate never
+  # sees it `skipped`, and the gate only decides whether the later steps do
+  # work. The paths are the phone's own tree plus the three core/ui files it
+  # mirrors or reads through the wire (the bridge, its Zod shapes, the desktop
+  # markdown parser the phone copies byte for byte); the root seam tests
+  # (`tests/mobile-*.test.ts`) run in the `test` job. `expo export` proves the
+  # Metro bundle builds, which typecheck and Jest do not. It is JavaScript
+  # only, so an ubuntu runner is enough; nothing here builds or signs an iOS
+  # binary.
+  mobile:
+    name: mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide whether mobile/ needs checking
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "mobile=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA"...HEAD)
+          if echo "$changed" | grep -qE '^(mobile/|packages/core/src/mobile/|packages/core/src/schema/mobile\.ts$|packages/ui/src/chat/chat-markdown\.ts$)'; then
+            echo "mobile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mobile=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The root setup action installs bun and the root workspace. mobile/ has
+      # its own lockfile and is not part of that install.
+      - uses: ./.github/actions/setup
+        if: steps.changes.outputs.mobile == 'true'
+
+      - name: Install mobile dependencies
+        if: steps.changes.outputs.mobile == 'true'
+        working-directory: mobile
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck, test and lint the phone app
+        if: steps.changes.outputs.mobile == 'true'
+        working-directory: mobile
+        run: bun run check
+
+      - name: Bundle the phone app
+        if: steps.changes.outputs.mobile == 'true'
+        working-directory: mobile
+        run: npx expo export --platform ios --output-dir /tmp/mobile-export
+
   # The one job that reaches the network for something other than the install
   # cache: `bun audit` asks GitHub's advisory service about the resolved tree.
   # Frozen dependencies do not stop being vulnerable, so this has to run on a
@@ -330,6 +389,7 @@ jobs:
         audit,
         gitleaks,
         site,
+        mobile,
       ]
     if: always()
     steps:

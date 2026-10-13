@@ -265,6 +265,14 @@ if (import.meta.main) {
     targets.push({ cwd: siteDir, label: "site" });
   }
 
+  // `mobile/` is the same shape and gets the same gate: the Expo phone app has
+  // its own `bun.lock` and ships to a device, so an advisory in its tree must
+  // not pass because the root install never resolves it.
+  const mobileDir = join(root, "mobile");
+  if (existsSync(join(mobileDir, "bun.lock"))) {
+    targets.push({ cwd: mobileDir, label: "mobile" });
+  }
+
   let worstExit = 0;
   for (const { cwd, label } of targets) {
     const verdict = await scan(cwd, label);
