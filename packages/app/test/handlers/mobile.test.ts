@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  HermeticError,
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL,
   MOBILE_ROUTES,
@@ -328,4 +329,41 @@ describe("mobile handlers", () => {
     expect(host.status()).not.toBeNull();
     await host.stop("test");
   }, 20_000);
+
+  test("a teardown whose plan fails releases the slot and re-syncs the bridge", async () => {
+    const real = await openHermetic({ fixture: true, home: testHome("mobile-teardown-plan-") });
+    const hermetic = {
+      ...real,
+      plan: {
+        ...real.plan,
+        teardown: async () => {
+          throw new HermeticError("CONFLICT", "agents are still alive");
+        },
+      },
+    } as Hermetic;
+    let syncs = 0;
+    let heldDuringSync: boolean | null = null;
+    const ctx = contextFor(hermetic);
+    ctx.mobile = {
+      sync: async () => {
+        syncs++;
+        heldDuringSync = ctx.state.teardownOpId !== null;
+      },
+    } as unknown as MobileHost;
+    const target = hermetic.target;
+    if (target === null) throw new Error("the fixture has a fleet");
+    const refused = await dispatch(ctx, "teardown", {
+      yes: true,
+      confirm_account_id: target.account_id,
+      target: fleetTargetOf(target),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(hasCode(refused, "CONFLICT")).toBe(true);
+    expect(ctx.state.teardownOpId).toBeNull();
+    expect(syncs).toBe(1);
+    // After the slot is released, so the sync is free to start it again.
+    expect(heldDuringSync as boolean | null).toBe(false);
+  });
 });

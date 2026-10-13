@@ -23,7 +23,8 @@
  * frames at a time, yielding to the event loop between slices and waiting for
  * the transport to drain when a send reported backpressure, so a 20,000-frame
  * buffer cannot push the socket past Bun's backpressure limit. Live frames that
- * arrive meanwhile are held and sent after it, in order.
+ * arrive meanwhile are held and sent after it, in order — up to
+ * `REPLAY_HELD_MAX`, past which the socket closes 1013 and the phone resumes.
  *
  * Turns outlive sockets (`turns.ts`): a socket only *attaches* to a turn, and
  * closing it detaches. Observations do not: each is a guest of the shared
@@ -37,7 +38,14 @@ import { randomUUID } from "node:crypto";
 import type { ChatObserveEvent, MobileAppPhase } from "../schema/index.ts";
 import { ChatObserveInput, MobileClientFrame } from "../schema/index.ts";
 import { HermeticError, isHermeticError } from "../errors.ts";
-import { type BridgeCtx, buildHello, guardDeviceFleet, guardFleet, wireError } from "./bridge-ctx.ts";
+import {
+  type BridgeCtx,
+  buildHello,
+  guardDeviceFleet,
+  guardFleet,
+  serving,
+  wireError,
+} from "./bridge-ctx.ts";
 import { forwardRpc } from "./core.ts";
 import type { MobileDeviceRow } from "./device-store.ts";
 import { verifyToken } from "./pairing.ts";
@@ -102,6 +110,12 @@ export const DEFAULT_SOCKET_LIMITS: SocketHubLimits = { maxSockets: 64, maxPreAu
 export const REPLAY_CHUNK = 200;
 /** The longest a replay waits for a `drain` before sending its next slice anyway. */
 export const REPLAY_DRAIN_WAIT_MS = 2_000;
+/**
+ * Live frames one attachment may hold while its replay is still going out.
+ * Past it the socket closes 1013: a phone that cannot keep up resumes from its
+ * last `n`, and the bridge does not buffer a second copy of the turn for it.
+ */
+export const REPLAY_HELD_MAX = 2_000;
 
 export interface SocketHub {
   /** Would one more socket from `source` fit under the caps? */
@@ -237,8 +251,14 @@ export function createSocketHub(
     ws.data.turns.get(turnId)?.();
     const gate: ReplayGate = { held: [], cancelled: false };
     const attached = ctx.turns.attach(turnId, after, (event) => {
-      if (gate.held !== null) gate.held.push(event);
-      else turnFrame(ws, event);
+      if (gate.held === null) {
+        turnFrame(ws, event);
+        return;
+      }
+      gate.held.push(event);
+      if (gate.held.length > REPLAY_HELD_MAX) {
+        shut(ws, MOBILE_CLOSE_CODES.SLOW_CONSUMER, "replay backlog");
+      }
     });
     if (attached === null) return null;
     if (attached.summary.state === "running") {
@@ -250,7 +270,12 @@ export function createSocketHub(
     return { ...attached, gate };
   }
 
-  /** Let the transport breathe between slices: wait for `drain` under backpressure, else one tick. */
+  /**
+   * Let the transport breathe between slices: wait for `drain` under
+   * backpressure, else one tick. A wait that times out forgets the pressure:
+   * the next send says afresh whether the transport is still behind, rather
+   * than every later slice waiting out the full timeout on a stale flag.
+   */
   async function pace(ws: MobileSocket): Promise<void> {
     if (!ws.data.pressured) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -258,13 +283,18 @@ export function createSocketHub(
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let wake: () => void = () => {};
+    let timedOut = false;
     await new Promise<void>((resolve) => {
       wake = resolve;
       ws.data.drainWaiters.add(resolve);
-      timer = setTimeout(resolve, REPLAY_DRAIN_WAIT_MS);
+      timer = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, REPLAY_DRAIN_WAIT_MS);
     });
     clearTimeout(timer);
     ws.data.drainWaiters.delete(wake);
+    if (timedOut) ws.data.pressured = false;
   }
 
   function wakeDrainWaiters(ws: MobileSocket): void {
@@ -332,7 +362,7 @@ export function createSocketHub(
     }
     // A pairing is per fleet: refused before the socket counts as connected.
     try {
-      guardDeviceFleet(ctx.core(), device);
+      guardDeviceFleet(serving(ctx), device);
     } catch (e) {
       send(ws, { type: "auth.error", error: wireError(e).body });
       if (isHermeticError(e) && e.code === "WRONG_FLEET") {
@@ -365,6 +395,8 @@ export function createSocketHub(
     if (ws.data.closed) return;
     send(ws, { type: "auth.ok", hello });
     for (const resume of frame.resume?.turns ?? []) {
+      // A replay above may have outlived the socket.
+      if (ws.data.closed) return;
       const attached = attachTurn(ws, resume.turn_id, resume.after);
       if (attached === null) {
         resError(
@@ -434,7 +466,7 @@ export function createSocketHub(
         const controller = new AbortController();
         ws.data.rpcs.add(controller);
         try {
-          const core = ctx.core();
+          const core = serving(ctx);
           guardFleet(core, frame.target);
           const result = await forwardRpc(core, frame.method, frame.params, controller.signal);
           res(ws, frame.id, result);
@@ -451,7 +483,7 @@ export function createSocketHub(
       case "turn.start": {
         let summary: Awaited<ReturnType<typeof ctx.turns.start>>;
         try {
-          guardFleet(ctx.core(), frame.target);
+          guardFleet(serving(ctx), frame.target);
           summary = await ctx.turns.start({
             device_id: device.device_id,
             instance: frame.turn.instance,
@@ -505,7 +537,7 @@ export function createSocketHub(
       }
       case "observe.open": {
         try {
-          guardFleet(ctx.core(), frame.target);
+          guardFleet(serving(ctx), frame.target);
           const parsed = ChatObserveInput.safeParse({
             instance: frame.instance,
             bot: frame.bot,
@@ -542,8 +574,16 @@ export function createSocketHub(
     for (const ws of sockets) if (ws.data.device !== null) send(ws, frame);
   }
 
-  /** One frame, start to finish. Throws only what a handler did not expect. */
+  /**
+   * One frame, start to finish. Throws only what a handler did not expect.
+   *
+   * A frame the transport delivers after the hub has shut the socket (one
+   * pipelined behind a refusal, a deadline or a revoke) is dropped unread: it
+   * must not authenticate a socket that is already gone, announce a device
+   * nobody will see disconnect, or run a call whose answer cannot be sent.
+   */
   async function handle(ws: MobileSocket, raw: string | Buffer): Promise<void> {
+    if (ws.data.closed) return;
     ws.data.lastSeen = ctx.clock();
     const text = typeof raw === "string" ? raw : raw.toString("utf8");
     let value: unknown;

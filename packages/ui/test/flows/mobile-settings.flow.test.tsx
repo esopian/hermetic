@@ -10,7 +10,7 @@
  */
 import { act, cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { MOBILE_PROTOCOL, MOBILE_ROUTES } from "@hermetic/core";
+import { HermeticError, MOBILE_PROTOCOL, MOBILE_ROUTES, mobileBridgeHost } from "@hermetic/core";
 import { dispatch } from "../../../app/src/handlers/dispatch.ts";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
@@ -221,3 +221,46 @@ test("the address form validates, warns on a wildcard host, and saves overrides"
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save address" })).toBeNull());
   expect(settingsCalls(h)).toContainEqual({ host: null, port: null });
 });
+
+test("a bridge that cannot start says why, until it serves again", async () => {
+  harness = await flowHarness({ mobileHost: true });
+  const h = harness;
+  const host = h.ctx.mobile;
+  if (host === undefined) throw new Error("the harness hosts a bridge");
+  gotoHash("#settings/mobile");
+  mountPortal();
+  const user = userEvent.setup();
+
+  await waitFor(() => expect(toggle().disabled).toBe(false));
+  await user.click(toggle());
+  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
+
+  // The next start fails, twice (the host retries once): the follow reports it.
+  const core = mobileBridgeHost(h.ctx.state.hermetic);
+  const start = core.start;
+  core.start = async () => {
+    throw new HermeticError("CONFLICT", "port 8787 is taken");
+  };
+  try {
+    await act(async () => {
+      await host.stop("test");
+      await host.sync();
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Bridge failed to start: port 8787 is taken (CONFLICT)")).toBeDefined(),
+    );
+    expect(screen.getByText("not serving")).toBeDefined();
+  } finally {
+    core.start = start;
+  }
+
+  // Serving again clears it.
+  await act(async () => {
+    await host.sync();
+  });
+  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
+  expect(screen.queryByText(/Bridge failed to start/)).toBeNull();
+  await act(async () => {
+    await host.stop("test");
+  });
+}, 20_000);

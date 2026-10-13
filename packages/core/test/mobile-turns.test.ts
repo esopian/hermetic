@@ -366,4 +366,39 @@ describe("turn registry", () => {
     await expect(reg.start(INPUT)).rejects.toMatchObject({ code: "ABORTED" });
     expect(chat.sent).toEqual([]);
   });
+
+  test("an open the stop cuts short with a DOMException still refuses ABORTED", async () => {
+    const chat = manualSend();
+    // What core's `chat.open` does with an aborted signal: throws its reason.
+    const reg = createTurnRegistry({
+      open: (_input, opts) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener("abort", () => reject(opts.signal.reason), { once: true });
+        }),
+      send: chat.send,
+      abort: async () => ({}),
+    });
+    const starting = reg.start(INPUT);
+    await settle();
+    await reg.stopAll({ timeoutMs: 50 });
+    const refused = await starting.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(HermeticError);
+    expect(refused).toMatchObject({ code: "ABORTED" });
+    expect(chat.sent).toEqual([]);
+  });
+
+  test("an open that fails on its own keeps its own error", async () => {
+    const chat = manualSend();
+    const reg = createTurnRegistry({
+      open: async () => {
+        throw new HermeticError("CHAT_UNREACHABLE", "the box is not answering");
+      },
+      send: chat.send,
+      abort: async () => ({}),
+    });
+    await expect(reg.start(INPUT)).rejects.toMatchObject({ code: "CHAT_UNREACHABLE" });
+  });
 });

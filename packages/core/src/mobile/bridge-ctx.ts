@@ -70,6 +70,19 @@ export function wireError(e: unknown): { status: number; body: MobileErrorBody }
   return { status: 500, body: { code: "INTERNAL", message: "internal error" } };
 }
 
+/**
+ * The SDK the bridge serves, or `NOT_INITIALIZED` (503, 4503) when there is
+ * none to ask right now: a getter that throws is a bridge that cannot answer
+ * yet, not a failure of the request that asked.
+ */
+export function serving(ctx: BridgeCtx): MobileCore {
+  try {
+    return ctx.core();
+  } catch {
+    throw new HermeticError("NOT_INITIALIZED", "this laptop has no fleet to serve");
+  }
+}
+
 /** `FLEET_MISMATCH` unless the request names the fleet this bridge serves. */
 export function guardFleet(core: MobileCore, target: FleetTarget): void {
   const own = core.target;
@@ -106,7 +119,7 @@ export function guardDeviceFleet(core: MobileCore, device: MobileDeviceRow): voi
 }
 
 export async function buildHello(ctx: BridgeCtx, device: MobileDeviceRow): Promise<MobileHello> {
-  const core = ctx.core();
+  const core = serving(ctx);
   const target = core.target;
   if (target === null) {
     throw new HermeticError("NOT_INITIALIZED", "this laptop has no fleet to serve");

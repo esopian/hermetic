@@ -302,8 +302,12 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
         clearInterval(heartbeat);
         clearInterval(sweep);
         notify.stop();
-        hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
+        // Turns first, sockets second: a `turn.start` the stop refuses, and the
+        // `turn.end` of every turn it ends, can still reach a socket that is
+        // open. Best effort — a refusal that settles after the sockets close
+        // is lost, and the phone's retry is refused the same way.
         await turns.stopAll();
+        hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
         await pool.stop();
         // Let the 1001s reach their sockets before the listener goes.
         const deadline = Date.now() + 1_000;

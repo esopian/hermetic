@@ -106,6 +106,25 @@ describe("the feed", () => {
     ).toBeNull();
     expect(mobileFeedEvent({ event: "listening", data: { device_id: "d1" } })).toBeNull();
     expect(mobileFeedEvent({ event: "paired", data: "d1" })).toBeNull();
+    expect(mobileFeedEvent({ event: "error", data: null })).toBeNull();
+  });
+
+  test("an error frame says why the bridge is not serving", () => {
+    expect(
+      mobileFeedEvent({
+        event: "error",
+        data: { code: "EADDRINUSE", message: "the mobile bridge could not start" },
+      }),
+    ).toEqual({ kind: "error", code: "EADDRINUSE", message: "the mobile bridge could not start" });
+    // Untyped fields degrade to something sayable rather than dropping the frame.
+    expect(mobileFeedEvent({ event: "error", data: { code: 7 } })).toEqual({
+      kind: "error",
+      code: "INTERNAL",
+      message: "INTERNAL",
+    });
+    const event = { kind: "error", code: "X", message: "m" } as const;
+    expect(describeFeedEvent(event, (id) => id)).toBe("bridge failed to start");
+    expect(nextConnected(new Set(["a"]), event)).toEqual(new Set(["a"]));
   });
 
   test("connections are learned from device events and cleared by a stop", () => {

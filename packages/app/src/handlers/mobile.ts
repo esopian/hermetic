@@ -75,7 +75,9 @@ export async function mobileSettings(ctx: HandlerContext, params: unknown) {
 
 /**
  * Frames are `{event, data}`: `status` (a `MobileServeStatus`, or null once
- * stopped), then `paired`, `device` and `stopped` as the bridge reports them.
+ * stopped), then `paired`, `device` and `stopped` as the bridge reports them,
+ * and `error` (`{code, message}`) when the bridge could not start even after
+ * its retry — sent once to a follower that joins while it is still not serving.
  */
 export async function mobileServe(
   ctx: HandlerContext,

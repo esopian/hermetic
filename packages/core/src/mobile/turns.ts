@@ -233,15 +233,23 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
       const controller = new AbortController();
       // The conversation first: a refusal here is the caller's error, and what
       // it answers is the session every later frame, abort and push names.
-      const conversation = await deps.open(
-        {
-          instance: input.instance,
-          bot: input.bot,
-          ...(input.session !== undefined ? { session: input.session } : {}),
-          ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
-        },
-        { signal: life.signal },
-      );
+      let conversation: { session: string };
+      try {
+        conversation = await deps.open(
+          {
+            instance: input.instance,
+            bot: input.bot,
+            ...(input.session !== undefined ? { session: input.session } : {}),
+            ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
+          },
+          { signal: life.signal },
+        );
+      } catch (e) {
+        // `chat.open` cut short by `stopAll` throws the signal's own reason (a
+        // DOMException), which the phone would read as INTERNAL: say why.
+        if (life.signal.aborted) throw refuseStopped();
+        throw e;
+      }
       // `stopAll` ran while `chat.open` was out: registering now would leave a
       // turn running that no stop will ever reach.
       if (life.signal.aborted) throw refuseStopped();

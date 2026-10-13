@@ -21,8 +21,10 @@ import { MOBILE_CLOSE_CODES, MOBILE_PROTOCOL, MOBILE_ROUTES } from "../src/mobil
 import { expoPushSender, memoryPushSender } from "../src/mobile/push.ts";
 import { hostAllowed, startMobileBridge, type MobileBridge } from "../src/mobile/server.ts";
 import { createTurnRegistry } from "../src/mobile/turns.ts";
+import { handleHttp } from "../src/mobile/http.ts";
 import {
   REPLAY_CHUNK,
+  REPLAY_HELD_MAX,
   createSocketHub,
   newSocketData,
   type MobileSocket,
@@ -479,6 +481,126 @@ describe("the socket hub, second review", () => {
     await r2;
     expect(turnNs(pressed.sent)).toHaveLength(REPLAY_CHUNK * 3);
     hub.close(pressed.ws);
+  });
+});
+
+describe("the socket hub, third review", () => {
+  test("a frame delivered after the hub shut the socket is dropped unread", async () => {
+    const store = new MemoryMobileStore();
+    const { token, device } = mint(store);
+    let coreCalls = 0;
+    const core = {
+      target: CORE_TARGET,
+      chat: {
+        listening: async () => ({ instances: [] }),
+        swarms: async () => ({ swarms: [] }),
+      },
+    } as unknown as MobileCore;
+    const events: string[] = [];
+    const hub = createSocketHub(
+      hubCtx({
+        store,
+        core: () => {
+          coreCalls++;
+          return core;
+        },
+        emit: (e) => events.push(e.type === "device" ? `device:${e.action}` : e.type),
+      }),
+    );
+
+    // An `auth` pipelined behind a frame that got the socket refused 4400.
+    const pre = fakeSocket(hub, "100.64.0.9", () => 1, false);
+    hub.open(pre.ws);
+    await hub.message(pre.ws, "not json");
+    expect(pre.closes).toEqual([MOBILE_CLOSE_CODES.BAD_FRAME]);
+    const sentBefore = pre.sent.length;
+    await hub.message(pre.ws, authFrame(token));
+    expect(pre.ws.data.device).toBeNull();
+    expect(pre.sent.length).toBe(sentBefore);
+    expect(events).toEqual([]);
+    expect(coreCalls).toBe(0);
+
+    // An `rpc` queued behind a revoke runs nothing.
+    const live = fakeSocket(hub, "100.64.0.9", () => 1, false);
+    hub.open(live.ws);
+    live.ws.data.device = device;
+    hub.dropDevice(device.device_id);
+    expect(live.closes).toEqual([MOBILE_CLOSE_CODES.UNAUTHORIZED]);
+    events.length = 0;
+    await hub.message(
+      live.ws,
+      JSON.stringify({ type: "rpc", id: "r1", method: "chat.swarms", params: {}, target: TARGET }),
+    );
+    expect(coreCalls).toBe(0);
+    expect(events).toEqual([]);
+    expect(live.sent.filter((f) => f["type"] === "res")).toEqual([]);
+  });
+
+  test("past REPLAY_HELD_MAX live frames held behind a replay, the socket closes 1013", async () => {
+    const { turns, turnId, push } = await fedTurn();
+    const store = new MemoryMobileStore();
+    const { device } = mint(store);
+    await buffered(push, REPLAY_CHUNK * 2);
+    const hub = createSocketHub(hubCtx({ store, turns }));
+    // Every send queues: the replay waits on a `drain` that never comes.
+    const s = fakeSocket(hub, "100.64.0.9", () => -1, false);
+    hub.open(s.ws);
+    s.ws.data.device = device;
+    const resuming = hub.message(
+      s.ws,
+      JSON.stringify({ type: "turn.resume", id: "r", turn_id: turnId, after: 0 }),
+    );
+    await Bun.sleep(5);
+    expect(turnNs(s.sent)).toHaveLength(REPLAY_CHUNK);
+    for (let i = 1; i <= REPLAY_HELD_MAX; i++) push(deltaFrame(REPLAY_CHUNK * 2 + i));
+    await Bun.sleep(5);
+    expect(s.closes).toEqual([]);
+    push(deltaFrame(REPLAY_CHUNK * 2 + REPLAY_HELD_MAX + 1));
+    await Bun.sleep(5);
+    expect(s.closes).toEqual([MOBILE_CLOSE_CODES.SLOW_CONSUMER]);
+    expect(s.ws.data.turns.size).toBe(0);
+    // The teardown woke the waiting replay, which sends nothing more.
+    await resuming;
+    expect(turnNs(s.sent)).toHaveLength(REPLAY_CHUNK);
+  });
+
+  test("a drain wait that times out forgets the pressure", async () => {
+    const { turns, turnId, push } = await fedTurn();
+    const store = new MemoryMobileStore();
+    const { device } = mint(store);
+    await buffered(push, REPLAY_CHUNK * 2);
+    const hub = createSocketHub(hubCtx({ store, turns }));
+    // The first slice queues; after that the transport keeps up, but no `drain` comes.
+    let answer = -1;
+    const s = fakeSocket(hub, "100.64.0.9", () => answer);
+    hub.open(s.ws);
+    s.ws.data.device = device;
+    const resuming = hub.message(
+      s.ws,
+      JSON.stringify({ type: "turn.resume", id: "r", turn_id: turnId, after: 0 }),
+    );
+    await Bun.sleep(5);
+    expect(s.ws.data.pressured).toBe(true);
+    answer = 1;
+    await resuming;
+    expect(turnNs(s.sent)).toHaveLength(REPLAY_CHUNK * 2);
+    expect(s.ws.data.pressured).toBe(false);
+    hub.close(s.ws);
+  }, 10_000);
+
+  test("an authenticated route with no SDK to ask is 503 NOT_INITIALIZED, not 500", async () => {
+    const store = new MemoryMobileStore();
+    const { token } = mint(store);
+    const ctx = hubCtx({ store });
+    const res = await handleHttp(
+      ctx,
+      new Request(`http://127.0.0.1${MOBILE_ROUTES.hello}`, {
+        headers: { ...HEADER, authorization: `Bearer ${token}` },
+      }),
+      "test",
+    );
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as Record<string, unknown>)["code"]).toBe("NOT_INITIALIZED");
   });
 });
 

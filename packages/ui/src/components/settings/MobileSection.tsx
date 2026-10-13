@@ -229,6 +229,11 @@ function DevicesTable({
   );
 }
 
+/** `the mobile bridge could not start (EADDRINUSE)`: the code too, unless the message already says it. */
+function startFailure(event: { code: string; message: string }): string {
+  return event.message.includes(event.code) ? event.message : `${event.message} (${event.code})`;
+}
+
 export function MobileSection() {
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
   const [draft, setDraft] = useState<AddressDraft>({ host: "", port: "" });
@@ -237,6 +242,8 @@ export function MobileSection() {
   const [follow, setFollow] = useState<Follow>("off");
   const [connected, setConnected] = useState<Set<string>>(() => new Set());
   const [lastEvent, setLastEvent] = useState<{ text: string; at: number } | null>(null);
+  /** Why the bridge is not serving, as `mobile.serve` last said; cleared by any status. */
+  const [startError, setStartError] = useState<string | null>(null);
   const [pairing, setPairing] = useState<MobilePairView | null>(null);
   const [justPaired, setJustPaired] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<MobileDeviceView | null>(null);
@@ -295,7 +302,11 @@ export function MobileSection() {
       onFrame: (frame) => {
         const event = mobileFeedEvent(frame);
         if (event === null) return;
-        if (event.kind === "status") setServing(event.status);
+        if (event.kind === "status") {
+          setServing(event.status);
+          setStartError(null);
+        }
+        if (event.kind === "error") setStartError(startFailure(event));
         setConnected((current) => nextConnected(current, event));
         const text = describeFeedEvent(event, (id) => names.current.get(id) ?? id);
         if (text !== null) setLastEvent({ text, at: Date.now() });
@@ -304,7 +315,7 @@ export function MobileSection() {
           setPairing(null);
           setJustPaired(event.name);
         }
-        if (event.kind !== "status") void refreshDevices();
+        if (event.kind === "paired" || event.kind === "device") void refreshDevices();
       },
     });
   }, [enabled, refreshDevices]);
@@ -413,6 +424,11 @@ export function MobileSection() {
             },
           ]}
         />
+        {enabled && serving === null && startError !== null ? (
+          <div className="st-hint mono st-err" role="status">
+            Bridge failed to start: {startError}
+          </div>
+        ) : null}
         <SettingRow
           label="Serve the bridge"
           desc="While this app is open. Paired phones reconnect on their own."

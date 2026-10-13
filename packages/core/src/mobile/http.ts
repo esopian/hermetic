@@ -16,7 +16,14 @@ import {
   MobileRpcRequest,
 } from "../schema/index.ts";
 import type { ZodType } from "zod";
-import { type BridgeCtx, buildHello, guardDeviceFleet, guardFleet, wireError } from "./bridge-ctx.ts";
+import {
+  type BridgeCtx,
+  buildHello,
+  guardDeviceFleet,
+  guardFleet,
+  serving,
+  wireError,
+} from "./bridge-ctx.ts";
 import { forwardRpc } from "./core.ts";
 import type { MobileDeviceRow } from "./device-store.ts";
 import { bearerOf, redeemPairCode, verifyToken } from "./pairing.ts";
@@ -57,8 +64,9 @@ function authenticate(ctx: BridgeCtx, req: Request): MobileDeviceRow {
   const token = bearerOf(req.headers.get("authorization"));
   const device = verifyToken(ctx.store, token ?? "");
   if (device === null) throw new HermeticError("UNAUTHORIZED", "unknown or revoked device token");
-  // A phone paired for another fleet is refused before anything is read or written for it.
-  guardDeviceFleet(ctx.core(), device);
+  // A phone paired for another fleet is refused before anything is read or
+  // written for it; no SDK to ask at all is 503, not a 500.
+  guardDeviceFleet(serving(ctx), device);
   ctx.store.touch(device.device_id, new Date(ctx.clock()).toISOString());
   return device;
 }
@@ -99,7 +107,7 @@ export async function handleHttp(
         const body = await readBody(req, MobilePairRequest);
         // A bridge with no fleet cannot build the `Hello` a pairing answers
         // with; refusing before the code is spent leaves it for a retry.
-        const target = ctx.core().target;
+        const target = serving(ctx).target;
         if (target === null) {
           throw new HermeticError("NOT_INITIALIZED", "this laptop has no fleet to serve");
         }
@@ -123,7 +131,7 @@ export async function handleHttp(
         authenticate(ctx, req);
         untimed();
         const body = await readBody(req, MobileRpcRequest);
-        const core = ctx.core();
+        const core = serving(ctx);
         guardFleet(core, body.target);
         const result = await forwardRpc(core, body.method, body.params, req.signal);
         if (body.method === "chat.listen") {

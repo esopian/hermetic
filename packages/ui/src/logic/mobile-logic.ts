@@ -82,7 +82,9 @@ export type MobileFeedEvent =
       kind: "device";
       device_id: string;
       action: "connected" | "disconnected" | "revoked";
-    };
+    }
+  /** The bridge could not start, after its retry: what `mobile.serve` reports instead of serving. */
+  | { kind: "error"; code: string; message: string };
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
@@ -109,6 +111,10 @@ export function mobileFeedEvent(frame: { event: string; data: unknown }): Mobile
   }
   const d = record(frame.data);
   if (d === null) return null;
+  if (frame.event === "error") {
+    const code = str(d, "code") ?? "INTERNAL";
+    return { kind: "error", code, message: str(d, "message") ?? code };
+  }
   const device_id = str(d, "device_id");
   if (device_id === null) return null;
   if (frame.event === "paired") {
@@ -150,6 +156,8 @@ export function describeFeedEvent(
       return `${nameOf(event.device_id)} ${event.action}`;
     case "status":
       return event.status === null ? "bridge stopped" : null;
+    case "error":
+      return "bridge failed to start";
   }
 }
 
