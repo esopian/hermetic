@@ -155,7 +155,23 @@ test("notification frames update the inbox and alert unless watching", async () 
   expect(alerts).toEqual([
     expect.objectContaining({ decision: "banner", title: "ops replied", body: "deploy finished" }),
   ]);
+  // The header count is the bridge's (its frame said 2); the rows say which
+  // are read: the one about the watched thread was read as it landed.
   expect(client.inbox.badgeCount()).toBe(2);
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
+  expect(client.inbox.unreadFor("kestrel", "ops")).toBe(1);
+});
+
+test("a failed turn's chat.error in the watched thread does not badge it; in background it does", async () => {
+  const { client, ws } = await connected();
+  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+  const error = (id: string) =>
+    notification({ id, kind: "chat.error", class: "bad", title: "scribe on atlas could not answer" });
+  ws.push({ type: "notification", row: error("e1"), counts: { unread: 1, needs_action: 0 } });
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
+  client.setPhase("background");
+  ws.push({ type: "notification", row: error("e2"), counts: { unread: 1, needs_action: 0 } });
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
 });
 
 test("listening frames reach the roster", async () => {

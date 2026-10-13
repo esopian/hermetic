@@ -102,7 +102,7 @@ export function rosterRows(
  * is no last message at all, the one case it is true.
  *
  * Phone-only: the name fallback is dropped (empty string) when the row already
- * shows that name — as its title, or as the `default` tag of a bot named
+ * shows that name — as its title (in any case), or as the `default` tag of a bot named
  * `default` — because the desktop rail's rule there reads "ember default /
  * default" on a phone row. The row then draws no second line.
  */
@@ -112,7 +112,11 @@ export function previewLine(bot: Bot): string {
   const description = bot.description?.trim();
   if (description) return description;
   if (!bot.last_message_at) return "No messages yet";
-  const nameShown = (bot.title || bot.name) === bot.name || (bot.is_default && bot.name === "default");
+  // Case-insensitive: a title that differs from the name only in case ("Magpie"
+  // over "magpie") already shows the name.
+  const nameShown =
+    (bot.title || bot.name).toLowerCase() === bot.name.toLowerCase() ||
+    (bot.is_default && bot.name === "default");
   return nameShown ? "" : bot.name;
 }
 

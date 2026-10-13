@@ -1,7 +1,10 @@
 import { act, renderHook } from "@testing-library/react-native";
-import { endOffset, fromBottom, nextFollowing } from "../../src/chat/follow.ts";
+import type { TranscriptItem } from "../../src/chat/Transcript.tsx";
+import { endOffset, fromBottom, nextFollowing, shouldRepin } from "../../src/chat/follow.ts";
 import { transcriptItems } from "../../src/chat/Transcript.tsx";
+import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 import { useThrottled } from "../../src/ui/useThrottled.ts";
+import type { ChatMessage } from "../../src/protocol/types.ts";
 import { msg } from "../helpers/fixtures.ts";
 import { NOW } from "../helpers/render.tsx";
 
@@ -36,6 +39,27 @@ describe("following the live end", () => {
     expect(endOffset(1000, 600)).toBe(400);
     expect(endOffset(300, 600)).toBe(0);
   });
+
+  test("with the keyboard up, the end is past the content by the bottom inset", () => {
+    // KeyboardChatScrollView adds the keyboard's height to the bottom inset:
+    // pinning to content − viewport would park the newest line under it.
+    expect(endOffset(1000, 600, 300)).toBe(700);
+    expect(endOffset(300, 600, 400)).toBe(100);
+    // Pinned there, the reader is at the bottom; at the inset-less end they are not.
+    expect(
+      fromBottom({ offsetY: 700, contentHeight: 1000, viewportHeight: 600, insetBottom: 300 }),
+    ).toBe(0);
+    expect(
+      fromBottom({ offsetY: 400, contentHeight: 1000, viewportHeight: 600, insetBottom: 300 }),
+    ).toBe(300);
+  });
+
+  test("a growth under the reader's finger or fling does not re-pin", () => {
+    expect(shouldRepin({ following: true, dragging: false, momentum: false })).toBe(true);
+    expect(shouldRepin({ following: true, dragging: true, momentum: false })).toBe(false);
+    expect(shouldRepin({ following: true, dragging: false, momentum: true })).toBe(false);
+    expect(shouldRepin({ following: false, dragging: false, momentum: false })).toBe(false);
+  });
 });
 
 describe("transcriptItems", () => {
@@ -51,6 +75,63 @@ describe("transcriptItems", () => {
     const replied = transcriptItems([local], live, true, NOW);
     const turn = replied.find((i) => i.kind === "turn" && i.mine);
     expect(turn?.kind === "turn" && turn.answered).toBe(true);
+  });
+
+  test("only an agent turn directly after an own run answers it", () => {
+    const local = msg({ id: "local:x#1", role: "user", at: at(0), text: "hi" });
+    // Another bot's message lands between the prompt and a later agent row.
+    const other = msg({
+      id: "dm-1",
+      role: "user",
+      at: at(1),
+      text: "ping",
+      from_bot: { name: "rook", handle: null },
+    });
+    const later = msg({ id: "b1", role: "bot", at: at(2), text: "unrelated" });
+    const items = transcriptItems([local, other, later], null, false, NOW);
+    const mine = items.find((i) => i.kind === "turn" && i.mine);
+    expect(mine?.kind === "turn" && mine.answered).toBe(false);
+
+    // A run of own messages is answered together by the reply after it.
+    const second = msg({ id: "local:x#2", role: "user", at: at(1), text: "and this" });
+    const reply = msg({ id: "b2", role: "bot", at: at(2), text: "both" });
+    const run = transcriptItems([local, second, reply], null, false, NOW);
+    expect(
+      run.filter((i) => i.kind === "turn" && i.mine).map((i) => i.kind === "turn" && i.answered),
+    ).toEqual([true, true]);
+  });
+
+  test("unchanged rows keep their identity across a live delta", () => {
+    const history = [
+      msg({ id: "u0", role: "user", at: at(-120), text: "look into it" }),
+      // A tool step and the prose closing it merge into one row (a fresh merged object per call).
+      msg({
+        id: "t0",
+        at: at(-110),
+        blocks: [
+          { kind: "tool", name: "terminal", args: { command: "ls" }, status: "ok" },
+        ] as ChatMessage["blocks"],
+      }),
+      msg({ id: "b0", at: at(-100), text: "found it" }),
+      msg({ id: "u1", role: "user", at: at(-10), text: "now fix it" }),
+    ];
+    const live1 = msg({ id: "live-1", at: at(0), text: "on" });
+    const first = transcriptItems(history, live1, true, NOW);
+    const live2 = { ...live1, blocks: [{ kind: "text", markdown: "on it" }] } as ChatMessage;
+    const second = transcriptItems(history, live2, true, NOW, first);
+
+    const turns = (items: TranscriptItem[]) =>
+      items.filter((i): i is Extract<TranscriptItem, { kind: "turn" }> => i.kind === "turn");
+    const [a, b] = [turns(first), turns(second)];
+    expect(a.length).toBe(b.length);
+    expect(a.some((i) => i.sources.length > 1)).toBe(true);
+    for (let i = 0; i < a.length - 1; i++) {
+      expect(b[i]).toBe(a[i]);
+      expect(b[i]?.row).toBe(a[i]?.row);
+    }
+    // The live row itself is new.
+    expect(b[b.length - 1]).not.toBe(a[a.length - 1]);
+    expect(b[b.length - 1]?.row.message).toBe(live2);
   });
 });
 
@@ -72,5 +153,66 @@ describe("useThrottled", () => {
       jest.advanceTimersByTime(80);
     });
     expect(result.current).toBe(3);
+  });
+
+  test("a change outside the window renders once, already carrying the new value", async () => {
+    const seen: number[] = [];
+    const { rerender } = await renderHook(
+      ({ v }: { v: number }) => {
+        const shown = useThrottled(v, 80);
+        seen.push(shown);
+        return shown;
+      },
+      { initialProps: { v: 0 } },
+    );
+    seen.length = 0;
+    await rerender({ v: 1 });
+    expect(seen).toEqual([1]);
+  });
+
+  test("an `immediate` value skips the window", async () => {
+    const isNull = (v: number | null) => v === null;
+    const { result, rerender } = await renderHook(
+      ({ v }: { v: number | null }) => useThrottled(v, 80, isNull),
+      { initialProps: { v: 0 as number | null } },
+    );
+    await rerender({ v: 1 });
+    await rerender({ v: 2 });
+    expect(result.current).toBe(1);
+    // The turn ended: `live` went null, and it must not linger for the window.
+    await rerender({ v: null });
+    expect(result.current).toBeNull();
+  });
+});
+
+describe("usePullRefresh", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test("a read that answers at once still holds the spinner for the floor", async () => {
+    const read = jest.fn(() => Promise.resolve());
+    const { result } = await renderHook(() => usePullRefresh(read, 600));
+    await act(async () => {
+      result.current.onRefresh();
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.current.refreshing).toBe(true);
+    await act(async () => {
+      jest.advanceTimersByTime(599);
+    });
+    expect(result.current.refreshing).toBe(true);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(result.current.refreshing).toBe(false);
+  });
+
+  test("a failed read still ends the refresh", async () => {
+    const { result } = await renderHook(() => usePullRefresh(() => Promise.reject(new Error("x")), 10));
+    await act(async () => {
+      result.current.onRefresh();
+      jest.advanceTimersByTime(10);
+    });
+    expect(result.current.refreshing).toBe(false);
   });
 });

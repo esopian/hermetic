@@ -50,14 +50,19 @@ function inlineParts(text: string): PlainPart[] {
 }
 
 /**
- * Operator text as the desktop draws it: fenced blocks, and runs of prose with
- * inline code in them. Whitespace is never touched (`pre-wrap`).
+ * Operator text after the desktop's `PlainText`: fenced blocks, and runs of
+ * prose with inline code in them, whitespace otherwise kept (`pre-wrap`).
+ *
+ * One phone-only difference: the newline directly beside a fence is dropped.
+ * The desktop's `pre-wrap` keeps it, so a desktop bubble shows a blank line
+ * there; on a phone the pane already breaks the line, and the extra one only
+ * costs height in a narrow bubble.
  */
 export function plainSegments(text: string): PlainSegment[] {
   const segments: PlainSegment[] = [];
   const prose = (slice: string, beforeFence: boolean, afterFence: boolean) => {
-    // The newline either side of a fence is the line break the block itself
-    // makes; kept, it would draw as an extra blank line beside the pane.
+    // Phone-only: the newline either side of a fence is dropped, since the
+    // pane breaks the line itself (the desktop's `pre-wrap` keeps it).
     let s = slice;
     if (afterFence) s = s.replace(/^\n/, "");
     if (beforeFence) s = s.replace(/\n$/, "");

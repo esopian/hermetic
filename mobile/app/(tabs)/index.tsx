@@ -5,7 +5,7 @@
  * 60 s while in front. "Listening" opens the instance picker.
  */
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from "react-native";
 import { BotsList } from "../../src/bots/BotsList.tsx";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
@@ -15,6 +15,7 @@ import { BANDED_SOCKET_STATES, rosterRows } from "../../src/client/roster-rows.t
 import type { Bot } from "../../src/protocol/types.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
+import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 import { Kicker, Screen, StatusSquare, Text } from "../../src/ui/index.ts";
 import { useNow } from "../../src/ui/useNow.ts";
 
@@ -33,7 +34,6 @@ export default function Bots() {
   const { client, credentials, socketState, reconnect, servedFleet, rePair } = useBridge();
   const { state, layout } = useRoster();
   const now = useNow();
-  const [refreshing, setRefreshing] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -90,14 +90,12 @@ export default function Bots() {
     [client],
   );
 
-  const onRefresh = useCallback(() => {
-    if (!client) return;
-    setRefreshing(true);
+  const read = useCallback(() => {
+    if (!client) return Promise.resolve();
     haptic.light();
-    void Promise.all([client.roster.refresh(), client.inbox.refresh()]).finally(() =>
-      setRefreshing(false),
-    );
+    return Promise.all([client.roster.refresh(), client.inbox.refresh()]);
   }, [client]);
+  const { refreshing, onRefresh } = usePullRefresh(client ? read : null);
 
   const live = socketState === "open";
   const banded = BANDED_SOCKET_STATES.has(socketState);

@@ -5,7 +5,7 @@
  * composer, the session switcher and the subagent sheet.
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,7 +22,7 @@ import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx"
 import { Composer } from "../../../src/chat/Composer.tsx";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
 import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentSheet.tsx";
-import { Transcript, transcriptItems } from "../../../src/chat/Transcript.tsx";
+import { Transcript, type TranscriptItem, transcriptItems } from "../../../src/chat/Transcript.tsx";
 import { subagentsIn } from "../../../src/client/chat-activity.ts";
 import { composerState, type ThreadState, threadState } from "../../../src/client/chat-logic.ts";
 import { turnErrorNeedsBand } from "../../../src/client/chat-recovery.ts";
@@ -44,6 +44,7 @@ import { useThrottled } from "../../../src/ui/useThrottled.ts";
 
 const LIVE_THROTTLE_MS = 80;
 const NO_IDS: readonly string[] = [];
+const isNull = (value: unknown): boolean => value === null;
 
 const AVATAR_STATUS: Record<ThreadState, AvatarStatus> = {
   ready: "ready",
@@ -117,18 +118,25 @@ export default function Conversation() {
   const botRow = swarm?.bots.find((b) => b.name === target.bot) ?? null;
   const botTitle = botRow?.title ?? null;
   const messages = view?.messages ?? [];
-  // The streaming row redraws at most every 80 ms (`useThrottled`).
-  const live = useThrottled(view?.live ?? null, LIVE_THROTTLE_MS);
+  // The streaming row redraws at most every 80 ms (`useThrottled`). The turn
+  // ending (`live` gone, the reply recorded in the same change) is shown at
+  // once: a stale `live` beside the recorded reply would draw it twice — a
+  // failed turn's card (`failed:…`) has an id the transcript never shares.
+  const live = useThrottled(view?.live ?? null, LIVE_THROTTLE_MS, isNull);
   const sending = view?.sending ?? false;
   // The store hands out a fresh `released` array with every snapshot (each
   // streamed delta); keep one identity per content so the transcript's
   // `extraData` does not change, and redraw every row, on each delta.
   const releasedKey = (view?.released ?? NO_IDS).join("\n");
   const released = useMemo(() => view?.released ?? NO_IDS, [releasedKey]);
-  const items = useMemo(
-    () => transcriptItems(messages, live, sending, now),
-    [messages, live, sending, now],
-  );
+  // The last answer is handed back so unchanged rows keep their identity and
+  // the memoised rows skip a streamed delta (`transcriptItems`).
+  const lastItems = useRef<TranscriptItem[]>([]);
+  const items = useMemo(() => {
+    const next = transcriptItems(messages, live, sending, now, lastItems.current);
+    lastItems.current = next;
+    return next;
+  }, [messages, live, sending, now]);
   const state = threadState({
     status: agent?.display_status ?? null,
     reachable: swarm?.reachable ?? true,

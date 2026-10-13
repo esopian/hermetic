@@ -6,7 +6,7 @@
  */
 import { FlashList } from "@shopify/flash-list";
 import { router } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useInbox } from "../../src/bridge/hooks.ts";
@@ -22,13 +22,19 @@ import { useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
 import { Kicker, Screen, SkeletonRow, Text } from "../../src/ui/index.ts";
 import { useNow } from "../../src/ui/useNow.ts";
+import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 
 export default function Inbox() {
   const t = useTheme();
   const { client } = useBridge();
   const inbox = useInbox();
   const now = useNow();
-  const [refreshing, setRefreshing] = useState(false);
+  const read = useCallback(() => {
+    haptic.light();
+    return client?.inbox.refresh() ?? Promise.resolve();
+  }, [client]);
+  // A floor on the spinner, as on Bots (`usePullRefresh`).
+  const { refreshing, onRefresh } = usePullRefresh(read);
   const rows = inbox?.rows ?? [];
   const groups = useMemo(() => groupNotifications(rows), [rows]);
   const unread = inbox?.counts.unread ?? 0;
@@ -113,16 +119,7 @@ export default function Inbox() {
         extraData={now}
         renderItem={({ item }) => <InboxRow group={item} now={now} onOpen={onOpen} onAck={onAck} />}
         refreshControl={
-          <RefreshControl
-            tintColor={t.c.fg3}
-            refreshing={refreshing}
-            onRefresh={async () => {
-              setRefreshing(true);
-              haptic.light();
-              await client?.inbox.refresh();
-              setRefreshing(false);
-            }}
-          />
+          <RefreshControl tintColor={t.c.fg3} refreshing={refreshing} onRefresh={onRefresh} />
         }
         ListEmptyComponent={
           loading ? (

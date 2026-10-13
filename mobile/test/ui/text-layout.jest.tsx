@@ -54,7 +54,7 @@ describe("operator text: the desktop's PlainText", () => {
     ]);
   });
 
-  test("a fenced block is a pane; the newlines beside it are the block's own break", () => {
+  test("a fenced block is a pane; the phone drops the newline beside it (the desktop keeps it)", () => {
     expect(plainSegments("before\n```sh\necho hi\n```\nafter")).toEqual([
       { kind: "inline", parts: [{ code: false, text: "before" }] },
       { kind: "fence", text: "echo hi" },

@@ -147,8 +147,9 @@ export default function AgentBrowser() {
         }}
       >
         <StatusSquare status={agent?.display_status ?? "pending"} size={8} />
+        {/* The status only: the View only chip beside it already says the mode. */}
         <Kicker style={{ flex: 1 }} numberOfLines={1}>
-          {[agent?.display_status, viewOnly ? "view only" : "interactive"].filter(Boolean).join(" · ")}
+          {agent?.display_status ?? ""}
         </Kicker>
         <Chip label="View only" on={viewOnly} onPress={() => setViewOnly((v) => !v)} />
         <Chip

@@ -1,7 +1,8 @@
 /**
  * One inbox card: a run of rows about one conversation folded into one
  * (`groupNotifications`), unread if any member is (`isUnreadRow`, the rule
- * the header's count uses). Class colour on the left seam (grey once the
+ * the header's count uses), cleared only when every member is, and needing
+ * you when any member still does (`groupCondition`). Class colour on the left seam (grey once the
  * condition has cleared), an unread marker, needs-you in gold, the count of
  * what it folded, and the time. Swipe left to mark it read.
  */
@@ -11,7 +12,12 @@ import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { railTime } from "../client/chat-logic.ts";
-import { groupRow, groupUnread, type NotificationGroup } from "../client/inbox-logic.ts";
+import {
+  groupCondition,
+  groupRow,
+  groupUnread,
+  type NotificationGroup,
+} from "../client/inbox-logic.ts";
 import type { Notification } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { classColor } from "../theme/tokens.ts";
@@ -36,11 +42,12 @@ function InboxRowImpl({
   // The marker and the header count read one rule (`isUnreadRow`); the class
   // colour is the left seam's job and says nothing about read state.
   const unread = groupUnread(group);
-  const resolved = !!row.resolved_at;
-  const needs = row.class === "needs_action" && !resolved;
+  // Cleared and needs-you read every member too (`groupCondition`), so a card
+  // never says "cleared" over a member the header still counts as needing you.
+  const { resolved, needs } = groupCondition(group);
   // A resolved row loses emphasis rather than gaining a colour (desktop
   // `NotificationRow`: tone `--line2` once the condition has cleared).
-  const edge = resolved ? t.c.line2 : classColor(t.c, row.class);
+  const edge = resolved ? t.c.line2 : classColor(t.c, needs ? "needs_action" : row.class);
   return (
     <ReanimatedSwipeable
       ref={swipe}

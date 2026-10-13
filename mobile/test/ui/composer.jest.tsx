@@ -97,12 +97,16 @@ describe("Composer", () => {
     expect(screen.queryByText(/Send now steers/)).toBeNull();
   });
 
-  test("sending with text: Queue queues, Send now steers, and a line says which is which", async () => {
+  test("sending with text: Queue queues, Send now steers, Stop stays, and a line says which is which", async () => {
     const h = handlers();
     await renderUi(<Harness {...base} {...h} sending initial="first" />);
     expect(screen.getByText("Queue waits for the turn · Send now steers it")).toBeTruthy();
     expect(screen.getByText("Send now")).toBeTruthy();
-    expect(screen.queryByLabelText("Stop turn")).toBeNull();
+    // A draft never hides Stop (the desktop's Esc stops whatever is typed):
+    // it stays as a square beside Send now and Queue, and leaves the draft be.
+    await fireEvent.press(screen.getByLabelText("Stop turn"));
+    expect(h.onStop).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Message").props.value).toBe("first");
     await fireEvent.press(screen.getByLabelText("Queue"));
     expect(h.onQueue).toHaveBeenCalledWith("first");
     await fireEvent.changeText(screen.getByLabelText("Message"), "redirect");

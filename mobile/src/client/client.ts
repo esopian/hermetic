@@ -29,6 +29,8 @@ import {
   type AppPhase,
   alertFor,
   dedupeKey,
+  isUnreadRow,
+  isWatchingThread,
   NotificationsStore,
   type WatchedThread,
 } from "./notifications-store.ts";
@@ -342,6 +344,11 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         },
         { dedupe, row, phase, watched },
       );
+      // A row about the thread on screen is read as it lands, the same rule
+      // as opening it (`ackThread` on focus): a failed turn's `chat.error`
+      // would otherwise badge the conversation the operator is looking at.
+      if (phase === "active" && isUnreadRow(row) && isWatchingThread(row, watched))
+        void inbox.ack([row.id]);
       if (row.kind.startsWith("chat.")) void roster.refresh();
     }),
   ];

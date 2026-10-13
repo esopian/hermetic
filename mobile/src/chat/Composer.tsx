@@ -8,6 +8,8 @@
  *   steers it into the running turn — falling back to the head of the queue
  *   and a stop when the box will not take a steer. A line above the input says
  *   which is which (the desktop's footer hint, "Enter queues · ⌘Enter sends now").
+ *   Stop stays within reach as a square ■ beside them: the desktop's Esc stops
+ *   a turn whatever is typed, so a draft never hides the way out.
  * - Stop lives here and only here: the conversation header has none.
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
@@ -74,6 +76,31 @@ export function isAutocorrectEcho(incoming: string, taken: string, elapsedMs: nu
     changed++;
   }
   return changed <= Math.max(1, Math.floor(a.length / 2));
+}
+
+/** Stop as a 44pt square glyph, for the queue row where a labelled button does not fit. */
+function StopSquare({ onPress }: { onPress(): void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Stop turn"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: t.touch.min,
+        height: t.touch.min,
+        alignItems: "center",
+        justifyContent: "center",
+        borderWidth: t.border.control,
+        borderColor: t.c.bad,
+        backgroundColor: pressed ? t.c.bad : "transparent",
+      })}
+    >
+      {({ pressed }) => (
+        <View style={{ width: 12, height: 12, backgroundColor: pressed ? t.c.dangerText : t.c.bad }} />
+      )}
+    </Pressable>
+  );
 }
 
 const LINE = 21;
@@ -288,6 +315,12 @@ function ComposerImpl(props: ComposerProps) {
                 if (!text) return;
                 haptic.select();
                 props.onQueue(text);
+              }}
+            />
+            <StopSquare
+              onPress={() => {
+                haptic.warning();
+                props.onStop();
               }}
             />
           </View>

@@ -36,7 +36,7 @@ import { useTheme } from "../theme/theme.tsx";
 import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
-import { AT_BOTTOM_SLACK, endOffset, fromBottom, nextFollowing } from "./follow.ts";
+import { AT_BOTTOM_SLACK, endOffset, fromBottom, nextFollowing, shouldRepin } from "./follow.ts";
 import { TurnRow } from "./TurnRow.tsx";
 
 export type TranscriptItem =
@@ -45,20 +45,49 @@ export type TranscriptItem =
       kind: "turn";
       key: string;
       row: TurnRowType;
+      /** The source messages the row was built from, for reusing it unchanged. */
+      sources: readonly ChatMessage[];
       streaming: boolean;
       mine: boolean;
-      /** Mine, and an agent turn follows it: no longer "sending…". */
+      /** Mine, and an agent turn directly follows its run: no longer "sending…". */
       answered: boolean;
     };
 
-/** Rows → list items: a divider before each row that opens a day. */
+const sameList = <T,>(a: readonly T[], b: readonly T[]): boolean =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** Whether `next` draws exactly what `prev` drew, so `prev` (and its row) can stand. */
+function sameItem(prev: TranscriptItem | undefined, next: TranscriptItem): boolean {
+  if (!prev || prev.kind !== next.kind || prev.key !== next.key) return false;
+  if (prev.kind === "divider" || next.kind === "divider")
+    return prev.kind === "divider" && next.kind === "divider" && prev.label === next.label;
+  return (
+    prev.streaming === next.streaming &&
+    prev.mine === next.mine &&
+    prev.answered === next.answered &&
+    prev.row.continuation === next.row.continuation &&
+    prev.row.divider === next.row.divider &&
+    sameList(prev.sources, next.sources)
+  );
+}
+
+/**
+ * Rows → list items: a divider before each row that opens a day.
+ *
+ * `previous` is the last call's answer. `turnRows` builds every row afresh, so
+ * without it each streamed delta handed every visible row a new object and the
+ * memoised `TurnRow` redrew them all; an item whose source messages (by
+ * identity) and placement are unchanged is handed back as the same object.
+ */
 export function transcriptItems(
   messages: readonly ChatMessage[],
   live: ChatMessage | null,
   sending: boolean,
   now: number,
+  previous: readonly TranscriptItem[] = [],
 ): TranscriptItem[] {
   const all = live && !messages.some((m) => m.id === live.id) ? [...messages, live] : messages;
+  const byId = new Map(all.map((m) => [m.id, m]));
   const rows = turnRows(all, now, { breakBefore: live?.id ?? null });
   const items: TranscriptItem[] = [];
   for (const row of rows) {
@@ -68,19 +97,30 @@ export function transcriptItems(
       kind: "turn",
       key,
       row,
+      sources: row.ids.flatMap((id) => {
+        const m = byId.get(id);
+        return m ? [m] : [];
+      }),
       streaming: sending && !!live && row.ids.includes(live.id),
       mine: row.message.role === "user" && !row.message.from_bot,
       answered: false,
     });
   }
+  // An own run is answered by an agent turn directly after it: anything else
+  // in between (a system row, another bot's message) means this one has not
+  // been taken up yet.
   let replied = false;
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
     if (item?.kind !== "turn") continue;
     if (item.mine) item.answered = replied;
-    else if (item.row.message.role === "bot") replied = true;
+    else replied = item.row.message.role === "bot";
   }
-  return items;
+  const before = new Map(previous.map((item) => [item.key, item]));
+  return items.map((item) => {
+    const prev = before.get(item.key);
+    return prev && sameItem(prev, item) ? prev : item;
+  });
 }
 
 const ChatScroll = forwardRef<ScrollView, ScrollViewProps>(function ChatScroll(props, ref) {
@@ -146,7 +186,10 @@ function TranscriptImpl({
     following: true,
     pinnedY: null,
   });
-  const size = useRef({ content: 0, viewport: 0 });
+  // `inset` is the scroll view's bottom content inset: the keyboard's height
+  // while it is up (`KeyboardChatScrollView` adds it on iOS), so the live end
+  // sits above the keyboard rather than under it.
+  const size = useRef({ content: 0, viewport: 0, inset: 0 });
 
   const setFollowing = useCallback((following: boolean) => {
     pin.current.following = following;
@@ -161,18 +204,21 @@ function TranscriptImpl({
   // `onContentSizeChange` FlashList's own layout has not caught up with the
   // new height yet, so its idea of "the end" is the old one.
   const pinToEnd = useCallback((animated: boolean) => {
-    const y = endOffset(size.current.content, size.current.viewport);
+    const y = endOffset(size.current.content, size.current.viewport, size.current.inset);
     list.current?.scrollToOffset({ offset: y, animated });
     pin.current.pinnedY = y;
   }, []);
 
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+      const { contentOffset, contentSize, layoutMeasurement, contentInset } = e.nativeEvent;
+      // iOS reports the inset with every scroll event; elsewhere keep the last one heard.
+      if (contentInset) size.current.inset = contentInset.bottom;
       const gap = fromBottom({
         offsetY: contentOffset.y,
         contentHeight: contentSize.height,
         viewportHeight: layoutMeasurement.height,
+        insetBottom: size.current.inset,
       });
       const next = nextFollowing({
         following: pin.current.following,
@@ -191,14 +237,30 @@ function TranscriptImpl({
 
   // A streaming reply grows its row without adding one; re-pin on every growth
   // while following, without animation, so the text runs on like a terminal
-  // instead of lagging and catching up in jumps.
+  // instead of lagging and catching up in jumps. Not under the reader's finger
+  // or fling (`shouldRepin`): the drag decides (`onScroll`), and a growth it
+  // skipped is caught up when the touch ends still following.
   const onContentSizeChange = useCallback(
     (_w: number, h: number) => {
       size.current.content = h;
-      if (pin.current.following) pinToEnd(false);
+      if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
     },
     [pinToEnd],
   );
+
+  // The keyboard moving changes the inset, and with it where the end is.
+  const onContentInsetChange = useCallback(
+    (insets: { bottom: number }) => {
+      size.current.inset = insets.bottom;
+      if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
+    },
+    [pinToEnd],
+  );
+  const scrollOverrides = useMemo(() => ({ onContentInsetChange }), [onContentInsetChange]);
+
+  const touchEnded = useCallback(() => {
+    if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
+  }, [pinToEnd]);
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
     size.current.viewport = e.nativeEvent.layout.height;
@@ -272,15 +334,20 @@ function TranscriptImpl({
         onScrollBeginDrag={() => {
           touch.current.dragging = true;
         }}
-        onScrollEndDrag={() => {
+        onScrollEndDrag={(e) => {
           touch.current.dragging = false;
+          // A release with no fling ends the touch here; a fling ends it at momentum end.
+          if (!e.nativeEvent.velocity?.y) touchEnded();
         }}
         onMomentumScrollBegin={() => {
           touch.current.momentum = true;
         }}
         onMomentumScrollEnd={() => {
           touch.current.momentum = false;
+          touchEnded();
         }}
+        // Reaches `ChatScroll` (FlashList passes these to its scroll component).
+        overrideProps={scrollOverrides}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"

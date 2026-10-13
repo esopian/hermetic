@@ -67,6 +67,23 @@ export function groupUnread<T extends { read_at?: string | null; resolved_at?: s
   return group.rows.some(isUnreadRow);
 }
 
+/**
+ * A folded card's condition, read across every member so it agrees with the
+ * unread marker and the header's counts: it is cleared only when *every*
+ * member is resolved, and it needs the operator when *any* member is an
+ * unresolved `needs_action`. Phone-only: the desktop card draws the latest
+ * row's state (`groupRow`), which can say "cleared" while an older member
+ * still counts as needing you in the header.
+ */
+export function groupCondition<T extends { class: string; resolved_at?: string | null }>(
+  group: NotificationGroup<T>,
+): { resolved: boolean; needs: boolean } {
+  return {
+    resolved: group.rows.every((r) => !!r.resolved_at),
+    needs: group.rows.some((r) => r.class === "needs_action" && !r.resolved_at),
+  };
+}
+
 /** Rows a "mark read" should acknowledge: everything not yet read, resolved or not. */
 export function unackedIds<T extends { id: string; read_at?: string | null }>(
   rows: readonly T[],

@@ -4,6 +4,7 @@ import { FilterChips } from "../../src/bots/BotsList.tsx";
 import {
   groupNotifications,
   groupRow,
+  groupCondition,
   groupUnread,
   inQuietHours,
   rowDestination,
@@ -80,7 +81,7 @@ describe("bots list rows", () => {
     // what the desktop's bot rail says (`preview || description || name`).
     const quoted = bot({
       name: "scribe",
-      title: "Scribe",
+      title: "Digest writer",
       last_message_at: new Date(NOW - 5 * 60_000).toISOString(),
     });
     expect(previewLine(quoted)).toBe("scribe");
@@ -97,6 +98,8 @@ describe("bots list rows", () => {
     expect(
       previewLine(bot({ name: "default", title: "ember", is_default: true, last_message_at: at })),
     ).toBe("");
+    // A title that differs from the name only in case shows the name too.
+    expect(previewLine(bot({ name: "magpie", title: "Magpie", last_message_at: at }))).toBe("");
     // A default bot with its own name still names itself.
     expect(
       previewLine(bot({ name: "ops", title: "ember", is_default: true, last_message_at: at })),
@@ -262,6 +265,45 @@ describe("inbox", () => {
     expect(screen.queryByLabelText("unread")).toBeNull();
     expect(screen.getByText("cleared")).toBeTruthy();
     expect(screen.getByLabelText("vol-1 has no agent")).toBeTruthy();
+  });
+
+  test("InboxRow: a folded card is cleared only when every member is, and needs you while any member does", async () => {
+    // Latest member resolved, an older one still needing the operator: the
+    // header counts that need, so the card must not say "cleared".
+    const group = groupNotifications([
+      notification({
+        id: "n2",
+        class: "info",
+        title: "Reply ready",
+        at: "2026-10-13T11:59:00.000Z",
+        resolved_at: "2026-10-13T11:59:30.000Z",
+      }),
+      notification({
+        id: "n1",
+        class: "needs_action",
+        title: "Approval needed",
+        at: "2026-10-13T11:58:00.000Z",
+      }),
+    ])[0];
+    if (!group) throw new Error("no group");
+    expect(group.count).toBe(2);
+    expect(groupCondition(group)).toEqual({ resolved: false, needs: true });
+    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
+    expect(screen.queryByText("cleared")).toBeNull();
+    expect(screen.getByText("NEEDS YOU")).toBeTruthy();
+    expect(screen.getByLabelText("unread")).toBeTruthy();
+
+    const settled = groupNotifications([
+      notification({ id: "m2", class: "info", resolved_at: "x", at: "2026-10-13T11:59:00.000Z" }),
+      notification({
+        id: "m1",
+        class: "needs_action",
+        resolved_at: "x",
+        at: "2026-10-13T11:58:00.000Z",
+      }),
+    ])[0];
+    if (!settled) throw new Error("no group");
+    expect(groupCondition(settled)).toEqual({ resolved: true, needs: false });
   });
 
   test("tap goes to the conversation, or the agent", () => {
