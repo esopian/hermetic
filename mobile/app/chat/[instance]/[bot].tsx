@@ -39,6 +39,10 @@ import type { AvatarStatus } from "../../../src/ui/avatar/avatar-seed.ts";
 import { haptic } from "../../../src/ui/haptics.ts";
 import { Avatar, Kicker, SkeletonRow, Text } from "../../../src/ui/index.ts";
 import { useNow } from "../../../src/ui/useNow.ts";
+import { useThrottled } from "../../../src/ui/useThrottled.ts";
+
+const LIVE_THROTTLE_MS = 80;
+const NO_IDS: readonly string[] = [];
 
 const AVATAR_STATUS: Record<ThreadState, AvatarStatus> = {
   ready: "ready",
@@ -111,8 +115,14 @@ export default function Conversation() {
   const botRow = swarm?.bots.find((b) => b.name === target.bot) ?? null;
   const botTitle = botRow?.title ?? null;
   const messages = view?.messages ?? [];
-  const live = view?.live ?? null;
+  // The streaming row redraws at most every 80 ms (`useThrottled`).
+  const live = useThrottled(view?.live ?? null, LIVE_THROTTLE_MS);
   const sending = view?.sending ?? false;
+  // The store hands out a fresh `released` array with every snapshot (each
+  // streamed delta); keep one identity per content so the transcript's
+  // `extraData` does not change, and redraw every row, on each delta.
+  const releasedKey = (view?.released ?? NO_IDS).join("\n");
+  const released = useMemo(() => view?.released ?? NO_IDS, [releasedKey]);
   const items = useMemo(
     () => transcriptItems(messages, live, sending, now),
     [messages, live, sending, now],
@@ -125,6 +135,37 @@ export default function Conversation() {
   });
   const composer = composerState(state);
   const avatarStatus = AVATAR_STATUS[state];
+
+  // Stable props for the memoised transcript: a streaming turn re-renders this
+  // screen on every delta, and a fresh element or closure here would redraw
+  // the whole list each time (`Transcript` is `memo`).
+  const historyLine =
+    view?.history === "failed"
+      ? `The transcript could not be read: ${view.historyError ?? "unknown error"}. Pull to retry.`
+      : "Nothing said yet.";
+  const empty = useMemo(
+    () => (
+      <View style={{ alignItems: "center", gap: t.space.md, paddingVertical: 80 }}>
+        <Avatar
+          fleet_id={fleetId}
+          instance={target.instance}
+          bot={target.bot}
+          size={64}
+          status={avatarStatus}
+        />
+        <Text variant="title">{botTitle ?? target.bot}</Text>
+        <Text tone="fg3" variant="bodySmall" style={{ textAlign: "center", maxWidth: 260 }}>
+          {historyLine}
+        </Text>
+      </View>
+    ),
+    [t, fleetId, target.instance, target.bot, avatarStatus, botTitle, historyLine],
+  );
+  const onRefresh = useCallback(() => {
+    if (!client) return;
+    setRefreshing(true);
+    void client.conversations.reload(target).finally(() => setRefreshing(false));
+  }, [client, target]);
   const session = view?.sessions.find((s) => s.id === (view.resolvedSession ?? target.session)) ?? null;
   const onCanonical = target.session === null || session?.kind === "canonical";
 
@@ -246,9 +287,11 @@ export default function Conversation() {
     };
   }, [client, subagentId, target, view?.resolvedSession]);
 
+  const [pinSignal, setPinSignal] = useState(0);
   const onSend = useCallback(
     (text: string) => {
       if (!client) return;
+      setPinSignal((n) => n + 1);
       if (!client.conversations.sendMessage(target, text)) client.conversations.enqueue(target, text);
     },
     [client, target],
@@ -265,6 +308,7 @@ export default function Conversation() {
             live?.session ?? null,
           ).catch(() => null);
         }
+        setPinSignal((n) => n + 1);
         const outcome = await client.conversations.sendNow(target, text, queuedId ?? null);
         if (outcome === "redirected" || outcome === "queued" || outcome === "sent") haptic.success();
         else if (outcome === "refused") {
@@ -394,30 +438,11 @@ export default function Conversation() {
             status={avatarStatus}
             now={now}
             activity={view?.activity ?? "idle"}
-            released={view?.released ?? []}
+            released={released}
             refreshing={refreshing}
-            onRefresh={() => {
-              if (!client) return;
-              setRefreshing(true);
-              void client.conversations.reload(target).finally(() => setRefreshing(false));
-            }}
-            empty={
-              <View style={{ alignItems: "center", gap: t.space.md, paddingVertical: 80 }}>
-                <Avatar
-                  fleet_id={fleetId}
-                  instance={target.instance}
-                  bot={target.bot}
-                  size={64}
-                  status={avatarStatus}
-                />
-                <Text variant="title">{botTitle ?? target.bot}</Text>
-                <Text tone="fg3" variant="bodySmall" style={{ textAlign: "center", maxWidth: 260 }}>
-                  {view?.history === "failed"
-                    ? `The transcript could not be read: ${view.historyError ?? "unknown error"}. Pull to retry.`
-                    : "Nothing said yet."}
-                </Text>
-              </View>
-            }
+            pinSignal={pinSignal}
+            onRefresh={onRefresh}
+            empty={empty}
           />
         )}
         <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>

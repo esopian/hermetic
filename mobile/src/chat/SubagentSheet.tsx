@@ -148,8 +148,8 @@ export function SubagentSheet({
             block.tools.map((tool, i) => {
               const latest = live && i === block.tools.length - 1;
               return (
-                <View key={i} style={{ flexDirection: "row", gap: t.space.sm }}>
-                  <Text mono tone={tool.is_error ? "bad" : latest ? "acc" : "fg3"}>
+                <View key={i} style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm }}>
+                  <Text mono variant="caption" tone={tool.is_error ? "bad" : latest ? "acc" : "fg3"}>
                     {latest ? "●" : "›"}
                   </Text>
                   <Text mono variant="caption" weight={700}>

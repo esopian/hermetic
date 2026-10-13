@@ -40,6 +40,10 @@ export default function TabsLayout() {
           borderRadius: 0,
           fontFamily: t.mono(700),
           fontSize: 11,
+          // The navigator pins the badge 3pt past the 31pt icon box's corner,
+          // which lands on a narrow glyph; move it clear to the right. (Its
+          // own transform animates the scale, so offset with `end`.)
+          end: -14,
         },
       }}
     >

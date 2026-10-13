@@ -100,9 +100,7 @@ describe("Composer", () => {
   test("sending with text: Queue queues, Send now steers, and a line says which is which", async () => {
     const h = handlers();
     await renderUi(<Harness {...base} {...h} sending initial="first" />);
-    expect(
-      screen.getByText("Queue sends when the agent is free · Send now steers this turn"),
-    ).toBeTruthy();
+    expect(screen.getByText("Queue waits for the turn · Send now steers it")).toBeTruthy();
     expect(screen.getByText("Send now")).toBeTruthy();
     expect(screen.queryByLabelText("Stop turn")).toBeNull();
     await fireEvent.press(screen.getByLabelText("Queue"));

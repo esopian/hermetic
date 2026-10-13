@@ -42,9 +42,18 @@ function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   );
 }
 
-function OperatorBubble({ message, now }: { message: ChatMessage; now: number }) {
+function OperatorBubble({
+  message,
+  now,
+  answered,
+}: {
+  message: ChatMessage;
+  now: number;
+  answered: boolean;
+}) {
   const t = useTheme();
-  const pending = isLocal(message);
+  // A reply already under it means the bridge took it, echo or not.
+  const pending = isLocal(message) && !answered;
   const text = message.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("");
   const steer = message.id.startsWith("local:steer:");
   return (
@@ -91,6 +100,8 @@ export interface TurnRowProps {
   streaming?: boolean;
   activity?: TurnActivity;
   released?: readonly string[];
+  /** An operator message with an agent turn after it (`transcriptItems`). */
+  answered?: boolean;
 }
 
 function TurnRowImpl({
@@ -104,11 +115,13 @@ function TurnRowImpl({
   streaming = false,
   activity = streaming ? "streaming" : "idle",
   released = [],
+  answered = false,
 }: TurnRowProps) {
   const t = useTheme();
   const { message, continuation } = row;
   const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
-  if (message.role === "user" && !fromBot) return <OperatorBubble message={message} now={now} />;
+  if (message.role === "user" && !fromBot)
+    return <OperatorBubble message={message} now={now} answered={answered} />;
 
   const failure = failureOf(message);
   const broken = !!failure || !!message.incomplete;

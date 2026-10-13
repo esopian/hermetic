@@ -36,6 +36,7 @@ function BotRowImpl({
   const t = useTheme();
   const needs = badge === "!";
   const unread = !!badge;
+  const preview = previewLine(bot);
   return (
     <Pressable
       accessibilityRole="button"
@@ -90,12 +91,19 @@ function BotRowImpl({
             {rowTime(bot, now)}
           </Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-          <Text variant="bodySmall" tone={unread ? "fg2" : "fg3"} numberOfLines={1} style={{ flex: 1 }}>
-            {previewLine(bot)}
-          </Text>
-          <Badge label={badge} />
-        </View>
+        {preview || badge ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+            <Text
+              variant="bodySmall"
+              tone={unread ? "fg2" : "fg3"}
+              numberOfLines={1}
+              style={{ flex: 1 }}
+            >
+              {preview}
+            </Text>
+            <Badge label={badge} />
+          </View>
+        ) : null}
       </View>
     </Pressable>
   );

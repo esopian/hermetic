@@ -213,8 +213,8 @@ function ComposerImpl(props: ComposerProps) {
           a question is waiting above — Send now skips it, Queue waits behind it
         </Text>
       ) : mode === "queue" ? (
-        <Text mono variant="caption" tone="fg3">
-          Queue sends when the agent is free · Send now steers this turn
+        <Text mono variant="caption" tone="fg3" numberOfLines={1}>
+          Queue waits for the turn · Send now steers it
         </Text>
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}>

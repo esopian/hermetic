@@ -78,11 +78,29 @@ describe("bots list rows", () => {
     expect(rowTime(empty, NOW)).toBe("");
     // A watermark with nothing to quote: there *are* messages, so the row says
     // what the desktop's bot rail says (`preview || description || name`).
-    const quoted = bot({ name: "scribe", last_message_at: new Date(NOW - 5 * 60_000).toISOString() });
+    const quoted = bot({
+      name: "scribe",
+      title: "Scribe",
+      last_message_at: new Date(NOW - 5 * 60_000).toISOString(),
+    });
     expect(previewLine(quoted)).toBe("scribe");
     expect(rowTime(quoted, NOW)).toBe("5m");
     expect(previewLine({ ...quoted, description: "Writes the digest." })).toBe("Writes the digest.");
     expect(previewLine({ ...empty, description: "Writes the digest." })).toBe("Writes the digest.");
+  });
+
+  test("the name fallback is dropped when the row already shows the name", () => {
+    const at = new Date(NOW - 5 * 60_000).toISOString();
+    // Untitled: the row's title is the name.
+    expect(previewLine(bot({ name: "scribe", title: "", last_message_at: at }))).toBe("");
+    // A default bot named `default` under its instance's title: the tag says it.
+    expect(
+      previewLine(bot({ name: "default", title: "ember", is_default: true, last_message_at: at })),
+    ).toBe("");
+    // A default bot with its own name still names itself.
+    expect(
+      previewLine(bot({ name: "ops", title: "ember", is_default: true, last_message_at: at })),
+    ).toBe("ops");
   });
 
   test("BotRow: a bot with no messages shows no time", async () => {
