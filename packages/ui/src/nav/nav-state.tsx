@@ -27,9 +27,11 @@ import type { VolumeView } from "../api/index.ts";
 import { DEFAULT_AGENT_TAB, agentHash, parseAgentHash } from "./agent-nav.ts";
 import type { AgentTab } from "./agent-nav.ts";
 import {
+  FLEET_HASH,
   FLEET_VOLUMES_HASH,
   LEGACY_VOLUMES_HASH,
   fleetLensHash,
+  isLandingHash,
   parseFleetLensHash,
 } from "./fleet-nav.ts";
 import type { FleetLens } from "./fleet-nav.ts";
@@ -47,7 +49,8 @@ export interface Nav {
   /**
    * The full-page view on screen, by the priority `App` draws them in:
    * Settings over Chat over the fleet. Settings wins because it is the older
-   * contract and `#settings` is what the header links to.
+   * contract and `#settings` is what the header links to. A launch with no
+   * hash is Chat: it is the page the app opens on (`isLandingHash`).
    */
   view: View;
   settingsOpen: boolean;
@@ -229,8 +232,13 @@ export function NavProvider({
   const [fleetLens, setFleetLens] = useState<FleetLens>(
     () => parseFleetLensHash(currentHash()) ?? "agents",
   );
-  /** Chat frame visibility is independent of its persistent, fleet-keyed store. */
-  const [chatOpen, setChatOpen] = useState(() => isChatHash(currentHash()));
+  /**
+   * Chat frame visibility is independent of its persistent, fleet-keyed store.
+   * Chat is the landing view, so a hash naming nothing opens it too.
+   */
+  const [chatOpen, setChatOpen] = useState(
+    () => isChatHash(currentHash()) || isLandingHash(currentHash()),
+  );
   const [deleteVolume, setDeleteVolume] = useState<VolumeView | null>(null);
   const [foundationTeardownOpen, setFoundationTeardownOpen] = useState(false);
   const [foundationUpdateOpen, setFoundationUpdateOpen] = useState(false);
@@ -255,6 +263,10 @@ export function NavProvider({
     // `n` is refused while Settings is up (`shortcutAllowed`), so the only
     // caller that reaches this with Settings open is Settings' own header.
     setSettingsOpen(false);
+    // The create drawer is drawn on the fleet page only. Chat is the landing
+    // view, so `n` pressed there has to bring the fleet up under the drawer
+    // rather than open one nothing draws.
+    setChatOpen(false);
     setSelected(null);
     setTeardownOpen(false);
     setPopoverOpen(false);
@@ -312,7 +324,7 @@ export function NavProvider({
   }, [returnToCreate, openCreate]);
 
   /**
-   * The header's `FLEET | CHAT | SETTINGS`. Settings is drawn under the same
+   * The header's `CHAT | FLEET | SETTINGS`. Settings is drawn under the same
    * nav, so leaving it is this call too, not only `backFromSettings`: choosing
    * Fleet or Chat has to close it, or the page keeps rendering Settings
    * whatever was clicked. A pending "New profile" detour is dropped with it.
@@ -418,6 +430,8 @@ export function NavProvider({
       // An old `#volumes` link (a bookmark, a pasted URL) is the volumes lens
       // now; respell it in place so back does not step through the old name.
       if (window.location.hash === LEGACY_VOLUMES_HASH) redirectLegacyVolumesHash();
+      // A hash naming nothing is Chat, the landing view; spell it out in place.
+      if (isLandingHash(window.location.hash)) redirectLandingHash();
       const section = parseSettingsHash(window.location.hash);
       setSettingsOpen(section !== null);
       // Only when the hash names Settings: leaving for the fleet must not
@@ -430,8 +444,9 @@ export function NavProvider({
       setChatOpen(isChatHash(window.location.hash));
       /*
        * The agent drawer, on the same rule and for the same reason: a hash that
-       * names an agent opens it, on the tab it names, and only an *empty* hash
-       * closes it. `#settings` and `#fleet/volumes` leave the selection alone —
+       * names an agent opens it, on the tab it names, and only a fleet hash
+       * that names no agent (`#fleet`, another lens) closes it. `#settings` and
+       * `#chat` leave the selection alone —
        * opening Settings over a drawer writes the Settings hash, and taking
        * that as "no agent" would close the drawer as a side effect.
        */
@@ -445,8 +460,9 @@ export function NavProvider({
         // different agent and is a destructive step.
         setTeardownOpen(false);
       } else if (
-        window.location.hash === "" ||
-        window.location.hash === "#" ||
+        // Back from `#agent/<name>` to the fleet's own `#fleet` closes the
+        // drawer, or the writer would push the agent's hash straight back.
+        window.location.hash === FLEET_HASH ||
         // The drawer lives on the agents lens. Back from `#agent/<name>` to
         // `#fleet/volumes` has to close it, or the writer would push the
         // agent's hash straight back and trap the operator on it. The
@@ -464,8 +480,11 @@ export function NavProvider({
 
   // Declared before the writer below so it runs first: a cold start on
   // `#volumes` is respelled in place, and the writer then has nothing to push.
+  // So is a cold start on no hash at all, which is Chat: replacing rather than
+  // pushing keeps back from stepping onto an empty entry that means the same.
   useEffect(() => {
     if (window.location.hash === LEGACY_VOLUMES_HASH) redirectLegacyVolumesHash();
+    if (isLandingHash(window.location.hash)) redirectLandingHash();
   }, []);
 
   useEffect(() => {
@@ -481,10 +500,24 @@ export function NavProvider({
           ? agentHash(selected, agentTab, agentSession)
           : fleetLensHash(fleetLens);
     if (window.location.hash === wants) return;
-    if (wants) {
+    // A hash naming nothing this page knows (a cold start on `#foo`, an
+    // in-page anchor) is replaced rather than pushed over, as the empty hash
+    // the fleet used to clear to was: back must not step onto an entry the
+    // view cannot follow. A real move between views still pushes, so its
+    // hashchange reaches every listener (ChatShell reads the hash that way).
+    const current = window.location.hash;
+    const known =
+      isChatHash(current) ||
+      parseSettingsHash(current) !== null ||
+      parseAgentHash(current) !== null ||
+      // Not `parseFleetLensHash`, which reads any unknown hash as the agents lens.
+      current === FLEET_HASH ||
+      current.startsWith(`${FLEET_HASH}/`) ||
+      current === LEGACY_VOLUMES_HASH;
+    if (known) {
       window.location.hash = wants;
     } else {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}${wants}`);
     }
   }, [settingsOpen, settingsSection, fleetLens, chatOpen, selected, agentTab, agentSession]);
 
@@ -623,6 +656,11 @@ function redirectLegacyVolumesHash(): void {
     "",
     `${window.location.pathname}${window.location.search}${FLEET_VOLUMES_HASH}`,
   );
+}
+
+/** Respell a hash that names nothing as `#chat`, the landing view, without adding a history entry. */
+function redirectLandingHash(): void {
+  history.replaceState(null, "", `${window.location.pathname}${window.location.search}#chat`);
 }
 
 export function useNav(): Nav {

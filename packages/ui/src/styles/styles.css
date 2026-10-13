@@ -3268,7 +3268,7 @@ button:focus-visible,
 
 /* ── volumes (§9) ───────────────────────────────────────────────────────── */
 
-/* The view switch, inside the header. `FLEET | CHAT | SETTINGS`. */
+/* The view switch, inside the header. `CHAT | FLEET | SETTINGS`. */
 .viewnav {
   display: flex;
   align-items: stretch;

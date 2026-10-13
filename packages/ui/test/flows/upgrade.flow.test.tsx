@@ -33,7 +33,7 @@ let harness: FlowHarness | null = null;
 /** See `rerun.flow.test.tsx`: the hash is read at mount, so it is cleared before as well as after. */
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {

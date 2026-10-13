@@ -385,7 +385,13 @@ describe("context window figures", () => {
     (await client.history(box(instance), bot, { session })).findLast((m) => m.usage)?.usage;
 
   test("one conversation sits in each band the composer meter draws", async () => {
-    expect((await last("atlas", "default", "sx-atlas-portal"))?.context_percent).toBe(12);
+    // The portal thread's rows are stored-shaped, with no window; its figure is
+    // the live gateway session's, as a reopened conversation's is on a real box.
+    expect((await last("atlas", "default", "sx-atlas-portal"))?.context_percent).toBeUndefined();
+    expect(
+      (await client.liveUsage?.(box("atlas"), "default", "sx-atlas-portal"))?.context_percent,
+    ).toBe(12);
+    expect(await client.liveUsage?.(box("atlas"), "default", "sx-atlas-cli")).toBeNull();
     expect((await last("granite", "quarry", "sx-granite-quarry-cli"))?.context_percent).toBe(84);
     expect((await last("atlas", "default", "sx-atlas-cli"))?.context_percent).toBe(99);
   });

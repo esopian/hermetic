@@ -4,6 +4,7 @@ import { useFleetIfAvailable } from "../../state/state.tsx";
 import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { threadState } from "../chat-logic.ts";
 import { chatHash } from "../chat-routing.ts";
+import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 import { hasOpenOverlay } from "../../lib/focus.ts";
 import { isVisible } from "../../lib/visibility.ts";
 import {
@@ -388,7 +389,7 @@ export function BotWorkspace({
                   className="btn btn-secondary"
                   type="button"
                   onClick={() => {
-                    window.location.hash = "";
+                    window.location.hash = FLEET_HASH;
                   }}
                 >
                   Go to fleet

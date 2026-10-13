@@ -8,7 +8,9 @@
  * estimates: a conversation whose gateway reported no window has no figure.
  *
  * The box's stored rows carry no window, so the re-read that replaces a settled
- * turn's live copy would take the figure away. The conversation's record keeps
+ * turn's live copy would take the figure away. A conversation's first read asks
+ * for the live gateway's figure instead (`usageContext`), which is how a
+ * reopened conversation has one before its next turn. The conversation's record keeps
  * the newest one it has seen (`Conversation.context`, `noteContext`), and the
  * thread draws the newer of that and what its own rows carry.
  */
@@ -100,6 +102,18 @@ export function frameContext(frame: ChatFrameView, at: string): ContextReading |
         ? fromTick(frame.block)
         : null;
   return usage ? { usage, at } : null;
+}
+
+/**
+ * The figure a `chat.history` read with `usage: true` reports — the live
+ * gateway's, for a conversation reopened before any turn — stamped `at`.
+ */
+export function usageContext(
+  usage: ChatUsageView | null | undefined,
+  at: string,
+): ContextReading | null {
+  const figure = usage ? fromFields(usage) : null;
+  return figure ? { usage: figure, at } : null;
 }
 
 /** A `session.usage` tick's payload is upstream's raw object: read it warily. */

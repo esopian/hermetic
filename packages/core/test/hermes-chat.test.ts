@@ -29,6 +29,7 @@ import type {
   ChatSocket,
   HermesChatDeps,
 } from "../src/chat/hermes/hermes-chat.ts";
+import { createLiveUsage, LIVE_USAGE_DEADLINE_MS } from "../src/chat/hermes/hermes-chat-live-usage.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
 import { Bot, ChatFrame } from "../src/schema/index.ts";
@@ -2666,5 +2667,153 @@ describe("semantic live activity and requests", () => {
     ]);
     const done = frames.at(-1);
     expect(done?.type === "done" && done.usage?.input_tokens).toBeGreaterThan(4);
+  });
+});
+
+/* ── the context window before the first tick ─────────────────────────────── */
+
+describe("hermes-chat · usage on resume and session.info", () => {
+  const WINDOW = {
+    input: 48_000,
+    output: 900,
+    context_used: 50_000,
+    context_max: 200_000,
+    context_percent: 25,
+  };
+
+  const usageBlocks = (frames: ChatFrame[]) =>
+    frames.flatMap((f) =>
+      f.type === "block" && f.block.kind === "activity" && f.block.category === "usage" ? [f] : [],
+    );
+
+  test("a resume reply's info.usage is a usage block before the prompt goes in", async () => {
+    const h = harness({
+      results: {
+        "session.resume": { session_id: SESSION_ID, running: false, info: { usage: WINDOW } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+      after: { "prompt.submit": [RECORDED_MESSAGE_COMPLETE] },
+    });
+    const frames = await collect(
+      createHermesChat(h.deps).send(BOX, "default", "again", { session: "durable-1" }),
+    );
+    const kinds = frames.map((f) =>
+      f.type === "block" && f.block.kind === "activity" ? f.block.category : f.type,
+    );
+    // connecting, the window the session already had, then the submit's answer.
+    expect(kinds.slice(0, 3)).toEqual(["connection", "usage", "queue"]);
+    const [known] = usageBlocks(frames);
+    expect(known?.seq).toBe(0);
+    expect(known?.block).toMatchObject({ role: "status", payload: { usage: WINDOW } });
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+
+  test("a create reply's info.usage is read the same way; a lazy info without one is not", async () => {
+    const withWindow = harness({
+      ...turnScript([RECORDED_MESSAGE_COMPLETE]),
+      results: {
+        "session.create": { ...SESSION_CREATE_RESULT, info: { usage: WINDOW } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    const created = await collect(createHermesChat(withWindow.deps).send(BOX, "default", "hi"));
+    expect(usageBlocks(created)).toHaveLength(1);
+
+    // `SESSION_CREATE_RESULT.info` is upstream's lazy info: no usage at all.
+    const lazy = harness(turnScript([RECORDED_MESSAGE_COMPLETE]));
+    expect(usageBlocks(await collect(createHermesChat(lazy.deps).send(BOX, "default", "hi")))).toEqual(
+      [],
+    );
+
+    // A window-less usage (a fresh agent before its first call) says nothing either.
+    const fresh = harness({
+      ...turnScript([RECORDED_MESSAGE_COMPLETE]),
+      results: {
+        "session.create": { ...SESSION_CREATE_RESULT, info: { usage: { input: 0, output: 0 } } },
+        "prompt.submit": PROMPT_SUBMIT_RESULT,
+      },
+    });
+    expect(usageBlocks(await collect(createHermesChat(fresh.deps).send(BOX, "default", "hi")))).toEqual(
+      [],
+    );
+  });
+
+  test("a session.info carrying a window is a usage block at its seq; other session.info is chatter", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("session.info", 2, { model: "m", usage: WINDOW }),
+        eventFrame("session.info", 3, { model: "m" }),
+        // A subagent's window is not the conversation's.
+        eventFrame("session.info", 4, { usage: { context_used: 1, context_max: 2 } }, "child-1"),
+        RECORDED_MESSAGE_DELTA_1,
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    const usage = usageBlocks(frames);
+    expect(usage.map((f) => f.seq)).toEqual([2]);
+    expect(usage[0]?.block).toMatchObject({ payload: { usage: WINDOW } });
+    expect(
+      blocks(frames).some(
+        (b) => b.kind === "unknown" && (b.name === "session.info" || b.name === "subagent"),
+      ),
+    ).toBe(false);
+  });
+
+  test("a session.info window is not content: the first-frame deadline still runs", async () => {
+    const h = harness(turnScript([eventFrame("session.info", 2, { usage: WINDOW })]));
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "hi"));
+    expect(usageBlocks(frames)).toHaveLength(1);
+    expect(frames.at(-1)?.type).toBe("error");
+  });
+});
+
+describe("hermes-chat · liveUsage", () => {
+  const LIVE = {
+    sessions: [
+      { id: "rt-other", session_key: "durable-2", status: "idle" },
+      { id: "rt-1", session_key: "durable-1", status: "idle" },
+    ],
+  };
+  const sent = (h: Harness) => h.sockets.flatMap((socket) => socket.sent.map((call) => call));
+
+  test("reads a live session's usage by its runtime id, without resuming it", async () => {
+    const h = harness({
+      results: {
+        "session.active_list": LIVE,
+        "session.usage": { input: 48_000, output: 900, context_used: 50_000, context_max: 200_000 },
+      },
+    });
+    const usage = await createHermesChat(h.deps).liveUsage?.(BOX, "default", "durable-1");
+    expect(usage).toMatchObject({ input_tokens: 48_000, context_used: 50_000, context_percent: 25 });
+    const calls = sent(h).filter((call) => call.method !== "client.capabilities");
+    expect(calls.map((call) => call.method)).toEqual(["session.active_list", "session.usage"]);
+    expect(calls[1]?.params).toEqual({ session_id: "rt-1", profile: "default" });
+  });
+
+  test("a session not live on the gateway, or one with no window, has no figure", async () => {
+    const h = harness({ results: { "session.active_list": LIVE } });
+    const chat = createHermesChat(h.deps);
+    expect(await chat.liveUsage?.(BOX, "default", "durable-9")).toBeNull();
+    expect(sent(h).some((call) => call.method === "session.usage")).toBe(false);
+    const cold = harness({
+      results: { "session.active_list": LIVE, "session.usage": { calls: 0, input: 0, output: 0 } },
+    });
+    expect(await createHermesChat(cold.deps).liveUsage?.(BOX, "default", "durable-1")).toBeNull();
+    expect(sent(cold).some((call) => /^session\.(resume|create)$/.test(call.method))).toBe(false);
+  });
+
+  test("each lookup request carries its own short deadline, not the pool's slot wait", async () => {
+    const deadlines: Array<number | undefined> = [];
+    const live = createLiveUsage({
+      rpc: async (_box, method, _params, opts) => {
+        deadlines.push(opts?.deadlineMs);
+        return method === "session.active_list"
+          ? LIVE
+          : { input: 1, output: 1, context_used: 10, context_max: 100 };
+      },
+    });
+    expect(await live.liveUsage(BOX, "default", "durable-1")).toMatchObject({ context_used: 10 });
+    expect(deadlines).toEqual([LIVE_USAGE_DEADLINE_MS, LIVE_USAGE_DEADLINE_MS]);
   });
 });

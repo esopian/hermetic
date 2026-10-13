@@ -63,6 +63,7 @@ import {
   usage,
 } from "./fixture-chat-catalog.ts";
 import { FIXTURE_CHAT_SESSIONS, at, specFor, swarmFor } from "./fixture-chat-roster.ts";
+import { FIXTURE_LIVE_USAGE } from "./fixture-chat-usage.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
 
 // The tables and the activity store keep their homes in the split modules; this
@@ -432,6 +433,13 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       const kept =
         limit !== undefined && limit >= 0 ? found.slice(Math.max(0, found.length - limit)) : found;
       return Promise.resolve(kept.map((m) => ({ ...m })));
+    },
+
+    /** The live gateway's figure for a conversation still attached there (`FIXTURE_LIVE_USAGE`). */
+    liveUsage(box: BoxAddress, _bot: string, session: string) {
+      if (!reachable(box.instance)) return Promise.resolve(null);
+      const live = FIXTURE_LIVE_USAGE[session];
+      return Promise.resolve(live ? { ...live } : null);
     },
 
     send(box: BoxAddress, bot: string, text: string, opts: SendOptions = {}): AsyncIterable<ChatFrame> {

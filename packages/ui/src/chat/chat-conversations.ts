@@ -31,7 +31,7 @@ import {
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
-import { frameContext } from "./context-usage.ts";
+import { frameContext, usageContext } from "./context-usage.ts";
 
 export type { ObserveState } from "./chat-conversation-record.ts";
 
@@ -332,12 +332,20 @@ export function useConversations(
           }
           session = opened.session;
         }
+        // The first read of a conversation with no figure also asks the box for
+        // the window its live session holds: the stored rows carry none, so a
+        // reopened conversation would otherwise show no meter until its next
+        // turn. Once only — a poll does not pay for it. Stamped with when it was
+        // asked, so a turn frame that lands while it is in flight stays newer.
+        const askUsage = !record.historyRead && record.context === null;
+        const asked = new Date().toISOString();
         const result = await apiRef.current.fetchHistory(
           target.instance,
           target.bot,
           {
             ...(session ? { session } : {}),
             limit: 200,
+            ...(askUsage ? { usage: true } : {}),
           },
           controller.signal,
         );
@@ -384,6 +392,7 @@ export function useConversations(
         }
         record.messages = absorbEarly(record, result.messages);
         noteRows(record, record.messages);
+        noteContext(record, usageContext(result.usage, asked));
         record.resolvedSession = result.session ?? record.resolvedSession;
         record.historyRead = true;
         record.historyError = null;

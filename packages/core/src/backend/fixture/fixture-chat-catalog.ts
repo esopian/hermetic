@@ -9,7 +9,7 @@
  */
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
-import { usage } from "./fixture-chat-usage.ts";
+import { storedUsage, usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
   SCRIBE_BOT_CHAT_SESSION,
@@ -151,7 +151,9 @@ export const FIXTURE_CHAT_FAILURES = {
  * the collapse rule is a property of a transcript and not of a card — `ok`,
  * `warn`, `bad`, `acc` and `muted` start collapsed and `unknown` and any error
  * start expanded, and whether that reads as calm or as a wall of chevrons is
- * only visible when they are stacked.
+ * only visible when they are stacked. Its usage is stored-shaped, with no
+ * context window, as a real box's rows are: its meter comes from the live
+ * gateway (`FIXTURE_LIVE_USAGE`), not from these rows.
  *
  * The other transcripts are short, and five of them exist to carry one failure
  * each. They are placed on the agent whose fleet row already tells the same
@@ -247,7 +249,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         { kind: "text", markdown: CITED },
         { kind: "sources", items: SOURCES },
       ],
-      usage: usage(18422, 964, 0.0412, "claude-sonnet-5"),
+      usage: storedUsage(18422, 964, 0.0412, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },
@@ -301,7 +303,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           href: "/api/chat/attachments/fixture/granite-iostat-2026-09-17.md",
         },
       ],
-      usage: usage(21105, 612, 0.0288, "claude-sonnet-5"),
+      usage: storedUsage(21105, 612, 0.0288, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },
@@ -402,7 +404,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           href: "/api/chat/attachments/fixture/queue-depth.png",
         },
       ],
-      usage: usage(23980, 344, 0.0161, "claude-sonnet-5"),
+      usage: storedUsage(23980, 344, 0.0161, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },
@@ -482,7 +484,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           detail: null,
         },
       ],
-      usage: usage(24400, 96, 0.0044, "claude-sonnet-5"),
+      usage: storedUsage(24400, 96, 0.0044, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },

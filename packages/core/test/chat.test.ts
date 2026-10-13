@@ -989,3 +989,60 @@ describe("instance listening", () => {
     expect(await roster).toEqual({ swarms: [] });
   });
 });
+
+describe("chat.history · the live session's usage", () => {
+  const WINDOW = {
+    input_tokens: 48_000,
+    output_tokens: 900,
+    cost_usd: null,
+    model: null,
+    context_used: 50_000,
+    context_max: 200_000,
+    context_percent: 25,
+  };
+
+  test("asked for, it rides beside the transcript; not asked, it is not read", async () => {
+    const asked: string[] = [];
+    const { chat } = harness({
+      liveUsage: (_box, _bot, session) => {
+        asked.push(session);
+        return Promise.resolve(WINDOW);
+      },
+    });
+    const read = await chat.history({
+      instance: "atlas",
+      bot: "default",
+      session: "durable-1",
+      usage: true,
+    });
+    expect(read.usage).toEqual(WINDOW);
+    const plain = await chat.history({ instance: "atlas", bot: "default", session: "durable-1" });
+    expect("usage" in plain).toBe(false);
+    expect(asked).toEqual(["durable-1"]);
+  });
+
+  test("a failed usage read never fails the transcript", async () => {
+    const { chat } = harness({
+      liveUsage: () => Promise.reject(new HermeticError("CHAT_PROTOCOL", "Method not found")),
+    });
+    const read = await chat.history({
+      instance: "atlas",
+      bot: "default",
+      session: "durable-1",
+      usage: true,
+    });
+    expect(read.usage).toBeNull();
+    expect(read.messages).toEqual([]);
+  });
+
+  test("a client without the read answers null", async () => {
+    const { chat } = harness();
+    const read = await chat.history({
+      instance: "atlas",
+      bot: "default",
+      session: "durable-1",
+      usage: true,
+    });
+    expect(read.usage).toBeNull();
+  });
+});

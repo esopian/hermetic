@@ -9,6 +9,7 @@ import {
   frameContext,
   latestContextUsage,
   newerReading,
+  usageContext,
 } from "../src/chat/context-usage.ts";
 
 describe("contextLevel", () => {
@@ -206,5 +207,28 @@ describe("frameContext", () => {
         },
       ])?.percent,
     ).toBe(33);
+  });
+});
+
+describe("usageContext", () => {
+  test("a live usage with a window is a figure stamped when it was asked; without one, none", () => {
+    const live = usageContext(usage({ context_used: 24_400, context_max: 200_000 }), T0);
+    expect(live).toEqual({
+      usage: { used: 24_400, max: 200_000, percent: 12, estimated: false },
+      at: T0,
+    });
+    expect(usageContext(usage({ input_tokens: 10 }), T0)).toBeNull();
+    expect(usageContext(null, T0)).toBeNull();
+    expect(usageContext(undefined, T0)).toBeNull();
+  });
+
+  test("a turn frame that arrived after the live read was asked stays the figure", () => {
+    // The read was asked at T0 and answered late; the turn's done landed at T1.
+    const done = frameContext(
+      { type: "done", seq: 1, message: "m", usage: usage({ context_used: 6, context_max: 100 }) },
+      T1,
+    );
+    const live = usageContext(usage({ context_used: 12, context_max: 100 }), T0);
+    expect(newerReading(done, live)?.usage.percent).toBe(6);
   });
 });

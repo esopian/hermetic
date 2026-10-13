@@ -22,7 +22,7 @@ let harness: FlowHarness | null = null;
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
   window.sessionStorage.clear();
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {
@@ -49,7 +49,7 @@ test("the destroyed count is in the headline before the lens is opened", async (
   // `oriole` is the fixture's one tombstone.
   const half = await waitFor(() => within(lens()).getByRole("button", { name: /^1 destroyed$/ }));
   expect(half.getAttribute("aria-pressed")).toBe("false");
-  expect(window.location.hash).toBe("");
+  expect(window.location.hash).toBe("#fleet");
   expect(harness.calls.filter((c) => c.name === "agents.destroyed").length).toBe(1);
 });
 
@@ -127,7 +127,7 @@ test("destroy, review the tombstone and its history, then reuse the name", async
 
   // 4. The name is free: create it again, and it is back on the board.
   await user.click(within(lens()).getByRole("button", { name: /agents$/ }));
-  expect(window.location.hash).toBe("");
+  expect(window.location.hash).toBe("#fleet");
   await user.click(screen.getByRole("button", { name: /New agent/ }));
   const input = document.getElementById("create-name") as HTMLInputElement;
   await user.clear(input);

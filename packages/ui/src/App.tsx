@@ -33,6 +33,7 @@ import { ShortcutsPopover } from "./components/Shortcuts.tsx";
 import { InitWizard } from "./components/InitWizard.tsx";
 import { FleetSkeleton } from "./components/Loading.tsx";
 import { ChatView } from "./chat/components/ChatView.tsx";
+import { ChatEmpty, chatEmptyKind } from "./chat/components/ChatEmpty.tsx";
 import { AgentSectionContext } from "./chat/agent-sections.ts";
 import { ChatShell } from "./chat/components/ChatShell.tsx";
 import { useChatEntry } from "./chat/chat-entry-state.tsx";
@@ -49,6 +50,7 @@ import { DestroyedView, useDestroyedAudit } from "./components/DestroyedView.tsx
 import { filterVolumes, settleVolumes, type SettledPhase } from "./logic/volume-logic.ts";
 import { fleetPhase, volumeScan } from "./logic/loading.ts";
 import { NavProvider, useNav, useNavKeys } from "./nav/nav-state.tsx";
+import { useListeningIfAvailable } from "./state/listening-state.tsx";
 import {
   countsOf,
   emptyHint,
@@ -117,6 +119,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   const chatEntry = useChatEntry();
   const fleet = useFleet();
   const nav = useNav();
+  const listening = useListeningIfAvailable();
   const initialized = fleet.meta !== null && isInitialized(fleet.meta);
   const volumes = useVolumes(initialized);
   /**
@@ -426,7 +429,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
       </>
     );
   /**
-   * `FLEET | CHAT | SETTINGS`, drawn inside the header on every screen that has
+   * `CHAT | FLEET | SETTINGS`, drawn inside the header on every screen that has
    * views to move between — Settings included, so leaving it is the same click
    * as arriving.
    */
@@ -522,6 +525,9 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           onOpenFleet={() => {
             fleet.resync();
             setWizardOpen(false);
+            // The wizard's last step says "Open fleet", so it lands on the
+            // fleet rather than on Chat, the view a launch opens on.
+            nav.setView("fleet");
           }}
           onOpenReceipt={showReceipt}
         />
@@ -631,12 +637,19 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
   );
 
   if (nav.chatOpen) {
+    // Chat is the landing view, so a fleet with nobody to talk to says why
+    // here, and how to fix it, instead of drawing an empty workspace.
+    const empty = chatEmptyKind({ fleetRead: !scanning, agents: shown, listening });
     return (
       <div className="app">
         {chrome}
-        <AgentSectionContext.Provider value={nav.openAgentOverChat}>
-          <ChatView />
-        </AgentSectionContext.Provider>
+        {empty ? (
+          <ChatEmpty kind={empty} onGoToFleet={() => nav.setView("fleet")} />
+        ) : (
+          <AgentSectionContext.Provider value={nav.openAgentOverChat}>
+            <ChatView />
+          </AgentSectionContext.Provider>
+        )}
         {nav.agentOverChat ? agentDrawer : null}
         {footer}
         {help}

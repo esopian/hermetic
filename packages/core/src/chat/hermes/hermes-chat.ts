@@ -72,6 +72,7 @@ import { SLOT_WAIT_MS } from "./hermes-chat-types.ts";
 import type { HermesChatClient, HermesChatDeps } from "./hermes-chat-types.ts";
 import { createChatConnection } from "./hermes-chat-connect.ts";
 import { createChatHistory } from "./hermes-chat-history.ts";
+import { createLiveUsage } from "./hermes-chat-live-usage.ts";
 import { createChatPeer } from "./hermes-chat-peer.ts";
 import { createRequestPool } from "./hermes-chat-pool.ts";
 import { createChatRoster } from "./hermes-chat-roster.ts";
@@ -153,6 +154,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     conversation: canonical.conversation,
   });
   const observation = createChatObserve({ connect: connection.connect });
+  const live = createLiveUsage({ rpc: peer.botModeRpc });
   const turn = createChatTurn({
     connect: connection.connect,
     now: deps.now,
@@ -165,6 +167,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     swarm: roster.swarm,
     sessions: sessions.sessions,
     history: history.history,
+    liveUsage: live.liveUsage,
     send: turn.send,
     abort: turn.abort,
     steer: turn.steer,

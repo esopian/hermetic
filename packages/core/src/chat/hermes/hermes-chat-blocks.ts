@@ -7,6 +7,7 @@
  * function.
  */
 import type { ChatBlock, ChatUsage, ToolRender } from "../../schema/index.ts";
+import { hermesActivity } from "./hermes-chat-activity.ts";
 import { arr, isoOrNull, nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
@@ -197,6 +198,25 @@ export function mapUsage(usage: Record<string, unknown> | null): ChatUsage | nul
     model: str(usage.model),
     ...mapContext(usage),
   };
+}
+
+/**
+ * The context window a session's `info` carries, as the same `usage` activity
+ * block a live `session.usage` tick becomes, or null when it carries none.
+ *
+ * `info` is either a `session.info` event's payload or the `info` of a
+ * `session.resume`/`session.create` reply: upstream builds both with
+ * `_session_info`, whose `usage` is `_session_usage_snapshot` — the figure the
+ * gateway holds for a session that is already live. A cold or lazy resume's
+ * `info` has no `usage` at all, and a fresh agent's has no window until its
+ * first model call; both come back null, so a head shows nothing rather than
+ * zero. Usage without a window is dropped as well: these frames are read for
+ * the composer's meter, and the turn's own ticks and `done` carry the tokens.
+ */
+export function contextUsageBlock(info: Record<string, unknown> | null): ChatBlock | null {
+  const usage = rec(info?.usage);
+  if (!usage || mapUsage(usage)?.context_used == null) return null;
+  return hermesActivity("session.usage", { usage });
 }
 
 /**

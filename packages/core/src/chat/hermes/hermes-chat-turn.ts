@@ -18,7 +18,13 @@ import {
   type SendOptions,
 } from "./hermes-chat-types.ts";
 import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
-import { approvalBlock, mapUsage, questionBlock, toolBlock } from "./hermes-chat-blocks.ts";
+import {
+  approvalBlock,
+  contextUsageBlock,
+  mapUsage,
+  questionBlock,
+  toolBlock,
+} from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
@@ -55,6 +61,8 @@ const CONTROL_EVENTS = new Set([
   "gateway.ready",
   // Observed ×2. Model, toolsets, cwd, approval mode. Useful, but not a
   // transcript block — and the model it names also rides on `done`'s usage.
+  // The one part read is its `usage`'s context window, which `stream` lifts
+  // into a `usage` activity block before this list is consulted.
   "session.info",
   // Observed ×2. The box renaming the conversation; a head reads titles from
   // `sessions()`.
@@ -145,7 +153,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
   const activeTurns = new Map<string, Set<{ runtime: string; stored: string | null }>>();
   const turnKey = (box: BoxAddress, bot: string): string => JSON.stringify([box.baseUrl, bot]);
 
-  async function resume(rpc: Rpc, box: BoxAddress, bot: string, stored: string): Promise<string> {
+  async function resume(
+    rpc: Rpc,
+    box: BoxAddress,
+    bot: string,
+    stored: string,
+  ): Promise<{ runtime: string; info: Record<string, unknown> | null }> {
     const result = rec(
       await rpc.request("session.resume", {
         session_id: stored,
@@ -161,7 +174,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         CHAT_ERROR_CODES.PROTOCOL,
         `${box.instance}: session.resume named no runtime session`,
       );
-    return runtime;
+    return { runtime, info: rec(result?.info) };
   }
 
   async function* turn(
@@ -201,8 +214,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await advertiseServerRequests(rpc, opts.signal);
       let session: string;
       let stored = opts.session ?? null;
+      let info: Record<string, unknown> | null;
       if (opts.session) {
-        session = await resume(rpc, box, bot, opts.session);
+        ({ runtime: session, info } = await resume(rpc, box, bot, opts.session));
       } else {
         // Stamped so `session.list` can tell this session from the box's own TUI
         // (`HERMETIC_SESSION_SOURCE`); `portal` still comes only from the local record.
@@ -217,7 +231,15 @@ export function createChatTurn(deps: ChatTurnDeps) {
           );
         session = runtime;
         stored = str(created?.stored_session_id);
+        info = rec(created?.info);
       }
+      // The window the gateway already holds for this session, said before the
+      // prompt goes in. A session still live on the box answers its resume with
+      // the figure its last turn left (`contextUsageBlock`), so the composer's
+      // meter is right from the turn's first frame instead of from its first
+      // tick. Adapter-minted, so `seq: 0`, like the status frames.
+      const known = contextUsageBlock(info);
+      if (known) yield { type: "block", seq: 0, message, block: known };
       active = { runtime: session, stored };
       const entries = activeTurns.get(key) ?? new Set();
       entries.add(active);
@@ -452,9 +474,16 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (!type) continue;
       const sourceSeq = num(ev.seq) ?? 0;
       const payload = rec(ev.payload) ?? {};
-      if (CONTROL_EVENTS.has(type)) continue;
-
       const evSession = typeof ev.session_id === "string" ? ev.session_id : null;
+      // `session.info` is chatter except for its usage's context window, which
+      // is the one figure the meter can have before the turn's first tick.
+      // Only this session's: a subagent's window is not the conversation's.
+      const infoUsage =
+        type === "session.info" && (evSession === null || evSession === session)
+          ? contextUsageBlock(payload)
+          : null;
+      if (CONTROL_EVENTS.has(type) && !infoUsage) continue;
+
       // Reclamation is broadcast globally, but its payload addresses one runtime.
       // A different conversation releasing a slot is not a failure of this turn.
       if (type === "session.reclaimed" && str(payload.session_id) !== session) continue;
@@ -500,6 +529,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
           rec(payload.params) ?? {},
         ))
           yield* emit(seq, block);
+        continue;
+      }
+      if (infoUsage) {
+        // A status snapshot, not content: the session describing itself says
+        // nothing about whether the model has started, so the first-frame
+        // deadline keeps running.
+        yield { type: "block", seq, message, block: infoUsage };
         continue;
       }
       const activity = hermesActivity(type, payload);

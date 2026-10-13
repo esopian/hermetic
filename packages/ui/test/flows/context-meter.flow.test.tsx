@@ -6,8 +6,13 @@
  * `Thread`. The fixture seeds one conversation per band: atlas's portal thread
  * is neutral, granite/quarry's release checklist is past the warn line, and
  * atlas's CLI reindex ran the window to 99%.
+ *
+ * Atlas's portal thread is stored the way a real box stores it, with no window
+ * on its rows; its figure is the live gateway session's, which the first
+ * `chat.history` read asks for (`usage: true`). That is the reopened
+ * conversation whose meter is right before any turn is sent.
  */
-import { cleanup, screen } from "../dom.ts";
+import { cleanup, screen, userEvent, waitFor } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
@@ -69,4 +74,46 @@ test("a conversation with no figure from the gateway draws no meter", async () =
   mountPortal();
   await screen.findByText("Are you awake?", undefined, { timeout: 4_000 });
   expect(screen.queryByRole("meter")).toBeNull();
+});
+
+/** The `chat.history` requests that asked for the live session's usage. */
+const usageReads = (h: FlowHarness) =>
+  h.calls.filter(
+    (call) => call.name === "chat.history" && (call.params as { usage?: unknown }).usage === true,
+  );
+
+test("a reopened conversation shows its live window before any turn is sent", async () => {
+  const meter = await openMeter("atlas", "default", "sx-atlas-portal");
+  expect(meter.textContent).toBe("12%");
+  expect(meter.closest(".ch-composer-foot")).not.toBeNull();
+  // Nothing was sent: the figure came with the conversation's first read.
+  expect(harness!.calls.some((call) => call.name === "chat.turn")).toBe(false);
+  expect(usageReads(harness!)).toHaveLength(1);
+  // And not from the rows: they carry tokens but no window, as a box's do.
+  const stored = await harness!.ctx
+    .hermetic()
+    .chat.history({ instance: "atlas", bot: "default", session: "sx-atlas-portal" });
+  expect(stored.usage).toBeUndefined();
+  expect(stored.messages.some((m) => m.usage?.context_used != null)).toBe(false);
+  expect(stored.messages.some((m) => m.usage?.input_tokens === 24_400)).toBe(true);
+});
+
+test("a turn's figure replaces the reopened one, and later reads do not take it back", async () => {
+  await openMeter("atlas", "default", "sx-atlas-portal");
+  expect(screen.getByRole("meter").textContent).toBe("12%");
+  const composer = await screen.findByRole("textbox", { name: /^Message / }, { timeout: 4_000 });
+  await userEvent.type(composer, "how full is the window?{Enter}");
+  // The fixture turn's `done` reports 12,040 of 200,000: 6%.
+  await waitFor(() => expect(screen.getByRole("meter").textContent).toBe("6%"), {
+    timeout: 4_000,
+  });
+  // The settled turn's re-read lands, and the live figure is not asked again.
+  await waitFor(
+    () =>
+      expect(harness!.calls.filter((call) => call.name === "chat.history").length).toBeGreaterThan(1),
+    { timeout: 4_000 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(screen.getByRole("meter").textContent).toBe("6%");
+  expect(usageReads(harness!)).toHaveLength(1);
 });

@@ -9,6 +9,7 @@ import { useChat } from "../chat-state.tsx";
 import { useChatEntry } from "../chat-entry-state.tsx";
 import { conversationCandidates } from "../conversation-search.ts";
 import { Dialog } from "../../components/Dialog.tsx";
+import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 
 interface Result {
   key: string;
@@ -19,8 +20,8 @@ interface Result {
   hash?: string;
 }
 const COMMANDS = [
-  { name: "Fleet", hash: "" },
   { name: "Chat", hash: "#chat" },
+  { name: "Fleet", hash: "#fleet" },
   { name: "Volumes", hash: "#fleet/volumes" },
   { name: "Settings", hash: "#settings" },
   { name: "Run log", hash: "#settings/runs" },
@@ -115,7 +116,7 @@ export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; 
       if (!entry?.open(result.target, result.draft ? "dock" : full ? "full" : "dock", result.draft))
         return;
     } else {
-      window.location.hash = result.hash ?? "";
+      window.location.hash = result.hash ?? FLEET_HASH;
     }
     onClose();
   };

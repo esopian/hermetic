@@ -1026,6 +1026,13 @@ export const ChatHistoryInput = z.object({
   bot: BotName,
   session: z.string().min(1).optional(),
   limit: z.number().int().min(1).max(500).optional(),
+  /**
+   * Also report the usage the gateway holds for the session while it is live
+   * there (`ChatHistoryResult.usage`), read without resuming it. For a head
+   * opening a conversation it has no context-window figure for; a poll leaves
+   * it off, because the read costs two requests on the box's socket.
+   */
+  usage: z.boolean().optional(),
 });
 export type ChatHistoryInput = z.infer<typeof ChatHistoryInput>;
 

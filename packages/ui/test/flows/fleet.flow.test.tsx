@@ -89,7 +89,7 @@ let harness: FlowHarness | null = null;
  */
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {
@@ -212,7 +212,7 @@ describe("the fleet, over a real head", () => {
 
     await user.click(screen.getByRole("button", { name: /^\d+ agents$/ }));
     await screen.findByRole("textbox", { name: "Filter agents" });
-    expect(window.location.hash).toBe("");
+    expect(window.location.hash).toBe("#fleet");
   });
 
   test("the fleet stream carries a status change into the fleet without a re-read", async () => {

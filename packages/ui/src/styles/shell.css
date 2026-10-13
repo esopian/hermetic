@@ -110,6 +110,23 @@
   font-size: 16px;
 }
 
+/*
+ * Chat with nobody to talk to: no agents, or none listening. Chat is the
+ * landing view, so this is a first-run page; the sentence is body prose rather
+ * than the fleet empty state's mono hint, with the same 48px primary under it.
+ */
+.chat-empty p {
+  margin: 0;
+  max-width: 46ch;
+  text-align: center;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--fg);
+}
+.chat-empty .btn {
+  margin-top: 14px;
+}
+
 /* ── Destroyed lens (§6.7) ──────────────────────────────────────────────── */
 
 /* The table beside its read-only detail panel; the panel is not an overlay. */

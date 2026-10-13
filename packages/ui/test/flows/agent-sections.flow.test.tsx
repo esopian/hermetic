@@ -27,7 +27,7 @@ let harness: FlowHarness | null = null;
 /** See `rerun.flow.test.tsx`: the hash is read at mount, so it is cleared before as well as after. */
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
-  gotoHash("");
+  gotoHash("#fleet");
 });
 
 afterEach(async () => {
@@ -191,7 +191,7 @@ describe("the Lifecycle section", () => {
     await screen.findByLabelText(new RegExp(`^${FIXTURE.readyAgent} · `));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(window.location.hash).toBe("");
+      expect(window.location.hash).toBe("#fleet");
     });
   });
 });

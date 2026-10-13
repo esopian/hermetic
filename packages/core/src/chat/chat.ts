@@ -62,6 +62,7 @@ import type {
   ChatFrame,
   ChatMessage,
   ChatObserveEvent,
+  ChatUsage,
   FleetItem,
   LocalConfig,
   Session,
@@ -281,6 +282,14 @@ export interface ChatHistoryResult {
   /** The session the messages came from, or null when the box named none. */
   session: string | null;
   messages: ChatMessage[];
+  /**
+   * Present only when the request asked (`ChatHistoryInput.usage`): the usage
+   * the gateway holds for the session while it is live there, read without
+   * resuming it — null when it is not live, reports no context window, or the
+   * read failed. The stored rows carry no window, so this is the only figure a
+   * head can have for a reopened conversation before its next turn.
+   */
+  usage?: ChatUsage | null;
 }
 
 /**
@@ -627,6 +636,12 @@ export function createChat(deps: ChatDeps) {
         })
       : undefined;
     const selected = conversation?.session ?? parsed.session;
+    // Beside the transcript read rather than after it, and never allowed to
+    // fail it: the figure is a nicety, and the transcript is the answer.
+    const live =
+      parsed.usage === true && selected && hermes.liveUsage
+        ? hermes.liveUsage(box, parsed.bot, selected, { signal: opts.signal }).catch(() => null)
+        : null;
     const messages =
       conversation === null && !selected
         ? []
@@ -641,6 +656,7 @@ export function createChat(deps: ChatDeps) {
       session: selected ?? messages[0]?.session ?? null,
       ...(conversation !== undefined ? { conversation } : {}),
       messages: messages.map((message) => view.message(message)),
+      ...(parsed.usage === true ? { usage: await live } : {}),
     };
   }
 
