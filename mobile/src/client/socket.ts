@@ -113,7 +113,15 @@ export type SocketState =
   /** The bridge refused this device (revoked, unknown token). Reconnecting will not help. */
   | "unauthorized"
   /** The bridge speaks another protocol version. Reconnecting will not help. */
-  | "mismatch";
+  | "mismatch"
+  /**
+   * The bridge now serves another fleet than the one this phone was paired on
+   * (the laptop switched fleets): close 4403, an `auth.error` or HTTP 403
+   * `WRONG_FLEET`, or an `auth.ok` whose `hello.fleet` is not this pairing's.
+   * The token is not revoked, but every call would be refused: only a re-pair
+   * helps. Sticky across `close()`; `reset()` or `clearFatal()` leaves it.
+   */
+  | "wrong_fleet";
 
 export interface SocketEvents {
   state: SocketState;
@@ -194,6 +202,16 @@ interface Observation {
   opening: boolean;
 }
 
+/** What a call made in `wrong_fleet` rejects with. */
+export function wrongFleetError(served: Hello["fleet"] | null): BridgeError {
+  const now = served ? ` now serves ${served.alias ?? served.fleet_id}` : " serves another fleet";
+  return new BridgeError(
+    CLIENT_ERROR_CODES.WRONG_FLEET,
+    `The bridge${now}, not the fleet this phone was paired on. Pair again to use it.`,
+    403,
+  );
+}
+
 const CONNECTING = 0;
 const OPEN = 1;
 
@@ -220,6 +238,8 @@ export class BridgeSocket {
   private phase: SocketPhase = "foreground";
   /** The last drop was a 4503: say "unavailable" rather than "reconnecting" until something else happens. */
   private unavailable = false;
+  /** The fleet the bridge said it serves instead, when it said (`auth.ok`, HTTP `hello`). */
+  private _servedFleet: Hello["fleet"] | null = null;
   /** In-flight `turn.resume` request ids → turn, answered synchronously in `receive`. */
   private readonly resumes = new Map<string, string>();
 
@@ -239,6 +259,11 @@ export class BridgeSocket {
 
   get hello(): Hello | null {
     return this._hello;
+  }
+
+  /** In `wrong_fleet`: the fleet the bridge serves now, or `null` when it only refused. */
+  get servedFleet(): Hello["fleet"] | null {
+    return this._state === "wrong_fleet" ? this._servedFleet : null;
   }
 
   /** The turns being followed and the last `n` seen of each. */
@@ -262,7 +287,7 @@ export class BridgeSocket {
   connect(): void {
     this.wanted = true;
     if (this.ws || this.reconnectTimer !== null) return;
-    if (this._state === "unauthorized" || this._state === "mismatch") return;
+    if (this.fatal()) return;
     this.attempt = 0;
     this.unavailable = false;
     this.open();
@@ -284,7 +309,8 @@ export class BridgeSocket {
     for (const obs of this.observations.values()) this.clearObservationTimer(obs);
     this.bySubId.clear();
     for (const obs of this.observations.values()) obs.subId = null;
-    this.setState("idle");
+    // A wrong fleet outlives a backgrounding or a Reconnect: only a re-pair clears it.
+    if (this._state !== "wrong_fleet") this.setState("idle");
   }
 
   /** Forget everything (sign out). */
@@ -293,6 +319,7 @@ export class BridgeSocket {
     this.turns.clear();
     this.observations.clear();
     this._hello = null;
+    this._servedFleet = null;
     if (this._state !== "idle") this.setState("idle");
   }
 
@@ -307,9 +334,42 @@ export class BridgeSocket {
     if (this._state === "open") this.sendRaw({ type: "phase", phase });
   }
 
-  /** Allow connecting again after `unauthorized`/`mismatch` (a re-pair). */
+  /** Allow connecting again after `unauthorized`/`mismatch`/`wrong_fleet` (a re-pair). */
   clearFatal(): void {
-    if (this._state === "unauthorized" || this._state === "mismatch") this.setState("idle");
+    if (this.fatal()) {
+      this._servedFleet = null;
+      this.setState("idle");
+    }
+  }
+
+  /**
+   * The bridge serves another fleet than this pairing's: stop, fail everything
+   * in flight with `WRONG_FLEET`, and do not dial again. `fleet` is what the
+   * bridge said it serves, when it said; a later bare refusal keeps it.
+   */
+  wrongFleet(fleet: Hello["fleet"] | null = null): void {
+    if (fleet) this._servedFleet = fleet;
+    this.wanted = false;
+    this.unavailable = false;
+    this.clearReconnect();
+    this.clearSilence();
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) this.retire(ws, 1000, "wrong fleet");
+    this.failPending(wrongFleetError(this._servedFleet));
+    this.bySubId.clear();
+    for (const obs of this.observations.values()) {
+      obs.subId = null;
+      obs.opening = false;
+      this.clearObservationTimer(obs);
+    }
+    this.setState("wrong_fleet");
+  }
+
+  private fatal(): boolean {
+    return (
+      this._state === "unauthorized" || this._state === "mismatch" || this._state === "wrong_fleet"
+    );
   }
 
   rpc<T = unknown>(method: string, params: unknown = {}): Promise<T> {
@@ -463,6 +523,10 @@ export class BridgeSocket {
       this.setState("mismatch");
       return;
     }
+    if (code === MOBILE_CLOSE_CODES.WRONG_FLEET) {
+      this.wrongFleet();
+      return;
+    }
     if (!this.wanted) {
       this.setState("idle");
       return;
@@ -576,6 +640,8 @@ export class BridgeSocket {
         } else if (err.code === "UNAUTHORIZED") {
           this.wanted = false;
           this.setState("unauthorized");
+        } else if (err.code === CLIENT_ERROR_CODES.WRONG_FLEET) {
+          this.wrongFleet();
         }
         return;
       }
@@ -650,6 +716,13 @@ export class BridgeSocket {
   }
 
   private authenticated(hello: Hello): void {
+    // A bridge answering for another fleet would refuse every call with
+    // FLEET_MISMATCH: stop here rather than follow its turns or open watches.
+    const target = this.opts.target();
+    if (target && hello.fleet.fleet_id !== target.fleet_id) {
+      this.wrongFleet(hello.fleet);
+      return;
+    }
     this._hello = hello;
     this.attempt = 0;
     this.unavailable = false;
@@ -779,7 +852,11 @@ export class BridgeSocket {
       else if (!this.wanted) {
         this.pending.delete(frame.id);
         this.timers.clearTimeout(timer);
-        reject(new BridgeError(CLIENT_ERROR_CODES.DISCONNECTED, "Not connected to the bridge."));
+        reject(
+          this._state === "wrong_fleet"
+            ? wrongFleetError(this._servedFleet)
+            : new BridgeError(CLIENT_ERROR_CODES.DISCONNECTED, "Not connected to the bridge."),
+        );
       }
     });
   }

@@ -5,6 +5,7 @@
  * link, a pasted link or the form.
  */
 import { View } from "react-native";
+import { pairConfirmLabels } from "../client/pairing.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
@@ -41,11 +42,8 @@ export function PairConfirm({
   onCancel(): void;
 }) {
   const t = useTheme();
-  const host = target.host.includes(":") ? `[${target.host}]` : target.host;
-  const fleet =
-    target.fleet && target.name && target.name !== target.fleet
-      ? `${target.name} · ${target.fleet}`
-      : (target.fleet ?? target.name ?? null);
+  // Cleaned here as well as in `pairProposal`: a link's name is never shown raw.
+  const { bridge, fleet } = pairConfirmLabels(target);
   return (
     <View
       accessibilityRole="summary"
@@ -58,7 +56,7 @@ export function PairConfirm({
       }}
     >
       <Kicker>Confirm pairing</Kicker>
-      <Line label="Bridge" value={`${host}:${target.port}`} mono />
+      <Line label="Bridge" value={bridge} mono />
       <Line
         label="Fleet"
         value={fleet ?? "not named by the code — the bridge says after pairing"}

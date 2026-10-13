@@ -371,6 +371,8 @@ export function turnErrorHeadline(code: string): string {
     case "FLEET_MISMATCH":
     case "NO_TARGET":
       return "Not sent: this phone is showing a fleet the bridge is no longer serving.";
+    case "WRONG_FLEET":
+      return "Not sent: the bridge now serves another fleet. Re-pair to use it.";
     default:
       return "The message was not sent.";
   }

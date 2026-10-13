@@ -119,6 +119,73 @@ describe("BridgeSocket — handshake", () => {
   });
 });
 
+describe("BridgeSocket — wrong fleet", () => {
+  const other = {
+    fleet_id: "sg7k2m4p",
+    account_id: "123456789012",
+    region: "us-west-2",
+    alias: "staging",
+  };
+
+  test("auth.ok for another fleet: wrong_fleet, no hello, no reconnect", async () => {
+    const s = setup();
+    s.socket.connect();
+    const ws = s.factory.current();
+    ws.open();
+    const pending = s.socket.rpc("chat.swarms").catch((e: unknown) => e);
+    ws.push({ type: "auth.ok", hello: hello({ fleet: other }) });
+    expect(s.socket.state).toBe("wrong_fleet");
+    expect(s.socket.servedFleet?.alias).toBe("staging");
+    expect(s.socket.hello).toBeNull();
+    expect(s.events.hello).toBeUndefined();
+    expect(ws.closedWith?.code).toBe(1000);
+    // The queued rpc was never sent to the wrong fleet, and fails with the reason.
+    expect(ws.sent.some((f) => f.type === "rpc")).toBe(false);
+    expect(await pending).toMatchObject({ code: "WRONG_FLEET" });
+    await expect(s.socket.rpc("chat.swarms")).rejects.toMatchObject({ code: "WRONG_FLEET" });
+    s.timers.advance(120_000);
+    expect(s.factory.sockets).toHaveLength(1);
+  });
+
+  test("close 4403 is wrong_fleet, not unauthorized, and is final", () => {
+    const s = setup();
+    s.socket.connect();
+    s.factory.current().open();
+    s.factory.current().drop(MOBILE_CLOSE_CODES.WRONG_FLEET);
+    expect(s.socket.state).toBe("wrong_fleet");
+    expect(s.socket.servedFleet).toBeNull();
+    expect(s.events.state).not.toContain("unauthorized");
+    s.timers.advance(120_000);
+    expect(s.factory.sockets).toHaveLength(1);
+  });
+
+  test("auth.error WRONG_FLEET stops too", () => {
+    const s = setup();
+    s.socket.connect();
+    const ws = s.factory.current();
+    ws.open();
+    ws.push({ type: "auth.error", error: { code: "WRONG_FLEET", message: "re-pair" } });
+    expect(s.socket.state).toBe("wrong_fleet");
+    s.timers.advance(120_000);
+    expect(s.factory.sockets).toHaveLength(1);
+  });
+
+  test("survives close() and connect() (backgrounding, Reconnect); reset() clears it", () => {
+    const s = setup();
+    s.socket.connect();
+    s.factory.current().open();
+    s.factory.current().push({ type: "auth.ok", hello: hello({ fleet: other }) });
+    s.socket.close();
+    s.socket.connect();
+    expect(s.socket.state).toBe("wrong_fleet");
+    expect(s.socket.servedFleet?.fleet_id).toBe("sg7k2m4p");
+    expect(s.factory.sockets).toHaveLength(1);
+    s.socket.reset();
+    expect(s.socket.state).toBe("idle");
+    expect(s.socket.servedFleet).toBeNull();
+  });
+});
+
 describe("BridgeSocket — requests", () => {
   test("rpc correlates by id and carries the fleet target", async () => {
     const s = setup();
@@ -592,4 +659,17 @@ describe("BridgeSocket — retiring a socket", () => {
     s.socket.close();
     expect(ws.closedWith).toBeNull();
   });
+});
+
+test("clearFatal() after wrong_fleet lets a manual reconnect check again", () => {
+  const s = setup();
+  s.socket.connect();
+  s.factory.current().open();
+  s.factory.current().drop(MOBILE_CLOSE_CODES.WRONG_FLEET);
+  s.socket.clearFatal();
+  s.socket.connect();
+  expect(s.factory.sockets).toHaveLength(2);
+  s.factory.current().open();
+  s.factory.current().push({ type: "auth.ok", hello: hello() });
+  expect(s.socket.state).toBe("open");
 });

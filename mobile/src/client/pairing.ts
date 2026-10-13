@@ -149,12 +149,99 @@ export function pairHostAllowed(input: string): PairHostCheck {
  * characters). Falls back to "iPhone".
  */
 export function deviceNameFor(raw: string | null | undefined): string {
-  const cleaned = (raw ?? "")
+  return cleanLabel(raw) || "iPhone";
+}
+
+/** The longest label a phone shows for a name it did not choose (a device or fleet alias). */
+export const LABEL_MAX = 64;
+
+/**
+ * Text from outside the app made safe to show: control and bidi-override
+ * characters removed (so `‮` cannot reverse what follows), trimmed, and capped
+ * at `max` characters.
+ */
+export function cleanLabel(raw: string | null | undefined, max: number = LABEL_MAX): string {
+  return (raw ?? "")
     .replace(/[\p{Cc}\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, "")
     .trim()
-    .slice(0, 64)
+    .slice(0, max)
     .trim();
-  return cleaned || "iPhone";
+}
+
+/* ── what a pairing link may propose ────────────────────────────────────── */
+
+/**
+ * A fleet id as core mints it: 8 lowercase Crockford base32 characters
+ * (`FLEET_ID_ALPHABET` in `packages/core/src/schema/common.ts`), e.g. `fxtr0001`.
+ */
+export const FLEET_ID_RE = /^[0123456789abcdefghjkmnpqrstvwxyz]{8}$/;
+
+/** What every way into pairing proposes (the shape of `PairTarget` in `src/pair/PairForm.tsx`). */
+export interface PairProposalInput {
+  host: string;
+  port: number;
+  code: string;
+  fleet?: string | null;
+  name?: string | null;
+}
+
+export type PairProposal =
+  | { ok: true; target: PairProposalInput & { fleet: string | null; name: string | null } }
+  | { ok: false; error: PairErrorCopy };
+
+/**
+ * The one gate between a link (scanned, deep-linked, pasted or typed) and the
+ * confirmation screen. A bracketed IPv6 host is unwrapped; the port must be a
+ * whole number in 1–65535; the host must be on the tailnet (`pairHostAllowed`);
+ * a fleet id must look like one; the fleet alias is cleaned and capped. Nothing
+ * the link spells reaches the screen unchecked.
+ */
+export function pairProposal(input: PairProposalInput): PairProposal {
+  const host = input.host.trim().replace(/^\[(.*)\]$/, "$1");
+  if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)
+    return {
+      ok: false,
+      error: {
+        title: "That port is not valid.",
+        detail:
+          "A port is a whole number from 1 to 65535. Use the address `hermetic mobile serve` printed.",
+      },
+    };
+  const check = pairHostAllowed(host);
+  if (!check.ok)
+    return {
+      ok: false,
+      error: {
+        title: `${cleanLabel(host) || "That host"} is not on your tailnet.`,
+        detail: check.reason,
+      },
+    };
+  const fleet = input.fleet?.trim() || null;
+  if (fleet !== null && !FLEET_ID_RE.test(fleet))
+    return {
+      ok: false,
+      error: {
+        title: "That pairing link names no valid fleet.",
+        detail:
+          "A fleet id is 8 lowercase letters and digits, like fxtr0001. Make a new link with `hermetic mobile pair` on the laptop.",
+      },
+    };
+  return {
+    ok: true,
+    target: { host, port: input.port, code: input.code, fleet, name: cleanLabel(input.name) || null },
+  };
+}
+
+/** The confirmation's "Bridge" and "Fleet" lines, cleaned however the target was built. */
+export function pairConfirmLabels(target: PairProposalInput): { bridge: string; fleet: string | null } {
+  const bare = target.host.trim().replace(/^\[(.*)\]$/, "$1");
+  const host = bare.includes(":") ? `[${bare}]` : bare;
+  const id = target.fleet && FLEET_ID_RE.test(target.fleet) ? target.fleet : null;
+  const name = cleanLabel(target.name) || null;
+  return {
+    bridge: `${host}:${target.port}`,
+    fleet: id && name && name !== id ? `${name} · ${id}` : (id ?? name),
+  };
 }
 
 /**

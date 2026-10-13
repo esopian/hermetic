@@ -58,7 +58,7 @@ export default function Conversation() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ instance: string; bot: string; session?: string }>();
-  const { client, credentials, socketState, reconnect } = useBridge();
+  const { client, credentials, socketState, reconnect, servedFleet, rePair } = useBridge();
   const { state: roster } = useRoster();
   const now = useNow();
   const target = useMemo<ConversationTarget>(
@@ -362,7 +362,13 @@ export default function Conversation() {
         }}
       >
         <Stack.Screen options={{ headerTitle, headerRight, title: botTitle ?? target.bot }} />
-        <SocketBand state={socketState} onRetry={reconnect} />
+        <SocketBand
+          state={socketState}
+          onRetry={reconnect}
+          servedFleet={servedFleet}
+          pairedFleet={credentials?.fleet ?? null}
+          onRePair={() => void rePair()}
+        />
         <ThreadBand
           state={state}
           instance={target.instance}

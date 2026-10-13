@@ -39,7 +39,7 @@ export function PairForm({
   const [link, setLink] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const [host, setHost] = useState(initial?.host ?? "");
-  const [port, setPort] = useState(String(initial?.port ?? MOBILE_PROTOCOL.DEFAULT_PORT));
+  const [port, setPort] = useState(String(initial?.port || MOBILE_PROTOCOL.DEFAULT_PORT)); // NaN from a junk link: the default
   const [code, setCode] = useState(initial?.code ?? "");
 
   useEffect(() => {

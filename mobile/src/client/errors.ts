@@ -27,7 +27,11 @@ export const CLIENT_ERROR_CODES = {
   NOT_PAIRED: "NOT_PAIRED",
   NO_TARGET: "NO_TARGET",
   BAD_RESPONSE: "BAD_RESPONSE",
-  /** Paired, but the bridge serves another fleet than the pairing link named. */
+  /**
+   * The bridge serves another fleet than this phone expects: the one a pairing
+   * link named, or the one a stored pairing was made on (the laptop switched
+   * fleets since). The bridge sends the same code itself (HTTP 403, close 4403).
+   */
   WRONG_FLEET: "WRONG_FLEET",
 } as const;
 

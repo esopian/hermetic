@@ -110,6 +110,44 @@ describe("PairConfirm", () => {
     expect(screen.getByLabelText("Replace…")).toBeTruthy();
   });
 
+  test("an already-bracketed IPv6 host is not bracketed twice; a spoofing name is cleaned", async () => {
+    await renderUi(
+      <PairConfirm
+        target={{
+          host: "[fd7a:115c:a1e0::9]",
+          port: 7877,
+          code: "WXYZ5678",
+          fleet: "fxtr0001",
+          name: `\u202Eniam${"x".repeat(100)}`,
+        }}
+        deviceName="iPhone"
+        replacing={false}
+        busy={false}
+        onConfirm={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.getByText("[fd7a:115c:a1e0::9]:7877")).toBeTruthy();
+    expect(screen.queryByText(/\[\[/)).toBeNull();
+    expect(screen.getByText(`niam${"x".repeat(60)} · fxtr0001`)).toBeTruthy();
+    expect(screen.queryByText(/\u202E/)).toBeNull();
+  });
+
+  test("a malformed fleet id from a link is not shown as a fleet", async () => {
+    await renderUi(
+      <PairConfirm
+        target={{ host: "100.64.0.9", port: 7877, code: "WXYZ5678", fleet: "evil fleet", name: null }}
+        deviceName="iPhone"
+        replacing={false}
+        busy={false}
+        onConfirm={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.queryByText(/evil fleet/)).toBeNull();
+    expect(screen.getByText(/not named by the code/)).toBeTruthy();
+  });
+
   test("an off-tailnet host is flagged under the form", async () => {
     await renderUi(<PairForm busy={false} error={null} onSubmit={jest.fn()} />);
     await fireEvent.changeText(screen.getByLabelText("Host"), "192.168.1.10");

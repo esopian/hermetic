@@ -13,7 +13,8 @@ import { WebView } from "react-native-webview";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import {
   noVncOrigin,
-  noVncUrl,
+  noVncRefusalText,
+  noVncTarget,
   type VncScale as Scale,
   vncNavigationAllowed,
   vncScaleScript as scaleScript,
@@ -59,7 +60,9 @@ export default function AgentBrowser() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { name } = useLocalSearchParams<{ name: string }>();
-  const { client, credentials } = useBridge();
+  const { client, credentials, hello } = useBridge();
+  // The bridge's tailnet: a box's reported name must sit under it to be loaded.
+  const tailnet = hello?.tailnet ?? credentials?.tailnet ?? null;
   const [agent, setAgent] = useState<AgentView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewOnly, setViewOnly] = useState(true);
@@ -84,16 +87,17 @@ export default function AgentBrowser() {
     };
   }, [client, name, generation]);
 
-  const url = useMemo(
+  const vnc = useMemo(
     () =>
       agent
-        ? noVncUrl(agent, credentials?.tailnet ?? null, credentials?.fleet.fleet_id ?? null, {
+        ? noVncTarget(agent, tailnet, credentials?.fleet.fleet_id ?? null, {
             viewOnly,
             ...(agent.browsers[0] ? { servePath: agent.browsers[0].serve_path } : {}),
           })
         : null,
-    [agent, credentials, viewOnly],
+    [agent, tailnet, credentials, viewOnly],
   );
+  const url = vnc?.ok ? vnc.url : null;
 
   // The one origin the WebView may load; every other navigation goes to the OS.
   const origin = useMemo(() => (url ? noVncOrigin(url) : null), [url]);
@@ -212,9 +216,11 @@ export default function AgentBrowser() {
             : !url
               ? overlay(
                   <Text tone="fg2" style={{ textAlign: "center" }}>
-                    {agent.tailscale_dns_name
-                      ? `This agent's tailnet name (${agent.tailscale_dns_name}) is not a host this app will load.`
-                      : "This agent has no tailnet name yet. Its browser is reachable once it has joined the tailnet."}
+                    {noVncRefusalText(
+                      vnc && !vnc.ok ? vnc.reason : "no_name",
+                      agent.tailscale_dns_name ?? vnc?.host ?? null,
+                      tailnet,
+                    )}
                   </Text>,
                 )
               : loadError

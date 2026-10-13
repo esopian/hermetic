@@ -33,7 +33,7 @@ import {
   type WatchedThread,
 } from "./notifications-store.ts";
 import { type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
-import { BridgeSocket, type Timers, type WebSocketFactory } from "./socket.ts";
+import { BridgeSocket, type Timers, type WebSocketFactory, wrongFleetError } from "./socket.ts";
 
 /** Everything the phone keeps about one pairing. The token goes to the keychain, never to logs. */
 export interface Credentials {
@@ -149,12 +149,45 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   const { credentials } = options;
   const target = targetOf(credentials.fleet);
   const token = () => credentials.token;
-  const http = createBridgeHttp({
+  const raw = createBridgeHttp({
     baseUrl: credentials.baseUrl,
     token,
     target: () => target,
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
+  /**
+   * The bridge's HTTP half, with the fleet binding enforced: a 403
+   * `WRONG_FLEET`, or a `hello` naming another fleet than this pairing's,
+   * puts the socket in `wrong_fleet` (one place the screens read), and every
+   * call after that is refused here without dialling.
+   */
+  const guard = async <T>(call: () => Promise<T>): Promise<T> => {
+    if (socket.state === "wrong_fleet") throw wrongFleetError(socket.servedFleet);
+    try {
+      return await call();
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === CLIENT_ERROR_CODES.WRONG_FLEET)
+        socket.wrongFleet();
+      throw error;
+    }
+  };
+  const http: BridgeHttp = {
+    baseUrl: raw.baseUrl,
+    health: () => raw.health(),
+    pair: (request) => raw.pair(request),
+    hello: () =>
+      guard(async () => {
+        const hello = await raw.hello();
+        if (hello.fleet.fleet_id !== target.fleet_id) {
+          socket.wrongFleet(hello.fleet);
+          throw wrongFleetError(hello.fleet);
+        }
+        return hello;
+      }),
+    rpc: <T>(method: string, params?: unknown) => guard(() => raw.rpc<T>(method, params)),
+    pushRegister: (input) => guard(() => raw.pushRegister(input)),
+    pushSettings: (input) => guard(() => raw.pushSettings(input)),
+  };
   const socket = new BridgeSocket({
     url: wsUrlFor(credentials.baseUrl),
     token,
@@ -164,6 +197,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     ...(options.random ? { random: options.random } : {}),
   });
 
+  // In `wrong_fleet` the socket is not open, so this lands in `http`, which refuses at once.
   const rpc = <T>(method: string, params: unknown = {}): Promise<T> =>
     socket.state === "open" ? socket.rpc<T>(method, params) : http.rpc<T>(method, params);
 

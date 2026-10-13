@@ -173,9 +173,45 @@ export function ObservationBand({
   );
 }
 
+/** How a fleet reads to a person: its alias, else its id. */
+const fleetLabel = (fleet: { fleet_id: string; alias: string | null } | null | undefined) =>
+  fleet ? (fleet.alias ?? fleet.fleet_id) : null;
+
 /** The phone's own connection to the bridge, when it is not up. */
-export function SocketBand({ state, onRetry }: { state: string; onRetry?: () => void }) {
+export function SocketBand({
+  state,
+  onRetry,
+  servedFleet,
+  pairedFleet,
+  onRePair,
+}: {
+  state: string;
+  onRetry?: () => void;
+  /** In `wrong_fleet`: what the bridge serves now, when it said. */
+  servedFleet?: { fleet_id: string; alias: string | null } | null;
+  /** The fleet this phone was paired on. */
+  pairedFleet?: { fleet_id: string; alias: string | null } | null;
+  onRePair?: () => void;
+}) {
   if (state === "open" || state === "idle") return null;
+  // The laptop switched fleets: the token still exists but is bound to the old one.
+  if (state === "wrong_fleet") {
+    const served = fleetLabel(servedFleet);
+    const paired = fleetLabel(pairedFleet);
+    return (
+      <BandShell
+        tone="bad"
+        testID="band-socket"
+        title={
+          served
+            ? `This bridge now serves ${served}; re-pair to use it.`
+            : "This bridge now serves another fleet; re-pair to use it."
+        }
+        sub={`This phone was paired with ${paired ?? "another fleet"}, which the laptop no longer serves. Re-pairing forgets this pairing first.`}
+        action={onRePair ? { label: "Re-pair", onPress: onRePair } : null}
+      />
+    );
+  }
   if (state === "unauthorized")
     return (
       <BandShell

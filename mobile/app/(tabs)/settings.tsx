@@ -147,6 +147,7 @@ const SOCKET_WORDS: Record<string, string> = {
   unavailable: "laptop bridge unavailable — retrying",
   unauthorized: "refused — this phone was revoked",
   mismatch: "protocol mismatch — update the app or the bridge",
+  wrong_fleet: "the bridge serves another fleet now — re-pair",
 };
 
 export default function Settings() {
@@ -158,6 +159,8 @@ export default function Settings() {
   const [pushBusy, setPushBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const live = socketState === "open";
+  const fatal =
+    socketState === "unauthorized" || socketState === "mismatch" || socketState === "wrong_fleet";
   const listening = state?.listening ?? [];
 
   const signOut = () => {
@@ -192,18 +195,20 @@ export default function Settings() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
             <StatusSquare
               size={10}
-              color={
-                live
-                  ? t.c.ok
-                  : socketState === "unauthorized" || socketState === "mismatch"
-                    ? t.c.bad
-                    : t.c.warn
-              }
-              pulse={!live && socketState !== "unauthorized" && socketState !== "mismatch"}
+              color={live ? t.c.ok : fatal ? t.c.bad : t.c.warn}
+              pulse={!live && !fatal}
             />
             <Text weight={700} style={{ flex: 1 }}>
               {SOCKET_WORDS[socketState] ?? socketState}
             </Text>
+            {socketState === "wrong_fleet" ? (
+              <Button
+                label="Re-pair"
+                variant="secondary"
+                compact
+                onPress={() => void bridge.rePair()}
+              />
+            ) : null}
             <Button label="Reconnect" variant="secondary" compact onPress={bridge.reconnect} />
           </View>
           <Row label="Host" value={credentials?.baseUrl} />

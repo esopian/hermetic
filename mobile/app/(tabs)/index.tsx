@@ -25,11 +25,12 @@ const KICKER_STATE: Record<string, string> = {
   unavailable: " · bridge unavailable",
   unauthorized: " · refused",
   mismatch: " · version mismatch",
+  wrong_fleet: " · bridge serves another fleet",
 };
 
 export default function Bots() {
   const t = useTheme();
-  const { client, credentials, socketState, reconnect } = useBridge();
+  const { client, credentials, socketState, reconnect, servedFleet, rePair } = useBridge();
   const { state, layout } = useRoster();
   const now = useNow();
   const [refreshing, setRefreshing] = useState(false);
@@ -143,8 +144,17 @@ export default function Bots() {
         </Pressable>
       </View>
       {/* Only the states that last: "connecting" flickers by on every resume. */}
-      {socketState === "unavailable" || socketState === "unauthorized" || socketState === "mismatch" ? (
-        <SocketBand state={socketState} onRetry={reconnect} />
+      {socketState === "unavailable" ||
+      socketState === "unauthorized" ||
+      socketState === "mismatch" ||
+      socketState === "wrong_fleet" ? (
+        <SocketBand
+          state={socketState}
+          onRetry={reconnect}
+          servedFleet={servedFleet}
+          pairedFleet={credentials?.fleet ?? null}
+          onRePair={() => void rePair()}
+        />
       ) : null}
       <BotsList
         rows={rows}

@@ -1,4 +1,10 @@
-import { type Alert, createHermeticClient, pairDevice, replyPreview } from "../../src/client/client.ts";
+import {
+  type Alert,
+  createHermeticClient,
+  isUnpaired,
+  pairDevice,
+  replyPreview,
+} from "../../src/client/client.ts";
 import type { FetchLike } from "../../src/client/http.ts";
 import { FakeTimers, flush, socketFactory } from "../helpers/fakes.ts";
 import { approval, block, delta, done, hello, msg, notification } from "../helpers/fixtures.ts";
@@ -172,4 +178,93 @@ test("the app phase reaches the bridge as a phase frame on the injected socket",
     "background",
     "foreground",
   ]);
+});
+
+describe("a bridge that now serves another fleet", () => {
+  const staging = {
+    fleet_id: "sg7k2m4p",
+    account_id: "123456789012",
+    region: "us-west-2",
+    alias: "staging",
+  };
+
+  function paired(fetch: FetchLike) {
+    const factory = socketFactory();
+    const client = createHermeticClient({
+      credentials: {
+        baseUrl: "http://127.0.0.1:7877",
+        token: "hmt_FIXTURE",
+        device_id: "dev1",
+        fleet: hello().fleet,
+        tailnet: "tail1234.ts.net",
+        paired_at: "2026-10-13T09:00:00.000Z",
+      },
+      createSocket: factory.create,
+      fetch,
+      timers: new FakeTimers(),
+      random: () => 0,
+    });
+    return { client, factory };
+  }
+
+  const answering = (status: number, body: unknown) => {
+    const calls: string[] = [];
+    const fetch: FetchLike = async (url) => {
+      calls.push(url);
+      return { ok: status < 400, status, text: async () => JSON.stringify(body) };
+    };
+    return { fetch, calls };
+  };
+
+  test("auth.ok naming another fleet: wrong_fleet, and calls fail without dialling", async () => {
+    const http = answering(200, { ok: true, result: {} });
+    const { client, factory } = paired(http.fetch);
+    client.connect();
+    factory.current().open();
+    factory.current().push({ type: "auth.ok", hello: hello({ fleet: staging }) });
+    expect(client.socket.state).toBe("wrong_fleet");
+    expect(client.socket.servedFleet?.alias).toBe("staging");
+    const before = http.calls.length;
+    await expect(client.rpc("chat.swarms")).rejects.toMatchObject({ code: "WRONG_FLEET" });
+    await expect(client.http.pushSettings({ previews: false })).rejects.toMatchObject({
+      code: "WRONG_FLEET",
+    });
+    expect(http.calls.length).toBe(before);
+    client.connect();
+    expect(factory.sockets).toHaveLength(1);
+  });
+
+  test("HTTP 403 WRONG_FLEET enters the same state, not unpaired", async () => {
+    const http = answering(403, { error: { code: "WRONG_FLEET", message: "re-pair" } });
+    const { client } = paired(http.fetch);
+    const err = await client.rpc("chat.swarms").catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "WRONG_FLEET", status: 403 });
+    expect(isUnpaired(err)).toBe(false);
+    expect(client.socket.state).toBe("wrong_fleet");
+    expect(client.socket.servedFleet).toBeNull();
+  });
+
+  test("an HTTP hello for another fleet: wrong_fleet with the fleet it serves", async () => {
+    const http = answering(200, hello({ fleet: staging }));
+    const { client } = paired(http.fetch);
+    await expect(client.http.hello()).rejects.toMatchObject({ code: "WRONG_FLEET" });
+    expect(client.socket.state).toBe("wrong_fleet");
+    expect(client.socket.servedFleet?.fleet_id).toBe("sg7k2m4p");
+  });
+
+  test("close 4403 on the socket", async () => {
+    const { client, factory } = paired(answering(200, {}).fetch);
+    client.connect();
+    factory.current().open();
+    factory.current().drop(4403);
+    expect(client.socket.state).toBe("wrong_fleet");
+    await flush();
+    expect(factory.sockets).toHaveLength(1);
+  });
+
+  test("the same fleet's hello passes", async () => {
+    const { client } = paired(answering(200, hello()).fetch);
+    await expect(client.http.hello()).resolves.toMatchObject({ fleet: { fleet_id: "fxtr0001" } });
+    expect(client.socket.state).toBe("idle");
+  });
 });

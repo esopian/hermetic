@@ -1,7 +1,10 @@
 import {
   agentHostname,
   noVncOrigin,
+  noVncRefusalText,
+  noVncTarget,
   noVncUrl,
+  onTailnet,
   validTailnetHost,
   vncNavigationAllowed,
 } from "../../src/client/vnc.ts";
@@ -67,5 +70,55 @@ describe("hostile names never reach the WebView", () => {
     expect(vncNavigationAllowed("https://fxtr0001-atlas.t.ts.net:8443/", origin)).toBe(false);
     expect(vncNavigationAllowed("https://fxtr0001-atlas.t.ts.net@evil.com/", origin)).toBe(false);
     expect(vncNavigationAllowed("http://fxtr0001-atlas.t.ts.net/", origin)).toBe(false);
+  });
+});
+
+describe("a reported name off this fleet's tailnet is refused", () => {
+  test.each([
+    "evil.com",
+    "fxtr0001-atlas.other.ts.net",
+    "tail1234.ts.net",
+    "fxtr0001-atlas.tail1234.ts.net.evil.com",
+  ])("%p with tailnet tail1234.ts.net", (name) => {
+    const target = noVncTarget(
+      { name: "atlas", tailscale_dns_name: name },
+      "tail1234.ts.net",
+      "fxtr0001",
+    );
+    expect(target).toMatchObject({ ok: false, reason: "off_tailnet" });
+    expect(
+      noVncUrl({ name: "atlas", tailscale_dns_name: name }, "tail1234.ts.net", "fxtr0001"),
+    ).toBeNull();
+  });
+
+  test("with no tailnet known, a name must still be under .ts.net", () => {
+    expect(noVncUrl({ name: "atlas", tailscale_dns_name: "evil.com" }, null, null)).toBeNull();
+    expect(noVncUrl({ name: "atlas", tailscale_dns_name: "ts.net" }, null, null)).toBeNull();
+    expect(noVncUrl({ name: "atlas", tailscale_dns_name: "a.t.ts.net." }, null, null)).toBe(
+      "https://a.t.ts.net/vnc/vnc.html?path=vnc/websockify&autoconnect=true&resize=scale&reconnect=true",
+    );
+  });
+
+  test("the tailnet match is case- and trailing-dot-insensitive, and a hostile tailnet falls back to .ts.net", () => {
+    expect(onTailnet("a.tail1234.ts.net", "Tail1234.TS.net.")).toBe(true);
+    expect(onTailnet("evil.com", "evil.com/#")).toBe(false);
+    expect(onTailnet("a.tail1234.ts.net", "evil.com/#")).toBe(true);
+  });
+
+  test("the overlay says why", () => {
+    const target = noVncTarget(
+      { name: "atlas", tailscale_dns_name: "evil.com" },
+      "tail1234.ts.net",
+      "fxtr0001",
+    );
+    expect(target.ok).toBe(false);
+    if (!target.ok)
+      expect(noVncRefusalText(target.reason, "evil.com", "tail1234.ts.net")).toBe(
+        "This agent reported the name evil.com, which is not on this fleet's tailnet (tail1234.ts.net). The app will not load a browser from it.",
+      );
+    expect(noVncTarget({ name: "atlas", tailscale_dns_name: null }, null, null)).toMatchObject({
+      ok: false,
+      reason: "no_name",
+    });
   });
 });

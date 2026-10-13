@@ -81,6 +81,13 @@ export interface BridgeContextValue {
   hello: Hello | null;
   /** Drop the socket and dial again now (Settings → Reconnect). */
   reconnect(): void;
+  /**
+   * In `wrong_fleet`: the fleet the bridge serves now, when it said which
+   * (`null` for a bare 403/4403 refusal, or in any other state).
+   */
+  servedFleet: Hello["fleet"] | null;
+  /** Forget this pairing entirely and go to Pair (the way out of `wrong_fleet`). */
+  rePair(): Promise<void>;
   /** Ask the bridge to stop (or resume) pushing to this device. */
   setPushEnabled(enabled: boolean): Promise<boolean>;
 }
@@ -109,6 +116,7 @@ export function BridgeProvider({
   const [previews, setPreviewsState] = useState(true);
   const [push, setPush] = useState<PushRegistration | null>(null);
   const [hello, setHello] = useState<Hello | null>(null);
+  const [servedFleet, setServedFleet] = useState<Hello["fleet"] | null>(null);
   const { mayAlert } = usePrefs();
   const mayAlertRef = useRef(mayAlert);
   mayAlertRef.current = mayAlert;
@@ -171,7 +179,11 @@ export function BridgeProvider({
   useEffect(() => {
     if (!client) return;
     setSocketState(client.socket.state);
-    const offState = client.socket.on("state", setSocketState);
+    setServedFleet(client.socket.servedFleet);
+    const offState = client.socket.on("state", (state) => {
+      setSocketState(state);
+      setServedFleet(client.socket.servedFleet);
+    });
     const offBadge = client.inbox.subscribe(() => void setBadge(client.inbox.badgeCount()));
     const offHello = client.socket.on("hello", setHello);
     return () => {
@@ -255,6 +267,11 @@ export function BridgeProvider({
     setStatus("unpaired");
   }, [storage]);
 
+  const rePair = useCallback(async () => {
+    await signOut();
+    router.replace("/pair");
+  }, [signOut]);
+
   const setPreviews = useCallback(
     async (value: boolean) => {
       previewsRef.current = value;
@@ -276,6 +293,9 @@ export function BridgeProvider({
   const reconnect = useCallback(() => {
     const c = clientRef.current;
     if (!c) return;
+    // A wrong fleet is sticky so nothing loops on it; an explicit Reconnect
+    // checks once more (the laptop may have switched back, which honours the token).
+    if (c.socket.state === "wrong_fleet") c.socket.clearFatal();
     c.disconnect();
     c.connect();
   }, []);
@@ -308,9 +328,13 @@ export function BridgeProvider({
       hello,
       reconnect,
       setPushEnabled,
+      servedFleet,
+      rePair,
     }),
     [
       hello,
+      servedFleet,
+      rePair,
       reconnect,
       setPushEnabled,
       status,

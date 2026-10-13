@@ -21,7 +21,7 @@ import {
   deviceNameFor,
   type PairErrorCopy,
   pairErrorCopy,
-  pairHostAllowed,
+  pairProposal,
 } from "../src/client/pairing.ts";
 import { PairConfirm } from "../src/pair/PairConfirm.tsx";
 import { PairForm, type PairTarget } from "../src/pair/PairForm.tsx";
@@ -53,7 +53,8 @@ export default function Pair() {
     params.host && params.code
       ? {
           host: String(params.host),
-          port: Number(params.port) || MOBILE_PROTOCOL.DEFAULT_PORT,
+          // Absent means the default; anything else is checked as given (`pairProposal`).
+          port: params.port ? Number(params.port) : MOBILE_PROTOCOL.DEFAULT_PORT,
           code: normalisePairCode(String(params.code)),
           fleet: params.fleet ? String(params.fleet) : null,
           name: params.name ? String(params.name) : null,
@@ -86,17 +87,20 @@ export default function Pair() {
     [busy, pair, deviceName],
   );
 
-  /** Every way in stops here: refuse an off-tailnet host, else ask before pairing. */
+  /**
+   * Every way in stops here: refuse a bad port, an off-tailnet host or a
+   * malformed fleet id, else ask before pairing with the cleaned target.
+   */
   const propose = useCallback((target: PairTarget) => {
-    const check = pairHostAllowed(target.host);
-    if (!check.ok) {
+    const proposal = pairProposal(target);
+    if (!proposal.ok) {
       haptic.error();
       setPending(null);
-      setError({ title: `${target.host} is not on your tailnet.`, detail: check.reason });
+      setError(proposal.error);
       return;
     }
     setError(null);
-    setPending(target);
+    setPending(proposal.target);
   }, []);
 
   const confirm = useCallback(() => {

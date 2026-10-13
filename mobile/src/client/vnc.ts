@@ -24,6 +24,19 @@ export function validTailnetHost(host: string): boolean {
   return host.length <= 253 && TAILNET_HOST.test(host) && !host.includes("..");
 }
 
+/**
+ * Whether `host` is a node on this fleet's tailnet: a name under
+ * `.<tailnet>` when the bridge said which tailnet (`Hello.tailnet`), else
+ * under `.ts.net`. A box's reported `tailscale_dns_name` is not trusted on its
+ * own — `evil.com` is a syntactically fine host, and would become the one
+ * origin the WebView is pinned to.
+ */
+export function onTailnet(host: string, tailnet: string | null): boolean {
+  const zone = (tailnet ?? "").toLowerCase().replace(/\.$/, "");
+  const suffix = zone && validTailnetHost(zone) ? `.${zone}` : ".ts.net";
+  return validTailnetHost(host) && host.endsWith(suffix) && host.length > suffix.length;
+}
+
 export function agentHostname(
   agent: Pick<AgentView, "name" | "tailscale_dns_name">,
   tailnet: string,
@@ -42,23 +55,70 @@ export interface VncOptions {
 const SERVE_PATH = /^(\/[A-Za-z0-9._-]+)+$/;
 
 /**
- * `null` when there is no tailnet name to build a host from, or when the name
- * (or the browser's Serve path) is not one a URL can carry safely.
+ * Why there is no noVNC URL: no tailnet name to build a host from yet, a name
+ * a URL cannot carry safely, a name off this fleet's tailnet, or a Serve path
+ * that is not one.
  */
+export type NoVncRefusal = "no_name" | "bad_host" | "off_tailnet" | "bad_path";
+
+export type NoVncTarget =
+  | { ok: true; url: string; host: string }
+  | { ok: false; reason: NoVncRefusal; host: string | null };
+
+/**
+ * The noVNC URL for an agent, or why the app will not load one. `tailnet` is
+ * the bridge's (`Hello.tailnet`, kept in the credentials): the host must be a
+ * name under it, or under `.ts.net` when it is unknown.
+ */
+export function noVncTarget(
+  agent: Pick<AgentView, "name" | "tailscale_dns_name">,
+  tailnet: string | null,
+  fleetId: string | null,
+  opts: VncOptions = {},
+): NoVncTarget {
+  if (!agent.tailscale_dns_name && !tailnet) return { ok: false, reason: "no_name", host: null };
+  const host = agentHostname(agent, tailnet ?? "", cloudName(fleetId, agent.name)).toLowerCase();
+  if (!validTailnetHost(host)) return { ok: false, reason: "bad_host", host };
+  if (!onTailnet(host, tailnet)) return { ok: false, reason: "off_tailnet", host };
+  const path = `/${(opts.servePath ?? "/vnc").replace(/^\/+|\/+$/g, "")}`;
+  if (!SERVE_PATH.test(path) || path.split("/").some((seg) => seg === "." || seg === ".."))
+    return { ok: false, reason: "bad_path", host };
+  const socket = `${path.replace(/^\//, "")}/websockify`;
+  const view = opts.viewOnly ? "&view_only=true" : "";
+  return {
+    ok: true,
+    host,
+    url: `https://${host}${path}/vnc.html?path=${socket}&autoconnect=true&resize=scale&reconnect=true${view}`,
+  };
+}
+
+/** `noVncTarget`'s URL, or `null` for any refusal. */
 export function noVncUrl(
   agent: Pick<AgentView, "name" | "tailscale_dns_name">,
   tailnet: string | null,
   fleetId: string | null,
   opts: VncOptions = {},
 ): string | null {
-  if (!agent.tailscale_dns_name && !tailnet) return null;
-  const host = agentHostname(agent, tailnet ?? "", cloudName(fleetId, agent.name)).toLowerCase();
-  if (!validTailnetHost(host)) return null;
-  const path = `/${(opts.servePath ?? "/vnc").replace(/^\/+|\/+$/g, "")}`;
-  if (!SERVE_PATH.test(path) || path.split("/").some((seg) => seg === "." || seg === "..")) return null;
-  const socket = `${path.replace(/^\//, "")}/websockify`;
-  const view = opts.viewOnly ? "&view_only=true" : "";
-  return `https://${host}${path}/vnc.html?path=${socket}&autoconnect=true&resize=scale&reconnect=true${view}`;
+  const target = noVncTarget(agent, tailnet, fleetId, opts);
+  return target.ok ? target.url : null;
+}
+
+/** What the agent screen says instead of loading the browser. */
+export function noVncRefusalText(
+  reason: NoVncRefusal,
+  reported: string | null,
+  tailnet: string | null,
+): string {
+  switch (reason) {
+    case "no_name":
+      return "This agent has no tailnet name yet. Its browser is reachable once it has joined the tailnet.";
+    case "off_tailnet":
+      return `This agent reported the name ${reported ?? "(none)"}, which is not on this fleet's tailnet (${tailnet ?? "*.ts.net"}). The app will not load a browser from it.`;
+    case "bad_path":
+      return "This agent's browser path is not one this app will load.";
+    default:
+      return `This agent's tailnet name (${reported ?? "(none)"}) is not a host this app will load.`;
+  }
 }
 
 /** The one origin a noVNC URL loads from (`https://host`), for the WebView's allow-list. */
