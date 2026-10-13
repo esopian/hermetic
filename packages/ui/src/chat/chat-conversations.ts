@@ -7,6 +7,7 @@ import type {
   ChatFrameView,
   ChatMessageView,
   ChatObserveView,
+  SessionView,
 } from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
@@ -379,16 +380,21 @@ export function useConversations(
           !record.sessions.some((s) => s.id === result.conversation!.session)
         ) {
           const c = result.conversation;
-          record.sessions.push({
-            id: c.session,
-            instance: c.instance,
-            bot: c.bot,
-            kind: c.kind,
-            origin: "desktop",
-            title: c.kind === "canonical" ? "Bot Chat" : "Chat",
-            unread: 0,
-            turn_count: 0,
-          });
+          // This record's own entry only: the list is shared with the bot's
+          // other records once read, so it is replaced, never pushed into.
+          record.sessions = [
+            ...record.sessions,
+            {
+              id: c.session,
+              instance: c.instance,
+              bot: c.bot,
+              kind: c.kind,
+              origin: "desktop",
+              title: c.kind === "canonical" ? "Bot Chat" : "Chat",
+              unread: 0,
+              turn_count: 0,
+            },
+          ];
         }
         record.messages = absorbEarly(record, result.messages);
         noteRows(record, record.messages);
@@ -423,13 +429,48 @@ export function useConversations(
     [changed, permits],
   );
 
+  /**
+   * Every record of the same bot as `record`, itself excluded. A bot's Bot Chat
+   * and each of its additional sessions are separate records, but the list of
+   * the bot's sessions is one fact about the bot, so a read made through any of
+   * them is the answer for all of them.
+   */
+  const siblingsOf = useCallback((record: Conversation): Conversation[] => {
+    const out: Conversation[] = [];
+    for (const other of new Set(records.current.values())) {
+      if (other === record) continue;
+      if (other.target.instance !== record.target.instance) continue;
+      if (other.target.bot !== record.target.bot) continue;
+      out.push(other);
+    }
+    return out;
+  }, []);
+  /** The bot's session list, as every record of the bot now holds it. */
+  const setSessions = useCallback(
+    (record: Conversation, sessions: SessionView[]) => {
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessions = sessions;
+        each.sessionsState = "ready";
+        each.sessionsError = null;
+      }
+    },
+    [siblingsOf],
+  );
+
   const readSessions = useCallback(
     async (record: Conversation) => {
       if (!alive.current || !permits(record.target.instance)) return;
-      record.sessionsController?.abort();
+      // A read for any record of this bot answers for all of them, so one in
+      // flight through a sibling is superseded here rather than left to land
+      // later with a list that may predate a session this one will name.
+      for (const each of [record, ...siblingsOf(record)]) {
+        each.sessionsController?.abort();
+        each.sessionsController = null;
+        each.sessionsGen += 1;
+      }
       const controller = new AbortController();
       record.sessionsController = controller;
-      const gen = ++record.sessionsGen;
+      const gen = record.sessionsGen;
       record.sessionsState = "pending";
       changed();
       try {
@@ -439,17 +480,23 @@ export function useConversations(
           controller.signal,
         );
         if (!alive.current || gen !== record.sessionsGen) return;
-        record.sessions = result.sessions;
-        record.sessionsState = "ready";
-        record.sessionsError = null;
+        setSessions(record, result.sessions);
       } catch (error) {
         if (!alive.current || gen !== record.sessionsGen) return;
+        const message = error instanceof Error ? error.message : String(error);
         record.sessionsState = "failed";
-        record.sessionsError = error instanceof Error ? error.message : String(error);
+        record.sessionsError = message;
+        // A sibling still waiting on this read has no list of its own to fall
+        // back on; one that already holds a list keeps it.
+        for (const each of siblingsOf(record)) {
+          if (each.sessionsState !== "pending") continue;
+          each.sessionsState = "failed";
+          each.sessionsError = message;
+        }
       }
       changed();
     },
-    [changed, permits],
+    [changed, permits, setSessions, siblingsOf],
   );
 
   const select = useCallback(
@@ -659,8 +706,16 @@ export function useConversations(
             // frame can correct it. Same refresh, for the same reason, as the
             // one a send does when its history response names a new session.
             // Only on a rollover away from a session: a first snapshot is
-            // already behind a read that refreshes the list itself.
-            if (retiredSession) void readSessions(record);
+            // already behind a read that refreshes the list itself — unless
+            // that read was the collided record's, cancelled just above while
+            // this record's own had already been superseded by it (a sibling's
+            // read answers for every record of the bot). Nothing else would
+            // read for it then, and `pending` would hold the composer closed.
+            if (
+              retiredSession ||
+              (record.sessionsState === "pending" && record.sessionsController === null)
+            )
+              void readSessions(record);
           }
           // Anything observed before this transcript existed is folded into it
           // first, so the reconciliation below sees every message this browser
