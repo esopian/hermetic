@@ -475,6 +475,8 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
             note: "emitted by a hermes build this adapter has never been taught to read",
           },
         },
+        // A gateway internal signal stored as `unknown`: the UI must draw nothing for it.
+        { kind: "unknown", name: "platforms.changed", payload: {} },
         {
           kind: "activity",
           category: "history",

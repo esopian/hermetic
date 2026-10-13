@@ -32,6 +32,7 @@ import type {
 import { createLiveUsage, LIVE_USAGE_DEADLINE_MS } from "../src/chat/hermes/hermes-chat-live-usage.ts";
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
+import { HERMES_INTERNAL_EVENTS } from "../src/shared/hermes-internal-events.ts";
 import { Bot, ChatFrame } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
@@ -484,6 +485,24 @@ describe("hermes-chat · the recorded turn", () => {
     expect(names).not.toContain("session.title");
     expect(names).not.toContain("session.info");
     expect(names).not.toContain("gateway.ready");
+  });
+
+  test("every gateway internal signal is dropped, sessioned or broadcast, and content still renders", async () => {
+    // Broadcasts arrive with `session_id: ""` (upstream `tui_gateway/server.py`),
+    // so the subagent check does not catch them; the name check must.
+    let seq = 2;
+    const internal = HERMES_INTERNAL_EVENTS.flatMap((name) => [
+      eventFrame(name, seq++, {}),
+      eventFrame(name, 0, {}, ""),
+    ]);
+    const complete = eventFrame("message.complete", seq, { text: "pong", status: "complete" });
+    const h = harness(turnScript([...internal, complete]));
+    const frames = body(await collect(createHermesChat(h.deps).send(BOX, "default", "hi")));
+    const names = new Set(blocks(frames).flatMap((b) => (b.kind === "unknown" ? [b.name] : [])));
+    for (const name of HERMES_INTERNAL_EVENTS) expect(names.has(name)).toBe(false);
+    // Nothing was wrapped as a subagent either.
+    expect(names.has("subagent")).toBe(false);
+    expect(frames.flatMap((f) => (f.type === "delta" ? [f.text] : []))).toEqual(["pong"]);
   });
 
   test("a turn whose text arrives only on message.complete still renders", async () => {
@@ -1403,6 +1422,21 @@ describe("hermes-chat · warm slots", () => {
     expect(last?.type).toBe("error");
     expect(last?.type === "error" ? last.code : null).toBe("CHAT_TURN_FAILED");
     expect(h.sockets[0]?.sent.map((c) => c.method)).toContain("session.interrupt");
+  });
+
+  test("internal signals alone are not content: the first-frame deadline still fires", async () => {
+    // The gateway did talk, so this is not CHAT_NO_SLOT — but nothing it said
+    // was about the turn, so it is not a silently running answer either.
+    const frames = HERMES_INTERNAL_EVENTS.flatMap((name, i) => [
+      eventFrame(name, i + 3, {}),
+      eventFrame(name, 0, {}, ""),
+    ]);
+    const h = harness(turnScript(frames));
+    const out = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    const last = out.at(-1);
+    expect(last?.type).toBe("error");
+    expect(last?.type === "error" ? last.code : null).toBe("CHAT_TURN_FAILED");
+    expect(blocks(body(out)).filter((b) => b.kind === "unknown")).toEqual([]);
   });
 
   test("a long tool call after the first frame is not a timeout", async () => {
@@ -2617,7 +2651,8 @@ describe("semantic live activity and requests", () => {
     const h = harness(
       turnScript([
         eventFrame("notice", 1000, { message: "Capabilities refreshed" }, ""),
-        eventFrame("skin.changed", 1001, { name: "future skin" }, ""),
+        eventFrame("workspace.checkpoint", 1001, { name: "future checkpoint" }, ""),
+        eventFrame("skin.changed", 1002, { name: "future skin" }, ""),
         eventFrame("session.reclaimed", 0, { session_id: "other-runtime", reason: "idle_timeout" }, ""),
         eventFrame(
           "message.complete",
@@ -2633,6 +2668,10 @@ describe("semantic live activity and requests", () => {
       expect.objectContaining({ kind: "activity", title: "Capabilities refreshed" }),
     );
     expect(blocks(frames)).toContainEqual(
+      expect.objectContaining({ kind: "unknown", name: "workspace.checkpoint" }),
+    );
+    // A gateway internal signal (`shared/hermes-internal-events.ts`) is not one.
+    expect(blocks(frames)).not.toContainEqual(
       expect.objectContaining({ kind: "unknown", name: "skin.changed" }),
     );
     expect(

@@ -48,6 +48,7 @@
  * turn is still streaming. Taking the first id instead would silently break all
  * three. `ids` keeps the whole run addressable for anything that needs it.
  */
+import { isHermesInternalEvent } from "@hermetic/core/shared";
 import type { BlockLike, MessageLike, MessageRow } from "./chat-logic.ts";
 import { dayDivider, messageRows } from "./chat-logic.ts";
 import type { ChatBlockOf } from "../api/index.ts";
@@ -219,6 +220,37 @@ export function turnGroups<M extends MessageLike>(
   return groups;
 }
 
+/** An `unknown` block naming one of the gateway's internal signals. */
+function internalSignal(block: BlockLike): boolean {
+  return (
+    block.kind === "unknown" && typeof block.name === "string" && isHermesInternalEvent(block.name)
+  );
+}
+
+/**
+ * The gateway's internal signals (`platforms.changed` and the like,
+ * `@hermetic/core/shared` `HERMES_INTERNAL_EVENTS`) are dropped by core's
+ * adapter, but a transcript stored before it did, or a payload from an older
+ * core, can still carry one as an `unknown` block. They go here, before rows
+ * are grouped, so a message left with nothing to draw is not a row: it would
+ * otherwise draw a day divider, or take the header from the next message by
+ * its author, while `Message` rendered nothing for it.
+ */
+function withoutInternalSignals<M extends MessageLike>(messages: readonly M[]): readonly M[] {
+  if (!messages.some((m) => m.blocks.some(internalSignal))) return messages;
+  const out: M[] = [];
+  for (const m of messages) {
+    if (!m.blocks.some(internalSignal)) {
+      out.push(m);
+      continue;
+    }
+    const blocks = m.blocks.filter((block) => !internalSignal(block));
+    if (blocks.length === 0 && !broken(m) && !m.usage) continue;
+    out.push({ ...m, blocks });
+  }
+  return out;
+}
+
 /**
  * The transcript as presented rows: one row per turn, with `continuation` and
  * the day divider decided on the merged rows by the same rule `messageRows()`
@@ -229,7 +261,7 @@ export function turnRows<M extends MessageLike>(
   now: number,
   options: TurnOptions = {},
 ): TurnRow<M>[] {
-  const groups = turnGroups(messages, now, options);
+  const groups = turnGroups(withoutInternalSignals(messages), now, options);
   return messageRows(
     groups.map((run) => mergeTurn(run)),
     now,

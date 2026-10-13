@@ -9,6 +9,7 @@
  */
 import { checkAbort } from "../../abort.ts";
 import { HermeticError } from "../../errors.ts";
+import { isHermesInternalEvent } from "../../shared/hermes-internal-events.ts";
 import {
   CHAT_ERROR_CODES,
   chatError,
@@ -30,46 +31,6 @@ import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
-
-/**
- * Events that carry no transcript content and are dropped rather than turned
- * into an `unknown` block.
- *
- * **Every entry here was observed on the wire.** That rule is the whole of the
- * list's design, and it was learned the expensive way: an earlier version also
- * dropped `tool.started`, `tool.generating`, `status.update`, `message.interim`,
- * `session.status` and `session.usage`, every one of them taken from a *list of
- * declared RPC method names* in upstream's source rather than from a frame
- * anybody had seen. `tool.started` and `tool.start` are both declared. If the
- * spelling upstream actually emits is the one on the drop list, every tool call
- * in every transcript disappears silently, and the symptom is a transcript that
- * merely looks a bit thin.
- *
- * Other recognized events are normalized by hermes-chat-activity.ts without
- * discarding their payload. Unfamiliar events survive as unknown blocks.
- * The four below are the four
- * whose frames the probe counted in its single recorded turn (§8 — `gateway.ready`
- * ×1, `session.info` ×2, `session.title` ×2, `sessions.changed` ×5): nine frames
- * of pure chatter around a four-token answer, which is what makes dropping them
- * worth the risk that the list is wrong.
- *
- * Adding an entry means recording a frame first.
- */
-const CONTROL_EVENTS = new Set([
-  // Observed ×1. Emitted immediately after the socket is accepted. The adapter
-  // mints its own status frames instead, so this is redundant rather than new.
-  "gateway.ready",
-  // Observed ×2. Model, toolsets, cwd, approval mode. Useful, but not a
-  // transcript block — and the model it names also rides on `done`'s usage.
-  // The one part read is its `usage`'s context window, which `stream` lifts
-  // into a `usage` activity block before this list is consulted.
-  "session.info",
-  // Observed ×2. The box renaming the conversation; a head reads titles from
-  // `sessions()`.
-  "session.title",
-  // Observed ×5, for one four-token answer.
-  "sessions.changed",
-]);
 
 /**
  * `prompt.submit`'s reply, mapped onto a status the transcript can show.
@@ -482,7 +443,18 @@ export function createChatTurn(deps: ChatTurnDeps) {
         type === "session.info" && (evSession === null || evSession === session)
           ? contextUsageBlock(payload)
           : null;
-      if (CONTROL_EVENTS.has(type) && !infoUsage) continue;
+      // The gateway's internal signals (`shared/hermes-internal-events.ts`) are
+      // dropped here, before seq bookkeeping and before `seenContent`, so they
+      // never become `unknown` blocks and never satisfy the first-frame
+      // deadline. The list is what Hermes Desktop consumes without drawing
+      // anything, cited from Desktop's source — not upstream's declared method
+      // names: an earlier drop list built from declared names held
+      // `tool.started` and `status.update`, and a dropped spelling that
+      // upstream really emits makes every tool call vanish silently. Anything
+      // unlisted is mapped by hermes-chat-activity.ts or survives as `unknown`.
+      // It also runs before the child-session `subagent` wrap below, so a
+      // listed event from a child session is dropped too, by intent.
+      if (isHermesInternalEvent(type) && !infoUsage) continue;
 
       // Reclamation is broadcast globally, but its payload addresses one runtime.
       // A different conversation releasing a slot is not a failure of this turn.
