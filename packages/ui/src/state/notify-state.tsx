@@ -308,7 +308,7 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   /** Led by a ref for the same reason `items` is (`writeItems` below). */
   const viewsRef = useRef(views);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerView, setDrawerView] = useState<DrawerView>("inbox");
+  const [drawerView, setDrawerView] = useState<DrawerView>("unread");
   const [settings, setSettings] = useState<NotificationSettingsView | null>(null);
   /** Read at delivery time by the `terminal_alerts` gate below. */
   const settingsRef = useRef(settings);

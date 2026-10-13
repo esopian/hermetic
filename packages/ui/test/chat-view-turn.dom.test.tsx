@@ -19,7 +19,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ChatBlockView, ChatFrameView, ChatTurnHandlers } from "../src/api/index.ts";
 import { ChatProvider, reconnectDelayMs, useChat } from "../src/chat/chat-state.tsx";
 import type { Chat } from "../src/chat/chat-state.tsx";
-import { harness, messageOf, mount, sendable, swarmOf } from "./chat-fixtures.tsx";
+import { harness, messageOf, mount, sendable, showAllRail, swarmOf } from "./chat-fixtures.tsx";
 import type { Turn } from "./chat-fixtures.tsx";
 
 afterEach(cleanup);
@@ -521,6 +521,7 @@ test("completed tool calls remain expandable after durable replacement, revisiti
   }
   await expandStoredTool();
   const choose = async (name: string) => {
+    showAllRail();
     const row = [...root.container.querySelectorAll<HTMLButtonElement>(".ch-conv")].find((button) =>
       button.textContent?.includes(name),
     )!;
@@ -554,6 +555,7 @@ describe("switching bot while a turn is in flight", () => {
     ];
     const { container } = mount(h);
     await waitFor(() => expect(screen.getByText("EMBER TRANSCRIPT")).toBeDefined());
+    showAllRail();
 
     await userEvent.type(await sendable(container), "how is /data?");
     await userEvent.click(screen.getByTitle(/Send/));

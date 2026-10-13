@@ -491,6 +491,16 @@ describe("railBuckets", () => {
     expect(buckets).toHaveLength(0);
   });
 
+  test("the open bot survives a filter it does not match, but not a query", () => {
+    const open = { instance: "atlas", bot: "atlas" };
+    const kept = railBuckets([swarm()], { scope: { kind: "all" }, filter: "unread", open });
+    expect(kept[0]?.sections[0]?.bots.map((b) => b.name)).toEqual(["atlas"]);
+    expect(railBuckets([swarm()], { scope: { kind: "all" }, filter: "unread" })).toHaveLength(0);
+    expect(
+      railBuckets([swarm()], { scope: { kind: "all" }, filter: "unread", open, query: "zzz" }),
+    ).toHaveLength(0);
+  });
+
   test("sections follow the swarm's declared order, and a section it never declared still shows", () => {
     const swarms = [
       swarm({
