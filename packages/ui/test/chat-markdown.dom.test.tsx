@@ -211,4 +211,18 @@ describe("markdown in a text block", () => {
     expect(block?.querySelector("annotation")?.textContent).toBe("\\frac{a}{b}");
     expect(container.textContent).not.toContain("$");
   });
+
+  test("a bare URL is drawn as a link that opens in a new tab", () => {
+    const { container } = draw(
+      "PR: https://github.com/esopian/hermetic/pull/50. Run `open https://x.dev`.",
+    );
+    const links = container.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    const link = links[0];
+    expect(link?.getAttribute("href")).toBe("https://github.com/esopian/hermetic/pull/50");
+    expect(link?.textContent).toBe("https://github.com/esopian/hermetic/pull/50");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")?.split(" ").sort()).toEqual(["noopener", "noreferrer"]);
+    expect(container.querySelector("code")?.textContent).toBe("open https://x.dev");
+  });
 });

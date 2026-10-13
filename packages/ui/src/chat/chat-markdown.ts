@@ -124,6 +124,10 @@ const INLINE = new RegExp(
     "(?<code>`[^`]+`)",
     "(?<cite>\\[\\^(?<citeN>[^\\]]+)\\])",
     "(?<link>\\[(?<linkText>[^\\]]*)\\]\\((?<href>[^)\\s]+)\\))",
+    // A bare URL, after the two rules it may sit inside: a code span keeps it
+    // literal, and a Markdown link has already claimed it. It comes before the
+    // emphasis rules so that the `_` or `*` in a path does not split it.
+    "(?<url>(?<![" + WORD + '])https?://[^\\s<>`"]+)',
     "(?<del>~~(?!\\s)[\\s\\S]+?(?<!\\s)~~)",
     // Three delimiters before two, two before one: `***a***` read as a strong
     // run starting `*a*` is exactly the literal-asterisk bug.
@@ -157,11 +161,33 @@ const INLINE = new RegExp(
  * delimiter pair is stripped before the content is handed back down, so each
  * level is strictly shorter than the one above it.
  */
-function nested(text: string): MdSpan[] | undefined {
+function nested(text: string, autolink = true): MdSpan[] | undefined {
   if (text === "") return undefined;
-  const spans = parseInline(text);
+  const spans = parseInline(text, autolink);
   if (spans.length === 1 && spans[0]?.type === "text") return undefined;
   return spans;
+}
+
+/**
+ * A bare URL with the punctuation a sentence put after it taken back off.
+ *
+ * `.`, `,`, `;`, `:`, `!`, `?` and quotes at the end close the sentence, not
+ * the address. A `)` is kept only while it balances a `(` inside the URL, which
+ * is GFM's rule: `(see https://x.dev/a)` loses it, a Wikipedia
+ * `…/Bun_(software)` keeps it.
+ */
+function trimUrl(url: string): string {
+  let end = url.length;
+  for (;;) {
+    const last = url[end - 1] ?? "";
+    if (/[.,;:!?'*_~]/.test(last)) end--;
+    else if (last === ")") {
+      const body = url.slice(0, end);
+      if ((body.match(/\)/g) ?? []).length > (body.match(/\(/g) ?? []).length) end--;
+      else break;
+    } else break;
+  }
+  return url.slice(0, end);
 }
 
 /**
@@ -172,17 +198,34 @@ function nested(text: string): MdSpan[] | undefined {
  * line with n spans in it is rescanned n times: quadratic in the length of text
  * a language model wrote, which is exactly the input this repo does not get to
  * bound. One long paragraph full of inline code was enough to hang the tab.
+ *
+ * `autolink` is `false` only inside a link's label, where a bare URL is the
+ * text of a link that already exists and must not become a second one.
  */
-export function parseInline(line: string): MdSpan[] {
+export function parseInline(line: string, autolink = true): MdSpan[] {
   const spans: MdSpan[] = [];
+  // Adjacent text joins into one span, so a URL left as text inside a label
+  // reads as the single text node the label always was.
+  const pushText = (value: string) => {
+    const last = spans[spans.length - 1];
+    if (last?.type === "text") last.text += value;
+    else spans.push({ type: "text", text: value });
+  };
   let at = 0;
   INLINE.lastIndex = 0;
   for (let m = INLINE.exec(line); m !== null; m = INLINE.exec(line)) {
-    if (m.index > at) spans.push({ type: "text", text: line.slice(at, m.index) });
+    if (m.index > at) pushText(line.slice(at, m.index));
     const token = m[0];
     at = m.index + token.length;
     const g = m.groups ?? {};
-    if (g["code"] !== undefined) {
+    if (g["url"] !== undefined) {
+      // Whatever the trim took back is rescanned as ordinary prose, because
+      // `at` (and so `lastIndex`) resumes from the end of the kept URL.
+      const href = trimUrl(token);
+      at = m.index + href.length;
+      if (autolink && /^https?:\/\/[^/]/.test(href)) spans.push({ type: "link", text: href, href });
+      else pushText(href);
+    } else if (g["code"] !== undefined) {
       // Backticks suspend every other rule, including `$…$`: a code span is
       // atomic and keeps its asterisks, underscores and dollars literal.
       spans.push({ type: "code", text: token.slice(1, -1) });
@@ -190,10 +233,10 @@ export function parseInline(line: string): MdSpan[] {
       spans.push({ type: "cite", n: g["citeN"] ?? "" });
     } else if (g["link"] !== undefined) {
       const text = g["linkText"] ?? "";
-      spans.push({ type: "link", text, href: g["href"] ?? "", spans: nested(text) });
+      spans.push({ type: "link", text, href: g["href"] ?? "", spans: nested(text, false) });
     } else if (g["del"] !== undefined) {
       const text = token.slice(2, -2);
-      spans.push({ type: "del", text, spans: nested(text) });
+      spans.push({ type: "del", text, spans: nested(text, autolink) });
     } else if (g["tri"] !== undefined || g["triU"] !== undefined) {
       // `***a***` is both at once, and the order is the one HTML nests them in:
       // a strong run whose whole content is an emphasis run.
@@ -201,23 +244,23 @@ export function parseInline(line: string): MdSpan[] {
       spans.push({
         type: "strong",
         text,
-        spans: [{ type: "em", text, spans: nested(text) }],
+        spans: [{ type: "em", text, spans: nested(text, autolink) }],
       });
     } else if (g["strong"] !== undefined) {
       const text = token.slice(2, -2);
-      spans.push({ type: "strong", text, spans: nested(text) });
+      spans.push({ type: "strong", text, spans: nested(text, autolink) });
     } else if (g["math"] !== undefined) {
       spans.push({ type: "math", text: token.slice(1, -1) });
     } else {
       const text = token.slice(1, -1);
-      spans.push({ type: "em", text, spans: nested(text) });
+      spans.push({ type: "em", text, spans: nested(text, autolink) });
     }
     // `nested` re-enters this function, and `INLINE` is one shared global
     // regex: without this the child's scan would leave `lastIndex` pointing
     // into the child's own string and the parent would resume from nowhere.
     INLINE.lastIndex = at;
   }
-  if (at < line.length) spans.push({ type: "text", text: line.slice(at) });
+  if (at < line.length) pushText(line.slice(at));
   return spans;
 }
 
