@@ -364,34 +364,81 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       const params = rec(pending.params);
       if (params?.session_id !== runtime)
         throw failure("Pending request does not belong to the selected session");
-      if (input.kind === "question" && Array.isArray(params.questions)) {
-        if (
-          !input.question_id ||
-          !records(params.questions).some((row) => row.qid === input.question_id)
-        )
+      const batch = input.kind === "question" && Array.isArray(params.questions);
+      if (batch && input.skip !== true) {
+        // A batch closes only when every question is locked; the last lock
+        // resolves it. Each lock is acknowledged, unlike a closing
+        // `request.answer`, which a compute-host relay can report as sent
+        // without delivering.
+        const qids = records(params.questions)
+          .map((row) => row.qid)
+          .filter((qid): qid is string => typeof qid === "string");
+        const answers =
+          input.answers ??
+          (input.question_id !== undefined && input.answer !== undefined
+            ? { [input.question_id]: input.answer }
+            : null);
+        if (!answers || !Object.keys(answers).length)
           throw new HermeticError("VALIDATION", "Choose the exact pending question");
-        const result = rec(
-          await rpc.request("clarify.lock", {
-            profile: input.bot,
-            request_id: input.request_id,
-            question_id: input.question_id,
-            answer: input.answer,
-          }),
-        );
-        if (result?.status !== "ok" && result?.status !== "expired")
-          throw failure("Gateway returned no question response status");
-        return {
-          status: result.status,
-          ...(Array.isArray(result.remaining)
-            ? { remaining: result.remaining.filter((v): v is string => typeof v === "string") }
-            : {}),
-        };
+        if (Object.keys(answers).some((qid) => !qids.includes(qid)))
+          throw new HermeticError("VALIDATION", "Choose the exact pending question");
+        // The gateway resolves the batch on the lock that leaves no question
+        // unlocked, and refuses every lock after that as expired. So replace
+        // the locks it already holds (`params.answers`, replayed from
+        // `open_requests`) first, and only then lock the open questions: the
+        // completing lock is necessarily the last one sent, so no edit of a
+        // locked answer can land after the batch has closed. Within each
+        // group the gateway's question order decides.
+        const held = rec(params.answers) ?? {};
+        const order = [
+          ...qids.filter((qid) => Object.hasOwn(held, qid)),
+          ...qids.filter((qid) => !Object.hasOwn(held, qid)),
+        ];
+        let last: { status: "ok" | "expired"; remaining?: string[] } | null = null;
+        for (const qid of order) {
+          const answer = answers[qid];
+          if (answer === undefined) continue;
+          const result = rec(
+            await rpc.request("clarify.lock", {
+              profile: input.bot,
+              request_id: input.request_id,
+              question_id: qid,
+              answer,
+            }),
+          );
+          if (result?.status !== "ok" && result?.status !== "expired")
+            throw failure("Gateway returned no question response status");
+          last = {
+            status: result.status,
+            ...(Array.isArray(result.remaining)
+              ? { remaining: result.remaining.filter((v): v is string => typeof v === "string") }
+              : {}),
+          };
+          // Expired before completion: the batch closed elsewhere (timeout,
+          // cancel, another client's lock); nothing more can land.
+          if (last.status === "expired") break;
+          // Completed: by the ordering above this is the final lock sent,
+          // unless another client locked a question concurrently — and then
+          // the batch is closed and any further lock would only expire.
+          if (last.remaining?.length === 0) break;
+        }
+        if (!last) throw failure("No question was answered");
+        return last;
       }
+      if (input.kind === "question" && !batch && (input.answers || input.question_id))
+        throw new HermeticError("VALIDATION", "This request asks a single question");
       const result = rec(
         await rpc.request("request.answer", {
           profile: input.bot,
           id: input.request_id,
-          result: input.kind === "approval" ? { choice: input.choice } : { answer: input.answer },
+          // Skipping a batch is an empty result (no `answers` key), which the
+          // gateway reads as cancel-all; a single question skips with "".
+          result:
+            input.kind === "approval"
+              ? { choice: input.choice }
+              : batch
+                ? {}
+                : { answer: input.skip === true ? "" : input.answer },
         }),
       );
       if (result?.status !== "ok" && result?.status !== "expired")

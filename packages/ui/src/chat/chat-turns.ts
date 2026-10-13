@@ -59,13 +59,27 @@ export interface TurnRow<M extends MessageLike = MessageLike> extends MessageRow
   ids: string[];
 }
 
-/** Blocks that belong inside a tool run rather than being addressed to the reader. */
-const RUN_KINDS = new Set(["tool", "reasoning", "activity"]);
+/**
+ * Blocks that belong inside a tool run rather than being addressed to the
+ * reader. A delegated child is one: live it rides the turn's frames, and on a
+ * re-read history appends it to the `delegate_task` tool row
+ * (`settledDelegation`), which must still fold into the turn.
+ */
+const RUN_KINDS = new Set(["tool", "reasoning", "activity", "subagent"]);
 
 /** Blocks that stop the turn to wait for the reader. They do not end the run. */
 const HOLD_KINDS = new Set(["approval", "question"]);
 
 const broken = (m: MessageLike): boolean => !!m.error || !!m.incomplete;
+
+/**
+ * A clarify a history read settled (`settledClarify()` in
+ * `hermes-chat-history.ts`): core appends it to the `clarify` tool row with no
+ * `request_id`, because nothing is open to answer. It is a record of the turn's
+ * work, not a hold, so it rides the tool row as filler — counting it as a hold
+ * would make that row a hard `system` break and split the turn around it.
+ */
+const settledQuestion = (block: BlockLike): boolean => block.kind === "question" && !block.request_id;
 
 /**
  * A `role: "tool"` row reaches the UI as `system` (`messageRole()`), so its
@@ -77,7 +91,7 @@ function runFiller(m: MessageLike): boolean {
   return (
     m.role !== "user" &&
     m.blocks.length > 0 &&
-    m.blocks.every((block: BlockLike) => RUN_KINDS.has(block.kind))
+    m.blocks.every((block: BlockLike) => RUN_KINDS.has(block.kind) || settledQuestion(block))
   );
 }
 

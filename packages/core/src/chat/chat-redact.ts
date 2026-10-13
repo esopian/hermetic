@@ -40,7 +40,7 @@
  * existing leak-grep test greps for" describes something that did not exist.
  * This is that library.
  */
-import type { ChatBlock, ChatFrame, ChatMessage } from "../schema/index.ts";
+import type { ChatBlock, ChatFailure, ChatFrame, ChatMessage } from "../schema/index.ts";
 
 /** What every match is replaced with. Bracketed so it cannot re-match as a value. */
 export const REDACTED = "[redacted]";
@@ -389,6 +389,7 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         ...block,
         summary: redactText(block.summary),
         detail: typeof block.detail === "string" ? redactText(block.detail) : block.detail,
+        ...(block.pattern !== undefined ? { pattern: redactText(block.pattern) } : {}),
         ...(block.payload !== undefined ? { payload: redactDeep(block.payload) } : {}),
       };
     case "question":
@@ -396,6 +397,16 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         ...block,
         prompt: redactText(block.prompt),
         choices: block.choices.map(redactText),
+        ...(block.questions
+          ? {
+              questions: block.questions.map((q) => ({
+                ...q,
+                prompt: redactText(q.prompt),
+                choices: q.choices.map(redactText),
+                answer: q.answer === null ? null : redactText(q.answer),
+              })),
+            }
+          : {}),
         ...(block.payload !== undefined ? { payload: redactDeep(block.payload) } : {}),
       };
     case "sources":
@@ -414,6 +425,8 @@ export function redactBlock(block: ChatBlock): ChatBlock {
       return { ...block, ref: redactText(block.ref) };
     case "process_event":
       return redactProcessEvent(block);
+    case "subagent":
+      return redactSubagent(block);
     case "unknown":
       // The whole point of the fallthrough block: hermetic does not know what
       // is in `payload`, which is the strongest possible reason to walk it.
@@ -469,12 +482,88 @@ function redactProcessEvent(block: Extract<ChatBlock, { kind: "process_event" }>
   };
 }
 
-export function redactMessage(message: ChatMessage): ChatMessage {
+/**
+ * A delegated child is another model's work, and every string it carries is
+ * that model's words or paths it touched: the goal the parent wrote, the
+ * child's summary, tool previews (often a command line), progress and
+ * thinking, file paths, and the history envelope's failure text.
+ */
+function redactSubagent(block: Extract<ChatBlock, { kind: "subagent" }>): ChatBlock {
+  const rows = (list: typeof block.tools) =>
+    list.map((tool) => ({ ...tool, preview: redactText(tool.preview) }));
+  return {
+    ...block,
+    goal: redactText(block.goal),
+    summary: redactOptional(block.summary),
+    tools: rows(block.tools),
+    progress: redactOptional(block.progress),
+    thinking: redactOptional(block.thinking),
+    ...(block.files_read ? { files_read: block.files_read.map(redactText) } : {}),
+    ...(block.files_written ? { files_written: block.files_written.map(redactText) } : {}),
+    ...(block.output_tail ? { output_tail: rows(block.output_tail) } : {}),
+    ...(block.result
+      ? {
+          result: {
+            ...block.result,
+            failure_reason: redactOptional(block.result.failure_reason),
+            error: redactOptional(block.result.error),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * A failure is an error, not transcript content, so it is masked whether or
+ * not the transcript is (see `TranscriptMask`): upstream's message quotes the
+ * request that failed, and the surface's own `message` is the provider's.
+ */
+export function redactFailure(failure: ChatFailure): ChatFailure {
+  return {
+    ...failure,
+    message: redactText(failure.message),
+    ...(failure.surface
+      ? {
+          surface: {
+            ...failure.surface,
+            ...(failure.surface.message !== undefined
+              ? { message: redactText(failure.surface.message) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * A subagent's failure text — the history envelope's `error` and
+ * `failure_reason` — is failure text like a message's `error`, so it is masked
+ * on the same always-on rule, redaction on or off.
+ */
+function redactSubagentFailure(block: ChatBlock): ChatBlock {
+  if (block.kind !== "subagent" || !block.result) return block;
+  return {
+    ...block,
+    result: {
+      ...block.result,
+      failure_reason: redactOptional(block.result.failure_reason),
+      error: redactOptional(block.result.error),
+    },
+  };
+}
+
+/** A message's error fields — the string, the structured failure, subagent failure text — masked. */
+function redactMessageError(message: ChatMessage): ChatMessage {
   return {
     ...message,
-    blocks: message.blocks.map(redactBlock),
     error: typeof message.error === "string" ? redactText(message.error) : message.error,
+    ...(message.failure ? { failure: redactFailure(message.failure) } : {}),
+    blocks: message.blocks.map(redactSubagentFailure),
   };
+}
+
+export function redactMessage(message: ChatMessage): ChatMessage {
+  return redactMessageError({ ...message, blocks: message.blocks.map(redactBlock) });
 }
 
 /**
@@ -493,7 +582,11 @@ export function redactFrame(frame: ChatFrame): ChatFrame {
     case "done":
       return frame;
     case "error":
-      return { ...frame, message: redactText(frame.message) };
+      return {
+        ...frame,
+        message: redactText(frame.message),
+        ...(frame.failure ? { failure: redactFailure(frame.failure) } : {}),
+      };
   }
 }
 
@@ -529,9 +622,20 @@ export const MASKED: TranscriptMask = {
 
 export const UNMASKED: TranscriptMask = {
   redact: false,
+  // Failure text is masked even with redaction off: it is an error, not the
+  // transcript the operator chose to see whole (see `TranscriptMask`).
   message: (message) =>
-    typeof message.error === "string" ? { ...message, error: redactText(message.error) } : message,
-  frame: (frame) => (frame.type === "error" ? redactFrame(frame) : frame),
+    typeof message.error === "string" ||
+    message.failure ||
+    message.blocks.some((block) => block.kind === "subagent" && block.result)
+      ? redactMessageError(message)
+      : message,
+  frame: (frame) =>
+    frame.type === "error"
+      ? redactFrame(frame)
+      : frame.type === "block" && frame.block.kind === "subagent"
+        ? { ...frame, block: redactSubagentFailure(frame.block) }
+        : frame,
   deep: <T>(value: T): T => value,
 };
 

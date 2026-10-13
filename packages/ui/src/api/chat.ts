@@ -148,6 +148,49 @@ export function steerTurn(
 }
 
 /**
+ * `chat.steer` with `subagent_id` — steer one delegated child rather than the
+ * turn. Applied at the child's next tool call; it needs no running parent turn
+ * and inserts nothing into the transcript. `queued` is the box's only "yes";
+ * `rejected` means the child is gone or the session was reset.
+ */
+export function steerSubagent(
+  instance: string,
+  bot: string,
+  subagentId: string,
+  text: string,
+  session?: string | null,
+): Promise<ChatSteerResult> {
+  return transport().request<ChatSteerResult>("chat.steer", {
+    instance,
+    bot,
+    text,
+    session,
+    subagent_id: subagentId,
+    target: target(),
+  });
+}
+
+/**
+ * `chat.abort` with `subagent_id` — stop one delegated child; the turn goes on.
+ * `aborted: true` only says the stop was delivered: the child is stopped when
+ * its `interrupted` completion arrives. `false` means it was not found.
+ */
+export function stopSubagent(
+  instance: string,
+  bot: string,
+  subagentId: string,
+  session?: string | null,
+): Promise<ChatAbortResult> {
+  return transport().request<ChatAbortResult>("chat.abort", {
+    instance,
+    bot,
+    session,
+    subagent_id: subagentId,
+    target: target(),
+  });
+}
+
+/**
  * `chat.observe.resume` — ask this head to hold one conversation's
  * observation again, after it ended.
  *

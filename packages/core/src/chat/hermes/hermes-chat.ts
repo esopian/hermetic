@@ -49,7 +49,7 @@
  * ## The modules behind this one
  *
  * The adapter is one thing to its callers — every name below is imported from
- * this file — and seven modules behind that facade, each handed an explicit deps
+ * this file — and eight modules behind that facade, each handed an explicit deps
  * object rather than sharing one closure:
  *
  * | module | owns |
@@ -61,6 +61,12 @@
  * | `hermes-chat-turn.ts` | one live turn → `ChatFrame`, its abort and steer |
  * | `hermes-chat-peer.ts` | Bot Mode's two raw transports |
  * | `hermes-chat-observe.ts` | a socket that only listens → `ChatObserveHint` |
+ * | `hermes-chat-subagent-control.ts` | one delegated child's steer and stop |
+ *
+ * Delegated children are folded by per-session ledgers
+ * (`hermes-chat-subagent-ledgers.ts`) that the client owns rather than any
+ * turn, because a background delegation keeps reporting after its turn ends:
+ * the turn, the observation and child control all read the same set.
  *
  * Three more carry what those share: `hermes-chat-rpc.ts` (the JSON-RPC
  * transport), `hermes-chat-blocks.ts` (payloads → blocks) and
@@ -78,6 +84,8 @@ import { createRequestPool } from "./hermes-chat-pool.ts";
 import { createChatRoster } from "./hermes-chat-roster.ts";
 import { createChatObserve } from "./hermes-chat-observe.ts";
 import { createChatSessions } from "./hermes-chat-sessions.ts";
+import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
+import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
 
 export { CHAT_ERROR_CODES, SLOT_WAIT_MS, WARM_SLOTS_PER_GATEWAY } from "./hermes-chat-types.ts";
@@ -86,6 +94,7 @@ export type {
   ChatFetch,
   ChatSocket,
   ChatSteerStatus,
+  SubagentSteerStatus,
   HermesChatClient,
   HermesChatDeps,
   HermesChatOptions,
@@ -106,7 +115,7 @@ export { mapHistory } from "./hermes-chat-history.ts";
 /* ── the client ───────────────────────────────────────────────────────────── */
 
 /**
- * Wires the seven modules into one client.
+ * Wires the eight modules into one client.
  *
  * The order below is the dependency order and cannot be rearranged: everything
  * reaches a box through the connection, Bot Mode's REST transport is what
@@ -153,14 +162,21 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     connection,
     conversation: canonical.conversation,
   });
-  const observation = createChatObserve({ connect: connection.connect });
+  const subagents = createSubagentLedgers({ now: deps.now });
+  const observation = createChatObserve({ connect: connection.connect, subagents });
   const live = createLiveUsage({ rpc: peer.botModeRpc });
   const turn = createChatTurn({
     connect: connection.connect,
     now: deps.now,
     waitMs,
     conversation: canonical.conversation,
+    subagents,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
+  });
+  const children = createSubagentControl({
+    connect: connection.connect,
+    ledgers: subagents,
+    conversation: canonical.conversation,
   });
   return {
     token: connection.freshToken,
@@ -171,6 +187,8 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     send: turn.send,
     abort: turn.abort,
     steer: turn.steer,
+    subagentSteer: children.steer,
+    subagentInterrupt: children.interrupt,
     observe: observation.observe,
     botModeRpc: peer.botModeRpc,
     botModeRest: peer.botModeRest,

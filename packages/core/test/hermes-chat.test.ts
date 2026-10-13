@@ -33,7 +33,7 @@ import { createLiveUsage, LIVE_USAGE_DEADLINE_MS } from "../src/chat/hermes/herm
 import { DURABLE_TOOL_ROWS, SESSION_HISTORY_PARAM_KEYS } from "./fixtures/hermes-history-contract.ts";
 import { HermeticError } from "../src/errors.ts";
 import { HERMES_INTERNAL_EVENTS } from "../src/shared/hermes-internal-events.ts";
-import { Bot, ChatFrame } from "../src/schema/index.ts";
+import { Bot, ChatFrame, ChatMessage } from "../src/schema/index.ts";
 import type { ChatBlock } from "../src/schema/index.ts";
 import {
   AGENTS_LIST_RESULT,
@@ -2235,6 +2235,191 @@ describe("hermes-chat · history", () => {
     ]);
   });
 
+  describe("a completed clarify re-read from history", () => {
+    /** The blocks of the tool row answering one clarify call, parsed through the schema. */
+    const settled = (args: unknown, content: unknown): ChatBlock[] => {
+      const messages = mapHistory(BOX, SESSION_ID, [
+        {
+          id: 1,
+          role: "assistant",
+          tool_calls: [{ id: "c1", function: { name: "clarify", arguments: JSON.stringify(args) } }],
+        },
+        {
+          id: 2,
+          role: "tool",
+          tool_call_id: "c1",
+          tool_name: "clarify",
+          content: typeof content === "string" ? content : JSON.stringify(content),
+        },
+      ]);
+      for (const message of messages) expect(ChatMessage.safeParse(message).success).toBe(true);
+      return messages[1]?.blocks ?? [];
+    };
+
+    test("a single choice question follows its tool card as an answered question", () => {
+      const blocks = settled(
+        { question: "Which region?", choices: ["us-east-1", "eu-west-1"] },
+        {
+          question: "Which region?",
+          choices_offered: ["us-east-1", "eu-west-1"],
+          user_response: "eu-west-1",
+        },
+      );
+      expect(blocks.map((b) => b.kind)).toEqual(["tool", "question"]);
+      expect(blocks[0]).toMatchObject({ kind: "tool", tool_id: "c1", name: "clarify" });
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Which region?",
+        choices: ["us-east-1", "eu-west-1"],
+        multi_select: false,
+        questions: [
+          {
+            id: "q0",
+            prompt: "Which region?",
+            choices: ["us-east-1", "eu-west-1"],
+            multi_select: false,
+            answer: "eu-west-1",
+          },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("a multi-select answer list becomes the JSON array string the live path locks", () => {
+      const blocks = settled(
+        { question: "Which checks?", choices: ["lint", "test", "build"], multi_select: true },
+        {
+          question: "Which checks?",
+          choices_offered: ["lint", "test", "build"],
+          user_response: ["lint", "build"],
+        },
+      );
+      expect(blocks[1]).toMatchObject({
+        kind: "question",
+        multi_select: true,
+        questions: [{ id: "q0", multi_select: true, answer: '["lint","build"]' }],
+      });
+    });
+
+    test("a batch keeps the gateway's question ids and a skipped question answers blank", () => {
+      const blocks = settled(
+        {
+          questions: [
+            { question: "Name?" },
+            { question: "Size?", choices: ["small (Recommended)", "large"] },
+            { question: "Notes?" },
+          ],
+        },
+        {
+          responses: [
+            { question: "Name?", choices_offered: null, user_response: "atlas" },
+            { question: "Size?", choices_offered: ["small", "large"], user_response: "" },
+            { question: "Notes?", choices_offered: null, user_response: "none" },
+          ],
+        },
+      );
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Name?",
+        choices: [],
+        multi_select: false,
+        questions: [
+          { id: "q0", prompt: "Name?", choices: [], multi_select: false, answer: "atlas" },
+          { id: "q1", prompt: "Size?", choices: ["small", "large"], multi_select: false, answer: "" },
+          { id: "q2", prompt: "Notes?", choices: [], multi_select: false, answer: "none" },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("a skipped multi-select stays multi-select with a blank answer", () => {
+      const blocks = settled(
+        { question: "Which checks?", choices: ["lint", "test"], multi_select: true },
+        { question: "Which checks?", choices_offered: ["lint", "test"], user_response: "" },
+      );
+      expect(blocks[1]).toMatchObject({
+        multi_select: true,
+        questions: [{ id: "q0", multi_select: true, answer: "" }],
+      });
+    });
+
+    test("a timed-out batch settles with the unanswered questions blank", () => {
+      const blocks = settled(
+        { questions: [{ question: "Name?" }, { question: "Size?", choices: ["small", "large"] }] },
+        {
+          responses: [
+            { question: "Name?", choices_offered: null, user_response: "atlas" },
+            { question: "Size?", choices_offered: ["small", "large"], user_response: "" },
+          ],
+          timed_out: true,
+        },
+      );
+      expect(blocks[1]).toMatchObject({
+        request_id: null,
+        questions: [
+          { id: "q0", answer: "atlas" },
+          { id: "q1", choices: ["small", "large"], answer: "" },
+        ],
+      });
+    });
+
+    test("a one-entry questions array settles from upstream's batch result", () => {
+      const blocks = settled(
+        { questions: [{ question: "Which region?", choices: ["us-east-1", "eu-west-1"] }] },
+        {
+          responses: [
+            {
+              question: "Which region?",
+              choices_offered: ["us-east-1", "eu-west-1"],
+              user_response: "us-east-1",
+            },
+          ],
+        },
+      );
+      expect(blocks[1]).toEqual({
+        kind: "question",
+        prompt: "Which region?",
+        choices: ["us-east-1", "eu-west-1"],
+        multi_select: false,
+        questions: [
+          {
+            id: "q0",
+            prompt: "Which region?",
+            choices: ["us-east-1", "eu-west-1"],
+            multi_select: false,
+            answer: "us-east-1",
+          },
+        ],
+        request_id: null,
+      });
+    });
+
+    test("an error result leaves only the tool card", () => {
+      const blocks = settled({ question: "Which region?" }, { error: "Clarify is unavailable here." });
+      expect(blocks.map((b) => b.kind)).toEqual(["tool"]);
+    });
+
+    test("a result in neither shape leaves only the tool card", () => {
+      expect(settled({ question: "Which?" }, "not json").map((b) => b.kind)).toEqual(["tool"]);
+      expect(settled({ questions: [] }, { responses: [] }).map((b) => b.kind)).toEqual(["tool"]);
+    });
+
+    test("a call with no result row stays an unanswered tool card", () => {
+      const messages = mapHistory(BOX, SESSION_ID, [
+        {
+          id: 1,
+          role: "assistant",
+          tool_calls: [
+            { id: "c1", function: { name: "clarify", arguments: '{"question":"Which region?"}' } },
+          ],
+        },
+      ]);
+      expect(messages[0]?.blocks).toEqual([
+        expect.objectContaining({ kind: "tool", name: "clarify", status: "warn", result: null }),
+      ]);
+    });
+  });
+
   test("tool arguments survive a durable REST page boundary", async () => {
     const h = harness({
       history: [
@@ -2585,6 +2770,7 @@ describe("hermes-chat · durable addressing", () => {
       type: "error",
       code: "CHAT_TURN_FAILED",
       message: "provider refused this turn",
+      failure: { code: "CHAT_TURN_FAILED", message: "provider refused this turn" },
     });
     expect(frames.some((frame) => frame.type === "done")).toBe(false);
   });
@@ -2616,11 +2802,33 @@ describe("semantic live activity and requests", () => {
             choices: ["once", "deny"],
           },
         }),
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "srv-3",
+          method: "clarify",
+          params: {
+            session_id: SESSION_ID,
+            questions: [
+              { qid: "q1", question: "Drink?", choices: ["Coffee", "Tea"], multi_select: false },
+              { qid: "q2", question: "Why?", choices: null, multi_select: false },
+            ],
+          },
+        }),
         eventFrame("request.cancel", 4, { id: "srv-1", method: "clarify", reason: "resolved" }),
         RECORDED_MESSAGE_COMPLETE,
       ]),
     );
     const frames = await collect(createHermesChat(h.deps).send(BOX, "default", "go"));
+    // A batch is one request, so it is one card carrying both questions.
+    const batch = blocks(frames).filter((b) => b.kind === "question" && b.request_id === "srv-3");
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toMatchObject({
+      prompt: "Drink?",
+      questions: [
+        { id: "q1", prompt: "Drink?", choices: ["Coffee", "Tea"], answer: null },
+        { id: "q2", prompt: "Why?", choices: [], answer: null },
+      ],
+    });
     expect(blocks(frames)).toContainEqual(
       expect.objectContaining({
         kind: "question",
@@ -2881,5 +3089,142 @@ describe("hermes-chat · liveUsage", () => {
     const pending = live.liveUsage(BOX, "default", "durable-1", { signal: controller.signal });
     controller.abort(new Error("page left"));
     await expect(pending).rejects.toThrow("page left");
+  });
+});
+
+describe("hermes-chat · structured failures", () => {
+  const SURFACE = {
+    layer: "provider",
+    code: "rate_limited",
+    retryable: true,
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    resets_at: 1_760_000_000,
+    message: "Rate limit reached",
+    extra_field: "kept out",
+  };
+
+  test("message.complete's error_surface becomes the frame's failure", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("message.start", 2, {}),
+        eventFrame("message.delta", 3, { text: "partial" }),
+        eventFrame("message.complete", 4, {
+          text: "partial",
+          status: "error",
+          error: "429 Too Many Requests",
+          error_surface: SURFACE,
+        }),
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    const error = frames.at(-1);
+    expect(ChatFrame.parse(error)).toEqual({
+      type: "error",
+      code: "CHAT_TURN_FAILED",
+      message: "429 Too Many Requests",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "429 Too Many Requests",
+        surface: {
+          layer: "provider",
+          code: "rate_limited",
+          retryable: true,
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          resets_at: 1_760_000_000,
+          message: "Rate limit reached",
+        },
+      },
+    });
+  });
+
+  test("a failure with no surface, or an unreadable one, still carries code and message", async () => {
+    for (const error_surface of [undefined, { layer: "provider" }, "not an object"]) {
+      const h = harness(
+        turnScript([
+          eventFrame("message.complete", 4, { status: "error", error: "boom", error_surface }),
+        ]),
+      );
+      const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+      expect(frames.at(-1)).toEqual({
+        type: "error",
+        code: "CHAT_TURN_FAILED",
+        message: "boom",
+        failure: { code: "CHAT_TURN_FAILED", message: "boom" },
+      });
+    }
+  });
+
+  test("an error before any content is a failure frame with nothing ahead of it but status", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("turn.error", 2, {
+          code: "CHAT_TURN_FAILED",
+          message: "invalid api key",
+          error_surface: { layer: "auth", code: "invalid_key", retryable: false, auth_kind: "api_key" },
+        }),
+      ]),
+    );
+    const frames = await collect(createHermesChat(h.deps).send(BOX, "d", "go"));
+    expect(frames.filter((f) => f.type === "block" && f.block.kind !== "activity")).toEqual([]);
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      failure: {
+        message: "invalid api key",
+        surface: { layer: "auth", code: "invalid_key", retryable: false, auth_kind: "api_key" },
+      },
+    });
+  });
+});
+
+describe("hermes-chat · legacy request events", () => {
+  /**
+   * `approval.request` / `clarify.request` as turn *events* were a guessed
+   * vocabulary no gateway emits: requests arrive as server→client requests.
+   * One that does arrive is an event this build does not map, so it is kept
+   * whole as `unknown` rather than drawn as an answerable card.
+   */
+  test("an approval.request turn event becomes an unknown block", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("approval.request", 3, { tool: "bash", command: "rm -rf /tmp/x" }),
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const out = blocks(body(await collect(createHermesChat(h.deps).send(BOX, "d", "go"))));
+    expect(out.some((b) => b.kind === "approval")).toBe(false);
+    expect(out).toContainEqual({
+      kind: "unknown",
+      name: "approval.request",
+      payload: { tool: "bash", command: "rm -rf /tmp/x" },
+    });
+  });
+});
+
+describe("hermes-chat · connection requests in a turn", () => {
+  test("a stale connection update never reaches a head", async () => {
+    const op = (seq: number, extra: Record<string, unknown> = {}) => ({
+      op_id: "op1",
+      seq,
+      deadline_at: 1_760_000_000,
+      targets: [{ name: "github", kind: "mcp", action: "connect", state: "pending" }],
+      ...extra,
+    });
+    const h = harness(
+      turnScript([
+        eventFrame("connection.request", 2, op(1, { timeout_seconds: 300 })),
+        eventFrame("connection.update", 3, op(3)),
+        eventFrame("connection.update", 4, op(2, { settled: true })),
+        RECORDED_MESSAGE_COMPLETE,
+      ]),
+    );
+    const notices = blocks(await collect(createHermesChat(h.deps).send(BOX, "d", "go"))).filter(
+      (b) => b.kind === "activity" && b.key === "connection:op1",
+    );
+    expect(notices.map((b) => (b.kind === "activity" ? b.payload : null))).toEqual([
+      { op_id: "op1", seq: 1, deadline_at: 1_760_000_000 },
+      { op_id: "op1", seq: 3, deadline_at: 1_760_000_000 },
+    ]);
   });
 });

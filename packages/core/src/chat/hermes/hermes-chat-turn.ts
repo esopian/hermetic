@@ -18,16 +18,16 @@ import {
   type ChatSteerStatus,
   type SendOptions,
 } from "./hermes-chat-types.ts";
-import { hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
-import {
-  approvalBlock,
-  contextUsageBlock,
-  mapUsage,
-  questionBlock,
-  toolBlock,
-} from "./hermes-chat-blocks.ts";
+import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-chat-activity.ts";
+import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
+import { isSubagentEvent } from "./hermes-chat-subagent.ts";
+import {
+  createSubagentLedgers,
+  subagentTurn,
+  type SubagentLedgers,
+} from "./hermes-chat-subagent-ledgers.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
@@ -56,6 +56,11 @@ const SUBMIT_TITLES: Record<ChatStatusState, string> = {
 /** Upstream's "agent does not support active-turn redirect" (`methods_session.py`). */
 const REDIRECT_UNSUPPORTED = 4010;
 
+/** An error frame, with `failure` always filled (and its surface when upstream sent one). */
+function fail(code: string, message: string, surface?: unknown): ChatFrame {
+  return { type: "error", code, message, failure: chatFailure(code, message, surface) };
+}
+
 /** What `createChatTurn` needs, and nothing more. */
 export interface ChatTurnDeps {
   connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
@@ -71,6 +76,12 @@ export interface ChatTurnDeps {
    * (`chat-observe.ts`), because both are bounding the same outage.
    */
   resumeTuning?: ChatResumeTuning | undefined;
+  /**
+   * The client's per-session subagent ledgers, shared with the observation
+   * and child control so a delegation outlives the turn that started it.
+   * Absent gives this turn factory a private set.
+   */
+  subagents?: SubagentLedgers | undefined;
 }
 
 /** What a caller may tune about a turn's reconnect. */
@@ -87,6 +98,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
   // One factory per client, because the "this gateway cannot replay" memo it
   // holds has the same answer for every turn against that box.
   const continuation = createTurnResume({ connect: deps.connect, now: deps.now, ...deps.resumeTuning });
+  const subagents = deps.subagents ?? createSubagentLedgers({ now: deps.now });
 
   /**
    * One turn, as frames.
@@ -168,6 +180,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
     let active: { runtime: string; stored: string | null } | null = null;
     let pump: TurnPump | null = null;
+    let delegation: ReturnType<typeof subagentTurn> | null = null;
     const key = turnKey(box, bot);
     try {
       // Before the session exists, so the gateway already counts this socket
@@ -202,6 +215,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
       const known = contextUsageBlock(info);
       if (known) yield { type: "block", seq: 0, message, block: known };
       active = { runtime: session, stored };
+      // Registered now, before the prompt: a background delegation's children
+      // may first report after this turn has ended, on the observation stream,
+      // which can only attribute them to a session somebody registered.
+      delegation = subagentTurn(subagents, { box, bot, runtime: session, stored });
       const entries = activeTurns.get(key) ?? new Set();
       entries.add(active);
       activeTurns.set(key, entries);
@@ -226,10 +243,21 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // which of the three happened rather than a flat "queued" that is wrong
       // two times in three.
       yield status(message, submitState(str(submitted?.status)));
-      yield* stream(rpc, pump, session, message, opts.signal, waitMs, arrivedAtSubmit, baseline);
+      yield* stream(
+        rpc,
+        pump,
+        session,
+        message,
+        opts.signal,
+        waitMs,
+        arrivedAtSubmit,
+        baseline,
+        delegation,
+      );
     } catch (e) {
       yield errorFrame(e);
     } finally {
+      delegation?.close();
       if (active) {
         const entries = activeTurns.get(key);
         entries?.delete(active);
@@ -265,6 +293,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     deadlineMs: number,
     arrivedAtSubmit: number,
     baseline: number,
+    delegation: ReturnType<typeof subagentTurn>,
   ): AsyncIterable<ChatFrame> {
     let reasoning = "";
     let reasoningTokens: number | null = null;
@@ -276,6 +305,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // dedupe below is also the filter that keeps a replay of *this* turn from
     // dragging the previous one back onto the screen.
     let lastSeq = baseline;
+    // Connection-request notices replace by key, so an update older than the
+    // one shown (a replay, the resume snapshot) must not reach a head.
+    const connections = createConnectionGate();
 
     /**
      * Every block leaves through here, because every block that is not text
@@ -409,14 +441,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // a problem the box does not have.
         const silent =
           !pump.reconnected() && pump.current() === rpc && rpc.arrived() === arrivedAtSubmit;
-        yield {
-          type: "error",
-          code: silent ? CHAT_ERROR_CODES.NO_SLOT : CHAT_ERROR_CODES.TURN_FAILED,
-          message: silent
+        yield fail(
+          silent ? CHAT_ERROR_CODES.NO_SLOT : CHAT_ERROR_CODES.TURN_FAILED,
+          silent
             ? `no warm backend slot: the gateway sent nothing at all in ${seconds}s, ` +
-              "so the box is running its limit of concurrent bots"
+                "so the box is running its limit of concurrent bots"
             : `the box accepted the prompt but sent no content in ${seconds}s`,
-        };
+        );
         return;
       }
 
@@ -477,7 +508,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // Server requests and global notifications do not share the parent session's
       // event counter. Keep their output at the last parent seq so a head neither
       // drops these blocks nor mistakes the next parent delta for an old replay.
-      const unsequenced = type === "hermetic.server_request" || evSession === "";
+      // A resume snapshot the pump turned back into an event (`pending_connection`)
+      // is marked the same way: it is state, not a step in the session's log.
+      const unsequenced =
+        type === "hermetic.server_request" || evSession === "" || ev.unsequenced === true;
       const seq = unsequenced ? lastSeq : sourceSeq;
       // `seq` is monotonic per session and exists for reconnect catch-up
       // (upstream's `event_replay.replay_epoch`), so a frame at or below the
@@ -510,6 +544,19 @@ export function createChatTurn(deps: ChatTurnDeps) {
         yield { type: "block", seq, message, block: infoUsage };
         continue;
       }
+      if (isSubagentEvent(type)) {
+        // A delegated child, on the parent session: through the session's
+        // ledger and out as the child's whole block, so a head's
+        // replace-by-key merge is the whole reducer. A progress snapshot, like
+        // an activity: it neither divides a streamed sentence nor flushes
+        // reasoning. An event for a child the ledger never saw start, or one
+        // already finished, changes nothing and emits nothing.
+        seenContent = true;
+        const child = delegation.event(type, payload, unsequenced ? 0 : seq);
+        if (child) yield { type: "block", seq, message, block: child };
+        continue;
+      }
+      if (connections.stale(type, payload)) continue;
       const activity = hermesActivity(type, payload);
       if (activity) {
         if (type === "tool.generating" || type === "session.usage") seenContent = true;
@@ -615,11 +662,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
           const statusText = str(payload.status);
           const failure = str(payload.error);
           if (statusText === "error" || failure) {
-            yield {
-              type: "error",
-              code: CHAT_ERROR_CODES.TURN_FAILED,
-              message: failure ?? "the turn failed on the box",
-            };
+            // Upstream's classified surface rides beside the error text
+            // (`prompt_turn.py`), so a head can offer the recovery that fits.
+            yield fail(
+              CHAT_ERROR_CODES.TURN_FAILED,
+              failure ?? "the turn failed on the box",
+              payload.error_surface,
+            );
             return;
           }
           yield {
@@ -631,37 +680,23 @@ export function createChatTurn(deps: ChatTurnDeps) {
           };
           return;
         }
-        case "tool.start": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, toolBlock(payload, "running"));
-          break;
-        }
+        case "tool.start":
         case "tool.complete": {
           seenContent = true;
           yield* flushReasoning(seq);
-          yield* emit(seq, toolBlock(payload, null));
-          break;
-        }
-        case "approval.request": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, approvalBlock(payload));
-          break;
-        }
-        case "clarify.request": {
-          seenContent = true;
-          yield* flushReasoning(seq);
-          yield* emit(seq, questionBlock(payload));
+          const tool = toolBlock(payload, type === "tool.start" ? "running" : null);
+          // A `delegate_task` call is what its children are matched against.
+          delegation.tool(tool);
+          yield* emit(seq, tool);
           break;
         }
         case "turn.error": {
           yield* flushReasoning(seq);
-          yield {
-            type: "error",
-            code: str(payload.code) ?? CHAT_ERROR_CODES.TURN_FAILED,
-            message: str(payload.message) ?? str(payload.error) ?? "the turn failed on the box",
-          };
+          yield fail(
+            str(payload.code) ?? CHAT_ERROR_CODES.TURN_FAILED,
+            str(payload.message) ?? str(payload.error) ?? "the turn failed on the box",
+            payload.error_surface,
+          );
           return;
         }
         default: {
@@ -855,7 +890,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
 
   function errorFrame(e: unknown): ChatFrame {
     const code = e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL;
-    return { type: "error", code, message: describe(e) };
+    return fail(code, describe(e));
   }
   return { send, abort, steer };
 }

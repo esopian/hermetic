@@ -704,6 +704,40 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+/* The header keeps its height whatever chips the actions column carries:
+   the identity rows stay on one line and the long text items ellipsise, so the
+   squeeze lands on the label, never on a second row. The compact layout moves
+   the actions to their own row and keeps its wrapping. */
+.ch-body:not(.ch-compact) .ch-thead-name,
+.ch-body:not(.ch-compact) .ch-thead-sub {
+  flex-wrap: nowrap;
+}
+.ch-body:not(.ch-compact) .ch-thead-name,
+.ch-body:not(.ch-compact) .ch-thead-sub {
+  min-width: 0;
+  overflow: hidden;
+}
+.ch-thead-name > *,
+.ch-thead-sub > * {
+  flex: none;
+}
+/* The bot's name never shrinks; the `@ instance` handle gives way first. */
+.ch-thead-name > .ch-thead-label {
+  flex: none;
+  white-space: nowrap;
+}
+.ch-thead-name > .mono,
+.ch-thead-sub > .ch-thead-fit {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-thead-name > .ch-title-form {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 /* The rename pencil sits beside the name it edits, quiet until pointed at.
    The field replaces the name in place: square, 2px rule, the name's own size. */
 .ch-title-edit {
@@ -1794,6 +1828,24 @@
 .ch-stop:focus-visible {
   outline: 2px solid var(--text-accent);
   outline-offset: 2px;
+}
+/* While a clarify waits: what Enter and ⌘Enter do to it (D4a). */
+.ch-composer-question {
+  padding: 0 14px 6px;
+  font: 10.5px var(--mono);
+  color: var(--text-warn);
+}
+/* A failed turn's recovery actions, under its card's words. */
+.ch-failure-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ch-failure-actions p {
+  margin: 0;
+}
+.ch-failure-actions .bm-note {
+  padding: 0;
 }
 /* What a reply does beyond this window, after "over the tailnet · <name>". */
 .ch-composer-hint.muted {

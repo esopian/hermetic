@@ -1,0 +1,558 @@
+/* Delegated children (WI-14, Option C): one line per child under its
+   `delegate_task` step (`blocks/Subagent.tsx`), and the child's run in a
+   modal (`blocks/SubagentModal.tsx`).
+
+   Built from the patterns already here and no new tokens: the line is a
+   recessed `.ch-card`-toned strip with a 2px left rule that appears only for a
+   verdict worth a glance (accent while running, bad when failed); glyphs are
+   `.ch-activity-glyph`'s; the modal takes the drawers' conventions (dimmed
+   backdrop, 2px `--fg` frame, Esc closes). Tints are `color-mix()` over the
+   existing colours. Both themes come from the tokens alone. */
+
+/* ── inline ──────────────────────────────────────────────────────────────── */
+
+.ch-msg-body .ch-activity .ch-activity-list > li.sa-li {
+  margin: 2px 0 6px 18px;
+}
+.sa-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sa-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 6px 4px 8px;
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+.sa-head-t {
+  color: var(--fg2);
+  font-weight: 700;
+}
+.sa-head-f {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The goal outranks the activity: the goal takes what it needs up to a cap,
+   and the activity column only ever gets what is left — so it is the one that
+   ellipsises first in a narrow window. */
+.sa-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 3px 6px 3px 8px;
+  background: color-mix(in srgb, var(--bg2) 82%, var(--bg));
+  border-left: 2px solid transparent;
+  font-size: 12px;
+}
+.sa-line:hover {
+  background: var(--bg2);
+}
+.sa-line.run {
+  border-left-color: var(--acc);
+}
+.sa-line.bad {
+  border-left-color: var(--bad);
+}
+.sa-line.sa-enter {
+  animation: sarowin 0.2s ease-out;
+}
+@keyframes sarowin {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.sa-line .sa-glyph {
+  flex: none;
+  line-height: 1;
+}
+.sa-line .sa-glyph.run {
+  animation: chthink 1.8s infinite;
+}
+.sa-goal {
+  flex: 0 1 auto;
+  min-width: 10ch;
+  max-width: 62%;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sa-depth {
+  flex: none;
+  font: 700 9px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  border: 1px solid var(--line2);
+  padding: 0 4px;
+  margin-right: 6px;
+}
+.sa-act {
+  flex: 1 1 0;
+  min-width: 0;
+  font: 400 11px var(--mono);
+  color: var(--fg3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sa-act .tn {
+  color: var(--fg2);
+  font-weight: 500;
+}
+.sa-act.summary,
+.sa-act.note {
+  font: 400 12px var(--sans);
+  color: var(--fg2);
+}
+.sa-act.note {
+  color: var(--fg3);
+}
+.sa-act.error {
+  font: 400 12px var(--sans);
+  color: var(--bad);
+}
+.sa-line[data-verdict="stopped"] .sa-act.error {
+  color: var(--fg3);
+}
+.sa-result-link {
+  flex: none;
+}
+.sa-time {
+  flex: none;
+  min-width: 4.5ch;
+  text-align: right;
+  font: 500 10px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+.sa-time.live {
+  color: var(--text-accent);
+}
+.sa-open {
+  all: unset;
+  flex: none;
+  cursor: pointer;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line2);
+  font: 700 9.5px var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+}
+.sa-open:hover {
+  border-color: var(--fg);
+}
+.sa-open:focus-visible {
+  outline: 2px solid var(--acc);
+}
+
+/* ── modal ───────────────────────────────────────────────────────────────── */
+
+.sa-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  animation: hfade 0.12s;
+}
+.sa-modal {
+  width: min(900px, calc(100% - 48px));
+  height: min(640px, calc(100% - 40px));
+  background: var(--bg);
+  color: var(--fg);
+  border: 2px solid var(--fg);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  font: 14px var(--sans);
+}
+.sa-frame {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+.sa-modal kbd {
+  font: 500 10px var(--mono);
+  border: 1px solid var(--line2);
+  padding: 0 4px;
+  color: var(--fg);
+}
+.sa-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+  border-right: 1px solid var(--line);
+}
+.sa-side-h {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.sa-side-h b {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 800;
+}
+.sa-side-h small {
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+.sa-sibs {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0;
+}
+.sa-sib {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 7px;
+  padding: 9px 12px;
+  border-left: 3px solid transparent;
+}
+.sa-sib:hover {
+  background: color-mix(in srgb, var(--bg3) 50%, transparent);
+}
+.sa-sib:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+.sa-sib.on {
+  background: var(--sel);
+  border-left-color: var(--acc);
+}
+.sa-sib .g {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+}
+.sa-sib .s {
+  display: block;
+  margin-top: 3px;
+  font: 500 10px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+.sa-side-f {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font: 500 10px var(--mono);
+  line-height: 1.6;
+  color: var(--fg3);
+}
+.sa-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.sa-mhead {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.sa-mhead .t {
+  flex: 1;
+  min-width: 0;
+}
+.sa-mhead h3 {
+  margin: 4px 0 0;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.sa-parent {
+  margin-top: 4px;
+  font: 500 10.5px var(--mono);
+  color: var(--fg3);
+}
+.sa-mhead .nav {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.sa-mhead .nav button {
+  all: unset;
+  cursor: pointer;
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line2);
+  font-size: 14px;
+}
+.sa-mhead .nav button:hover {
+  border-color: var(--fg);
+}
+.sa-mhead .nav button:focus-visible {
+  outline: 2px solid var(--acc);
+}
+.sa-mhead .nav button[disabled] {
+  cursor: default;
+  opacity: 0.4;
+}
+.sa-kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: baseline;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+.sa-kv b {
+  margin-right: 5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sa-kv span span {
+  color: var(--fg2);
+}
+.sa-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px 10px;
+}
+.sa-prompt {
+  margin-bottom: 12px;
+}
+.sa-prompt-h {
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+.sa-prompt-h b {
+  margin-right: 6px;
+  font: 700 12px var(--sans);
+  color: var(--fg);
+}
+.sa-prompt-b {
+  font-size: 13.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.sa-prompt-c {
+  margin-top: 4px;
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+.sa-t {
+  display: grid;
+  grid-template-columns: 40px 12px minmax(0, 1fr);
+  gap: 6px;
+  padding: 4px 0;
+  font: 400 11.5px / 1.5 var(--mono);
+  color: var(--fg3);
+}
+.sa-t .rel {
+  padding-top: 1px;
+  font-size: 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sa-t .tn {
+  margin-right: 8px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.sa-t .pv {
+  overflow-wrap: anywhere;
+}
+.sa-t.cur .tn,
+.sa-t.cur .gl {
+  color: var(--text-accent);
+}
+.sa-t.err .tn {
+  color: var(--bad);
+}
+.sa-t .k {
+  margin-right: 8px;
+  font: 700 9px var(--mono);
+  font-style: normal;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.sa-t.progress .b,
+.sa-t.thinking .b {
+  font: 12.5px / 1.55 var(--sans);
+  color: var(--fg2);
+}
+.sa-t.thinking .b {
+  font-style: italic;
+  color: var(--fg3);
+}
+.sa-t.you {
+  background: color-mix(in srgb, var(--sel) 70%, var(--bg));
+}
+.sa-t.you .k {
+  color: var(--text-warn);
+}
+.sa-t.you.stop .gl {
+  color: var(--bad);
+}
+.sa-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 4px 46px;
+  font: 500 10.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+.sa-result {
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg2) 82%, var(--bg));
+  border-left: 2px solid var(--ok);
+}
+.sa-result.failed {
+  border-left-color: var(--bad);
+}
+.sa-result.stopped {
+  border-left-color: var(--fg3);
+}
+.sa-result .kicker {
+  margin: 0 0 6px;
+}
+.sa-summary {
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sa-reason {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, var(--bg));
+  font-size: 12.5px;
+}
+.sa-rollup {
+  margin: 10px 0 8px;
+  font: 500 10.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+.sa-tail {
+  margin: 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 1px solid var(--line2);
+  font: 400 11px / 1.6 var(--mono);
+  color: var(--fg3);
+}
+.sa-tail .gl {
+  margin-right: 8px;
+  color: var(--ok);
+}
+.sa-tail .tn {
+  margin-right: 8px;
+  color: var(--fg);
+}
+.sa-tail li.err {
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+.sa-tail li.err .gl,
+.sa-tail li.err .tn {
+  color: var(--bad);
+}
+.sa-closed {
+  margin: 0;
+  padding: 8px 0;
+  font: 500 11px var(--mono);
+  color: var(--fg3);
+}
+.sa-foot {
+  flex: none;
+  padding: 10px 20px 12px;
+  border-top: 1px solid var(--line);
+}
+.sa-ctl {
+  display: flex;
+  gap: 6px;
+}
+.sa-ctl .in {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px var(--sans);
+}
+.sa-ctl .in:focus {
+  outline: none;
+  border-color: var(--acc);
+}
+.sa-ctl button {
+  all: unset;
+  cursor: pointer;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line2);
+  font: 700 11px var(--mono);
+  letter-spacing: 0.06em;
+  display: inline-flex;
+  align-items: center;
+}
+.sa-ctl button:hover:not([disabled]) {
+  border-color: var(--fg);
+}
+.sa-ctl button:focus-visible {
+  outline: 2px solid var(--acc);
+}
+.sa-ctl button[disabled] {
+  cursor: default;
+  opacity: 0.5;
+}
+/* Small and outlined: it ends one child, never reads as the turn's stop. */
+.sa-ctl .sa-stop {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.sa-ack {
+  margin-top: 6px;
+  font: 500 10.5px var(--mono);
+  color: var(--fg2);
+}
+.sa-hint {
+  margin-top: 6px;
+  font: 500 10px var(--mono);
+  color: var(--fg3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sa-line.sa-enter,
+  .sa-line .sa-glyph.run,
+  .sa-backdrop {
+    animation: none;
+  }
+}

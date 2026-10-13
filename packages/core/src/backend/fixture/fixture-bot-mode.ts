@@ -1,8 +1,10 @@
 /** Stateful Bot Mode fixture. No transport or model calls; shared with the chat roster. */
 import type { HermesChatClient, BoxAddress } from "../../chat/hermes/hermes-chat.ts";
 import type { FixtureChatActivity } from "./fixture-chat.ts";
-import type { Bot, ChatConversation, ChatMessage } from "../../schema/index.ts";
+import type { Bot, ChatConversation, ChatFailure, ChatMessage } from "../../schema/index.ts";
 import { HermeticError } from "../../errors.ts";
+import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
+import { settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { profileTitle } from "../../chat/hermes/hermes-chat-roster.ts";
 
 const rec = (v: unknown): Record<string, unknown> =>
@@ -65,6 +67,10 @@ function configureUiMeta(
  */
 export const FIXTURE_LEGACY_GATEWAY = "kestrel";
 const isLegacyGateway = (instance: string): boolean => instance === FIXTURE_LEGACY_GATEWAY;
+/** A room message containing this raises a pending approval for the room's first member. */
+export const FIXTURE_ROOM_APPROVAL_TRIGGER = "E2E_ROOM_APPROVAL";
+/** The room service's refusal of any answer but these (`hosted_room_service.py`). */
+const ROOM_APPROVAL_CHOICES = ["once", "deny"];
 /**
  * `opts.activity` is the scripted external activity a fixture stages (§9.2). It
  * is optional and absent by default, so every existing caller is unchanged: with
@@ -79,6 +85,8 @@ export function withFixtureBotMode(
   let serial = 0;
   const profiles = new Map<string, Map<string, Record<string, unknown>>>(),
     rooms = new Map<string, Record<string, unknown>>(),
+    /** The driver's `pending_actions` per room: what a room task is parked on. */
+    pending = new Map<string, Record<string, unknown>[]>(),
     logs = new Map<string, Record<string, unknown>[]>(),
     jobs = new Map<string, Record<string, unknown>[]>(),
     histories = new Map<string, Record<string, unknown>[]>();
@@ -301,7 +309,15 @@ export function withFixtureBotMode(
       case "groups.state": {
         const r = rooms.get(roomKey);
         if (!r || r.disbanded_at) throw new HermeticError("NOT_FOUND", "Room not found");
-        return { room: r, driver_status: { working: false, blocked: false, pending_actions: [] } };
+        const actions = pending.get(roomKey) ?? [];
+        return {
+          room: r,
+          driver_status: {
+            working: actions.length > 0,
+            blocked: actions.length > 0,
+            pending_actions: actions,
+          },
+        };
       }
       case "groups.rename": {
         const r = rooms.get(roomKey);
@@ -363,6 +379,29 @@ export function withFixtureBotMode(
             `${m.display_name}: fixture response to the shared discussion.`,
             String(m.member_id),
           );
+        // A task parked on a command only the operator can allow: the driver's
+        // `_report_pending_action` shape, with the choices the room service accepts.
+        if (String(rec(p.payload).text).includes(FIXTURE_ROOM_APPROVAL_TRIGGER)) {
+          const member_id = String(rows(r.members)[0]?.member_id ?? "m1");
+          const raised = pending.get(roomKey) ?? [];
+          // A member's task is parked on one request at a time.
+          if (!raised.some((a) => a.member_id === member_id))
+            raised.push({
+              kind: "approval",
+              task_id: `task-${++serial}`,
+              member_id,
+              session_id: `fx-room-session-${serial}`,
+              request_id: `rrq-fixture-${serial}`,
+              execution_generation: 1,
+              text: "Run `rm -rf ./build`?",
+              approval: {
+                command: "rm -rf ./build",
+                description: "recursive delete",
+                choices: ROOM_APPROVAL_CHOICES,
+              },
+            });
+          pending.set(roomKey, raised);
+        }
         logs.set(roomKey, events);
         r.latest_seq = events.length;
         return {
@@ -370,9 +409,54 @@ export function withFixtureBotMode(
           event: { ...events.find((e) => e.event_id === p.event_id), idempotent: false },
         };
       }
-      case "groups.stop":
+      case "groups.approve": {
+        // The room service takes once or deny and nothing else, and answers
+        // anything it refuses with the catch-all 5119 that core recognises.
+        const refuse = (message: string): never => {
+          throw new HermeticError("CHAT_PROTOCOL", `${box.instance}: ${message}`, { code: 5119 });
+        };
+        // Pending first, as the service checks: a stale or foreign answer is
+        // "no longer pending" whatever it chose. An answer must name the exact
+        // task, member and generation the driver reported.
+        const actions = pending.get(roomKey) ?? [];
+        const at = actions.findIndex(
+          (a) =>
+            a.request_id === p.request_id &&
+            a.task_id === p.task_id &&
+            a.member_id === p.member_id &&
+            a.execution_generation === p.execution_generation,
+        );
+        if (at < 0) refuse("room approval is no longer pending");
+        if (!ROOM_APPROVAL_CHOICES.includes(String(p.choice)))
+          refuse("room approval choice must be once or deny");
+        const [settled] = actions.splice(at, 1);
+        const events = logs.get(roomKey) ?? [];
+        events.push({
+          room_id: p.room_id,
+          seq: events.length + 1,
+          event_id: `approval-${String(p.request_id)}`,
+          kind: "message.member",
+          actor: { kind: "member", id: String(settled?.member_id) },
+          payload: {
+            text:
+              p.choice === "once"
+                ? "Approved once: ran `rm -rf ./build`."
+                : "Denied: did not run `rm -rf ./build`.",
+            member_id: settled?.member_id,
+          },
+          created_at: Date.now() / 1000,
+        });
+        logs.set(roomKey, events);
+        const r = rooms.get(roomKey);
+        if (r) r.latest_seq = events.length;
+        return { ok: true, approved: true };
+      }
+      case "groups.stop": {
+        const cancelled = pending.get(roomKey)?.length ?? 0;
+        pending.delete(roomKey);
+        return { ok: true, cancelled, retried: true, approved: true };
+      }
       case "groups.retry":
-      case "groups.approve":
         return { ok: true, cancelled: 0, retried: true, approved: true };
       default:
         throw new HermeticError("CHAT_PROTOCOL", `Unsupported fixture operation ${method}`);
@@ -496,9 +580,19 @@ export function withFixtureBotMode(
         const turn = { session, messages };
         turns.push(turn);
         try {
+          // The reply as this wrapper keeps it: the turn's text, flat, as it
+          // always has been. A turn with a human in its loop (a clarify or an
+          // approval) or a delegation keeps every block it wrote down instead, folded by the
+          // rule the base client folds its own rows by, so a re-read shows the
+          // tool cards and the settled summaries a box's history holds.
           let answer = "";
-          for await (const frame of base.send(box, bot, text, opts)) {
-            if (frame.type === "delta") answer += frame.text;
+          const row = createFixtureTurnRow();
+          for await (const frame of base.send(box, bot, text, { ...opts, session })) {
+            if (frame.type === "block") row.fold(frame.block);
+            if (frame.type === "delta") {
+              answer += frame.text;
+              row.delta(frame.text);
+            }
             if (frame.type === "done") {
               const at = now();
               messages.push({
@@ -506,9 +600,27 @@ export function withFixtureBotMode(
                 session,
                 role: "bot",
                 at,
-                blocks: [{ kind: "text", markdown: answer }],
+                blocks: row.full
+                  ? settleFixtureSubagents(row.blocks)
+                  : [{ kind: "text", markdown: answer }],
               });
               spoke.set(key(box, bot), { at, session });
+            }
+            // A failed turn is stored with its failure, as a box stores it.
+            if (frame.type === "error") {
+              const failure: ChatFailure = frame.failure ?? {
+                code: frame.code,
+                message: frame.message,
+              };
+              messages.push({
+                id: `error-${++serial}`,
+                session,
+                role: "bot",
+                at: now(),
+                blocks: settleFixtureSubagents(row.blocks),
+                error: failure.message,
+                failure,
+              });
             }
             yield frame;
           }
@@ -593,8 +705,13 @@ export function withFixtureBotMode(
       if (c?.kind === "canonical") canonical.delete(key(box, bot));
       return { instance: box.instance, bot, session, archived: true };
     },
-    async respond() {
-      return { status: "ok" };
+    /**
+     * Clarify and approval requests both go to the base client, which owns the
+     * requests its turns are parked on.
+     */
+    async respond(box, input, respondOpts) {
+      if (!base.respond) return { status: "ok" };
+      return base.respond(box, input, respondOpts);
     },
   };
 }

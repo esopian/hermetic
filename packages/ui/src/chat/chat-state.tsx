@@ -59,7 +59,9 @@ import {
   getDoctor,
   resumeObservation,
   sendTurn,
+  steerSubagent,
   steerTurn,
+  stopSubagent,
 } from "../api/index.ts";
 import type {
   ChatBlockView,
@@ -73,6 +75,7 @@ import { useConversations } from "./chat-conversations.ts";
 import { useSendQueue } from "./chat-queue.ts";
 import type { QueuedMessage } from "./chat-queue.ts";
 export type { QueuedMessage } from "./chat-queue.ts";
+import type { SubagentControls } from "./chat-subagent-control.ts";
 import type { ChatArrival } from "./chat-conversations.ts";
 export { reconnectDelayMs } from "./chat-conversations.ts";
 export type { Observation, ObserveState } from "./chat-conversations.ts";
@@ -309,6 +312,10 @@ export interface Chat {
   turnActivities: ConversationActivity[];
   /** The last turn's failure, cleared when the next one starts. */
   turnError: { code: string; message: string } | null;
+  /** Requests answered from their own card, which no longer wait on anyone (`chat-requests.ts`). */
+  released: ReadonlySet<string>;
+  /** The prompt that started each turn seen failing here, by failed message id (`FailureCard`). */
+  turnPrompts: ReadonlyMap<string, string>;
   /**
    * This browser's stream to the portal dropped without a `done`, and the
    * transcript is being re-read. Core's own reconnect to the box (§9.2) never
@@ -324,8 +331,31 @@ export interface Chat {
   observation: Observation;
   /** Ask a terminated observation back, deliberately, because the operator did. */
   resumeObservation: () => Promise<void>;
-  send: (text: string) => void;
+  /** Start a turn; `false` when the store refused to, and nothing was sent. */
+  send: (text: string) => boolean;
   abort: () => Promise<void>;
+  /**
+   * Close a server request's card: a finished notice for `request_id` folded
+   * into the message that holds the card, as a `request.cancel` would be. The
+   * composer calls it once the box has acknowledged a declined clarify, because
+   * the gateway sends no close after an ordinary answer. `target` is the
+   * conversation the decline was made in, when the selection may have moved
+   * since. See `chat-conversations.ts`.
+   */
+  settleRequest: (request_id: string, outcome: "skipped" | "answered", target?: ChatSelection) => void;
+  /**
+   * Stop counting `request_id` as one the turn is parked on, without closing
+   * its card: the operator answered it from the card, which stays as its
+   * settled summary. Re-arms the no-frame timer; `openRequest` no longer names
+   * it. See `chat-conversations.ts`.
+   */
+  releaseRequest: (request_id: string, target?: ChatSelection) => void;
+  /**
+   * The clarify the selected conversation is waiting on, by request id, or
+   * `null` — across the live message and the parts of the reply a steer closed
+   * off, the same scope `settleRequest` closes in. Read at call time.
+   */
+  openRequest: () => string | null;
 
   /**
    * What the operator typed while this conversation's turn was in flight,
@@ -353,6 +383,8 @@ export interface Chat {
 
   /** A coarse clock, so every relative timestamp in one paint agrees with itself. */
   now: number;
+  /** Steer and Stop for one delegated child, and its unsent steer (`chat-subagent-control.ts`). */
+  subagents: SubagentControls;
 }
 
 /** The four calls, injectable so a DOM test can drive the provider without a fetch stub. */
@@ -365,6 +397,9 @@ export interface ChatApi {
   abortTurn: typeof abortTurn;
   /** `chat.steer`. Optional: a tree without it falls back to stopping the turn. */
   steerTurn?: typeof steerTurn;
+  /** `chat.steer`/`chat.abort` with `subagent_id`: one delegated child. Optional, like `steerTurn`. */
+  steerSubagent?: typeof steerSubagent;
+  stopSubagent?: typeof stopSubagent;
   /**
    * `doctor`, for its `local_tailscale` field and nothing else.
    *
@@ -404,6 +439,8 @@ const LIVE_API: ChatApi = {
   sendTurn,
   abortTurn,
   steerTurn,
+  steerSubagent,
+  stopSubagent,
   getDoctor,
   chatStream,
   resumeObservation,
@@ -439,25 +476,28 @@ function toolKey(block: ChatBlockView): string | null {
  * identical approval card, and the operator is asked the same question twice
  * with no way to tell which one is live.
  *
- * `request_id` is the whole key for an approval: one request, one card. A
- * clarify is a *batch* — `hermesRequest` in `hermes-chat-activity.ts` emits one
- * `question` block per entry in `payload.questions`, all of them under the same
- * request id — so the id alone would collapse a three-question batch into one
- * card. The prompt is what distinguishes them, and it is stable across a
- * replay because it is the question's own text. Two questions of one batch
- * that ask the same words in the same request do collapse; that is a batch
- * asking the same thing twice, and one card for it is not the wrong answer.
+ * `request_id` is the whole key, for an approval and a clarify alike: one
+ * request, one card. A clarify *batch* is one `question` block listing every
+ * question in `questions`, and the gateway holds the turn until all of them
+ * are answered — so they are answered together, on one card. Keying a batch
+ * per question would draw a card per question that each looked answered on
+ * its own while the turn still waited for the rest.
  */
 function requestKey(block: ChatBlockView): string | null {
   if (block.kind !== "approval" && block.kind !== "question") return null;
   const id = block.request_id;
   if (typeof id !== "string" || id.length === 0) return null;
-  return block.kind === "approval" ? `approval:${id}` : `question:${id}:${block.prompt}`;
+  return `${block.kind}:${id}`;
 }
 
-/** The identity a block replaces on, or `null` for one that only ever appends. */
+/**
+ * The identity a block replaces on, or `null` for one that only ever appends.
+ * A delegated child is re-sent whole on every change, so it replaces by its
+ * own id (`subagent:<subagent_id>`).
+ */
 function blockKey(block: ChatBlockView): string | null {
   if (block.kind === "activity") return `activity:${block.key}`;
+  if (block.kind === "subagent") return `subagent:${block.subagent_id}`;
   return toolKey(block) ?? requestKey(block);
 }
 
@@ -487,17 +527,21 @@ function appendDelta(blocks: ChatBlockView[], text: string): ChatBlockView[] {
   return [...blocks, { kind: "text", markdown: text } as ChatBlockView];
 }
 
-/** Folds one frame into the message being assembled. `error` is handled by the caller. */
+/**
+ * Folds one frame into the message being assembled. An `error` sets the turn's
+ * `failure` — core's structured one, else its code and message — minting the
+ * message when the turn failed before saying anything, so the failure card is
+ * drawn live from the same shape history gives it (`FailureCard`).
+ */
 export function applyFrame(
   live: ChatMessageView | null,
   frame: ChatFrameView,
   seed: { session: string; at: string },
 ): ChatMessageView | null {
-  if (frame.type === "error") return live;
   const base: ChatMessageView =
     live ??
     ({
-      id: frame.message,
+      id: frame.type === "error" ? `failed:${seed.at}` : frame.message,
       session: seed.session,
       role: "bot",
       author: null,
@@ -507,6 +551,8 @@ export function applyFrame(
       error: null,
       incomplete: null,
     } as unknown as ChatMessageView);
+  if (frame.type === "error")
+    return { ...base, failure: frame.failure ?? { code: frame.code, message: frame.message } };
   if (frame.type === "block") return { ...base, blocks: mergeBlock(base.blocks, frame.block) };
   if (frame.type === "delta") return { ...base, blocks: appendDelta(base.blocks, frame.text) };
   return { ...base, usage: frame.usage ?? base.usage, incomplete: frame.incomplete ?? null };
@@ -902,6 +948,8 @@ export function ChatProvider({
     activity,
     turnActivities,
     turnError,
+    released,
+    turnPrompts,
     reconnecting,
     reconnectAttempt,
     observation,
@@ -911,12 +959,16 @@ export function ChatProvider({
     resumeObservation,
     send,
     steer,
+    settleRequest,
+    releaseRequest,
+    openRequest,
     abort,
     reloadHistory,
     reloadTranscript,
     draft,
     setDraft,
     stageDraft,
+    subagents,
   } = conversations;
 
   /* ── the send queue (§9.2 "one active turn", "sending waits"), `chat-queue.ts` ── */
@@ -1207,12 +1259,17 @@ export function ChatProvider({
       activity,
       turnActivities,
       turnError,
+      released,
+      turnPrompts,
       reconnecting,
       reconnectAttempt,
       observation,
       resumeObservation,
       send: sendMessage,
       abort: stopTurn,
+      settleRequest,
+      releaseRequest,
+      openRequest,
       queued,
       queueMessage,
       unqueue,
@@ -1220,6 +1277,7 @@ export function ChatProvider({
       sendQueuedNow,
       queueParked,
       now,
+      subagents,
     }),
     [
       activate,
@@ -1255,12 +1313,17 @@ export function ChatProvider({
       activity,
       turnActivities,
       turnError,
+      released,
+      turnPrompts,
       reconnecting,
       reconnectAttempt,
       observation,
       resumeObservation,
       sendMessage,
       stopTurn,
+      settleRequest,
+      releaseRequest,
+      openRequest,
       queued,
       queueMessage,
       unqueue,
@@ -1269,6 +1332,7 @@ export function ChatProvider({
       queueParked,
       now,
       chatTiming,
+      subagents,
     ],
   );
 

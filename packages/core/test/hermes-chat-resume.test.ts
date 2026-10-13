@@ -538,6 +538,116 @@ describe("hermes-chat · turn continuation", () => {
     expect(ids).toEqual(["r1", "r2"]);
   });
 
+  test("a pending connection request in the resume snapshot comes back as its notice, once", async () => {
+    const operation = (seq: number) => ({
+      op_id: "op1",
+      seq,
+      deadline_at: 1_760_000_000,
+      timeout_seconds: 300,
+      targets: [
+        {
+          name: "github",
+          kind: "mcp",
+          action: "connect",
+          state: "pending",
+          connect_url: "https://auth.fixture.invalid/authorize?code=FIXTURE-URL",
+        },
+      ],
+    });
+    const run = async (shown: number[], snapshot: number) => {
+      const h = harness([
+        opening([
+          eventFrame("message.delta", 41, { text: "one " }),
+          ...shown.map((seq, i) => eventFrame("connection.request", 42 + i, operation(seq))),
+        ]),
+        {
+          results: {
+            "session.resume": {
+              session_id: SESSION_ID,
+              running: true,
+              pending_connection: operation(snapshot),
+            },
+            "session.events.since": {
+              events: [],
+              latest_seq: 41 + shown.length,
+              truncated: false,
+              epoch: EPOCH,
+            },
+          },
+          after: {
+            "session.events.since": [
+              eventFrame("message.complete", 50, { text: "one ", status: "complete" }),
+            ],
+          },
+        },
+      ]);
+      const frames = await runDropping(h.deps, h.sockets, 1);
+      return blocks(frames).filter((b) => b.kind === "activity" && b.key === "connection:op1");
+    };
+
+    // Missed on the dead socket: the snapshot restores it, with no link.
+    const restored = await run([], 1);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({
+      state: "running",
+      detail: "github · connect; the agent continues after 300s",
+    });
+    expect(JSON.stringify(restored)).not.toContain("FIXTURE-URL");
+    // Already shown at the same operation seq: not shown twice.
+    expect(await run([1], 1)).toHaveLength(1);
+  });
+
+  test("a replayed batch clarify is one card, shown once, with the locks already recorded", async () => {
+    const questions = [
+      { qid: "q1", question: "Drink?", choices: ["Coffee", "Tea"], multi_select: false },
+      { qid: "q2", question: "Snack?", choices: ["Chips", "Fruit"], multi_select: false },
+    ];
+    const h = harness([
+      opening([
+        eventFrame("message.delta", 41, { text: "one " }),
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "c1",
+          method: "clarify",
+          params: { session_id: SESSION_ID, questions },
+        }),
+      ]),
+      {
+        results: {
+          "session.resume": { session_id: SESSION_ID, running: true },
+          "session.events.since": {
+            events: [],
+            latest_seq: 41,
+            truncated: false,
+            epoch: EPOCH,
+            // c1 was already shown; c2 was asked while the socket was down and
+            // has one of its questions locked from another client.
+            open_requests: [
+              { id: "c1", method: "clarify", params: { questions, answers: { q1: "Tea" } } },
+              { id: "c2", method: "clarify", params: { questions, answers: { q1: "Coffee" } } },
+            ],
+          },
+        },
+        after: {
+          "session.events.since": [
+            eventFrame("message.complete", 42, { text: "one ", status: "complete" }),
+          ],
+        },
+      },
+    ]);
+
+    const frames = await runDropping(h.deps, h.sockets, 1);
+
+    const cards = blocks(frames).flatMap((b) => (b.kind === "question" ? [b] : []));
+    expect(cards.map((b) => b.request_id)).toEqual(["c1", "c2"]);
+    expect(cards[1]).toMatchObject({
+      questions: [
+        { id: "q1", answer: "Coffee" },
+        { id: "q2", answer: null },
+      ],
+    });
+  });
+
   test("a gateway that accepts the handshake and drops again spends the budget and stops", async () => {
     const h = harness([
       opening([eventFrame("message.delta", 41, { text: "one " })]),

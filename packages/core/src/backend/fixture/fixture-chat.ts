@@ -53,7 +53,7 @@ import type {
   SendOptions,
 } from "../../chat/hermes/hermes-chat.ts";
 import type { ChatObserveHint } from "../../chat/chat-observe.ts";
-import type { ChatBlock, ChatFrame, ChatMessage, Session, Swarm } from "../../schema/index.ts";
+import type { ChatFailure, ChatFrame, ChatMessage, Session, Swarm } from "../../schema/index.ts";
 import type { FixtureChatActivity } from "./fixture-chat-activity.ts";
 import {
   FIXTURE_CHAT_REPLY,
@@ -64,6 +64,15 @@ import {
 } from "./fixture-chat-catalog.ts";
 import { FIXTURE_CHAT_SESSIONS, at, specFor, swarmFor } from "./fixture-chat-roster.ts";
 import { FIXTURE_LIVE_USAGE } from "./fixture-chat-usage.ts";
+import {
+  createFixtureChatRequests,
+  fixtureClarifyScript,
+  type FixtureChatRequests,
+} from "./fixture-chat-requests.ts";
+import { fixtureApprovalScript } from "./fixture-chat-approval.ts";
+import { fixtureErrorScript } from "./fixture-chat-error.ts";
+import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
+import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
 
 // The tables and the activity store keep their homes in the split modules; this
@@ -116,6 +125,11 @@ export interface FixtureChatOptions {
    * a real gateway that had to be killed at the right moment.
    */
   cutAfter?: number | undefined;
+  /**
+   * The open clarify requests a parked turn waits on (`fixture-chat-requests.ts`).
+   * Absent means a registry of this client's own, which `respond` answers from.
+   */
+  requests?: FixtureChatRequests | undefined;
 }
 
 /**
@@ -126,6 +140,14 @@ export interface FixtureChatOptions {
  * for it twice. It goes through the injectable `sleep` for exactly that reason.
  */
 const FIXTURE_RECONNECT_PAUSE_MS = 150;
+
+/**
+ * How long a `*_TIMEOUT` request waits before the gateway withdraws it: long
+ * enough for a head to draw the card and be looked at, short enough for a test
+ * to wait out. A slowed fixture (`delayMs`) stretches it, so the card is still
+ * there for the turn's own pace.
+ */
+const FIXTURE_REQUEST_TIMEOUT_MS = 1000;
 
 /**
  * Cut a string into fixed-width pieces.
@@ -277,10 +299,19 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
     opts.sleep ??
     ((ms: number) => (ms > 0 ? new Promise<void>((done) => setTimeout(done, ms)) : Promise.resolve()));
   const pace = (): Promise<void> => (delayMs > 0 ? sleep(delayMs) : Promise.resolve());
+  const requestTimeoutMs = Math.max(FIXTURE_REQUEST_TIMEOUT_MS, delayMs * 20);
 
   const reachable = (instance: string): boolean => specFor(instance).reachable;
   const activity = opts.activity;
   const cutAfter = opts.cutAfter ?? 0;
+  const requests = opts.requests ?? createFixtureChatRequests();
+  /** Delegated children: the `E2E_SUBAGENT*` triggers and child control. */
+  const subagents = createFixtureSubagents({
+    delayMs,
+    sleep,
+    activity,
+    now: () => new Date().toISOString(),
+  });
 
   /**
    * The canonical session a read falls back to when the caller named none —
@@ -475,21 +506,8 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          * announced it running. Copied rather than referenced, because the
          * frames have already left and nothing here may edit them afterwards.
          */
-        const blocks: ChatBlock[] = [];
-        const fold = (block: ChatBlock): void => {
-          // A status activity block is the client saying what it is doing, not
-          // something the box wrote down. The reconnect card below is the only
-          // one this fixture mints, and folding it in would make the durable
-          // row depend on whether the socket happened to survive the turn.
-          if (block.kind === "activity" && block.role === "status") return;
-          if (block.kind === "tool") {
-            const found = blocks.findIndex((b) => b.kind === "tool" && b.tool_id === block.tool_id);
-            if (found >= 0) blocks[found] = { ...block };
-            else blocks.push({ ...block });
-            return;
-          }
-          blocks.push({ ...block });
-        };
+        const row = createFixtureTurnRow();
+        const { blocks, fold } = row;
         if (session !== null) {
           sentRows(instance, bot, session).push({
             id: `mx-fixture-local-${turns}`,
@@ -510,7 +528,10 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          * thinking when nobody is listening — and the cut below would then have
          * nothing to continue from.
          */
-        const log = [...turn(id)];
+        const clarify = fixtureClarifyScript(text);
+        const approval = fixtureApprovalScript(text);
+        const failing = fixtureErrorScript(text, () => Date.now() / 1000);
+        const log = clarify || approval || failing ? [] : [...turn(id)];
         /** The fixture's stand-in for `session.events.since`: everything past a cursor. */
         const eventsSince = (lastSeen: number): SequencedFrame[] =>
           log.filter((frame) => frame.seq > lastSeen);
@@ -529,10 +550,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             yield frame;
             cursor = frame.seq;
             if (frame.type === "block") fold(frame.block);
-            if (frame.type === "delta") {
-              const last = blocks.at(-1);
-              if (last?.kind === "text") last.markdown += frame.text;
-            }
+            if (frame.type === "delta") row.delta(frame.text);
           }
         };
 
@@ -559,7 +577,88 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           },
         });
 
+        /** The clarify or approval request this turn is parked on, if it raised one. */
+        let asked: { close(): void } | null = null;
+        /** How this turn failed, if it did: stored beside the row, as a box stores it. */
+        let failed: ChatFailure | null = null;
+
         try {
+          /** A delegating turn (`fixture-chat-subagent.ts`), paced like any other. */
+          const delegated = subagents.script(text);
+          if (delegated) {
+            // The resolved session, not the caller's: one that named none is
+            // talking to the canonical conversation, and its children and
+            // results belong to that one alone.
+            const where = { instance, bot, session: session ?? undefined };
+            for await (const frame of delegated.frames(id, where, opts.signal)) {
+              // Breaking out returns the script, which stops its waits and
+              // retires its children; `deliver` alone only skips one frame.
+              if (opts.signal?.aborted) break;
+              yield* deliver([frame]);
+            }
+            return;
+          }
+          /**
+           * A clarify turn (`fixture-chat-requests.ts`): the question card, then
+           * a park on the request until `respond` settles it, then the rest.
+           * Its second half depends on the answer, so it cannot be materialised
+           * up front, and the simulated cut below does not apply to it.
+           *
+           * The park is an awaited promise and nothing else: the request settles
+           * `aborted` when the turn's signal fires, and the turn then ends where
+           * it is, as any other aborted fixture turn does.
+           */
+          if (clarify) {
+            const parked = requests.open(clarify.questions, opts.signal, {
+              batch: clarify.batch,
+              timeoutMs: clarify.timeout ? requestTimeoutMs : undefined,
+            });
+            asked = parked;
+            yield* deliver(clarify.ask(id, parked.request_id));
+            const outcome = await parked.settled;
+            if (outcome.kind !== "aborted")
+              yield* deliver(clarify.resume(id, outcome, cursor, parked.request_id));
+            return;
+          }
+          /**
+           * An approval turn (`fixture-chat-approval.ts`): the same park, on a
+           * command the operator may refuse.
+           */
+          if (approval) {
+            const parked = requests.openApproval(
+              opts.signal,
+              approval.timeout ? requestTimeoutMs : undefined,
+            );
+            asked = parked;
+            yield* deliver(approval.ask(id, parked.request_id));
+            const outcome = await parked.settled;
+            if (outcome.kind !== "aborted")
+              yield* deliver(approval.resume(id, outcome, cursor, parked.request_id));
+            return;
+          }
+          /**
+           * A failing turn (`fixture-chat-error.ts`): optionally some text, then
+           * an `error` frame carrying the classified failure. The frame has no
+           * seq, so it does not go through `deliver`; the row it leaves behind
+           * is written below, with the failure beside it.
+           */
+          if (failing) {
+            if (failing.text !== null)
+              yield* deliver([
+                { type: "block", seq: 1, message: id, block: { kind: "text", markdown: "" } },
+                { type: "delta", seq: 2, message: id, text: failing.text },
+              ]);
+            if (opts.signal?.aborted) return;
+            await pace();
+            failed = failing.failure;
+            yield {
+              type: "error",
+              code: failing.failure.code,
+              message: failing.failure.message,
+              failure: failing.failure,
+            };
+            return;
+          }
           /**
            * The simulated cut (§9.2): the socket dies partway through, and the
            * turn is picked up from its cursor rather than started again.
@@ -586,17 +685,21 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             yield* deliver(log);
           }
         } finally {
+          // A turn abandoned before its question was answered leaves no request
+          // behind for a later `respond` to settle.
+          asked?.close();
           flying.splice(flying.indexOf(session), 1);
           // Also on abort: a turn the operator stopped still happened, and the
           // half of it the box had already written down is still in its
           // transcript when the next read comes.
-          if (session !== null && blocks.length > 0) {
+          if (session !== null && (blocks.length > 0 || failed !== null)) {
             sentRows(instance, bot, session).push({
               id,
               session,
               role: "bot",
               at: mint(),
-              blocks,
+              blocks: settleFixtureSubagents(blocks),
+              ...(failed ? { error: failed.message, failure: failed } : {}),
             });
           }
         }
@@ -636,6 +739,13 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             nudge();
           },
         });
+        const unlisten = subagents.listen(where, (hint) => {
+          // Another conversation's children are not this watch's, and a
+          // child no conversation claims is nobody's.
+          if (hint.session !== session) return;
+          pending.push(hint);
+          nudge();
+        });
         const onAbort = (): void => {
           done = true;
           nudge();
@@ -655,8 +765,21 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         } finally {
           opts.signal?.removeEventListener("abort", onAbort);
           close();
+          unlisten();
         }
       })();
+    },
+
+    /**
+     * Settles the clarify or approval request a parked turn is waiting on. An
+     * unknown or already-settled one is `expired`, as on a real box.
+     */
+    respond(_box, input) {
+      try {
+        return Promise.resolve(requests.respond(input));
+      } catch (e) {
+        return Promise.reject(e);
+      }
     },
 
     abort(_box: BoxAddress, _bot: string, _opts?: SendOptions): Promise<void> {
@@ -694,5 +817,11 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       }
       return Promise.resolve("redirected");
     },
+
+    /** A delegated child's steer and stop (`fixture-chat-subagent.ts`). */
+    subagentSteer: (box, bot, subagentId, text) =>
+      Promise.resolve(subagents.steer(box.instance, bot, subagentId, text)),
+    subagentInterrupt: (box, bot, subagentId) =>
+      Promise.resolve(subagents.interrupt(box.instance, bot, subagentId)),
   };
 }

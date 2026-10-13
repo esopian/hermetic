@@ -275,6 +275,25 @@ export type HermeticCard = z.infer<typeof HermeticCard>;
 
 const TextBlock = z.object({ kind: z.literal("text"), markdown: z.string() });
 
+/**
+ * Why the gateway withdrew a server request (`request.cancel {id, method,
+ * reason}`, `tui_gateway/contracts/server_requests.py` `RequestCancelReason`),
+ * in upstream's own spelling: `timeout` (the request's own wait ran out),
+ * `interrupted` (the turn was stopped), `shutdown` (the gateway is exiting),
+ * `resolved` (a choice was committed — by this laptop or another surface;
+ * upstream does not say which), `session_closed` (the wait was withdrawn with
+ * no answer). Anything else reads as `other`.
+ */
+export const RequestCloseReason = z.enum([
+  "timeout",
+  "interrupted",
+  "shutdown",
+  "resolved",
+  "session_closed",
+  "other",
+]);
+export type RequestCloseReason = z.infer<typeof RequestCloseReason>;
+
 /** A replaceable progress snapshot, distinct from transcript prose and final usage. */
 const ActivityBlock = z.object({
   kind: z.literal("activity"),
@@ -291,6 +310,14 @@ const ActivityBlock = z.object({
    * this field existed; a head falls back to its own category/key guess.
    */
   role: z.enum(["status", "work"]).nullish(),
+  /**
+   * Set only on the "Request closed" notice a `request.cancel` becomes (key
+   * `request:<id>`): why the gateway withdrew the request. A dedicated field
+   * rather than `detail`, because `detail` is copy a head may print and this is
+   * a value a head branches on ("Timed out" vs "Cancelled"). Null everywhere
+   * else, and on a notice minted before this field existed.
+   */
+  reason: RequestCloseReason.nullish(),
   /** Retained for inspection and redacted by the same boundary as every other block. */
   payload: z.unknown().optional(),
 });
@@ -336,6 +363,21 @@ const AttachmentBlock = z.object({
   href: z.string().min(1),
 });
 
+/** The answers an approval can take, in the gateway's order (`server.py` `_approval_request_payload`). */
+export const ApprovalChoice = z.enum(["once", "session", "always", "deny"]);
+export type ApprovalChoice = z.infer<typeof ApprovalChoice>;
+
+/**
+ * A command waiting on the operator's approval.
+ *
+ * `choices` is what the gateway offered, in its order, and is the only guard
+ * there is: upstream accepts any choice it is sent (non-`deny` = grant), so a
+ * head renders exactly these and nothing else. Core always fills it — from the
+ * request's own `choices` when present (unknown values dropped), else by the
+ * gateway's fill rule. The default only covers a block stored before the field
+ * existed, and is the narrowest answer set: a block that never said it offered
+ * `session`/`always` is never shown them.
+ */
 const ApprovalBlock = z.object({
   kind: z.literal("approval"),
   tool: z.string().min(1),
@@ -343,13 +385,42 @@ const ApprovalBlock = z.object({
   detail: z.string().nullish(),
   expires_at: Iso.nullish(),
   request_id: z.string().nullish(),
+  choices: z.array(ApprovalChoice).default(["once", "deny"]),
+  /** The command was flagged by the smart approver; only a one-shot answer is offered. */
+  smart_denied: z.boolean().optional(),
+  /**
+   * The pattern an "always" answer would persist (the request's
+   * `description`), for the confirm step that names it.
+   */
+  pattern: z.string().optional(),
   payload: z.unknown().optional(),
 });
 
+/**
+ * One question of a batch clarify, as the gateway sends it: `id` is the
+ * gateway's `qid` (the key an answer is locked under), `answer` is the lock
+ * already recorded for it when the request was replayed from `open_requests`.
+ */
+const QuestionEntry = z.object({
+  id: z.string().min(1),
+  prompt: z.string(),
+  choices: z.array(z.string()),
+  multi_select: z.boolean(),
+  answer: z.string().nullable(),
+});
+
+/**
+ * A clarify request is one block however many questions it carries. A batch
+ * lists every question in `questions` (in the gateway's order) and mirrors the
+ * first one into `prompt`/`choices` so a renderer that predates batches still
+ * shows something; a single question leaves `questions` absent.
+ */
 const QuestionBlock = z.object({
   kind: z.literal("question"),
   prompt: z.string(),
   choices: z.array(z.string()),
+  multi_select: z.boolean().optional(),
+  questions: z.array(QuestionEntry).optional(),
   request_id: z.string().nullish(),
   expires_at: Iso.nullish(),
   payload: z.unknown().optional(),
@@ -500,6 +571,104 @@ const ProcessEventBlock = z.object({
 });
 export type ProcessEventBlock = z.infer<typeof ProcessEventBlock>;
 
+/** Upstream's subagent lifecycle (`SubagentStatus`), plus two states hermetic names. */
+export const SubagentStatus = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "error",
+  "timeout",
+  "interrupted",
+  /** A background delegation's handle, read from history: accepted, result not in this row. */
+  "dispatched",
+  /**
+   * No longer observable: the child left the gateway's live roster without a
+   * `complete` this laptop saw, or completed with a status this build does
+   * not recognise. Results arrive with the next turn; never read as success.
+   */
+  "unobserved",
+]);
+export type SubagentStatus = z.infer<typeof SubagentStatus>;
+
+/** What a head colours by: the raw `status` folded once, in core. */
+export const SubagentVerdict = z.enum(["running", "done", "failed", "stopped", "unknown"]);
+export type SubagentVerdict = z.infer<typeof SubagentVerdict>;
+
+/** The most tool rows a subagent block keeps; `tool_count` carries the real total. */
+export const SUBAGENT_TOOLS_MAX = 24;
+
+const SubagentToolRow = z.object({
+  name: z.string(),
+  preview: z.string(),
+  is_error: z.boolean().optional(),
+});
+
+/**
+ * One delegated child (`delegate_task`), as one whole block.
+ *
+ * Every change re-emits the whole block under the same `subagent_id`, so a
+ * head's replace-by-key merge (`subagent:<subagent_id>`) is all the reducer it
+ * needs. `status` is upstream's value kept verbatim; `verdict` is the fold a
+ * head colours by (`timeout`/`error` are failures, an unrecognised status is
+ * `unknown` and never success). `tools` holds the last `SUBAGENT_TOOLS_MAX`
+ * calls; `tool_count` is the wire's own count, not the cap. `result` is only
+ * ever filled from history (`delegate_task`'s result envelope): the live wire
+ * does not carry cost or a classified failure reason. `output_tail` is the
+ * child's last tool outputs as its `complete` event reported them.
+ *
+ * `origin` says where the row came from: the live event stream, a roster
+ * re-read after a reconnect (`replay`), or a persisted tool result
+ * (`history`, with a synthetic `hist:<tool_id>:<task_index>` id when the
+ * envelope names none). `tool_id` is the parent `delegate_task` tool block,
+ * when known. `depth` is upstream's, zero-based: 0 is a child of the turn's
+ * own agent, 1 a child of that child.
+ */
+const SubagentBlock = z.object({
+  kind: z.literal("subagent"),
+  subagent_id: z.string().min(1),
+  delegation_id: z.string().optional(),
+  parent_id: z.string().optional(),
+  child_session_id: z.string().optional(),
+  depth: z.number().int().nonnegative(),
+  task_index: z.number().int().nonnegative(),
+  task_count: z.number().int().positive(),
+  goal: z.string(),
+  model: z.string().optional(),
+  status: SubagentStatus,
+  verdict: SubagentVerdict,
+  started_at: Iso.optional(),
+  duration_ms: z.number().int().nonnegative().optional(),
+  summary: z.string().optional(),
+  tool_count: z.number().int().nonnegative().optional(),
+  tools: z.array(SubagentToolRow),
+  progress: z.string().optional(),
+  thinking: z.string().optional(),
+  files_read: z.array(z.string()).optional(),
+  files_written: z.array(z.string()).optional(),
+  output_tail: z.array(SubagentToolRow).optional(),
+  usage: z
+    .object({
+      input_tokens: z.number().int().nonnegative().optional(),
+      output_tokens: z.number().int().nonnegative().optional(),
+      reasoning_tokens: z.number().int().nonnegative().optional(),
+      api_calls: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  result: z
+    .object({
+      cost_usd: z.number().nonnegative().optional(),
+      failure_reason: z.string().optional(),
+      exit_reason: z.string().optional(),
+      truncated: z.boolean().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
+  origin: z.enum(["live", "replay", "history"]),
+  tool_id: z.string().optional(),
+});
+export type SubagentBlock = z.infer<typeof SubagentBlock>;
+
 export const ChatBlock = z.discriminatedUnion("kind", [
   TextBlock,
   ActivityBlock,
@@ -511,6 +680,7 @@ export const ChatBlock = z.discriminatedUnion("kind", [
   SourcesBlock,
   HermeticBlock,
   ProcessEventBlock,
+  SubagentBlock,
   UnknownBlock,
 ]);
 export type ChatBlock = z.infer<typeof ChatBlock>;
@@ -526,6 +696,7 @@ export const CHAT_BLOCK_KINDS = [
   "sources",
   "hermetic",
   "process_event",
+  "subagent",
   "unknown",
 ] as const;
 
@@ -552,6 +723,38 @@ export const ChatUsage = z.object({
 });
 export type ChatUsage = z.infer<typeof ChatUsage>;
 
+/**
+ * Upstream's classified failure (`agent/error_surface.py` `_surface`), carried
+ * on `message.complete.error_surface` and on a persisted failed turn. Advisory:
+ * a head offers recovery actions from it, never decides correctness by it.
+ * `resets_at` is epoch seconds, as upstream sends it.
+ */
+export const ChatErrorSurface = z.object({
+  layer: z.string(),
+  code: z.string(),
+  retryable: z.boolean(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  auth_kind: z.string().optional(),
+  /** The provider's display name, on an auth failure (`error_surface.py`). */
+  provider_label: z.string().optional(),
+  resets_at: z.number().optional(),
+  message: z.string().optional(),
+});
+export type ChatErrorSurface = z.infer<typeof ChatErrorSurface>;
+
+/**
+ * A failed turn, live or re-read: hermetic's error `code` and the message, plus
+ * upstream's surface when the box classified the failure. The one shape a head
+ * renders a failure card from, whichever path it arrived by.
+ */
+export const ChatFailure = z.object({
+  code: z.string().min(1),
+  message: z.string(),
+  surface: ChatErrorSurface.optional(),
+});
+export type ChatFailure = z.infer<typeof ChatFailure>;
+
 export const ChatMessage = z.object({
   id: z.string().min(1),
   session: z.string().min(1),
@@ -561,7 +764,10 @@ export const ChatMessage = z.object({
   at: Iso,
   blocks: z.array(ChatBlock),
   usage: ChatUsage.nullish(),
+  /** The failure as text, kept for older readers; `failure` is the structured form. */
   error: z.string().nullish(),
+  /** Set beside `error` when the row is a failed turn. */
+  failure: ChatFailure.nullish(),
   /** The turn stopped before it finished: aborted, timed out, lost the socket. */
   incomplete: z.boolean().nullish(),
   /**
@@ -651,6 +857,13 @@ const ErrorFrame = z.object({
   type: z.literal("error"),
   code: z.string().min(1),
   message: z.string(),
+  /**
+   * The same failure as `ChatMessage.failure`, with upstream's surface when the
+   * box sent one. The Hermes adapter always fills it; optional because an
+   * error minted before the turn reached the box (or by an older producer)
+   * may not, and a head then falls back to `code`/`message`.
+   */
+  failure: ChatFailure.optional(),
 });
 
 export const ChatFrame = z.discriminatedUnion("type", [BlockFrame, DeltaFrame, DoneFrame, ErrorFrame]);
@@ -740,10 +953,32 @@ const ObserveErrorEvent = z.object({
   message: z.string(),
 });
 
+/**
+ * A delegated child's whole block, changed (§9.2) — the one documented
+ * exception to an observation carrying only durable reads.
+ *
+ * A background `delegate_task` ends the parent turn at once and its children
+ * keep running, so their progress has no turn left to ride on, and nothing
+ * durable records it until the results turn lands. This carries the same
+ * `SubagentBlock` the turn would have emitted. Routing: `session` is the
+ * observed conversation (as on `message`); a head finds the row it updates by
+ * the block's merge key `subagent:<subagent_id>` across every segment of that
+ * conversation, and appends it to the turn holding `block.tool_id`'s tool
+ * block (else the latest turn) when no row has that key yet.
+ */
+const ObserveSubagentEvent = z.object({
+  type: z.literal("subagent"),
+  instance: z.string().min(1),
+  bot: z.string().min(1),
+  session: z.string().min(1).nullable(),
+  block: SubagentBlock,
+});
+
 export const ChatObserveEvent = z.discriminatedUnion("type", [
   ObserveSnapshotEvent,
   ObserveMessageEvent,
   ObserveReconnectEvent,
   ObserveErrorEvent,
+  ObserveSubagentEvent,
 ]);
 export type ChatObserveEvent = z.infer<typeof ChatObserveEvent>;

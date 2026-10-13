@@ -175,6 +175,13 @@ export interface FlowHarnessOptions {
    * advance (`app/test/terminal/fake-timers.ts`).
    */
   terminalTimers?: Timers;
+  /**
+   * The fixture chat's pacing (`chatDelayMs`): milliseconds between a turn's
+   * frames, and the unit a delegated child's steps are paced in. Zero (the
+   * default) runs a turn without a timer; a flow that needs a turn or a
+   * subagent still running when it acts slows it down.
+   */
+  chatDelayMs?: number;
 }
 
 /**
@@ -197,7 +204,10 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
    * `reopen` would fabricate a fresh world, and a flow asserting continuity
    * across a switch would be asserting against a different one.
    */
-  const fixtureOptions: FixtureOptions = { account: createFixtureAccount() };
+  const fixtureOptions: FixtureOptions = {
+    account: createFixtureAccount(),
+    ...(options.chatDelayMs === undefined ? {} : { chatDelayMs: options.chatDelayMs }),
+  };
   const hermetic: Hermetic = await openHermetic({
     fixture: true,
     fixtureOptions,

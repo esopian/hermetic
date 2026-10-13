@@ -228,15 +228,18 @@ export function useSendQueue({
     };
   }, [selection, park]);
 
-  /** A send the operator asked for un-parks the queue behind it. */
+  /**
+   * A send the operator asked for un-parks the queue behind it. Answers whether
+   * a turn started, as the store's own `send` does.
+   */
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       if (selection) {
         const key = queueKeyOf(selection);
         unpark(key);
         if (dispatched.current?.key === key) dispatched.current = null;
       }
-      send(text);
+      return send(text);
     },
     [selection, send, unpark],
   );

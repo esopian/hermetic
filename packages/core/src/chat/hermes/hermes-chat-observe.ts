@@ -27,31 +27,75 @@
  * `connect` opens a socket and scrapes a session token. It does not call
  * `session.create`, `session.resume` or `prompt.submit`, so it allocates no
  * session, occupies none of the gateway's ~3 warm backend slots and starts no
- * work. Nothing in this file sends a JSON-RPC request at all — the only writes
- * on this socket are the ones the transport makes on its own behalf.
+ * work. Nothing in this file sends a JSON-RPC request on that socket — the
+ * only writes on it are the ones the transport makes on its own behalf.
+ *
+ * ## The one exception: delegated children (§9.2)
+ *
+ * A background `delegate_task` ends the parent turn at once while its children
+ * keep running, and nothing durable records their progress until the results
+ * turn lands, so their `subagent.*` events are the one payload this stream
+ * does not discard. Each goes through the session's ledger (shared with the
+ * turn, `hermes-chat-subagent-ledgers.ts`) and rides its hint as the child's
+ * whole block, addressed to the durable session it belongs to. Only for a
+ * session a turn in this process registered under this bot and this watch's
+ * conversation: an event names a runtime session and nothing else, and a
+ * block shown in another conversation would be worse than none.
+ *
+ * Opening the stream also reconciles those ledgers against the gateway's live
+ * roster (`reconcileSubagents`, on a socket of its own), because a reopened
+ * stream is exactly the moment a child may have finished unheard.
  */
 import type { BoxAddress, ObserveOptions } from "./hermes-chat-types.ts";
 import type { ChatObserveHint } from "../chat-observe.ts";
 import type { Rpc } from "./hermes-chat-rpc.ts";
-import { str } from "./hermes-chat-wire.ts";
+import { isSubagentEvent } from "./hermes-chat-subagent.ts";
+import { observedSubagent, type SubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
+import { reconcileSubagents } from "./hermes-chat-resume.ts";
+import { num, rec, str } from "./hermes-chat-wire.ts";
 
 /** What `createChatObserve` needs, and nothing more. */
 export interface ChatObserveAdapterDeps {
   /** An open JSON-RPC socket. The same one every other module reaches a box on. */
   connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
+  /** The client's per-session subagent ledgers; absent relays hints only. */
+  subagents?: SubagentLedgers | undefined;
 }
 
 export function createChatObserve(deps: ChatObserveAdapterDeps) {
   async function* observe(
     box: BoxAddress,
-    _bot: string,
+    bot: string,
     opts: ObserveOptions = {},
   ): AsyncIterable<ChatObserveHint> {
     const rpc = await deps.connect(box, opts.signal);
+    const ledgers = deps.subagents;
+    const watch = { box, bot, session: opts.session, sessions: opts.sessions };
     try {
+      if (ledgers) {
+        const changed = await reconcileSubagents(
+          { connect: deps.connect, ledgers },
+          watch,
+          opts.signal,
+        );
+        for (const { stored, block } of changed) yield { session: stored, subagent: block };
+      }
       for await (const event of rpc.events) {
         if (opts.signal?.aborted) return;
         const session = str(event.session_id);
+        const type = str(event.type);
+        if (ledgers && session && type && isSubagentEvent(type)) {
+          const child = observedSubagent(ledgers, watch, {
+            runtime: session,
+            type,
+            payload: rec(event.payload) ?? {},
+            seq: num(event.seq) ?? 0,
+          });
+          if (child) {
+            yield { session: child.stored, subagent: child.block };
+            continue;
+          }
+        }
         if (session !== null && !concerns(session, opts)) continue;
         yield { session };
       }

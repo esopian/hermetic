@@ -322,6 +322,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         {
           kind: "approval",
           tool: "bash",
+          choices: ["once", "session", "always", "deny"],
           summary: "Run `aws ec2 modify-volume` against vol-fixture00000000012",
           detail: md(
             "aws ec2 modify-volume \\",
@@ -402,6 +403,30 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           mime: "image/png",
           bytes: 421_776,
           href: "/api/chat/attachments/fixture/queue-depth.png",
+        },
+        // A delegated child as history re-reads it (`settledDelegation`), so
+        // the catalogue carries every block kind. Live subagent scripts are
+        // the fixture's own triggers, not this canned row.
+        {
+          kind: "subagent",
+          subagent_id: "hist:tl-fixture-0005:0",
+          depth: 0,
+          task_index: 0,
+          task_count: 1,
+          goal: "Summarise the granite volume's queue depth for the last hour",
+          model: "claude-sonnet-5",
+          status: "completed",
+          verdict: "done",
+          duration_ms: 41_200,
+          summary: "Queue depth peaked at 212 at 09:14 and has drained to 3.",
+          tool_count: 2,
+          tools: [
+            { name: "terminal", preview: "aws cloudwatch get-metric-data --metric QueueDepth" },
+            { name: "read_file", preview: "/tmp/queue-depth.json" },
+          ],
+          usage: { input_tokens: 8_120, output_tokens: 412, api_calls: 3 },
+          result: { exit_reason: "completed", truncated: false, cost_usd: 0.0043 },
+          origin: "history",
         },
       ],
       usage: storedUsage(23980, 344, 0.0161, "claude-sonnet-5"),

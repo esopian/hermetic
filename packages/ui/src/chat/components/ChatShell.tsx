@@ -10,7 +10,7 @@ import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { composerState, threadState } from "../chat-logic.ts";
 import { botLabel } from "../chat-presentation.ts";
-import { hasOpenOverlay, keyboardOwned } from "../../lib/focus.ts";
+import { hasOpenOverlay, keyboardOwned, ownsEscape } from "../../lib/focus.ts";
 import { ChatView } from "./ChatView.tsx";
 import { QuickJump } from "./QuickJump.tsx";
 
@@ -193,7 +193,8 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
       // is deliberately a no-op; the dock's own — button collapses it.
       if (e.key === "Escape") {
         const onChat = isChatHash(hash) || (dock && !collapsed);
-        if (!onChat) return;
+        // An element that handles Escape itself keeps it (`ownsEscape`).
+        if (!onChat || ownsEscape(e.target)) return;
         // A visible conversation owns Escape. `preventDefault` is what stops
         // `App`'s own handler, which closes the topmost *view* and so took the
         // operator out of chat and back to Fleet on a key the composer tells

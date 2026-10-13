@@ -1,32 +1,27 @@
-import { RequestActions } from "../BotResponses.tsx";
 /**
  * `question` — the agent asks you something.
  *
- * Choices, not free text, and the distinction is the block's whole reason for
- * existing: a bot that needs a decision from an unattended operator gets a
- * decision it can act on, not a sentence it has to parse. The turn is paused
- * while this is on screen, which the head says.
- *
- * Like the approval card, the choices are drawn and inert. Answering one is
- * `chat.respond` and lands in Phase 10; an enabled button that silently did
- * nothing would be worse than a disabled one that says why.
+ * One card per clarify request, however many questions it carries: the
+ * gateway holds the turn until every question has an answer, so a batch is
+ * answered as one form and confirmed once (`QuestionCard`). The card draws its
+ * own head, because "turn paused" is true only while the form can still answer
+ * the request. Without a way to respond from here (no provider, or a request
+ * with no id) the questions and their choices are drawn disabled, with a note
+ * saying where to answer; a question with no id whose answers were recorded is
+ * a clarify read back from history, and reads as settled.
  */
-import { RedactedText } from "../RedactedText.tsx";
 import type { ChatBlockOf } from "../../../api/index.ts";
+import { QuestionCard } from "../BotResponses.tsx";
+import type { ClosedRequest } from "../../chat-requests.ts";
 
-export function QuestionBlock({ block }: { block: ChatBlockOf<"question"> }) {
-  return (
-    <div className="ch-card acc">
-      <div className="ch-card-head">
-        <span>question</span>
-        <span className="right">turn paused</span>
-      </div>
-      <div className="ch-card-body">
-        <p>
-          <RedactedText text={block.prompt} />
-        </p>
-        <RequestActions block={block} />
-      </div>
-    </div>
-  );
+export function QuestionBlock({
+  block,
+  now,
+  closed,
+}: {
+  block: ChatBlockOf<"question">;
+  now?: number;
+  closed?: ClosedRequest;
+}) {
+  return <QuestionCard block={block} now={now} closed={closed} />;
 }
