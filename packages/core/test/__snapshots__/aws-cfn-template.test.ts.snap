@@ -543,6 +543,21 @@ exports[`the foundation template snapshot 1`] = `
                   ]
                 },
                 {
+                  "Sid": "FleetList",
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:Scan"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "AgentsTable",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
                   "Sid": "FleetConfigPrefix",
                   "Effect": "Allow",
                   "Action": [

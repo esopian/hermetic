@@ -70,6 +70,8 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   SG_INBOUND_RULE: 9,
   /** A precondition of the environment (§4.8): the account's directory table. */
   DIRECTORY_UNAVAILABLE: 9,
+  /** hermeticd's fleet view (§9.4): a foundation precondition, like the line above. */
+  FLEET_LIST_UNAVAILABLE: 9,
   SECRETS_DISABLED: 9,
   /** A precondition of the environment, like the two above it. */
   TAILSCALE_UNAVAILABLE: 9,

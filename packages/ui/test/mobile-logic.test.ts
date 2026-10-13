@@ -1,185 +1,77 @@
 /**
- * Settings › Mobile's pure rules (`src/logic/mobile-logic.ts`): the address
- * parse, the bridge feed's frames, and the strings the page formats.
+ * Settings › Mobile's pure rules (`src/logic/mobile-logic.ts`): the pairing
+ * link's QR and the sentences the page says about it.
  */
 import { describe, expect, test } from "bun:test";
-import { MOBILE_PROTOCOL } from "@hermetic/core";
+import { encodeMobileLink } from "@hermetic/core/shared";
 import {
-  DEFAULT_MOBILE_PORT,
-  addressDirty,
-  describeFeedEvent,
-  draftOf,
-  fmtCountdown,
-  fmtHostPort,
-  fmtStamp,
-  formatPairCode,
-  isWildcardHost,
-  mobileFeedEvent,
-  nextConnected,
-  parseAddress,
-  platformLabel,
+  agentsInLinkLine,
+  agentsLeftOutNote,
+  fleetLabel,
+  pairHelp,
+  pairQrSvg,
 } from "../src/logic/mobile-logic.ts";
 
-const STATUS = {
-  host: "127.0.0.1",
-  port: 7877,
-  url: "http://127.0.0.1:7877",
-  started_at: "2026-10-13T10:00:00.000Z",
-  connected: 1,
-  app: "desktop" as const,
-};
+const LINK = encodeMobileLink({
+  fleet_id: "fxtr0001",
+  alias: "main",
+  account_id: "123456789012",
+  region: "us-east-1",
+  tailnet: "tail1234.ts.net",
+  agents: [{ name: "atlas" }, { name: "corvid", host: "corvid-2.tail1234.ts.net" }],
+});
 
-describe("the address form", () => {
-  test("the default port is core's", () => {
-    expect(DEFAULT_MOBILE_PORT).toBe(MOBILE_PROTOCOL.DEFAULT_PORT);
+describe("pairQrSvg", () => {
+  test("draws a link as an SVG of modules, carrying no character of the link", () => {
+    const svg = pairQrSvg(LINK);
+    expect(svg).not.toBeNull();
+    expect(svg?.startsWith("<svg")).toBe(true);
+    expect(svg).toContain("<path");
+    expect(svg).not.toContain("hermetic://");
+    expect(svg).not.toContain("fxtr0001");
   });
 
-  test("empty fields clear the overrides", () => {
-    expect(parseAddress({ host: " ", port: "" })).toEqual({
-      ok: true,
-      patch: { host: null, port: null },
-    });
-  });
-
-  test("a host and a port are written trimmed and typed", () => {
-    expect(parseAddress({ host: " 100.64.0.9 ", port: " 8123 " })).toEqual({
-      ok: true,
-      patch: { host: "100.64.0.9", port: 8123 },
-    });
-  });
-
-  test("a URL, a bad port and port zero are refused with a sentence", () => {
-    for (const draft of [
-      { host: "http://laptop", port: "" },
-      { host: "", port: "99999" },
-      { host: "", port: "0" },
-      { host: "", port: "80.5" },
-      { host: "", port: "-1" },
-    ]) {
-      const parsed = parseAddress(draft);
-      expect(parsed.ok).toBe(false);
-      if (!parsed.ok) expect(parsed.error.length).toBeGreaterThan(0);
-    }
-  });
-
-  test("dirty compares against what is saved, ignoring surrounding spaces", () => {
-    const saved = { enabled: true, host: null, port: 9000 };
-    expect(draftOf(saved)).toEqual({ host: "", port: "9000" });
-    expect(addressDirty(saved, { host: "", port: " 9000" })).toBe(false);
-    expect(addressDirty(saved, { host: "0.0.0.0", port: "9000" })).toBe(true);
-    expect(addressDirty(null, { host: "", port: "" })).toBe(false);
-  });
-
-  test("wildcard hosts are the IPv4 and IPv6 any-addresses", () => {
-    expect(isWildcardHost("0.0.0.0")).toBe(true);
-    expect(isWildcardHost("::")).toBe(true);
-    expect(isWildcardHost("[::]")).toBe(true);
-    expect(isWildcardHost("100.64.0.9")).toBe(false);
-    expect(isWildcardHost(null)).toBe(false);
+  test("a link too long for any QR draws nothing rather than throwing", () => {
+    expect(pairQrSvg("x".repeat(10_000))).toBeNull();
   });
 });
 
-describe("the feed", () => {
-  test("status frames, with and without a bridge", () => {
-    expect(mobileFeedEvent({ event: "status", data: STATUS })).toEqual({
-      kind: "status",
-      status: STATUS,
-    });
-    expect(mobileFeedEvent({ event: "status", data: null })).toEqual({ kind: "status", status: null });
-    expect(mobileFeedEvent({ event: "status", data: { url: 1 } })).toBeNull();
+describe("agentsInLinkLine", () => {
+  test("counts what the link names against the fleet", () => {
+    expect(agentsInLinkLine(11, 11)).toBe("11 of 11 agents in the code");
+    expect(agentsInLinkLine(60, 75)).toBe("60 of 75 agents in the code");
+    expect(agentsInLinkLine(0, 0)).toBe("0 of 0 agents in the code");
   });
 
-  test("paired and device frames carry the core event's fields", () => {
-    expect(
-      mobileFeedEvent({ event: "paired", data: { type: "paired", device_id: "d1", name: "Pixel" } }),
-    ).toEqual({ kind: "paired", device_id: "d1", name: "Pixel" });
-    expect(
-      mobileFeedEvent({
-        event: "device",
-        data: { type: "device", device_id: "d1", action: "connected" },
-      }),
-    ).toEqual({ kind: "device", device_id: "d1", action: "connected" });
+  test("one agent is singular", () => {
+    expect(agentsInLinkLine(1, 1)).toBe("1 of 1 agent in the code");
+  });
+});
+
+describe("agentsLeftOutNote", () => {
+  test("nothing to say when the link names every agent", () => {
+    expect(agentsLeftOutNote(11, 11)).toBeNull();
+    expect(agentsLeftOutNote(0, 0)).toBeNull();
   });
 
-  test("frames the page has no use for read as null", () => {
-    expect(
-      mobileFeedEvent({ event: "device", data: { device_id: "d1", action: "exploded" } }),
-    ).toBeNull();
-    expect(mobileFeedEvent({ event: "listening", data: { device_id: "d1" } })).toBeNull();
-    expect(mobileFeedEvent({ event: "paired", data: "d1" })).toBeNull();
-    expect(mobileFeedEvent({ event: "error", data: null })).toBeNull();
-  });
-
-  test("an error frame says why the bridge is not serving", () => {
-    expect(
-      mobileFeedEvent({
-        event: "error",
-        data: { code: "EADDRINUSE", message: "the mobile bridge could not start" },
-      }),
-    ).toEqual({ kind: "error", code: "EADDRINUSE", message: "the mobile bridge could not start" });
-    // Untyped fields degrade to something sayable rather than dropping the frame.
-    expect(mobileFeedEvent({ event: "error", data: { code: 7 } })).toEqual({
-      kind: "error",
-      code: "INTERNAL",
-      message: "INTERNAL",
-    });
-    const event = { kind: "error", code: "X", message: "m" } as const;
-    expect(describeFeedEvent(event, (id) => id)).toBe("start failed");
-    expect(nextConnected(new Set(["a"]), event)).toEqual(new Set(["a"]));
-  });
-
-  test("connections are learned from device events and cleared by a stop", () => {
-    let connected = nextConnected(new Set(), { kind: "device", device_id: "a", action: "connected" });
-    connected = nextConnected(connected, { kind: "device", device_id: "b", action: "connected" });
-    expect([...connected].sort()).toEqual(["a", "b"]);
-    connected = nextConnected(connected, { kind: "device", device_id: "a", action: "revoked" });
-    expect([...connected]).toEqual(["b"]);
-    connected = nextConnected(connected, { kind: "status", status: STATUS });
-    expect([...connected]).toEqual(["b"]);
-    expect(nextConnected(connected, { kind: "status", status: null }).size).toBe(0);
-  });
-
-  test("the last-event line names the phone", () => {
-    const nameOf = (id: string) => (id === "d1" ? "Pixel" : id);
-    expect(describeFeedEvent({ kind: "paired", device_id: "d1", name: "Pixel" }, nameOf)).toBe(
-      "paired Pixel",
+  test("says how many the phone reads from the fleet instead", () => {
+    expect(agentsLeftOutNote(60, 75)).toBe(
+      "The phone reads the other 15 from the fleet once it is on the tailnet.",
     );
-    expect(describeFeedEvent({ kind: "device", device_id: "d1", action: "disconnected" }, nameOf)).toBe(
-      "Pixel disconnected",
+  });
+});
+
+describe("fleetLabel", () => {
+  test("the alias when there is one, else the fleet id", () => {
+    expect(fleetLabel({ fleet_id: "fxtr0001", alias: "main" })).toBe("main");
+    expect(fleetLabel({ fleet_id: "sg7k2m4p", alias: null })).toBe("sg7k2m4p");
+  });
+});
+
+describe("pairHelp", () => {
+  test("names the tailnet the phone must join", () => {
+    expect(pairHelp("tail1234.ts.net")).toBe(
+      "Install the Hermetic app and Tailscale on the phone, sign Tailscale into tail1234.ts.net, then scan this code.",
     );
-    expect(describeFeedEvent({ kind: "status", status: STATUS }, nameOf)).toBeNull();
-    expect(describeFeedEvent({ kind: "status", status: null }, nameOf)).toBe("bridge stopped");
   });
-});
-
-describe("formatting", () => {
-  test("pair codes read in two groups; anything else is left alone", () => {
-    expect(formatPairCode("ABCD2345")).toBe("ABCD-2345");
-    expect(formatPairCode("ABC")).toBe("ABC");
-  });
-
-  test("countdowns round up and stop at zero", () => {
-    expect(fmtCountdown(299_001)).toBe("5:00");
-    expect(fmtCountdown(65_000)).toBe("1:05");
-    expect(fmtCountdown(-3_000)).toBe("0:00");
-  });
-
-  test("stamps are en-US and never throw on a bad value", () => {
-    expect(fmtStamp(null)).toBe("—");
-    expect(fmtStamp("not a date")).toBe("—");
-    expect(fmtStamp("2026-10-13T10:00:00.000Z")).toMatch(/^Oct 1[34]/);
-  });
-
-  test("platforms have their proper names", () => {
-    expect(platformLabel("ios")).toBe("iOS");
-    expect(platformLabel("android")).toBe("Android");
-    expect(platformLabel("other")).toBe("Other");
-  });
-});
-
-test("fmtHostPort shows where the bridge is without a scheme, bracketing IPv6", () => {
-  expect(fmtHostPort("100.64.0.7", 7877)).toBe("100.64.0.7:7877");
-  expect(fmtHostPort("laptop.tail1234.ts.net", 8080)).toBe("laptop.tail1234.ts.net:8080");
-  expect(fmtHostPort("fd7a:115c:a1e0::1", 7877)).toBe("[fd7a:115c:a1e0::1]:7877");
-  expect(fmtHostPort("[::1]", 7877)).toBe("[::1]:7877");
 });

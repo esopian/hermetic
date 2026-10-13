@@ -247,7 +247,7 @@ describe("SettingsShell", () => {
       diagnostics: "st-ro",
       presets: "st-laptop",
       chat: "st-laptop",
-      mobile: "st-laptop",
+      mobile: "st-ro",
       notifications: "st-laptop",
       runs: "st-laptop",
       danger: "st-fleet",

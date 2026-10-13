@@ -1,17 +1,14 @@
 /**
- * Settings › Mobile end to end: the real page against the real `dispatch` over
- * the fixture backend, with the bridge hosted on loopback port 0 where a flow
- * needs one (`flowHarness({ mobileHost: true })`).
- *
- * The phone is played by a plain `fetch` to the bridge's own pair route, the
- * request the companion app makes after scanning the QR, so a device appearing
- * in the table is the bridge's `paired` event reaching the page through
- * `mobile.serve` — not a test calling the store behind its back.
+ * Settings › Mobile end to end: the real page against the real `bind` and
+ * `dispatch` over the fixture backend. `mobile.pair` is a read of the open
+ * fleet, so the code the page draws is the fixture fleet's own link — parsed
+ * back here with the same `parseMobileLink` the phone uses.
  */
-import { act, cleanup, render, screen, userEvent, waitFor, within } from "../dom.ts";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { cleanup, render, screen, userEvent, waitFor, within } from "../dom.ts";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { StrictMode, createElement } from "react";
-import { HermeticError, MOBILE_PROTOCOL, MOBILE_ROUTES, mobileBridgeHost } from "@hermetic/core";
+import { HermeticError } from "@hermetic/core";
+import { parseMobileLink } from "@hermetic/core/shared";
 import { dispatch } from "../../../app/src/handlers/dispatch.ts";
 import { MobileSection } from "../../src/components/settings/MobileSection.tsx";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
@@ -31,284 +28,152 @@ afterEach(async () => {
   gotoHash("");
 });
 
-function toggle(): HTMLInputElement {
-  return screen.getByRole<HTMLInputElement>("checkbox", { name: "Serve the mobile bridge" });
+interface PairAnswer {
+  link: string;
+  fleet: { fleet_id: string; alias: string | null; tailnet: string };
+  agents: { name: string }[];
+  agents_in_link: number;
 }
 
-function settingsCalls(h: FlowHarness): unknown[] {
-  return h.calls.filter((c) => c.name === "mobile.settings").map((c) => c.params);
+function pairCalls(h: FlowHarness): unknown[] {
+  return h.calls.filter((c) => c.name === "mobile.pair").map((c) => c.params);
 }
 
-/** Capture what `mobile.pair` answered, so the test knows the code the page shows. */
-function capturePairs(h: FlowHarness): { code: string; url: string }[] {
-  const seen: { code: string; url: string }[] = [];
-  h.intercept("mobile.pair", async (_params, passthrough) => {
-    const answer = (await passthrough()) as { code: string; url: string };
-    seen.push(answer);
-    return answer;
-  });
-  return seen;
+function linkField(): HTMLInputElement {
+  return screen.getByRole<HTMLInputElement>("textbox", { name: "Pairing link" });
 }
 
-/** What the companion app does with a scanned code. */
-async function phonePairs(bridgeUrl: string, code: string, device_name: string): Promise<Response> {
-  return await fetch(new URL(MOBILE_ROUTES.pair, bridgeUrl), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      [MOBILE_PROTOCOL.VERSION_HEADER]: String(MOBILE_PROTOCOL.PROTOCOL_VERSION),
-    },
-    body: JSON.stringify({ code, device_name, platform: "android" }),
-  });
-}
-
-test("serve, pair a phone, see it arrive, revoke it, stop", async () => {
-  harness = await flowHarness({ mobileHost: true });
-  const h = harness;
-  const pairs = capturePairs(h);
-  gotoHash("#settings/mobile");
-  mountPortal();
-  const user = userEvent.setup();
-
-  await waitFor(() => expect(toggle().disabled).toBe(false));
-  expect(toggle().checked).toBe(false);
-  expect(screen.getByText("No phones paired")).toBeDefined();
-
-  // On: the setting is written, the host starts the bridge, and the follow
-  // reports it listening.
-  await user.click(toggle());
-  await waitFor(() => expect(toggle().checked).toBe(true));
-  expect(settingsCalls(h)).toContainEqual({ enabled: true });
-  const status = h.ctx.mobile?.status() ?? null;
-  if (status === null) throw new Error("enabling did not start the hosted bridge");
-  await waitFor(() => expect(screen.getByText(`${status.host}:${status.port}`)).toBeDefined());
-  expect(screen.getByText("listening")).toBeDefined();
-
-  // Pair: a QR and the code, grouped for reading aloud.
-  await user.click(screen.getByRole("button", { name: "Pair a phone" }));
-  await waitFor(() => expect(pairs.length).toBe(1));
-  const issued = pairs[0];
-  if (issued === undefined) throw new Error("unreachable");
-  const shown = `${issued.code.slice(0, 4)}-${issued.code.slice(4)}`;
-  await waitFor(() => expect(screen.getByLabelText("Pairing code").textContent).toBe(shown));
-  const qr = screen.getByRole("img", { name: "Pairing QR code" });
-  expect(qr.querySelector("svg path")).not.toBeNull();
-  expect(screen.getByText(/^expires in \d+:\d\d$/)).toBeDefined();
-  expect(screen.getByText(/must be on the tailnet/)).toBeDefined();
-
-  // The phone spends the code: the panel closes and the phone is listed.
-  // In `act`: the bridge's `paired` event reaches the page while the phone's
-  // request is still in flight, and the page's state moves on it.
-  const answer = await act(async () => await phonePairs(status.url, issued.code, "FIXTURE Pixel"));
-  expect(answer.status).toBe(200);
-  await waitFor(() => expect(screen.getByText("Paired FIXTURE Pixel.")).toBeDefined());
-  expect(screen.queryByLabelText("Pairing code")).toBeNull();
-  const row = await waitFor(() => {
-    const cell = screen.getByText("FIXTURE Pixel", { selector: "b" });
-    const tr = cell.closest("tr");
-    if (tr === null) throw new Error("not in a row yet");
-    return tr;
-  });
-  expect(within(row).getByText("Android")).toBeDefined();
-  expect(within(row).getByText("on")).toBeDefined();
-  expect(screen.getByText(/paired FIXTURE Pixel ·/)).toBeDefined();
-
-  // Revoke, confirmed in place.
-  await user.click(screen.getByRole("button", { name: "Revoke FIXTURE Pixel" }));
-  const confirm = screen.getByRole("alertdialog", { name: "Revoke FIXTURE Pixel" });
-  await user.click(within(confirm).getByRole("button", { name: "Revoke phone" }));
-  await waitFor(() => expect(screen.getByText("No phones paired")).toBeDefined());
-  expect(screen.queryByRole("alertdialog")).toBeNull();
-  const held = (await dispatch(h.ctx, "mobile.devices", {})) as { devices: unknown[] };
-  expect(held.devices).toEqual([]);
-
-  // Off: the bridge stops and the page says so.
-  await user.click(toggle());
-  await waitFor(() => expect(toggle().checked).toBe(false));
-  expect(settingsCalls(h)).toContainEqual({ enabled: false });
-  expect(h.ctx.mobile?.status()).toBeNull();
-  await waitFor(() => expect(screen.getByText("off", { selector: "b" })).toBeDefined());
-});
-
-test("cancelling a revoke keeps the phone", async () => {
-  harness = await flowHarness({ mobileHost: true });
-  const h = harness;
-  await dispatch(h.ctx, "mobile.settings", { enabled: true });
-  await h.ctx.mobile?.sync();
-  const status = h.ctx.mobile?.status() ?? null;
-  if (status === null) throw new Error("the hosted bridge did not start");
-  const { code } = (await dispatch(h.ctx, "mobile.pair", {})) as { code: string };
-  expect((await phonePairs(status.url, code, "FIXTURE iPhone")).status).toBe(200);
-
-  gotoHash("#settings/mobile");
-  mountPortal();
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "Revoke FIXTURE iPhone" }));
-  const confirm = screen.getByRole("alertdialog", { name: "Revoke FIXTURE iPhone" });
-  await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
-  expect(screen.queryByRole("alertdialog")).toBeNull();
-  expect(screen.getByText("FIXTURE iPhone", { selector: "b" })).toBeDefined();
-  expect(h.calls.some((c) => c.name === "mobile.revoke")).toBe(false);
-});
-
-test("with no hosted bridge: enabling saves, pairing still issues a code, and the page says why it cannot follow", async () => {
+test("nothing is read until asked; then the QR, the link, the count and the fleet", async () => {
   harness = await flowHarness();
   const h = harness;
-  const pairs = capturePairs(h);
+  const expected = (await dispatch(h.ctx, "mobile.pair", {})) as PairAnswer;
+  const before = pairCalls(h).length;
   gotoHash("#settings/mobile");
   mountPortal();
   const user = userEvent.setup();
 
-  await waitFor(() => expect(toggle().disabled).toBe(false));
-  await user.click(toggle());
-  await waitFor(() => expect(toggle().checked).toBe(true));
-  expect(settingsCalls(h)).toContainEqual({ enabled: true });
-  expect(await dispatch(h.ctx, "mobile.settings", {})).toMatchObject({ enabled: true });
-  await waitFor(() => expect(screen.getByText(/live status unavailable/)).toBeDefined());
-  expect(screen.getByText("not serving")).toBeDefined();
+  // Opening the page reads nothing.
+  await screen.findByText(/nothing read yet/);
+  expect(screen.getByText("Read-only")).toBeDefined();
+  expect(pairCalls(h).length).toBe(before);
 
-  await user.click(screen.getByRole("button", { name: "Pair a phone" }));
-  await waitFor(() => expect(pairs.length).toBe(1));
-  expect(screen.getByRole("img", { name: "Pairing QR code" })).toBeDefined();
-  expect(screen.getByText(/The bridge is not running/)).toBeDefined();
+  await user.click(screen.getByRole("button", { name: "Show pairing code" }));
+  const qr = await screen.findByRole("img", { name: "Pairing QR code" });
+  expect(qr.querySelector("svg path")).not.toBeNull();
+  expect(pairCalls(h)).toEqual([{}]);
 
-  // A new code replaces the old one on screen.
-  await user.click(screen.getByRole("button", { name: "Generate new code" }));
-  await waitFor(() => expect(pairs.length).toBe(2));
-  const second = pairs[1]?.code ?? "";
+  // The link is the fleet's own, and the phone's parser reads all 11 agents back.
+  const link = linkField().value;
+  expect(link).toBe(expected.link);
+  expect(link.startsWith("hermetic://fleet?")).toBe(true);
+  expect(linkField().readOnly).toBe(true);
+  const parsed = parseMobileLink(link);
+  expect(parsed?.fleet_id).toBe("fxtr0001");
+  expect(parsed?.agents.length).toBe(11);
+
+  expect(screen.getByText("11 of 11 agents in the code")).toBeDefined();
+  expect(screen.queryByText(/reads the other/)).toBeNull();
+  // The facts: the page's own, not the env strip's or the rail's.
+  const page = qr.closest<HTMLElement>(".st-page");
+  if (page === null) throw new Error("the QR is not on the settings page");
+  const facts = within(page);
+  expect(facts.getByText("main", { selector: "b" })).toBeDefined();
+  expect(facts.getByText("fxtr0001", { selector: "b" })).toBeDefined();
+  const { tailnet } = expected.fleet;
+  expect(facts.getByText(tailnet, { selector: "b" })).toBeDefined();
+  expect(
+    screen.getByText(
+      `Install the Hermetic app and Tailscale on the phone, sign Tailscale into ${tailnet}, then scan this code.`,
+    ),
+  ).toBeDefined();
+  expect(
+    screen.getByText("The code carries no secret: the phone is trusted by its tailnet membership."),
+  ).toBeDefined();
+
+  // Copy puts the whole link on the clipboard and says so.
+  const write = spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  try {
+    await user.click(screen.getByRole("button", { name: "Copy link" }));
+    expect(write).toHaveBeenCalledWith(expected.link);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBeDefined());
+    expect(screen.getByRole("status").textContent).toBe("Copied the pairing link");
+    write.mockRejectedValue(new Error("Denied"));
+    await user.click(screen.getByRole("button", { name: "Copied" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Clipboard unavailable"),
+    );
+  } finally {
+    write.mockRestore();
+  }
+
+  // The primary reads again.
+  await user.click(screen.getByRole("button", { name: "Read again" }));
+  await waitFor(() => expect(pairCalls(h).length).toBe(2));
+  expect(linkField().value).toBe(expected.link);
+});
+
+test("a refusal shows core's code and message; a retry clears it; a failed re-read keeps the last code", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  h.intercept("mobile.pair", () => {
+    throw new HermeticError("FLEET_MISMATCH", "the _fleet item is missing");
+  });
+  gotoHash("#settings/mobile");
+  mountPortal();
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "Show pairing code" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toBe("FLEET_MISMATCH · the _fleet item is missing");
+  expect(screen.queryByRole("img", { name: "Pairing QR code" })).toBeNull();
+  expect(screen.queryByText(/nothing read yet/)).toBeNull();
+
+  h.intercept("mobile.pair", null);
+  await user.click(screen.getByRole("button", { name: "Show pairing code" }));
+  await screen.findByRole("img", { name: "Pairing QR code" });
+  expect(screen.queryByRole("alert")).toBeNull();
+  const shown = linkField().value;
+
+  h.intercept("mobile.pair", () => {
+    throw new HermeticError("ACCOUNT_MISMATCH", "these credentials are for another account");
+  });
+  await user.click(screen.getByRole("button", { name: "Read again" }));
   await waitFor(() =>
-    expect(screen.getByLabelText("Pairing code").textContent).toBe(
-      `${second.slice(0, 4)}-${second.slice(4)}`,
+    expect(screen.getByRole("alert").textContent).toBe(
+      "ACCOUNT_MISMATCH · these credentials are for another account",
     ),
   );
-  await user.click(screen.getByRole("button", { name: "Done" }));
-  expect(screen.queryByLabelText("Pairing code")).toBeNull();
+  expect(linkField().value).toBe(shown);
+  expect(screen.getByRole("img", { name: "Pairing QR code" })).toBeDefined();
 });
 
-test("the address form validates, warns on a wildcard host, and saves overrides", async () => {
+test("a link that names fewer agents than the fleet has says the phone reads the rest", async () => {
   harness = await flowHarness();
   const h = harness;
+  h.intercept("mobile.pair", async (_params, passthrough) => {
+    const answer = (await passthrough()) as PairAnswer;
+    return { ...answer, agents_in_link: answer.agents.length - 3 };
+  });
   gotoHash("#settings/mobile");
   mountPortal();
   const user = userEvent.setup();
 
-  const host = await screen.findByLabelText<HTMLInputElement>("Host");
-  const port = screen.getByLabelText<HTMLInputElement>("Port");
-  await waitFor(() => expect(host.disabled).toBe(false));
-
-  await user.type(host, "0.0.0.0");
-  expect(screen.getByText(/listens on every network this laptop joins/)).toBeDefined();
-  await user.type(port, "99999");
-  expect(screen.getByText(/Port must be a whole number/)).toBeDefined();
-  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save address" }).disabled).toBe(true);
-
-  await user.clear(host);
-  await user.type(host, "100.64.0.9");
-  await user.clear(port);
-  await user.type(port, "8123");
-  expect(screen.queryByText(/listens on every network/)).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Save address" }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Save address" })).toBeNull());
-  expect(settingsCalls(h)).toContainEqual({ host: "100.64.0.9", port: 8123 });
-  expect(await dispatch(h.ctx, "mobile.settings", {})).toEqual({
-    enabled: false,
-    host: "100.64.0.9",
-    port: 8123,
-  });
-
-  // Clearing both fields goes back to the defaults.
-  await user.clear(host);
-  await user.clear(port);
-  await user.click(screen.getByRole("button", { name: "Save address" }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Save address" })).toBeNull());
-  expect(settingsCalls(h)).toContainEqual({ host: null, port: null });
+  await user.click(await screen.findByRole("button", { name: "Show pairing code" }));
+  await screen.findByText("8 of 11 agents in the code");
+  expect(
+    screen.getByText("The phone reads the other 3 from the fleet once it is on the tailnet."),
+  ).toBeDefined();
 });
 
-test("a bridge that cannot start says why, until it serves again", async () => {
-  harness = await flowHarness({ mobileHost: true });
-  const h = harness;
-  const host = h.ctx.mobile;
-  if (host === undefined) throw new Error("the harness hosts a bridge");
-  gotoHash("#settings/mobile");
-  mountPortal();
-  const user = userEvent.setup();
-
-  await waitFor(() => expect(toggle().disabled).toBe(false));
-  await user.click(toggle());
-  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
-
-  // The next start fails, twice (the host retries once): the follow reports it.
-  const core = mobileBridgeHost(h.ctx.state.hermetic);
-  const start = core.start;
-  core.start = async () => {
-    throw new HermeticError("CONFLICT", "port 8787 is taken");
-  };
-  try {
-    await act(async () => {
-      await host.stop("test");
-      await host.sync();
-    });
-    await waitFor(() =>
-      expect(screen.getByText("Bridge failed to start: port 8787 is taken (CONFLICT)")).toBeDefined(),
-    );
-    expect(screen.getByText("not serving")).toBeDefined();
-  } finally {
-    core.start = start;
-  }
-
-  // Serving again clears it.
-  await act(async () => {
-    await host.sync();
-  });
-  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
-  expect(screen.queryByText(/Bridge failed to start/)).toBeNull();
-  await act(async () => {
-    await host.stop("test");
-  });
-}, 20_000);
-
-test("under StrictMode, as the app mounts it, the page still loads its settings and phones", async () => {
+test("under StrictMode, as the app mounts it, the answer still lands", async () => {
   // The app's entry wraps the page in StrictMode, whose mount, cleanup, mount
-  // once left the page's liveness flag false and every answer dropped.
+  // once left a liveness flag false and every answer dropped.
   harness = await flowHarness();
   render(createElement(StrictMode, null, createElement(MobileSection)));
-
-  await waitFor(() => expect(toggle().disabled).toBe(false));
-  await waitFor(() => expect(screen.getByText("No phones paired")).toBeDefined());
-  expect(screen.queryByText("reading paired phones…")).toBeNull();
-});
-
-test("a follow refused while the bridge could not start is asked again once a new address saves", async () => {
-  harness = await flowHarness({ mobileHost: true });
-  const h = harness;
-  const host = h.ctx.mobile;
-  if (host === undefined) throw new Error("the harness hosts a bridge");
-  const core = mobileBridgeHost(h.ctx.state.hermetic);
-  const start = core.start;
-  core.start = async () => {
-    throw new HermeticError("CONFLICT", "port 8787 is taken");
-  };
-  gotoHash("#settings/mobile");
-  mountPortal();
   const user = userEvent.setup();
 
-  try {
-    // On, but the bridge cannot start: the host refuses the follow.
-    await waitFor(() => expect(toggle().disabled).toBe(false));
-    await user.click(toggle());
-    await waitFor(() => expect(toggle().checked).toBe(true));
-    await waitFor(() => expect(screen.getByText(/live status unavailable/)).toBeDefined());
-  } finally {
-    core.start = start;
-  }
-
-  // A new address restarts the bridge, and the page follows it again.
-  const hostField = screen.getByLabelText<HTMLInputElement>("Host");
-  await user.type(hostField, "127.0.0.1");
-  await user.click(screen.getByRole("button", { name: "Save address" }));
-  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
-  await waitFor(() => expect(screen.queryByText(/live status unavailable/)).toBeNull());
-  await act(async () => {
-    await host.stop("test");
-  });
-}, 20_000);
+  await user.click(screen.getByRole("button", { name: "Show pairing code" }));
+  await screen.findByRole("img", { name: "Pairing QR code" });
+  expect(screen.getByText("11 of 11 agents in the code")).toBeDefined();
+  expect(screen.queryByText("reading the fleet…")).toBeNull();
+});

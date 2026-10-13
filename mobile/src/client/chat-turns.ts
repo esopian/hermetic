@@ -7,7 +7,7 @@
  * it, a run belongs to one author, the merged row is named by its last source
  * row — are explained there. Pure TypeScript.
  */
-import type { ChatBlock, ChatMessage, ToolBlock } from "../protocol/types.ts";
+import type { ChatBlock, ChatMessage, ToolBlock } from "@hermetic/core/chat-client";
 import { dayDivider, type MessageRow, messageRows } from "./chat-logic.ts";
 
 export interface TurnRow<M extends ChatMessage = ChatMessage> extends MessageRow<M> {

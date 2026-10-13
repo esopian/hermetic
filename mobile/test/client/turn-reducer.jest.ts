@@ -6,10 +6,9 @@ import {
   freshFold,
   mergeBlock,
   nextTurnActivity,
-  TurnCursors,
   type TurnFold,
 } from "../../src/client/turn-reducer.ts";
-import type { ChatFrame } from "../../src/protocol/types.ts";
+import type { ChatFrame } from "@hermetic/core/chat-client";
 import {
   approval,
   block,
@@ -236,23 +235,5 @@ describe("foldFrame — a whole turn", () => {
     expect(nextTurnActivity("streaming", block(0, tool()))).toBe("thinking");
     expect(nextTurnActivity("streaming", block(0, approval()))).toBe("idle");
     expect(nextTurnActivity("idle", done(0))).toBe("idle");
-  });
-});
-
-describe("TurnCursors (bridge n)", () => {
-  test("accepts strictly increasing n per turn and drops replays", () => {
-    const c = new TurnCursors();
-    expect(c.accept("t", 1)).toBe(true);
-    expect(c.accept("t", 2)).toBe(true);
-    expect(c.accept("t", 2)).toBe(false);
-    expect(c.accept("t", 1)).toBe(false);
-    expect(c.accept("u", 1)).toBe(true);
-    expect(c.lastN("t")).toBe(2);
-    expect(c.entries()).toEqual([
-      { turn_id: "t", after: 2 },
-      { turn_id: "u", after: 1 },
-    ]);
-    c.forget("t");
-    expect(c.lastN("t")).toBe(0);
   });
 });

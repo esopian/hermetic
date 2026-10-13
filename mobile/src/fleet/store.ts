@@ -1,0 +1,410 @@
+/**
+ * The paired fleet: the pairing link, the live view from hermeticd's
+ * `GET /fleet`, and which agents this phone listens to. Not React:
+ * `FleetProvider.tsx` subscribes to it.
+ *
+ * What is persisted, and where (§9.4):
+ * - the link and the listening choice, in the keychain (`hermetic.fleet.v2`,
+ *   SecureStore). SecureStore values are capped near 2 KB and a link may be up
+ *   to 2,900 characters, so the record is split across numbered keys;
+ * - the last fleet view, as a JSON file in the document directory. It is a
+ *   cache of what any box will say again, not a secret.
+ *
+ * `refresh()` asks up to three listened boxes at once and takes the first
+ * answer. When none answers — no box reachable, or a foundation that does not
+ * grant the agent role its scan yet (`FLEET_LIST_UNAVAILABLE`) — the snapshot
+ * stays and the state says `stale`. The link's agent list is the floor: an
+ * agent the link names and `/fleet` does not is still listed (with no status),
+ * and where both name it the view wins.
+ */
+import type { MobileFleetAgent, MobileFleetView } from "@hermetic/core/schema";
+import { MobileFleetView as MobileFleetViewSchema } from "@hermetic/core/schema";
+import { reasonOf } from "../client/errors.ts";
+import { agentHost, type FleetHosts } from "../gateway/client.ts";
+import { type FetchLike, firstFleetView } from "../gateway/hermeticd.ts";
+import { type PairedLink, readPairingLink } from "./pairing.ts";
+
+/* ── persistence seams ──────────────────────────────────────────────────── */
+
+/** A string key-value store: SecureStore in the app, a Map in tests. */
+export interface KvStorage {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+/** One file's text: the fleet-view cache. */
+export interface TextFile {
+  read(): Promise<string | null>;
+  write(text: string): Promise<void>;
+  remove(): Promise<void>;
+}
+
+/** In-memory stand-ins, for tests and fixture mode. */
+export function memoryKv(seed: Record<string, string> = {}): KvStorage & { map: Map<string, string> } {
+  const map = new Map(Object.entries(seed));
+  return {
+    map,
+    get: async (key) => map.get(key) ?? null,
+    set: async (key, value) => {
+      map.set(key, value);
+    },
+    remove: async (key) => {
+      map.delete(key);
+    },
+  };
+}
+
+export function memoryFile(initial: string | null = null): TextFile & { text: () => string | null } {
+  let text = initial;
+  return {
+    text: () => text,
+    read: async () => text,
+    write: async (next) => {
+      text = next;
+    },
+    remove: async () => {
+      text = null;
+    },
+  };
+}
+
+export const FLEET_KEY_PREFIX = "hermetic.fleet.v2";
+/** Under SecureStore's ~2 KB value cap with room for multi-byte characters. */
+export const SECURE_CHUNK = 1_800;
+const MAX_CHUNKS = 8;
+
+/** Write `text` under `key`, split into `key.0`, `key.1`, … and a count at `key`. */
+export async function saveChunked(kv: KvStorage, key: string, text: string): Promise<void> {
+  const parts: string[] = [];
+  for (let i = 0; i < text.length; i += SECURE_CHUNK) parts.push(text.slice(i, i + SECURE_CHUNK));
+  if (parts.length > MAX_CHUNKS) throw new Error("the pairing record is too large to keep");
+  for (const [i, part] of parts.entries()) await kv.set(`${key}.${i}`, part);
+  for (let i = parts.length; i < MAX_CHUNKS; i++) await kv.remove(`${key}.${i}`);
+  await kv.set(key, String(parts.length));
+}
+
+export async function loadChunked(kv: KvStorage, key: string): Promise<string | null> {
+  const count = Number(await kv.get(key));
+  if (!Number.isInteger(count) || count < 1 || count > MAX_CHUNKS) return null;
+  let text = "";
+  for (let i = 0; i < count; i++) {
+    const part = await kv.get(`${key}.${i}`);
+    if (part === null) return null;
+    text += part;
+  }
+  return text;
+}
+
+export async function removeChunked(kv: KvStorage, key: string): Promise<void> {
+  await kv.remove(key);
+  for (let i = 0; i < MAX_CHUNKS; i++) await kv.remove(`${key}.${i}`);
+}
+
+/* ── state ──────────────────────────────────────────────────────────────── */
+
+export type Listening = ReadonlySet<string> | "all";
+
+export interface FleetState {
+  /** The pairing, or `null` before one (or after sign out). */
+  link: PairedLink | null;
+  /** The last `GET /fleet` answer, or `null` when no box has answered yet. */
+  view: MobileFleetView | null;
+  listening: Listening;
+  /** When the view was last refreshed from a box (ISO), else `null`. */
+  refreshed_at: string | null;
+  /** The last refresh failed: what is shown is the snapshot. */
+  stale: boolean;
+  refreshing: boolean;
+  /** Why the last refresh failed (`FLEET_LIST_UNAVAILABLE`, `HERMETICD_UNAVAILABLE`, …). */
+  error: { code: string; message: string } | null;
+}
+
+/** One agent as the phone lists it: the link's floor, with the view's facts when it has them. */
+export interface FleetAgent {
+  name: string;
+  /** MagicDNS name the phone dials. */
+  host: string;
+  status: MobileFleetAgent["status"] | null;
+  tailscale_ip: string | null;
+  version: string | null;
+  health: MobileFleetAgent["health"] | null;
+  /** Named by `/fleet` (not only by the link). */
+  live: boolean;
+}
+
+interface Persisted {
+  link: string;
+  /** `"all"`, or the agent names. */
+  listening: string[] | "all";
+  /** Still the pairing's default (every ready agent): the first view may narrow it. */
+  listening_default: boolean;
+}
+
+export interface FleetStoreDeps {
+  secure: KvStorage;
+  viewCache: TextFile;
+  fetch: FetchLike;
+  /** ISO-8601 now. */
+  now: () => string;
+  /** A tailnet besides `*.ts.net` this build trusts. */
+  operatorTailnet?: string | null;
+  /** Per-box `/fleet` timeout. */
+  timeoutMs?: number;
+}
+
+/** How many boxes one refresh asks at once. */
+export const REFRESH_FAN_OUT = 3;
+
+const EMPTY: FleetState = {
+  link: null,
+  view: null,
+  listening: new Set(),
+  refreshed_at: null,
+  stale: false,
+  refreshing: false,
+  error: null,
+};
+
+export class FleetStore {
+  private state: FleetState = EMPTY;
+  private listeningDefault = false;
+  private readonly listeners = new Set<() => void>();
+  private gen = 0;
+
+  constructor(private readonly deps: FleetStoreDeps) {}
+
+  getState(): FleetState {
+    return this.state;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** Restore the pairing and the cached view. `false` when there is no pairing. */
+  async load(): Promise<boolean> {
+    const raw = await loadChunked(this.deps.secure, FLEET_KEY_PREFIX).catch(() => null);
+    const stored = parsePersisted(raw);
+    const proposal = stored ? readPairingLink(stored.link, this.opts()) : null;
+    if (!stored || !proposal?.ok) {
+      this.set(EMPTY);
+      return false;
+    }
+    const link = proposal.link;
+    const view = await this.readCache(link.payload.fleet_id);
+    this.listeningDefault = stored.listening_default;
+    this.set({
+      ...EMPTY,
+      link,
+      view,
+      listening: stored.listening === "all" ? "all" : new Set(stored.listening),
+      refreshed_at: view?.read_at ?? null,
+    });
+    return true;
+  }
+
+  /**
+   * Keep a confirmed pairing, replacing any before it. Listening starts as
+   * every agent the link names (`mobile.pair` lists live agents only), and the
+   * first view narrows it to the `ready` ones unless the operator chose first.
+   */
+  async pair(link: PairedLink): Promise<void> {
+    this.gen += 1;
+    const replacing = this.state.link?.payload.fleet_id !== link.payload.fleet_id;
+    if (replacing) await this.deps.viewCache.remove().catch(() => {});
+    this.listeningDefault = true;
+    this.set({
+      ...EMPTY,
+      link,
+      listening: new Set(link.payload.agents.map((a) => a.name)),
+    });
+    await this.persist();
+  }
+
+  /** Forget the pairing, the cache and the listening choice. */
+  async signOut(): Promise<void> {
+    this.gen += 1;
+    this.listeningDefault = false;
+    this.set(EMPTY);
+    await removeChunked(this.deps.secure, FLEET_KEY_PREFIX).catch(() => {});
+    await this.deps.viewCache.remove().catch(() => {});
+  }
+
+  /** Ask up to three listened boxes for the fleet; the first answer wins. */
+  async refresh(): Promise<boolean> {
+    const link = this.state.link;
+    if (!link) return false;
+    const gen = ++this.gen;
+    this.set({ refreshing: true });
+    const hosts = this.refreshHosts();
+    try {
+      const { view } = await firstFleetView(this.deps.fetch, hosts, link.payload.fleet_id, {
+        ...(this.deps.timeoutMs !== undefined ? { timeoutMs: this.deps.timeoutMs } : {}),
+      });
+      if (gen !== this.gen) return false;
+      let listening = this.state.listening;
+      if (this.listeningDefault) {
+        listening = new Set(view.agents.filter((a) => a.status === "ready").map((a) => a.name));
+        this.listeningDefault = false;
+      }
+      this.set({
+        view,
+        listening,
+        refreshed_at: this.deps.now(),
+        stale: false,
+        refreshing: false,
+        error: null,
+      });
+      await this.deps.viewCache.write(JSON.stringify(view)).catch(() => {});
+      await this.persist();
+      return true;
+    } catch (error) {
+      if (gen !== this.gen) return false;
+      this.set({ stale: true, refreshing: false, error: reasonOf(error) });
+      return false;
+    }
+  }
+
+  /* ── reading ──────────────────────────────────────────────────────────── */
+
+  /** The names the gateway client dials by, for `boxAddress`. */
+  hosts(): FleetHosts | null {
+    const link = this.state.link;
+    if (!link) return null;
+    const viewed = new Map((this.state.view?.agents ?? []).map((a) => [a.name, a.tailscale_dns_name]));
+    const names = new Set([...link.payload.agents.map((a) => a.name), ...viewed.keys()]);
+    return {
+      fleet_id: link.payload.fleet_id,
+      tailnet: link.payload.tailnet,
+      agents: [...names].map((name) => ({
+        name,
+        host: viewed.get(name) ?? link.payload.agents.find((a) => a.name === name)?.host ?? null,
+      })),
+    };
+  }
+
+  /** The MagicDNS name of `name`'s box. */
+  hostOf(name: string): string | null {
+    const hosts = this.hosts();
+    return hosts ? agentHost(hosts, name) : null;
+  }
+
+  /** Every agent, name-sorted: the link's, merged with the view's (the view wins). */
+  agents(): FleetAgent[] {
+    const hosts = this.hosts();
+    if (!hosts) return [];
+    const viewed = new Map((this.state.view?.agents ?? []).map((a) => [a.name, a]));
+    return hosts.agents
+      .map(({ name }) => {
+        const v = viewed.get(name);
+        return {
+          name,
+          host: agentHost(hosts, name),
+          status: v?.status ?? null,
+          tailscale_ip: v?.tailscale_ip ?? null,
+          version: v?.version ?? null,
+          health: v?.health ?? null,
+          live: v !== undefined,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The agents this phone listens to, name-sorted. */
+  listened(): string[] {
+    const listening = this.state.listening;
+    const names = this.agents().map((a) => a.name);
+    return listening === "all" ? names : names.filter((n) => listening.has(n));
+  }
+
+  isListening(name: string): boolean {
+    const listening = this.state.listening;
+    return listening === "all" || listening.has(name);
+  }
+
+  /** Listen to one agent or stop; answers the new listened list. */
+  async setListening(name: string, on: boolean): Promise<string[]> {
+    const current = this.state.listening;
+    const base = current === "all" ? new Set(this.agents().map((a) => a.name)) : new Set(current);
+    if (on) base.add(name);
+    else base.delete(name);
+    this.listeningDefault = false;
+    this.set({ listening: base });
+    await this.persist();
+    return this.listened();
+  }
+
+  async setListeningAll(): Promise<void> {
+    this.listeningDefault = false;
+    this.set({ listening: "all" });
+    await this.persist();
+  }
+
+  /* ── internals ────────────────────────────────────────────────────────── */
+
+  /** Up to three listened boxes, ready ones first; the link's agents when none is listened. */
+  private refreshHosts(): string[] {
+    const agents = this.agents();
+    const listened = new Set(this.listened());
+    const pool = agents.filter((a) => listened.has(a.name));
+    const candidates = (pool.length > 0 ? pool : agents).sort(
+      (a, b) => Number(b.status === "ready") - Number(a.status === "ready"),
+    );
+    return candidates.slice(0, REFRESH_FAN_OUT).map((a) => a.host);
+  }
+
+  private async readCache(fleetId: string): Promise<MobileFleetView | null> {
+    try {
+      const text = await this.deps.viewCache.read();
+      if (!text) return null;
+      const parsed = MobileFleetViewSchema.safeParse(JSON.parse(text));
+      return parsed.success && parsed.data.fleet.fleet_id === fleetId ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async persist(): Promise<void> {
+    const link = this.state.link;
+    if (!link) return;
+    const listening = this.state.listening;
+    const record: Persisted = {
+      link: link.link,
+      listening: listening === "all" ? "all" : [...listening].sort(),
+      listening_default: this.listeningDefault,
+    };
+    await saveChunked(this.deps.secure, FLEET_KEY_PREFIX, JSON.stringify(record));
+  }
+
+  private opts(): { operatorTailnet?: string | null } {
+    return this.deps.operatorTailnet !== undefined
+      ? { operatorTailnet: this.deps.operatorTailnet }
+      : {};
+  }
+
+  private set(patch: Partial<FleetState>): void {
+    this.state = { ...this.state, ...patch };
+    for (const l of [...this.listeners]) l();
+  }
+}
+
+function parsePersisted(raw: string | null): Persisted | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<Persisted>;
+    if (typeof v.link !== "string") return null;
+    const listening =
+      v.listening === "all"
+        ? "all"
+        : Array.isArray(v.listening)
+          ? v.listening.filter((x): x is string => typeof x === "string")
+          : [];
+    return { link: v.link, listening, listening_default: v.listening_default === true };
+  } catch {
+    return null;
+  }
+}

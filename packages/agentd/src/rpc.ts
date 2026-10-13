@@ -9,12 +9,18 @@
  * request, allowed or refused, leaves one audit line.
  *
  * Wire format is core's `@hermetic/core/schema` `rpc.ts`: NDJSON, one `RpcFrame`
- * per line, flushed as it happens. Two routes and no more: `GET /healthz` says
- * who this box is and what it is running, and `GET /logs` streams journald — or,
- * with `file=`, one of Hermes's own rotating logs on the data volume.
- * There is deliberately nothing here that *changes* the box — a config change
- * goes out by rerendering and rerunning the bootstrap stages (§4.2), not by an
- * operator reaching in over RPC, so this listener has no write path to abuse.
+ * per line, flushed as it happens. `GET /healthz` says who this box is and what
+ * it is running, and `GET /logs` streams journald — or, with `file=`, one of
+ * Hermes's own rotating logs on the data volume. The paired phone's three
+ * routes (§9.4) live in `rpc-mobile.ts`: `GET /fleet` (a read-only fleet view)
+ * and `POST`/`DELETE /push/devices` (which phones this box pushes to).
+ *
+ * Nothing here changes how the box *runs* — a config change goes out by
+ * rerendering and rerunning the bootstrap stages (§4.2), not by an operator
+ * reaching in over RPC. The one write is the push registry, and it is bounded
+ * on every axis (`rpc-mobile.ts`, `push/devices.ts`): one 0600 file of at most
+ * 32 validated entries, a body of at most 8 KB, ten writes per peer per minute.
+ * It names where notifications go and nothing the box executes or serves.
  */
 import type { ErrorCode, HermesLogFile, RpcFrame, RpcHealth, RpcLogLine } from "@hermetic/core/schema";
 import { LogsRequest, encodeRpcFrame } from "@hermetic/core/schema";
@@ -30,6 +36,7 @@ import {
 import type { Host } from "./host.ts";
 import { tailscaleIpv4 } from "./tailscale.ts";
 import { AgentdError } from "./errors.ts";
+import { rpcRefusal, type MobileRoutes } from "./rpc-mobile.ts";
 
 export { HERMETICD_RPC_PORT };
 
@@ -94,6 +101,11 @@ export interface RpcDeps {
   readonly allowedTags?: readonly string[];
   /** Where the audit line goes. `main.ts`'s `log`, which redacts, in the service. */
   readonly log?: (message: string) => void;
+  /**
+   * The phone's routes (`rpc-mobile.ts`), asked after the whois gate and before
+   * the 404. Absent: the listener has no phone routes at all.
+   */
+  readonly mobile?: MobileRoutes;
 }
 
 /**
@@ -109,7 +121,7 @@ export interface RpcAccess {
 }
 
 /**
- * Who is allowed to reach `logs` and `healthz`.
+ * Who is allowed to reach `logs`, `healthz` and the phone's routes.
  *
  * The tailnet ACL is the authorization layer (§6.4), and this is that ACL's own
  * rule restated on the box. What hermetic writes into the policy file is
@@ -226,10 +238,7 @@ function ndjson(source: AsyncIterable<RpcFrame>, onCancel: () => void = () => {}
 }
 
 function refuse(status: number, message: string, code: ErrorCode = "INTERNAL"): Response {
-  return new Response(encodeRpcFrame({ type: "error", code, message }), {
-    status,
-    headers: NDJSON_HEADERS,
-  });
+  return rpcRefusal(status, message, code);
 }
 
 /**
@@ -393,6 +402,9 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
         stop.abort(),
       );
     }
+
+    const mobile = deps.mobile ? await deps.mobile(request, url, peerIp) : null;
+    if (mobile !== null) return mobile;
 
     return refuse(404, `no such route: ${request.method} ${url.pathname}`, "NOT_FOUND");
   };

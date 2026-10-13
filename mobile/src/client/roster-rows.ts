@@ -3,7 +3,7 @@
  * header per instance bucket with its bots under it unless folded, then the
  * footer. Pure: the screen renders, this decides what there is to render.
  */
-import type { Bot } from "../protocol/types.ts";
+import type { Bot } from "@hermetic/core/chat-client";
 import { railTime } from "./chat-logic.ts";
 import { botKey, type RosterLayout, rosterFooter, unreadBadge } from "./roster-store.ts";
 

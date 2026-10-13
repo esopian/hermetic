@@ -1,357 +1,146 @@
-import {
-  type Alert,
-  createHermeticClient,
-  isUnpaired,
-  pairDevice,
-  replyPreview,
-} from "../../src/client/client.ts";
-import type { FetchLike } from "../../src/client/http.ts";
-import { FakeTimers, flush, socketFactory } from "../helpers/fakes.ts";
-import { approval, block, delta, done, hello, msg, notification } from "../helpers/fixtures.ts";
+import type { ChatFrame, HermesChatClient } from "@hermetic/core/chat-client";
+import { encodeMobileLink } from "@hermetic/core/shared";
+import { type Alert, createHermeticClient } from "../../src/client/client.ts";
+import { readPairingLink } from "../../src/fleet/pairing.ts";
+import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
+import { InboxStore } from "../../src/inbox/store.ts";
+import { fakeFetch, flush, json } from "../helpers/fakes.ts";
+import { approval, block, bot, delta, done, swarm } from "../helpers/fixtures.ts";
 
+const NOW = "2026-10-13T10:00:00.000Z";
 const T = { instance: "atlas", bot: "scribe", session: null };
 
-async function connected() {
-  const timers = new FakeTimers();
-  const factory = socketFactory();
-  const alerts: Alert[] = [];
-  const fetch: FetchLike = async () => ({ ok: true, status: 200, text: async () => "{}" });
-  const { credentials } = await pairDevice({
-    baseUrl: "http://127.0.0.1:7877",
-    code: "ABCD1234",
-    device_name: "FIXTURE phone",
-    platform: "ios",
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ token: "hmt_FIXTURE", device_id: "dev1", hello: hello() }),
+/** An adapter whose turn says `frames`; everything else answers empty. */
+function adapter(frames: ChatFrame[]): HermesChatClient & { sent: string[]; swarmed: string[] } {
+  const sent: string[] = [];
+  const swarmed: string[] = [];
+  return {
+    sent,
+    swarmed,
+    token: async () => "FIXTURE",
+    swarm: async (box) => {
+      swarmed.push(box.baseUrl);
+      return swarm(box.instance, [bot()]);
+    },
+    sessions: async () => [],
+    history: async () => [],
+    conversation: async (box, b) => ({
+      instance: box.instance,
+      bot: b,
+      root_session: "s-1",
+      session: "s-1",
+      kind: "canonical",
+      created: false,
     }),
-    now: () => 0,
-  });
-  expect(credentials).toMatchObject({
-    token: "hmt_FIXTURE",
-    device_id: "dev1",
-    baseUrl: "http://127.0.0.1:7877",
-  });
-  const client = createHermeticClient({
-    credentials,
-    createSocket: factory.create,
-    fetch,
-    timers,
-    random: () => 0,
-    onAlert: (a) => alerts.push(a),
-  });
-  client.connect();
-  const ws = factory.current();
-  ws.open();
-  ws.push({ type: "auth.ok", hello: hello() });
-  // answer every rpc the client makes on connect with something plausible
-  const answer = () => {
-    for (const f of ws.sent) {
-      if (f.type !== "rpc" || answered.has(f.id)) continue;
-      answered.add(f.id);
-      const result =
-        f.method === "notifications.list"
-          ? {
-              notifications: [],
-              unread: 0,
-              needs_action: 0,
-              snoozed: 0,
-              history: 0,
-              next_snooze_at: null,
-              mutes: [],
-            }
-          : f.method === "chat.history"
-            ? {
-                instance: "atlas",
-                bot: "scribe",
-                session: "s-1",
-                messages: [msg({ id: "m1", text: "All done" })],
-              }
-            : f.method === "chat.sessions"
-              ? { instance: "atlas", bot: "scribe", sessions: [] }
-              : {};
-      ws.push({ type: "res", id: f.id, ok: true, result });
-    }
+    send: (_box, _bot, text) => {
+      sent.push(text);
+      return (async function* () {
+        yield* frames;
+      })();
+    },
+    abort: async () => true,
   };
-  const answered = new Set<string>();
-  return { client, ws, alerts, timers, answer };
 }
 
-test("replyPreview folds and truncates", () => {
-  expect(replyPreview(msg({ text: "a\n\nb" }))).toBe("a b");
-  expect(replyPreview(msg({ text: "x".repeat(200) }))!.length).toBe(140);
-  expect(replyPreview(null)).toBeNull();
-});
-
-test("a turn streamed over the socket lands in the conversation and raises one alert in background", async () => {
-  const { client, ws, alerts, answer } = await connected();
-  client.setPhase("background");
-  expect(client.conversations.send(T, "hello")).toBe(true);
-  const start = ws.last("turn.start");
-  expect(start.turn).toMatchObject({ instance: "atlas", bot: "scribe", message: "hello" });
-  expect(start.target).toEqual({
-    account_id: "123456789012",
-    region: "us-west-2",
-    fleet_id: "fxtr0001",
-  });
-  ws.push({ type: "res", id: start.id, ok: true, result: { turn_id: "T1" } });
-  await flush();
-  ws.push({ type: "turn.frame", turn_id: "T1", n: 1, frame: delta(0, "All ") });
-  ws.push({ type: "turn.frame", turn_id: "T1", n: 2, frame: delta(1, "done") });
-  expect(client.conversations.view(T).live?.blocks).toEqual([{ kind: "text", markdown: "All done" }]);
-  ws.push({ type: "turn.frame", turn_id: "T1", n: 3, frame: done(2) });
-  ws.push({ type: "turn.end", turn_id: "T1", n: 3, state: "done" });
-  await flush();
-  answer();
-  await flush();
-  expect(alerts).toHaveLength(1);
-  expect(alerts[0]).toMatchObject({
-    decision: "local",
-    title: "scribe · atlas",
-    body: "All done",
-    data: { kind: "turn.done", turn_id: "T1", dedupe: "turn:T1:done" },
-  });
-  // The same event arriving again (a push) is already claimed.
-  expect(client.inbox.dedupe.claim("turn:T1:done")).toBe(false);
-});
-
-test("an approval in a followed turn raises a needs-you alert with the approval category", async () => {
-  const { client, ws, alerts } = await connected();
-  client.setPhase("background");
-  client.conversations.send(T, "do it");
-  ws.push({ type: "res", id: ws.last("turn.start").id, ok: true, result: { turn_id: "T2" } });
-  await flush();
-  ws.push({ type: "turn.frame", turn_id: "T2", n: 1, frame: block(0, approval()) });
-  expect(alerts).toEqual([
-    expect.objectContaining({
-      category: "hermetic.approval",
-      body: "Approval needed: rm -rf build",
-      data: expect.objectContaining({ kind: "needs_action", request_id: "r1", dedupe: "req:r1" }),
+async function setup(frames: ChatFrame[]) {
+  const read = readPairingLink(
+    encodeMobileLink({
+      fleet_id: "fxtr0001",
+      alias: "main",
+      account_id: "123456789012",
+      region: "us-west-2",
+      tailnet: "hermetic.ts.net",
+      agents: [{ name: "atlas" }, { name: "corvid", host: "fxtr0001-corvid-2.hermetic.ts.net" }],
     }),
-  ]);
-});
-
-test("notification frames update the inbox and alert unless watching", async () => {
-  const { client, ws, alerts } = await connected();
-  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
-  ws.push({
-    type: "notification",
-    row: notification({ id: "n1" }),
-    counts: { unread: 1, needs_action: 0 },
-  });
-  expect(client.inbox.getState().rows).toHaveLength(1);
-  expect(alerts).toHaveLength(0);
-  ws.push({
-    type: "notification",
-    row: notification({
-      id: "n2",
-      ref: "kestrel/ops",
-      title: "ops replied",
-      detail: "deploy finished",
-    }),
-    counts: { unread: 2, needs_action: 0 },
-  });
-  expect(alerts).toEqual([
-    expect.objectContaining({ decision: "banner", title: "ops replied", body: "deploy finished" }),
-  ]);
-  // The frame said 2, but it was counted before the bridge applied our ack of
-  // n1 (still unanswered): the phone takes that ack off again, so the badge
-  // matches the rows. The one about the watched thread was read as it landed.
-  expect(client.inbox.badgeCount()).toBe(1);
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
-  expect(client.inbox.unreadFor("kestrel", "ops")).toBe(1);
-});
-
-test("a failed turn's chat.error in the watched thread does not badge it; in background it does", async () => {
-  const { client, ws } = await connected();
-  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
-  const error = (id: string) =>
-    notification({ id, kind: "chat.error", class: "bad", title: "scribe on atlas could not answer" });
-  ws.push({ type: "notification", row: error("e1"), counts: { unread: 1, needs_action: 0 } });
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
-  client.setPhase("background");
-  ws.push({ type: "notification", row: error("e2"), counts: { unread: 1, needs_action: 0 } });
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
-});
-
-test("once our ack is answered, a notification frame's counts are taken as sent", async () => {
-  const { client, ws, answer } = await connected();
-  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
-  ws.push({
-    type: "notification",
-    row: notification({ id: "n1" }),
-    counts: { unread: 1, needs_action: 0 },
-  });
-  expect(ws.sent).toContainEqual(
-    expect.objectContaining({ method: "notifications.ack", params: { ids: ["n1"] } }),
   );
-  answer();
-  await flush();
-  ws.push({
-    type: "notification",
-    row: notification({ id: "n2", ref: "kestrel/ops" }),
-    counts: { unread: 1, needs_action: 0 },
+  if (!read.ok) throw new Error("fixture link refused");
+  const f = fakeFetch(() => json({}));
+  const fleet = new FleetStore({
+    secure: memoryKv(),
+    viewCache: memoryFile(),
+    fetch: f.fetch,
+    now: () => NOW,
   });
-  expect(client.inbox.badgeCount()).toBe(1);
-});
-
-test("coming back to the app reads what landed in the thread on screen meanwhile", async () => {
-  const { client, ws } = await connected();
-  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
-  client.setPhase("background");
-  ws.push({
-    type: "notification",
-    row: notification({ id: "e1", kind: "chat.error", class: "bad" }),
-    counts: { unread: 1, needs_action: 0 },
-  });
-  ws.push({
-    type: "notification",
-    row: notification({ id: "o1", ref: "kestrel/ops" }),
-    counts: { unread: 2, needs_action: 0 },
-  });
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
-  client.setPhase("inactive");
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
-  client.setPhase("active");
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
-  expect(client.inbox.unreadFor("kestrel", "ops")).toBe(1);
-  expect(client.inbox.badgeCount()).toBe(1);
-  expect(ws.last("rpc")).toMatchObject({ method: "notifications.ack", params: { ids: ["e1"] } });
-});
-
-test("a reconnect reads the thread on screen once the inbox is re-read", async () => {
-  const { client, ws } = await connected();
-  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
-  ws.push({ type: "auth.ok", hello: hello() });
-  const list = ws.last("rpc");
-  expect(list).toMatchObject({ method: "notifications.list" });
-  ws.push({
-    type: "res",
-    id: (list as { id: string }).id,
-    ok: true,
-    result: {
-      notifications: [notification({ id: "e9", kind: "chat.error", class: "bad" })],
-      unread: 1,
-      needs_action: 0,
-      snoozed: 0,
-      history: 0,
-      next_snooze_at: null,
-      mutes: [],
+  await fleet.pair(read.link);
+  const inbox = new InboxStore(memoryFile(), () => NOW);
+  const alerts: Alert[] = [];
+  const chat = adapter(frames);
+  const client = createHermeticClient({
+    fleet,
+    inbox,
+    fetch: f.fetch,
+    openSocket: () => {
+      throw new Error("no socket in this test");
     },
+    now: () => NOW,
+    chat,
+    onAlert: (a) => alerts.push(a),
   });
-  await flush();
-  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
-  expect(ws.last("rpc")).toMatchObject({ method: "notifications.ack", params: { ids: ["e9"] } });
-});
+  return { client, chat, alerts, inbox, fleet };
+}
 
-test("listening frames reach the roster", async () => {
-  const { client, ws } = await connected();
-  ws.push({ type: "listening", instances: ["atlas", "kestrel"] });
-  expect(client.roster.getState().listening).toEqual(["atlas", "kestrel"]);
-  client.dispose();
-  expect(client.socket.state).toBe("idle");
-});
+async function settle() {
+  for (let i = 0; i < 10; i++) await flush();
+}
 
-test("the app phase reaches the bridge as a phase frame on the injected socket", async () => {
-  const { client, ws } = await connected();
-  expect(ws.last("phase")).toEqual({ type: "phase", phase: "foreground" });
-  client.setPhase("background");
-  expect(ws.last("phase")).toEqual({ type: "phase", phase: "background" });
-  client.setPhase("inactive");
-  client.setPhase("active");
-  expect(ws.sent.filter((f) => f.type === "phase").map((f) => (f as { phase: string }).phase)).toEqual([
-    "foreground",
-    "background",
-    "foreground",
-  ]);
-});
-
-describe("a bridge that now serves another fleet", () => {
-  const staging = {
-    fleet_id: "sg7k2m4p",
-    account_id: "123456789012",
-    region: "us-west-2",
-    alias: "staging",
-  };
-
-  function paired(fetch: FetchLike) {
-    const factory = socketFactory();
-    const client = createHermeticClient({
-      credentials: {
-        baseUrl: "http://127.0.0.1:7877",
-        token: "hmt_FIXTURE",
-        device_id: "dev1",
-        fleet: hello().fleet,
-        tailnet: "tail1234.ts.net",
-        paired_at: "2026-10-13T09:00:00.000Z",
+describe("createHermeticClient", () => {
+  test("a turn streams into the store and its reply is filed and alerted once", async () => {
+    const s = await setup([delta(1, "the answer"), done(2)]);
+    expect(s.client.chat.send(T, "question")).toBe(true);
+    await settle();
+    expect(s.chat.sent).toEqual(["question"]);
+    expect(s.client.chat.view(T).sending).toBe(false);
+    expect(s.alerts).toHaveLength(1);
+    expect(s.alerts[0]).toMatchObject({
+      decision: "banner",
+      body: "the answer",
+      data: {
+        fleet_id: "fxtr0001",
+        instance: "atlas",
+        bot: "scribe",
+        session: "s-1",
+        kind: "turn.done",
       },
-      createSocket: factory.create,
-      fetch,
-      timers: new FakeTimers(),
-      random: () => 0,
     });
-    return { client, factory };
-  }
+    expect(s.inbox.getState().entries).toHaveLength(1);
+  });
 
-  const answering = (status: number, body: unknown) => {
-    const calls: string[] = [];
-    const fetch: FetchLike = async (url) => {
-      calls.push(url);
-      return { ok: status < 400, status, text: async () => JSON.stringify(body) };
-    };
-    return { fetch, calls };
-  };
+  test("the thread on screen is filed as read and does not alert", async () => {
+    const s = await setup([delta(1, "x"), done(2)]);
+    s.client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+    s.client.chat.send(T, "question");
+    await settle();
+    expect(s.alerts).toEqual([]);
+    expect(s.inbox.badgeCount()).toBe(0);
+  });
 
-  test("auth.ok naming another fleet: wrong_fleet, and calls fail without dialling", async () => {
-    const http = answering(200, { ok: true, result: {} });
-    const { client, factory } = paired(http.fetch);
-    client.connect();
-    factory.current().open();
-    factory.current().push({ type: "auth.ok", hello: hello({ fleet: staging }) });
-    expect(client.socket.state).toBe("wrong_fleet");
-    expect(client.socket.servedFleet?.alias).toBe("staging");
-    const before = http.calls.length;
-    await expect(client.rpc("chat.swarms")).rejects.toMatchObject({ code: "WRONG_FLEET" });
-    await expect(client.http.pushSettings({ previews: false })).rejects.toMatchObject({
-      code: "WRONG_FLEET",
+  test("a request opening mid-turn is a needs-you alert with its category", async () => {
+    const s = await setup([block(1, approval())]);
+    s.client.setPhase("background");
+    s.client.chat.send(T, "do it");
+    await settle();
+    expect(s.alerts[0]).toMatchObject({
+      decision: "local",
+      category: "hermetic.needs_action",
+      body: "Approval needed: rm -rf build",
     });
-    expect(http.calls.length).toBe(before);
-    client.connect();
-    expect(factory.sockets).toHaveLength(1);
   });
 
-  test("HTTP 403 WRONG_FLEET enters the same state, not unpaired", async () => {
-    const http = answering(403, { error: { code: "WRONG_FLEET", message: "re-pair" } });
-    const { client } = paired(http.fetch);
-    const err = await client.rpc("chat.swarms").catch((e: unknown) => e);
-    expect(err).toMatchObject({ code: "WRONG_FLEET", status: 403 });
-    expect(isUnpaired(err)).toBe(false);
-    expect(client.socket.state).toBe("wrong_fleet");
-    expect(client.socket.servedFleet).toBeNull();
+  test("the roster asks only listened boxes, at their link hosts", async () => {
+    const s = await setup([]);
+    await s.fleet.setListening("atlas", false);
+    await s.client.roster.refresh();
+    expect(s.chat.swarmed).toEqual(["https://fxtr0001-corvid-2.hermetic.ts.net/"]);
+    expect(s.client.roster.getState().listening).toEqual(["corvid"]);
   });
 
-  test("an HTTP hello for another fleet: wrong_fleet with the fleet it serves", async () => {
-    const http = answering(200, hello({ fleet: staging }));
-    const { client } = paired(http.fetch);
-    await expect(client.http.hello()).rejects.toMatchObject({ code: "WRONG_FLEET" });
-    expect(client.socket.state).toBe("wrong_fleet");
-    expect(client.socket.servedFleet?.fleet_id).toBe("sg7k2m4p");
-  });
-
-  test("close 4403 on the socket", async () => {
-    const { client, factory } = paired(answering(200, {}).fetch);
-    client.connect();
-    factory.current().open();
-    factory.current().drop(4403);
-    expect(client.socket.state).toBe("wrong_fleet");
-    await flush();
-    expect(factory.sockets).toHaveLength(1);
-  });
-
-  test("the same fleet's hello passes", async () => {
-    const { client } = paired(answering(200, hello()).fetch);
-    await expect(client.http.hello()).resolves.toMatchObject({ fleet: { fleet_id: "fxtr0001" } });
-    expect(client.socket.state).toBe("idle");
+  test("a conversation on an agent the fleet does not have is refused before any dial", async () => {
+    const s = await setup([]);
+    s.client.chat.send({ instance: "ghost", bot: "x", session: null }, "hi");
+    await settle();
+    expect(s.client.chat.view({ instance: "ghost", bot: "x", session: null }).turnError?.code).toBe(
+      "VALIDATION",
+    );
+    expect(s.chat.sent).toEqual([]);
   });
 });

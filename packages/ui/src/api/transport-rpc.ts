@@ -158,7 +158,6 @@ function rpcNameOf(name: RequestName): RpcName {
 const SUBSCRIBE: Record<SubscriptionKind, { open: RpcName; close: RpcName }> = {
   fleet: { open: "fleet.subscribe", close: "fleet.unsubscribe" },
   chat: { open: "chat.subscribe", close: "chat.unsubscribe" },
-  mobile: { open: "mobile.serve", close: "mobile.unsubscribe" },
 };
 
 const STREAM: Record<StreamName, { close: RpcName }> = {
@@ -189,7 +188,6 @@ const CHAT_FRAME = "chat.frame";
 const LOGS_LINE = "logs.line";
 const FLEET_EVENT = "fleet.event";
 const CHAT_EVENT = "chat.event";
-const MOBILE_EVENT = "mobile.event";
 const APP_UPDATE = "app.update";
 const TERMINAL_FRAME = "terminal.frame";
 
@@ -416,14 +414,12 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
   const feeds: Record<SubscriptionKind, Set<SubscriptionHandlers>> = {
     fleet: new Set(),
     chat: new Set(),
-    mobile: new Set(),
   };
-  const feedIds: Record<SubscriptionKind, string | null> = { fleet: null, chat: null, mobile: null };
+  const feedIds: Record<SubscriptionKind, string | null> = { fleet: null, chat: null };
   /** The open request for a feed, while it is in flight. See `subscribe`. */
   const feedOpening: Record<SubscriptionKind, Promise<string | null> | null> = {
     fleet: null,
     chat: null,
-    mobile: null,
   };
 
   /**
@@ -508,9 +504,6 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
         },
         [CHAT_EVENT]: (payload) => {
           toFeed("chat", frameOf(payload.event));
-        },
-        [MOBILE_EVENT]: (payload) => {
-          toFeed("mobile", frameOf(payload.event));
         },
         // Not a stream: the updater's state, pushed at every open window and
         // read by the footer (`state/app-update-state.tsx`). It is held here

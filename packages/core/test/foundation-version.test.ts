@@ -130,6 +130,13 @@ const FOUNDATION_TEMPLATE_SHA256: Record<number, string> = {
   // the old grant says so. The stack phase takes the empty change set as the
   // no-op it is (`stack already at this template`).
   15: "e028920a3a6c0a0fc5c6f895355190d71317e07f3248f2be943bd2e186503804",
+  // v16 is a template change in the agent role's policy only, and a widening:
+  // a new read-only `FleetList` statement grants `dynamodb:Scan` on the agents
+  // table (never the events table), so hermeticd can serve `GET /fleet` to a
+  // paired phone that holds no AWS credential (§9.4). No state moves, so the
+  // v16 migration carries no hooks. Below v16 the Scan is `AccessDenied` and
+  // the route answers `FLEET_LIST_UNAVAILABLE`.
+  16: "c893401e03c481279b1057cad812bb3963cc3cd50d619d2164af9328cb9adf69",
 };
 
 describe("foundation version", () => {

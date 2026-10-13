@@ -6,39 +6,42 @@
  * (`packages/ui/src/chat/chat-conversation-record.ts`, `chat-conversations.ts`,
  * `chat-queue.ts`) without React: the store holds mutable records, rebuilds an
  * immutable view of a record whenever it changes, and notifies subscribers —
- * the shape `useSyncExternalStore` wants. Every effect (the bridge, timers, the
+ * the shape `useSyncExternalStore` wants. Every effect (the gateway, timers, the
  * clock) is injected, so jest and bun can both drive it.
  *
- * The bridge owns turns (`.context/mobile-protocol.md`, "Turn semantics"): a
- * turn started here keeps running on the laptop if the phone sleeps, and the
- * socket resumes it by frame number. So the store's job is the head's half —
- * fold frames, show the prompt at once, never draw it twice, queue what is said
- * while a reply is running, and re-read history whenever the stream cannot be
- * trusted to have said everything.
+ * The box owns turns: the phone drives one straight at the agent's Hermes
+ * gateway through core's adapter (`src/gateway/transport.ts`), and the adapter
+ * reconnects a dropped turn itself (`session.events.since`). A turn whose
+ * stream ends without saying how — the reconnect budget spent while the phone
+ * slept — is `onTurnGone`, and the transcript is re-read with backoff. So the
+ * store's job is the head's half: fold frames, show the prompt at once, never
+ * draw it twice, queue what is said while a reply is running, and re-read
+ * history whenever the stream cannot be trusted to have said everything.
  */
 import type {
-  AbortResult,
   ApprovalBlock,
-  QuestionBlock,
   ChatFrame,
   ChatMessage,
   ChatObserveEvent,
   ChatRole,
+  QuestionBlock,
+  Session,
+  SubagentBlock,
+} from "@hermetic/core/chat-client";
+import { previewOf } from "./chat-logic.ts";
+import type {
+  AbortResult,
   HistoryResult,
   RespondResult,
-  Session,
   SessionsResult,
   SteerResult,
   SteerStatus,
-  SubagentBlock,
   TurnRequest,
   TurnStartResult,
   TurnState,
-  TurnSummary,
-} from "../protocol/types.ts";
-import { previewOf } from "./chat-logic.ts";
-import { BridgeError, CLIENT_ERROR_CODES } from "./errors.ts";
-import { realTimers, type TimerHandle, type Timers } from "./socket.ts";
+} from "./chat-types.ts";
+import { errorCode } from "./errors.ts";
+import { realTimers, type TimerHandle, type Timers } from "./timers.ts";
 import {
   blockKey,
   foldFrame,
@@ -221,7 +224,7 @@ export interface ConversationView {
   readonly live: ChatMessage | null;
   readonly history: HistoryState;
   readonly historyError: string | null;
-  /** The bridge's error code for a failed read (`NOT_FOUND`: no such bot or session). */
+  /** The error code of a failed read (`NOT_FOUND`: no such bot or session; `CHAT_UNREACHABLE`). */
   readonly historyCode: string | null;
   readonly sessions: readonly Session[];
   readonly sending: boolean;
@@ -234,8 +237,6 @@ export interface ConversationView {
   readonly reconnectAttempt: number;
   /** The last turn ended without `done`: what is shown may be incomplete. */
   readonly dropped: boolean;
-  /** The bridge's buffer lost frames; history will be re-read when the turn ends. */
-  readonly truncated: boolean;
   readonly openRequests: readonly string[];
   /** Requests the operator answered from this phone (the box never closes those in the stream). */
   readonly released: readonly string[];
@@ -255,10 +256,14 @@ export interface ConversationTransport {
     limit?: number;
   }): Promise<HistoryResult>;
   sessions(input: { instance: string; bot: string }): Promise<SessionsResult>;
+  /**
+   * Start a turn. Answers at once with a phone-minted id; the frames arrive on
+   * `onTurnFrame`, and how it ended on `onTurnEnd` / `onTurnGone`.
+   */
   startTurn(turn: TurnRequest): Promise<TurnStartResult>;
-  /** `turn.abort` — stop a turn this phone knows the id of. */
+  /** Stop a turn this phone started (the gateway's interrupt for its session). */
   abortTurn(turn_id: string): Promise<unknown>;
-  /** `chat.abort` — stop whatever runs in a conversation (the id is not known yet). */
+  /** Stop whatever runs in a conversation (no turn of this phone's to name). */
   abort(input: { instance: string; bot: string; session?: string }): Promise<AbortResult | unknown>;
   steer(input: {
     instance: string;
@@ -269,11 +274,12 @@ export interface ConversationTransport {
   respond(
     input: RespondInput & { instance: string; bot: string; session: string },
   ): Promise<RespondResult>;
-  /** Follow a turn by id (`turn.resume`); optional, used to attach to a turn already running. */
-  resumeTurn?(turn_id: string, after: number): Promise<unknown>;
-  /** Stop following a turn's frames. */
+  /** Stop following a turn's frames (the turn itself keeps running on the box). */
   forgetTurn?(turn_id: string): void;
-  /** Observe a conversation; returns the closer. */
+  /**
+   * Observe a conversation; returns the closer. `end` is called once when the
+   * observation stops by itself (a terminal error), never after the closer.
+   */
   observe?(
     target: ConversationTarget,
     handlers: { event: (event: ChatObserveEvent) => void; end: (error: Failure | null) => void },
@@ -354,7 +360,6 @@ interface Rec {
   reconnectAttempt: number;
   reconnectTimer: TimerHandle | null;
   dropped: boolean;
-  truncated: boolean;
   gen: number;
   run: TurnRun | null;
   segments: string[];
@@ -470,7 +475,6 @@ export class ConversationStore {
     this.clearReconnect(record);
     const gen = ++record.gen;
     record.dropped = false;
-    record.truncated = false;
     record.turnError = null;
     this.releaseHeld(record);
     if (record.live && !answered(record.messages, record.live))
@@ -509,8 +513,8 @@ export class ConversationStore {
     this.transport.startTurn(turn).then(
       (result) => {
         if (record.run !== run || run.settled) {
-          // Stopped or superseded before the bridge answered: let the bridge
-          // know nobody is following, and drop anything buffered.
+          // Stopped or superseded before the start answered: stop following it,
+          // and drop anything buffered.
           this.orphans.delete(result.turn_id);
           this.transport.forgetTurn?.(result.turn_id);
           return;
@@ -526,20 +530,14 @@ export class ConversationStore {
         }
       },
       (error: unknown) => {
+        // The gateway transport answers a start at once and reports what went
+        // wrong as an error frame; a refusal here is the transport's own (an
+        // instance this phone does not know). Nothing reached the box.
         if (record.run !== run || run.settled) return;
-        const err = error instanceof BridgeError ? error : null;
-        const lost =
-          err?.code === CLIENT_ERROR_CODES.DISCONNECTED ||
-          err?.code === CLIENT_ERROR_CODES.TIMEOUT ||
-          err?.code === CLIENT_ERROR_CODES.NETWORK;
-        // A start whose answer was lost may or may not have reached the box,
-        // so it is never re-sent: the transcript is re-read instead.
-        if (lost) this.end(record, run, false, null);
-        else
-          this.end(record, run, false, {
-            code: err?.code ?? "SEND_FAILED",
-            message: err?.message ?? (error instanceof Error ? error.message : String(error)),
-          });
+        this.end(record, run, false, {
+          code: errorCode(error) ?? "SEND_FAILED",
+          message: error instanceof Error ? error.message : String(error),
+        });
       },
     );
     return true;
@@ -695,7 +693,7 @@ export class ConversationStore {
     this.changed(record);
   }
 
-  /* ── the bridge's turn events ───────────────────────────────────────── */
+  /* ── turn events (from the gateway transport) ──────────────────────── */
 
   onTurnFrame(turn_id: string, _n: number, frame: ChatFrame): void {
     const key = this.owners.get(turn_id);
@@ -738,6 +736,23 @@ export class ConversationStore {
     }
   }
 
+  /**
+   * The session a turn was sent into, once the transport resolved it: a first
+   * message to a bot with no Bot Chat yet creates one, and until the next
+   * history read this is the only place the conversation learns its id.
+   */
+  onTurnSession(turn_id: string, session: string): void {
+    const key = this.owners.get(turn_id);
+    const record = key ? this.records.get(key) : undefined;
+    const run = record?.run;
+    if (!record || !run || run.turnId !== turn_id || run.settled) return;
+    if (!run.seed.session) run.seed = { ...run.seed, session };
+    if (record.resolvedSession === null) {
+      record.resolvedSession = session;
+      this.changed(record);
+    }
+  }
+
   onTurnEnd(turn_id: string, state: TurnState): void {
     const key = this.owners.get(turn_id);
     if (!key) {
@@ -761,7 +776,11 @@ export class ConversationStore {
     }
   }
 
-  /** The bridge no longer holds the turn's frames: history is the record. */
+  /**
+   * The turn's stream ended without saying how (no `done`, no error): the
+   * adapter spent its reconnect budget, or the phone slept through it. The
+   * transcript on the box is the record, so it is re-read with backoff.
+   */
   onTurnGone(turn_id: string): void {
     const key = this.owners.get(turn_id);
     if (!key) return;
@@ -769,57 +788,6 @@ export class ConversationStore {
     const run = record?.run;
     if (!record || !run || run.turnId !== turn_id || run.settled) return;
     this.end(record, run, false, null);
-  }
-
-  onTurnTruncated(turn_id: string): void {
-    const key = this.owners.get(turn_id);
-    const record = key ? this.records.get(key) : undefined;
-    if (!record) return;
-    record.truncated = true;
-    this.changed(record);
-  }
-
-  /**
-   * A turn running on the bridge that this phone is not following — started
-   * by this device before a restart (`Hello.active_turns`) or by another
-   * phone (`turn.started`). An idle conversation that is on screen attaches to
-   * it, so its reply streams here too.
-   */
-  attach(summary: TurnSummary): boolean {
-    if (summary.state !== "running" || this.owners.has(summary.turn_id)) return false;
-    const resume = this.transport.resumeTurn;
-    if (!resume) return false;
-    const record = [...this.records.values()].find(
-      (r) =>
-        r.target.instance === summary.instance &&
-        r.target.bot === summary.bot &&
-        (r.resolvedSession ?? r.target.session) === summary.session &&
-        r.closeObserve !== null,
-    );
-    if (!record || record.sending || record.aborting) return false;
-    const gen = ++record.gen;
-    record.sending = true;
-    record.activity = "thinking";
-    record.dropped = false;
-    record.turnError = null;
-    const run: TurnRun = {
-      gen,
-      turnId: summary.turn_id,
-      fold: freshFold(),
-      seed: { session: summary.session ?? "", at: summary.started_at },
-      segmentAt: summary.started_at,
-      settled: false,
-      idle: null,
-      body: "",
-    };
-    record.run = run;
-    this.owners.set(summary.turn_id, record.key);
-    this.tick(record, run);
-    this.changed(record);
-    resume.call(this.transport, summary.turn_id, 0).catch(() => {
-      if (record.run === run && !run.settled) this.end(record, run, false, null);
-    });
-    return true;
   }
 
   /* ── observation events ─────────────────────────────────────────────── */
@@ -913,11 +881,18 @@ export class ConversationStore {
     this.changed(record);
   }
 
+  /**
+   * The observation stopped by itself. Core's observation service already
+   * spent its own reconnect budget before giving up, so this is terminal until
+   * the conversation is opened again (`open` starts a new one).
+   */
   onObserveEnd(key: string, error: Failure | null): void {
     const record = this.records.get(key);
     if (!record?.closeObserve) return;
-    // The socket re-opens it with backoff; until then the band says so.
-    record.observe = error ? "reconnecting" : "live";
+    record.closeObserve = null;
+    if (record.observeQuiet !== null) this.timers.clearTimeout(record.observeQuiet);
+    record.observeQuiet = null;
+    record.observe = error ? "failed" : "off";
     record.observeError = error;
     this.changed(record);
   }
@@ -962,7 +937,6 @@ export class ConversationStore {
         reconnectAttempt: 0,
         reconnectTimer: null,
         dropped: false,
-        truncated: false,
         gen: 0,
         run: null,
         segments: [],
@@ -1002,7 +976,6 @@ export class ConversationStore {
       reconnecting: r.reconnecting,
       reconnectAttempt: r.reconnectAttempt,
       dropped: r.dropped,
-      truncated: r.truncated,
       openRequests: r.run?.fold.openRequests ?? [],
       released: [...r.released],
       queue: r.queue,
@@ -1087,7 +1060,6 @@ export class ConversationStore {
       // reply arrive with the transcript (desktop `replyArrival`).
       const assembled = record.live;
       void this.readHistory(record).then(() => {
-        record.truncated = false;
         if (ok) this.noteReply(record, assembled);
         this.drain(record);
       });
@@ -1357,11 +1329,4 @@ export class ConversationStore {
     if (record.observeQuiet !== null) this.timers.clearTimeout(record.observeQuiet);
     record.observeQuiet = null;
   }
-}
-
-/** A thrown value's string `code`, when it carries one (the bridge's errors do). */
-function errorCode(error: unknown): string | null {
-  if (typeof error !== "object" || error === null || !("code" in error)) return null;
-  const code = (error as { code: unknown }).code;
-  return typeof code === "string" ? code : null;
 }

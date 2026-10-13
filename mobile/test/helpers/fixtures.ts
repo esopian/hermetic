@@ -3,12 +3,13 @@ import type {
   Bot,
   ChatFrame,
   ChatMessage,
-  Notification,
   QuestionBlock,
   SubagentBlock,
   Swarm,
   ToolBlock,
-} from "../../src/protocol/types.ts";
+} from "@hermetic/core/chat-client";
+import type { MobileFleetView } from "@hermetic/core/schema";
+import type { InboxEntry } from "../../src/inbox/store.ts";
 
 export const delta = (seq: number, text: string, message = "m1"): ChatFrame => ({
   type: "delta",
@@ -112,33 +113,39 @@ export const swarm = (instance: string, bots: Bot[], over: Partial<Swarm> = {}):
   ...over,
 });
 
-export const notification = (over: Partial<Notification> = {}): Notification => ({
-  id: "n1",
+export const inboxEntry = (over: Partial<InboxEntry> = {}): InboxEntry => ({
+  id: "i1",
+  kind: "turn.done",
+  instance: "atlas",
+  bot: "scribe",
+  session: "s-1",
+  title: "scribe · atlas",
+  body: "Reply ready",
   at: "2026-10-13T10:00:00.000Z",
-  source: "chat",
-  kind: "chat.message",
-  class: "info",
-  title: "scribe replied",
-  ref: "atlas/scribe",
-  actions: [],
-  muted: false,
+  read_at: null,
+  dedupe: "atlas:s-1:4:turn.done",
   ...over,
 });
 
-export const hello = (over: Partial<import("../../src/protocol/types.ts").Hello> = {}) => ({
-  protocol: 1,
-  fleet: { fleet_id: "fxtr0001", account_id: "123456789012", region: "us-west-2", alias: "main" },
-  tailnet: "tail1234.ts.net",
-  device: {
-    device_id: "dev1",
-    name: "FIXTURE phone",
-    platform: "ios" as const,
-    created_at: "2026-10-13T09:00:00.000Z",
-    previews: true,
-    push_registered: false,
+/** A `GET /fleet` answer for the fixture fleet. */
+export const fleetView = (over: Partial<MobileFleetView> = {}): MobileFleetView => ({
+  fleet: {
+    fleet_id: "fxtr0001",
+    alias: "main",
+    tailnet: "hermetic.ts.net",
+    region: "us-west-2",
+    account_id: "123456789012",
+    foundation_version: 16,
   },
-  host: { app: "cli" as const, version: "0.0.0", fixture: true },
-  listening: ["atlas"],
-  active_turns: [],
+  agents: [
+    {
+      name: "atlas",
+      status: "ready",
+      tailscale_dns_name: "fxtr0001-atlas.hermetic.ts.net",
+      tailscale_ip: "100.64.0.1",
+      version: "0.21.1",
+    },
+  ],
+  read_at: "2026-10-13T10:00:00.000Z",
   ...over,
 });

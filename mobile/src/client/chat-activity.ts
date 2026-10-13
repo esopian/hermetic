@@ -10,7 +10,7 @@
  * `chat/chat-subagents.ts` (`glyphOf`, `activityOf`, `timeText`, `rollupOf`,
  * `controllable`). Pure TypeScript.
  */
-import type { ChatBlock, SubagentBlock } from "../protocol/types.ts";
+import type { ChatBlock, SubagentBlock } from "@hermetic/core/chat-client";
 import type { TurnActivity } from "./turn-reducer.ts";
 
 /* ── which blocks are run machinery ──────────────────────────────────────── */

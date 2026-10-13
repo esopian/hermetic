@@ -8,14 +8,9 @@ import {
   reconnectDelayMs,
   stillPending,
 } from "../../src/client/conversation-store.ts";
-import { BridgeError } from "../../src/client/errors.ts";
-import type {
-  ChatMessage,
-  ChatObserveEvent,
-  HistoryResult,
-  SteerStatus,
-  TurnRequest,
-} from "../../src/protocol/types.ts";
+import { HermeticError } from "@hermetic/core/chat-client";
+import type { ChatMessage, ChatObserveEvent } from "@hermetic/core/chat-client";
+import type { HistoryResult, SteerStatus, TurnRequest } from "../../src/client/chat-types.ts";
 import { FakeTimers, flush } from "../helpers/fakes.ts";
 import { approval, block, delta, done, errorFrame, msg, subagent, tool } from "../helpers/fixtures.ts";
 
@@ -47,14 +42,14 @@ function setup() {
     end: (e: { code: string; message: string } | null) => void;
   } | null = null;
   let historyFails = 0;
-  let historyFailCode = "NETWORK";
+  let historyFailCode = "CHAT_UNREACHABLE";
   const transport: ConversationTransport = {
     history: async (input) => {
       calls.push({ method: "chat.history", input });
       if (historyFails > 0) {
         historyFails -= 1;
-        throw new BridgeError(
-          historyFailCode,
+        throw new HermeticError(
+          historyFailCode as "NOT_FOUND",
           historyFailCode === "NOT_FOUND" ? "Profile not found" : "offline",
         );
       }
@@ -85,10 +80,6 @@ function setup() {
     respond: async (input) => {
       calls.push({ method: "chat.respond", input });
       return { status: "ok" };
-    },
-    resumeTurn: async (turn_id, after) => {
-      calls.push({ method: "turn.resume", input: { turn_id, after } });
-      return {};
     },
     forgetTurn: (turn_id) => {
       calls.push({ method: "forget", input: turn_id });
@@ -123,7 +114,7 @@ function setup() {
     setSteer: (s: SteerStatus) => {
       steerStatus = s;
     },
-    failHistory: (n: number, code = "NETWORK") => {
+    failHistory: (n: number, code = "CHAT_UNREACHABLE") => {
       historyFails = n;
       historyFailCode = code;
     },
@@ -132,7 +123,7 @@ function setup() {
   };
 }
 
-/** Send and let the bridge answer with a turn id. */
+/** Send and let the transport answer with a turn id. */
 async function started(s: ReturnType<typeof setup>, text = "hello", turn_id = "T1") {
   expect(s.store.send(T, text)).toBe(true);
   s.starts.at(-1)!.d.resolve({ turn_id });
@@ -259,19 +250,22 @@ describe("sending and streaming", () => {
     expect(s.method("turn.start")).toHaveLength(1);
   });
 
-  test("a refused turn.start surfaces its code", async () => {
+  test("a refused start surfaces its code", async () => {
     const s = setup();
     s.store.send(T, "hello");
-    s.starts[0]!.d.reject(new BridgeError("FORBIDDEN", "nope", 403));
+    s.starts[0]!.d.reject(new HermeticError("VALIDATION", "atlas is not an agent of the paired fleet"));
     await flush();
-    expect(s.view().turnError).toEqual({ code: "FORBIDDEN", message: "nope" });
+    expect(s.view().turnError).toEqual({
+      code: "VALIDATION",
+      message: "atlas is not an agent of the paired fleet",
+    });
   });
 
-  test("a turn.start lost to a disconnect is never re-sent: history is re-read with backoff", async () => {
+  test("a turn whose stream ended without saying how is never re-sent: history is re-read with backoff", async () => {
     const s = setup();
-    s.store.send(T, "hello");
+    await started(s);
     s.failHistory(2);
-    s.starts[0]!.d.reject(new BridgeError("DISCONNECTED", "dropped"));
+    s.store.onTurnGone("T1");
     await flush();
     expect(s.view().reconnecting).toBe(true);
     expect(s.view().dropped).toBe(true);
@@ -287,7 +281,7 @@ describe("sending and streaming", () => {
     expect(s.method("turn.start")).toHaveLength(1);
   });
 
-  test("TURN_GONE re-reads history", async () => {
+  test("a gone turn re-reads history", async () => {
     const s = setup();
     await started(s);
     s.store.onTurnGone("T1");
@@ -335,7 +329,7 @@ describe("stop, steer, queue", () => {
     s.store.send(T, "hello");
     await s.store.stop(T);
     expect(s.method("chat.abort")).toHaveLength(1);
-    // The bridge answers afterwards: nobody follows that turn.
+    // The transport answers afterwards: nobody follows that turn.
     s.starts[0]!.d.resolve({ turn_id: "T7" });
     await flush();
     expect(s.method("forget")).toEqual([{ method: "forget", input: "T7" }]);
@@ -492,7 +486,7 @@ describe("observation", () => {
     expect(s.view().messages.some((m) => m.id === "cron")).toBe(true);
   });
 
-  test("a failed read keeps the bridge's code, and a good read clears it", async () => {
+  test("a failed read keeps its code, and a good read clears it", async () => {
     const s = setup();
     s.failHistory(1, "NOT_FOUND");
     s.store.open(T);
@@ -591,28 +585,18 @@ describe("observation", () => {
   });
 });
 
-describe("attach", () => {
-  test("an open idle conversation attaches to a running turn and resumes it", async () => {
+describe("observation ends", () => {
+  test("a terminal end fails the band, and opening again starts a new observation", async () => {
     const s = setup();
     s.store.open(T);
     await flush();
-    const attached = s.store.attach({
-      turn_id: "TX",
-      instance: "atlas",
-      bot: "scribe",
-      session: "s-1",
-      started_at: "2026-10-13T10:00:00.000Z",
-      state: "running",
-      last_n: 3,
-      truncated: false,
-      device_id: "other",
-    });
-    expect(attached).toBe(true);
-    expect(s.method("turn.resume")).toEqual([
-      { method: "turn.resume", input: { turn_id: "TX", after: 0 } },
-    ]);
-    s.store.onTurnFrame("TX", 1, delta(0, "streamed elsewhere"));
-    expect(s.view().live?.blocks).toEqual([{ kind: "text", markdown: "streamed elsewhere" }]);
+    const first = s.observe();
+    first.end({ code: "CHAT_UNREACHABLE", message: "gone" });
+    expect(s.view().observe).toBe("failed");
+    expect(s.view().observeError?.code).toBe("CHAT_UNREACHABLE");
+    s.store.open(T);
+    expect(s.observe()).not.toBe(first);
+    expect(s.view().observe).toBe("live");
   });
 });
 

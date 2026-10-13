@@ -153,10 +153,12 @@ export {
 } from "./browser.ts";
 export {
   HERMETICD_RPC_PORT,
+  PUSH_DEVICE_ROUTE_PREFIX,
   RPC_CONTENT_TYPE,
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
+  pushDevicePath,
 } from "./rpc.ts";
 
 // --- Terminal shell integration (issue #18) --------------------------------
@@ -190,3 +192,29 @@ export type { MobileLinkAgentEntry, MobileLinkPayload } from "./mobile-link.ts";
 // runs on the phone and the box as well as the laptop, so the hash cannot be
 // `node:crypto`. Pinned byte-equal to it in `test/sha256.test.ts`.
 export { sha256Hex } from "./sha256.ts";
+
+// --- Expo push (hermeticd's gateway watcher, §9.4) -------------------------
+// The box sends; the payload shapes, batching and the ticket/receipt parse are
+// plain values a second runtime may need verbatim, and nothing here opens a
+// socket of its own — the caller hands in `fetch`.
+export {
+  EXPO_DEVICE_NOT_REGISTERED,
+  EXPO_PUSH_BATCH,
+  EXPO_PUSH_TIMEOUT_MS,
+  EXPO_PUSH_URL,
+  EXPO_RECEIPTS_BATCH,
+  EXPO_RECEIPTS_URL,
+  chunk,
+  expoPushSender,
+  expoReceiptFetcher,
+  isDeviceNotRegistered,
+  receiptOf,
+} from "./expo-push.ts";
+export type {
+  ExpoFetch,
+  ExpoPushMessage,
+  ExpoPushReceipt,
+  ExpoPushSender,
+  ExpoPushTicket,
+  ExpoReceiptFetcher,
+} from "./expo-push.ts";

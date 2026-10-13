@@ -7,7 +7,7 @@
  * difference is `openableHref`: a phone has no "same origin", so a root path or
  * a fragment is drawn as text rather than opened. Pure TypeScript.
  */
-import type { ChatBlock, ChatMessage } from "../protocol/types.ts";
+import type { ChatBlock, ChatMessage } from "@hermetic/core/chat-client";
 
 /* ── time ────────────────────────────────────────────────────────────────── */
 

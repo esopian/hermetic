@@ -17,7 +17,7 @@
  *
  * Pure: no React, no React Native, no clock.
  */
-import type { ChatBlock, ChatFrame, ChatMessage } from "../protocol/types.ts";
+import type { ChatBlock, ChatFrame, ChatMessage } from "@hermetic/core/chat-client";
 
 export function toolKey(block: ChatBlock): string | null {
   if (block.kind !== "tool") return null;
@@ -179,32 +179,4 @@ export function foldFrame(
     activity: nextTurnActivity(state.activity, frame),
     openRequests: terminal ? [] : trackRequests(state.openRequests, frame, released),
   };
-}
-
-/**
- * Bridge-assigned frame numbers (`n`, 1-based, strictly increasing per turn).
- * `accept` is false for a frame already seen — a replay overlapping what was
- * delivered live — and advances the cursor otherwise.
- */
-export class TurnCursors {
-  private readonly last = new Map<string, number>();
-
-  accept(turn_id: string, n: number): boolean {
-    const seen = this.last.get(turn_id) ?? 0;
-    if (n <= seen) return false;
-    this.last.set(turn_id, n);
-    return true;
-  }
-
-  lastN(turn_id: string): number {
-    return this.last.get(turn_id) ?? 0;
-  }
-
-  forget(turn_id: string): void {
-    this.last.delete(turn_id);
-  }
-
-  entries(): { turn_id: string; after: number }[] {
-    return [...this.last].map(([turn_id, after]) => ({ turn_id, after }));
-  }
 }

@@ -1,100 +1,56 @@
 /**
- * One paired bridge, wired: HTTP, the socket, and the three stores, with the
- * socket's events routed into them and the alert decision made in one place.
+ * One paired fleet, wired: the gateway transport over core's adapter, the
+ * conversation store, the roster, the phone-local inbox, and the Tailscale
+ * probe, with turn events routed into the stores and the alert decision made
+ * in one place.
  *
- * Pure TypeScript — the React Native layer (`src/bridge/`) supplies the real
- * `WebSocket`, `fetch`, SecureStore and expo-notifications; the root e2e test
- * supplies bun's. Either `WebSocket` is a `WebSocketLike` as-is
- * (`(url) => new WebSocket(url)`, no cast; see `socket.ts`). Nothing here
- * imports React or React Native.
+ * Pure TypeScript. The React Native layer (`src/fleet/FleetProvider.tsx`)
+ * hands in the loaded `FleetStore` and `InboxStore`, `fetch`, the socket opener
+ * over the global `WebSocket`, and draws the alerts; fixture mode hands in
+ * core's `fixtureChatClient` as `chat`. Nothing here imports React or React
+ * Native.
  */
-import type {
-  ApprovalBlock,
-  ChatMessage,
-  FleetTarget,
-  Hello,
-  MobilePlatform,
-  PushData,
-  QuestionBlock,
-} from "../protocol/types.ts";
-import { MOBILE_PROTOCOL } from "../protocol/constants.ts";
 import {
-  ConversationStore,
-  type ConversationTarget,
-  type ConversationTransport,
-} from "./conversation-store.ts";
-import { BridgeError, CLIENT_ERROR_CODES } from "./errors.ts";
-import { type BridgeHttp, createBridgeHttp, type FetchLike, wsUrlFor } from "./http.ts";
+  HermeticError,
+  type ApprovalBlock,
+  type ChatMessage,
+  type HermesChatClient,
+  type QuestionBlock,
+} from "@hermetic/core/chat-client";
+import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
+import type { FleetStore } from "../fleet/store.ts";
+import { boxAddress, createGatewayClient } from "../gateway/client.ts";
+import type { FetchLike } from "../gateway/hermeticd.ts";
+import type { OpenSocket } from "../gateway/socket.ts";
+import { probeTailscale, type TailscaleProbe } from "../gateway/tailscale.ts";
+import { createGatewayTransport, type GatewayTransport } from "../gateway/transport.ts";
 import {
+  type AlertDecision,
   type AppPhase,
   alertFor,
-  dedupeKey,
-  isUnreadRow,
-  isWatchingThread,
-  NotificationsStore,
+  type InboxArrival,
+  type InboxStore,
   type WatchedThread,
-} from "./notifications-store.ts";
+} from "../inbox/store.ts";
+import { ConversationStore, type ConversationTarget } from "./conversation-store.ts";
 import { type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
-import { BridgeSocket, type Timers, type WebSocketFactory, wrongFleetError } from "./socket.ts";
-
-/** Everything the phone keeps about one pairing. The token goes to the keychain, never to logs. */
-export interface Credentials {
-  baseUrl: string;
-  token: string;
-  device_id: string;
-  fleet: Hello["fleet"];
-  tailnet: string | null;
-  paired_at: string;
-}
-
-export function targetOf(fleet: Hello["fleet"]): FleetTarget {
-  return { account_id: fleet.account_id, region: fleet.region, fleet_id: fleet.fleet_id };
-}
-
-/** Pair with a one-time code; returns the credentials to store. */
-export async function pairDevice(input: {
-  baseUrl: string;
-  code: string;
-  device_name: string;
-  platform: MobilePlatform;
-  fetch?: FetchLike;
-  now?: () => number;
-}): Promise<{ credentials: Credentials; hello: Hello }> {
-  const http = createBridgeHttp({
-    baseUrl: input.baseUrl,
-    ...(input.fetch ? { fetch: input.fetch } : {}),
-  });
-  const result = await http.pair({
-    code: input.code,
-    device_name: input.device_name,
-    platform: input.platform,
-  });
-  const now = input.now ?? Date.now;
-  return {
-    hello: result.hello,
-    credentials: {
-      baseUrl: http.baseUrl,
-      token: result.token,
-      device_id: result.device_id,
-      fleet: result.hello.fleet,
-      tailnet: result.hello.tailnet,
-      paired_at: new Date(now()).toISOString(),
-    },
-  };
-}
+import type { Timers } from "./timers.ts";
 
 /* ── alerts ─────────────────────────────────────────────────────────────── */
 
+/** The iOS category of a needs-you notification (no inline actions: a tap opens the conversation). */
+export const NEEDS_ACTION_CATEGORY = "hermetic.needs_action";
+
 export interface Alert {
-  decision: "banner" | "local";
+  decision: Exclude<AlertDecision, "none">;
   title: string;
   body: string;
-  data: PushData;
-  /** iOS category for actionable notifications (`MOBILE_PUSH_CATEGORIES`). */
+  /** Shaped like a box's push `data`, so a tap on either opens the same place. */
+  data: MobilePushData;
   category: string | null;
 }
 
-export const PREVIEW_MAX = MOBILE_PROTOCOL.PREVIEW_MAX_CHARS;
+export const PREVIEW_MAX = 140;
 
 /** First line-folded `PREVIEW_MAX` characters of a reply's text. */
 export function replyPreview(message: ChatMessage | null): string | null {
@@ -115,161 +71,158 @@ export function requestAlertBody(block: ApprovalBlock | QuestionBlock): string {
     : block.prompt;
 }
 
+/**
+ * The key an event this phone saw on its own socket is filed under. The box
+ * keys its pushes `<instance>:<session>:<message_count>:<kind>`, which the
+ * phone cannot know; the inbox's same-conversation, same-kind window
+ * (`SAME_EVENT_MS`) is what folds the two.
+ */
+export function localDedupe(
+  where: { instance: string; session: string },
+  kind: MobilePushKind,
+  ref: string,
+): string {
+  return `${where.instance}:${where.session}:phone-${ref}:${kind}`;
+}
+
 /* ── the client ─────────────────────────────────────────────────────────── */
 
 export interface HermeticClientOptions {
-  credentials: Credentials;
-  createSocket: WebSocketFactory;
-  fetch?: FetchLike;
+  /** The paired fleet, already loaded. */
+  fleet: FleetStore;
+  /** The phone-local inbox, already loaded. */
+  inbox: InboxStore;
+  fetch: FetchLike;
+  openSocket: OpenSocket;
+  /** ISO-8601 now. */
+  now?: () => string;
   timers?: Timers;
-  random?: () => number;
+  /** The adapter to use instead of a live one (fixture mode: core's `fixtureChatClient`). */
+  chat?: HermesChatClient;
   rosterPrefs?: RosterPrefsStorage;
   /** Called with every alert that should be shown; the RN layer draws or schedules it. */
   onAlert?: (alert: Alert) => void;
-  /** Whether alerts may carry message text (the per-device previews setting). */
+  /** Whether alerts may carry message text (the phone's previews preference). */
   previews?: () => boolean;
 }
 
+/**
+ * What the screens use (`src/client/index.ts` documents each member).
+ */
 export interface HermeticClient {
-  readonly credentials: Credentials;
-  readonly target: FleetTarget;
-  readonly http: BridgeHttp;
-  readonly socket: BridgeSocket;
-  readonly conversations: ConversationStore;
+  readonly fleet: FleetStore;
+  readonly chat: ConversationStore;
   readonly roster: RosterStore;
-  readonly inbox: NotificationsStore;
-  /** Socket if it is open, else HTTP. */
-  rpc<T = unknown>(method: string, params?: unknown): Promise<T>;
-  connect(): void;
-  disconnect(): void;
+  readonly inbox: InboxStore;
+  /** Bot Mode lifecycle and subagent control beside the store (`open`, `compact`, `steerSubagent`, …). */
+  readonly gateway: GatewayTransport;
+  readonly tailscale: {
+    /** Probe up to three listened boxes; the answer is also kept as `last`. */
+    probe(): Promise<TailscaleProbe>;
+    last(): TailscaleProbe | null;
+  };
   setPhase(phase: AppPhase): void;
   setWatched(watched: WatchedThread | null): void;
   dispose(): void;
 }
 
 export function createHermeticClient(options: HermeticClientOptions): HermeticClient {
-  const { credentials } = options;
-  const target = targetOf(credentials.fleet);
-  const token = () => credentials.token;
-  const raw = createBridgeHttp({
-    baseUrl: credentials.baseUrl,
-    token,
-    target: () => target,
-    ...(options.fetch ? { fetch: options.fetch } : {}),
-  });
-  /**
-   * The bridge's HTTP half, with the fleet binding enforced: a 403
-   * `WRONG_FLEET`, or a `hello` naming another fleet than this pairing's,
-   * puts the socket in `wrong_fleet` (one place the screens read), and every
-   * call after that is refused here without dialling.
-   */
-  const guard = async <T>(call: () => Promise<T>): Promise<T> => {
-    if (socket.state === "wrong_fleet") throw wrongFleetError(socket.servedFleet);
-    try {
-      return await call();
-    } catch (error) {
-      if (error instanceof BridgeError && error.code === CLIENT_ERROR_CODES.WRONG_FLEET)
-        socket.wrongFleet();
-      throw error;
-    }
-  };
-  const http: BridgeHttp = {
-    baseUrl: raw.baseUrl,
-    health: () => raw.health(),
-    pair: (request) => raw.pair(request),
-    hello: () =>
-      guard(async () => {
-        const hello = await raw.hello();
-        if (hello.fleet.fleet_id !== target.fleet_id) {
-          socket.wrongFleet(hello.fleet);
-          throw wrongFleetError(hello.fleet);
-        }
-        return hello;
-      }),
-    rpc: <T>(method: string, params?: unknown) => guard(() => raw.rpc<T>(method, params)),
-    pushRegister: (input) => guard(() => raw.pushRegister(input)),
-    pushSettings: (input) => guard(() => raw.pushSettings(input)),
-  };
-  const socket = new BridgeSocket({
-    url: wsUrlFor(credentials.baseUrl),
-    token,
-    target: () => target,
-    createSocket: options.createSocket,
-    ...(options.timers ? { timers: options.timers } : {}),
-    ...(options.random ? { random: options.random } : {}),
-  });
+  const { fleet, inbox } = options;
+  const now = options.now ?? (() => new Date().toISOString());
+  const adapter =
+    options.chat ?? createGatewayClient({ fetch: options.fetch, openSocket: options.openSocket, now });
 
-  // In `wrong_fleet` the socket is not open, so this lands in `http`, which refuses at once.
-  const rpc = <T>(method: string, params: unknown = {}): Promise<T> =>
-    socket.state === "open" ? socket.rpc<T>(method, params) : http.rpc<T>(method, params);
+  const address = (instance: string) => {
+    const hosts = fleet.hosts();
+    if (!hosts?.agents.some((a) => a.name === instance))
+      throw new HermeticError("VALIDATION", `${instance} is not an agent of the paired fleet`, {
+        instance,
+      });
+    return boxAddress(hosts, instance);
+  };
+
+  const transport = createGatewayTransport({
+    client: adapter,
+    address,
+    listening: () => fleet.listened(),
+    setListening: (instance, on) => fleet.setListening(instance, on),
+    turns: () => ({
+      frame: (id, n, frame) => chat.onTurnFrame(id, n, frame),
+      end: (id, state) => chat.onTurnEnd(id, state),
+      gone: (id) => chat.onTurnGone(id),
+      session: (id, session) => chat.onTurnSession(id, session),
+    }),
+    now,
+  });
 
   let phase: AppPhase = "active";
   let watched: WatchedThread | null = null;
   const previews = options.previews ?? (() => true);
+  const fleetId = () => fleet.getState().link?.payload.fleet_id ?? "";
 
-  const raise = (alert: Omit<Alert, "decision">, input: Parameters<typeof alertFor>[0]) => {
-    const decision = alertFor(input, inbox.dedupe);
+  /** File an event this phone saw, and alert for it unless it should not interrupt. */
+  const raise = (arrival: InboxArrival, category: string | null) => {
+    const decision = alertFor(arrival, inbox, phase, watched);
+    const onScreen =
+      phase === "active" &&
+      !!watched?.focused &&
+      watched.instance === arrival.instance &&
+      watched.bot === arrival.bot;
+    inbox.ingest(onScreen ? { ...arrival, read_at: arrival.at } : arrival);
     if (decision === "none") return;
-    options.onAlert?.({ ...alert, decision });
-  };
-
-  const transport: ConversationTransport = {
-    history: (input) => rpc("chat.history", input),
-    sessions: (input) => rpc("chat.sessions", input),
-    startTurn: (turn) => socket.startTurn(turn),
-    abortTurn: (turn_id) => socket.abortTurn(turn_id),
-    abort: (input) => rpc("chat.abort", input),
-    steer: (input) => rpc("chat.steer", input),
-    respond: (input) => rpc("chat.respond", input),
-    resumeTurn: (turn_id, after) => socket.resumeTurn(turn_id, after),
-    forgetTurn: (turn_id) => socket.untrackTurn(turn_id),
-    observe: (where, handlers) => {
-      const id = socket.observe(where.instance, where.bot, where.session);
-      const offEvent = socket.on("observe.event", (e) => {
-        if (e.observation === id) handlers.event(e.event);
-      });
-      const offEnd = socket.on("observe.end", (e) => {
-        if (e.observation === id) handlers.end(e.error);
-      });
-      return () => {
-        offEvent();
-        offEnd();
-        socket.unobserve(id);
-      };
-    },
+    options.onAlert?.({
+      decision,
+      title: arrival.title,
+      body: arrival.body,
+      category,
+      data: {
+        fleet_id: fleetId(),
+        instance: arrival.instance,
+        bot: arrival.bot,
+        session: arrival.session,
+        kind: arrival.kind,
+        dedupe: arrival.dedupe,
+      },
+    });
   };
 
   const title = (t: { instance: string; bot: string }) => `${t.bot} · ${t.instance}`;
+  const sessionOf = (where: ConversationTarget) =>
+    chat.view(where).resolvedSession ?? where.session ?? "";
 
-  const conversations = new ConversationStore({
+  const chat = new ConversationStore({
     transport,
     ...(options.timers ? { timers: options.timers } : {}),
-    onTurnSettled: (where: ConversationTarget, outcome) => {
+    onTurnSettled: (where, outcome) => {
       if (!outcome.turnId) return;
-      const thread = { instance: where.instance, bot: where.bot };
-      const session = where.session;
+      const session = sessionOf(where);
+      const base = {
+        instance: where.instance,
+        bot: where.bot,
+        session,
+        title: title(where),
+        at: now(),
+      };
       if (outcome.ok) {
         const preview = previews() ? replyPreview(outcome.reply) : null;
-        const dedupe = dedupeKey.turnDone(outcome.turnId);
         raise(
           {
-            title: title(where),
+            ...base,
+            kind: "turn.done",
             body: preview ?? "Reply ready",
-            category: null,
-            data: { kind: "turn.done", ...thread, session, turn_id: outcome.turnId, dedupe },
+            dedupe: localDedupe({ instance: where.instance, session }, "turn.done", outcome.turnId),
           },
-          { dedupe, thread, phase, watched },
+          null,
         );
       } else if (outcome.error) {
-        const dedupe = dedupeKey.turnError(outcome.turnId);
         raise(
           {
-            title: title(where),
+            ...base,
+            kind: "turn.error",
             body: outcome.error.code,
-            category: null,
-            data: { kind: "turn.error", ...thread, session, turn_id: outcome.turnId, dedupe },
+            dedupe: localDedupe({ instance: where.instance, session }, "turn.error", outcome.turnId),
           },
-          { dedupe, thread, phase, watched },
+          null,
         );
       }
     },
@@ -279,131 +232,70 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     onRequestOpened: (where, { block }) => {
       const request_id = block.request_id;
       if (!request_id) return;
-      const thread = { instance: where.instance, bot: where.bot };
-      const dedupe = dedupeKey.request(request_id);
+      const session = sessionOf(where);
       raise(
         {
+          instance: where.instance,
+          bot: where.bot,
+          session,
           title: title(where),
+          at: now(),
+          kind: "needs_action",
           body: previews() ? requestAlertBody(block) : "Needs you",
-          category: block.kind === "approval" ? "hermetic.approval" : "hermetic.question",
-          data: {
-            kind: "needs_action",
-            request_kind: block.kind,
-            ...thread,
-            session: where.session,
-            request_id,
-            dedupe,
-          },
+          dedupe: localDedupe({ instance: where.instance, session }, "needs_action", request_id),
         },
-        { dedupe, thread, phase, watched },
+        NEEDS_ACTION_CATEGORY,
       );
     },
   });
 
-  const roster = new RosterStore(
-    {
-      swarms: () => rpc("chat.swarms", {}),
-      listening: () => rpc("chat.listening", {}),
-      listen: (instance, listening) => rpc("chat.listen", { instance, listening }),
+  const roster = new RosterStore(transport, options.rosterPrefs ?? null);
+  const pairedFleet = fleetId();
+  if (pairedFleet) void roster.setFleet(pairedFleet);
+  roster.setListening(fleet.listened());
+  const offFleet = fleet.subscribe(() => roster.setListening(fleet.listened()));
+
+  let lastProbe: TailscaleProbe | null = null;
+  const tailscale = {
+    probe: async () => {
+      const hosts = fleet
+        .listened()
+        .map((name) => fleet.hostOf(name))
+        .filter((h): h is string => h !== null);
+      lastProbe = await probeTailscale({ hosts, fetch: options.fetch });
+      return lastProbe;
     },
-    options.rosterPrefs ?? null,
-  );
-  void roster.setFleet(target.fleet_id);
-
-  const inbox = new NotificationsStore({
-    list: (input) => rpc("notifications.list", input),
-    ack: (input) => rpc("notifications.ack", input),
-  });
-
-  /**
-   * Read the thread on screen, if the app is on screen too: what landed for it
-   * while the app was inactive or in the background was not acked on arrival
-   * (that needs `active`), and the operator is looking at it now.
-   */
-  const ackFocused = () => {
-    if (phase !== "active" || !watched?.focused) return;
-    roster.markSeen(watched.instance, watched.bot);
-    void inbox.ackThread(watched.instance, watched.bot);
+    last: () => lastProbe,
   };
 
-  const offs = [
-    socket.on("turn.frame", (e) => conversations.onTurnFrame(e.turn_id, e.n, e.frame)),
-    socket.on("turn.end", (e) => conversations.onTurnEnd(e.turn_id, e.state)),
-    socket.on("turn.gone", (e) => conversations.onTurnGone(e.turn_id)),
-    socket.on("turn.truncated", (e) => conversations.onTurnTruncated(e.turn_id)),
-    socket.on("turn.started", (summary) => {
-      conversations.attach(summary);
-    }),
-    socket.on("hello", (hello) => {
-      roster.setListening(hello.listening);
-      for (const summary of hello.active_turns) conversations.attach(summary);
-      // A reconnect (a resume after the socket lingered out, say) learns what
-      // arrived meanwhile from this read; the thread on screen is read at once.
-      void inbox.refresh().then((ok) => {
-        if (ok) ackFocused();
-      });
-    }),
-    socket.on("listening", (e) => {
-      roster.setListening(e.instances);
-      void roster.refresh();
-    }),
-    socket.on("notification", ({ row, counts }) => {
-      inbox.ingest(row, counts);
-      const dedupe = dedupeKey.notification(row.id);
-      raise(
-        {
-          title: row.title,
-          body: previews() ? (row.detail ?? "") : "",
-          category: null,
-          data: { kind: "notification", id: row.id, dedupe, ref: row.ref ?? null },
-        },
-        { dedupe, row, phase, watched },
-      );
-      // A row about the thread on screen is read as it lands, the same rule
-      // as opening it (`ackThread` on focus): a failed turn's `chat.error`
-      // would otherwise badge the conversation the operator is looking at.
-      if (phase === "active" && isUnreadRow(row) && isWatchingThread(row, watched))
-        void inbox.ack([row.id]);
-      if (row.kind.startsWith("chat.")) void roster.refresh();
-    }),
-  ];
+  /** Read the thread on screen, if the app is on screen too. */
+  const readFocused = () => {
+    if (phase !== "active" || !watched?.focused) return;
+    roster.markSeen(watched.instance, watched.bot);
+    inbox.markThreadRead(watched.instance, watched.bot);
+  };
 
   return {
-    credentials,
-    target,
-    http,
-    socket,
-    conversations,
+    fleet,
+    chat,
     roster,
     inbox,
-    rpc,
-    connect: () => socket.connect(),
-    disconnect: () => socket.close(),
+    gateway: transport,
+    tailscale,
     setPhase: (next) => {
       const was = phase;
       phase = next;
-      // Only an app on screen is "foreground" to the bridge: `inactive` (the
-      // app switcher, Notification Centre over it) is somebody not looking.
-      socket.setPhase(next === "active" ? "foreground" : "background");
-      if (next === "active" && was !== "active") ackFocused();
+      if (next === "active" && was !== "active") readFocused();
     },
     setWatched: (next) => {
       watched = next;
+      readFocused();
     },
     dispose: () => {
-      for (const off of offs) off();
-      socket.reset();
-      conversations.reset();
+      offFleet();
+      transport.dispose();
+      chat.reset();
       roster.reset();
-      inbox.reset();
     },
   };
-}
-
-/** True for errors that mean "this pairing is dead" (revoked device, wiped bridge). */
-export function isUnpaired(error: unknown): boolean {
-  return (
-    error instanceof BridgeError &&
-    (error.code === "UNAUTHORIZED" || error.code === CLIENT_ERROR_CODES.NOT_PAIRED)
-  );
 }

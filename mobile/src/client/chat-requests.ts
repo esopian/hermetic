@@ -13,7 +13,7 @@ import type {
   ApprovalChoice,
   ChatBlock,
   QuestionBlock,
-} from "../protocol/types.ts";
+} from "@hermetic/core/chat-client";
 
 /* ── closed and open ─────────────────────────────────────────────────────── */
 

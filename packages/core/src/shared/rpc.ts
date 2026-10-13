@@ -20,4 +20,16 @@ export const RPC_CONTENT_TYPE = "application/x-ndjson";
 export const RPC_PATHS = {
   logs: "/logs",
   health: "/healthz",
+  /** `GET`: the fleet's live agents for a paired phone (`MobileFleetView`, §9.4). */
+  fleet: "/fleet",
+  /** `POST`: register or update one phone's push token (`MobilePushDevice`). */
+  pushDevices: "/push/devices",
 } as const;
+
+/** `DELETE <prefix><device_id>` unregisters one phone. */
+export const PUSH_DEVICE_ROUTE_PREFIX = `${RPC_PATHS.pushDevices}/`;
+
+/** The path that unregisters one phone; `device_id` is URL-encoded. */
+export function pushDevicePath(deviceId: string): string {
+  return `${PUSH_DEVICE_ROUTE_PREFIX}${encodeURIComponent(deviceId)}`;
+}

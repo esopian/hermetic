@@ -1,5 +1,4 @@
-import type { Timers, WebSocketLike } from "../../src/client/socket.ts";
-import type { ClientFrame, ServerFrame } from "../../src/protocol/types.ts";
+import type { Timers } from "../../src/client/timers.ts";
 
 /** Deterministic timers: `advance(ms)` runs everything due, in order. */
 export class FakeTimers implements Timers {
@@ -40,59 +39,27 @@ export class FakeTimers implements Timers {
   }
 }
 
-export class FakeWebSocket implements WebSocketLike {
-  readyState = 0;
-  readonly sent: ClientFrame[] = [];
-  closedWith: { code?: number; reason?: string } | null = null;
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { data: unknown }) => void) | null = null;
-  onclose: ((event: { code: number; reason: string }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-
-  constructor(readonly url: string) {}
-
-  send(data: string): void {
-    this.sent.push(JSON.parse(data) as ClientFrame);
-  }
-
-  close(code?: number, reason?: string): void {
-    this.closedWith = {
-      ...(code !== undefined ? { code } : {}),
-      ...(reason !== undefined ? { reason } : {}),
-    };
-    this.readyState = 3;
-  }
-
-  /* driving it from the test */
-  open(): void {
-    this.readyState = 1;
-    this.onopen?.({});
-  }
-
-  push(frame: ServerFrame): void {
-    this.onmessage?.({ data: JSON.stringify(frame) });
-  }
-
-  drop(code = 1006): void {
-    this.readyState = 3;
-    this.onclose?.({ code, reason: "" });
-  }
-
-  last<T extends ClientFrame["type"]>(type: T): Extract<ClientFrame, { type: T }> {
-    const found = [...this.sent].reverse().find((f) => f.type === type);
-    if (!found) throw new Error(`no ${type} frame sent`);
-    return found as Extract<ClientFrame, { type: T }>;
-  }
-}
-
-export function socketFactory() {
-  const sockets: FakeWebSocket[] = [];
-  const create = (url: string) => {
-    const ws = new FakeWebSocket(url);
-    sockets.push(ws);
-    return ws;
-  };
-  return { sockets, create, current: () => sockets[sockets.length - 1]! };
-}
-
 export const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** A recorded `fetch` double: `answer(url, init)` decides each response (or throws). */
+export function fakeFetch(
+  answer: (url: string, init: RequestInit | undefined) => Response | Promise<Response>,
+) {
+  const calls: { url: string; method: string; headers: Record<string, string>; body: string | null }[] =
+    [];
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    calls.push({
+      url,
+      method: init?.method ?? "GET",
+      headers: { ...((init?.headers ?? {}) as Record<string, string>) },
+      body: typeof init?.body === "string" ? init.body : null,
+    });
+    if (init?.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    return await answer(url, init);
+  };
+  return { fetch, calls };
+}
+
+export const json = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });

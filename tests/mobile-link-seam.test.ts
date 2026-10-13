@@ -11,7 +11,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MobilePairResult, openHermetic } from "@hermetic/core";
-import { MOBILE_LINK_PREFIX, parseMobileLink } from "@hermetic/core/shared";
+import { cloudName, MOBILE_LINK_PREFIX, parseMobileLink } from "@hermetic/core/shared";
+import { readPairingLink } from "../mobile/src/fleet/pairing.ts";
+import { FleetStore, memoryFile, memoryKv } from "../mobile/src/fleet/store.ts";
 
 async function fixturePair(): Promise<MobilePairResult> {
   const h = await openHermetic({
@@ -43,5 +45,34 @@ describe("mobile.pair → parseMobileLink", () => {
     for (const banned of ["token", "key", "secret", "code", "password", "auth"]) {
       expect(keys.some((k) => k.toLowerCase().includes(banned))).toBe(false);
     }
+  });
+});
+
+describe("mobile.pair → the phone's pairing gate", () => {
+  test("the phone accepts the fixture link whole, with the fleet and agents core encoded", async () => {
+    const result = await fixturePair();
+    const read = readPairingLink(result.link);
+    if (!read.ok) throw new Error(`the phone refused the fixture link: ${read.error.title}`);
+    expect(read.link.link).toBe(result.link);
+    expect(read.link.payload).toEqual({ ...result.fleet, agents: result.agents });
+    expect(read.link.label).toBe(result.fleet.alias ?? result.fleet.fleet_id);
+  });
+
+  test("a paired phone dials each box at the host the laptop would", async () => {
+    const result = await fixturePair();
+    const read = readPairingLink(result.link);
+    if (!read.ok) throw new Error("refused");
+    const store = new FleetStore({
+      secure: memoryKv(),
+      viewCache: memoryFile(),
+      fetch: async () => new Response("offline", { status: 503 }),
+      now: () => "2026-10-13T10:00:00.000Z",
+    });
+    await store.pair(read.link);
+    for (const agent of result.agents) {
+      const derived = `${cloudName(result.fleet.fleet_id, agent.name)}.${result.fleet.tailnet}`;
+      expect(store.hostOf(agent.name)).toBe(agent.host ?? derived);
+    }
+    expect(store.listened()).toEqual(result.agents.map((a) => a.name).sort());
   });
 });

@@ -9,7 +9,7 @@
  * order). Pure: the store holds state and notifies; persistence of pins and
  * folds is the caller's (`RosterPrefsStorage`).
  */
-import type { Bot, ChatRole, Swarm } from "../protocol/types.ts";
+import type { Bot, ChatRole, Swarm } from "@hermetic/core/chat-client";
 
 export type RailFilter = "all" | "unread" | "needs";
 

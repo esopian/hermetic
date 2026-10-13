@@ -1,31 +1,32 @@
 /**
- * The inbox's presentation rules: runs of rows about one conversation fold
+ * The inbox's presentation rules: runs of entries about one conversation fold
  * into one card, a folded card is unread if any member is, badge tones, and
  * the local quiet-hours window.
  *
- * Mirrors `packages/ui/src/logic/notification-logic.ts` (`conversationKeyOf`,
- * `groupNotifications`, `groupRow`, `badgeTone`, `inQuietHours`). Pure.
+ * Mirrors `packages/ui/src/logic/notification-logic.ts` (`groupNotifications`,
+ * `groupRow`, `badgeTone`, `inQuietHours`), over the phone's own entries
+ * (`src/inbox/store.ts`) rather than the laptop's notification rows. Pure.
  */
-import type { Notification } from "../protocol/types.ts";
-import { chatThreadOf, isUnreadRow } from "./notifications-store.ts";
+import type { InboxEntry } from "../inbox/store.ts";
 
-export function conversationKeyOf(n: { kind: string; ref?: string | null }): string | null {
-  const thread = chatThreadOf(n);
-  return thread === null ? null : `${n.kind}:${thread.instance}/${thread.bot}`;
+/** Entries of one kind about one conversation fold together. */
+export function conversationKeyOf(e: Pick<InboxEntry, "kind" | "instance" | "bot">): string {
+  return `${e.kind}:${e.instance}/${e.bot}`;
 }
 
 export interface NotificationGroup<T> {
-  /** The conversation key and the run's oldest row id, or the lone row's id. */
+  /** The conversation key and the run's oldest entry id. */
   key: string;
   rows: T[];
   latest: T;
   count: number;
 }
 
-/** Fold *consecutive* rows about one conversation into one card. */
-export function groupNotifications<
-  T extends { id: string; at: string; kind: string; ref?: string | null },
->(list: readonly T[], keyOf: (n: T) => string | null = conversationKeyOf): NotificationGroup<T>[] {
+/** Fold *consecutive* entries about one conversation into one card. */
+export function groupNotifications<T extends { id: string; at: string }>(
+  list: readonly T[],
+  keyOf: (n: T) => string | null,
+): NotificationGroup<T>[] {
   const groups: NotificationGroup<T>[] = [];
   let runKey: string | null = null;
   for (const row of list) {
@@ -49,6 +50,11 @@ export function groupNotifications<
   return groups;
 }
 
+/** The phone's inbox, grouped. */
+export function groupEntries(list: readonly InboxEntry[]): NotificationGroup<InboxEntry>[] {
+  return groupNotifications(list, conversationKeyOf);
+}
+
 /** The row a card draws: the latest one, unread if *any* member is. */
 export function groupRow<T extends { read_at?: string | null }>(group: NotificationGroup<T>): T {
   if (group.count === 1) return group.latest;
@@ -56,46 +62,23 @@ export function groupRow<T extends { read_at?: string | null }>(group: Notificat
   return group.rows.some((r) => !r.read_at) ? { ...group.latest, read_at: null } : group.latest;
 }
 
-/**
- * Whether a card carries the unread marker: any member counts as unread by
- * `isUnreadRow`, the same rule as the header's count. `groupRow` is the
- * desktop's display row and keys on `read_at` alone; the marker does not.
- */
-export function groupUnread<T extends { read_at?: string | null; resolved_at?: string | null }>(
+/** Whether a card carries the unread marker: any member unread. */
+export function groupUnread<T extends { read_at?: string | null }>(
   group: NotificationGroup<T>,
 ): boolean {
-  return group.rows.some(isUnreadRow);
+  return group.rows.some((r) => !r.read_at);
 }
 
-/**
- * A folded card's condition, read across every member.
- *
- * - `resolved`: every member is resolved, so the card says "cleared". One
- *   open member keeps it open, since the header still counts that member.
- * - `needs`: some member is an unresolved `needs_action`, *read or not*. This
- *   drives the "NEEDS YOU" label and the gold seam: reading a needs-action row
- *   acknowledges it but does not do what it asks, so the card keeps saying so
- *   until the condition resolves. The header's need count (core `counts`:
- *   unread *and* unresolved) drops it on read; the card deliberately does not.
- * - `needsUnread`: some member is an unread, unresolved `needs_action`, the
- *   exact rule of the header's need count. The unread marker's colour reads
- *   this, so a gold marker always means the header counts a need on this card.
- *
- * Phone-only: the desktop card draws the latest row's state (`groupRow`),
- * which can say "cleared" while an older member is still open.
- */
-export function groupCondition<
-  T extends { class: string; read_at?: string | null; resolved_at?: string | null },
->(group: NotificationGroup<T>): { resolved: boolean; needs: boolean; needsUnread: boolean } {
-  const open = group.rows.filter((r) => r.class === "needs_action" && !r.resolved_at);
-  return {
-    resolved: group.rows.every((r) => !!r.resolved_at),
-    needs: open.length > 0,
-    needsUnread: open.some(isUnreadRow),
-  };
+/** Whether a card is about the operator being needed, and whether that is unread. */
+export function groupCondition(group: NotificationGroup<InboxEntry>): {
+  needs: boolean;
+  needsUnread: boolean;
+} {
+  const needs = group.rows.filter((r) => r.kind === "needs_action");
+  return { needs: needs.length > 0, needsUnread: needs.some((r) => !r.read_at) };
 }
 
-/** Rows a "mark read" should acknowledge: everything not yet read, resolved or not. */
+/** Entries a "mark read" should acknowledge. */
 export function unackedIds<T extends { id: string; read_at?: string | null }>(
   rows: readonly T[],
 ): string[] {
@@ -137,19 +120,12 @@ export function inQuietHours(now: Date, q: QuietHours): boolean {
   return start < end ? m >= start && m < end : m >= start || m < end;
 }
 
-/** Where tapping a row goes: its conversation, an agent's browser, or nowhere. */
-export function rowDestination(
-  row: Pick<Notification, "kind" | "ref" | "agent" | "actions">,
-): { kind: "chat"; instance: string; bot: string } | { kind: "agent"; name: string } | null {
-  const thread = chatThreadOf(row);
-  if (thread) return { kind: "chat", ...thread };
-  const chatAction = row.actions.find((a) => a.target === "chat" && a.ref);
-  if (chatAction?.ref) {
-    const t = chatThreadOf({ kind: "chat.message", ref: chatAction.ref });
-    if (t) return { kind: "chat", ...t };
-  }
-  if (row.agent) return { kind: "agent", name: row.agent };
-  const agentAction = row.actions.find((a) => a.target === "agent" && a.ref);
-  if (agentAction?.ref) return { kind: "agent", name: agentAction.ref };
-  return null;
+/** Where tapping an entry goes: its conversation (and session). */
+export function rowDestination(entry: Pick<InboxEntry, "instance" | "bot" | "session">): {
+  kind: "chat";
+  instance: string;
+  bot: string;
+  session: string;
+} {
+  return { kind: "chat", instance: entry.instance, bot: entry.bot, session: entry.session };
 }

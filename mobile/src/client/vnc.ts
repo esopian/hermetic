@@ -7,10 +7,14 @@
  * served under `/vnc` dials the dashboard's `/websockify` and never upgrades,
  * and a plain `/vnc` 404s the socket.
  */
-import type { AgentView } from "../protocol/types.ts";
+import { cloudName } from "@hermetic/core/shared";
 
-export function cloudName(fleetId: string | null | undefined, agent: string): string {
-  return fleetId ? `${fleetId}-${agent}` : agent;
+export { cloudName };
+
+/** The slice of an agent the noVNC URL is built from (a `FleetAgent`, or a `/fleet` row). */
+export interface VncAgent {
+  name: string;
+  tailscale_dns_name?: string | null;
 }
 
 /**
@@ -26,7 +30,7 @@ export function validTailnetHost(host: string): boolean {
 
 /**
  * Whether `host` is a node on this fleet's tailnet: a name under
- * `.<tailnet>` when the bridge said which tailnet (`Hello.tailnet`), else
+ * `.<tailnet>` when the fleet names its tailnet (the pairing link), else
  * under `.ts.net`. A box's reported `tailscale_dns_name` is not trusted on its
  * own — `evil.com` is a syntactically fine host, and would become the one
  * origin the WebView is pinned to.
@@ -39,16 +43,12 @@ export function onTailnet(host: string, tailnet: string | null): boolean {
   return validTailnetHost(host) && host.endsWith(suffix) && host.length > suffix.length;
 }
 
-export function agentHostname(
-  agent: Pick<AgentView, "name" | "tailscale_dns_name">,
-  tailnet: string,
-  cloud?: string | null,
-): string {
+export function agentHostname(agent: VncAgent, tailnet: string, cloud?: string | null): string {
   return (agent.tailscale_dns_name ?? `${cloud ?? agent.name}.${tailnet}`).replace(/\.$/, "");
 }
 
 export interface VncOptions {
-  /** The browser identity's Serve path (`AgentView.browsers[].serve_path`); `/vnc` for `default`. */
+  /** The browser identity's Serve path (`browserServePath` in core's naming); `/vnc` for `default`. */
   servePath?: string;
   viewOnly?: boolean;
 }
@@ -69,11 +69,11 @@ export type NoVncTarget =
 
 /**
  * The noVNC URL for an agent, or why the app will not load one. `tailnet` is
- * the bridge's (`Hello.tailnet`, kept in the credentials): the host must be a
- * name under it, or under `.ts.net` when it is unknown.
+ * the pairing link's: the host must be a name under it, or under `.ts.net`
+ * when it is unknown.
  */
 export function noVncTarget(
-  agent: Pick<AgentView, "name" | "tailscale_dns_name">,
+  agent: VncAgent,
   tailnet: string | null,
   fleetId: string | null,
   opts: VncOptions = {},
@@ -96,7 +96,7 @@ export function noVncTarget(
 
 /** `noVncTarget`'s URL, or `null` for any refusal. */
 export function noVncUrl(
-  agent: Pick<AgentView, "name" | "tailscale_dns_name">,
+  agent: VncAgent,
   tailnet: string | null,
   fleetId: string | null,
   opts: VncOptions = {},

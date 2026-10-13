@@ -1,24 +1,4 @@
-/* Settings › Mobile: the pair panel and the address row's actions. */
-.mob-addr-acts {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
-}
-.mob-addr-acts .st-hint {
-  margin: 0;
-}
-.mob-addr-acts .btn {
-  height: 32px;
-}
-/* Two full buttons side by side: the list's 2px text-action gap merges their borders. */
-.mob-addr-acts .st-acts-in,
-.mob-pair-acts.st-acts-in {
-  gap: 8px;
-}
+/* Settings › Mobile: the pairing code's QR beside its link. */
 .mob-pair {
   display: grid;
   grid-template-columns: 216px minmax(0, 1fr);
@@ -39,35 +19,47 @@
   width: 100%;
   height: 100%;
 }
-.mob-expired .mob-qr,
-.mob-expired .mob-code {
-  opacity: 0.3;
+/* No QR: the square stays, so the layout does not jump, and says why. */
+.mob-qr-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg2);
+  color: var(--fg2);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
 }
 .mob-pair-info {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  align-items: stretch;
+  gap: 8px;
   min-width: 0;
 }
-.mob-pair-info .kicker {
-  margin-top: 8px;
+.mob-link {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
-.mob-pair-info .kicker:first-child {
-  margin-top: 0;
-}
-.mob-code {
-  display: block;
-  font-weight: 700;
-  font-size: 28px;
-  letter-spacing: 0.08em;
-}
-.mob-pair-info .st-callout {
-  margin-top: 10px;
-}
-.mob-pair-acts {
-  margin-top: 14px;
-}
-.mob-pair-acts .btn {
+.mob-link-input {
+  flex: 1;
+  min-width: 0;
   height: 32px;
+  font-size: 12px;
+}
+.mob-link .btn {
+  height: 32px;
+  flex: none;
+}
+.mob-pair-info p {
+  margin: 0;
+}
+.mob-count {
+  font-weight: 700;
+}
+.mob-help {
+  font-size: 13px;
+  color: var(--fg);
 }

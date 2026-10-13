@@ -363,16 +363,8 @@ export type CreateAgentInput = BridgeInput<"agents.create">;
 export type Accepted = ServerAccepted;
 
 /*
- * The phone companion's bridge (`mobile.*`). Local to this laptop, so no fleet
- * envelope. A pair result carries a live pairing code: hold it in component
- * state only, never in storage or a log.
+ * The phone companion's pairing link (`mobile.pair`): the open fleet and its
+ * live agents as a `hermetic://fleet?…` link. It carries no secret — the phone
+ * is trusted by its tailnet membership — so it needs no special handling.
  */
-export type MobileSettingsView = BridgeResult<"mobile.settings">;
-export type MobileSettingsInput = BridgeInput<"mobile.settings">;
 export type MobilePairView = BridgeResult<"mobile.pair">;
-export type MobilePairInput = BridgeInput<"mobile.pair">;
-export type MobileDevicesView = BridgeResult<"mobile.devices">;
-export type MobileDeviceView = MobileDevicesView["devices"][number];
-/** What a running bridge says about itself: its address, uptime and open sockets. */
-export type MobileServingView = NonNullable<MobileDevicesView["serving"]>;
-export type MobileRevokeResult = BridgeResult<"mobile.revoke">;

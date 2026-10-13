@@ -6,7 +6,7 @@
  * pure half of `components/FailureCard.tsx` (`splitError`, `failureOf`).
  * Pure TypeScript.
  */
-import type { ChatFailure, ChatMessage } from "../protocol/types.ts";
+import type { ChatFailure, ChatMessage } from "@hermetic/core/chat-client";
 import { type FailureCopy, failureCopy } from "./chat-logic.ts";
 import { STEER_PREFIX } from "./conversation-store.ts";
 

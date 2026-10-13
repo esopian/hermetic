@@ -129,6 +129,13 @@ export const ERROR_CODES = [
    * reaches the directory is a fleet the next laptop cannot find.
    */
   "DIRECTORY_UNAVAILABLE",
+  /**
+   * hermeticd's `GET /fleet` could not list the fleet's agents (§9.4) — most
+   * often a foundation below version 16, whose agent role holds no
+   * `dynamodb:Scan`. The box answers 503; a phone keeps its pairing snapshot,
+   * and `hermetic foundation update` is the remedy.
+   */
+  "FLEET_LIST_UNAVAILABLE",
   /** The caller is authenticated but not permitted — heads map it to 403. */
   "FORBIDDEN",
   /**
