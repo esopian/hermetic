@@ -230,7 +230,35 @@ export interface HermesChatClient {
    * with `CHAT_PROTOCOL` when it is absent rather than pretending to steer.
    */
   steer?(box: BoxAddress, bot: string, text: string, opts?: SendOptions): Promise<ChatSteerStatus>;
+  /**
+   * Steer one delegated child (`subagent.steer`), apart from any turn: it
+   * needs no running parent turn and writes nothing into the transcript
+   * (`hermes-chat-subagent-control.ts`). Optional; `chat.ts` refuses with
+   * `CHAT_PROTOCOL` when absent.
+   */
+  subagentSteer?(
+    box: BoxAddress,
+    bot: string,
+    subagentId: string,
+    text: string,
+    opts?: SendOptions,
+  ): Promise<SubagentSteerStatus>;
+  /** Stop one delegated child (`subagent.interrupt`): whether the gateway found it. */
+  subagentInterrupt?(
+    box: BoxAddress,
+    bot: string,
+    subagentId: string,
+    opts?: SendOptions,
+  ): Promise<boolean>;
 }
+
+/**
+ * What became of a child steer: upstream's `subagent.steer` answers. `queued`
+ * is not "delivered" — the child takes it at its next tool checkpoint — and
+ * `rejected` also covers a child hermetic cannot reach: unknown here, gone, or
+ * under a session that was rebuilt.
+ */
+export type SubagentSteerStatus = "queued" | "rejected";
 
 /**
  * What became of a steer (§9.2). The first three are the gateway's own answer

@@ -44,6 +44,9 @@ import type { ExchangeRequest } from "./BotDm.tsx";
 import { BotExchange } from "./BotExchange.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
+import { SubagentScope } from "./blocks/SubagentModal.tsx";
+import { hasSubagents } from "../chat-subagents.ts";
+import { useChatIfAvailable } from "../chat-state.tsx";
 
 /** The avatar status for a thread, read off the fleet row rather than guessed. */
 function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status"] {
@@ -443,8 +446,11 @@ export function Thread({
   // Background-process events (§9.2): folded into bursts, filtered by the
   // thread's density, and linked to the calls that started them. The switch
   // only exists in a thread that has events, so a thread without them is drawn
-  // exactly as it always was whatever this browser once stored for it.
-  const eventful = hasProcessEvents(all);
+  // exactly as it always was whatever this browser once stored for it. A
+  // thread that delegated has it too: under FAILURES ONLY a child that
+  // succeeded is a dimmed line with no detail (Q9).
+  const eventful = hasProcessEvents(all) || hasSubagents(all);
+  const subagents = useChatIfAvailable()?.subagents ?? null;
   const [density, setDensity] = useEventDensity(densityThreadKey(fleetId, instance, bot, session?.id));
   const items = threadItems(rows, eventful ? density : "compact");
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
@@ -549,6 +555,13 @@ export function Thread({
     active: notify !== null,
   });
 
+  const originText =
+    destination.state === "known"
+      ? (destination.detail ?? destination.origin)
+      : destination.state === "pending"
+        ? "reading…"
+        : "unknown";
+
   return (
     <section className="ch-thread">
       <div className="ch-thead">
@@ -571,9 +584,13 @@ export function Thread({
                 onSave={onRename}
               />
             ) : (
-              <RedactedText text={botLabel(instance, bot, botTitle)} />
+              <span className="ch-thead-label" title={botLabel(instance, bot, botTitle)}>
+                <RedactedText text={botLabel(instance, bot, botTitle)} />
+              </span>
             )}
-            {bot !== "default" ? <span className="mono">{`@ ${instance}`}</span> : null}
+            {bot !== "default" ? (
+              <span className="mono" title={`@ ${instance}`}>{`@ ${instance}`}</span>
+            ) : null}
             {isDefault ? <span className="ch-default">default bot</span> : null}
           </div>
           <div className="ch-thead-sub">
@@ -585,20 +602,20 @@ export function Thread({
             */}
             {knownOrigin ? (
               <>
-                <span className={`ch-origin ${originClass(destination)}`}>
+                <span className={`ch-origin ${originClass(destination)}`} title={originText}>
                   <i />
-                  {destination.state === "known"
-                    ? (destination.detail ?? destination.origin)
-                    : destination.state === "pending"
-                      ? "reading…"
-                      : "unknown"}
+                  {originText}
                 </span>
                 <span>·</span>
               </>
             ) : null}
-            <span>{session?.title ?? "canonical Bot Chat"}</span>
+            <span className="ch-thead-fit" title={session?.title ?? "canonical Bot Chat"}>
+              {session?.title ?? "canonical Bot Chat"}
+            </span>
             <span>·</span>
-            <span className="mono">{agent?.tailscale_dns_name ?? instance}</span>
+            <span className="mono ch-thead-fit" title={agent?.tailscale_dns_name ?? instance}>
+              {agent?.tailscale_dns_name ?? instance}
+            </span>
           </div>
         </div>
         <div className="ch-thead-actions">
@@ -633,7 +650,10 @@ export function Thread({
         </div>
       ) : null}
 
-      {turnError ? (
+      {turnError && !(all[all.length - 1]?.failure || all[all.length - 1]?.error) ? (
+        // A failure the box reported is drawn on the turn itself, with what to
+        // do about it (`FailureCard`); the band is for a turn refused before
+        // it got there, which has no message to carry it.
         <div className="ch-band bad" role="alert">
           <i className="dot" />
           <span>{turnErrorHeadline(turnError.code)}</span>
@@ -641,68 +661,78 @@ export function Thread({
         </div>
       ) : null}
 
-      <div className="ch-log" ref={log} data-autoscroll>
-        <BotDmContext.Provider value={dm}>
-          <ProcessEventContext.Provider value={processContext}>
-            {rows.length === 0 ? (
-              <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
-            ) : items.length === 0 ? (
-              // Every row here is a routine event and "failures only" hides them all.
-              <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
-            ) : (
-              items.map((item) => {
-                // Keyed on the row's *first* source id: the merged row is named by
-                // its last one, which moves every time the turn takes another row,
-                // and a key that moves remounts the article — losing the group the
-                // reader closed and the step they opened mid-turn. A burst is keyed
-                // the same way, on its first event.
-                const key = item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
-                const divider = item.kind === "burst" ? item.divider : item.row.divider;
-                const ids =
-                  item.kind === "burst"
-                    ? item.entries.map((entry) => entry.row.message.id)
-                    : item.row.ids;
-                return (
-                  <div key={key}>
-                    {divider ? (
-                      <div className="ch-divider">
-                        <hr />
-                        <span>{divider}</span>
-                        <hr />
-                      </div>
-                    ) : null}
-                    <RowBoundary
-                      resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
-                      label={item.kind === "burst" ? item.key : item.row.message.id}
-                    >
-                      {item.kind === "burst" ? (
-                        <ProcessBurst entries={item.entries} />
-                      ) : item.kind === "event" ? (
-                        <ProcessEventRow entry={item} />
-                      ) : (
-                        <Message
-                          row={item.row}
-                          fleetId={fleetId}
-                          instance={instance}
-                          bot={bot}
-                          botTitle={botTitle}
-                          status={status}
-                          now={now}
-                          streaming={sending && live !== null && item.row.message.id === live.id}
-                          activity={
-                            live !== null && item.row.message.id === live.id ? activity : "idle"
-                          }
-                          inReply={item.inReply}
-                        />
-                      )}
-                    </RowBoundary>
-                  </div>
-                );
-              })
-            )}
-          </ProcessEventContext.Provider>
-        </BotDmContext.Provider>
-      </div>
+      <SubagentScope
+        groups={rows.map((row) => ({ id: row.message.id, blocks: row.message.blocks }))}
+        messages={all}
+        liveId={live?.id ?? null}
+        sending={sending}
+        failuresOnly={eventful && density === "failures"}
+        controls={subagents}
+      >
+        <div className="ch-log" ref={log} data-autoscroll>
+          <BotDmContext.Provider value={dm}>
+            <ProcessEventContext.Provider value={processContext}>
+              {rows.length === 0 ? (
+                <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
+              ) : items.length === 0 ? (
+                // Every row here is a routine event and "failures only" hides them all.
+                <p className="ch-ev-allhidden">No failures — routine background events are hidden.</p>
+              ) : (
+                items.map((item) => {
+                  // Keyed on the row's *first* source id: the merged row is named by
+                  // its last one, which moves every time the turn takes another row,
+                  // and a key that moves remounts the article — losing the group the
+                  // reader closed and the step they opened mid-turn. A burst is keyed
+                  // the same way, on its first event.
+                  const key =
+                    item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
+                  const divider = item.kind === "burst" ? item.divider : item.row.divider;
+                  const ids =
+                    item.kind === "burst"
+                      ? item.entries.map((entry) => entry.row.message.id)
+                      : item.row.ids;
+                  return (
+                    <div key={key}>
+                      {divider ? (
+                        <div className="ch-divider">
+                          <hr />
+                          <span>{divider}</span>
+                          <hr />
+                        </div>
+                      ) : null}
+                      <RowBoundary
+                        resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
+                        label={item.kind === "burst" ? item.key : item.row.message.id}
+                      >
+                        {item.kind === "burst" ? (
+                          <ProcessBurst entries={item.entries} />
+                        ) : item.kind === "event" ? (
+                          <ProcessEventRow entry={item} />
+                        ) : (
+                          <Message
+                            row={item.row}
+                            fleetId={fleetId}
+                            instance={instance}
+                            bot={bot}
+                            botTitle={botTitle}
+                            status={status}
+                            now={now}
+                            streaming={sending && live !== null && item.row.message.id === live.id}
+                            activity={
+                              live !== null && item.row.message.id === live.id ? activity : "idle"
+                            }
+                            inReply={item.inReply}
+                          />
+                        )}
+                      </RowBoundary>
+                    </div>
+                  );
+                })
+              )}
+            </ProcessEventContext.Provider>
+          </BotDmContext.Provider>
+        </div>
+      </SubagentScope>
 
       {exchange ? (
         <BotExchange

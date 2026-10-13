@@ -77,7 +77,9 @@ export function BotTitleEdit({
   if (!editing)
     return (
       <>
-        <RedactedText text={label} />
+        <span className="ch-thead-label" title={label}>
+          <RedactedText text={label} />
+        </span>
         <button
           ref={pencil}
           type="button"

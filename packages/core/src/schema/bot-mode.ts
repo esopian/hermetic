@@ -265,6 +265,13 @@ export const HostedRoomAction = z.object({
   request_id: z.string().optional(),
   execution_generation: z.number().optional(),
   text: z.string().optional(),
+  /** The member's session the driver raised the action from. */
+  session_id: z.string().optional(),
+  /**
+   * The answers the room service accepts for this action, in the driver's
+   * order (`approval.choices`, today `once`/`deny`). A head offers only these.
+   */
+  choices: z.array(z.enum(["once", "session", "always", "deny"])).optional(),
 });
 export const HostedRoom = z.object({
   instance: z.string(),

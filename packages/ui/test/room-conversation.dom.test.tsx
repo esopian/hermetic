@@ -146,6 +146,8 @@ interface Rooms {
   sendMode: "ok" | "fail" | "duplicate" | "conflict";
   /** What the next history read answers with, per room and per read. */
   pages: Map<string, { events: RoomEvent[]; cursor: number; has_more: boolean }[]>;
+  /** Every `rooms.respond` the pane issued, in order. */
+  responds: Record<string, unknown>[];
 }
 
 /**
@@ -161,7 +163,12 @@ interface Rooms {
  * gateway reporting no high-water mark would.
  */
 async function mount(
-  rooms: { id: string; name: string; latest_seq?: number | null }[],
+  rooms: {
+    id: string;
+    name: string;
+    latest_seq?: number | null;
+    pending_actions?: Record<string, unknown>[];
+  }[],
 ): Promise<Rooms> {
   const state: Rooms = {
     sends: [],
@@ -169,14 +176,23 @@ async function mount(
     sendMode: "ok",
     pages: new Map(),
     server: {} as FakeServer,
+    responds: [],
   };
+  const actions = new Map(rooms.map((room) => [room.id, room.pending_actions ?? []]));
   const names = new Map(rooms.map((room) => [room.id, room.name]));
   const marks = new Map(rooms.map((room) => [room.id, room.latest_seq]));
   state.server = fakeServer({
     "rooms.get": (call: TransportCall) => {
       const body = call.params as { room: string };
       const mark = marks.get(body.room);
-      return detailOf(body.room, names.get(body.room) ?? body.room, mark === undefined ? 0 : mark);
+      return {
+        ...detailOf(body.room, names.get(body.room) ?? body.room, mark === undefined ? 0 : mark),
+        pending_actions: actions.get(body.room) ?? [],
+      };
+    },
+    "rooms.respond": (call: TransportCall) => {
+      state.responds.push(call.params as Record<string, unknown>);
+      return { status: "ok" };
     },
     "rooms.history": (call: TransportCall) => {
       const body = call.params as { room: string; since_seq: number };
@@ -226,6 +242,93 @@ async function send(text: string): Promise<void> {
   });
   fireEvent.click(button);
 }
+
+describe("a room member waiting on the operator", () => {
+  const approval = {
+    kind: "approval",
+    task_id: "t1",
+    member_id: "atlas",
+    session_id: "sess-1",
+    request_id: "req-1",
+    execution_generation: 2,
+    choices: ["once", "deny"],
+    text: "atlas wants to run rm -rf build/",
+  };
+
+  test("an approval offers only the driver's choices, and answers with the one picked", async () => {
+    const rooms = await mount([{ id: "r1", name: "Ops", pending_actions: [approval] }]);
+    try {
+      await open("Ops");
+      await screen.findByText("atlas wants to run rm -rf build/");
+      const card = document.querySelector(".ch-approve")!;
+      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+        "Approve once",
+        "Deny",
+      ]);
+      fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+      await waitFor(() => expect(rooms.responds).toHaveLength(1));
+      expect(rooms.responds[0]).toMatchObject({
+        room: "r1",
+        member_id: "atlas",
+        request_id: "req-1",
+        task_id: "t1",
+        execution_generation: 2,
+        choice: "once",
+      });
+    } finally {
+      rooms.server.restore();
+    }
+  });
+
+  test("an approval naming no choices offers once and deny", async () => {
+    const { choices: _, ...bare } = approval;
+    const rooms = await mount([{ id: "r1", name: "Ops", pending_actions: [bare] }]);
+    try {
+      await open("Ops");
+      await screen.findByText("atlas wants to run rm -rf build/");
+      const card = document.querySelector(".ch-approve")!;
+      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+        "Approve once",
+        "Deny",
+      ]);
+    } finally {
+      rooms.server.restore();
+    }
+  });
+
+  test("an approval without the ids an answer needs offers no buttons and says so", async () => {
+    const { request_id: _, ...partial } = approval;
+    const rooms = await mount([{ id: "r1", name: "Ops", pending_actions: [partial] }]);
+    try {
+      await open("Ops");
+      await screen.findByText(
+        "atlas is waiting on an approval hermetic cannot answer from here; stop the task or wait for the box's timeout.",
+      );
+      const card = document.querySelector(".ch-approve")!;
+      expect(card.querySelectorAll("button")).toHaveLength(0);
+    } finally {
+      rooms.server.restore();
+    }
+  });
+
+  test("input the room cannot answer says so, naming the member", async () => {
+    const rooms = await mount([
+      {
+        id: "r1",
+        name: "Ops",
+        pending_actions: [{ kind: "question", task_id: "t2", member_id: "atlas", text: "atlas asks" }],
+      },
+    ]);
+    try {
+      await open("Ops");
+      await screen.findByText(
+        "atlas is waiting on input hermetic cannot answer from the room; stop the task or wait for the box's timeout.",
+      );
+    } finally {
+      rooms.server.restore();
+    }
+  });
+});
 
 describe("an uncertain room submission keeps its identity", () => {
   test("a retry after leaving the room and coming back reuses the first event id", async () => {

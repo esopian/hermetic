@@ -167,6 +167,151 @@ describe("turn grouping", () => {
     expect(question).toBeLessThan(last);
   });
 
+  test("a clarify settled on its tool row rides the run instead of splitting the turn", () => {
+    // `settledClarify()` in core appends an answered question, with no
+    // `request_id`, to the `role: "tool"` row of a completed clarify call.
+    const settled: ChatBlockView = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      multi_select: false,
+      questions: [
+        { id: "q0", prompt: "Which box?", choices: ["one", "two"], multi_select: false, answer: "two" },
+      ],
+      request_id: null,
+    } as ChatBlockView;
+    const user = {
+      id: "stored:0",
+      session: "s",
+      role: "user",
+      at: AT,
+      blocks: [prose("Go")],
+    } as ChatMessageView;
+    const clarifyRow = { ...toolRow(2), blocks: [toolBlock(2), settled] } as ChatMessageView;
+    const rows = turnRows(
+      [
+        user,
+        botRow("stored:1", [prose("Let me ask.")]),
+        clarifyRow,
+        botRow("stored:3", [prose("Done")]),
+      ],
+      NOW,
+    );
+    expect(rows.map((row) => row.ids)).toEqual([["stored:0"], ["stored:1"], ["stored:2", "stored:3"]]);
+    // A tool row carrying an *open* question is still a hard break.
+    const open = {
+      ...clarifyRow,
+      blocks: [toolBlock(2), { ...settled, request_id: "r1" }],
+    } as ChatMessageView;
+    expect(turnRows([toolRow(1), open, botRow("stored:3", [prose("Done")])], NOW)).toHaveLength(3);
+  });
+
+  test("only an open request marks a streaming turn as waiting", () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+    } as ChatBlockView;
+    const meta = (request_id: string | null) => {
+      const live = botRow("live-1", [toolBlock(1), { ...question, request_id } as ChatBlockView]);
+      const { container } = thread([], live, "streaming");
+      const text = container.querySelector(".ch-msg-meta")?.textContent ?? "";
+      cleanup();
+      return text;
+    };
+    expect(meta("r1")).toContain("waiting");
+    expect(meta(null)).not.toContain("waiting");
+  });
+
+  test("a request that expires with no frame after it stops reading waiting on time", async () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+      expires_at: new Date(Date.now() + 150).toISOString(),
+    } as ChatBlockView;
+    const live = botRow("live-1", [toolBlock(1), question]);
+    const { container } = render(threadEl([], Date.now(), live, "streaming"));
+    const meta = () => container.querySelector(".ch-msg-meta")?.textContent ?? "";
+    expect(meta()).toContain("waiting");
+    // No frame, no prop change: the message's own timer is the only thing that moves.
+    await waitFor(() => expect(meta()).not.toContain("waiting"), { timeout: 1000 });
+  });
+
+  test("a request answered from its own card stops the turn waiting", async () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+    } as ChatBlockView;
+    const live = botRow("live-1", [toolBlock(1), question]);
+    let store!: Chat;
+    function Probe() {
+      store = useChat();
+      return threadEl([], NOW, live, "streaming");
+    }
+    const api = {
+      fetchSwarms: async () => ({ swarms: [] }),
+      fetchSessions: async () => ({ sessions: [] }),
+      fetchHistory: async () => ({ messages: [] }),
+      sendTurn: () => () => {},
+      abortTurn: async () => ({ aborted: true }),
+    } as unknown as ChatApi;
+    const { container } = render(
+      <ChatProvider api={api} eager={false}>
+        <Probe />
+      </ChatProvider>,
+    );
+    await act(async () => {
+      store.select("silent-crane", "default");
+    });
+    const meta = () => container.querySelector(".ch-msg-meta")?.textContent ?? "";
+    expect(meta()).toContain("waiting");
+    await act(async () => {
+      store.releaseRequest("r1");
+    });
+    expect(meta()).not.toContain("waiting");
+  });
+
+  test("a closed request no longer waits, and a cancelled card stays its own section", () => {
+    const question = {
+      kind: "question",
+      prompt: "Which box?",
+      choices: ["one", "two"],
+      request_id: "r1",
+    } as ChatBlockView;
+    const close = (reason: string) =>
+      ({
+        kind: "activity",
+        category: "notice",
+        key: "request:r1",
+        title: "Request closed",
+        state: "done",
+        request_id: "r1",
+        reason,
+      }) as ChatBlockView;
+    for (const [reason, heading] of [
+      ["interrupted", "Cancelled"],
+      ["timeout", "Timed out"],
+    ] as const) {
+      cleanup();
+      const live = botRow("live-1", [toolBlock(1), question, close(reason), toolBlock(2)]);
+      const { container } = thread([], live, "streaming");
+      expect(container.querySelector(".ch-msg-meta")?.textContent ?? "").not.toContain("waiting");
+      const card = container.querySelector(".bm-clarify");
+      expect(card?.querySelector(".bm-settled-head")?.textContent).toBe(heading);
+      // The card is a section of its own between the work around it.
+      expect(card?.closest(".ch-activity")).toBeNull();
+    }
+    // Answered — here or elsewhere — the card goes, as it always has.
+    cleanup();
+    const live = botRow("live-1", [toolBlock(1), question, close("resolved")]);
+    const { container } = thread([], live, "streaming");
+    expect(container.querySelector(".bm-clarify")).toBeNull();
+  });
+
   test("a broken row ends the run and stays its own message", () => {
     const { container } = thread([
       toolRow(1),
@@ -865,5 +1010,111 @@ describe("a recorded turn", () => {
     cleanup();
     const durableOnly = render(threadEl(durableRows, now));
     expect(settled).toBe(drawn(durableOnly.container));
+  });
+});
+
+/* ── delegated children (WI-14) ──────────────────────────────────────────── */
+
+describe("delegated children", () => {
+  const child = (n: number, over: Record<string, unknown> = {}): ChatBlockView =>
+    ({
+      kind: "subagent",
+      subagent_id: `child-${n}`,
+      depth: 0,
+      task_index: n,
+      task_count: 3,
+      goal: `Task ${n}`,
+      status: "completed",
+      verdict: "done",
+      duration_ms: 20_000 + n,
+      summary: `Result ${n}`,
+      tools: [],
+      tool_count: 2,
+      origin: "history",
+      tool_id: "call-delegate",
+      ...over,
+    }) as ChatBlockView;
+  const delegate = (status: "ok" | "running"): ChatBlockView =>
+    ({
+      kind: "tool",
+      name: "delegate_task",
+      tool_id: "call-delegate",
+      status,
+      args: { tasks: [{ goal: "Task 0" }, { goal: "Task 1" }, { goal: "Task 2" }] },
+      result: null,
+      render: "json",
+    }) as unknown as ChatBlockView;
+
+  test("a re-read turn keeps its children in the run: one article, one group, lines under the call", () => {
+    // History's shape: the call on the assistant row, then the tool row that
+    // closed it with the children `settledDelegation` appended, then the prose.
+    const messages = [
+      botRow("call-row", [delegate("running")]),
+      {
+        id: "tool-row",
+        session: "s",
+        role: "system",
+        at: AT,
+        blocks: [
+          delegate("ok"),
+          child(0),
+          child(1),
+          child(2, { status: "timeout", verdict: "failed" }),
+        ],
+      } as ChatMessageView,
+      botRow("prose-row", [prose("Two of three classified.")]),
+    ];
+    const { container } = thread(messages);
+    expect(counts(container)).toMatchObject({ articles: 1, groups: 1, steps: 1 });
+    expect(container.querySelectorAll(".sa-line")).toHaveLength(3);
+    const head = container.querySelector(".sa-head");
+    expect(head?.textContent).toContain("Delegated 3 tasks");
+    expect(head?.textContent).toContain("3 of 3 done");
+    // The lines sit right under the call's own step.
+    expect(
+      container.querySelector(".ch-activity-step")?.closest("li")?.nextElementSibling?.className,
+    ).toBe("sa-li");
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain("Subagent failed");
+    expect(container.querySelector(".ch-activity-count")?.textContent).toBe("1 tool · 3 subagents");
+  });
+
+  test("a live turn draws the same children in its run, with the delegation header", () => {
+    const live = botRow("live-sa", [
+      delegate("running"),
+      child(0, { origin: "live" }),
+      child(1, { origin: "live", status: "running", verdict: "running", summary: undefined }),
+    ]);
+    const { container } = thread([], live, "thinking");
+    expect(counts(container)).toMatchObject({ articles: 1, groups: 1, steps: 1 });
+    expect(container.querySelectorAll(".sa-line")).toHaveLength(2);
+    expect(container.querySelector(".sa-head")?.textContent).toContain("1 of 3 done");
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain(
+      "Waiting on 1 of 2 subagents",
+    );
+  });
+
+  test("a child still running inside a finished turn reads as running, and the group is open", () => {
+    const messages = [
+      botRow("done-turn", [
+        delegate("ok"),
+        child(0, {
+          origin: "live",
+          status: "running",
+          verdict: "running",
+          summary: undefined,
+          task_count: 1,
+        }),
+        prose("Dispatched; I will report back."),
+      ]),
+    ];
+    const { container } = thread(messages);
+    expect(counts(container).articles).toBe(1);
+    expect(container.querySelector(".sa-line")?.classList.contains("run")).toBe(true);
+    expect((container.querySelector(".ch-activity") as HTMLDetailsElement).open).toBe(true);
+    expect(container.querySelector(".ch-activity > summary")?.textContent).toContain(
+      "Waiting on 1 of 1 subagent",
+    );
+    // A single child gets no header.
+    expect(container.querySelector(".sa-head")).toBeNull();
   });
 });

@@ -19,14 +19,17 @@
  * (stopped, reconnecting, destroyed) stay at the top of the thread.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
-import { useRef, useState } from "react";
+import { useContext, useRef, useState } from "react";
 import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { BotResponses } from "./BotResponses.tsx";
 import { useFocusOnReturn } from "../../lib/focus.ts";
+import { expiryOf } from "../chat-requests.ts";
+import { useWakeAt } from "../use-wake-at.ts";
 import type { Destination } from "../chat-logic.ts";
 
 /** A conversation the `unchosen` band offers as a chip. */
@@ -105,15 +108,78 @@ export function Composer({
    * running. Nothing is silently swallowed either way.
    */
   const queued = chat?.queued ?? [];
+  const respond = useContext(BotResponses);
+  /** The store and the send callback as of the latest render, for code resuming after an await. */
+  const latest = useRef({ chat, onSend });
+  latest.current = { chat, onSend };
+
+  /**
+   * Run `then` once any clarify the reply is waiting on has been skipped.
+   *
+   * Hermes Desktop's rule, by action (D4a): steering into the agent while it
+   * waits on a question declines the question first — the turn is parked
+   * inside the clarify tool, and a steer would wait behind that tool for as
+   * long as the question stays open. Queueing does not: a queued message is
+   * "after the current work", and the question is part of that work, so the
+   * text waits in the queue and the card stays answerable. So ⌘Enter and a
+   * queued row's send-now come through here; Enter while the agent works does
+   * not, and neither does a send with nothing running (no turn is parked on
+   * anything then). The question may sit in the live message
+   * or in a part of the reply an earlier steer closed off (`openRequest`).
+   *
+   * The card closes only once the box has acknowledged the skip: `ok` and
+   * `expired` both mean the request is gone. A failed call leaves the card as
+   * it was, still answerable, and the message goes out as it would have.
+   *
+   * The message belongs to the conversation it was typed in. If the operator
+   * has moved to another one by the time the skip returns, nothing is sent:
+   * the text goes back into the first conversation's draft instead.
+   */
+  const afterOpenQuestion = (then: () => void, text: string | null) => {
+    // Only a running turn is parked on a question; with none, a card still
+    // drawn as open is stale and is left alone.
+    const request_id = respond && chat?.sending ? chat.openRequest() : null;
+    const target = chat?.selection ?? null;
+    if (!respond || !chat || !request_id || !target) {
+      then();
+      return;
+    }
+    const proceed = () => {
+      const now = latest.current.chat?.selection ?? null;
+      const same =
+        now !== null &&
+        now.instance === target.instance &&
+        now.bot === target.bot &&
+        now.session === target.session;
+      if (same) then();
+      else if (text !== null) latest.current.chat?.stageDraft(target, text);
+    };
+    // Through `then` so a provider that throws rather than rejects lands in
+    // the same place as one that rejects.
+    Promise.resolve()
+      .then(() => respond({ request_id, kind: "question", skip: true }))
+      .then(() => {
+        latest.current.chat?.settleRequest(request_id, "skipped", target);
+        proceed();
+      }, proceed);
+  };
   const parkedQueue = chat?.queueParked ?? false;
   const canQueue = chat !== null && sending && enabled;
+  // Read each render: the open clarify moves with the frames that re-render
+  // this, and a render at its expiry takes the hint down with no frame at all.
+  const asking = canQueue && respond && chat ? chat.openRequest() : null;
+  useWakeAt(
+    asking && chat ? expiryOf([...chat.messages, ...(chat.live ? [chat.live] : [])], asking) : null,
+  );
 
   /**
    * Enter sends, or queues. §9.2 gives a conversation one active turn and says
    * sending waits — so a second message is *held*, not refused and not fired
-   * at a busy session. It leaves the input either way: an operator who pressed
-   * Enter is done with that text, and finding it still in the box is how the
-   * same message gets sent twice.
+   * at a busy session. A held message leaves any open question alone: it is
+   * the operator's to answer or to skip (⌘Enter), not the queue's (D4a). It
+   * leaves the input either way: an operator who pressed Enter is done with
+   * that text, and finding it still in the box is how the same message gets
+   * sent twice.
    */
   const submit = () => {
     const body = text.trim();
@@ -124,6 +190,8 @@ export function Composer({
       chat.queueMessage(body);
       return;
     }
+    // Nothing is running, so nothing is parked on a question: a card still
+    // drawn as open is stale, and a plain send leaves it alone.
     setText("");
     onSend(body);
   };
@@ -140,7 +208,7 @@ export function Composer({
       return;
     }
     setText("");
-    chat.sendNow(body);
+    afterOpenQuestion(() => latest.current.chat?.sendNow(body), body);
   };
 
   /**
@@ -241,7 +309,11 @@ export function Composer({
                     className="ch-queue-act"
                     title={sending ? "Send now, into the running turn" : "Send now"}
                     aria-label="Send queued message now"
-                    onClick={() => chat?.sendQueuedNow(row.id)}
+                    // A queued row stays in its own conversation's queue if the
+                    // selection moves, so there is nothing to stage.
+                    onClick={() =>
+                      afterOpenQuestion(() => latest.current.chat?.sendQueuedNow(row.id), null)
+                    }
                   >
                     <Icon d={["M12 19V5", "M6 11l6-6 6 6"]} />
                   </button>
@@ -311,6 +383,12 @@ export function Composer({
       </div>
 
       {mentionHint ? <div className="bm-mention-hint">{mentionHint}</div> : null}
+      {asking !== null ? (
+        <div className="ch-composer-question" role="note">
+          A question is waiting — <span className="ch-kbd">Enter</span> queues until it is answered ·{" "}
+          <span className="ch-kbd">⌘Enter</span> skips it and steers
+        </div>
+      ) : null}
       <div className="ch-composer-foot">
         <span>
           <span className="ch-kbd">Enter</span> send · <span className="ch-kbd">⇧ Enter</span> newline ·{" "}

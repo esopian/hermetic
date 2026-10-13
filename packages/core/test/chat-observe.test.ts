@@ -40,7 +40,7 @@ import {
   notificationsList,
 } from "../src/chat/notifications.ts";
 import type { StackInfo } from "../src/backend/types.ts";
-import type { ChatMessage, ChatObserveEvent } from "../src/schema/index.ts";
+import type { ChatMessage, ChatObserveEvent, SubagentBlock } from "../src/schema/index.ts";
 import { HermeticError } from "../src/errors.ts";
 import { REDACTED } from "../src/chat/chat-redact.ts";
 
@@ -1326,5 +1326,89 @@ describe("chat.observe: a session that compressed under the watch", () => {
     // Asked at each event, never at open: at open the tip is not known yet.
     expect([...(ask?.() ?? [])].sort()).toEqual([ROOT, TIP].sort());
     await watcher.stop();
+  });
+});
+
+/* ── §9.2: the one payload a hint carries ─────────────────────────────────── */
+
+/**
+ * A delegated child's whole block rides its hint, because a background
+ * delegation's progress has no turn left to ride on. It becomes a `subagent`
+ * event addressed to the observed conversation, it wakes no durable read, and
+ * it goes through the redaction door like any live frame.
+ */
+describe("chat.observe: subagent updates", () => {
+  const SECRET = "sk-ant-api03-FIXTUREVALUE";
+  const block = (preview: string): SubagentBlock => ({
+    kind: "subagent",
+    subagent_id: "sa-1",
+    depth: 0,
+    task_index: 0,
+    task_count: 1,
+    goal: `Audit with ${preview}`,
+    status: "running",
+    verdict: "running",
+    tools: [{ name: "terminal", preview }],
+    origin: "live",
+  });
+  /** One hint, then silence until the watch hangs up. */
+  const once =
+    (hint: ChatObserveHint) =>
+    (_box: unknown, _bot: unknown, opts: ObserveOptions = {}): AsyncIterable<ChatObserveHint> =>
+      (async function* () {
+        yield hint;
+        await new Promise<void>((resolve) => {
+          if (opts.signal?.aborted) resolve();
+          opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      })();
+
+  test("a subagent hint is a subagent event under the child's own session, and no read", async () => {
+    // The source attributes the child (its durable session); a hint that
+    // names none falls back to the observed conversation.
+    for (const [said, expected] of [
+      ["s1-tip", "s1-tip"],
+      [undefined, "s1"],
+    ] as const) {
+      const h = service(
+        { reads: [{ session: "s1", messages: [] }], failures: [] },
+        { hints: (_target, opts) => once({ session: said, subagent: block("ls") })(null, null, opts) },
+      );
+      const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+      const events = await watcher.take(2);
+      await settle();
+      await watcher.stop();
+      expect(events[0]?.type).toBe("snapshot");
+      expect(events[1]).toEqual({
+        type: "subagent",
+        instance: TARGET.instance,
+        bot: TARGET.bot,
+        session: expected,
+        block: block("ls"),
+      });
+      expect(h.snapshots()).toBe(1);
+    }
+  });
+
+  test("the block goes through the redaction door: masked with redaction on", async () => {
+    for (const redact of [true, false]) {
+      const h = harness({
+        hermes: {
+          ...fixtureChatClient(),
+          observe: once({ session: "runtime-1", subagent: block(`export K=${SECRET}`) }),
+        },
+      });
+      await h.chat.settings({ redact });
+      const watcher = watching((signal) => h.chat.observe(WHERE, { signal }));
+      const events = await watcher.take(2);
+      await watcher.stop();
+      const update = events.find((e) => e.type === "subagent");
+      if (update?.type !== "subagent") throw new Error("expected a subagent event");
+      const said = JSON.stringify(update.block);
+      if (redact) {
+        expect(said).not.toContain(SECRET);
+        expect(update.block.tools[0]?.preview).toContain(REDACTED);
+      } else expect(update.block.tools[0]?.preview).toContain(SECRET);
+    }
   });
 });

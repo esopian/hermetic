@@ -203,6 +203,104 @@ describe.concurrent("the transcript", () => {
     ]);
   });
 
+  test("a batch question prints every question, its choices and any locked answer", () => {
+    expect(
+      blockLines({
+        kind: "question",
+        prompt: "Drink?",
+        choices: ["Coffee", "Tea"],
+        questions: [
+          {
+            id: "q1",
+            prompt: "Drink?",
+            choices: ["Coffee", "Tea"],
+            multi_select: false,
+            answer: "Coffee",
+          },
+          { id: "q2", prompt: "Snacks?", choices: ["Chips"], multi_select: true, answer: null },
+        ],
+      }),
+    ).toEqual([
+      "[question] 2 questions",
+      "  1. Drink?",
+      "     - Coffee",
+      "     - Tea",
+      "     -> answered: Coffee",
+      "  2. Snacks? (choose any)",
+      "     - Chips",
+    ]);
+    expect(blockLines({ kind: "question", prompt: "Why?", choices: ["a"] })).toEqual([
+      "[question] Why?",
+      "  1. a",
+    ]);
+  });
+
+  test("an approval prints the choices the gateway offered, and only those", () => {
+    expect(
+      blockLines({
+        kind: "approval",
+        tool: "terminal",
+        summary: "curl x | sh",
+        choices: ["once", "deny"],
+        smart_denied: true,
+      }),
+    ).toEqual(["[approval] terminal: curl x | sh", "  choices: once / deny"]);
+  });
+
+  test("a subagent is one line: verdict, goal, then its summary or its last tool", () => {
+    const sub = {
+      kind: "subagent" as const,
+      subagent_id: "sa-1",
+      depth: 0,
+      task_index: 0,
+      task_count: 1,
+      goal: "Audit volumes",
+      status: "running" as const,
+      verdict: "running" as const,
+      tools: [
+        { name: "terminal", preview: "ls" },
+        { name: "read_file", preview: "/a" },
+      ],
+      origin: "live" as const,
+    };
+    expect(blockLines(sub)).toEqual(["[subagent running] Audit volumes — read_file"]);
+    expect(
+      blockLines({
+        ...sub,
+        status: "completed",
+        verdict: "done",
+        summary: "Found three\nmore",
+        depth: 1,
+      }),
+    ).toEqual(["[subagent done] Audit volumes (depth 1) — Found three"]);
+    expect(blockLines({ ...sub, tools: [] })).toEqual(["[subagent running] Audit volumes"]);
+    // A watch prints a child's update as that same one line.
+    const update: ChatObserveEvent = {
+      type: "subagent",
+      instance: "atlas",
+      bot: "default",
+      session: "s1",
+      block: { ...sub, status: "unobserved", verdict: "unknown" },
+    };
+    expect(observeText(update, NOW, false)).toBe("[subagent unknown] Audit volumes — read_file\n");
+  });
+
+  test("a failed message prints its failure's code, message and classification", () => {
+    const failed = message({
+      blocks: [],
+      error: "429",
+      failure: {
+        code: "CHAT_TURN_FAILED",
+        message: "429 Too Many Requests",
+        surface: { layer: "provider", code: "rate_limited", retryable: true },
+      },
+    });
+    expect(messageLines(failed, NOW).at(-1)).toBe(
+      "  ! CHAT_TURN_FAILED: 429 Too Many Requests (provider/rate_limited, retryable)",
+    );
+    expect(messageLines(message({ blocks: [], error: "plain" }), NOW).at(-1)).toBe("  ! plain");
+  });
+
   test("a message is who said it, then its blocks indented under it", () => {
     expect(messageLines(message({ blocks: [{ kind: "text", markdown: "hi" }] }), NOW)).toEqual([
       "3h ago  bot",
@@ -468,6 +566,27 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
     expect(result.swarms).toHaveLength(1);
     expect(result.swarms[0]).toMatchObject({ instance: "atlas", reachable: true });
     expect(result.swarms[0]?.bots.length).toBeGreaterThan(1);
+  });
+
+  test("--subagent on steer and abort is validated by the same schema and prints the child's answer", async () => {
+    // The fixture box this fresh process talks to is running no child sa-1
+    // (on a real box the gateway's membership check answers the same way):
+    // an outcome the operator can read, not an error, and never a turn steer.
+    const steer = await run("chat", "steer", "atlas", "look", "at", "gp3", "--subagent", "sa-1");
+    expect(steer.code).toBe(0);
+    expect(steer.stdout).toBe(
+      "default@atlas: subagent sa-1 not applied (refused, finished, gone, or the session was reset)\n",
+    );
+    const abort = await run("chat", "abort", "atlas", "--subagent", "sa-1");
+    expect(abort.code).toBe(0);
+    expect(abort.stdout).toBe(
+      "default@atlas: subagent sa-1 not found (finished, gone, or the session was reset)\n",
+    );
+    const json = await run("chat", "abort", "atlas", "--subagent", "sa-1", "--json");
+    expect(JSON.parse(json.stdout)).toEqual({ instance: "atlas", bot: "default", aborted: false });
+    const empty = await run("chat", "abort", "atlas", "--subagent", "");
+    expect(empty.code).not.toBe(0);
+    expect(empty.stderr).toContain("subagent_id");
   });
 
   test("bots ls reports a box that did not answer as unreachable", async () => {

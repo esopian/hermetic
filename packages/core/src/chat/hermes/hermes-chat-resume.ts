@@ -29,7 +29,8 @@ import { HermeticError } from "../../errors.ts";
 import { advertiseServerRequests, nextEvent, type Rpc } from "./hermes-chat-rpc.ts";
 import { CHAT_ERROR_CODES, CHAT_RECONNECT_BLOCK_KEY, type BoxAddress } from "./hermes-chat-types.ts";
 import { HERMETIC_SESSION_SOURCE, num, rec, str } from "./hermes-chat-wire.ts";
-import type { ChatBlock } from "../../schema/index.ts";
+import type { ChatBlock, SubagentBlock } from "../../schema/index.ts";
+import { watches, type SubagentLedgers, type SubagentWatch } from "./hermes-chat-subagent-ledgers.ts";
 
 /** JSON-RPC's "method not found", which is how an older gateway says no. */
 const METHOD_NOT_FOUND = -32601;
@@ -459,6 +460,21 @@ export function createTurnResume(deps: TurnResumeDeps) {
         queued.push({ kind: "reconnected" });
         for (const value of replayed(answer?.events)) queued.push({ kind: "event", value });
         for (const value of openRequests(answer?.open_requests)) queued.push({ kind: "event", value });
+        // An open connection request is in the resume snapshot, not the event
+        // log, when its frame went out on the socket that died. Replayed as the
+        // event it was; the turn's connection gate drops it when the same or a
+        // newer operation `seq` was already shown.
+        const connection = rec(resumed?.pending_connection);
+        if (connection)
+          queued.push({
+            kind: "event",
+            value: {
+              type: "connection.request",
+              session_id: session,
+              unsequenced: true,
+              payload: connection,
+            },
+          });
       } catch (e) {
         if (signal?.aborted || isAborted(e)) {
           // The half-built socket is left open and current: it is attached if
@@ -617,3 +633,90 @@ export function createTurnResume(deps: TurnResumeDeps) {
 }
 
 export type TurnResume = ReturnType<typeof createTurnResume>;
+
+/* ── subagent reconcile ───────────────────────────────────────────────────── */
+
+/** Upstream's "session not found or not owned by this transport" / "session not found". */
+const SESSION_GONE: ReadonlySet<number> = new Set([4001, 4007]);
+
+export interface SubagentReconcileDeps {
+  connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
+  ledgers: SubagentLedgers;
+}
+
+/**
+ * Re-read the live roster of every session this watch answers for whose ledger
+ * still has a running child, after the events that would have finished them
+ * may have been missed — the observation stream reopening after a drop, or a
+ * watch resumed (`chat.observe.resume`). Another conversation's children are
+ * not this watch's to reconcile (`watches`). Returns every block it changed,
+ * with the durable session it belongs to.
+ *
+ * Per session: a fresh socket, `session.resume` (the shape child control uses,
+ * which attaches this socket to the live session), the session's latest event
+ * `seq` (`session.events.since`, the turn's own probe) as the snapshot's
+ * watermark, then `subagent.list`, whose roster holds **active** children
+ * only. A listed child becomes
+ * `origin: "replay"` with the roster's status and counts; one absent from it
+ * and never seen to complete becomes `unobserved` / `unknown` — it ended while
+ * nobody listened, and nothing here infers how (`SubagentLedger.replay`). A
+ * session the gateway no longer has (4001/4007) lists nobody. Any other
+ * failure changes nothing: an unreachable box is not evidence a child ended.
+ *
+ * Events that arrive on the observation socket while this runs are applied
+ * after it. One newer than the snapshot wins; one at or below the watermark
+ * is older than the snapshot and leaves the replayed row alone, and no event
+ * moves a tool count backwards. A `complete` applied before the snapshot is
+ * terminal and the snapshot cannot undo it.
+ */
+export async function reconcileSubagents(
+  deps: SubagentReconcileDeps,
+  watch: SubagentWatch,
+  signal?: AbortSignal,
+): Promise<{ stored: string; block: SubagentBlock }[]> {
+  const { box, bot } = watch;
+  const changed: { stored: string; block: SubagentBlock }[] = [];
+  for (const session of deps.ledgers.open(box, bot)) {
+    if (signal?.aborted) break;
+    if (!session.stored || !watches(watch, session)) continue;
+    let roster: unknown[] | null = null;
+    let watermark: number | null = null;
+    let rpc: Rpc | null = null;
+    try {
+      rpc = await deps.connect(box, signal);
+      const resumed = rec(
+        await rpc.request("session.resume", {
+          session_id: session.stored,
+          profile: bot,
+          source: HERMETIC_SESSION_SOURCE,
+          defer_history: true,
+          omit_messages: true,
+        }),
+      );
+      const runtime = str(resumed?.session_id);
+      if (!runtime) continue;
+      try {
+        const latest = rec(
+          await rpc.request("session.events.since", {
+            session_id: runtime,
+            last_seen: Number.MAX_SAFE_INTEGER,
+          }),
+        );
+        watermark = num(latest?.latest_seq);
+      } catch {
+        // A gateway without a replay log: the tool-count floor still holds.
+      }
+      const listed = rec(await rpc.request("subagent.list", { session_id: runtime }));
+      roster = Array.isArray(listed?.subagents) ? listed.subagents : null;
+    } catch (e) {
+      const code = e instanceof HermeticError ? e.details?.code : undefined;
+      if (typeof code === "number" && SESSION_GONE.has(code)) roster = [];
+    } finally {
+      rpc?.close();
+    }
+    if (roster === null) continue;
+    const stored = session.stored;
+    for (const block of session.ledger.replay(roster, watermark)) changed.push({ stored, block });
+  }
+  return changed;
+}

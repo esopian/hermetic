@@ -70,7 +70,7 @@
 import { abortableSleep } from "../abort.ts";
 import { redactText } from "./chat-redact.ts";
 import { HermeticError } from "../errors.ts";
-import type { ChatMessage, ChatObserveEvent } from "../schema/index.ts";
+import type { ChatMessage, ChatObserveEvent, SubagentBlock } from "../schema/index.ts";
 
 /* ── the policy constants ─────────────────────────────────────────────────── */
 
@@ -190,6 +190,15 @@ export interface ChatObserveTarget {
 export interface ChatObserveHint {
   /** The session the hint concerned, when the source could tell. Advisory. */
   session?: string | null | undefined;
+  /**
+   * A delegated child's whole block, changed — the one payload a hint may
+   * carry (§9.2), because a background delegation's progress has no turn left
+   * to ride on and nothing durable records it. Already through the redaction
+   * door when it reaches this module. Emitted as a `subagent` event under
+   * `session`, which for this hint is the child's own durable session; it is
+   * not evidence the durable transcript changed, so it wakes no read.
+   */
+  subagent?: SubagentBlock | undefined;
 }
 
 /** The authoritative read: the box's own transcript, already redacted. */
@@ -340,7 +349,7 @@ interface Subscription {
  * here rather than left to surface as an unhandled rejection later.
  */
 type Wake =
-  | { kind: "hint" }
+  | { kind: "hint"; hint?: ChatObserveHint }
   | { kind: "tick" }
   | { kind: "ended"; error?: unknown }
   | { kind: "aborted" };
@@ -456,7 +465,7 @@ function hintChannel(it: AsyncIterator<ChatObserveHint>, cancel: () => void): Hi
   return {
     pull(): Promise<Wake> {
       pending ??= it.next().then(
-        (r): Wake => (r.done === true ? { kind: "ended" } : { kind: "hint" }),
+        (r): Wake => (r.done === true ? { kind: "ended" } : { kind: "hint", hint: r.value }),
         (error): Wake => ({ kind: "ended", error }),
       );
       return pending;
@@ -681,6 +690,8 @@ export function createChatObservation(deps: ChatObserveDeps) {
     let hintAttempt = 0;
     /** Set once the hint channel has been shown not to work. Poll from then on. */
     let pollOnly = false;
+    /** The last wake carried only a subagent block: nothing durable to read. */
+    let quiet = false;
     while (!signal.aborted) {
       // Asked every pass rather than once, so a caller that only learns the
       // gateway is hintless after the first conversation is obeyed by the
@@ -737,7 +748,8 @@ export function createChatObservation(deps: ChatObserveDeps) {
         }
       }
       try {
-        await reconcile(sub);
+        if (!quiet) await reconcile(sub);
+        quiet = false;
         readAttempt = 0;
       } catch (error) {
         if (signal.aborted) break;
@@ -785,6 +797,19 @@ export function createChatObservation(deps: ChatObserveDeps) {
         // evidence that the outage is over. Completing a read is not: the read
         // does not go through the thing that broke.
         if (hints !== null) hintAttempt = 0;
+        const hint = next.kind === "hint" ? next.hint : undefined;
+        if (hint?.subagent) {
+          emit(sub, {
+            type: "subagent",
+            instance: sub.target.instance,
+            bot: sub.target.bot,
+            // The durable session the child belongs to, as the source
+            // attributed it; else the observed conversation, as on `message`.
+            session: hint.session ?? sub.snapshot?.session ?? sub.target.session ?? null,
+            block: hint.subagent,
+          });
+          quiet = true;
+        }
         continue;
       }
       hints?.close();

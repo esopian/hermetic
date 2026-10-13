@@ -1,15 +1,18 @@
 /** Conversation records outlive the frame displaying them, but never their fleet provider. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatApi, ChatSelection } from "./chat-state.tsx";
-import type {
-  BotView,
-  ChatConversationView,
-  ChatFrameView,
-  ChatMessageView,
-  ChatObserveView,
-} from "../api/index.ts";
+import type { BotView, ChatConversationView, ChatMessageView, ChatObserveView } from "../api/index.ts";
 import { nextTurnActivity } from "./chat-activity.ts";
 import { previewOf } from "./chat-logic.ts";
+import {
+  landOnSegment,
+  openRequestIn,
+  releaseIn,
+  rememberTurnPrompt,
+  settleIn,
+  trackRequest,
+} from "./chat-requests.ts";
+import { STEER_PREFIX } from "./chat-recovery.ts";
 import { isProcessEventMessage, previewText } from "./process-events.ts";
 import type { ConversationActivity } from "./chat-activity.ts";
 import {
@@ -29,6 +32,13 @@ import {
   takeHeld,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
+import {
+  noteSubagentFrame,
+  observeSubagent,
+  reapplySubagents,
+  takeSubagents,
+} from "./chat-subagents.ts";
+import { useSubagentControls } from "./chat-subagent-control.ts";
 
 export type { ObserveState } from "./chat-conversation-record.ts";
 
@@ -132,10 +142,14 @@ function replyArrival(record: Conversation, live: ChatMessageView | null): ChatA
  */
 export type SteerOutcome = "redirected" | "queued" | "rejected" | "idle" | "refused";
 
-/** The optimistic copy of the operator's prompt, until the box echoes it back. */
-function localPrompt(body: string, at: string, session: string | null): ChatMessageView {
+/**
+ * The optimistic copy of the operator's prompt, until the box echoes it back.
+ * A steer's is marked (`STEER_PREFIX`), so a failed turn's Retry binds to the
+ * prompt that started the turn rather than to words steered into it.
+ */
+function localPrompt(body: string, at: string, session: string | null, steer = false): ChatMessageView {
   return {
-    id: `local:${at}`,
+    id: `${steer ? STEER_PREFIX : "local:"}${at}`,
     session: session ?? "",
     role: "user",
     author: null,
@@ -159,42 +173,6 @@ function answered(messages: readonly ChatMessageView[], live: ChatMessageView): 
     (m) =>
       m.id === live.id || (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
   );
-}
-
-/** The blocks a part of the reply that a steer closed off can still receive. */
-const LANDS = new Set(["tool", "approval", "question"]);
-
-/**
- * A `block` frame that updates a block in a part of the reply a steer closed
- * off — a tool that was running when the operator's words went in, finishing
- * after them — lands on that part rather than starting a copy below.
- *
- * Whether it does is read off `assemble` itself: a block it *replaced* leaves
- * the part's block count where it was, and one it would only have appended is
- * new work, which belongs to the live message.
- */
-function landOnSegment(
-  record: Conversation,
-  frame: ChatFrameView,
-  seed: { session: string; at: string },
-  assemble: Assemble,
-): boolean {
-  if (frame.type !== "block" || record.segments.length === 0) return false;
-  // Only blocks with an identity of their own. A status snapshot also replaces
-  // by key, but it describes the turn as it is now, which is the live part.
-  if (!LANDS.has(frame.block.kind)) return false;
-  for (const id of [...record.segments].reverse()) {
-    const index = record.messages.findIndex((m) => m.id === id);
-    const part = index === -1 ? null : record.messages[index]!;
-    if (!part) continue;
-    const merged = assemble(part, frame, seed);
-    if (!merged || merged.blocks.length !== part.blocks.length) continue;
-    const next = [...record.messages];
-    next[index] = merged;
-    record.messages = next;
-    return true;
-  }
-  return false;
 }
 
 export function useConversations(
@@ -392,6 +370,9 @@ export function useConversations(
             record.dropped = false;
           } else record.live = { ...record.live, incomplete: true };
         }
+        // After the live message is retired, never before: a child placed on a
+        // live message the read then drops would be lost with it.
+        reapplySubagents(record);
         return true;
       } catch (error) {
         if (!stale()) record.historyError = error instanceof Error ? error.message : String(error);
@@ -448,6 +429,15 @@ export function useConversations(
     [get, permits],
   );
   const current = selection ? get(selection) : empty.current;
+  const subagents = useSubagentControls({
+    current,
+    selected,
+    get,
+    find: (target) => records.current.get(key(target)),
+    changed,
+    permits,
+    api: apiRef,
+  });
   useEffect(() => {
     if (!selection) return;
     const record = get(selection);
@@ -539,6 +529,8 @@ export function useConversations(
             // made; the seed stays, because the turn itself is still streaming
             // and the rows it produces from here on belong to the new session.
             appendMissing(record, takeHeld(record, true));
+            // The children belong to the conversation that recorded them.
+            const children = takeSubagents(record);
             if (retiredSession) {
               // Same shape as the `openConversation` re-key in `readHistory`:
               // the retired session's explicit alias is moved off this record
@@ -571,6 +563,7 @@ export function useConversations(
                   sessions: [...record.sessions],
                   sessionsState: record.sessionsState,
                   sessionsError: record.sessionsError,
+                  ...children,
                 });
               }
             }
@@ -661,6 +654,7 @@ export function useConversations(
             record.live = null;
             record.dropped = false;
           }
+          reapplySubagents(record);
           break;
         }
         case "message": {
@@ -755,6 +749,24 @@ export function useConversations(
             record.live = null;
             record.dropped = false;
           }
+          break;
+        }
+        case "subagent": {
+          // The one observation that is not a durable read (§9.2): a delegated
+          // child, whole, landing on its row wherever the transcript holds it.
+          // Routed by the event's own durable session, not the subscription's:
+          // a late child of a retired session goes to that session's record,
+          // if this browser keeps one, and never into the conversation that
+          // replaced it.
+          observeLive(record);
+          const owner =
+            sessionOf(record) === event.session
+              ? record
+              : event.session === null
+                ? undefined
+                : records.current.get(key({ ...record.target, session: event.session }));
+          if (owner && sessionOf(owner) === event.session)
+            observeSubagent(owner, event.block, Date.now());
           break;
         }
         case "reconnect": {
@@ -1008,6 +1020,7 @@ export function useConversations(
       record.turnSeed = seed;
       record.segments = [];
       record.segmentAt = at;
+      record.openRequests.clear();
       record.messages = [...record.messages, localPrompt(body, at, session)];
       changed();
       let seq = -1;
@@ -1025,8 +1038,10 @@ export function useConversations(
         settled = true;
         finish();
         record.cancel = null;
+        record.rearm = null;
         record.activity = "idle";
         record.segments = [];
+        record.openRequests.clear();
         if (!record.aborting) record.sending = false;
         // The live message stops speaking for the held rows here — including on
         // the paths that never re-read the transcript, which is the whole point
@@ -1054,8 +1069,13 @@ export function useConversations(
           });
         }
       };
+      // Arms only while nothing is open: a turn parked on an approval or a
+      // clarify is waiting on the operator, not silent, and cancelling it for
+      // that would take the turn away from someone still reading the question.
+      // There is deliberately no upper bound on how long it may stay parked.
       const tick = () => {
         finish();
+        if (record.openRequests.size > 0) return;
         idle = setTimeout(() => {
           record.cancel?.();
           end(false, null);
@@ -1068,10 +1088,18 @@ export function useConversations(
         {
           onFrame: (frame) => {
             if (!valid() || settled || terminal) return;
+            // Any frame is a sign of life, but only restarts the timer while no
+            // request is open — a reconnect status or a notice arriving while a
+            // question waits must not start the clock on the operator.
             tick();
             if (frame.type === "error") {
               terminal = true;
+              record.openRequests.clear();
+              tick();
               record.activity = "idle";
+              // The failure is drawn on the turn itself, minted if it came first.
+              record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
+              if (record.live) rememberTurnPrompt(record, record.live.id, body);
               changed();
               return;
             }
@@ -1083,9 +1111,20 @@ export function useConversations(
             }
             seq = frame.seq;
             terminal = frame.type === "done";
+            if (terminal) {
+              record.openRequests.clear();
+              tick();
+            }
+            // Opening a request stops the clock; closing the last one restarts it.
+            else if (trackRequest(record, frame)) tick();
             record.activity = nextTurnActivity(record.activity, frame);
-            if (!landOnSegment(record, frame, seed, assemble))
-              record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
+            // A child's frame is reconciled against every copy already drawn
+            // and the observed one (`noteSubagentFrame`); `null` merges nothing.
+            const block =
+              frame.type === "block" ? noteSubagentFrame(record, frame.block, Date.now()) : null;
+            const merged = frame.type === "block" && block ? { ...frame, block } : frame;
+            if ((frame.type !== "block" || block) && !landOnSegment(record, merged, seed, assemble))
+              record.live = assemble(record.live, merged, { ...seed, at: record.segmentAt ?? seed.at });
             changed();
           },
           onEnd: end,
@@ -1096,6 +1135,9 @@ export function useConversations(
         record.cancel = () => {
           finish();
           cancel();
+        };
+        record.rearm = () => {
+          if (valid() && !settled && !terminal) tick();
         };
         tick();
       }
@@ -1146,7 +1188,7 @@ export function useConversations(
         record.live = null;
       }
       record.segmentAt = at;
-      record.messages = [...record.messages, localPrompt(body, at, session)];
+      record.messages = [...record.messages, localPrompt(body, at, session, true)];
       changed();
       // The turn ended while the box was answering: its re-read has already
       // been asked for and may predate this prompt, so ask again.
@@ -1155,6 +1197,59 @@ export function useConversations(
     },
     [changed, get, permits, readHistory],
   );
+
+  /**
+   * Stop counting `request_id` as one the turn is parked on, without closing
+   * its card: the operator answered it from the card itself, and the gateway
+   * sends no close after an ordinary answer. The no-frame timer may run again,
+   * `openRequest` no longer names it and the message stops reading "waiting",
+   * but no notice is added, so the card stays on screen as its settled summary.
+   * `target` names the conversation when the caller captured it before an
+   * await; the current selection otherwise.
+   */
+  const releaseRequest = useCallback(
+    (request_id: string, target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (releaseIn(record, request_id)) record.rearm?.();
+      changed();
+    },
+    [changed, get, permits],
+  );
+
+  /**
+   * Close a request card the box has let go of, without waiting for it to say
+   * so in the stream. The composer's steer declines an open clarify before
+   * sending and calls this once the box has acknowledged the skip, never
+   * before: a skip that failed leaves the card answerable. The close is the
+   * same finished `notice` a `request.cancel` lands as (`settleIn`), so the
+   * card settles to its summary (`closedRequests`) and the turn reads as
+   * thinking again (`nextTurnActivity`). `target` as for `releaseRequest`.
+   */
+  const settleRequest = useCallback(
+    (request_id: string, outcome: "skipped" | "answered", target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      releaseRequest(request_id, where);
+      const settled = settleIn(record, request_id, outcome, assemble);
+      if (!settled) return;
+      record.activity = nextTurnActivity(record.activity, settled);
+      changed();
+    },
+    [assemble, changed, get, permits, releaseRequest],
+  );
+
+  /**
+   * The clarify the selected conversation is waiting on, if any (`openRequestIn`).
+   * Read at call time, so a caller acting on a keypress sees the record as it
+   * is rather than as the last render left it.
+   */
+  const openRequest = useCallback((): string | null => {
+    if (!selected.current || !permits(selected.current.instance)) return null;
+    return openRequestIn(get(selected.current));
+  }, [get, permits]);
 
   const abort = useCallback(async () => {
     if (!selected.current || !permits(selected.current.instance)) return;
@@ -1187,6 +1282,8 @@ export function useConversations(
         record.cancel = null;
         record.sending = false;
         record.segments = [];
+        record.openRequests.clear();
+        record.rearm = null;
         releaseHeld(record);
         record.activity = "idle";
         record.aborting = false;
@@ -1255,6 +1352,9 @@ export function useConversations(
     select,
     send,
     steer,
+    settleRequest,
+    releaseRequest,
+    openRequest,
     abort,
     reloadHistory,
     reloadTranscript,
@@ -1265,5 +1365,6 @@ export function useConversations(
     observeDropped,
     observeTransport,
     resumeObservation,
+    subagents,
   };
 }

@@ -356,16 +356,21 @@ describe("an unsequenced server request arriving twice", () => {
     expect(blocks[0]).toMatchObject({ summary: "rm -rf /data (retried)" });
   });
 
-  test("two questions of one batch are two cards, and a replay of one is still two", () => {
-    const first = ask("Which box?");
-    const second = ask("Which fleet?");
-    expect(fold(first, second)).toHaveLength(2);
-    const blocks = fold(first, second, first);
-    expect(blocks).toHaveLength(2);
-    expect(blocks.map((b) => (b.kind === "question" ? b.prompt : ""))).toEqual([
-      "Which box?",
-      "Which fleet?",
-    ]);
+  test("a batch of two questions is one card, and its replay replaces it", () => {
+    const batch = (answer: string | null) => ({
+      ...ask("Which box?"),
+      questions: [
+        { id: "q0", prompt: "Which box?", choices: ["yes", "no"], multi_select: false, answer },
+        { id: "q1", prompt: "Which fleet?", choices: ["yes", "no"], multi_select: false, answer: null },
+      ],
+    });
+    expect(fold(batch(null))).toHaveLength(1);
+    // The replay carries a lock the first delivery did not, and it wins.
+    const blocks = fold(batch(null), batch("yes"));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ questions: [{ id: "q0", answer: "yes" }, { id: "q1" }] });
+    // One request, one card, whatever its prompt says: the id is the whole key.
+    expect(fold(ask("Which box?"), ask("Which fleet?"))).toHaveLength(1);
   });
 
   test("the same question under two request ids stays two cards", () => {

@@ -7,6 +7,7 @@
 import type { ChatSelection } from "./chat-state.tsx";
 import type { ChatFrameView, ChatMessageView, SessionView } from "../api/index.ts";
 import type { TurnActivity } from "./chat-activity.ts";
+import type { SubagentControl, SubagentTrail, SubagentView } from "./chat-subagents.ts";
 
 export type Failure = { code: string; message: string };
 
@@ -380,6 +381,42 @@ export interface Conversation {
   segments: string[];
   /** When the live message's current part began: the turn's start, or the last steer. */
   segmentAt: string | null;
+  /**
+   * Server requests (approval or clarify) the streaming turn is parked on, by
+   * request id. While any is open the turn's no-frame timer stays off: the box
+   * is silent because it waits on the operator, not because the pipe died.
+   * Emptied at every turn boundary.
+   */
+  openRequests: Set<string>;
+  /**
+   * Requests the operator answered from the card. The gateway sends no close
+   * after an ordinary answer, so the card's block stays as it was (the card
+   * draws its own settled summary) and only this set says the request is no
+   * longer waiting on anyone. Replaced, never mutated, so a render sees it
+   * move; ids are never reused, so it is never pruned (`chat-requests.ts`).
+   */
+  released: ReadonlySet<string>;
+  /**
+   * The prompt that started each turn this browser saw fail, by the failed
+   * message's id: what its Retry sends, whatever was steered into it since.
+   * Replaced, never mutated, like `released`.
+   */
+  turnPrompts: ReadonlyMap<string, string>;
+  /**
+   * Re-run the streaming turn's no-frame timer, for a request settled outside
+   * the frame stream. `null` when no turn of this browser's is streaming.
+   */
+  rearm: (() => void) | null;
+  /**
+   * Delegated children (`chat-subagents.ts`): the latest live block of each,
+   * when its calls and notes were first seen, the operator's unsent steer per
+   * child, and what became of their steer and stop. Replaced, never mutated,
+   * and bounded.
+   */
+  subagentLive: ReadonlyMap<string, SubagentView>;
+  subagentTrail: ReadonlyMap<string, SubagentTrail>;
+  subagentDrafts: ReadonlyMap<string, string>;
+  subagentControl: ReadonlyMap<string, SubagentControl>;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -419,5 +456,13 @@ export function fresh(target: ChatSelection): Conversation {
     turnSeed: null,
     segments: [],
     segmentAt: null,
+    openRequests: new Set(),
+    released: new Set(),
+    turnPrompts: new Map(),
+    rearm: null,
+    subagentLive: new Map(),
+    subagentTrail: new Map(),
+    subagentDrafts: new Map(),
+    subagentControl: new Map(),
   };
 }

@@ -15,9 +15,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { defaultRole } from "../packages/core/src/chat/hermes/hermes-chat-activity.ts";
-import type { ChatBlock } from "../packages/core/src/schema/chat.ts";
+import { CHAT_BLOCK_KINDS, type ChatBlock } from "../packages/core/src/schema/chat.ts";
 import type { ChatBlockOf } from "../packages/ui/src/api/index.ts";
-import { isStatusBlock } from "../packages/ui/src/chat/components/Activity.tsx";
+import { CHAT_BLOCK_KINDS as UI_BLOCK_KINDS } from "../packages/ui/src/chat/chat-logic.ts";
+import { isActivity, isStatusBlock } from "../packages/ui/src/chat/components/Activity.tsx";
 
 // core's activity shape (`payload: unknown`) and the UI's wire-typed view
 // (`payload: JSONValue`) are structurally the same block once `payload` is
@@ -49,6 +50,8 @@ const CASES: Array<[CoreCategory, string]> = [
   ["notice", "notice"],
   ["notice", "error"],
   ["notice", "risk:call1"],
+  ["notice", "connection:op1"],
+  ["notice", "request:srv-1"],
 ];
 
 describe("core's defaultRole and the UI's role-less fallback agree", () => {
@@ -64,5 +67,28 @@ describe("core's defaultRole and the UI's role-less fallback agree", () => {
     // hermes-chat-turn.ts at the "Thinking…"/"Thinking complete" sites), but
     // both are explicitly role: "status" there, so the fallback must agree.
     expect(isStatusBlock(roleless("generation", "reasoning"))).toBe(true);
+  });
+});
+
+describe("the UI's block-kind mirror", () => {
+  test("names exactly core's kinds, so no kind falls through to `unknown`", () => {
+    expect([...UI_BLOCK_KINDS].sort()).toEqual([...CHAT_BLOCK_KINDS].sort());
+  });
+
+  test("a subagent block is run work, never a status snapshot", () => {
+    const block: ChatBlockOf<"subagent"> = {
+      kind: "subagent",
+      subagent_id: "sa-1",
+      depth: 0,
+      task_index: 0,
+      task_count: 1,
+      goal: "g",
+      status: "running",
+      verdict: "running",
+      tools: [],
+      origin: "live",
+    };
+    expect(isActivity(block)).toBe(true);
+    expect(isStatusBlock(block)).toBe(false);
   });
 });

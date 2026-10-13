@@ -159,6 +159,8 @@ export type ChatActivityView = Extract<ChatBlockView, { kind: "activity" }>;
 /** One member of the block union, by its discriminant — `ChatBlockOf<"tool">`. */
 export type ChatBlockOf<K extends ChatBlockView["kind"]> = Extract<ChatBlockView, { kind: K }>;
 export type ChatUsageView = NonNullable<ChatMessageView["usage"]>;
+/** A failed turn as core describes it, live or re-read (`ChatFailure`). */
+export type ChatFailureView = NonNullable<ChatMessageView["failure"]>;
 export type ChatAbortResult = BridgeResult<"chat.abort">;
 export type ChatSteerResult = BridgeResult<"chat.steer">;
 export type ChatResumeResult = BridgeResult<"chat.observe.resume">;
@@ -168,7 +170,7 @@ export type ChatFrameView =
   | { type: "block"; seq: number; message: string; block: ChatBlockView }
   | { type: "delta"; seq: number; message: string; text: string }
   | { type: "done"; seq: number; message: string; usage?: ChatUsageView | null; incomplete?: boolean }
-  | { type: "error"; code: string; message: string };
+  | { type: "error"; code: string; message: string; failure?: ChatFailureView | null };
 
 export type SettingsResult = BridgeResult<"settings.get">;
 export type FleetSettings = SettingsResult["settings"];

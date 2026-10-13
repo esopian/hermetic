@@ -26,6 +26,8 @@ import { SourcesBlock } from "./Sources.tsx";
 import { TextBlock } from "./Text.tsx";
 import { ToolBlock } from "./Tool.tsx";
 import { UnknownBlock } from "./Unknown.tsx";
+import { SubagentBlock } from "./Subagent.tsx";
+import type { ClosedRequest } from "../../chat-requests.ts";
 
 export function Block({
   block,
@@ -41,11 +43,17 @@ export function Block({
    * kind is unaffected because only `text` runs markdown at all.
    */
   mine = false,
+  /** How the box closed this request card, when it did (`closedRequests`). */
+  closed,
+  /** Open approvals in the turn, for the approval card's "N pending" label. */
+  pending,
 }: {
   block: ChatBlockView;
   now: number;
   streaming?: boolean;
   mine?: boolean;
+  closed?: ClosedRequest;
+  pending?: number;
 }) {
   switch (blockKind(block)) {
     case "text":
@@ -63,9 +71,16 @@ export function Block({
     case "attachment":
       return <AttachmentBlock block={block as ChatBlockOf<"attachment">} />;
     case "approval":
-      return <ApprovalBlock block={block as ChatBlockOf<"approval">} now={now} />;
+      return (
+        <ApprovalBlock
+          block={block as ChatBlockOf<"approval">}
+          now={now}
+          closed={closed}
+          pending={pending}
+        />
+      );
     case "question":
-      return <QuestionBlock block={block as ChatBlockOf<"question">} />;
+      return <QuestionBlock block={block as ChatBlockOf<"question">} now={now} closed={closed} />;
     case "sources":
       return <SourcesBlock block={block as ChatBlockOf<"sources">} />;
     case "hermetic":
@@ -74,6 +89,8 @@ export function Block({
       // `Thread` draws an event message as a gutter row of its own and never
       // reaches here with one; this is the same content for any other surface.
       return <ProcessEventBlock block={block as ChatBlockOf<"process_event">} />;
+    case "subagent":
+      return <SubagentBlock block={block} />;
     default:
       return <UnknownBlock block={block} />;
   }

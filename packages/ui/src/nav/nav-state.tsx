@@ -605,6 +605,15 @@ export function useNav(): Nav {
 }
 
 /**
+ * The navigation when this tree has a provider, `null` when it does not: the
+ * chat's failure card links to Settings and the agent's Config where it can,
+ * and a chat rendered on its own (a test, a demo shell) simply offers no link.
+ */
+export function useNavIfAvailable(): Nav | null {
+  return useContext(NavContext);
+}
+
+/**
  * The page's keyboard shortcuts (`shortcuts.ts`), as one window listener.
  *
  * Registered once: everything it reads that changes per render comes through

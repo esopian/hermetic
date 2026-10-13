@@ -92,6 +92,19 @@ export function isTopmostOverlay(root: HTMLElement | null): boolean {
 }
 
 /**
+ * Whether a key event started inside an element that handles Escape itself
+ * (`data-owns-escape`): an approval card's confirm step, where Escape means
+ * "back to the buttons". The window-level Escape handlers run in the capture
+ * phase, ahead of the element's own, so they ask this rather than waiting for
+ * `defaultPrevented`.
+ */
+export function ownsEscape(target: EventTarget | null): boolean {
+  return typeof Element !== "undefined" && target instanceof Element
+    ? target.closest("[data-owns-escape]") !== null
+    : false;
+}
+
+/**
  * Whether focus is inside an element that owns the keyboard — the terminal's
  * screen (`data-owns-keys`, `TerminalPane.tsx`), where Esc and Tab are keys
  * for the shell. Overlays and page shortcuts stand aside while it is; clicking
