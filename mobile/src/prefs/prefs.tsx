@@ -30,7 +30,7 @@ export const DEFAULT_PREFS: Prefs = {
   quiet: { enabled: false, start: "22:00", end: "07:00" },
 };
 
-const KEY = "hermetic.prefs.v1";
+const PREFS_SLOT = "hermetic.prefs.v1";
 
 export function parsePrefs(raw: string | null): Prefs {
   if (!raw) return DEFAULT_PREFS;
@@ -70,7 +70,7 @@ export function PrefsProvider({ children, storage }: { children: ReactNode; stor
   useEffect(() => {
     let live = true;
     void storage
-      ?.get(KEY)
+      ?.get(PREFS_SLOT)
       .then((raw) => {
         if (!live) return;
         const next = parsePrefs(raw);
@@ -88,7 +88,7 @@ export function PrefsProvider({ children, storage }: { children: ReactNode; stor
       setPrefs((current) => {
         const next = { ...current, ...patch, quiet: { ...current.quiet, ...(patch.quiet ?? {}) } };
         setHapticsEnabled(next.haptics);
-        void storage?.set(KEY, JSON.stringify(next)).catch(() => {});
+        void storage?.set(PREFS_SLOT, JSON.stringify(next)).catch(() => {});
         return next;
       });
     },
