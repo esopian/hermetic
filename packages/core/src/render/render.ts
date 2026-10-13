@@ -29,6 +29,7 @@ import {
 import {
   BROWSER_ENV_REFS,
   CHROME_APPARMOR_COMMAND,
+  browserEnvSeedCommands,
   browserFiles,
   browserServeRoutes,
   browserUnits,
@@ -454,6 +455,8 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
      */
     CHROME_APPARMOR_COMMAND,
     ...seedCommands(input),
+    // The agent's `.env` gets the CDP endpoint the way its config gets the seed.
+    ...browserEnvSeedCommands(browsers),
     /**
      * The proxy's config is not a unit file, so apply's units phase will never
      * restart nginx for it (it restarts only units whose own file changed).

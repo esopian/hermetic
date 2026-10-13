@@ -14,6 +14,7 @@ import {
 } from "../src/schema/index.ts";
 import { assertFullyRendered, renderAgentConfig, serveCommands } from "../src/render/render.ts";
 import { HERMETIC_PLATFORM_HINT } from "../src/render/render-hermes.ts";
+import { browserEnvSeedCommands, browserManagedConfigLines } from "../src/render/render-browser.ts";
 import { HermeticError } from "../src/errors.ts";
 
 /**
@@ -291,6 +292,42 @@ describe("renderAgentConfig", () => {
       expect(fileAt(on, path), path).toContain(`AGENT_BROWSER_EXECUTABLE_PATH=${chrome}`);
       expect(fileAt(on, path), path).toContain("Environment=DISPLAY=:99");
     }
+  });
+
+  /**
+   * The managed key is not read by every upstream path: `browser_exec` goes
+   * through `read_raw_config()`, which skips the managed overlay, and with no
+   * endpoint it launches a headless Chrome of its own. `BROWSER_CDP_URL` in the
+   * agent's `.env` is read first by every path, so the render seeds it there,
+   * with the same value as the managed key.
+   */
+  test("the agent's .env is seeded with BROWSER_CDP_URL, the managed endpoint", () => {
+    const on = browserOn();
+    const seeds = on.manifest.commands.filter((c) => c.includes("BROWSER_CDP_URL"));
+    expect(seeds).toHaveLength(1);
+    const command = seeds[0]!;
+    expect(command).toContain('echo "BROWSER_CDP_URL=http://127.0.0.1:9222"');
+    expect(fileAt(on, "/etc/hermes/config.yaml")).toContain('cdp_url: "http://127.0.0.1:9222"');
+    // Seeded, never overwritten: any existing assignment stands, and the probe
+    // and the append both run as the account, never as root inside its home.
+    expect(command).toStartWith(
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' " +
+        "/data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && ",
+    );
+    expect(command).toEndWith(
+      '>>"$0"\' /data/hermes/.hermes/.env && ' +
+        "systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
+    );
+  });
+
+  /**
+   * Every rendered agent runs a browser, so the empty case is only reachable
+   * through the functions themselves — and an agent with no identity must get
+   * neither the managed key nor the `.env` line.
+   */
+  test("with no browser identity there is no CDP endpoint anywhere", () => {
+    expect(browserManagedConfigLines([])).toEqual([]);
+    expect(browserEnvSeedCommands([])).toEqual([]);
   });
 
   /**

@@ -56,6 +56,7 @@ import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
   HERMES_LEGACY_DASHBOARD_UNIT,
+  HERMES_USER_ENV,
 } from "../packages/core/src/schema/hermes.ts";
 import { renderAgentConfig } from "../packages/core/src/render/render.ts";
 import type { RenderInput } from "../packages/core/src/render/render.ts";
@@ -75,6 +76,8 @@ import {
 } from "../packages/agentd/src/apply/index.ts";
 import { HERMETICD_CAPABILITIES, parseManifest } from "../packages/agentd/src/manifest.ts";
 import { HERMES_HEALTH_URL } from "../packages/agentd/src/heartbeat.ts";
+import { checkHermes } from "../packages/agentd/src/hermes-check.ts";
+import { FakeHost } from "../packages/agentd/test/fake-host.ts";
 import { SECRET_SLOTS, isKnownSlot } from "../packages/agentd/src/main.ts";
 import { releaseStages, stageEnv } from "../packages/agentd/src/stages.ts";
 import type { StagesDeps } from "../packages/agentd/src/stages.ts";
@@ -1019,6 +1022,29 @@ describe("seam: the browser stack: what the laptop renders is what the box watch
     expect(identity).toBeDefined();
     const wsPath = `${identity?.serve_path.replace(/^\//, "")}/websockify`;
     expect(index).toContain(`path=${wsPath}`);
+  });
+
+  /**
+   * The `.env` line the laptop seeds is the one `verify-hermes` accepts. The
+   * render spells it from the first identity's port, the box's `cdp_override`
+   * check compares against the same identity — and a drift between the two is
+   * every browser agent failing its boot on a line hermetic itself wrote.
+   */
+  test("the BROWSER_CDP_URL line the render seeds passes the box's cdp_override check", async () => {
+    const command = manifest.commands.find((c) => c.includes("BROWSER_CDP_URL")) ?? "";
+    const line = /echo "(BROWSER_CDP_URL=[^"]+)"/.exec(command)?.[1];
+    expect(line).toBe(`BROWSER_CDP_URL=http://127.0.0.1:${String(identities[0]?.cdp_port)}`);
+    // The command's own guard must recognise the line it appends, or every
+    // apply would append another copy.
+    const guard = /grep -qsE '([^']+)'/.exec(command)?.[1] ?? "";
+    expect(new RegExp(guard.replaceAll("[[:space:]]", "\\s")).test(line ?? "")).toBe(true);
+
+    const host = new FakeHost();
+    host.seed(HERMES_USER_ENV, `${line}\n`, "0600");
+    const checks = await checkHermes(host, parseManifest(manifest));
+    const override = checks.find((c) => c.name === "cdp_override");
+    expect(override?.ok).toBe(true);
+    expect(override?.advisory).toBeUndefined();
   });
 
   test("the Serve route for the identity's path targets its own websockify port", () => {

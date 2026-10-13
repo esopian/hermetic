@@ -2,8 +2,8 @@
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "addb46e2330e165d",
-  "key": "config/atlas/addb46e2330e165d.tgz",
+  "config_hash": "7878c0c59de2c1c7",
+  "key": "config/atlas/7878c0c59de2c1c7.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -38,12 +38,13 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "addb46e2330e165d",
+    "config_hash": "7878c0c59de2c1c7",
     "files": [
       {
         "content": 
@@ -683,8 +684,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "9f63e92d75e1eeb9",
-  "key": "config/atlas/9f63e92d75e1eeb9.tgz",
+  "config_hash": "f8ada0aa43048f8c",
+  "key": "config/atlas/f8ada0aa43048f8c.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -724,12 +725,13 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "9f63e92d75e1eeb9",
+    "config_hash": "f8ada0aa43048f8c",
     "files": [
       {
         "content": 
@@ -1371,8 +1373,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "7b17d1a6e9a44593",
-  "key": "config/atlas/7b17d1a6e9a44593.tgz",
+  "config_hash": "29ebd3a7105d619b",
+  "key": "config/atlas/29ebd3a7105d619b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -1407,12 +1409,13 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "7b17d1a6e9a44593",
+    "config_hash": "29ebd3a7105d619b",
     "files": [
       {
         "content": 
@@ -2049,8 +2052,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "c8bdc328fce391ed",
-  "key": "config/atlas/c8bdc328fce391ed.tgz",
+  "config_hash": "c1a9939b957f21dd",
+  "key": "config/atlas/c1a9939b957f21dd.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2090,12 +2093,13 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c8bdc328fce391ed",
+    "config_hash": "c1a9939b957f21dd",
     "files": [
       {
         "content": 
@@ -2734,8 +2738,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "ebd1e31405581afc",
-  "key": "config/atlas/ebd1e31405581afc.tgz",
+  "config_hash": "dcbc5d9f286eeadd",
+  "key": "config/atlas/dcbc5d9f286eeadd.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2770,12 +2774,13 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ebd1e31405581afc",
+    "config_hash": "dcbc5d9f286eeadd",
     "files": [
       {
         "content": 
@@ -3412,8 +3417,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "abb7d19212226c53",
-  "key": "config/atlas/abb7d19212226c53.tgz",
+  "config_hash": "e616717ebdce4d96",
+  "key": "config/atlas/e616717ebdce4d96.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -3453,12 +3458,13 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "abb7d19212226c53",
+    "config_hash": "e616717ebdce4d96",
     "files": [
       {
         "content": 
@@ -4097,8 +4103,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
 {
-  "config_hash": "207fda301c2cbda4",
-  "key": "config/atlas/207fda301c2cbda4.tgz",
+  "config_hash": "0a0545d61984fa20",
+  "key": "config/atlas/0a0545d61984fa20.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4133,12 +4139,13 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "207fda301c2cbda4",
+    "config_hash": "0a0545d61984fa20",
     "files": [
       {
         "content": 
@@ -4777,8 +4784,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "9b9b8dc71eeeec23",
-  "key": "config/atlas/9b9b8dc71eeeec23.tgz",
+  "config_hash": "ab44c03a28373db8",
+  "key": "config/atlas/ab44c03a28373db8.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4818,12 +4825,13 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "9b9b8dc71eeeec23",
+    "config_hash": "ab44c03a28373db8",
     "files": [
       {
         "content": 
@@ -5464,8 +5472,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
 {
-  "config_hash": "1656ce69f44e8b48",
-  "key": "config/atlas/1656ce69f44e8b48.tgz",
+  "config_hash": "5495aea9e7c65b3c",
+  "key": "config/atlas/5495aea9e7c65b3c.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -5500,12 +5508,13 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "1656ce69f44e8b48",
+    "config_hash": "5495aea9e7c65b3c",
     "files": [
       {
         "content": 
@@ -6142,8 +6151,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "52e1dfa37d3327d3",
-  "key": "config/atlas/52e1dfa37d3327d3.tgz",
+  "config_hash": "495404dfecc858fa",
+  "key": "config/atlas/495404dfecc858fa.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6183,12 +6192,13 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "52e1dfa37d3327d3",
+    "config_hash": "495404dfecc858fa",
     "files": [
       {
         "content": 
@@ -6827,8 +6837,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
 {
-  "config_hash": "232ff0766dce54ff",
-  "key": "config/atlas/232ff0766dce54ff.tgz",
+  "config_hash": "ea50312b6cba7b81",
+  "key": "config/atlas/ea50312b6cba7b81.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6863,12 +6873,13 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "232ff0766dce54ff",
+    "config_hash": "ea50312b6cba7b81",
     "files": [
       {
         "content": 
@@ -7505,8 +7516,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "d6818f227e24ea84",
-  "key": "config/atlas/d6818f227e24ea84.tgz",
+  "config_hash": "a5241e57f667f330",
+  "key": "config/atlas/a5241e57f667f330.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -7546,12 +7557,13 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "d6818f227e24ea84",
+    "config_hash": "a5241e57f667f330",
     "files": [
       {
         "content": 
@@ -8190,8 +8202,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "57934e6c3088ff4e",
-  "key": "config/atlas/57934e6c3088ff4e.tgz",
+  "config_hash": "c28569c39eac5260",
+  "key": "config/atlas/c28569c39eac5260.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8226,12 +8238,13 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "57934e6c3088ff4e",
+    "config_hash": "c28569c39eac5260",
     "files": [
       {
         "content": 
@@ -8871,8 +8884,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "28df5dd73e504c8d",
-  "key": "config/atlas/28df5dd73e504c8d.tgz",
+  "config_hash": "52352cdd1a770082",
+  "key": "config/atlas/52352cdd1a770082.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8912,12 +8925,13 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "28df5dd73e504c8d",
+    "config_hash": "52352cdd1a770082",
     "files": [
       {
         "content": 
@@ -9559,8 +9573,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "66d4054432e21ae4",
-  "key": "config/atlas/66d4054432e21ae4.tgz",
+  "config_hash": "772635aaf36bc532",
+  "key": "config/atlas/772635aaf36bc532.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -9595,12 +9609,13 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "66d4054432e21ae4",
+    "config_hash": "772635aaf36bc532",
     "files": [
       {
         "content": 
@@ -10237,8 +10252,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "e5f7c43de9dbfa73",
-  "key": "config/atlas/e5f7c43de9dbfa73.tgz",
+  "config_hash": "33102030760b708f",
+  "key": "config/atlas/33102030760b708f.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10278,12 +10293,13 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "e5f7c43de9dbfa73",
+    "config_hash": "33102030760b708f",
     "files": [
       {
         "content": 
@@ -10922,8 +10938,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "41216cb9f52d0520",
-  "key": "config/atlas/41216cb9f52d0520.tgz",
+  "config_hash": "0753009a273f4f41",
+  "key": "config/atlas/0753009a273f4f41.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10958,12 +10974,13 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "41216cb9f52d0520",
+    "config_hash": "0753009a273f4f41",
     "files": [
       {
         "content": 
@@ -11600,8 +11617,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "6621b670a346eaec",
-  "key": "config/atlas/6621b670a346eaec.tgz",
+  "config_hash": "72950f7f8204fa1b",
+  "key": "config/atlas/72950f7f8204fa1b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -11641,12 +11658,13 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "6621b670a346eaec",
+    "config_hash": "72950f7f8204fa1b",
     "files": [
       {
         "content": 
@@ -12285,8 +12303,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
 {
-  "config_hash": "864eb10f55b9a0c3",
-  "key": "config/atlas/864eb10f55b9a0c3.tgz",
+  "config_hash": "00ed4b8a43d67bb1",
+  "key": "config/atlas/00ed4b8a43d67bb1.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -12321,12 +12339,13 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "864eb10f55b9a0c3",
+    "config_hash": "00ed4b8a43d67bb1",
     "files": [
       {
         "content": 
@@ -12965,8 +12984,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "d983f4ccbe4c7d49",
-  "key": "config/atlas/d983f4ccbe4c7d49.tgz",
+  "config_hash": "07de6f0748fa7991",
+  "key": "config/atlas/07de6f0748fa7991.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13006,12 +13025,13 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "d983f4ccbe4c7d49",
+    "config_hash": "07de6f0748fa7991",
     "files": [
       {
         "content": 
@@ -13652,8 +13672,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
 {
-  "config_hash": "6b17d41fbccf8853",
-  "key": "config/atlas/6b17d41fbccf8853.tgz",
+  "config_hash": "0a015840ab496c15",
+  "key": "config/atlas/0a015840ab496c15.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13688,12 +13708,13 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "6b17d41fbccf8853",
+    "config_hash": "0a015840ab496c15",
     "files": [
       {
         "content": 
@@ -14330,8 +14351,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "a9d513dd177c051e",
-  "key": "config/atlas/a9d513dd177c051e.tgz",
+  "config_hash": "686bed265065a7af",
+  "key": "config/atlas/686bed265065a7af.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -14371,12 +14392,13 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "a9d513dd177c051e",
+    "config_hash": "686bed265065a7af",
     "files": [
       {
         "content": 
@@ -15015,8 +15037,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
 {
-  "config_hash": "4e21344dfb6e128e",
-  "key": "config/atlas/4e21344dfb6e128e.tgz",
+  "config_hash": "584380ecceae1b9b",
+  "key": "config/atlas/584380ecceae1b9b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15051,12 +15073,13 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "4e21344dfb6e128e",
+    "config_hash": "584380ecceae1b9b",
     "files": [
       {
         "content": 
@@ -15693,8 +15716,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "0129118b7a74f949",
-  "key": "config/atlas/0129118b7a74f949.tgz",
+  "config_hash": "d5cd041cc5849052",
+  "key": "config/atlas/d5cd041cc5849052.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15734,12 +15757,13 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0129118b7a74f949",
+    "config_hash": "d5cd041cc5849052",
     "files": [
       {
         "content": 
@@ -16378,8 +16402,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "782374d483a7c2d7",
-  "key": "config/atlas/782374d483a7c2d7.tgz",
+  "config_hash": "ade9a576a02926ea",
+  "key": "config/atlas/ade9a576a02926ea.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -16414,12 +16438,13 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "782374d483a7c2d7",
+    "config_hash": "ade9a576a02926ea",
     "files": [
       {
         "content": 
@@ -17059,8 +17084,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "83b9b771db027201",
-  "key": "config/atlas/83b9b771db027201.tgz",
+  "config_hash": "56d5903ad33e6b74",
+  "key": "config/atlas/56d5903ad33e6b74.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17100,12 +17125,13 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'zai.glm-4.7-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "83b9b771db027201",
+    "config_hash": "56d5903ad33e6b74",
     "files": [
       {
         "content": 
@@ -17747,8 +17773,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "027bfa39e1478f04",
-  "key": "config/atlas/027bfa39e1478f04.tgz",
+  "config_hash": "973feaabf4f00025",
+  "key": "config/atlas/973feaabf4f00025.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17783,12 +17809,13 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "027bfa39e1478f04",
+    "config_hash": "973feaabf4f00025",
     "files": [
       {
         "content": 
@@ -18425,8 +18452,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "cca150557cf90955",
-  "key": "config/atlas/cca150557cf90955.tgz",
+  "config_hash": "8881657a177ff948",
+  "key": "config/atlas/8881657a177ff948.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -18466,12 +18493,13 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'claude-sonnet-5' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "cca150557cf90955",
+    "config_hash": "8881657a177ff948",
     "files": [
       {
         "content": 
@@ -19110,8 +19138,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "38c826ad8e314468",
-  "key": "config/atlas/38c826ad8e314468.tgz",
+  "config_hash": "6d37bd549b1eb7eb",
+  "key": "config/atlas/6d37bd549b1eb7eb.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19146,12 +19174,13 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "38c826ad8e314468",
+    "config_hash": "6d37bd549b1eb7eb",
     "files": [
       {
         "content": 
@@ -19788,8 +19817,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "b5fc0c36f85f48ec",
-  "key": "config/atlas/b5fc0c36f85f48ec.tgz",
+  "config_hash": "eefa0865d9c0ea65",
+  "key": "config/atlas/eefa0865d9c0ea65.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19829,12 +19858,13 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b5fc0c36f85f48ec",
+    "config_hash": "eefa0865d9c0ea65",
     "files": [
       {
         "content": 
@@ -20473,8 +20503,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
 {
-  "config_hash": "85a996f8c6d736fa",
-  "key": "config/atlas/85a996f8c6d736fa.tgz",
+  "config_hash": "5eeafb4942702ab4",
+  "key": "config/atlas/5eeafb4942702ab4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -20509,12 +20539,13 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "85a996f8c6d736fa",
+    "config_hash": "5eeafb4942702ab4",
     "files": [
       {
         "content": 
@@ -21153,8 +21184,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "8287e65caed795dc",
-  "key": "config/atlas/8287e65caed795dc.tgz",
+  "config_hash": "541c84cbbb86c547",
+  "key": "config/atlas/541c84cbbb86c547.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21194,12 +21225,13 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8287e65caed795dc",
+    "config_hash": "541c84cbbb86c547",
     "files": [
       {
         "content": 
@@ -21840,8 +21872,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
 {
-  "config_hash": "b7f86ddc2542d925",
-  "key": "config/atlas/b7f86ddc2542d925.tgz",
+  "config_hash": "7f67ff1c54cef356",
+  "key": "config/atlas/7f67ff1c54cef356.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21876,12 +21908,13 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "b7f86ddc2542d925",
+    "config_hash": "7f67ff1c54cef356",
     "files": [
       {
         "content": 
@@ -22518,8 +22551,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "bc6e8eae141492e2",
-  "key": "config/atlas/bc6e8eae141492e2.tgz",
+  "config_hash": "1612b6137e791b1b",
+  "key": "config/atlas/1612b6137e791b1b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -22559,12 +22592,13 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'gpt-5.6-luna' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "bc6e8eae141492e2",
+    "config_hash": "1612b6137e791b1b",
     "files": [
       {
         "content": 
@@ -23203,8 +23237,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
 {
-  "config_hash": "98f74bf3b9f03dad",
-  "key": "config/atlas/98f74bf3b9f03dad.tgz",
+  "config_hash": "357242f27db466c3",
+  "key": "config/atlas/357242f27db466c3.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23239,12 +23273,13 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "98f74bf3b9f03dad",
+    "config_hash": "357242f27db466c3",
     "files": [
       {
         "content": 
@@ -23881,8 +23916,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "e3b016a4b1653672",
-  "key": "config/atlas/e3b016a4b1653672.tgz",
+  "config_hash": "4a9439cebf14f39a",
+  "key": "config/atlas/4a9439cebf14f39a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23922,12 +23957,13 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
       "test -e /data/hermes/.hermes/config.yaml || { install -o hermes -g hermes -m 0640 /etc/hermes/config.seed.yaml /data/hermes/.hermes/config.yaml && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config get model.default --json >/dev/null 2>&1 || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set model.default 'deepseek/deepseek-v4.1-flash' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "test "$(cat /etc/hermetic/asserted/approvals_mode 2>/dev/null)" = "off" || { runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes config set approvals.mode 'off' >/dev/null && systemctl try-restart hermes-dashboard.service hermes-gateway.service && install -d -m 0755 /etc/hermetic/asserted && printf '%s' 'off' > /etc/hermetic/asserted/approvals_mode; }",
+      "runuser -u hermes -- grep -qsE '^[[:space:]]*(export[[:space:]]+)?BROWSER_CDP_URL[[:space:]]*=' /data/hermes/.hermes/.env || { runuser -u hermes -- sh -c 'umask 077 && { [ ! -s "$0" ] || [ -z "$(tail -c1 "$0")" ] || echo; echo "BROWSER_CDP_URL=http://127.0.0.1:9222"; } >>"$0"' /data/hermes/.hermes/.env && systemctl try-restart hermes-dashboard.service hermes-gateway.service; }",
       "nginx -t && systemctl restart nginx.service",
       "tailscale serve reset",
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "e3b016a4b1653672",
+    "config_hash": "4a9439cebf14f39a",
     "files": [
       {
         "content": 
