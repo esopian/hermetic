@@ -262,6 +262,9 @@ export interface WatchedThread {
   focused: boolean;
 }
 
+/** Two dock panes may be visible and focused at once. */
+export type WatchedThreads = WatchedThread | readonly WatchedThread[] | null;
+
 /**
  * Which thread a row is about, or `null` for a row that is about no thread.
  *
@@ -308,9 +311,11 @@ export function chatThreadOf(n: {
  */
 export function isWatchingThread(
   n: { kind: string; ref?: string | null },
-  watched: WatchedThread | null | undefined,
+  watched: WatchedThreads | undefined,
 ): boolean {
-  if (!watched?.focused) return false;
+  if (watched === null || watched === undefined) return false;
+  if ("length" in watched) return watched.some((thread) => isWatchingThread(n, thread));
+  if (!watched.focused) return false;
   const thread = chatThreadOf(n);
   if (thread === null) return false;
   return thread.instance === watched.instance && thread.bot === watched.bot;
@@ -354,7 +359,7 @@ export function shouldToast(
   prefs: NotificationPrefs,
   quiet: QuietHours = prefs.quiet,
   now: Date = new Date(),
-  watched: WatchedThread | null = null,
+  watched: WatchedThreads = null,
   terminal: string | null = null,
 ): boolean {
   if (isResolved(n)) return false;
@@ -373,7 +378,7 @@ export function shouldDesktop(
   prefs: NotificationPrefs,
   quiet: QuietHours = prefs.quiet,
   now: Date = new Date(),
-  watched: WatchedThread | null = null,
+  watched: WatchedThreads = null,
   terminal: string | null = null,
 ): boolean {
   return shouldToast(n, prefs, quiet, now, watched, terminal) && prefs.desktop[groupOf(n)];

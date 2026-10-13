@@ -1,0 +1,504 @@
+/* Floating chat dock, activity rail, and footer entry. The app shell owns the
+   footer; these surfaces use the same tokens and stay above it. */
+
+.ch-dock {
+  right: 18px;
+  bottom: 94px;
+  width: 464px;
+  height: 563px;
+  max-width: calc(100vw - 36px);
+  max-height: calc(100vh - 184px);
+  overflow: visible;
+}
+
+.ch-dock.split {
+  width: 802px;
+}
+
+.ch-dock.full {
+  inset: 18px 18px 94px;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+}
+
+.ch-dock-chrome {
+  display: flex;
+  flex: none;
+  height: 43px;
+  background: var(--bg2);
+  border-bottom: 2px solid var(--fg);
+}
+
+.ch-dock-title {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+  padding: 0 12px;
+  color: var(--fg);
+  font: 800 10px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ch-dock-title span {
+  color: var(--fg3);
+  font-weight: 500;
+}
+
+.ch-dock-controls {
+  display: flex;
+  flex: none;
+  background: var(--bg3);
+  border-left: 2px solid var(--fg);
+}
+
+.ch-dock-controls button {
+  width: 38px;
+  padding: 0;
+  color: var(--fg2);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line2);
+  font: 700 18px var(--mono);
+  cursor: pointer;
+}
+
+.ch-dock-controls button:hover,
+.ch-dock-controls button[aria-pressed="true"] {
+  color: var(--fg);
+  background: var(--sel);
+}
+
+.ch-dock-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ch-dock-controls .ch-dock-add-panel {
+  width: 102px;
+  padding: 0 10px;
+  color: var(--fg);
+  font: 800 10px var(--mono);
+  white-space: nowrap;
+}
+
+.ch-dock-panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ch-dock-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ch-dock-pane + .ch-dock-pane {
+  border-left: 2px solid var(--fg);
+}
+
+/* The dock keeps the turn controls and destination, while the full view owns
+   density and duplicate status metadata. */
+.ch-dock .ch-ev-density,
+.ch-dock .ch-thead-actions .ch-chip.static,
+.ch-dock .ch-default,
+.ch-dock .ch-thead-sub > :nth-last-child(-n + 2) {
+  display: none;
+}
+
+.ch-dock-pane-tabs {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  height: 38px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line2);
+}
+
+.ch-dock-pane-label {
+  display: grid;
+  flex: none;
+  place-items: center;
+  padding: 0 8px;
+  color: var(--fg3);
+  border-right: 1px solid var(--line2);
+  font: 700 9px var(--mono);
+  white-space: nowrap;
+}
+
+.ch-dock-tab-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ch-dock-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.ch-dock-tab {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: stretch;
+  height: auto;
+  padding: 0;
+  min-width: 0;
+  max-width: 138px;
+  color: var(--fg2);
+  border-right: 1px solid var(--line2);
+}
+
+.ch-dock-tab[aria-selected="true"],
+.ch-dock-tab.selected {
+  color: var(--fg);
+  background: var(--bg3);
+  box-shadow: inset 0 -3px 0 var(--acc);
+}
+
+.ch-dock-tab-select {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  padding: 0 5px 0 9px;
+  color: inherit;
+  background: none;
+  border: 0;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.ch-dock-tab-select .label,
+.ch-dock-tab-select .ch-dock-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-dock-tab .ch-unread {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  font-size: 9px;
+}
+
+.ch-dock-tab-close {
+  flex: none;
+  width: 22px;
+  padding: 0;
+  color: var(--fg3);
+  background: none;
+  border: 0;
+  font: 13px var(--mono);
+  cursor: pointer;
+}
+
+.ch-dock-tab-close:hover {
+  color: var(--fg);
+  background: var(--line2);
+}
+
+.ch-dock-add-tab,
+.ch-dock-close-pane {
+  flex: none;
+  padding: 0 9px;
+  color: var(--fg2);
+  background: none;
+  border: 0;
+  font: 800 9px var(--mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ch-dock-add-tab {
+  border-right: 1px solid var(--line2);
+}
+
+.ch-dock-close-pane {
+  margin-left: auto;
+  padding: 0 7px;
+  background: var(--bg3);
+  border-left: 1px solid var(--line2);
+}
+
+.ch-dock-add-tab:hover,
+.ch-dock-close-pane:hover {
+  color: var(--fg);
+  background: var(--bg3);
+}
+
+.ch-dock-pane > .ch-body,
+.ch-dock-pane > .ch-thread {
+  flex: 1;
+  min-height: 0;
+}
+
+.ch-dock-picker {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 10;
+  width: 255px;
+  max-width: calc(100% - 24px);
+  max-height: min(420px, calc(100% - 48px));
+  overflow-y: auto;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 2px solid var(--fg);
+  box-shadow: 0 18px 35px rgba(0, 0, 0, 0.6);
+}
+
+.ch-dock-picker[hidden] {
+  display: none;
+}
+
+.ch-dock-picker h4 {
+  margin: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--line2);
+  font: 800 10px var(--mono);
+  text-transform: uppercase;
+}
+
+.ch-dock-picker button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  gap: 9px;
+  padding: 0 12px;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ch-dock-picker button:hover {
+  background: var(--bg3);
+}
+
+.ch-dock-picker button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ch-dock-picker button small {
+  margin-left: auto;
+  color: var(--fg3);
+  font: 8px var(--mono);
+}
+
+.ch-activity-rail {
+  position: fixed;
+  right: 0;
+  bottom: 41px;
+  left: 0;
+  z-index: 94;
+  display: flex;
+  align-items: stretch;
+  height: 44px;
+  color: var(--fg);
+  background: var(--bg2);
+  border-top: 2px solid var(--fg);
+  box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.4);
+}
+
+.ch-activity-rail[hidden] {
+  display: none;
+}
+
+.ch-activity-label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  width: 126px;
+  padding: 0 14px;
+  border-right: 1px solid var(--line2);
+  font: 800 10px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ch-activity-items {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ch-activity-items::-webkit-scrollbar {
+  display: none;
+}
+
+.ch-activity-item {
+  display: flex;
+  flex: 1 0 170px;
+  align-items: center;
+  min-width: 170px;
+  max-width: 225px;
+  min-height: 0;
+  gap: 9px;
+  padding: 0 12px;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-right: 1px solid var(--line2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ch-activity-item:hover {
+  background: var(--bg3);
+}
+
+.ch-activity-item .ch-ava,
+.ch-activity-item .ch-avatar {
+  flex: none;
+  width: 23px;
+  height: 23px;
+}
+
+.ch-activity-item .copy {
+  min-width: 0;
+}
+
+.ch-activity-item b {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-activity-item em {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--fg3);
+  font: 9px var(--mono);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-activity-item .ch-unread {
+  margin-left: auto;
+}
+
+.ch-activity-hide {
+  flex: none;
+  min-width: 43px;
+  padding: 0 14px;
+  color: var(--fg2);
+  background: var(--bg3);
+  border: 0;
+  border-left: 2px solid var(--fg);
+  font: 700 16px var(--mono);
+  cursor: pointer;
+}
+
+.ch-activity-hide:hover {
+  color: var(--fg);
+}
+
+.ch-footer-chat {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  gap: 8px;
+  margin-left: auto;
+  padding: 0 10px;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  font: 800 10px var(--mono);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.footer:has(.ch-footer-chat) {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 93;
+  height: 41px;
+  min-height: 41px;
+  align-items: center;
+  flex-wrap: nowrap;
+  padding: 5px 18px;
+  background: var(--bg2);
+}
+
+.app:has(> .footer .ch-footer-chat) {
+  padding-bottom: 41px;
+}
+
+.ch-footer-chat:hover {
+  border-color: var(--fg);
+}
+
+.ch-footer-chat .idle,
+.ch-footer-chat .ch-footer-idle {
+  color: var(--fg3);
+}
+
+.ch-footer-chat strong,
+.ch-footer-chat .ch-unread {
+  padding: 2px 5px;
+  color: var(--acc-fg);
+  background: var(--acc);
+  font: 900 10px var(--mono);
+}
+
+.ch-footer-chat i,
+.ch-footer-chat .ch-footer-running {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--ok);
+}
+
+@media (max-width: 850px) {
+  .ch-dock {
+    right: 12px;
+    max-width: calc(100vw - 24px);
+  }
+
+  .ch-dock.split {
+    width: calc(100vw - 24px);
+  }
+
+  .ch-activity-label {
+    display: none;
+  }
+
+  .ch-activity-item {
+    min-width: 125px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-dock {
+    animation: none;
+  }
+}

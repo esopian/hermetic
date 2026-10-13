@@ -83,13 +83,12 @@ describe("env strip", () => {
 describe("footer", () => {
   test("two squares and their words, no ages and no prose", () => {
     const now = new Date().toISOString();
-    render(
-      <Footer lastPollAt={now} connected everConnected volumesReadAt={now} onShortcuts={() => {}} />,
-    );
+    render(<Footer lastPollAt={now} connected everConnected volumesReadAt={now} />);
     const footer = document.querySelector(".footer") as HTMLElement;
     const text = footer.textContent ?? "";
     expect(text).toContain("fleet");
     expect(text).toContain("volumes");
+    expect(text).not.toContain("? for shortcuts");
     for (const gone of ["polled", "ago", "engine: local", "IAM-only", "no open ports"]) {
       expect(text).not.toContain(gone);
     }
