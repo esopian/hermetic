@@ -33,6 +33,7 @@ import type { SeededDraft } from "./seeded.ts";
 import { SettingsFleetContext, Sq } from "./Section.tsx";
 import { DiagnosticsSection } from "./DiagnosticsSection.tsx";
 import { FoundationSection } from "./FoundationSection.tsx";
+import { MobileSection } from "./MobileSection.tsx";
 import { NotificationsSection } from "./NotificationsSection.tsx";
 import { PolicySection } from "./PolicySection.tsx";
 import { PresetsSection } from "./PresetsSection.tsx";
@@ -277,6 +278,7 @@ export function SettingsShell({
             {section === "diagnostics" ? <DiagnosticsSection /> : null}
             {section === "presets" ? <PresetsSection /> : null}
             {section === "chat" ? <ChatSection /> : null}
+            {section === "mobile" ? <MobileSection /> : null}
             {section === "notifications" ? <NotificationsSection /> : null}
             {section === "runs" ? <RunsSection config={config} /> : null}
             {section === "danger" ? (

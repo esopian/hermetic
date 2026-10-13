@@ -112,6 +112,12 @@ export type RequestName =
   | "notifications.settings"
   | "presets.get"
   | "presets.set"
+  // The phone companion's bridge (`api/mobile.ts`): local reads and writes of
+  // this laptop's database. `mobile.serve` is a feed (`SubscriptionKind`).
+  | "mobile.pair"
+  | "mobile.devices"
+  | "mobile.revoke"
+  | "mobile.settings"
   | "chat.listening"
   | "chat.listen"
   | "chat.settings"
@@ -153,8 +159,12 @@ export type RequestName =
 /** The name of a finite stream. Disjoint from `RequestName` on purpose: a stream is not an answer. */
 export type StreamName = "ops.subscribe" | "logs.open" | "chat.turn" | "terminal.attach";
 
-/** Which long-lived feed a `subscribe` means. One socket each, today and under RPC. */
-export type SubscriptionKind = "fleet" | "chat";
+/**
+ * Which long-lived feed a `subscribe` means. One socket each, today and under
+ * RPC. `mobile` is the hosted phone bridge's status and events (`mobile.serve`);
+ * opening it starts the bridge, so only a page showing an enabled bridge joins.
+ */
+export type SubscriptionKind = "fleet" | "chat" | "mobile";
 
 /**
  * Whatever a call site passes as the request's input: the core schema's own

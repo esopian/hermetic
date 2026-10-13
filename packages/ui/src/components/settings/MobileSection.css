@@ -1,0 +1,71 @@
+/* Settings › Mobile: the pair panel and the address row's actions. */
+.mob-port {
+  width: 120px;
+}
+.mob-addr-acts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mob-addr-acts .st-hint {
+  margin: 0;
+}
+.mob-addr-acts .btn {
+  height: 32px;
+}
+.mob-pair {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  padding-top: 16px;
+}
+.mob-qr {
+  display: block;
+  width: 216px;
+  height: 216px;
+  border: 2px solid var(--fg);
+  background: #fff;
+  line-height: 0;
+}
+.mob-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mob-expired .mob-qr,
+.mob-expired .mob-code {
+  opacity: 0.3;
+}
+.mob-pair-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.mob-pair-info .kicker {
+  margin-top: 8px;
+}
+.mob-pair-info .kicker:first-child {
+  margin-top: 0;
+}
+.mob-code {
+  display: block;
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: 0.08em;
+}
+.mob-pair-info .st-callout {
+  margin-top: 10px;
+}
+.mob-pair-acts {
+  margin-top: 14px;
+}
+.mob-pair-acts .btn {
+  height: 32px;
+}

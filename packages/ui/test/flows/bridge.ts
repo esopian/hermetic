@@ -72,6 +72,7 @@ import { createChatOwner, type ChatOwner } from "../../../app/src/chat-owner.ts"
 import type { HandlerContext } from "../../../app/src/handlers/ctx.ts";
 import { createStreamRegistry } from "../../../app/src/handlers/streams.ts";
 import { OpRegistry } from "../../../app/src/ops.ts";
+import { createMobileHost, type MobileHost } from "../../../app/src/mobile-host.ts";
 import { FleetPoller } from "../../../app/src/poller.ts";
 import { AppState } from "../../../app/src/state.ts";
 import {
@@ -182,6 +183,13 @@ export interface FlowHarnessOptions {
    * subagent still running when it acts slows it down.
    */
   chatDelayMs?: number;
+  /**
+   * Host the phone bridge, as `main/index.ts` does: `mobile.settings` starts
+   * and stops it and `mobile.serve` follows it. Bound to loopback on port 0,
+   * so a flow never collides with a real bridge. Off by default, and then
+   * `mobile.serve` refuses `UNSUPPORTED`, which is what a head without one says.
+   */
+  mobileHost?: boolean;
 }
 
 /**
@@ -257,6 +265,10 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     },
     ...(timers === undefined ? {} : { timers }),
   });
+  const mobile: MobileHost | undefined =
+    options.mobileHost === true
+      ? createMobileHost({ hermetic: () => state.hermetic, bind: { host: "127.0.0.1", port: 0 } })
+      : undefined;
   const ctx: HandlerContext = {
     state,
     hermetic: () => state.hermetic,
@@ -267,6 +279,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     opts: { fixture: true },
     streams: createStreamRegistry(),
     terminals,
+    ...(mobile === undefined ? {} : { mobile }),
   };
 
   const calls: HarnessCall[] = [];
@@ -414,6 +427,7 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
       binding.close();
       ctx.streams.closeAll();
       terminals.stopAll();
+      await mobile?.stop("harness restored");
       await chatOwner.stop();
     },
   };
