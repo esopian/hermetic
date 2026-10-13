@@ -5,7 +5,8 @@
  * `block.choices` in the gateway's order with the desktop's labels; "Always
  * allow" persists a pattern on the box, so it takes an inline confirm naming
  * the pattern and the command. Expired, it says so; closed by the box, it says
- * the command was not run; answered here, it says what was sent.
+ * the command was not run; answered here, it says what was sent. In a turn no
+ * longer live on this phone (`stale`), its buttons are drawn disabled.
  */
 import { type ReactNode, useState } from "react";
 import { View } from "react-native";
@@ -19,6 +20,7 @@ import {
   GONE,
   offeredChoices,
   SENT,
+  STALE,
 } from "../../client/chat-requests.ts";
 import type { ApprovalBlock, ApprovalChoice } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
@@ -35,6 +37,7 @@ export function ApprovalCard({
   pending = 0,
   session,
   released = false,
+  stale = false,
 }: {
   block: ApprovalBlock;
   now: number;
@@ -45,6 +48,8 @@ export function ApprovalCard({
   session: string | null;
   /** Already answered from this phone (another render of the same card). */
   released?: boolean;
+  /** Its turn is no longer live on this phone: nothing can be answered here (`openRequests`). */
+  stale?: boolean;
 }) {
   const t = useTheme();
   const { live, state, busy, submit, settled } = useSubmit(session);
@@ -95,6 +100,26 @@ export function ApprovalCard({
       <Text variant="bodySmall" tone="fg2">
         {EXPIRED}
       </Text>
+    );
+  else if (stale)
+    foot = (
+      <View style={{ gap: t.space.sm }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          {offeredChoices(block).map((choice) => (
+            <Button
+              key={choice}
+              label={APPROVAL_LABEL[choice]}
+              variant="secondary"
+              disabled
+              style={{ flexGrow: 1, flexBasis: "45%" }}
+              onPress={() => undefined}
+            />
+          ))}
+        </View>
+        <Text variant="bodySmall" tone="fg2">
+          {STALE}
+        </Text>
+      </View>
     );
   else if (confirming)
     foot = (

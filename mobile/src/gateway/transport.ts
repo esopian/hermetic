@@ -142,10 +142,22 @@ export interface GatewayTransport extends ConversationTransport, RosterSource, G
    */
   detachTurns(): string[];
   /**
+   * `detachTurns`, with each turn's start (`since`, ISO-8601, this phone's
+   * clock): a turn followed afterwards with no live id to match on is
+   * confirmed over only by a transcript row written after it started.
+   */
+  detachTurnsSince(): DetachedTurn[];
+  /**
    * Stop every turn pump and observation this transport started. Turns are
    * detached, never interrupted: a running turn keeps running on its box.
    */
   dispose(): void;
+}
+
+/** A turn let go by `detachTurnsSince`, with when it was started. */
+export interface DetachedTurn {
+  turn_id: string;
+  since: string;
 }
 
 /** A turn the pump is following. */
@@ -153,6 +165,8 @@ interface TurnRun {
   box: BoxAddress;
   bot: string;
   session: string | null;
+  /** When `startTurn` was asked (ISO-8601). */
+  since: string;
   controller: AbortController;
   /** `abortTurn` was asked: the end is `aborted`, whatever the stream says. */
   stopping: boolean;
@@ -331,6 +345,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
       box,
       bot: turn.bot,
       session: turn.session ?? null,
+      since: deps.now(),
       controller: new AbortController(),
       stopping: false,
       forgotten: false,
@@ -347,7 +362,12 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     const run = runs.get(turn_id);
     if (!run) return false;
     run.stopping = true;
-    return client.abort(run.box, run.bot, run.session ? { session: run.session } : {});
+    if (run.session) return client.abort(run.box, run.bot, { session: run.session });
+    // The pump has not learned its session yet. Aborting the run's own signal
+    // makes the adapter interrupt exactly the turn it is driving; an abort
+    // scoped only to the bot could interrupt another conversation's turn.
+    run.controller.abort();
+    return true;
   }
 
   /**
@@ -366,10 +386,14 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     runs.delete(turn_id);
   }
 
+  function detachTurnsSince(): DetachedTurn[] {
+    const detached = [...runs].map(([turn_id, run]) => ({ turn_id, since: run.since }));
+    for (const { turn_id } of detached) forgetTurn(turn_id);
+    return detached;
+  }
+
   function detachTurns(): string[] {
-    const ids = [...runs.keys()];
-    for (const id of ids) forgetTurn(id);
-    return ids;
+    return detachTurnsSince().map((t) => t.turn_id);
   }
 
   async function liveStatus(input: {
@@ -625,6 +649,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     steerSubagent,
     abortSubagent,
     detachTurns,
+    detachTurnsSince,
     liveStatus,
     dispose: () => {
       detachTurns();

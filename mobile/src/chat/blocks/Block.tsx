@@ -36,6 +36,8 @@ export interface BlockProps {
   /** The session the message is in, for a request card's answer. */
   session?: string | null;
   released?: readonly string[];
+  /** A request card's turn is no longer live on this phone (`openRequests`). */
+  stale?: boolean;
 }
 
 function BlockImpl({
@@ -47,6 +49,7 @@ function BlockImpl({
   pending,
   session = null,
   released = [],
+  stale = false,
 }: BlockProps) {
   switch (blockKind(block)) {
     case "text": {
@@ -79,6 +82,7 @@ function BlockImpl({
           pending={pending ?? 0}
           session={session}
           released={!!block.request_id && released.includes(block.request_id)}
+          stale={stale}
         />
       ) : null;
     case "question":
@@ -89,6 +93,7 @@ function BlockImpl({
           closed={closed}
           session={session}
           released={!!block.request_id && released.includes(block.request_id)}
+          stale={stale}
         />
       ) : null;
     case "sources":

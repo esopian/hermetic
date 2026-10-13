@@ -25,9 +25,19 @@ describe("liveStatusOf", () => {
     const rotated = { sessions: [{ id: "live-1", session_key: "s-1b", status: "working" }] };
     expect(liveStatusOf(rotated, "s-1")).toBeNull();
     expect(liveStatusOf(rotated, "s-1", "live-1")).toBe("working");
-    expect(liveRowOf(answer, "s-1")).toEqual({ status: "working", id: "live-1" });
+    expect(liveRowOf(answer, "s-1")).toEqual({ status: "working", id: "live-1", session_key: "s-1" });
+    // Matched on the live id, the row names the rotated key the gateway resolves now.
+    expect(liveRowOf(rotated, "s-1", "live-1")).toEqual({
+      status: "working",
+      id: "live-1",
+      session_key: "s-1b",
+    });
     // A live id that is not listed falls back to the stored key.
-    expect(liveRowOf(answer, "s-2", "gone")).toEqual({ status: "waiting", id: "s-2" });
+    expect(liveRowOf(answer, "s-2", "gone")).toEqual({
+      status: "waiting",
+      id: "s-2",
+      session_key: null,
+    });
   });
 
   test("a session not listed is null; an unknown status is not running", () => {
@@ -76,10 +86,12 @@ describe("transport.liveStatus", () => {
     expect(await t.liveStatus({ instance: "atlas", session: "s-1", signal })).toEqual({
       status: "starting",
       id: "x",
+      session_key: "s-1",
     });
     expect(await t.liveStatus({ instance: "atlas", session: "s-9", runtime: "x" })).toEqual({
       status: "starting",
       id: "x",
+      session_key: "s-1",
     });
     expect(await t.liveStatus({ instance: "atlas", session: "s-2" })).toBeNull();
     expect(calls[0]).toEqual({

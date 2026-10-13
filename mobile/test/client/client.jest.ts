@@ -1,4 +1,4 @@
-import type { ChatFrame, HermesChatClient } from "@hermetic/core/chat-client";
+import type { ChatFrame, ChatMessage, HermesChatClient } from "@hermetic/core/chat-client";
 import type { MobileFleetView } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
 import {
@@ -7,6 +7,8 @@ import {
   REMOTE_FAILURES,
   REMOTE_MISSES,
   REMOTE_POLL_MS,
+  REMOTE_UNKNOWN_MAX_MS,
+  tailShowsDone,
 } from "../../src/client/client.ts";
 import type { Timers } from "../../src/client/timers.ts";
 import { noteTunnel, resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
@@ -22,7 +24,9 @@ import {
   done,
   errorFrame,
   fleetView,
+  msg,
   swarm,
+  tool,
 } from "../helpers/fixtures.ts";
 
 const NOW = "2026-10-13T10:00:00.000Z";
@@ -41,13 +45,20 @@ interface Watch {
  */
 function adapter(
   frames: ChatFrame[],
-  opts: { hold?: boolean; rpc?: (method: string) => unknown } = {},
+  opts: {
+    hold?: boolean;
+    rpc?: (method: string) => unknown;
+    history?: () => ChatMessage[];
+    /** What `abort` answers (default `true`: the box interrupted something). */
+    aborted?: () => boolean;
+  } = {},
 ): HermesChatClient & {
   sent: string[];
   swarmed: string[];
   aborts: string[];
   abortSessions: (string | undefined)[];
   steers: string[];
+  steerSessions: (string | undefined)[];
   rpcs: string[];
   turnSignals: (AbortSignal | undefined)[];
   watches: Watch[];
@@ -55,6 +66,7 @@ function adapter(
 } {
   const abortSessions: (string | undefined)[] = [];
   const steers: string[] = [];
+  const steerSessions: (string | undefined)[] = [];
   const rpcs: string[] = [];
   const sent: string[] = [];
   const swarmed: string[] = [];
@@ -74,6 +86,7 @@ function adapter(
     aborts,
     abortSessions,
     steers,
+    steerSessions,
     rpcs,
     turnSignals,
     watches,
@@ -86,7 +99,7 @@ function adapter(
     sessions: async () => [],
     history: async (box) => {
       histories.push(box.instance);
-      return [];
+      return opts.history?.() ?? [];
     },
     conversation: async (box, b) => ({
       instance: box.instance,
@@ -107,10 +120,11 @@ function adapter(
     abort: async (box, _bot, o) => {
       aborts.push(box.instance);
       abortSessions.push(o?.session);
-      return true;
+      return opts.aborted?.() ?? true;
     },
-    steer: async (_box, _bot, text) => {
+    steer: async (_box, _bot, text, o) => {
       steers.push(text);
+      steerSessions.push(o?.session);
       return "queued";
     },
     ...(rpc
@@ -161,6 +175,8 @@ async function setup(
     hold?: boolean;
     view?: MobileFleetView;
     rpc?: (method: string) => unknown;
+    history?: () => ChatMessage[];
+    aborted?: () => boolean;
     timers?: Timers;
     previews?: boolean;
   } = {},
@@ -381,11 +397,21 @@ describe("a turn still running on its box after the phone was away", () => {
    * box's list. `frames` is what the turn said before it was detached, and
    * `queued` is put in the queue while it runs, before the phone goes away.
    */
-  async function away(answer: () => unknown, opts: { frames?: ChatFrame[]; queued?: string } = {}) {
+  async function away(
+    answer: () => unknown,
+    opts: {
+      frames?: ChatFrame[];
+      queued?: string;
+      history?: () => ChatMessage[];
+      aborted?: () => boolean;
+    } = {},
+  ) {
     const timers = new FakeTimers();
     const s = await setup(opts.frames ?? [delta(1, "working on it")], {
       hold: true,
       timers,
+      ...(opts.history ? { history: opts.history } : {}),
+      ...(opts.aborted ? { aborted: opts.aborted } : {}),
       rpc: (method) => {
         if (method !== "session.active_list") throw new Error(`unexpected ${method}`);
         return answer();
@@ -511,6 +537,70 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.dispose();
   });
 
+  test("after a compaction renamed the stored session, Steer and Stop go by the row's new key", async () => {
+    let answer: unknown = row("working");
+    const s = await away(() => answer);
+    answer = { sessions: [{ id: "live-1", session_key: "s-1b", status: "working" }] };
+    await s.tick(REMOTE_POLL_MS);
+    expect(await s.client.chat.steer(T, "also check the logs")).toBe("queued");
+    expect(s.chat.steerSessions).toEqual(["s-1b"]);
+    await s.client.chat.stop(T);
+    await settle();
+    // The old key resolves to the idle parent, which has nothing to interrupt.
+    expect(s.chat.abortSessions).toEqual(["s-1b"]);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null });
+    s.client.dispose();
+  });
+
+  test("a Stop the box did not act on keeps the turn running and the queue parked", async () => {
+    let interrupted = false;
+    const s = await away(() => row("working"), { queued: "next", aborted: () => interrupted });
+    await s.client.chat.stop(T);
+    await settle();
+    expect(s.chat.abortSessions).toEqual(["s-1"]);
+    expect(s.client.chat.view(T)).toMatchObject({
+      sending: true,
+      aborting: false,
+      remote: { status: "working" },
+      queueParked: true,
+      turnError: { code: "ABORT_FAILED", message: "Could not stop the turn — try again." },
+    });
+    expect(s.chat.sent).toEqual(["long job"]);
+    // Still followed: a second Stop that lands settles it.
+    await s.tick(REMOTE_POLL_MS);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    interrupted = true;
+    await s.client.chat.stop(T);
+    await settle();
+    expect(s.client.chat.view(T)).toMatchObject({
+      sending: false,
+      remote: null,
+      turnError: null,
+      queueParked: true,
+    });
+    expect(s.chat.sent).toEqual(["long job"]);
+    s.client.dispose();
+  });
+
+  test("a refused Stop is moot once the turn ends by itself", async () => {
+    let answer: unknown = row("working");
+    const s = await away(() => answer, { aborted: () => false });
+    await s.client.chat.stop(T);
+    await settle();
+    expect(s.client.chat.view(T).turnError?.code).toBe("ABORT_FAILED");
+    answer = row("idle");
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null, turnError: null });
+    s.client.dispose();
+  });
+
+  test("a request in a turn running on its box unfollowed is not open here", async () => {
+    const s = await away(() => row("waiting"), { frames: [block(1, approval())] });
+    expect(s.client.chat.view(T)).toMatchObject({ remote: { status: "waiting" }, openRequests: [] });
+    s.client.dispose();
+  });
+
   test("waiting says the turn waits on the operator", async () => {
     const s = await away(() => row("waiting"));
     expect(s.client.chat.view(T).remote).toMatchObject({
@@ -538,8 +628,14 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.dispose();
   });
 
-  test(`missing from ${REMOTE_MISSES} first answers finished while away too, not dropped`, async () => {
-    const s = await away(() => ({ sessions: [] }), { frames: [] });
+  // The turn started at NOW (the client's clock in these tests).
+  const OLD = msg({ id: "old", at: "2026-10-13T09:59:00.000Z", text: "earlier reply" });
+  const FRESH = msg({ id: "fresh", at: "2026-10-13T10:05:00.000Z", text: "all done" });
+  /** A busy row with no live `id`: the phone never learns the turn's runtime session. */
+  const keyOnly = (status: string) => ({ sessions: [{ session_key: "s-1", status }] });
+
+  test(`missing from ${REMOTE_MISSES} first answers, a fresh reply in the tail: finished while away, not dropped`, async () => {
+    const s = await away(() => ({ sessions: [] }), { frames: [], history: () => [OLD, FRESH] });
     expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: null });
     await s.tick(REMOTE_POLL_MS);
     await s.tick(0);
@@ -551,6 +647,53 @@ describe("a turn still running on its box after the phone was away", () => {
       live: null,
     });
     expect(s.chat.histories.length).toBeGreaterThan(0);
+    s.client.dispose();
+  });
+
+  test("missing with no live id and an old tail: still running on the box, still asked", async () => {
+    let answer: unknown = keyOnly("working");
+    const s = await away(() => answer, { history: () => [OLD] });
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    s.client.chat.enqueue(T, "next");
+    // Renamed by a compaction while away, or over: the tail has no reply since the turn began.
+    answer = { sessions: [] };
+    const asked = s.chat.rpcs.length;
+    for (let i = 0; i < REMOTE_MISSES * 3; i++) await s.tick(REMOTE_POLL_MS);
+    expect(s.chat.rpcs).toHaveLength(asked + REMOTE_MISSES * 3);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: { status: "working" } });
+    expect(s.chat.sent).toEqual(["long job"]);
+    s.client.dispose();
+  });
+
+  test(`missing with no live id is over at ${REMOTE_UNKNOWN_MAX_MS / 1000} s whatever the tail says`, async () => {
+    let answer: unknown = keyOnly("working");
+    const s = await away(() => answer, { history: () => [OLD] });
+    s.client.chat.enqueue(T, "next");
+    answer = { sessions: [] };
+    await s.tick(REMOTE_POLL_MS); // the first miss
+    for (let t = REMOTE_POLL_MS; t < REMOTE_UNKNOWN_MAX_MS; t += REMOTE_POLL_MS)
+      await s.tick(REMOTE_POLL_MS);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: true, remote: { status: "working" } });
+    expect(s.chat.sent).toEqual(["long job"]);
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    expect(s.client.chat.view(T)).toMatchObject({ remote: null, dropped: false, queue: [] });
+    expect(s.chat.sent).toEqual(["long job", "next"]);
+    const asked = s.chat.rpcs.length;
+    await s.tick(REMOTE_POLL_MS * 3);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    s.client.dispose();
+  });
+
+  test("an idle row for the stored key with no live id is final at once", async () => {
+    let answer: unknown = keyOnly("working");
+    const s = await away(() => answer, { history: () => [OLD] });
+    s.client.chat.enqueue(T, "next");
+    answer = keyOnly("idle");
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    expect(s.client.chat.view(T)).toMatchObject({ remote: null, dropped: false, queue: [] });
+    expect(s.chat.sent).toEqual(["long job", "next"]);
     s.client.dispose();
   });
 
@@ -600,5 +743,36 @@ describe("a turn still running on its box after the phone was away", () => {
     expect(s.chat.rpcs).toHaveLength(asked + 1);
     expect(s.client.chat.view(T).remote?.status).toBe("working");
     s.client.dispose();
+  });
+});
+
+describe("tailShowsDone", () => {
+  const since = "2026-10-13T10:00:00.000Z";
+  const at = "2026-10-13T10:01:00.000Z";
+
+  test("a bot reply written after the start ends the turn", () => {
+    expect(tailShowsDone([msg({ role: "user", at: since }), msg({ at })], since)).toBe(true);
+  });
+
+  test("a failure written after the start ends it, whatever its role", () => {
+    const failed = msg({ role: "system", at, failure: { code: "RATE_LIMITED", message: "slow down" } });
+    expect(tailShowsDone([failed], since)).toBe(true);
+  });
+
+  test("an older row, a user row, a reply stopping on a tool call, or no start: not yet", () => {
+    expect(tailShowsDone([msg({ at: since })], since)).toBe(false);
+    expect(tailShowsDone([msg({ at }), msg({ role: "user", at })], since)).toBe(false);
+    expect(tailShowsDone([msg({ at, blocks: [tool()] })], since)).toBe(false);
+    expect(tailShowsDone([], since)).toBe(false);
+    expect(tailShowsDone([msg({ at })], null)).toBe(false);
+  });
+
+  test("process events after the reply are looked past", () => {
+    const event = msg({
+      at,
+      role: "system",
+      blocks: [{ kind: "process_event" } as ChatMessage["blocks"][number]],
+    });
+    expect(tailShowsDone([msg({ at }), event], since)).toBe(true);
   });
 });

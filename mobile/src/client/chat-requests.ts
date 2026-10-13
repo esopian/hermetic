@@ -65,13 +65,20 @@ export function keepsCard(block: ChatBlock, closed: ClosedRequest | undefined): 
 
 export type RequestBlock = ApprovalBlock | QuestionBlock;
 
-/** Requests still waiting: an id, not closed, not answered here, not expired. */
+/**
+ * Requests still waiting: an id, not closed, not answered here, not expired —
+ * and in a turn still live on this phone (`answerable`). One that is not (the
+ * turn dropped, cut off, running on the box unfollowed, or settled without a
+ * response) is stale: its card draws `STALE`, and nothing waits on it.
+ */
 export function openRequests(
   blocks: readonly ChatBlock[],
   closed: ReadonlyMap<string, ClosedRequest>,
   released: ReadonlySet<string> | readonly string[] | null | undefined,
   now: number,
+  answerable = true,
 ): RequestBlock[] {
+  if (!answerable) return [];
   const done = released ? new Set(released) : null;
   return blocks.filter(
     (block): block is RequestBlock =>
@@ -112,6 +119,8 @@ export const APPROVAL_OUTCOME: Record<ApprovalChoice, string> = {
 export const EXPIRED = "Request expired.";
 export const SENT = "Response sent.";
 export const GONE = "Already answered or expired.";
+/** A request whose turn is no longer live on this phone (`openRequests`). */
+export const STALE = "This request can no longer be answered from here.";
 
 const KNOWN_CHOICES = new Set<string>(["once", "session", "always", "deny"]);
 

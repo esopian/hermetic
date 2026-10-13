@@ -1,6 +1,8 @@
 import { act, fireEvent, screen } from "@testing-library/react-native";
 import { ApprovalCard } from "../../src/chat/blocks/Approval.tsx";
 import { QuestionCard } from "../../src/chat/blocks/Question.tsx";
+import { type TranscriptItem, transcriptItems } from "../../src/chat/Transcript.tsx";
+import { TurnRow } from "../../src/chat/TurnRow.tsx";
 import {
   answerOf,
   clarifyPayload,
@@ -9,10 +11,14 @@ import {
   offeredChoices,
   openRequests,
   questionsOf,
+  STALE,
 } from "../../src/client/chat-requests.ts";
 import type { QuestionBlock } from "@hermetic/core/chat-client";
-import { approval, question } from "../helpers/fixtures.ts";
+import { approval, msg, question } from "../helpers/fixtures.ts";
 import { NOW, renderUi, scope } from "../helpers/render.tsx";
+
+// The transcript module imports the keyboard-aware scroll view, which needs its native half.
+jest.mock("react-native-keyboard-controller", () => require("react-native-keyboard-controller/jest"));
 
 const ok = jest.fn(async () => ({ status: "ok" as const }));
 
@@ -264,6 +270,8 @@ describe("request rules", () => {
     ];
     const open = openRequests(blocks, new Map(), ["b"], NOW);
     expect(open.map((b) => b.request_id)).toEqual(["a"]);
+    // A turn no longer live on this phone waits on nothing.
+    expect(openRequests(blocks, new Map(), ["b"], NOW, false)).toEqual([]);
   });
 
   test("a multi-select answer is a JSON list; the suffix is stripped", () => {
@@ -271,5 +279,77 @@ describe("request rules", () => {
     if (!q) throw new Error("no question");
     expect(answerOf(q, { picked: ["main (Recommended)"], text: "" })).toBe("main");
     expect(clarifyPayload("r", questionsOf(question()), [{ picked: [], text: "" }])).toBeNull();
+  });
+});
+
+describe("a request in a turn no longer live on this phone", () => {
+  const turnItem = (items: TranscriptItem[]) => {
+    const item = items.find((i) => i.kind === "turn");
+    if (item?.kind !== "turn") throw new Error("no turn row");
+    return item;
+  };
+  const drawRow = (item: Extract<TranscriptItem, { kind: "turn" }>) =>
+    renderUi(
+      <TurnRow
+        row={item.row}
+        fleetId="f"
+        instance="atlas"
+        bot="scribe"
+        status="ready"
+        now={NOW}
+        streaming={item.streaming}
+        activity="idle"
+        answerable={item.answerable}
+      />,
+      scope({ respond: ok }),
+    );
+  const asking = (over: Parameters<typeof msg>[0] = {}) =>
+    msg({ id: "b1", at: new Date(NOW).toISOString(), blocks: [approval()], ...over });
+
+  test("a dropped turn's approval is stale: buttons disabled, nothing waits, nothing is sent", async () => {
+    // The store marks a dropped turn's live reply incomplete and stops sending.
+    const item = turnItem(transcriptItems([], asking({ incomplete: true }), false, NOW));
+    expect(item.answerable).toBe(false);
+    await drawRow(item);
+    expect(screen.getByText(STALE)).toBeTruthy();
+    const once = screen.getByLabelText("Approve once");
+    expect(once.props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(once);
+    expect(ok).not.toHaveBeenCalled();
+    expect(screen.queryByText(/waiting/)).toBeNull();
+  });
+
+  test("a cut-off reply is stale even while its turn still reads as running (a Stop in flight)", async () => {
+    const item = turnItem(transcriptItems([], asking({ incomplete: true }), true, NOW));
+    expect(item.answerable).toBe(true);
+    await drawRow(item);
+    expect(screen.getByText(STALE)).toBeTruthy();
+  });
+
+  test("a turn running on its box unfollowed, or settled without a response, is stale too", async () => {
+    expect(turnItem(transcriptItems([], asking(), true, NOW, [], true)).answerable).toBe(false);
+    const settled = turnItem(transcriptItems([asking()], null, false, NOW));
+    await drawRow(settled);
+    expect(screen.getByText(STALE)).toBeTruthy();
+  });
+
+  test("the turn this phone follows keeps its card answerable", async () => {
+    const item = turnItem(transcriptItems([], asking(), true, NOW));
+    expect(item.answerable).toBe(true);
+    await drawRow(item);
+    expect(screen.queryByText(STALE)).toBeNull();
+    await fireEvent.press(screen.getByLabelText("Approve once"));
+    expect(ok).toHaveBeenCalledWith({ request_id: "r1", kind: "approval", choice: "once" }, "s-1");
+  });
+
+  test("a stale question draws its choices disabled", async () => {
+    await renderUi(
+      <QuestionCard block={question()} now={NOW} session="s-1" stale />,
+      scope({ respond: ok }),
+    );
+    expect(screen.getByText(STALE)).toBeTruthy();
+    expect(screen.getByLabelText("main").props.accessibilityState.disabled).toBe(true);
+    expect(screen.queryByLabelText("Confirm and continue")).toBeNull();
+    expect(screen.queryByText("turn paused")).toBeNull();
   });
 });

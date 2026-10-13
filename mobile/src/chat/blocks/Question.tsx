@@ -5,7 +5,8 @@
  * id; a single question sends `answer`. Choices are lettered rows (radio, or
  * checkbox when multi-select), "Other" is a free-text row, Skip declines,
  * "Confirm and continue" is disabled until every question has an answer.
- * Settled, the card collapses to what was asked and what went back.
+ * Settled, the card collapses to what was asked and what went back. In a turn
+ * no longer live on this phone (`stale`), its choices are drawn disabled.
  */
 import { type ReactNode, useEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
@@ -25,6 +26,7 @@ import {
   questionsOf,
   replayed,
   SENT,
+  STALE,
   type Stage,
   skippedAnswer,
   typeOther,
@@ -185,12 +187,15 @@ export function QuestionCard({
   closed,
   session,
   released = false,
+  stale = false,
 }: {
   block: QuestionBlock;
   now: number;
   closed?: ClosedRequest | undefined;
   session: string | null;
   released?: boolean;
+  /** Its turn is no longer live on this phone: nothing can be answered here (`openRequests`). */
+  stale?: boolean;
 }) {
   const t = useTheme();
   const { live, state, busy, submit, settled } = useSubmit(session);
@@ -213,7 +218,7 @@ export function QuestionCard({
   const shut = closed && closed.kind !== "answered" ? closed.kind : null;
   const expired = !!block.expires_at && Date.parse(block.expires_at) < now;
   const done = settled || (released && !state);
-  const paused = answerable && !expired && !done && !shut;
+  const paused = answerable && !stale && !expired && !done && !shut;
   const single = questions.length === 1 ? (questions[0] ?? null) : null;
 
   const edit = (index: number, next: (stage: Stage, q: QuestionEntry) => Stage) =>
@@ -252,7 +257,7 @@ export function QuestionCard({
         {single ? <LateChoices q={single} /> : null}
       </>
     );
-  else if (!answerable)
+  else if (!answerable || stale)
     body = (
       <>
         {questions.map((q, i) => (
@@ -271,7 +276,7 @@ export function QuestionCard({
           </View>
         ))}
         <Text variant="caption" tone="fg3">
-          Respond in Hermes. Choices are shown here for reference.
+          {answerable ? STALE : "Respond in Hermes. Choices are shown here for reference."}
         </Text>
       </>
     );
@@ -374,7 +379,7 @@ export function QuestionCard({
     );
   }
 
-  const muted = recorded || done || !!shut;
+  const muted = recorded || done || !!shut || (answerable && stale);
   return (
     <View
       testID={`question-${request_id ?? "none"}`}

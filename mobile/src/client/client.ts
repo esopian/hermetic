@@ -35,7 +35,7 @@ import {
   type WatchedThread,
 } from "../inbox/store.ts";
 import { failureHeadline } from "./chat-logic.ts";
-import { ConversationStore, type ConversationTarget } from "./conversation-store.ts";
+import { ConversationStore, type ConversationTarget, type TurnWhere } from "./conversation-store.ts";
 import { type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
 import { realTimers, type Timers } from "./timers.ts";
 
@@ -100,8 +100,41 @@ export const REMOTE_FAILURES = 5;
  * Answers in a row that do not list a turn's session before it is taken as
  * over. One is not enough: a compaction mid-turn renames the stored session,
  * and until an answer has named the turn's live id the phone cannot match it.
+ * With no live id learned, misses alone never conclude: see
+ * `REMOTE_UNKNOWN_MAX_MS`.
  */
 export const REMOTE_MISSES = 2;
+/**
+ * How long a turn whose session the box stops listing, with no live id
+ * learned to match it on, is still taken as running unless its transcript
+ * shows it ended (`tailShowsDone`). Core's adapter does not reveal a turn's
+ * live id, so a compaction while the phone was away (stored key rotated, the
+ * live id never seen) looks exactly like a turn that ended; concluding on
+ * misses would drain the queue into a busy session, and upstream's
+ * `busy_input_mode = interrupt` would kill the turn. Timed from the first
+ * miss; at the bound the turn is taken as over.
+ */
+export const REMOTE_UNKNOWN_MAX_MS = 120_000;
+/** Transcript rows read to confirm such a turn ended (`tailShowsDone`). */
+export const REMOTE_TAIL_ROWS = 5;
+
+const isProcessEvent = (m: ChatMessage): boolean =>
+  m.blocks.length > 0 && m.blocks.every((b) => b.kind === "process_event");
+
+/**
+ * Whether a transcript's tail (oldest first) shows that a turn started at
+ * `since` ended: its last row, process events aside, was written after
+ * `since` and either carries a failure or is a bot reply that does not stop
+ * on a tool call. `since` unknown: never.
+ */
+export function tailShowsDone(messages: readonly ChatMessage[], since: string | null): boolean {
+  const start = since === null ? Number.NaN : Date.parse(since);
+  if (Number.isNaN(start)) return false;
+  const last = messages.filter((m) => !isProcessEvent(m)).pop();
+  if (!last || !(Date.parse(last.at) > start)) return false;
+  if (last.failure || last.error) return true;
+  return last.role === "bot" && last.blocks[last.blocks.length - 1]?.kind !== "tool";
+}
 
 /* ── the client ─────────────────────────────────────────────────────────── */
 
@@ -143,7 +176,10 @@ export interface HermeticClientOptions {
  *   or gone. A definite answer that it is over — `idle`, or absent from
  *   `REMOTE_MISSES` answers in a row — is `chat.onRemoteDone` on the first ask
  *   as on any later one: the turn ran to its end, so the transcript is re-read
- *   and the queue released, with nothing marked dropped. No answer (the first
+ *   and the queue released, with nothing marked dropped. Absent with no live
+ *   id learned is over only once the transcript's tail shows a reply or a
+ *   failure written after the turn started (`tailShowsDone`), or after
+ *   `REMOTE_UNKNOWN_MAX_MS` of misses. No answer (the first
  *   ask failing, or `REMOTE_FAILURES` in a row) is `chat.onTurnGone`: dropped,
  *   and the transcript re-read from the box.
  * - `"inactive"` — alerts only; nothing is detached.
@@ -223,6 +259,8 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   let phase: AppPhase = "active";
   /** Turns detached when the app went to the background, reported gone on its return. */
   let detached: string[] = [];
+  /** When each detached turn was started (`tailShowsDone`), until it settles. */
+  const turnStarts = new Map<string, string>();
   let suspended = false;
   let watched: WatchedThread | null = null;
   const previews = options.previews ?? (() => true);
@@ -263,6 +301,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     ...(options.timers ? { timers: options.timers } : {}),
     onTurnSettled: (where, outcome) => {
       if (!outcome.turnId) return;
+      turnStarts.delete(outcome.turnId);
       const session = sessionOf(where);
       const base = {
         instance: where.instance,
@@ -372,12 +411,30 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     following.delete(turnId);
   };
 
+  /** Whether the transcript's tail shows the turn ended; a failed read shows nothing. */
+  const tailDone = async (turnId: string, where: TurnWhere, session: string): Promise<boolean> => {
+    try {
+      const tail = await transport.history({
+        instance: where.target.instance,
+        bot: where.target.bot,
+        session,
+        limit: REMOTE_TAIL_ROWS,
+      });
+      return tailShowsDone(tail.messages, turnStarts.get(turnId) ?? null);
+    } catch {
+      return false;
+    }
+  };
+
   /**
    * Ask a detached turn's box what its session is doing, and keep asking
    * while the box says it is busy and its conversation is on screen. `back`:
    * the first ask on the return to the foreground, where no answer at all is
    * `onTurnGone`. A row once matched names the turn's live id, which the next
    * ask matches on too (a compaction renames the stored id, not the live one).
+   * With no live id learned, a session gone from the list may be one renamed
+   * while the phone was away: the turn is over only when the transcript's
+   * tail says so, or `REMOTE_UNKNOWN_MAX_MS` after the first miss.
    */
   function followRemote(turnId: string, back: boolean): void {
     if (following.has(turnId)) return;
@@ -390,11 +447,16 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     void (async () => {
       let failures = 0;
       let misses = 0;
+      /** `timers.now()` at the first of the current misses. */
+      let missedSince: number | null = null;
       for (let first = true; ; first = false) {
         if (!first) await pause(REMOTE_POLL_MS, signal);
         if (signal.aborted) return;
         const where = chat.turnTarget(turnId);
-        if (!where) return done();
+        if (!where) {
+          turnStarts.delete(turnId);
+          return done();
+        }
         if (!where.session) {
           done();
           return chat.onTurnGone(turnId);
@@ -417,14 +479,25 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         }
         if (signal.aborted) return;
         failures = 0;
-        // Not listed: over, or renamed under a live id not yet learned. Ask again.
-        if (row === null && ++misses < REMOTE_MISSES) continue;
-        if (row === null || !isRunning(row.status)) {
+        if (row === null) {
+          missedSince ??= timers.now();
+          // Not listed: over, or renamed under a live id not yet learned. Ask again.
+          if (++misses < REMOTE_MISSES) continue;
+          if (!where.runtime && timers.now() - missedSince < REMOTE_UNKNOWN_MAX_MS) {
+            const ended = await tailDone(turnId, where, where.session);
+            if (signal.aborted) return;
+            if (!ended) continue;
+          }
+          done();
+          return chat.onRemoteDone(turnId);
+        }
+        if (!isRunning(row.status)) {
           done();
           return chat.onRemoteDone(turnId);
         }
         misses = 0;
-        chat.onTurnRemote(turnId, row.status, row.id);
+        missedSince = null;
+        chat.onTurnRemote(turnId, row.status, row.id, row.session_key);
         // Off screen: the turn stays "running on the box" until it is shown again.
         if (!chat.turnTarget(turnId)?.opened) return done();
       }
@@ -457,7 +530,10 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
           if (chat.turnTarget(turnId)?.remote === null) detached.push(turnId);
           stopFollowing(turnId);
         }
-        detached = [...detached, ...transport.detachTurns()];
+        for (const turn of transport.detachTurnsSince()) {
+          turnStarts.set(turn.turn_id, turn.since);
+          detached.push(turn.turn_id);
+        }
         chat.suspend();
       }
       if (next === "active" && suspended) {
@@ -475,6 +551,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     },
     dispose: () => {
       for (const turnId of [...following.keys()]) stopFollowing(turnId);
+      turnStarts.clear();
       offFleet();
       transport.dispose();
       chat.reset();

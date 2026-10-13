@@ -38,9 +38,10 @@
  * And upstream's orphan reaper pops a session no client is attached to within
  * about 20 s of its turn ending, so a turn seen running can leave the list
  * before any poll sees it idle; it settles from its stored tail as it goes,
- * provided that tail's reply was written after the turn was first seen — a
- * session key rotated by a compression leaves the list too, and its turn goes
- * on under the new key.
+ * provided that tail's reply was written after the turn was first seen. A
+ * session key rotated by a compression leaves the list too, mid-turn; the live
+ * `id` it keeps names its new key, and what was seen of it, turn and event
+ * counter included, moves there without a push.
  *
  * Each of those transitions bumps the session's event counter, the `<n>` of
  * the push's dedupe key (`MobilePushData`): two `waiting` spells in one turn
@@ -62,8 +63,10 @@
  * is a *baseline*: it is recorded and pushes nothing, so a daemon restart does
  * not replay every live session to every phone. A poll that merely fails (a
  * throw, a timeout, an answer without a list) keeps what was seen, so a turn
- * that settles across the failed poll still pushes; it re-baselines only when
- * nothing had been seen yet.
+ * that settles in the list across the failed poll still pushes; it
+ * re-baselines only when nothing had been seen yet. The answer after a failed
+ * poll settles nothing that left the list, though: a Hermes restart can show
+ * only as refused polls, and the turns it killed left interim rows behind.
  *
  * At most every `TAILNET_PRUNE_MS` it also asks Tailscale who is on the tailnet
  * (`tailnetLogins`) and drops the registrations of owners who are not: a member
@@ -147,6 +150,11 @@ export type TickOutcome =
 export interface LiveSession {
   /** The stored id (`session_key`, else the live `id`). */
   readonly key: string;
+  /**
+   * The live `id`, which outlives a compression that rotates `session_key`;
+   * `null` when not reported.
+   */
+  readonly id: string | null;
   readonly status: string;
   readonly message_count: number;
   /**
@@ -180,16 +188,14 @@ export function parseActiveList(value: unknown): LiveSession[] | null {
   for (const raw of sessions) {
     if (typeof raw !== "object" || raw === null) continue;
     const row = raw as Record<string, unknown>;
+    const id = typeof row["id"] === "string" && row["id"] !== "" ? row["id"] : null;
     const key =
-      typeof row["session_key"] === "string" && row["session_key"] !== ""
-        ? row["session_key"]
-        : typeof row["id"] === "string" && row["id"] !== ""
-          ? row["id"]
-          : null;
+      typeof row["session_key"] === "string" && row["session_key"] !== "" ? row["session_key"] : id;
     const count = row["message_count"];
     if (key === null || typeof row["status"] !== "string" || typeof count !== "number") continue;
     out.push({
       key,
+      id,
       status: row["status"],
       message_count: count,
       last_active: activeAt(row["last_active"]),
@@ -208,8 +214,10 @@ function rowText(row: ChatMessage): string {
 
 /**
  * The tail's verdict: the newest row with a failure is an error, the newest
- * bot row is a reply, and a user row reached first means the turn left nothing
- * to tell (an interrupt before any output) — no push.
+ * complete bot row is a reply, and a user row reached first means the turn
+ * left nothing to tell (an interrupt before any output) — no push. A bot row
+ * marked `incomplete` (a step the turn never finished) is no reply and is
+ * passed over.
  */
 export function tailVerdict(
   rows: readonly ChatMessage[],
@@ -234,7 +242,10 @@ function tailRow(
         at: stamped,
       };
     }
-    if (row.role === "bot") return { kind: "turn.done", text: rowText(row), at: stamped };
+    if (row.role === "bot") {
+      if (row.incomplete === true) continue;
+      return { kind: "turn.done", text: rowText(row), at: stamped };
+    }
     if (row.role === "user") return null;
   }
   return null;
@@ -282,12 +293,13 @@ export function createWatcher(deps: WatchDeps): Watcher {
    * upstream commits the turn's history before it goes idle, so the next
    * `idle` settles it, grown count or not. `turnSince` is the last moment the
    * turn was not yet seen — the poll before the one that first saw it, or that
-   * one when there was none — so a row the turn wrote is newer; `null` when no
-   * turn is under way.
+   * one when there was none (a pollMs before it, for the process's first) — so
+   * a row the turn wrote is newer; `null` when no turn is under way. `id` is
+   * the live id, which a compression that rotates the key keeps.
    */
   const seen = new Map<
     string,
-    { status: string; count: number; turn: boolean; turnSince: number | null }
+    { id: string | null; status: string; count: number; turn: boolean; turnSince: number | null }
   >();
   const botOf = new Map<string, string>();
   /** session → its last event number. Outlives `seen`, so a session that leaves and returns never reuses one. */
@@ -308,6 +320,14 @@ export function createWatcher(deps: WatchDeps): Watcher {
   let mapAt = Number.NEGATIVE_INFINITY;
   let pruneAt = Number.NEGATIVE_INFINITY;
   let baseline = true;
+  /**
+   * Set by a failed poll, cleared by the next answer. A Hermes restart the
+   * watcher sees only as refused polls (the unit never reads as down) kills
+   * every running turn, and its interim rows would read as replies; so the
+   * answer after a failure settles only what it sees settle in the list, and a
+   * turn that left the list meanwhile pushes nothing.
+   */
+  let suspect = false;
   /** When the last answered `session.active_list` was asked, in milliseconds. */
   let lastPollAt: number | null = null;
 
@@ -391,15 +411,21 @@ export function createWatcher(deps: WatchDeps): Watcher {
 
   /**
    * The push a turn that just settled deserves, read off its tail. `after` is
-   * for a session gone from the list, whose leaving alone proves nothing: a
-   * tail row written no later than it is not this turn's, and a session no
-   * bot can be placed for has no tail to prove it by; either pushes nothing.
+   * when the turn was last not yet seen: a tail row written no later than it
+   * is not this turn's, and pushes nothing. `reaped` is for a session gone
+   * from the list, whose leaving alone proves nothing: one no bot can be
+   * placed for has no tail to prove it by and pushes nothing, where one that
+   * settled in the list pushes a content-free `message` under `UNKNOWN_BOT`.
    * An event number is taken only for a push.
    */
-  async function settled(key: string, after: number | null = null): Promise<PushEvent | null> {
+  async function settled(
+    key: string,
+    after: number | null,
+    reaped: boolean,
+  ): Promise<PushEvent | null> {
     const bot = await resolveBot(key);
     if (bot === null) {
-      return after === null ? event("message", UNKNOWN_BOT, key, nextEvent(key), "") : null;
+      return reaped ? null : event("message", UNKNOWN_BOT, key, nextEvent(key), "");
     }
     const rows = await tail(bot, key);
     // The turn did settle; without its tail there is no excerpt, but silence
@@ -445,6 +471,7 @@ export function createWatcher(deps: WatchDeps): Watcher {
   ): Promise<PushEvent[]> {
     const events: PushEvent[] = [];
     const present = new Set<string>();
+    rekey(live);
     for (const s of live) {
       present.add(s.key);
       const prev = seen.get(s.key);
@@ -458,10 +485,18 @@ export function createWatcher(deps: WatchDeps): Watcher {
       const settles = s.status === "idle" && (grew || compacted || (prev?.turn ?? false));
       const turn = (TURN_STATUSES.has(s.status) || (prev?.turn ?? false)) && !settles;
       seen.set(s.key, {
+        id: s.id,
         status: s.status,
         count: s.message_count,
         turn,
-        turnSince: !turn ? null : prev?.turn === true ? prev.turnSince : (since ?? askedAt),
+        // The process's first answer has no poll before it: a poll's length
+        // back stands in, so a turn that wrote its reply just before is still
+        // placed after the turn began.
+        turnSince: !turn
+          ? null
+          : prev?.turn === true
+            ? prev.turnSince
+            : (since ?? askedAt - tuning.pollMs),
       });
       if (baseline) continue;
       if (s.status === "waiting") {
@@ -483,7 +518,9 @@ export function createWatcher(deps: WatchDeps): Watcher {
       }
       if (!settles) continue;
       if (prev.turn) {
-        const pushed = await settled(s.key);
+        // A turn that ended without writing a row leaves the previous reply
+        // newest; it is not this turn's.
+        const pushed = await settled(s.key, prev.turnSince, false);
         if (pushed !== null) events.push(pushed);
         continue;
       }
@@ -496,26 +533,61 @@ export function createWatcher(deps: WatchDeps): Watcher {
       if (present.has(key)) continue;
       // Gone mid-turn: the orphan reaper pops a detached session soon after
       // its turn ends, possibly before any poll saw it idle. Its stored tail
-      // still says how the turn ended, if the reply is newer than the turn — a
-      // key rotated by a compression leaves too, and its turn settles under
-      // the new key. A baseline knows nothing of what happened meanwhile.
-      if (!baseline && prev.turn) {
-        const pushed = await settled(key, prev.turnSince);
+      // still says how the turn ended, if the reply is newer than the turn (a
+      // key rotated by a compression was moved to its new key by `rekey`). A
+      // baseline knows nothing of what happened meanwhile, and the answer
+      // after a failed poll may follow a Hermes restart that killed the turn.
+      if (!baseline && !suspect && prev.turn) {
+        const pushed = await settled(key, prev.turnSince, true);
         if (pushed !== null) events.push(pushed);
       }
       seen.delete(key);
     }
     baseline = false;
+    suspect = false;
     return events;
   }
 
   /**
+   * Moves what was seen of a session whose key a compression rotated onto its
+   * new key. Upstream saves the old key's transcript once more before it
+   * renames the session, so the old key's tail ends on the turn's latest step
+   * (often a tool call, which reads as a bot row), and settling it as reaped
+   * would push a turn that is still running. The live `id` survives the
+   * rotation: a key gone from the list whose `id` is now listed under another
+   * key hands that key its status, count, turn and event counter, and pushes
+   * nothing of its own. The turn settles under the new key when it ends.
+   */
+  function rekey(live: readonly LiveSession[]): void {
+    const listed = new Set(live.map((s) => s.key));
+    const keyOf = new Map<string, string>();
+    for (const s of live) if (s.id !== null) keyOf.set(s.id, s.key);
+    for (const [key, prev] of [...seen]) {
+      if (listed.has(key) || prev.id === null) continue;
+      const to = keyOf.get(prev.id);
+      if (to === undefined) continue;
+      const into = seen.get(to);
+      if (into === undefined) seen.set(to, prev);
+      else if (prev.turn && !into.turn)
+        seen.set(to, { ...into, turn: true, turnSince: prev.turnSince });
+      seen.delete(key);
+      const n = counters.get(key);
+      if (n !== undefined && n > (counters.get(to) ?? counterFloor)) {
+        counters.delete(to);
+        counters.set(to, n);
+      }
+    }
+  }
+
+  /**
    * A poll that failed without the unit going down. What was seen still
-   * stands, so the next answer is diffed against it; only with nothing seen
-   * is there nothing to diff against, and the next answer is a baseline.
+   * stands, so the next answer is diffed against it, though only for what
+   * settles in the list (`suspect`); only with nothing seen is there nothing
+   * to diff against, and the next answer is a baseline.
    */
   function failed(reason: string): TickOutcome {
     if (seen.size === 0) baseline = true;
+    suspect = true;
     return { kind: "down", reason };
   }
 

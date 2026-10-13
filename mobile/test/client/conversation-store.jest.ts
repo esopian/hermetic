@@ -363,15 +363,44 @@ describe("stop, steer, queue", () => {
     ]);
   });
 
-  test("stop before the turn id is known falls back to chat.abort", async () => {
+  test("stop before the turn id is known falls back to chat.abort by its session", async () => {
     const s = setup();
+    s.store.open(T);
+    await flush();
     s.store.send(T, "hello");
     await s.store.stop(T);
-    expect(s.method("chat.abort")).toHaveLength(1);
+    expect(s.method("chat.abort").map((c) => c.input)).toEqual([
+      { instance: "atlas", bot: "scribe", session: "s-1" },
+    ]);
     // The transport answers afterwards: nobody follows that turn.
     s.starts[0]!.d.resolve({ turn_id: "T7" });
     await flush();
     expect(s.method("forget")).toEqual([{ method: "forget", input: "T7" }]);
+  });
+
+  test("stop with no session never sends an unscoped chat.abort", async () => {
+    // Before the start answers: stopped by the id it answers with.
+    const s = setup();
+    s.store.send(T, "hello");
+    await s.store.stop(T);
+    expect(s.method("chat.abort")).toEqual([]);
+    expect(s.view()).toMatchObject({ sending: false, turnError: null });
+    s.starts[0]!.d.resolve({ turn_id: "T7" });
+    await flush();
+    expect(s.method("turn.abort").map((c) => c.input)).toEqual(["T7"]);
+    expect(s.method("forget")).toEqual([]);
+
+    // A pump the transport no longer holds: refused, with the reason.
+    const p = setup();
+    await started(p);
+    p.setAbortTurn(false);
+    await p.store.stop(T);
+    expect(p.method("turn.abort")).toHaveLength(1);
+    expect(p.method("chat.abort")).toEqual([]);
+    expect(p.view().turnError).toEqual({
+      code: "ABORT_FAILED",
+      message: "This conversation has no session yet, so the turn cannot be stopped from here.",
+    });
   });
 
   test("the queue drains one message at a time when the turn ends", async () => {

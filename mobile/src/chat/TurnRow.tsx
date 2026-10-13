@@ -102,6 +102,11 @@ export interface TurnRowProps {
   released?: readonly string[];
   /** An operator message with an agent turn after it (`transcriptItems`). */
   answered?: boolean;
+  /**
+   * The row's turn is live on this phone, so its requests can be answered here
+   * (`transcriptItems`; defaults to `streaming`). A cut-off or failed row never is.
+   */
+  answerable?: boolean;
 }
 
 function TurnRowImpl({
@@ -116,6 +121,7 @@ function TurnRowImpl({
   activity = streaming ? "streaming" : "idle",
   released = [],
   answered = false,
+  answerable = streaming,
 }: TurnRowProps) {
   const t = useTheme();
   const { message, continuation } = row;
@@ -154,7 +160,8 @@ function TurnRowImpl({
       ? author.bot
       : (botTitle ?? bot);
   const closed = closedRequests(message.blocks);
-  const open = openRequests(message.blocks, closed, released, now);
+  const requestsLive = answerable && !broken;
+  const open = openRequests(message.blocks, closed, released, now, requestsLive);
   const waiting = open.length > 0;
   const blocks = message.blocks.filter(
     (block) =>
@@ -229,6 +236,7 @@ function TurnRowImpl({
               pending={pending}
               session={message.session || null}
               released={released}
+              stale={!requestsLive}
             />
           ),
         )}

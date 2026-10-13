@@ -51,6 +51,8 @@ export type TranscriptItem =
       mine: boolean;
       /** Mine, and an agent turn directly follows its run: no longer "sending…". */
       answered: boolean;
+      /** The turn this phone follows, not running on its box unfollowed: its requests can be answered. */
+      answerable: boolean;
     };
 
 const sameList = <T,>(a: readonly T[], b: readonly T[]): boolean =>
@@ -63,6 +65,7 @@ function sameItem(prev: TranscriptItem | undefined, next: TranscriptItem): boole
     return prev.kind === "divider" && next.kind === "divider" && prev.label === next.label;
   return (
     prev.streaming === next.streaming &&
+    prev.answerable === next.answerable &&
     prev.mine === next.mine &&
     prev.answered === next.answered &&
     prev.row.continuation === next.row.continuation &&
@@ -78,6 +81,9 @@ function sameItem(prev: TranscriptItem | undefined, next: TranscriptItem): boole
  * without it each streamed delta handed every visible row a new object and the
  * memoised `TurnRow` redrew them all; an item whose source messages (by
  * identity) and placement are unchanged is handed back as the same object.
+ *
+ * `remote`: the turn runs on its box unfollowed (`ConversationView.remote`),
+ * so the streaming row's requests cannot be answered from here.
  */
 export function transcriptItems(
   messages: readonly ChatMessage[],
@@ -85,6 +91,7 @@ export function transcriptItems(
   sending: boolean,
   now: number,
   previous: readonly TranscriptItem[] = [],
+  remote = false,
 ): TranscriptItem[] {
   const all = live && !messages.some((m) => m.id === live.id) ? [...messages, live] : messages;
   const byId = new Map(all.map((m) => [m.id, m]));
@@ -93,6 +100,7 @@ export function transcriptItems(
   for (const row of rows) {
     const key = row.ids[0] ?? row.message.id;
     if (row.divider) items.push({ kind: "divider", key: `d:${key}`, label: row.divider });
+    const streaming = sending && !!live && row.ids.includes(live.id);
     items.push({
       kind: "turn",
       key,
@@ -101,7 +109,8 @@ export function transcriptItems(
         const m = byId.get(id);
         return m ? [m] : [];
       }),
-      streaming: sending && !!live && row.ids.includes(live.id),
+      streaming,
+      answerable: streaming && !remote,
       mine: row.message.role === "user" && !row.message.from_bot,
       answered: false,
     });
@@ -275,6 +284,7 @@ function TranscriptImpl({
           activity={item.streaming ? activity : "idle"}
           released={released}
           answered={item.answered}
+          answerable={item.answerable}
         />
       ),
     [t, fleetId, instance, bot, botTitle, status, now, activity, released],

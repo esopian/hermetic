@@ -39,6 +39,8 @@ const TOKEN_B = "ExponentPushToken[FIXTURE-watch-b]";
 
 type Live = {
   id: string;
+  /** The live `id`; `live-<id>` unless a test says otherwise (a key rotation keeps it). */
+  live?: string;
   status: string;
   message_count: number;
   preview?: string;
@@ -49,7 +51,7 @@ type Live = {
 function snapshot(...sessions: Live[]): unknown {
   return {
     sessions: sessions.map((s) => ({
-      id: `live-${s.id}`,
+      id: s.live ?? `live-${s.id}`,
       session_key: s.id,
       status: s.status,
       message_count: s.message_count,
@@ -791,7 +793,7 @@ describe("settling a turn", () => {
     // Upstream commits the turn's history before it marks the session idle.
     const r = await rig();
     r.chat.bots.set("s1", "granite");
-    r.chat.tails.set("s1", [message("user", "go"), message("bot", "done")]);
+    r.chat.tails.set("s1", [message("user", "go"), message("bot", "done", { at: isoAt(r, 5_000) })]);
     r.chat.snapshots.push(
       snapshot({ id: "s1", status: "idle", message_count: 2 }),
       snapshot({ id: "s1", status: "working", message_count: 2 }),
@@ -870,24 +872,90 @@ describe("settling a turn", () => {
 
   test("a key rotated mid-turn by a compression settles once, under the new key", async () => {
     const r = await rig();
+    const n = nth(r, 1);
     r.chat.bots.set("old", "granite");
     r.chat.bots.set("new", "granite");
-    // The old key's newest reply predates the turn; the turn ends under the new one.
+    // Upstream saves the old key's transcript after every step and once more
+    // before compression renames it, so its tail ends on the turn's latest
+    // step: a bot row with a trailing tool call, written after the turn began.
     r.chat.tails.set("old", [
-      message("user", "go"),
-      message("bot", "before", { at: isoAt(r, -60_000) }),
+      message("user", "go", { at: isoAt(r, 3_500) }),
+      message("bot", "Let me check the logs.", {
+        at: isoAt(r, 5_000),
+        blocks: [
+          { kind: "text", markdown: "Let me check the logs." },
+          { kind: "tool", name: "terminal", args: { command: "tail log" }, status: "ok" },
+        ],
+      }),
     ]);
     r.chat.tails.set("new", [message("user", "go"), message("bot", "after", { at: isoAt(r, 7_000) })]);
     r.chat.snapshots.push(
-      snapshot({ id: "old", status: "idle", message_count: 40 }),
-      snapshot({ id: "old", status: "working", message_count: 40 }),
-      snapshot({ id: "new", status: "working", message_count: 6 }),
-      snapshot({ id: "new", status: "idle", message_count: 7 }),
+      snapshot({ id: "old", live: "tui-1", status: "idle", message_count: 40 }),
+      snapshot({ id: "old", live: "tui-1", status: "working", message_count: 40 }),
+      // Compressed: the same live session, listed under its new key.
+      snapshot({ id: "new", live: "tui-1", status: "working", message_count: 6 }),
+      snapshot({ id: "new", live: "tui-1", status: "idle", message_count: 7 }),
     );
     const w = createWatcher(r.deps);
     await w.tick();
-    for (let i = 0; i < 3; i++) await step(r, w);
-    expect(r.sent.map((m) => (m.data as MobilePushData).session)).toEqual(["new"]);
+    await step(r, w);
+    expect(await step(r, w)).toEqual({ kind: "ok", pushes: [] });
+    await step(r, w);
+    expect(
+      r.sent.map((m) => [(m.data as MobilePushData).dedupe, (m.data as MobilePushData).kind]),
+    ).toEqual([[`atlas:new:${n}:turn.done`, "turn.done"]]);
+  });
+
+  test("a turn that ended without writing a row does not push the previous reply", async () => {
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [
+      message("user", "earlier question", { at: isoAt(r, -70_000) }),
+      message("bot", "the previous reply", { at: isoAt(r, -60_000) }),
+    ]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+      snapshot({ id: "s1", status: "working", message_count: 2 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    await step(r, w);
+    expect(r.sent).toEqual([]);
+  });
+
+  test("a turn already running at the first poll is placed a poll before it", async () => {
+    // Its reply was written a second before the process's first answer; with
+    // no poll before that one, the turn is taken to have begun a poll earlier.
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [
+      message("user", "go", { at: isoAt(r, -2_000) }),
+      message("bot", "finished", { at: isoAt(r, -1_000) }),
+    ]);
+    r.chat.snapshots.push(snapshot({ id: "s1", status: "working", message_count: 2 }), snapshot());
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    expect(r.sent.map((m) => (m.data as MobilePushData).kind)).toEqual(["turn.done"]);
+  });
+
+  test("a step the turn never finished is no reply", async () => {
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [
+      message("user", "go", { at: isoAt(r, 1_000) }),
+      message("bot", "Half a thought", { at: isoAt(r, 2_000), incomplete: true }),
+    ]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    expect(r.sent).toEqual([]);
   });
 });
 
@@ -899,7 +967,7 @@ describe("a failed poll", () => {
     test(`${label} keeps what was seen: idle → working → (fails) → idle still pushes turn.done`, async () => {
       const r = await rig();
       r.chat.bots.set("s1", "granite");
-      r.chat.tails.set("s1", [message("user", "go"), message("bot", "done")]);
+      r.chat.tails.set("s1", [message("user", "go"), message("bot", "done", { at: isoAt(r, 7_000) })]);
       r.chat.snapshots.push(
         snapshot({ id: "s1", status: "idle", message_count: 2 }),
         snapshot({ id: "s1", status: "working", message_count: 3 }),
@@ -914,6 +982,37 @@ describe("a failed poll", () => {
       expect(r.sent.map((m) => (m.data as MobilePushData).kind)).toEqual(["turn.done"]);
     });
   }
+
+  test("a turn that left the list across a failed poll pushes nothing; the next answer clears that", async () => {
+    // A Hermes restart the unit check never saw: the port refuses, the
+    // restart kills the turn, and its last saved step reads as a reply.
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.bots.set("s2", "granite");
+    r.chat.tails.set("s1", [
+      message("user", "go", { at: isoAt(r, 1_000) }),
+      message("bot", "Working on it", { at: isoAt(r, 2_000) }),
+    ]);
+    r.chat.tails.set("s2", [
+      message("user", "go", { at: isoAt(r, 9_500) }),
+      message("bot", "done", { at: isoAt(r, 11_000) }),
+    ]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      new Error("connection refused"),
+      snapshot(),
+      snapshot({ id: "s2", status: "working", message_count: 1 }),
+      snapshot(),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    expect((await step(r, w)).kind).toBe("down");
+    expect(await step(r, w)).toEqual({ kind: "ok", pushes: [] });
+    // A later reaped turn, with no failure in between, settles as before.
+    await step(r, w);
+    await step(r, w);
+    expect(r.sent.map((m) => (m.data as MobilePushData).session)).toEqual(["s2"]);
+  });
 
   test("a Hermes unit that was down re-baselines: what settled meanwhile pushes nothing", async () => {
     let up = true;
@@ -939,7 +1038,11 @@ describe("the event counter", () => {
     const r = await rig();
     const base = nth(r, 0);
     r.chat.bots.set("s1", "granite");
-    r.chat.tails.set("s1", [message("user", "go"), message("bot", "compacted and done")]);
+    // Written after the second turn began (+9 s), so it settles both turns.
+    r.chat.tails.set("s1", [
+      message("user", "go"),
+      message("bot", "compacted and done", { at: isoAt(r, 10_000) }),
+    ]);
     r.chat.snapshots.push(
       snapshot({ id: "s1", status: "working", message_count: 40 }),
       snapshot({ id: "s1", status: "idle", message_count: 6 }),
@@ -1119,8 +1222,8 @@ describe("parsing", () => {
         ],
       }),
     ).toEqual([
-      { key: "stored-1", status: "idle", message_count: 2, last_active: null },
-      { key: "live-2", status: "working", message_count: 0, last_active: null },
+      { key: "stored-1", id: "live-1", status: "idle", message_count: 2, last_active: null },
+      { key: "live-2", id: "live-2", status: "working", message_count: 0, last_active: null },
     ]);
     // `last_active` in upstream's epoch seconds, in milliseconds, or ISO.
     const at = (value: unknown) =>
@@ -1149,6 +1252,14 @@ describe("parsing", () => {
       text: "a",
     });
     expect(tailVerdict([message("user", "q")])).toBeNull();
+    // A bot row the turn never finished is passed over.
+    expect(
+      tailVerdict([message("user", "q"), message("bot", "half", { incomplete: true })]),
+    ).toBeNull();
+    expect(tailVerdict([message("bot", "a"), message("bot", "half", { incomplete: true })])).toEqual({
+      kind: "turn.done",
+      text: "a",
+    });
     expect(tailVerdict([])).toBeNull();
   });
 });

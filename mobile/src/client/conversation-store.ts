@@ -28,7 +28,18 @@ import type {
   Session,
   SubagentBlock,
 } from "@hermetic/core/chat-client";
-import { previewOf, type RemoteTurnView, remoteTurnView } from "./chat-logic.ts";
+import { type RemoteTurnView, remoteTurnView } from "./chat-logic.ts";
+import {
+  accountsFor,
+  answered,
+  insertByStamp,
+  isLocal,
+  LOCAL_PREFIX,
+  isProcessEventMessage,
+  localPrompt,
+  quoteOf,
+  stillPending,
+} from "./chat-pending.ts";
 import type {
   AbortResult,
   HistoryResult,
@@ -54,10 +65,6 @@ import {
 
 /* ── constants mirrored from the desktop ────────────────────────────────── */
 
-/** A recorded row may land this long *before* the placeholder it accounts for (clock skew). */
-export const MATCH_BEHIND_MS = 1_000;
-/** …and this long after it. */
-export const MATCH_AHEAD_MS = 5 * 60_000;
 /** Observed rows this far behind a turn's start are held until the turn settles. */
 export const HOLD_BEHIND_MS = 60_000;
 export const TURN_HOLD_LIMIT = 200;
@@ -67,113 +74,23 @@ export const OBSERVE_QUIET_MS = 10_000;
 /** History re-read attempts after a dropped stream. */
 export const RECONNECT_ATTEMPTS = 5;
 
-export const LOCAL_PREFIX = "local:";
 export const STEER_PREFIX = "local:steer:";
 
+export {
+  accountsFor,
+  answered,
+  insertByStamp,
+  isLocal,
+  LOCAL_PREFIX,
+  localPrompt,
+  MATCH_AHEAD_MS,
+  MATCH_BEHIND_MS,
+  stillPending,
+} from "./chat-pending.ts";
 /** 0, 1, 2, 4, 8 s — the desktop's transcript-recovery ladder (`reconnectDelayMs`). */
 export function reconnectDelayMs(attempt: number): number {
   const delays = [0, 1000, 2000, 4000, 8000];
   return delays[Math.max(0, Math.min(attempt - 1, delays.length - 1))] as number;
-}
-
-/* ── pure helpers (desktop mirrors) ─────────────────────────────────────── */
-
-export const isLocal = (message: ChatMessage): boolean => message.id.startsWith(LOCAL_PREFIX);
-
-function bodyOf(message: ChatMessage): string {
-  return message.blocks
-    .map((block) => (block.kind === "text" ? block.markdown : ""))
-    .join("")
-    .trim();
-}
-
-/** Whether a recorded row is the echo of an optimistic placeholder. */
-export function accountsFor(recorded: ChatMessage, placeholder: ChatMessage): boolean {
-  if (recorded.role !== placeholder.role) return false;
-  const gap = Date.parse(recorded.at) - Date.parse(placeholder.at);
-  if (gap < -MATCH_BEHIND_MS || gap > MATCH_AHEAD_MS) return false;
-  return bodyOf(recorded) === bodyOf(placeholder);
-}
-
-/** The placeholders no recorded row accounts for yet (each recorded row claims at most one). */
-export function stillPending(
-  local: readonly ChatMessage[],
-  recorded: readonly ChatMessage[],
-): ChatMessage[] {
-  const ids = new Set(recorded.map((row) => row.id));
-  const claimed = new Set<number>();
-  const pending: ChatMessage[] = [];
-  for (const message of local) {
-    if (!isLocal(message)) continue;
-    if (ids.has(message.id)) continue;
-    const at = recorded.findIndex((row, i) => !claimed.has(i) && accountsFor(row, message));
-    if (at === -1) pending.push(message);
-    else claimed.add(at);
-  }
-  return pending;
-}
-
-/** Insert rows in timestamp order, after any row with the same stamp. */
-export function insertByStamp(
-  messages: readonly ChatMessage[],
-  rows: readonly ChatMessage[],
-): ChatMessage[] {
-  const next = [...messages];
-  for (const row of rows) {
-    const at = Date.parse(row.at);
-    let i = next.length;
-    if (!Number.isNaN(at)) {
-      while (i > 0) {
-        const before = Date.parse(next[i - 1]!.at);
-        if (Number.isNaN(before) || before <= at) break;
-        i -= 1;
-      }
-    }
-    next.splice(i, 0, row);
-  }
-  return next;
-}
-
-const isProcessEventMessage = (m: ChatMessage): boolean =>
-  m.blocks.length > 0 && m.blocks.every((b) => b.kind === "process_event");
-
-/** What the rail quotes for a message: its prose, attributed when another bot sent it (desktop `previewText`). */
-function previewTextOf(message: ChatMessage): string {
-  const prose = message.blocks
-    .map((b) => (b.kind === "text" ? b.markdown : ""))
-    .filter((text) => text.length > 0)
-    .join("\n");
-  return message.from_bot && prose ? `${message.from_bot.name}: ${prose}` : prose;
-}
-
-/** The rail row's quote for `message`, or `null` when it has none to give. */
-function quoteOf(message: ChatMessage): ConversationArrival["preview"] {
-  if (isProcessEventMessage(message)) return null;
-  const preview = previewOf(previewTextOf(message));
-  return preview ? { preview, preview_role: message.role } : null;
-}
-
-/** Whether the transcript already holds the reply `live` was assembling. */
-export function answered(messages: readonly ChatMessage[], live: ChatMessage): boolean {
-  const since = Date.parse(live.at);
-  return messages.some(
-    (m) =>
-      m.id === live.id || (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
-  );
-}
-
-export function localPrompt(id: string, body: string, at: string, session: string | null): ChatMessage {
-  return {
-    id,
-    session: session ?? "",
-    role: "user",
-    author: null,
-    at,
-    blocks: [{ kind: "text", markdown: body }],
-    usage: null,
-    error: null,
-    incomplete: null,
-  };
 }
 
 /* ── public types ───────────────────────────────────────────────────────── */
@@ -242,6 +159,7 @@ export interface ConversationView {
    * the composer offers Steer and Stop and a plain send is queued.
    */
   readonly remote: RemoteTurnView | null;
+  /** Requests open in the turn this phone follows; none while it runs on its box unfollowed. */
   readonly openRequests: readonly string[];
   /** Requests the operator answered from this phone (the box never closes those in the stream). */
   readonly released: readonly string[];
@@ -363,6 +281,8 @@ interface TurnRun {
   segmentAt: string;
   settled: boolean;
   body: string;
+  /** Stopped before the start answered, with no session to stop it by: stop it by its id then. */
+  abortOnStart?: boolean;
 }
 
 interface HeldRow {
@@ -394,6 +314,12 @@ interface Rec {
   /** Set by `suspend` on a turn in flight: its pump was let go, so Stop goes by session. */
   detached: boolean;
   runtime: string | null;
+  /**
+   * The stored key the box's live row carries now (`onTurnRemote`). A
+   * compaction rotates it mid-turn, and the key the turn was sent into then
+   * resolves to the idle parent: Stop and Steer go by this one once known.
+   */
+  liveKey: string | null;
   gen: number;
   run: TurnRun | null;
   segments: string[];
@@ -569,6 +495,7 @@ export class ConversationStore {
     record.dropped = false;
     record.detached = false;
     record.runtime = null;
+    record.liveKey = null;
     record.turnError = null;
     this.releaseHeld(record);
     if (record.live && !answered(record.messages, record.live))
@@ -608,7 +535,8 @@ export class ConversationStore {
           // Stopped or superseded before the start answered: stop following it,
           // and drop anything buffered.
           this.orphans.delete(result.turn_id);
-          this.transport.forgetTurn?.(result.turn_id);
+          if (run.abortOnStart) void this.transport.abortTurn(result.turn_id).catch(() => undefined);
+          else this.transport.forgetTurn?.(result.turn_id);
           return;
         }
         run.turnId = result.turn_id;
@@ -642,7 +570,7 @@ export class ConversationStore {
     if (!body) return "refused";
     if (!record.sending || record.aborting) return "idle";
     const run = record.run;
-    const session = record.resolvedSession ?? target.session;
+    const session = record.liveKey ?? record.resolvedSession ?? target.session;
     let status: SteerStatus;
     try {
       status = (
@@ -908,13 +836,20 @@ export class ConversationStore {
    * `waiting`). It stays in flight — no frames arrive, but Steer and Stop
    * reach it by its session, and what is sent now is queued — until the box
    * says it is idle (`onRemoteDone`). `runtime` is the live session id the
-   * box's row carried (`turnTarget` hands it back for the next ask). Answers
-   * whether the turn was still followed here.
+   * box's row carried (`turnTarget` hands it back for the next ask), and
+   * `key` the stored key it carries now (what Stop and Steer then go by).
+   * Answers whether the turn was still followed here.
    */
-  onTurnRemote(turn_id: string, status: RemoteStatus, runtime: string | null = null): boolean {
+  onTurnRemote(
+    turn_id: string,
+    status: RemoteStatus,
+    runtime: string | null = null,
+    key: string | null = null,
+  ): boolean {
     const record = this.owned(turn_id);
     if (!record) return false;
     if (runtime) record.runtime = runtime;
+    if (key) record.liveKey = key;
     if (record.remote === status) return true;
     record.remote = status;
     record.activity = "thinking";
@@ -1101,6 +1036,7 @@ export class ConversationStore {
         remote: null,
         detached: false,
         runtime: null,
+        liveKey: null,
         gen: 0,
         run: null,
         segments: [],
@@ -1142,7 +1078,8 @@ export class ConversationStore {
       reconnectAttempt: r.reconnectAttempt,
       dropped: r.dropped,
       remote: r.remote ? remoteTurnView(r.remote) : null,
-      openRequests: r.run?.fold.openRequests ?? [],
+      // Running on its box unfollowed: nothing can be answered from here.
+      openRequests: r.remote ? [] : (r.run?.fold.openRequests ?? []),
       released: [...r.released],
       queue: r.queue,
       queueParked: r.parked && r.queue.length > 0,
@@ -1199,6 +1136,8 @@ export class ConversationStore {
     run.fold = { ...run.fold, openRequests: [] };
     if (!record.aborting) record.sending = false;
     if (!record.sending) this.releaseHeld(record);
+    // A Stop the box refused is moot once the turn has ended anyway.
+    if (record.turnError?.code === "ABORT_FAILED") record.turnError = null;
     if (error) record.turnError = error;
     record.dropped = !ok && !ranOut;
     if (!ok && !ranOut && record.live) record.live = { ...record.live, incomplete: true };
@@ -1254,29 +1193,53 @@ export class ConversationStore {
     const run = record.run;
     this.clearReconnect(record);
     record.dropped = false;
+    if (record.turnError?.code === "ABORT_FAILED") record.turnError = null;
     this.changed(record);
     // A turn unfollowed (detached on the way to the background, or known to
     // run on its box) has no pump to stop: it is interrupted by its session,
-    // like one this phone never started. So is one whose pump the transport
-    // no longer holds (`abortTurn` answers `false`).
-    const session = record.resolvedSession ?? record.target.session ?? (run?.seed.session || null);
-    const bySession = () =>
-      this.transport.abort({
+    // like one this phone never started — by the key its live row carries,
+    // once known (`liveKey`). So is one whose pump the transport no longer
+    // holds (`abortTurn` answers `false`). With no session at all the abort
+    // is refused: an unscoped one may interrupt another conversation's turn.
+    // A start not answered yet is stopped by the id it answers with instead.
+    const session =
+      record.liveKey ?? record.resolvedSession ?? record.target.session ?? (run?.seed.session || null);
+    const unfollowed = record.detached || record.remote !== null;
+    // An unfollowed turn the box did not interrupt is still running there.
+    let failed = false;
+    const bySession = async () => {
+      if (!session)
+        throw new HermeticError(
+          "VALIDATION",
+          "This conversation has no session yet, so the turn cannot be stopped from here.",
+        );
+      const result = await this.transport.abort({
         instance: record.target.instance,
         bot: record.target.bot,
-        ...(session ? { session } : {}),
+        session,
       });
+      if (unfollowed && (result as { aborted?: unknown } | null)?.aborted === false)
+        throw new Error("Could not stop the turn — try again.");
+    };
     try {
-      const pumped = !record.detached && record.remote === null ? run?.turnId : null;
-      if (!pumped || (await this.transport.abortTurn(pumped)) === false) await bySession();
+      const pumped = unfollowed ? null : run?.turnId;
+      if (!pumped || (await this.transport.abortTurn(pumped)) === false) {
+        if (!session && !unfollowed && run && !run.turnId) run.abortOnStart = true;
+        else await bySession();
+      }
     } catch (error) {
+      if (unfollowed) failed = true;
       if (record.gen === gen)
         record.turnError = {
           code: "ABORT_FAILED",
           message: error instanceof Error ? error.message : String(error),
         };
     } finally {
-      if (record.gen === gen) {
+      if (record.gen === gen && failed && run && record.run === run && !run.settled) {
+        // Not stopped: the turn stays in flight as it was, and the queue stays parked.
+        record.aborting = false;
+        this.changed(record);
+      } else if (record.gen === gen) {
         record.gen += 1;
         if (run) {
           run.settled = true;

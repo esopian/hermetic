@@ -26,6 +26,13 @@ export interface LiveRow {
   status: LiveStatus;
   /** The row's live (runtime) `id`; `null` when the row carried none. */
   id: string | null;
+  /**
+   * The row's stored `session_key` now; `null` when the row carried none. A
+   * mid-turn compaction rotates it, so after one it is the key the gateway
+   * resolves to the running session, where the key the turn was sent into
+   * resolves to the idle parent.
+   */
+  session_key: string | null;
 }
 
 /**
@@ -54,9 +61,11 @@ export function liveRowOf(
   if (!row) return null;
   const status = row["status"];
   const id = row["id"];
+  const key = row["session_key"];
   return {
     status: typeof status === "string" && STATUSES.includes(status) ? (status as LiveStatus) : "idle",
     id: typeof id === "string" && id !== "" ? id : null,
+    session_key: typeof key === "string" && key !== "" ? key : null,
   };
 }
 

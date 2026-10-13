@@ -123,11 +123,13 @@ export default function Conversation() {
   // The last answer is handed back so unchanged rows keep their identity and
   // the memoised rows skip a streamed delta (`transcriptItems`).
   const lastItems = useRef<TranscriptItem[]>([]);
+  // A turn running on its box unfollowed: its requests cannot be answered from here.
+  const remote = !!view?.remote;
   const items = useMemo(() => {
-    const next = transcriptItems(messages, live, sending, now, lastItems.current);
+    const next = transcriptItems(messages, live, sending, now, lastItems.current, remote);
     lastItems.current = next;
     return next;
-  }, [messages, live, sending, now]);
+  }, [messages, live, sending, now, remote]);
   const state = threadState({
     status: agent?.status ?? null,
     reachable: swarm?.reachable ?? true,

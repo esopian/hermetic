@@ -78,6 +78,12 @@ upstream otherwise keeps the request waiting until its own timeout. The fix (fol
 `open_requests` from `session.events.since` into approval and question cards, answered through the
 canonical `respond`) is marked `TODO(mobile)` in `src/client/chat-logic.ts`.
 
+Core's adapter does not reveal a turn's live session id, so a compaction while the phone was away
+(the stored key rotated and gone from `session.active_list`) looks like a finished turn; with no live
+id learned the phone therefore takes a missing session as over only once the transcript's last rows
+show a reply or failure written after the turn started, or after `REMOTE_UNKNOWN_MAX_MS` (2 min) of
+misses (`followRemote`, `src/client/client.ts`).
+
 ## Platforms
 
 iOS only. Android is out of scope: `app.config.ts` carries only the `android` block `expo prebuild`
