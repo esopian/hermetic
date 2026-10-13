@@ -14,6 +14,7 @@
  * process alive, `close()` cancels it, and a push token is never logged.
  */
 import type { FetchLike } from "../aws/tailscale.ts";
+import { HermeticError } from "../errors.ts";
 
 export const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
 /** Expo's cap on ids per `getReceipts` request. */
@@ -77,7 +78,11 @@ export function expoReceiptFetcher(
       body: JSON.stringify({ ids }),
       signal: outer === undefined ? timeout : AbortSignal.any([timeout, outer]),
     });
-    if (!response.ok) throw new Error(`receipts service answered ${response.status}`);
+    if (!response.ok) {
+      throw new HermeticError("INTERNAL", `receipts service answered ${response.status}`, {
+        status: response.status,
+      });
+    }
     const json = (await response.json()) as { data?: unknown };
     const data =
       typeof json.data === "object" && json.data !== null ? (json.data as Record<string, unknown>) : {};
