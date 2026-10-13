@@ -7,14 +7,57 @@ import { useBridge } from "./BridgeProvider.tsx";
 
 const noop = () => () => {};
 
+/**
+ * `notify` wakes `fn` at most once per display frame; `dispose` drops a wake-up
+ * still pending.
+ *
+ * A streamed reply moves the conversation store on every delta, one WebSocket
+ * frame each, and they come in bursts. `useSyncExternalStore` renders the
+ * screen synchronously on every wake-up, so a burst kept the JS thread busy
+ * from the first delta to the last: React Native ran no timers and delivered
+ * no layout events in between, the transcript never heard its content grow
+ * (`onContentSizeChange`), and the operator's message and the whole reply
+ * appeared in one jump when the turn ended.
+ */
+export function oncePerFrame(
+  fn: () => void,
+  schedule: (cb: () => void) => number = requestAnimationFrame,
+  cancel: (handle: number) => void = cancelAnimationFrame,
+): { notify: () => void; dispose: () => void } {
+  let pending: number | null = null;
+  return {
+    notify: () => {
+      if (pending !== null) return;
+      pending = schedule(() => {
+        pending = null;
+        fn();
+      });
+    },
+    dispose: () => {
+      if (pending !== null) cancel(pending);
+      pending = null;
+    },
+  };
+}
+
 export function useConversation(target: ConversationTarget | null): ConversationView | null {
   const { client } = useBridge();
   const key = target ? JSON.stringify([target.instance, target.bot, target.session]) : null;
   // Keyed on the target's identity, not its object, so a fresh literal each render is stable.
   const stable = useMemo(() => target, [key]);
+  // One render per frame however many deltas the frame brought (`oncePerFrame`).
   const subscribe = useCallback(
-    (fn: () => void) =>
-      client && key ? client.conversations.subscribe((k) => (k === key || k === "*") && fn()) : noop(),
+    (fn: () => void) => {
+      if (!client || !key) return noop();
+      const wake = oncePerFrame(fn);
+      const off = client.conversations.subscribe((k) => {
+        if (k === key || k === "*") wake.notify();
+      });
+      return () => {
+        off();
+        wake.dispose();
+      };
+    },
     [client, key],
   );
   const get = useCallback(

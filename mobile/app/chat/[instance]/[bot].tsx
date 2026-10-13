@@ -320,6 +320,9 @@ export default function Conversation() {
     [client, target, openQuestion, respond, live?.session],
   );
 
+  // The header depends on the turn's activity, not on the whole view: a new
+  // `headerTitle` resets the screen's options, and the view changes per delta.
+  const headerActivity = view?.activity ?? "idle";
   const headerTitle = useCallback(
     () => (
       <Pressable
@@ -337,7 +340,7 @@ export default function Conversation() {
           bot={target.bot}
           size={28}
           status={avatarStatus}
-          activity={view?.activity === "idle" || !view ? "idle" : view.activity}
+          activity={headerActivity}
         />
         <View style={{ flexShrink: 1 }}>
           <Text weight={800} variant="bodySmall" numberOfLines={1}>
@@ -349,7 +352,7 @@ export default function Conversation() {
         </View>
       </Pressable>
     ),
-    [t, fleetId, target, botTitle, session, onCanonical, avatarStatus, view],
+    [t, fleetId, target, botTitle, session, onCanonical, avatarStatus, headerActivity],
   );
 
   // One Stop, in the composer (iMessage-style). The header keeps only the
