@@ -18,6 +18,7 @@ import {
   browserIdentities,
   chromeBinaryPath,
   isProviderKeySlot,
+  memoryKeyEnv,
 } from "../schema/index.ts";
 import type { RenderInput } from "./render.ts";
 
@@ -363,6 +364,12 @@ export function secretsUnit(input: RenderInput): string {
         " is read from SSM at " +
         slot(providerKeyRef(input)) +
         " by hermeticd.",
+    );
+  }
+  const memoryEnv = input.memory === undefined ? null : memoryKeyEnv(input.memory.provider);
+  if (memoryEnv !== null && input.memory?.key_ref !== undefined) {
+    sources.push(
+      "# " + memoryEnv + " is read from SSM at " + slot(input.memory.key_ref) + " by hermeticd.",
     );
   }
   if (input.secrets_mode === "bitwarden") {

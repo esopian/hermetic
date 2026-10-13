@@ -74,6 +74,23 @@ export type { BotIdentity } from "./bot-handles.ts";
 export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./providers.ts";
 export type { Provider, ProviderSpec } from "./providers.ts";
 
+// --- External memory providers --------------------------------------------
+// The create drawer's picker, core's render and hermeticd's materialise step
+// must agree on the ids, the key variables and the slot names.
+export {
+  MEMORY_KEY_SLOT,
+  MEMORY_PROVIDERS,
+  MEMORY_PROVIDERS_LIST,
+  MEMORY_PROVIDER_CAPABILITY,
+  MEMORY_PROVIDER_IDS,
+  MEMORY_PROVIDER_NONE,
+  isMemoryProvider,
+  memoryKeyEnv,
+  memoryKeySlug,
+  memoryProviderNeedsKey,
+} from "./memory-providers.ts";
+export type { MemoryProvider, MemoryProviderSpec } from "./memory-providers.ts";
+
 // --- Sizes and create presets (§7.1, §4.6) --------------------------------
 export { SIZE_IDS, isSizeId } from "./sizes.ts";
 export type { SizeId } from "./sizes.ts";

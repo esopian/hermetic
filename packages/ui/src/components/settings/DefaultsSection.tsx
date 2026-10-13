@@ -31,6 +31,7 @@ import {
   toSaveError,
 } from "../../logic/settings-logic.ts";
 import type { DefaultsForm, RaisedSaveError, SaveError } from "../../logic/settings-logic.ts";
+import { MemoryDefaultRows } from "./MemorySettings.tsx";
 import { SaveBar } from "./SaveBar.tsx";
 import { liveDraft, useSeededForm } from "./seeded.ts";
 import type { DraftHolder, SeededDraft } from "./seeded.ts";
@@ -345,6 +346,20 @@ function DefaultsFormView({
             ))}
           </div>
         </SettingRow>
+      </Block>
+
+      <Block
+        title="Memory"
+        right={
+          <span className="mono dim">pinned on the agent at create; existing agents keep theirs</span>
+        }
+      >
+        <MemoryDefaultRows
+          result={result}
+          expectedVersion={expected}
+          onSaved={onSaved}
+          onWritten={onReload}
+        />
       </Block>
 
       {/*

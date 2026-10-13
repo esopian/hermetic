@@ -375,10 +375,16 @@ describe("a config the fleet's published release could not apply", () => {
   });
 
   test("a release that implements everything is not refused", async () => {
-    // `atlas` is a browser agent in the fixture, so the document it renders
-    // also asks for the browser stack — "everything" is every capability this
-    // agent's configuration names, not a fixed pair.
-    const { hermetic } = await publish(["gateway-unit", "restart-units", "browser-stack"]);
+    // `atlas` is a browser agent in the fixture with a memory provider, so the
+    // document it renders also asks for the browser stack and the memory
+    // provider — "everything" is every capability this agent's configuration
+    // names, not a fixed pair.
+    const { hermetic } = await publish([
+      "gateway-unit",
+      "restart-units",
+      "browser-stack",
+      "memory-provider",
+    ]);
     await expect(hermetic.agents.set({ name: "atlas", size: "large" })).resolves.toBeTruthy();
   });
 

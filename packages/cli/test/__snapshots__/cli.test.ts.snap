@@ -99,6 +99,10 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "instance_type": "t4g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:42.000Z",
     "lock": null,
+    "memory": {
+      "key_ref": null,
+      "provider": "holographic",
+    },
     "metrics": {
       "cpu_pct": 34,
       "disk_pct": 62,
@@ -232,6 +236,10 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "instance_type": "r8g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:48.000Z",
     "lock": null,
+    "memory": {
+      "key_ref": "memory-key",
+      "provider": "supermemory",
+    },
     "metrics": {
       "cpu_pct": 58,
       "disk_pct": 48,
@@ -258,6 +266,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       "ssm_paths": [
         "/hermes/fxtr0001/corvid/ts-key",
         "/hermes/fxtr0001/corvid/provider-key-rtr00002-r1",
+        "/hermes/fxtr0001/corvid/memory-key",
       ],
       "volume_id": "vol-fixture00000000002",
     },
@@ -1542,6 +1551,10 @@ exports[`--json output is a golden contract agent status atlas 1`] = `
   "instance_type": "t4g.2xlarge",
   "last_heartbeat": "2026-09-01T11:59:42.000Z",
   "lock": null,
+  "memory": {
+    "key_ref": null,
+    "provider": "holographic",
+  },
   "metrics": {
     "cpu_pct": 34,
     "disk_pct": 62,
@@ -1711,7 +1724,7 @@ exports[`--json output is a golden contract plan teardown 1`] = `
       "id": "tailscale",
     },
     {
-      "description": "delete 21 SSM parameter(s) under /hermetic/fxtr0001/ and /hermes/fxtr0001/",
+      "description": "delete 23 SSM parameter(s) under /hermetic/fxtr0001/ and /hermes/fxtr0001/",
       "destructive": true,
       "id": "ssm",
     },
@@ -1923,6 +1936,12 @@ exports[`--json output is a golden contract settings show 1`] = `
     "secrets": [
       {
         "created_at": "2026-07-20T09:00:00.000Z",
+        "label": "Supermemory",
+        "last_set_at": "2026-07-20T09:00:00.000Z",
+        "slug": "memory-supermemory",
+      },
+      {
+        "created_at": "2026-07-20T09:00:00.000Z",
         "label": "Nous Portal",
         "last_set_at": "2026-07-20T09:00:00.000Z",
         "slug": "nous-key",
@@ -1968,6 +1987,15 @@ exports[`--json output is a golden contract settings show 1`] = `
 exports[`--json output is a golden contract secrets ls 1`] = `
 {
   "secrets": [
+    {
+      "created_at": "2026-07-20T09:00:00.000Z",
+      "exists": true,
+      "label": "Supermemory",
+      "last_set_at": "2026-07-20T09:00:00.000Z",
+      "placeholder": false,
+      "slug": "memory-supermemory",
+      "used_by": [],
+    },
     {
       "created_at": "2026-07-20T09:00:00.000Z",
       "exists": true,

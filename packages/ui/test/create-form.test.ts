@@ -105,6 +105,8 @@ describe("initialCreateForm", () => {
       // Unstated: the fleet's approvals mode is inherited by the request
       // omitting the key, so there is nothing for a fresh drawer to open on.
       approvals_mode: "",
+      // Unstated for the same reason: the fleet's memory default rides on omission.
+      memory_provider: "",
       touched: new Set(),
     });
   });
@@ -238,5 +240,26 @@ describe("createRequestBody · the hermes object", () => {
   test("the cli preview names the flag exactly when the body carries the field", () => {
     expect(createCliLine(form({ approvals_mode: "off" }))).toContain("--approvals off");
     expect(createCliLine(form())).not.toContain("--approvals");
+  });
+
+  /*
+   * The memory provider follows the approvals rule: unstated is absent (the
+   * fleet's `default_memory_provider` is inherited by omission), `none` is a
+   * stated override and is sent, and a draft carries the choice across a detour.
+   */
+  test("memory: unstated is absent, a provider or none is sent, the cli line agrees", () => {
+    expect("memory_provider" in createRequestBody(form())).toBe(false);
+    expect(createRequestBody(form({ memory_provider: "holographic" })).memory_provider).toBe(
+      "holographic",
+    );
+    expect(createRequestBody(form({ memory_provider: "none" })).memory_provider).toBe("none");
+    expect(createCliLine(form({ memory_provider: "supermemory" }))).toContain("--memory supermemory");
+    expect(createCliLine(form())).not.toContain("--memory");
+  });
+
+  test("memory: a draft's choice is restored, and junk reads as unstated", () => {
+    expect(seed({ draft: draft({ memory_provider: "honcho" }) }).memory_provider).toBe("honcho");
+    expect(seed({ draft: draft({ memory_provider: "letta" }) }).memory_provider).toBe("");
+    expect(seed({ draft: draft() }).memory_provider).toBe("");
   });
 });

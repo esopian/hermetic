@@ -3,6 +3,7 @@ import type {
   AgentConfig,
   HermesHold,
   HermesSettings,
+  MemoryProvider,
   Provider,
   RenderedFile,
   SecretsMode,
@@ -124,6 +125,12 @@ export interface RenderInput {
    * created before provider profiles has and the one an older hermeticd reads.
    */
   provider_key_ref?: string | undefined;
+  /**
+   * The external memory provider the managed config selects (`Agent.memory`),
+   * and the slot its key is materialised from. Absent is built-in memory only,
+   * and renders exactly what a render before the field did.
+   */
+  memory?: { provider: MemoryProvider; key_ref?: string | undefined } | undefined;
 }
 
 export interface RenderedAgentConfig {
@@ -518,6 +525,18 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
     ...(providerKeyRef(input) === DEFAULT_PROVIDER_KEY_SLOT
       ? {}
       : { provider_key_ref: providerKeyRef(input) }),
+    /**
+     * Omitted, never null, when the agent has none: an agent without a memory
+     * provider must hash exactly as it did before the field existed.
+     */
+    ...(input.memory === undefined
+      ? {}
+      : {
+          memory: {
+            provider: input.memory.provider,
+            ...(input.memory.key_ref === undefined ? {} : { key_ref: input.memory.key_ref }),
+          },
+        }),
   };
 
   const config_hash = createHash("sha256").update(canonical(unhashed)).digest("hex").slice(0, 16);

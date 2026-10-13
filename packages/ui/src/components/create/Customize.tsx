@@ -21,6 +21,9 @@ import {
 import type { SizeSpec } from "../../logic/format.ts";
 import type { ApprovalsMode, SecretsMode } from "../../logic/create-form.ts";
 import { APPROVALS_MODES } from "../../logic/settings-logic.ts";
+import { MEMORY_PROVIDERS, MEMORY_PROVIDERS_LIST, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
+import { memoryKeyState, memoryLabel } from "../../logic/memory-logic.ts";
+import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { Field, Seg, SizeCells, Slider } from "./controls.tsx";
 import { INHERITED_HINT, INHERITED_VALUE, isPrimarySize } from "./useCreateForm.ts";
 import type { CreateFormModel } from "./useCreateForm.ts";
@@ -79,7 +82,7 @@ export function Customize({ f, initiallyOpen }: { f: CreateFormModel; initiallyO
         </div>
       ) : (
         <div className="cr-disc-sum mono">
-          machine · storage · behaviour (secrets, on failure, approvals)
+          machine · storage · behaviour (secrets, on failure, approvals, memory)
         </div>
       )}
     </div>
@@ -282,6 +285,59 @@ function Behaviour({ f }: { f: CreateFormModel }) {
           </div>
         )}
       />
+      <MemoryField f={f} />
     </div>
+  );
+}
+
+/**
+ * The Hermes external memory provider. `""` first, as Approvals does: the
+ * fleet's default reaches the agent by the request omitting the key, so the
+ * option naming it is the choice to inherit, not a placeholder. A keyed
+ * provider whose fleet slot is empty cannot be picked — core would refuse the
+ * create with `MEMORY_KEY_MISSING` — and the hint says where the key goes.
+ */
+function MemoryField({ f }: { f: CreateFormModel }) {
+  const { fleetMemory, memorySlots } = f;
+  const inherited =
+    fleetMemory === undefined ? "Fleet default" : `Fleet default (${memoryLabel(fleetMemory)})`;
+  const missing = (id: Parameters<typeof memoryKeyState>[0]) =>
+    memoryKeyState(id, memorySlots) === "missing";
+  // What the agent will actually get, for the hint's one line. A missing key
+  // is said once, by the drawer above the footer (`f.memoryBlock`).
+  const effective = f.memoryEffective;
+  const hint =
+    effective === undefined
+      ? INHERITED_HINT
+      : effective === null
+        ? "Hermes's built-in MEMORY.md / USER.md only"
+        : missing(effective)
+          ? "no key yet — see below"
+          : MEMORY_PROVIDERS[effective].summary;
+  return (
+    <Field
+      label="Memory"
+      changed={f.memory !== ""}
+      onReset={() => f.setMemory("")}
+      hint={hint}
+      control={(id) => (
+        <div className="select-wrap">
+          <select
+            id={id}
+            className="select-input"
+            value={f.memory}
+            onChange={(e) => f.setMemory(e.target.value as MemoryChoice | "")}
+          >
+            <option value="">{inherited}</option>
+            <option value={MEMORY_PROVIDER_NONE}>None — built-in only</option>
+            {MEMORY_PROVIDERS_LIST.map((p) => (
+              <option key={p.id} value={p.id} disabled={missing(p.id) && f.memory !== p.id}>
+                {missing(p.id) ? `${p.label} — key missing` : p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    />
   );
 }

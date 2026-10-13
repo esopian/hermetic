@@ -18,6 +18,7 @@ import { useState } from "react";
 import { ApiError, applyPlan, planRollout, setAgentProfile } from "../api/index.ts";
 import type { AgentView, RolloutPlan } from "../api/index.ts";
 import { isOff } from "../logic/format.ts";
+import { memoryLabel } from "../logic/memory-logic.ts";
 import {
   credentialLine,
   pendingSummary,
@@ -200,6 +201,20 @@ export function AgentProfilePanel({
         <CfgRow k="model">{agent.hermes?.model ?? bound?.model ?? "—"}</CfgRow>
         <CfgRow k="credential" className={credential.mono ? undefined : "cfg-prose"}>
           {credential.text}
+        </CfgRow>
+        {/* Pinned at create and rendered into the managed config: read-only here. */}
+        <CfgRow k="memory">
+          {agent.memory === null || agent.memory === undefined ? (
+            <Dim>Built-in only</Dim>
+          ) : (
+            <>
+              {memoryLabel(agent.memory.provider)}
+              <Dim>
+                {" "}
+                ({agent.memory.provider}){agent.memory.key_ref ? ` · key: ${agent.memory.key_ref}` : ""}
+              </Dim>
+            </>
+          )}
         </CfgRow>
       </CfgRows>
 

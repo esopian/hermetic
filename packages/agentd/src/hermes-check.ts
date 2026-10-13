@@ -9,10 +9,12 @@
  * nothing had ever written Hermes a config naming a provider or a model. Every
  * signal said healthy; the one thing an agent is for did not work.
  *
- * Six things on an agent with no browser, eight on one with, in two groups.
- * Two of the eight are conditional on what the manifest says rather than on
- * what the box is: `approvals` is skipped by a manifest rendered before that
- * field existed, and the two browser checks by one that names no browsers.
+ * Six things on an agent with no browser, eight on one with, one more on an
+ * agent with an external memory provider, in two groups. Some are conditional on what the manifest says rather than on what the box
+ * is: `approvals` is skipped by a manifest rendered before that field existed,
+ * the two browser checks by one that names no browsers, and `memory` (the
+ * managed config selects the provider the manifest names) by one with no
+ * external memory provider.
  *
  * These are read offline, from what hermetic itself wrote:
  *
@@ -110,6 +112,19 @@ function namesKey(yaml: string, section: string, key: string): boolean {
     else if (inSection && new RegExp(`^\\s+${key}\\s*:\\s*\\S`).test(line)) return true;
   }
   return false;
+}
+
+/** `section.key`'s value, unquoted, at the depth `namesKey` reads; null when absent. */
+function keyValue(yaml: string, section: string, key: string): string | null {
+  let inSection = false;
+  for (const line of yaml.split("\n")) {
+    if (/^\S/.test(line)) inSection = line.startsWith(section + ":");
+    else if (inSection) {
+      const m = new RegExp(`^\\s+${key}\\s*:\\s*(\\S.*?)\\s*$`).exec(line);
+      if (m) return m[1]!.replace(/^(["'])(.*)\1$/, "$2");
+    }
+  }
+  return null;
 }
 
 /**
@@ -231,6 +246,24 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
       ? `${HERMES_MANAGED_CONFIG} names provider ${spec.hermes_provider}`
       : `${HERMES_MANAGED_CONFIG} names no model.provider`,
   });
+
+  /**
+   * Only when the manifest names an external memory provider: the managed
+   * config must select the same one, or Hermes runs built-in memory while every
+   * laptop-side reading says otherwise.
+   */
+  if (manifest.memory) {
+    const named = keyValue(managed, "memory", "provider");
+    checks.push({
+      name: "memory",
+      ok: named === manifest.memory.provider,
+      detail:
+        named === manifest.memory.provider
+          ? `${HERMES_MANAGED_CONFIG} selects memory provider ${named}`
+          : `${HERMES_MANAGED_CONFIG} selects memory provider ${named ?? "(none)"}, ` +
+            `not ${manifest.memory.provider}`,
+    });
+  }
 
   /**
    * Either file may carry the model, and which one does is not this stage's

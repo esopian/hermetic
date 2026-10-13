@@ -98,6 +98,13 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   /** The fleet's role may not invoke that Bedrock model yet: also a conflict with reality. */
   MODEL_NOT_GRANTED: 7,
   /**
+   * A create chose (or inherited) a keyed memory provider whose fleet shared
+   * slot is empty (§6.2). A conflict with reality like `PROFILE_IN_USE`:
+   * nothing was created, and `hermetic secrets push _fleet --shared
+   * memory-<id>` is the fix.
+   */
+  MEMORY_KEY_MISSING: 7,
+  /**
    * The box could not be reached for a chat turn, answered without a session
    * token, answered with something that is not the protocol, or never freed a
    * warm backend slot (§9.2). All four are preconditions of the

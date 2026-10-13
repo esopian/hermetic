@@ -241,6 +241,38 @@ describe("the reads", () => {
     expect(recorded.input).toMatchObject({ name: "basalt", rollback_on_failure: true });
   });
 
+  /**
+   * §6.2: the memory provider is a choice, not a secret, so like the rollback
+   * flag it rides through `parseInput` untouched into the recorded input a
+   * resume restarts from — and lands on the row core writes.
+   */
+  test("a create's memory provider survives into the recorded input and the row", async () => {
+    const { ctx, ops } = await harness();
+    const { op } = (await dispatch(
+      ctx,
+      "agents.create",
+      write({ name: "tern", memory_provider: "holographic" }),
+    )) as { op: { id: string } };
+    const recorded = (await dispatch(ctx, "ops.get", { id: op.id })) as {
+      input?: Record<string, unknown>;
+    };
+    expect(recorded.input).toMatchObject({ name: "tern", memory_provider: "holographic" });
+    await ops.wait(op.id);
+    const row = (await dispatch(ctx, "agents.get", { name: "tern" })) as {
+      memory?: { provider: string; key_ref?: string | null } | null;
+    };
+    expect(row.memory).toMatchObject({ provider: "holographic" });
+  });
+
+  test("a memory provider outside the catalogue is a plain VALIDATION", async () => {
+    const { ctx } = await harness();
+    expect(
+      await codeOf(
+        dispatch(ctx, "agents.create", write({ name: "tern", memory_provider: "hindsight" })),
+      ),
+    ).toBe("VALIDATION");
+  });
+
   test("an invalid agent name is NAME_INVALID", async () => {
     const { ctx } = await harness();
     expect(await codeOf(dispatch(ctx, "agents.create", write({ name: "BAD_NAME" })))).toBe(
@@ -1038,6 +1070,20 @@ describe("the settings methods", () => {
     expect(after.settings.default_profile).toBe(FIXTURE_PROFILE_IDS.openrouter);
   });
 
+  test("settings.set writes and clears the default memory provider", async () => {
+    const { ctx } = await harness();
+    const set = (await dispatch(
+      ctx,
+      "settings.set",
+      write({ default_memory_provider: "holographic" }),
+    )) as { settings: { default_memory_provider?: string | null } };
+    expect(set.settings.default_memory_provider).toBe("holographic");
+    const cleared = (await dispatch(ctx, "settings.set", write({ default_memory_provider: null }))) as {
+      settings: { default_memory_provider?: string | null };
+    };
+    expect(cleared.settings.default_memory_provider ?? null).toBeNull();
+  });
+
   test("a stale expected_version is CONFLICT, not a silent overwrite", async () => {
     const { ctx } = await harness();
     expect(
@@ -1068,10 +1114,12 @@ describe("the shared secrets methods", () => {
     const body = (await dispatch(ctx, "secrets.list", {})) as {
       secrets: Array<{ slug: string; used_by: string[]; placeholder: boolean }>;
     };
-    // The two hand-pushed slots, then the four the fixture's keyed provider
-    // profiles own (§8.3) — listed in slug order like everything else here.
+    // The two hand-pushed slots, the Supermemory key behind `corvid`'s memory
+    // provider (§8.3), then the four the fixture's keyed provider profiles own
+    // — listed in slug order like everything else here.
     expect(body.secrets.map((s) => s.slug)).toEqual(
       [
+        "memory-supermemory",
         "nous-key",
         "openrouter-key",
         ...(["anthropic", "openrouter", "nous", "vercel"] as const).map(

@@ -61,6 +61,12 @@ export interface ApplyOptions {
    */
   readonly providerKey?: string;
   /**
+   * The external memory provider's API key, read by the caller from the slot
+   * `manifest.memory.key_ref` names under this agent's own SSM prefix. Present
+   * only when the manifest names a keyed memory provider (`memoryKeyBinding`).
+   */
+  readonly memoryKey?: string;
+  /**
    * Reads one object out of the fleet bucket — the Hermes source bundle, and
    * the mirrored Chrome build a browser agent runs.
    *

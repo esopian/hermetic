@@ -55,6 +55,8 @@ export async function materialiseSecrets(input: {
   host: Host;
   /** The provider API key and the variable it becomes; from SSM (§8.1). */
   providerKey?: { env: string; value: string };
+  /** The external memory provider's API key and its variable; from SSM (`memory.key_ref`). */
+  memoryKey?: { env: string; value: string };
   /** The Bitwarden machine-account token and the project it may read. */
   bitwarden?: { token: string; project: string };
   outPath?: string;
@@ -75,6 +77,9 @@ export async function materialiseSecrets(input: {
   // a deliberate override of the slot.
   const lines: string[] = [];
   if (input.providerKey) lines.push(envLine(input.providerKey.env, input.providerKey.value));
+  // The memory key the same way and for the same reason: after the slot hermetic
+  // owns, before the project the operator owns.
+  if (input.memoryKey) lines.push(envLine(input.memoryKey.env, input.memoryKey.value));
 
   if (input.bitwarden) {
     const listed = await must(

@@ -20,7 +20,13 @@ import {
 import { renderOp } from "../stream.ts";
 import { assertConfirmable, confirmPlan } from "../confirm.ts";
 import { declare } from "../declare.ts";
-import { HermeticError, ROOT_GIB_MAX, ROOT_GIB_MIN, resolveCreatePreset } from "@hermetic/core";
+import {
+  HermeticError,
+  MEMORY_PROVIDER_IDS,
+  ROOT_GIB_MAX,
+  ROOT_GIB_MIN,
+  resolveCreatePreset,
+} from "@hermetic/core";
 import type {
   HermesSettings,
   HoldableSetting,
@@ -185,6 +191,10 @@ export function createInputFrom(
       rollback_on_failure: opts["rollbackOnFailure"],
       hermes: hermesFrom(opts),
       hold: holdFrom(opts["hold"]),
+      // §6.2: absent inherits the fleet's default memory provider, so only a
+      // typed `--memory` reaches core; `none` is the one way to say "built-in
+      // only" over a fleet default, and core's enum takes it as written.
+      memory_provider: opts["memory"],
     }),
   });
 }
@@ -269,6 +279,10 @@ export function register(program: Command): void {
         "build on an existing data volume instead of creating one (`hermetic volume ls`)",
       )
       .option(
+        "--memory <provider|none>",
+        `Hermes external memory provider: ${MEMORY_PROVIDER_IDS.join(" | ")} | none; default: the fleet's default memory provider`,
+      )
+      .option(
         "--rollback-on-failure",
         "if the create fails, undo everything it made instead of leaving it for a re-run (an interrupt still leaves it resumable)",
       )
@@ -282,6 +296,8 @@ export function register(program: Command): void {
           "  hermetic agent create atlas --provider nous             the fleet's nous profile, if it has exactly one\n" +
           "  hermetic agent create atlas --secrets bitwarden\n" +
           "  hermetic agent create cinder-2 --volume vol-0c85d3b7f1a94e620   reuse a destroyed agent's memory\n" +
+          "  hermetic agent create atlas --memory supermemory        an external memory provider beside the built-in one\n" +
+          "  hermetic agent create atlas --memory none               built-in memory only, whatever the fleet's default\n" +
           "  hermetic --fixture agent create atlas                   against the seeded fixture fleet\n" +
           "\nThe machine (size, data volume, system disk) comes from this laptop's create\n" +
           "presets unless you name it: --preset, else the default preset when no machine\n" +
@@ -289,7 +305,9 @@ export function register(program: Command): void {
           "--volume keeps the volume's own size. Everything else left out comes from the\n" +
           "fleet's defaults (`hermetic settings show`).\n" +
           "\nThere is no key to type. A credential belongs to a provider profile:\n" +
-          "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n",
+          "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n" +
+          "and a keyed memory provider's key to the fleet's shared slot for it:\n" +
+          "  hermetic secrets push _fleet --shared memory-supermemory\n",
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

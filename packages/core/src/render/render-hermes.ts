@@ -275,6 +275,18 @@ export function hermesManagedConfig(input: RenderInput): string {
     lines.push("terminal:", "  backend: " + yamlString(managed.terminal_backend));
   }
 
+  /**
+   * Managed, not seeded: the external memory provider is chosen at create and
+   * hermetic owns the binding — its key is materialised by hermeticd from a
+   * slot only hermetic fills, so a box that switched providers on its own would
+   * be running one with no key. Nothing at all when there is none: Hermes's
+   * built-in memory is its default, and an agent without a provider renders
+   * the same bytes it always did.
+   */
+  if (input.memory !== undefined) {
+    lines.push("memory:", "  provider: " + yamlString(input.memory.provider));
+  }
+
   // Managed, not seeded: the hint describes the surface hermetic drives, so an
   // agent's own config must not be able to shadow it.
   lines.push(

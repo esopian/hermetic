@@ -11,6 +11,7 @@ import { BUILD_VERSIONS, runRecorderFor } from "@hermetic/core";
 /** The recorded row, as core hands it back — not the spawned process below. */
 import type { Run as CoreRun } from "@hermetic/core";
 import { cliBinary, seedFixtureHome } from "./cli-binary.ts";
+import { createInputFrom } from "../src/commands/agent.ts";
 
 /** Every spawned CLI writes its `runs` log here, never into the real ~/.hermetic. */
 const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-test-"));
@@ -540,6 +541,30 @@ describe.concurrent("settings and providers", () => {
     expect(bad.stderr).toContain("approvals_mode");
   });
 
+  test("set --default-memory-provider writes the fleet default, and none clears it", async () => {
+    const set = await run("settings", "set", "--default-memory-provider", "holographic", "--json");
+    expect(set.code).toBe(0);
+    const written = JSON.parse(set.stdout) as { settings: { default_memory_provider?: string } };
+    expect(written.settings.default_memory_provider).toBe("holographic");
+
+    const cleared = await run("settings", "set", "--default-memory-provider", "none", "--json");
+    expect(cleared.code).toBe(0);
+    const after = JSON.parse(cleared.stdout) as {
+      settings: { default_memory_provider?: string | null };
+    };
+    expect(after.settings.default_memory_provider ?? null).toBeNull();
+
+    const bad = await run("settings", "set", "--default-memory-provider", "hindsight");
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("default_memory_provider");
+  });
+
+  test("settings show names the default memory provider, or none", async () => {
+    const { code, stdout } = await run("settings", "show");
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/memory provider\s+none \(built-in only\)/);
+  });
+
   test("a profile the fleet does not have is NOT_FOUND, on stderr", async () => {
     const { code, stderr } = await run("settings", "set", "--default-profile", "nope");
     expect(code).toBe(6);
@@ -1049,6 +1074,52 @@ describe.concurrent("agent create · the credential the profile already holds", 
   test("a bare --provider resolves to the fleet's profile for it", async () => {
     const { code } = await run("agent", "create", "wren", "--provider", "bedrock", "--json");
     expect(code).toBe(0);
+  });
+
+  /**
+   * §6.2: `--memory` picks the Hermes external memory provider. `none` is the
+   * explicit built-in-only answer, a keyed provider copies the fleet's shared
+   * key into the agent's own `memory-key` slot (and never echoes it), and a
+   * keyed provider whose shared slot is empty is refused before anything
+   * exists.
+   */
+  test("--memory maps onto memory_provider, and an absent flag states nothing", () => {
+    expect(createInputFrom("plover", { memory: "none" }).memory_provider).toBe("none");
+    expect(createInputFrom("plover", { memory: "supermemory" }).memory_provider).toBe("supermemory");
+    // Absent inherits the fleet's default in core, so the head must not fill it.
+    expect("memory_provider" in createInputFrom("plover", {})).toBe(false);
+  });
+
+  test("--memory none creates a built-in-only agent", async () => {
+    const { code } = await run("agent", "create", "plover", "--memory", "none", "--json");
+    expect(code).toBe(0);
+  });
+
+  test("--memory supermemory copies the shared key without echoing it", async () => {
+    const { code, stdout, stderr } = await run(
+      "agent",
+      "create",
+      "sandpiper",
+      "--memory",
+      "supermemory",
+      "--json",
+    );
+    expect(code).toBe(0);
+    for (const stream of [stdout, stderr]) {
+      expect(stream).not.toContain("sm-memory-FIXTURE");
+    }
+  });
+
+  test("a memory provider outside the catalogue is a usage error", async () => {
+    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "hindsight");
+    expect(code).toBe(2);
+    expect(stderr).toContain("memory_provider");
+  });
+
+  test("a keyed provider with no shared key is MEMORY_KEY_MISSING", async () => {
+    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "honcho");
+    expect(code).toBe(7);
+    expect(stderr).toContain("hermetic secrets push _fleet --shared memory-honcho");
   });
 
   /**

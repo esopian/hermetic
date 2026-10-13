@@ -53,6 +53,7 @@ import {
 import { ensureAgentVenv } from "./agent-python.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
+import { ensureMemoryDeps, memoryKeyBinding } from "./memory.ts";
 import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
 import { ensureShellIntegration } from "./shell.ts";
 
@@ -95,6 +96,7 @@ export {
   shasumFor,
 } from "./node-web.ts";
 export { SECRETS_ENV_DIR, SECRETS_ENV_PATH, envLine, materialiseSecrets } from "./secrets.ts";
+export { distributionOf, ensureMemoryDeps, importNameOf, memoryKeyBinding } from "./memory.ts";
 export {
   BASHRC_PATH,
   SHELL_HOOK_LINE,
@@ -120,6 +122,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
     commands: [],
   };
   const at = () => host.now();
+  // First, before anything is touched: a manifest naming a slot that is not the
+  // memory key's is refused outright (`memoryKeyBinding`).
+  const memoryKey = memoryKeyBinding(manifest);
 
   const write = async (
     path: string,
@@ -222,6 +227,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   // here from the checkout above, with a Node apt cannot supply.
   await ensureNode(opts, result, emit, dry);
   await ensureWebUi(manifest, opts, result, emit, dry);
+  // After `ensureHermes`, which builds the venv these go into (and puts `uv` on
+  // the box), and before the units phase starts Hermes on it.
+  const memoryDepsInstalled = await ensureMemoryDeps(host, manifest, result, emit, dry);
 
   // ─── 2b. accounts ──────────────────────────────────────────────────────────
   // Before `files`, not merely before `units`: a rendered file that names
@@ -290,6 +298,12 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
       `manifest sets provider: ${manifest.provider} but no ${keyEnv} was resolved for ${manifest.name}`,
     );
   }
+  if (memoryKey !== null && !opts.memoryKey) {
+    throw new AgentdError(
+      "INTERNAL",
+      `manifest sets memory.provider: ${manifest.memory?.provider} but no ${memoryKey.env} was resolved for ${manifest.name}`,
+    );
+  }
   /**
    * **Unconditional**, and that is the change §8.3 needed.
    *
@@ -312,6 +326,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
       : {}),
     ...(keyEnv !== null && opts.providerKey
       ? { providerKey: { env: keyEnv, value: opts.providerKey } }
+      : {}),
+    ...(memoryKey !== null && opts.memoryKey
+      ? { memoryKey: { env: memoryKey.env, value: opts.memoryKey } }
       : {}),
     ...(dry ? { dryRun: true } : {}),
   });
@@ -411,8 +428,12 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
    * is hermeticd's, not a rendered file, so it cannot declare `restart_units`,
    * and an `EnvironmentFile` that moves after a process started does not reach
    * that process.
+   *
+   * `memoryDepsInstalled` is the venv again, one package wide: a Hermes that
+   * started before its memory provider's dependency was there may already
+   * have given up on the provider, and a restart is what makes it look again.
    */
-  if (hermesChanged || revisionChanged) {
+  if (hermesChanged || revisionChanged || memoryDepsInstalled) {
     watchTriggered.add(HERMES_DASHBOARD_UNIT);
     watchTriggered.add(HERMES_GATEWAY_UNIT);
   }

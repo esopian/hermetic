@@ -19,6 +19,8 @@
  */
 import { CREATE_FIELDS } from "./create-form.ts";
 import type { ApprovalsMode, CreateField } from "./create-form.ts";
+import { isMemoryChoice } from "./memory-logic.ts";
+import type { MemoryChoice } from "./memory-logic.ts";
 import { APPROVALS_MODES } from "./settings-logic.ts";
 
 const PREFIX = "hermetic.create-draft.";
@@ -38,6 +40,12 @@ export interface CreateDraft {
    * not, and the fleet's answer is inherited by the request omitting the key.
    */
   approvals_mode: ApprovalsMode | "";
+  /**
+   * The memory provider stated, `""` when none was (the fleet default is
+   * inherited). Optional and read leniently, like `approvals_mode`: a draft
+   * from before the picker existed simply chose nothing.
+   */
+  memory_provider?: MemoryChoice | "";
   secrets: string;
   rollback: boolean;
   /**
@@ -162,6 +170,7 @@ export function loadCreateDraft(fleetId: string | null, volumeId: string | null)
     profile_id: d["profile_id"],
     model: d["model"],
     approvals_mode: approvals,
+    memory_provider: isMemoryChoice(d["memory_provider"]) ? d["memory_provider"] : "",
     secrets: d["secrets"],
     rollback: d["rollback"],
     volume_id: target,

@@ -16,6 +16,7 @@ export type { ProviderSpec } from "../shared/providers.ts";
 import { browserIdentities } from "./browser.ts";
 import { Iso, ProfileId, Region, Sha256, Version } from "./common.ts";
 import { HermesHold, HermesSettings } from "./hermes.ts";
+import { AgentMemory } from "./memory.ts";
 
 /** Stored lifecycle status (§4.3). `unreachable` is never stored — see DisplayStatus. */
 export const AgentStatus = z.enum([
@@ -536,6 +537,15 @@ export const Agent = z.object({
    * and because rows written before this field existed do not carry it.
    */
   hermes: HermesSettings.nullish(),
+  /**
+   * The Hermes external memory provider this agent was created with, and the
+   * instance slot its key was copied into. Null or absent is Hermes's built-in
+   * memory only — what every row written before the field means, and what a
+   * create that said `none` (or inherited no fleet default) records. Nullish
+   * for the reason `credential_ref` is. Rendered into the managed config, so
+   * the box cannot switch it; changing it after create is not supported.
+   */
+  memory: AgentMemory.nullish(),
   /**
    * The fleet's answers this agent was *created* with (§4.6): the model its
    * provider defaulted to plus whatever `settings.agent_defaults` stated, all

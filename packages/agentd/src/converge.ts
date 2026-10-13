@@ -27,7 +27,7 @@
  */
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { PROVIDERS, providerKeyRefOf } from "@hermetic/core/shared";
-import { apply } from "./apply/index.ts";
+import { apply, memoryKeyBinding } from "./apply/index.ts";
 import type { Aws } from "./aws.ts";
 import { AgentdError } from "./errors.ts";
 import { paramPath } from "./fleet.ts";
@@ -125,7 +125,7 @@ export async function convergeOnce(
     return { kind: "current", config_hash: manifest.config_hash };
   }
 
-  // The two slots an apply may need, fetched only when this manifest could use
+  // The slots an apply may need, fetched only when this manifest could use
   // them — the same condition `hermeticd apply` uses, so a converge makes no SSM
   // call an apply would not have made.
   let bwsToken: string | undefined;
@@ -136,12 +136,18 @@ export async function convergeOnce(
   if (PROVIDERS[manifest.provider].env !== null) {
     providerKey = await aws.getParameter(paramPath(deps.paramPrefix, providerKeyRefOf(manifest)));
   }
+  let memoryKey: string | undefined;
+  const memory = memoryKeyBinding(manifest);
+  if (memory !== null) {
+    memoryKey = await aws.getParameter(paramPath(deps.paramPrefix, memory.ref));
+  }
 
   await apply(manifest, {
     host,
     ...(deps.emit ? { emit: deps.emit } : {}),
     ...(bwsToken ? { bwsToken } : {}),
     ...(providerKey ? { providerKey } : {}),
+    ...(memoryKey ? { memoryKey } : {}),
   });
 
   /**

@@ -73,6 +73,8 @@ export interface ManifestOverrides {
    * what a document rendered before it looks like.
    */
   approvals_mode?: AgentConfig["approvals_mode"] | null;
+  /** The external memory provider and its key slot; omitted, like core omits it, by default. */
+  memory?: AgentConfig["memory"];
 }
 
 /** The Chrome build the browser fixtures pin. */
@@ -171,6 +173,7 @@ export function makeManifest(overrides: ManifestOverrides = {}): AgentConfig {
     // approvals (`HERMES_DEFAULTS`), and therefore what `verify-hermes` expects
     // Hermes to resolve. `null` renders the older document that states no mode.
     ...(overrides.approvals_mode === null ? {} : { approvals_mode: overrides.approvals_mode ?? "off" }),
+    ...(overrides.memory ? { memory: overrides.memory } : {}),
     config_hash: "abc123def4567890",
     // `git` is in core's rendered list because Hermes installs from a checkout.
     packages: overrides.packages ?? [

@@ -20,7 +20,12 @@ import { defined, toInt, validate } from "../validate.ts";
 import { err, out, outJson } from "../io.ts";
 import { renderSettings } from "../table.ts";
 import { declare } from "../declare.ts";
-import { SettingsGetInput, SettingsSetInput } from "@hermetic/core";
+import {
+  MEMORY_PROVIDER_IDS,
+  MEMORY_PROVIDER_NONE,
+  SettingsGetInput,
+  SettingsSetInput,
+} from "@hermetic/core";
 import type { HermesSettings } from "@hermetic/core";
 
 const getSchema = declare("settings.get", "settings show", SettingsGetInput);
@@ -77,6 +82,10 @@ export function register(program: Command): void {
         "--no-auto-update-hermeticd",
         "leave a newly pushed hermeticd to each box's nightly update",
       )
+      .option(
+        "--default-memory-provider <provider|none>",
+        `the Hermes external memory provider a create with no --memory gets: ${MEMORY_PROVIDER_IDS.join(" | ")} | none`,
+      )
       .option("--expected-version <n>", "refuse unless the settings are still at this version")
       .addHelpText(
         "after",
@@ -88,8 +97,14 @@ export function register(program: Command): void {
           "  hermetic settings set --size large --volume-gib 200\n" +
           "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n" +
           "  hermetic settings set --no-auto-update-hermeticd\n" +
+          "  hermetic settings set --default-memory-provider holographic\n" +
+          "  hermetic settings set --default-memory-provider none\n" +
           "\nSwitching hermeticd auto-update republishes the fleet manifest, which is how\n" +
-          "the boxes hear about it (§6.5).\n",
+          "the boxes hear about it (§6.5).\n" +
+          "\nThe default memory provider is read once, when an agent is created, and\n" +
+          "pinned on it: changing it moves no existing agent. A keyed provider needs its\n" +
+          "key in the fleet's shared slot first (`hermetic secrets push _fleet --shared\n" +
+          "memory-<provider>`), or the create that inherits it is refused.\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -126,6 +141,14 @@ export function register(program: Command): void {
           // Both spellings are defined, so Commander leaves this undefined
           // unless one of them was given.
           ...defined({ auto_update_hermeticd: opts["autoUpdateHermeticd"] }),
+          // `none` clears the default back to built-in memory only: the wire
+          // says that with `null`, which no flag value can spell directly.
+          ...defined({
+            default_memory_provider:
+              opts["defaultMemoryProvider"] === MEMORY_PROVIDER_NONE
+                ? null
+                : opts["defaultMemoryProvider"],
+          }),
           ...expected(opts),
         });
         const result = await ctx.hermetic.settings.set(input);

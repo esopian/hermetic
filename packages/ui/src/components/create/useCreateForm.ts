@@ -8,8 +8,8 @@
  * `create-presets.ts`. This hook is the React glue between the two.
  */
 import { useEffect, useMemo, useState } from "react";
-import { createAgent, fleetIdOf } from "../../api/index.ts";
-import type { Meta, ProfileView, VolumeView } from "../../api/index.ts";
+import { createAgent, fleetIdOf, listSecrets } from "../../api/index.ts";
+import type { Meta, ProfileView, SharedSecretView, VolumeView } from "../../api/index.ts";
 import { hostname, sizeSpec } from "../../logic/format.ts";
 import type { SizeSpec } from "../../logic/format.ts";
 import { randomAgentName } from "../../logic/name-dictionary.ts";
@@ -44,6 +44,9 @@ import {
 import type { MachineField, MachineState } from "../../logic/create-presets.ts";
 import { usePresets } from "../../state/presets-store.ts";
 import type { PresetView } from "@hermetic/core/shared";
+import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
+import { fleetDefaultMemory, memoryKeyState } from "../../logic/memory-logic.ts";
+import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { profileById, readyProfiles } from "../../logic/provider-logic.ts";
 import { suggestedName } from "../../logic/volume-logic.ts";
 import type { ProfilesState } from "../../state/state.tsx";
@@ -220,6 +223,34 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   // what it made is the safer answer for anyone who has not chosen otherwise.
   const [rollback, setRollback] = useState(seed.rollback);
   /**
+   * The external memory provider, `""` until stated — the `approvals` rule: the
+   * fleet's `default_memory_provider` is inherited by omission, so there is
+   * nothing to re-seed and no value to show but the fleet's own.
+   */
+  const [memory, setMemory] = useState<MemoryChoice | "">(seed.memory_provider);
+  /** What a create that states no memory provider gets; `undefined` is "not reported". */
+  const fleetMemory = fleetDefaultMemory(meta);
+  /**
+   * The fleet's shared slots, read once on open, so a keyed provider whose
+   * `memory-<id>` slot is empty is marked before core refuses it with
+   * `MEMORY_KEY_MISSING`. `null` until read, and left `null` on a failed read:
+   * the picker then marks nothing rather than calling every key missing.
+   */
+  const [memorySlots, setMemorySlots] = useState<SharedSecretView[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    listSecrets()
+      .then((out) => {
+        if (live) setMemorySlots(out.secrets);
+      })
+      .catch(() => {
+        /* Unknown, not missing: core still checks the slot at create. */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  /**
    * The selected preset's id, `null` when the loadout offers none (the machine
    * then follows the fleet's defaults, untouched).
    */
@@ -332,7 +363,24 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    * gated on the *current* list saying this profile exists and is ready, which
    * is the same question core asks again before it creates anything.
    */
-  const disabled = !trimmed || taken || invalid || submitting || !chosenReady;
+  /**
+   * The provider this agent will actually run: the stated one, or — stated
+   * nothing — the fleet's default (`undefined` when that was not reported).
+   */
+  const memoryEffective = memory === "" ? fleetMemory : memory === MEMORY_PROVIDER_NONE ? null : memory;
+  /**
+   * A keyed provider whose shared slot the read found empty: core would refuse
+   * the create with `MEMORY_KEY_MISSING`, so Create is held here and the drawer
+   * says where the key goes. Only a read that answered can block — a failed one
+   * is unknown, and core still checks.
+   */
+  const memoryBlock =
+    memoryEffective !== undefined &&
+    memoryEffective !== null &&
+    memoryKeyState(memoryEffective, memorySlots) === "missing"
+      ? `${MEMORY_PROVIDERS[memoryEffective].label} memory has no key — set it in Settings › Defaults, or pick another memory provider`
+      : null;
+  const disabled = !trimmed || taken || invalid || submitting || !chosenReady || memoryBlock !== null;
 
   /**
    * The whole form in one object, so the request and the `cli` preview are
@@ -351,6 +399,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     profile_id: chosenReady ? profileId : "",
     model,
     approvals_mode: approvals,
+    memory_provider: memory,
     profile_model: profile?.model ?? "",
     profile_name: profile?.name ?? "",
     volume_id: volumeTarget,
@@ -461,6 +510,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    */
   function resetAll() {
     setApprovals("");
+    setMemory("");
     applyMachine(preset, { size, volume_gib: volume, root_gib: rootGib, touched: new Set() });
   }
   /**
@@ -484,6 +534,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
       profile_id: profileId,
       model,
       approvals_mode: approvals,
+      memory_provider: memory,
       secrets,
       rollback,
       volume_id: volumeTarget,
@@ -493,7 +544,8 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   }
 
   /** How many Customize fields are off their preset or fleet default, for its summary line. */
-  const customized = CREATE_FIELDS.filter(fieldChanged).length + (approvals === "" ? 0 : 1);
+  const customized =
+    CREATE_FIELDS.filter(fieldChanged).length + (approvals === "" ? 0 : 1) + (memory === "" ? 0 : 1);
 
   async function submit() {
     if (disabled) return;
@@ -566,6 +618,12 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     setApprovals,
     rollback,
     chooseRollback,
+    memory,
+    setMemory,
+    fleetMemory,
+    memorySlots,
+    memoryEffective,
+    memoryBlock,
     presets,
     strip: stripPresets(presets),
     preset,

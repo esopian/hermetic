@@ -10,7 +10,7 @@
  *
  * `seedFixtureAgents` in `memory.ts` is the only reader.
  */
-import type { Agent } from "../../schema/index.ts";
+import type { Agent, MemoryProvider } from "../../schema/index.ts";
 
 /** The health snapshot of a box with nothing wrong with it. */
 const HEALTHY = { hermes: true, tailscale: true, disk: true } as const;
@@ -100,6 +100,12 @@ export interface SeedSpec {
    */
   pending_profile?: "anthropic" | "openrouter" | "nous" | "bedrock" | "vercel";
   pending_model?: string;
+  /**
+   * The external memory provider the agent was created with. One local and
+   * one keyed seed, so the drawer's memory line and the `memory-key` slot are
+   * both on screen in `bun run dev:fixture`; every other seed is built-in only.
+   */
+  memory?: MemoryProvider;
 }
 
 export const SEEDS: readonly SeedSpec[] = [
@@ -123,6 +129,7 @@ export const SEEDS: readonly SeedSpec[] = [
     profile: "bedrock",
     provider: "bedrock",
     profile_revision: 1,
+    memory: "holographic",
   },
   {
     name: "corvid",
@@ -144,6 +151,7 @@ export const SEEDS: readonly SeedSpec[] = [
     profile: "openrouter",
     pending_profile: "anthropic",
     pending_model: "claude-sonnet-5",
+    memory: "supermemory",
   },
   {
     name: "ember",

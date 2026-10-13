@@ -20,7 +20,13 @@ import { realHost, type Host } from "./host.ts";
 import { paramPath } from "./fleet.ts";
 import { normalize, resolve } from "node:path";
 import { MANIFEST_PATH, parseManifestJson, readBundleManifest } from "./manifest.ts";
-import { apply, materialiseSecrets, SECRETS_ENV_DIR, SECRETS_ENV_PATH } from "./apply/index.ts";
+import {
+  apply,
+  materialiseSecrets,
+  memoryKeyBinding,
+  SECRETS_ENV_DIR,
+  SECRETS_ENV_PATH,
+} from "./apply/index.ts";
 import { checkHermes } from "./hermes-check.ts";
 import { bootstrap, installBootstrapUnit } from "./bootstrap.ts";
 import { DATA_MOUNT, DEVICE_WAIT_MS, mountDataVolume } from "./disk.ts";
@@ -234,10 +240,16 @@ export async function run(
       const dryRun = flags["dry-run"] === true;
       let bwsToken: string | undefined;
       let providerKey: string | undefined;
+      let memoryKey: string | undefined;
+      const memory = memoryKeyBinding(manifest);
       // Only when `apply` would rewrite `secrets.env` at all. On a box where it
       // would not, `hermetic-secrets.service` remains the file's sole author and
       // there is nothing for apply to preserve — so no SSM call is made.
-      if (manifest.secrets_mode === "bitwarden" || PROVIDERS[manifest.provider].env !== null) {
+      if (
+        manifest.secrets_mode === "bitwarden" ||
+        PROVIDERS[manifest.provider].env !== null ||
+        memory !== null
+      ) {
         const ctx = await context(host, deps);
         if (manifest.secrets_mode === "bitwarden") {
           bwsToken = await ctx.aws.getParameter(paramPath(ctx.paramPrefix, "bws-token"));
@@ -247,6 +259,9 @@ export async function run(
             paramPath(ctx.paramPrefix, providerKeyRefOf(manifest)),
           );
         }
+        if (memory !== null) {
+          memoryKey = await ctx.aws.getParameter(paramPath(ctx.paramPrefix, memory.ref));
+        }
       }
       const result = await apply(manifest, {
         host,
@@ -254,6 +269,7 @@ export async function run(
         ...(dryRun ? { dryRun: true } : {}),
         ...(bwsToken ? { bwsToken } : {}),
         ...(providerKey ? { providerKey } : {}),
+        ...(memoryKey ? { memoryKey } : {}),
       });
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       return EXIT_OK;
@@ -376,9 +392,12 @@ export async function run(
         keyEnv === null
           ? null
           : await ctx.aws.getParameter(paramPath(ctx.paramPrefix, providerKeyRefOf(manifest)));
-      if (manifest.secrets_mode !== "bitwarden" && keyEnv === null) {
+      const memory = memoryKeyBinding(manifest);
+      const memoryKey =
+        memory === null ? null : await ctx.aws.getParameter(paramPath(ctx.paramPrefix, memory.ref));
+      if (manifest.secrets_mode !== "bitwarden" && keyEnv === null && memory === null) {
         process.stderr.write(
-          "no provider key and no bitwarden project; writing an empty environment file\n",
+          "no provider key, no memory key and no bitwarden project; writing an empty environment file\n",
         );
       }
       const mode = typeof flags["mode"] === "string" ? flags["mode"] : "0600";
@@ -386,6 +405,7 @@ export async function run(
         host,
         ...(token ? { bitwarden: { token, project: manifest.name } } : {}),
         ...(keyEnv !== null && key ? { providerKey: { env: keyEnv, value: key } } : {}),
+        ...(memory !== null && memoryKey ? { memoryKey: { env: memory.env, value: memoryKey } } : {}),
         outPath: out,
       });
       // Unconditional: an existing file with the right content may still have

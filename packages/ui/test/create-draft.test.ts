@@ -18,6 +18,7 @@ const DRAFT: CreateDraft = {
   profile_id: "an7hr0p1",
   model: "claude-sonnet-5",
   approvals_mode: "manual",
+  memory_provider: "supermemory",
   secrets: "none",
   rollback: false,
   volume_id: null,

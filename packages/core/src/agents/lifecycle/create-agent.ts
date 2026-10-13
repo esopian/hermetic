@@ -10,7 +10,10 @@ import {
   DEFAULT_ROOT_GIB,
   PROVIDERS,
   SIZES,
+  MEMORY_PROVIDER_CAPABILITY,
   cloudName,
+  memoryKeyEnv,
+  memoryKeySlug,
   providerNeedsKey,
 } from "../../schema/index.ts";
 import type { Agent, CreateAgentInput, OpEvent } from "../../schema/index.ts";
@@ -49,6 +52,12 @@ import {
   type ReleaseResult,
 } from "./release-name.ts";
 import { createRecordedInstance } from "./recorded-instance.ts";
+import {
+  assertMemoryKeyReady,
+  memoryOf,
+  resolveMemoryProvider,
+  snapshotMemoryKey,
+} from "./memory-binding.ts";
 import type { ReleaseLookup } from "./release.ts";
 
 export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
@@ -61,6 +70,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     agentPrefix,
     appendEvent,
     assertFleetUnlocked,
+    assertReleaseCanApply,
     assertSealed,
     attachDeps,
     backend,
@@ -297,6 +307,12 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * of agent forever.
      */
     assertBrowserSupported(fleet);
+    /**
+     * The external memory provider: stated, else the fleet default, else none
+     * — resolved here and pinned on the row, so a later change to the fleet
+     * default moves no agent (`memory-binding.ts`).
+     */
+    const memory = memoryOf(resolveMemoryProvider(parsed.memory_provider, settings));
     const provider = binding.provider;
     const at0 = nowIso();
 
@@ -353,6 +369,24 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * adoption decides its retag from the disk's tags as they are now.
      */
     const legacy = await backend.store.agents.get(name);
+    /**
+     * A keyed memory provider with nothing in its shared slot is refused while
+     * nothing exists — before a legacy row is released or the name claimed.
+     * Only for a create that will claim the name afresh: a resume finishes the
+     * row that exists, with the memory *it* records, and the copy below is
+     * where that one is checked.
+     */
+    if (legacy === null || legacy.status === "destroyed") {
+      await assertMemoryKeyReady(bindingPorts, memory?.provider ?? null);
+      /**
+       * And a fleet whose published hermeticd cannot apply a memory provider is
+       * refused here too, rather than by `ensureConfig` after the name is
+       * claimed and the key copied. The same question `ensureConfig` asks of
+       * the full rendered document, narrowed to the one requirement this
+       * create's choice adds.
+       */
+      if (memory !== null) await assertReleaseCanApply({ requires: [MEMORY_PROVIDER_CAPABILITY] });
+    }
     /** The predecessor's `incarnationEnd`, which this life must start after. */
     let floor: string | null = null;
     if (legacy?.status === "destroyed") {
@@ -432,6 +466,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        * the day somebody changed it.
        */
       seed: defaults.seed,
+      memory,
       // Both halves of the tailnet identity start empty and are filled in by the
       // node's first heartbeat; they are written together everywhere, because a
       // name without an address (or the reverse) is a row that describes no node.
@@ -713,6 +748,30 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
             );
           }
         }
+      }
+
+      /**
+       * The memory provider's key, copied from the fleet's shared slot into
+       * this agent's own the way the provider key is above, and read off the
+       * row for the same reason. An agent slot that was never filled is
+       * `MEMORY_KEY_MISSING` here too — a resume whose fleet slot was emptied
+       * since the first attempt.
+       */
+      const memoryKey = await snapshotMemoryKey(bindingPorts, name, agent.memory);
+      if (memoryKey !== null) ssm_paths.push(memoryKey.path);
+      if (memoryKey?.copied === true && agent.memory) {
+        const slug = memoryKeySlug(agent.memory.provider);
+        await appendEvent(
+          name,
+          "secrets.push",
+          `${agent.memory.key_ref ?? "memory-key"} from shared slot ${slug}`,
+        );
+        yield say(
+          "secrets",
+          0.23,
+          `${memoryKeyEnv(agent.memory.provider) ?? "memory key"} copied from the fleet's shared slot ${slug} into its SSM slot`,
+          nowIso(),
+        );
       }
 
       if (agent.secrets_mode === "bitwarden") {

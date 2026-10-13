@@ -132,6 +132,12 @@ export function CreateDrawer({
               <span className="sq ok" /> Tailscale only · 0 inbound rules · no SSH key · Hermes{" "}
               {latest ?? "—"} · Chromium · noVNC desktop
             </div>
+            {/* Said outside Customize: an inherited default blocks with it folded. */}
+            {f.memoryBlock !== null ? (
+              <div className="mono" role="status" style={{ color: "var(--warn)", fontSize: 12 }}>
+                {f.memoryBlock}
+              </div>
+            ) : null}
             {f.failure ? (
               <div className="mono" style={{ color: "var(--bad)", fontSize: 12 }}>
                 {f.failure}

@@ -42,6 +42,12 @@ import {
 } from "../packages/core/src/schema/fleet.ts";
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
 import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
+import {
+  MEMORY_KEY_SLOT,
+  MEMORY_PROVIDERS,
+  MEMORY_PROVIDER_CAPABILITY,
+  memoryKeyEnv,
+} from "../packages/core/src/schema/memory.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
 import { HEARTBEAT_ATTRIBUTES } from "../packages/agentd/src/aws.ts";
 import {
@@ -51,7 +57,11 @@ import {
   providerKeySlot,
   requiredCapabilities,
 } from "../packages/core/src/schema/manifest.ts";
-import { HERMES_DASHBOARD_PORT, HERMES_PROXY_PORT } from "../packages/core/src/schema/hermes.ts";
+import {
+  HERMES_DASHBOARD_PORT,
+  HERMES_MANAGED_CONFIG,
+  HERMES_PROXY_PORT,
+} from "../packages/core/src/schema/hermes.ts";
 import {
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
@@ -674,6 +684,98 @@ describe("seam: the provider-key slot core names is the one hermeticd reads", ()
   test("the legacy slot hermeticd stages by hand is the one core falls back to", () => {
     expect([...SECRET_SLOTS]).toContain(DEFAULT_PROVIDER_KEY_SLOT);
     for (const slot of SECRET_SLOTS) expect(isKnownSlot(slot)).toBe(true);
+  });
+});
+
+/**
+ * The external memory provider, from both ends. Core renders the provider into
+ * the managed config and names the slot its key lives in on the manifest;
+ * hermeticd reads that field, writes the key into `secrets.env` under the
+ * provider's variable and preinstalls its Python dependencies. A drift in any
+ * of those strings is a Hermes that has `memory.provider` set and no key — the
+ * provider reports itself unavailable and the agent quietly runs on built-in
+ * memory, which is the failure nobody would notice.
+ */
+describe("seam: the memory provider core names is the one hermeticd configures", () => {
+  const render = (memory?: RenderInput["memory"]) =>
+    renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.1",
+      hermes_ref: "v2026.8.31",
+      chrome_ref: CHROME_REF,
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      ...(memory === undefined ? {} : { memory }),
+    } as RenderInput);
+
+  const none = render();
+
+  test("a keyed provider and its slot survive the wire, and resolve to its variable", () => {
+    const rendered = render({ provider: "supermemory", key_ref: MEMORY_KEY_SLOT });
+    const read = parseManifest(overTheWire(rendered.manifest));
+    expect(read.memory).toEqual({ provider: "supermemory", key_ref: "memory-key" });
+    // The strings the box acts on, from the table both ends import.
+    expect(memoryKeyEnv(read.memory!.provider)).toBe("SUPERMEMORY_API_KEY");
+    expect(MEMORY_PROVIDERS[read.memory!.provider].pip).toEqual(["supermemory"]);
+    // And what Hermes itself will be told, in the file hermetic manages.
+    const managed = rendered.files.find((f) => f.path === HERMES_MANAGED_CONFIG)!;
+    expect(managed.content).toInclude(`memory:\n  provider: "${read.memory!.provider}"\n`);
+  });
+
+  test("a local provider survives the wire with no slot", () => {
+    const read = parseManifest(overTheWire(render({ provider: "holographic" }).manifest));
+    expect(read.memory).toEqual({ provider: "holographic" });
+    expect(memoryKeyEnv("holographic")).toBeNull();
+  });
+
+  /**
+   * Any provider asks for the capability, and this checkout's hermeticd claims
+   * it. Until hermeticd learns `memory-provider` this test is the one that
+   * says so — a laptop rendering a requirement its own box does not implement.
+   */
+  test("a provider asks for the capability, and hermeticd advertises it", () => {
+    for (const memory of [
+      { provider: "holographic" as const },
+      { provider: "mem0" as const, key_ref: MEMORY_KEY_SLOT },
+    ]) {
+      const rendered = render(memory);
+      expect(requiredCapabilities(rendered.manifest)).toContain(MEMORY_PROVIDER_CAPABILITY);
+      expect([...(rendered.manifest.requires ?? [])]).toContain(MEMORY_PROVIDER_CAPABILITY);
+    }
+    expect(AGENT_CAPABILITY_LIST).toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(HERMETICD_CAPABILITIES.has(MEMORY_PROVIDER_CAPABILITY)).toBe(true);
+  });
+
+  /**
+   * A manifest is a document, not an authorisation: the slot it names becomes
+   * an SSM path the box reads, so the box's own parse refuses any slot but
+   * `memory-key` — on the schema, before any capability is consulted.
+   */
+  test("a manifest naming any other slot is refused by the box's parse", () => {
+    const rendered = render({ provider: "supermemory", key_ref: MEMORY_KEY_SLOT });
+    for (const key_ref of ["provider-key", "ts-key", "bws-token", "../ts-key"]) {
+      const forged = { ...rendered.manifest, memory: { provider: "supermemory", key_ref } };
+      let issues: string[] = [];
+      try {
+        parseManifest(overTheWire(forged));
+      } catch (e) {
+        issues = ((e as { detail?: { issues?: string[] } }).detail?.issues ?? []) as string[];
+      }
+      expect(issues.some((i) => i.startsWith("memory.key_ref"))).toBe(true);
+    }
+  });
+
+  test("none renders nothing and asks for nothing, so old documents hash the same", () => {
+    expect(none.manifest.memory).toBeUndefined();
+    expect(parseManifest(overTheWire(none.manifest)).memory).toBeUndefined();
+    expect(requiredCapabilities(none.manifest)).not.toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(render(undefined).manifest.config_hash).toBe(none.manifest.config_hash);
+    expect(render({ provider: "holographic" }).manifest.config_hash).not.toBe(
+      none.manifest.config_hash,
+    );
   });
 });
 

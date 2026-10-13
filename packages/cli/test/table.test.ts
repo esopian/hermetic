@@ -150,6 +150,28 @@ function tailnetLine(a: AgentView): string {
     .replace(/^tailnet name\s+/, "");
 }
 
+/**
+ * §6.4: the external memory provider an agent was created with. Hermes's own
+ * MEMORY.md/USER.md is on either way, so a row with none says "built-in only"
+ * rather than "none" — and a row from before the field reads the same.
+ */
+describe("agent status · the memory provider", () => {
+  test("a row with no provider, or from before the field, is built-in only", () => {
+    expect(line(agent(), "memory")).toBe("built-in only");
+    expect(line(agent({ memory: null }), "memory")).toBe("built-in only");
+  });
+
+  test("a keyed provider names its label, id and the slot its key sits in", () => {
+    const a = agent({ memory: { provider: "supermemory", key_ref: "memory-key" } });
+    expect(line(a, "memory")).toBe("Supermemory (supermemory) · key memory-key");
+  });
+
+  test("a local provider has no key to name", () => {
+    const a = agent({ memory: { provider: "holographic", key_ref: null } });
+    expect(line(a, "memory")).toBe("Holographic (local) (holographic)");
+  });
+});
+
 describe("agent status · the tailnet name", () => {
   test("a node holding its own name is printed plainly", () => {
     expect(tailnetLine(agent({ tailscale_dns_name: "atlas.hermetic.ts.net" }))).toBe(

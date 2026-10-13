@@ -165,6 +165,15 @@ export const ERROR_CODES = [
    */
   "MODEL_NOT_GRANTED",
   /**
+   * A create chose (or inherited) a keyed external memory provider, and the
+   * fleet's shared slot for its key (`memory-<id>`) is absent or still the
+   * placeholder. Refused before anything exists: a Hermes told to use a
+   * provider with no key quietly falls back to built-in memory, which is not
+   * what the operator asked for. The remedy is `hermetic secrets push _fleet
+   * --shared memory-<id>`.
+   */
+  "MEMORY_KEY_MISSING",
+  /**
    * The box's Hermes dashboard could not be reached for a chat turn (§9.2):
    * the laptop is off the tailnet, the instance is stopped, or Hermes is
    * not listening. Distinguished from the codes below because it is the one an

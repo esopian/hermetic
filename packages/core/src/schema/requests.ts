@@ -7,6 +7,7 @@ import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
 import { ProfileName } from "./profile.ts";
 import { HermesHold, HermesSettings } from "./hermes.ts";
+import { MemoryProviderChoice, MemoryProviderId } from "./memory.ts";
 import { FLEET_KEY, FleetDefaults, NetworkMode } from "./fleet.ts";
 import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
@@ -115,6 +116,14 @@ export const CreateAgentInput = z
      * dashboard can change. The model of a profile-bound agent is held anyway.
      */
     hold: HermesHold.optional(),
+    /**
+     * The Hermes external memory provider this agent runs beside its built-in
+     * memory. Absent inherits `settings.default_memory_provider`; `none`
+     * overrides that to built-in only. A keyed provider's API key comes from
+     * the fleet's shared slot `memory-<id>`, and a create naming one whose slot
+     * is empty is refused with `MEMORY_KEY_MISSING` before anything exists.
+     */
+    memory_provider: MemoryProviderChoice.optional(),
   })
   .refine((v) => v.volume_id === undefined || v.volume_gib === undefined, {
     message: "--volume takes the volume as it is; --volume-gib would have to resize it",
@@ -502,16 +511,22 @@ export const SettingsSetInput = z
      * fleet manifest, which is how the boxes hear about it.
      */
     auto_update_hermeticd: z.boolean().optional(),
+    /**
+     * The external memory provider a create with no `memory_provider`
+     * inherits. `null` clears it back to built-in memory only.
+     */
+    default_memory_provider: MemoryProviderId.nullable().optional(),
   })
   .refine(
     (v) =>
       v.defaults !== undefined ||
       v.agent_defaults !== undefined ||
       v.default_profile !== undefined ||
-      v.auto_update_hermeticd !== undefined,
+      v.auto_update_hermeticd !== undefined ||
+      v.default_memory_provider !== undefined,
     {
       message:
-        "name at least one of defaults, agent_defaults, default_profile or auto_update_hermeticd",
+        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd or default_memory_provider",
     },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;

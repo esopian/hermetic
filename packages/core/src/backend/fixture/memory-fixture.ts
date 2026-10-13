@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import type {
   Agent,
   DirectoryEntry,
+  AgentMemory,
   FleetSettings,
   LocalConfig,
   NetworkMode,
@@ -32,6 +33,9 @@ import {
   SIZES,
   cloudName,
   defaultFleetSettings,
+  MEMORY_KEY_SLOT,
+  memoryKeySlug,
+  memoryProviderNeedsKey,
   profileSlotSlug,
   providerKeySlot,
   providerNeedsKey,
@@ -324,6 +328,13 @@ export const FIXTURE_PROFILE_REVISIONS = {
 
 /** Fixture profile keys; `secrets-leak.test.ts` greps every stream for these. */
 export const FIXTURE_PROFILE_KEY = "sk-profile-FIXTURE-SECRET";
+
+/**
+ * The Supermemory key behind `main`'s shared `memory-supermemory` slot, and
+ * the copy `corvid` holds in its own `memory-key` slot. `secrets-leak.test.ts`
+ * greps every stream for it.
+ */
+export const FIXTURE_MEMORY_KEY = "sm-memory-FIXTURE-SECRET";
 
 /** The hermeticd release the fixture fleet's manifest points at. */
 export const FIXTURE_HERMETICD_VERSION = "0.6.0";
@@ -635,6 +646,12 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
         ),
       },
       default_profile: FIXTURE_PROFILE_IDS.anthropic,
+      /**
+       * `staging` alone has a default memory provider, so inheritance is on
+       * screen there; `main` keeps none, so a create on it with no
+       * `memory_provider` still gets built-in memory only.
+       */
+      ...(fixtureName === "staging" ? { default_memory_provider: "holographic" as const } : {}),
       secrets: [
         {
           slug: "nous-key",
@@ -657,6 +674,19 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
           created_at: config.frozen_at,
           last_set_at: config.frozen_at,
         })),
+        // The keyed memory provider's shared slot, on `main` only: the one
+        // `corvid`'s `memory-key` was copied from, and the one a create naming
+        // supermemory copies from again.
+        ...(fixtureName === "main"
+          ? [
+              {
+                slug: memoryKeySlug("supermemory"),
+                label: "Supermemory",
+                created_at: config.frozen_at,
+                last_set_at: config.frozen_at,
+              },
+            ]
+          : []),
       ].sort((a, b) => a.slug.localeCompare(b.slug)),
     };
   })();
@@ -688,6 +718,12 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
       sharedSecretPath(config.fleet_id, profileSlotSlug(FIXTURE_PROFILE_IDS.nous)),
       SECRET_PLACEHOLDER,
     );
+    if (fixtureName === "main") {
+      backend.params.set(
+        sharedSecretPath(config.fleet_id, memoryKeySlug("supermemory")),
+        FIXTURE_MEMORY_KEY,
+      );
+    }
   }
 
   backend.fleetItem = {
@@ -956,6 +992,20 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     if ((seed.secrets_mode ?? "none") === "bitwarden") {
       ssm_paths.push(slot(seed.name, "bws-token"));
     }
+    // The memory provider's key, copied into the agent's own slot the way
+    // `snapshotMemoryKey` would have at create.
+    const memory: AgentMemory | null =
+      seed.memory === undefined
+        ? null
+        : {
+            provider: seed.memory,
+            key_ref: memoryProviderNeedsKey(seed.memory) ? MEMORY_KEY_SLOT : null,
+          };
+    const memorySlot =
+      memory?.key_ref === null || memory?.key_ref === undefined
+        ? null
+        : slot(seed.name, memory.key_ref);
+    if (memorySlot !== null) ssm_paths.push(memorySlot);
 
     backend.volumes.set(volume_id, {
       volume_id,
@@ -997,7 +1047,14 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
      */
     const copied = credentialRef === undefined ? null : slot(seed.name, credentialRef);
     for (const p of ssm_paths) {
-      backend.params.set(p, p === copied ? FIXTURE_PROFILE_KEY : `${FIXTURE_TS_KEY}-${seed.name}`);
+      backend.params.set(
+        p,
+        p === copied
+          ? FIXTURE_PROFILE_KEY
+          : p === memorySlot
+            ? FIXTURE_MEMORY_KEY
+            : `${FIXTURE_TS_KEY}-${seed.name}`,
+      );
     }
     backend.objects.set(`config/${seed.name}/${config_hash}.tgz`, new Uint8Array([1, 2, 3]));
     // Every seeded agent has a matching tailscale device, so `doctor` sees no
@@ -1120,6 +1177,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
             },
           }),
       secrets_mode: seed.secrets_mode ?? "none",
+      ...(memory === null ? {} : { memory }),
       // A box that is neither running nor bootstrapping holds no tailnet
       // identity at all: `stop` and `destroy` both null the address, the
       // MagicDNS name and the version together, because the next boot
