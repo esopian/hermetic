@@ -101,7 +101,7 @@ export function renderSettings(s: MobileSettingsResult): string {
 }
 
 /** Fleet aliases for the table; a directory that cannot be read leaves the ids. */
-async function fleetAliases(
+export async function fleetAliases(
   hermetic: Pick<Hermetic, "fleets">,
   result: MobileDevicesResult,
 ): Promise<Map<string, string>> {

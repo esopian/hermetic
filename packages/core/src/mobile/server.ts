@@ -124,6 +124,8 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
   let broadcast: (frame: Record<string, unknown>) => void = () => {};
   let isLive: (deviceId: string) => boolean = () => false;
 
+  // Receipt-poll failures are intentionally silent: `MobileBridgeEvent` has no
+  // channel for them, and a lost poll costs only a stale token the next ticket clears.
   const push = createPushNotifier({
     store: opts.store,
     sender: opts.push,
@@ -306,12 +308,13 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
         clearInterval(heartbeat);
         clearInterval(sweep);
         notify.stop();
-        push.close();
         // Turns first, sockets second: a `turn.start` the stop refuses, and the
         // `turn.end` of every turn it ends, can still reach a socket that is
         // open. Best effort — a refusal that settles after the sockets close
         // is lost, and the phone's retry is refused the same way.
         await turns.stopAll();
+        // After the turns: a push raised while they stop must still be tracked.
+        push.close();
         hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
         await pool.stop();
         // Let the 1001s reach their sockets before the listener goes.

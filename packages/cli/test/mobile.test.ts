@@ -3,7 +3,7 @@
  * the code, the URL and a QR; the device table never shows a token.
  */
 import { describe, expect, test } from "bun:test";
-import { renderDevices, renderPair, renderSettings } from "../src/commands/mobile.ts";
+import { fleetAliases, renderDevices, renderPair, renderSettings } from "../src/commands/mobile.ts";
 
 const PAIR = {
   code: "ABCD2345",
@@ -86,5 +86,53 @@ describe("mobile rendering", () => {
     });
     expect(wild).toContain("host     0.0.0.0");
     expect(wild).toContain("warning: the bridge binds every interface");
+  });
+});
+
+describe("fleetAliases", () => {
+  const base = {
+    name: "FIXTURE phone",
+    platform: "ios" as const,
+    created_at: "2026-10-13T12:00:00.000Z",
+    last_seen_at: null,
+    push_registered: false,
+    previews: true,
+    enabled: true,
+  };
+  const entry = (fleet_id: string | null, name: string | null) => ({ fleet_id, name });
+  const hermetic = (list: () => Promise<unknown>) =>
+    ({ fleets: { list } }) as unknown as Parameters<typeof fleetAliases>[0];
+
+  test("reads aliases for fleets with a name, skipping the rest", async () => {
+    const aliases = await fleetAliases(
+      hermetic(async () => ({
+        fleets: [entry("fxtr0001", "main"), entry("sg7k2m4p", null), entry(null, "x")],
+      })),
+      { devices: [{ ...base, device_id: "d", fleet_id: "fxtr0001" }], serving: null },
+    );
+    expect([...aliases]).toEqual([["fxtr0001", "main"]]);
+  });
+
+  test("does not ask when no device has a fleet", async () => {
+    let asked = 0;
+    const aliases = await fleetAliases(
+      hermetic(async () => {
+        asked++;
+        return { fleets: [] };
+      }),
+      { devices: [{ ...base, device_id: "d", fleet_id: null }], serving: null },
+    );
+    expect(asked).toBe(0);
+    expect(aliases.size).toBe(0);
+  });
+
+  test("a directory that throws leaves the ids", async () => {
+    const aliases = await fleetAliases(
+      hermetic(async () => {
+        throw new Error("directory unreachable");
+      }),
+      { devices: [{ ...base, device_id: "d", fleet_id: "fxtr0001" }], serving: null },
+    );
+    expect(aliases.size).toBe(0);
   });
 });

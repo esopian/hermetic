@@ -320,6 +320,12 @@ describe("the Expo receipts fetcher", () => {
     expect(got.has("c")).toBe(false);
   });
 
+  test("an id that names an inherited property is not a receipt", async () => {
+    const fetchReceipts = expoReceiptFetcher(async () => Response.json({ data: {} }));
+    const got = await fetchReceipts(["constructor", "toString"]);
+    expect(got.size).toBe(0);
+  });
+
   test("a non-2xx answer throws for the tracker to swallow", async () => {
     const fetchReceipts = expoReceiptFetcher(async () => new Response("no", { status: 503 }));
     await expect(fetchReceipts(["a"])).rejects.toThrow("503");

@@ -82,7 +82,7 @@ export function expoReceiptFetcher(
     const data =
       typeof json.data === "object" && json.data !== null ? (json.data as Record<string, unknown>) : {};
     const out = new Map<string, PushReceipt>();
-    for (const id of ids) if (id in data) out.set(id, receiptOf(data[id]));
+    for (const id of ids) if (Object.hasOwn(data, id)) out.set(id, receiptOf(data[id]));
     return out;
   };
 }
