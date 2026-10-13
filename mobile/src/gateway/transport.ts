@@ -121,7 +121,17 @@ export interface GatewayOps {
 }
 
 export interface GatewayTransport extends ConversationTransport, RosterSource, GatewayOps {
-  /** Stop every turn pump and observation this transport started. */
+  /**
+   * Stop following every running turn (`forgetTurn` on each) and answer their
+   * ids. The turns keep running on their boxes: nothing is interrupted. The
+   * caller tells the store each one is gone (`onTurnGone`) when it wants the
+   * transcript re-read — the client does on its return to the foreground.
+   */
+  detachTurns(): string[];
+  /**
+   * Stop every turn pump and observation this transport started. Turns are
+   * detached, never interrupted: a running turn keeps running on its box.
+   */
   dispose(): void;
 }
 
@@ -133,7 +143,12 @@ interface TurnRun {
   controller: AbortController;
   /** `abortTurn` was asked: the end is `aborted`, whatever the stream says. */
   stopping: boolean;
-  /** `forgetTurn` was asked: nothing more is delivered. */
+  /**
+   * `forgetTurn` was asked: nothing more is delivered, and the pump leaves the
+   * adapter's stream at its next frame (`return()`, which closes the socket)
+   * rather than aborting it — an aborted stream owes the box a
+   * `session.interrupt`, and forgetting a turn is not stopping it.
+   */
   forgotten: boolean;
 }
 
@@ -321,12 +336,26 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     return client.abort(run.box, run.bot, run.session ? { session: run.session } : {});
   }
 
+  /**
+   * Stop following a turn; the turn itself keeps running on the box (the
+   * `ConversationTransport.forgetTurn` contract). Only the pump is let go: it
+   * stops delivering at once and leaves the adapter's stream at the next frame
+   * the box sends. The run's controller is **not** aborted — the adapter
+   * answers an aborted signal with `session.interrupt`, which would stop a turn
+   * the operator only looked away from (a backgrounded phone, a left screen, a
+   * quiet tool run). `abortTurn` is the only path that stops a turn.
+   */
   function forgetTurn(turn_id: string): void {
     const run = runs.get(turn_id);
     if (!run) return;
     run.forgotten = true;
-    run.controller.abort();
     runs.delete(turn_id);
+  }
+
+  function detachTurns(): string[] {
+    const ids = [...runs.keys()];
+    for (const id of ids) forgetTurn(id);
+    return ids;
   }
 
   async function abort(input: {
@@ -363,6 +392,10 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     input: Parameters<ConversationTransport["respond"]>[0],
   ): Promise<RespondResult> {
     if (!client.respond) throw new HermeticError("CHAT_PROTOCOL", "Request responses unavailable");
+    // A response names the session its request lives in; an empty one would
+    // be routed by the gateway to whatever it guesses.
+    if (!input.session)
+      throw new HermeticError("VALIDATION", "This request has no session to answer it in");
     const result = await client.respond(deps.address(input.instance), input);
     return mask.deep(result);
   }
@@ -557,8 +590,9 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     archive,
     steerSubagent,
     abortSubagent,
+    detachTurns,
     dispose: () => {
-      for (const id of [...runs.keys()]) forgetTurn(id);
+      detachTurns();
       for (const controller of [...observers]) controller.abort();
       observers.clear();
     },

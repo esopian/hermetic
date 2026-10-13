@@ -6,6 +6,7 @@ import {
   arrivalFromPush,
   INBOX_LIMIT,
   InboxStore,
+  pushBelongs,
   SAME_EVENT_MS,
 } from "../../src/inbox/store.ts";
 import { inboxEntry } from "../helpers/fixtures.ts";
@@ -55,6 +56,41 @@ describe("InboxStore", () => {
     );
     expect(inbox.ingest(push)).toBe(false);
     expect(inbox.ingest({ ...push, at: "2026-10-13T10:10:00.000Z" })).toBe(true);
+  });
+
+  test("two box pushes of one kind seconds apart are two events: only exact keys fold", () => {
+    const { inbox } = setup();
+    const push = (count: number, at: string) =>
+      arrivalFromPush(
+        {
+          fleet_id: "fxtr0001",
+          instance: "atlas",
+          bot: "scribe",
+          session: "s-1",
+          kind: "needs_action",
+          dedupe: `atlas:s-1:${count}:needs_action`,
+        },
+        { title: "scribe", body: "Approval needed" },
+        at,
+      );
+    expect(inbox.ingest(push(4, "2026-10-13T10:00:00.000Z"))).toBe(true);
+    expect(inbox.ingest(push(5, "2026-10-13T10:00:03.000Z"))).toBe(true);
+    expect(inbox.ingest(push(5, "2026-10-13T10:00:04.000Z"))).toBe(false);
+    expect(inbox.getState().needsAction).toBe(2);
+  });
+
+  test("two events this phone saw itself are two entries too, however close", () => {
+    const { inbox } = setup();
+    inbox.ingest(arrival({ kind: "needs_action", dedupe: "atlas:s-1:phone-r1:needs_action" }));
+    expect(
+      inbox.ingest(
+        arrival({
+          kind: "needs_action",
+          dedupe: "atlas:s-1:phone-r2:needs_action",
+          at: "2026-10-13T10:00:03.000Z",
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("the last 200 are kept", () => {
@@ -144,5 +180,26 @@ describe("grouping", () => {
     expect(groups.map((g) => g.count)).toEqual([2, 1]);
     expect(groupUnread(groups[0]!)).toBe(true);
     expect(groupRow(groups[0]!).read_at).toBeNull();
+  });
+});
+
+describe("pushBelongs", () => {
+  const data = {
+    fleet_id: "fxtr0001",
+    instance: "atlas",
+    bot: "scribe",
+    session: "s-1",
+    kind: "turn.done",
+    dedupe: "atlas:s-1:4:turn.done",
+  } satisfies MobilePushData;
+  const fleet = { fleet_id: "fxtr0001", agents: ["atlas", "corvid"] };
+
+  test("the paired fleet and one of its agents", () => {
+    expect(pushBelongs(data, fleet)).toBe(true);
+  });
+
+  test("another fleet, or an agent this fleet does not have, does not", () => {
+    expect(pushBelongs({ ...data, fleet_id: "sg7k2m4p" }, fleet)).toBe(false);
+    expect(pushBelongs({ ...data, instance: "oriole" }, fleet)).toBe(false);
   });
 });

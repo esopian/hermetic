@@ -13,6 +13,7 @@ import { fleetViewSource, makeMobileRoutes } from "./rpc-mobile.ts";
 import { pushDeviceStore } from "./push/devices.ts";
 import { bunChatSocket } from "./push/socket.ts";
 import { createWatcher } from "./push/watch.ts";
+import { tailnetLogins } from "./tailscale.ts";
 import { createHermesChat } from "@hermetic/core/chat-client";
 import { HERMES_DASHBOARD_UNIT, expoPushSender, expoReceiptFetcher } from "@hermetic/core/shared";
 import {
@@ -226,6 +227,8 @@ function pushWatchLoop(
         .catch(() => null);
       return res !== null && res.code === 0;
     },
+    // Owners who have left the tailnet lose their registrations (§9.4).
+    tailnetLogins: () => tailnetLogins(host),
   });
   return watcher.run(signal);
 }

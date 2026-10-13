@@ -22,16 +22,16 @@ jest.mock("expo-constants", () => ({
 }));
 jest.mock("@hermetic/core/chat-client-fixture", () => {
   const actual = jest.requireActual("@hermetic/core/chat-client-fixture");
-  return { fixtureChatClient: jest.fn(actual.fixtureChatClient) };
+  return { ...actual, createFixtureChatStack: jest.fn(actual.createFixtureChatStack) };
 });
 
-import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";
-import { appFleetDeps } from "../../src/fleet/deps.ts";
+import { createFixtureChatStack } from "@hermetic/core/chat-client-fixture";
+import { appFleetDeps, fixtureSelected } from "../../src/fleet/deps.ts";
 
 /** What a fixture build carries; a release build's `load` answers `null`. */
 const fixtureBuild = () => jest.requireActual("../../src/fixture/index.ts");
 
-const built = fixtureChatClient as unknown as jest.Mock;
+const built = createFixtureChatStack as unknown as jest.Mock;
 
 beforeEach(() => built.mockClear());
 
@@ -55,6 +55,25 @@ describe("appFleetDeps", () => {
     expect(deps.fixture?.link.startsWith("hermetic://fleet?")).toBe(true);
     expect(deps.fixture?.tailscale.get()).toBe("ok");
     expect(deps.background).toBeNull();
+  });
+
+  test("the gate needs both halves: a development build and the flag", () => {
+    expect(fixtureSelected("1", true)).toBe(true);
+    expect(fixtureSelected("1", false)).toBe(false);
+    for (const flag of [undefined, "", "0", "true"]) {
+      expect(fixtureSelected(flag, true)).toBe(false);
+      expect(fixtureSelected(flag, false)).toBe(false);
+    }
+  });
+
+  test("a release build with the flag set still gets the real platform", () => {
+    const deps = appFleetDeps("1", fixtureBuild, false);
+    expect(deps.fixture).toBeNull();
+    expect(deps.chat).toBeUndefined();
+    expect(deps.background).not.toBeNull();
+    expect(built).not.toHaveBeenCalled();
+    // And the same flag in a development build is the fixture.
+    expect(appFleetDeps("1", fixtureBuild, true).fixture).not.toBeNull();
   });
 
   test("the fixture pairing lives under its own keys", async () => {

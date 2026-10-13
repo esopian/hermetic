@@ -55,7 +55,7 @@ export default function Conversation() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ instance: string; bot: string; session?: string }>();
-  const { client } = useFleetContext();
+  const { client, focusConversation } = useFleetContext();
   const fleetState = useFleetState();
   const agents = useFleetAgents();
   const { state: roster } = useRoster();
@@ -88,10 +88,15 @@ export default function Conversation() {
     useCallback(() => {
       if (!client) return;
       client.setWatched({ instance: target.instance, bot: target.bot, focused: true });
+      // Back from the background, the provider re-opens this one.
+      focusConversation(target);
       client.roster.markSeen(target.instance, target.bot);
       client.inbox.markThreadRead(target.instance, target.bot);
-      return () => client.setWatched(null);
-    }, [client, target.instance, target.bot]),
+      return () => {
+        client.setWatched(null);
+        focusConversation(null);
+      };
+    }, [client, target, focusConversation]),
   );
 
   const swarm = roster?.swarms.find((s) => s.instance === target.instance) ?? null;
@@ -440,11 +445,15 @@ export default function Conversation() {
             empty={empty}
           />
         )}
-        <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
+        {/* Opened, the home-indicator inset sinks under the keyboard; a small margin stays. */}
+        <KeyboardStickyView
+          offset={{ closed: 0, opened: Math.max(insets.bottom, t.space.sm) - t.space.sm }}
+        >
           {view?.turnError && !missing && turnErrorNeedsBand(messages, view.live) ? (
             <TurnErrorBand error={view.turnError} />
           ) : null}
-          {view?.dropped && !sending && !missing ? <DroppedBand /> : null}
+          {/* A turn that ended on an error already has its card (or the band above). */}
+          {view?.dropped && !view.turnError && !sending && !missing ? <DroppedBand /> : null}
           <View
             style={{
               borderTopWidth: t.border.control,

@@ -3,15 +3,23 @@ import { MobileFleetView, decodeRpcFrame } from "@hermetic/core/schema";
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { FLEET_KEY, RPC_PATHS, pushDevicePath } from "@hermetic/core/shared";
 import { ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { PUSH_DEVICES_PATH } from "../src/push/devices.ts";
+import {
+  PUSH_DEVICES_MAX,
+  PUSH_DEVICES_PATH,
+  deviceTag,
+  pushDeviceStore,
+} from "../src/push/devices.ts";
 import { makeAws } from "../src/aws.ts";
 import {
   FLEET_VIEW_CACHE_MS,
+  PUSH_BODY_DEADLINE_MS,
   PUSH_BODY_MAX_BYTES,
   PUSH_WRITES_PER_MINUTE,
   accountOfArn,
+  makeMobileRoutes,
 } from "../src/rpc-mobile.ts";
-import { TAGGED_DEVICES_LOGIN, peerOwner } from "../src/rpc.ts";
+import { TAGGED_DEVICES_LOGIN, auditPath, peerOwner } from "../src/rpc.ts";
+import { FakeHost } from "./fake-host.ts";
 import { RecordingSink, TEST_AGENTS_TABLE, TEST_EVENTS_TABLE, makeFleetManifest } from "./fixtures.ts";
 import {
   MEMBER,
@@ -32,6 +40,7 @@ function device(over: Partial<MobilePushDevice> = {}): MobilePushDevice {
     platform: "ios",
     app_version: "1.0.0",
     listening: "all",
+    previews: false,
     ...over,
   };
 }
@@ -219,8 +228,77 @@ describe("POST /push/devices", () => {
       devices: [{ ...device(), owner: MEMBER.login, renewed_at: rig.host.now().toISOString() }],
     });
     const audit = rig.audit.join("\n");
-    expect(audit).toContain("push device registered: phone-1 (ios)");
+    expect(audit).toContain(`push device registered: ${deviceTag("phone-1")} (ios) by ${MEMBER.login}`);
     expect(audit).not.toContain("FIXTURE-rpc-mobile");
+    expect(audit).not.toContain("phone-1");
+  });
+
+  test("a body that does not arrive by the deadline is 408, and nothing is written", async () => {
+    const host = new FakeHost();
+    const deadline = new AbortController();
+    const routes = makeMobileRoutes({
+      devices: pushDeviceStore(host),
+      now: () => host.now().getTime(),
+      bodyDeadline: () => deadline.signal,
+    });
+    // A peer that opens the request, sends a little, and then stalls.
+    const stalled = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"device_id":'));
+      },
+    });
+    const request = new Request(`http://100.64.0.1:7434${RPC_PATHS.pushDevices}`, {
+      method: "POST",
+      body: stalled,
+    });
+    const pending = routes(request, new URL(request.url), { ip: "100.64.0.7", owner: MEMBER.login });
+    deadline.abort();
+    const response = await pending;
+    expect(response?.status).toBe(408);
+    expect((await errorOf(response as Response)).code).toBe("ABORTED");
+    expect(host.files.has(PUSH_DEVICES_PATH)).toBe(false);
+    expect(PUSH_BODY_DEADLINE_MS).toBe(5_000);
+  });
+
+  test("a registry full of other owners' phones is 507, and evicts nobody", async () => {
+    const rig = mobileRig();
+    const store = pushDeviceStore(rig.host);
+    for (let i = 0; i < PUSH_DEVICES_MAX; i++) {
+      await store.upsert(
+        device({ device_id: `other-${i}`, token: `ExponentPushToken[FIXTURE-o${i}]` }),
+        `user${i}@example.com`,
+      );
+    }
+    const before = rig.host.files.get(PUSH_DEVICES_PATH)?.content;
+    const full = await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()));
+    expect(full.status).toBe(507);
+    expect((await errorOf(full)).code).toBe("PAYLOAD_TOO_LARGE");
+    expect(rig.host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
+    const audit = rig.audit.join("\n");
+    expect(audit).toContain(
+      `push device ${deviceTag("phone-1")}: registration by ${MEMBER.login} refused`,
+    );
+    expect(audit).not.toContain("phone-1");
+  });
+
+  test("an owner's fifth phone evicts their own oldest, named by its tag", async () => {
+    const rig = mobileRig();
+    for (let i = 0; i < 5; i++) {
+      const ok = await rig.call(
+        "POST",
+        RPC_PATHS.pushDevices,
+        JSON.stringify(device({ device_id: `phone-${i}`, token: `ExponentPushToken[FIXTURE-p${i}]` })),
+      );
+      expect(ok.status).toBe(200);
+    }
+    const stored = JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}");
+    expect(stored.devices.map((d: { device_id: string }) => d.device_id)).toEqual([
+      "phone-1",
+      "phone-2",
+      "phone-3",
+      "phone-4",
+    ]);
+    expect(rig.audit.join("\n")).toContain(`evicted their ${deviceTag("phone-0")}`);
   });
 
   test("not JSON, or not a MobilePushDevice, is 400 VALIDATION — and the message carries no value", async () => {
@@ -304,7 +382,16 @@ describe("DELETE /push/devices/<device_id>", () => {
     expect(JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}")).toEqual({ devices: [] });
     const again = await rig.call("DELETE", pushDevicePath("phone-1"));
     expect(await again.json()).toEqual({ ok: true, device_id: "phone-1", removed: false });
-    expect(rig.audit.join("\n")).toContain("push device unregistered: phone-1");
+    expect(rig.audit.join("\n")).toContain(`push device unregistered: ${deviceTag("phone-1")}`);
+    // Not even the listener's own audit line spells the id: its path is tagged too.
+    expect(rig.audit.join("\n")).not.toContain("phone-1");
+    expect(rig.audit.join("\n")).toContain(`DELETE /push/devices/${deviceTag("phone-1")} from`);
+  });
+
+  test("auditPath tags a device id in the path and leaves every other path alone", () => {
+    expect(auditPath(pushDevicePath("phone-1"))).toBe(`/push/devices/${deviceTag("phone-1")}`);
+    expect(auditPath(RPC_PATHS.pushDevices)).toBe(RPC_PATHS.pushDevices);
+    expect(auditPath(RPC_PATHS.health)).toBe(RPC_PATHS.health);
   });
 
   test("an id outside the device_id shape is 400", async () => {
@@ -335,33 +422,51 @@ describe("a registration belongs to the login that made it (§9.4)", () => {
     expect((await rig.call("DELETE", pushDevicePath("phone-1"))).status).toBe(200);
   });
 
-  test("another member's POST or DELETE on the same device_id is 403 FORBIDDEN and changes nothing", async () => {
+  test("another member's DELETE of a device_id only the first holds is 403 FORBIDDEN, logged by tag", async () => {
     const rig = mobileRig();
     await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()));
     const before = rig.host.files.get(PUSH_DEVICES_PATH)?.content;
 
-    const hijack = await rig.call(
+    const silence = await rig.call("DELETE", pushDevicePath("phone-1"), null, OTHER_MEMBER_IP);
+    expect(silence.status).toBe(403);
+    const error = await errorOf(silence);
+    expect(error.code).toBe("FORBIDDEN");
+    // The caller is not told whose phone it is.
+    expect(error.message).not.toContain(MEMBER.login);
+    expect(rig.host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
+
+    const tag = deviceTag("phone-1");
+    expect(rig.audit.filter((line) => line.startsWith(`push device ${tag}:`))).toEqual([
+      `push device ${tag}: delete by ${OTHER_MEMBER.login} refused; registered to ${MEMBER.login}`,
+    ]);
+    const audit = rig.audit.join("\n");
+    expect(audit).not.toContain("phone-1");
+    expect(audit).not.toContain("FIXTURE-rpc-mobile");
+  });
+
+  test("another member posting the same device_id first cannot lock the owner out, or redirect them", async () => {
+    const rig = mobileRig();
+    // The squatter gets there first, with the victim's id and their own token.
+    const squat = await rig.call(
       "POST",
       RPC_PATHS.pushDevices,
       JSON.stringify(device({ token: "ExponentPushToken[FIXTURE-hijack]" })),
       OTHER_MEMBER_IP,
     );
-    expect(hijack.status).toBe(403);
-    const error = await errorOf(hijack);
-    expect(error.code).toBe("FORBIDDEN");
-    // The caller is not told whose phone it is.
-    expect(error.message).not.toContain(MEMBER.login);
-
-    const silence = await rig.call("DELETE", pushDevicePath("phone-1"), null, OTHER_MEMBER_IP);
-    expect(silence.status).toBe(403);
-    expect((await errorOf(silence)).code).toBe("FORBIDDEN");
-    expect(rig.host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
-
-    const refusals = rig.audit.filter((line) => line.startsWith("push device phone-1:"));
-    expect(refusals).toEqual([
-      `push device phone-1: update by ${OTHER_MEMBER.login} refused; registered to ${MEMBER.login}`,
-      `push device phone-1: delete by ${OTHER_MEMBER.login} refused; registered to ${MEMBER.login}`,
+    expect(squat.status).toBe(200);
+    // The real phone still registers.
+    expect((await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()))).status).toBe(200);
+    const stored = JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}");
+    expect(stored.devices.map((d: { owner: string; token: string }) => [d.owner, d.token])).toEqual([
+      [OTHER_MEMBER.login, "ExponentPushToken[FIXTURE-hijack]"],
+      [MEMBER.login, TOKEN],
     ]);
+    // Each delete touches only the caller's own record.
+    expect((await rig.call("DELETE", pushDevicePath("phone-1"), null, OTHER_MEMBER_IP)).status).toBe(
+      200,
+    );
+    const after = JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}");
+    expect(after.devices.map((d: { owner: string }) => d.owner)).toEqual([MEMBER.login]);
     const audit = rig.audit.join("\n");
     expect(audit).not.toContain("FIXTURE-rpc-mobile");
     expect(audit).not.toContain("FIXTURE-hijack");

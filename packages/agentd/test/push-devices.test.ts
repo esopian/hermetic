@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { MobilePushDevice } from "@hermetic/core/schema";
+import { sha256Hex } from "@hermetic/core/shared";
 import {
   PUSH_DEVICES_MAX,
   PUSH_DEVICES_PATH,
+  PUSH_DEVICES_PER_OWNER,
   PUSH_DEVICE_TTL_MS,
+  deviceTag,
   listensTo,
   pushDeviceStore,
 } from "../src/push/devices.ts";
@@ -20,6 +23,7 @@ function device(id: string, over: Partial<MobilePushDevice> = {}): MobilePushDev
     platform: "ios",
     app_version: "1.0.0",
     listening: "all",
+    previews: false,
     ...over,
   };
 }
@@ -47,13 +51,37 @@ describe("push device store", () => {
     ]);
   });
 
-  test("past the cap the least-recently registered phone is evicted", async () => {
+  test("an owner's fifth phone evicts that owner's oldest, never anyone else's", async () => {
+    expect(PUSH_DEVICES_PER_OWNER).toBe(4);
     const store = pushDeviceStore(new FakeHost());
-    for (let i = 0; i < PUSH_DEVICES_MAX; i++) await store.upsert(device(`d${i}`), OWNER);
+    await store.upsert(device("theirs"), OTHER);
+    for (let i = 0; i < PUSH_DEVICES_PER_OWNER; i++) await store.upsert(device(`d${i}`), OWNER);
     expect(await store.upsert(device("newest"), OWNER)).toEqual({ ok: true, evicted: "d0" });
-    const list = await store.list();
-    expect(list).toHaveLength(PUSH_DEVICES_MAX);
-    expect(list.at(-1)?.device_id).toBe("newest");
+    expect((await store.list()).map((d) => [d.owner, d.device_id])).toEqual([
+      [OTHER, "theirs"],
+      [OWNER, "d1"],
+      [OWNER, "d2"],
+      [OWNER, "d3"],
+      [OWNER, "newest"],
+    ]);
+    // Renewing one already held is not a fifth phone.
+    expect(await store.upsert(device("d1"), OWNER)).toEqual({ ok: true, evicted: null });
+  });
+
+  test("a file full of other owners' live phones refuses a new one rather than evicting a stranger", async () => {
+    const host = new FakeHost();
+    const store = pushDeviceStore(host);
+    for (let i = 0; i < PUSH_DEVICES_MAX; i++)
+      await store.upsert(device(`d${i}`), `user${i}@example.com`);
+    const before = host.files.get(PUSH_DEVICES_PATH)?.content;
+    expect(await store.upsert(device("late"), OWNER)).toEqual({ ok: false, reason: "full" });
+    expect(host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
+    // An owner already in the file may still renew, and may still rotate within
+    // their own slots.
+    expect(await store.upsert(device("d0"), "user0@example.com")).toEqual({ ok: true, evicted: null });
+    // Once one lapses the newcomer fits.
+    host.advance(PUSH_DEVICE_TTL_MS);
+    expect((await store.upsert(device("late"), OWNER)).ok).toBe(true);
   });
 
   test("upsert refuses an unvalidated shape", async () => {
@@ -62,15 +90,36 @@ describe("push device store", () => {
     expect(await store.list()).toEqual([]);
   });
 
-  test("remove by id, and by id+token only while the token still matches", async () => {
+  test("remove by key, and by key+token only while the token still matches", async () => {
     const store = pushDeviceStore(new FakeHost());
     await store.upsert(device("a"), OWNER);
     await store.upsert(device("b"), OWNER);
-    expect(await store.remove("a", "ExponentPushToken[FIXTURE-old]")).toBe(false);
-    expect(await store.remove("a", "ExponentPushToken[FIXTURE-a]")).toBe(true);
-    expect(await store.remove("b")).toBe(true);
-    expect(await store.remove("b")).toBe(false);
-    expect(await store.list()).toEqual([]);
+    await store.upsert(device("b"), OTHER);
+    const a = { owner: OWNER, device_id: "a" };
+    const b = { owner: OWNER, device_id: "b" };
+    expect(await store.remove(a, "ExponentPushToken[FIXTURE-old]")).toBe(false);
+    expect(await store.remove(a, "ExponentPushToken[FIXTURE-a]")).toBe(true);
+    expect(await store.remove(b)).toBe(true);
+    expect(await store.remove(b)).toBe(false);
+    // The other owner's `b` is another record and survives.
+    expect((await store.list()).map((d) => [d.owner, d.device_id])).toEqual([[OTHER, "b"]]);
+  });
+
+  test("pruneOwners drops the records of owners it rejects, and writes only when it did", async () => {
+    const host = new FakeHost();
+    const store = pushDeviceStore(host);
+    await store.upsert(device("a"), OWNER);
+    await store.upsert(device("b"), OTHER);
+    const before = host.files.get(PUSH_DEVICES_PATH)?.content;
+    expect(await store.pruneOwners(() => true)).toBe(0);
+    expect(host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
+    expect(await store.pruneOwners((owner) => owner === OWNER)).toBe(1);
+    expect((await pushDeviceStore(host).list()).map((d) => d.owner)).toEqual([OWNER]);
+  });
+
+  test("deviceTag is the first twelve hex digits of the id's sha256", () => {
+    expect(deviceTag("phone-1")).toBe(sha256Hex("phone-1").slice(0, 12));
+    expect(deviceTag("phone-1")).toMatch(/^[0-9a-f]{12}$/);
   });
 
   test("a restart reads the file back; a corrupt file or entry is dropped, not fatal", async () => {
@@ -100,32 +149,50 @@ describe("push device store", () => {
     expect(await pushDeviceStore(host, () => {}).list()).toEqual([]);
   });
 
-  test("another login may neither replace nor unregister a phone; its owner may", async () => {
+  test("records are keyed by (owner, device_id): another login's same id is its own record", async () => {
+    const host = new FakeHost();
+    const store = pushDeviceStore(host);
+    await store.upsert(device("a"), OWNER);
+    // Registering the same id first does not lock the real phone out, and does
+    // not replace it either.
+    expect(await store.upsert(device("a", { token: "ExponentPushToken[FIXTURE-x]" }), OTHER)).toEqual({
+      ok: true,
+      evicted: null,
+    });
+    expect((await store.list()).map((d) => [d.owner, d.token])).toEqual([
+      [OWNER, "ExponentPushToken[FIXTURE-a]"],
+      [OTHER, "ExponentPushToken[FIXTURE-x]"],
+    ]);
+    expect(await store.unregister("a", OTHER)).toEqual({ ok: true, removed: true });
+    expect((await store.list()).map((d) => d.owner)).toEqual([OWNER]);
+  });
+
+  test("another login may not unregister a phone it holds no record of; its owner may", async () => {
     const host = new FakeHost();
     const store = pushDeviceStore(host);
     await store.upsert(device("a"), OWNER);
     const before = host.files.get(PUSH_DEVICES_PATH)?.content;
-    expect(await store.upsert(device("a", { token: "ExponentPushToken[FIXTURE-x]" }), OTHER)).toEqual({
+    expect(await store.unregister("a", OTHER)).toEqual({
       ok: false,
+      reason: "forbidden",
       owner: OWNER,
     });
-    expect(await store.unregister("a", OTHER)).toEqual({ ok: false, owner: OWNER });
     expect(host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
     expect(await store.unregister("a", OWNER)).toEqual({ ok: true, removed: true });
     expect(await store.unregister("a", OWNER)).toEqual({ ok: true, removed: false });
   });
 
-  test("a registration lapses 30 days after its last renewal: unlisted, then pruned", async () => {
-    expect(PUSH_DEVICE_TTL_MS).toBe(30 * DAY_MS);
+  test("a registration lapses 72 hours after its last renewal: unlisted, then pruned", async () => {
+    expect(PUSH_DEVICE_TTL_MS).toBe(3 * DAY_MS);
     const host = new FakeHost();
     const logs: string[] = [];
     const store = pushDeviceStore(host, (m) => void logs.push(m));
     await store.upsert(device("stale"), OWNER);
     await store.upsert(device("fresh"), OWNER);
-    host.advance(10 * DAY_MS);
+    host.advance(DAY_MS);
     await store.upsert(device("fresh"), OWNER);
 
-    host.advance(PUSH_DEVICE_TTL_MS - 10 * DAY_MS - 1);
+    host.advance(PUSH_DEVICE_TTL_MS - DAY_MS - 1);
     expect((await store.list()).map((d) => d.device_id)).toEqual(["stale", "fresh"]);
     host.advance(1);
     expect((await store.list()).map((d) => d.device_id)).toEqual(["fresh"]);

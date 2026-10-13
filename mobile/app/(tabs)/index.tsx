@@ -95,8 +95,17 @@ export default function Bots() {
   const status = tailscale?.status ?? null;
   const banded = status === "off" || status === "unreachable";
   const live = !banded && !fleet.stale;
+  // The kicker names the same state the Tailscale band below it does, in its colour.
   const kicker = `${fleet.link?.label ?? ""}${
-    banded ? " · tailnet unreachable" : fleet.stale ? " · fleet list from pairing" : ""
+    status === "off"
+      ? " · Tailscale off"
+      : status === "unreachable"
+        ? " · no box answers"
+        : fleet.stale
+          ? fleet.fromBoxes
+            ? " · fleet view from boxes"
+            : " · fleet list from pairing"
+          : ""
   }`;
   const loading = !state?.readAt && (state?.loading ?? true) && !state?.error;
 
@@ -116,7 +125,11 @@ export default function Bots() {
       >
         <View style={{ flex: 1, gap: 4 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-            <StatusSquare size={8} color={live ? t.c.ok : t.c.warn} pulse={probing} />
+            <StatusSquare
+              size={8}
+              color={live ? t.c.ok : status === "off" ? t.c.bad : t.c.warn}
+              pulse={probing}
+            />
             <Kicker numberOfLines={1}>{kicker}</Kicker>
           </View>
           <Text variant="display">Bots</Text>

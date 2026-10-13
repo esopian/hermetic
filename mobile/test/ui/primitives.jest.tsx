@@ -4,6 +4,7 @@ import { buildTheme, ThemeProvider } from "../../src/theme/theme.tsx";
 import { palettes, statusColor } from "../../src/theme/tokens.ts";
 import { buildBlob } from "../../src/ui/avatar/Avatar.tsx";
 import { avatarPalette, avatarSeed, hslHex, rngFor } from "../../src/ui/avatar/avatar-seed.ts";
+import { primaryColors } from "../../src/ui/Button.tsx";
 import { codeSpans } from "../../src/ui/codeSpans.tsx";
 import { Avatar, Badge, Button, Kicker, Text, ToggleSwitch } from "../../src/ui/index.ts";
 
@@ -100,6 +101,27 @@ describe("primitives render", () => {
     await fireEvent.press(screen.getByLabelText("Send"));
     await fireEvent.press(screen.getByLabelText("Nope"));
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  test("a disabled primary (Send, empty draft) keeps a legible label in both schemes", () => {
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => {
+        const v = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      }) as [number, number, number];
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x) as [number, number];
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    for (const scheme of ["light", "dark"] as const) {
+      const c = palettes[scheme];
+      const off = primaryColors(c, { pressed: false, disabled: true });
+      expect(contrast(off.text, off.fill)).toBeGreaterThanOrEqual(4.5);
+      // And it still reads as not the live button.
+      expect(off.fill).not.toBe(primaryColors(c, { pressed: false, disabled: false }).fill);
+    }
   });
 
   test("Avatar renders with an accessible label", async () => {

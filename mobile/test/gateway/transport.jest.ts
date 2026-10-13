@@ -33,9 +33,13 @@ function fakeAdapter(script: {
   hints?: ChatObserveHint[];
   /** Hold the turn open until released. */
   hold?: boolean;
+  /** Frames the box sends once a held turn is released. */
+  after?: ChatFrame[];
 }) {
   const calls: { method: string; args: unknown[] }[] = [];
   let release: (() => void) | null = null;
+  /** Each send's signal, and whether its stream was closed (its `finally` ran). */
+  const streams: { signal: AbortSignal | undefined; closed: boolean }[] = [];
   const client: HermesChatClient = {
     token: async () => "FIXTURE",
     swarm: async (box) => {
@@ -71,14 +75,21 @@ function fakeAdapter(script: {
     },
     send: (box, b, text, opts) => {
       calls.push({ method: "send", args: [box.instance, b, text, opts?.session] });
+      const stream = { signal: opts?.signal, closed: false };
+      streams.push(stream);
       return (async function* () {
-        if (script.sendThrows) throw script.sendThrows;
-        for (const f of script.frames ?? []) yield f;
-        if (script.hold) {
-          await new Promise<void>((resolve) => {
-            release = resolve;
-            opts?.signal?.addEventListener("abort", () => resolve());
-          });
+        try {
+          if (script.sendThrows) throw script.sendThrows;
+          for (const f of script.frames ?? []) yield f;
+          if (script.hold) {
+            await new Promise<void>((resolve) => {
+              release = resolve;
+              opts?.signal?.addEventListener("abort", () => resolve());
+            });
+          }
+          for (const f of script.after ?? []) yield f;
+        } finally {
+          stream.closed = true;
         }
       })();
     },
@@ -102,7 +113,7 @@ function fakeAdapter(script: {
       })();
     },
   };
-  return { client, calls, release: () => release?.() };
+  return { client, calls, streams, release: () => release?.() };
 }
 
 function setup(script: Parameters<typeof fakeAdapter>[0] = {}, listening = ["atlas"]) {
@@ -221,6 +232,46 @@ describe("turns", () => {
     expect(s.events.filter((e) => e.type !== "frame")).toEqual([]);
   });
 
+  test("forgetTurn never interrupts the box: the stream is left, not aborted", async () => {
+    const s = setup({ frames: [delta(1, "working")], hold: true, after: [delta(2, " more"), done(3)] });
+    await s.transport.startTurn({ ...ATLAS, message: "hello" });
+    await flush();
+    const delivered = s.events.length;
+    s.transport.forgetTurn?.("T1");
+    await flush();
+    // An aborted signal is what makes the adapter send `session.interrupt`.
+    expect(s.streams[0]?.signal?.aborted).toBe(false);
+    expect(s.calls.some((c) => c.method === "abort")).toBe(false);
+    // The box's next frame: the pump leaves the stream (closing its socket), delivering nothing.
+    s.release();
+    await flush();
+    await flush();
+    expect(s.streams[0]?.closed).toBe(true);
+    expect(s.streams[0]?.signal?.aborted).toBe(false);
+    expect(s.events).toHaveLength(delivered);
+  });
+
+  test("detachTurns forgets every running turn, interrupting none, and names them", async () => {
+    const s = setup({ frames: [delta(1, "working")], hold: true });
+    await s.transport.startTurn({ ...ATLAS, message: "one" });
+    await s.transport.startTurn({ ...ATLAS, message: "two" });
+    await flush();
+    expect(s.transport.detachTurns().sort()).toEqual(["T1", "T2"]);
+    expect(s.transport.detachTurns()).toEqual([]);
+    expect(s.streams.every((st) => st.signal?.aborted === false)).toBe(true);
+    expect(s.calls.some((c) => c.method === "abort")).toBe(false);
+  });
+
+  test("dispose detaches turns the same way: no interrupt", async () => {
+    const s = setup({ frames: [delta(1, "working")], hold: true });
+    await s.transport.startTurn({ ...ATLAS, message: "hello" });
+    await flush();
+    s.transport.dispose();
+    await flush();
+    expect(s.streams[0]?.signal?.aborted).toBe(false);
+    expect(s.calls.some((c) => c.method === "abort")).toBe(false);
+  });
+
   test("/compact in Bot Chat compacts instead of sending", async () => {
     const s = setup();
     await s.transport.startTurn({ ...ATLAS, message: "/compact" });
@@ -304,6 +355,20 @@ describe("reads", () => {
       request_id: "r1",
       session: "s-1",
     });
+  });
+
+  test("a response with no session is refused before it reaches the adapter", async () => {
+    const s = setup();
+    await expect(
+      s.transport.respond({
+        ...ATLAS,
+        session: "",
+        request_id: "r1",
+        kind: "approval",
+        choice: "once",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(s.calls.some((c) => c.method === "respond")).toBe(false);
   });
 });
 

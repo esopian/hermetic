@@ -11,7 +11,8 @@
  *    the file the watcher reads, unchanged, beside the `owner` and
  *    `renewed_at` the box adds (`MobilePushDeviceRecord`);
  *  - the `data` of every push the watcher sends parses with `MobilePushData`,
- *    and its `dedupe` is the documented `<instance>:<session>:<count>:<kind>`.
+ *    and its `dedupe` is the documented `<instance>:<session>:<n>:<kind>`;
+ *  - the body honours the registration's `previews` choice.
  *
  * The phone half — the phone's own client reading the same documents — is
  * added beside it with the phone's fleet and push code.
@@ -42,6 +43,7 @@ const DEVICE: MobilePushDevice = {
   platform: "android",
   app_version: "2.3.4",
   listening: ["granite", "atlas"],
+  previews: true,
 };
 
 /** The fixture fleet's agent rows, as core's `agents.list` answers them. */
@@ -90,10 +92,20 @@ describe("POST /push/devices → push-devices.json", () => {
 });
 
 describe("the watcher's push → MobilePushData", () => {
-  test("every kind's data parses, with the documented dedupe", async () => {
+  test("every kind's data parses, with the documented dedupe, and previews follow the opt-in", async () => {
     const host = new FakeHost();
     const devices = pushDeviceStore(host);
     await devices.upsert({ ...DEVICE, listening: "all" }, MEMBER.login);
+    await devices.upsert(
+      {
+        ...DEVICE,
+        device_id: "seam-quiet",
+        token: "ExponentPushToken[FIXTURE-quiet]",
+        listening: "all",
+        previews: false,
+      },
+      MEMBER.login,
+    );
     const sent: ExpoPushMessage[] = [];
     const snapshots: unknown[] = [
       { sessions: [{ id: "l1", session_key: "s-turn", status: "working", message_count: 1 }] },
@@ -101,7 +113,15 @@ describe("the watcher's push → MobilePushData", () => {
         sessions: [
           { id: "l1", session_key: "s-turn", status: "idle", message_count: 2 },
           { id: "l2", session_key: "s-wait", status: "waiting", message_count: 4 },
-          { id: "l3", session_key: "s-cron", status: "idle", message_count: 2, preview: "digest" },
+          {
+            id: "l3",
+            session_key: "s-cron",
+            status: "idle",
+            message_count: 2,
+            preview: "digest",
+            // Epoch seconds, after the first poll (at 0): news, not a resumed session.
+            last_active: 2,
+          },
         ],
       },
     ];
@@ -172,14 +192,24 @@ describe("the watcher's push → MobilePushData", () => {
     await watcher.tick();
     clock += 3_000;
     await watcher.tick();
-    const data = sent.map((m) => MobilePushData.parse(m.data));
+    const loud = sent.filter((m) => m.to === DEVICE.token);
+    const data = loud.map((m) => MobilePushData.parse(m.data));
+    // The watcher started at 0 s, so each session's first event is number 1.
     expect(data.map((d) => [d.kind, d.dedupe])).toEqual([
-      ["turn.done", "atlas:s-turn:2:turn.done"],
-      ["needs_action", "atlas:s-wait:4:needs_action"],
-      ["message", "atlas:s-cron:2:message"],
+      ["turn.done", "atlas:s-turn:1:turn.done"],
+      ["needs_action", "atlas:s-wait:1:needs_action"],
+      ["message", "atlas:s-cron:1:message"],
     ]);
-    // The dedupe is built from the payload's own fields, which is what lets the
-    // phone recompute it from a socket event and drop the duplicate.
+    expect(loud.map((m) => m.body)).toEqual(["done", "granite is waiting on you", "done"]);
+    const quiet = sent.filter((m) => m.to === "ExponentPushToken[FIXTURE-quiet]");
+    expect(quiet.map((m) => m.body)).toEqual([
+      "granite replied",
+      "granite is waiting on you",
+      "New message from granite",
+    ]);
+    expect(quiet.map((m) => m.data)).toEqual(loud.map((m) => m.data));
+    // The dedupe names the payload's own instance, session and kind; the phone
+    // treats the whole string as opaque and drops a key it has already seen.
     for (const d of data) {
       expect(d.dedupe.startsWith(`${d.instance}:${d.session}:`)).toBe(true);
       expect(d.dedupe.endsWith(`:${d.kind}`)).toBe(true);

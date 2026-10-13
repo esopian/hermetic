@@ -133,7 +133,8 @@ export const EXPO_PUSH_TOKEN_RE = /^Expo(nent)?PushToken\[[A-Za-z0-9_-]+\]$/;
 
 /**
  * One phone's registration with one box: which bots on that box it wants
- * pushes for (`"all"`, or a list of bot names), and where to send them.
+ * pushes for (`"all"`, or a list of bot names), where to send them, and
+ * whether their bodies may quote the conversation.
  */
 export const MobilePushDevice = z
   .object({
@@ -147,6 +148,12 @@ export const MobilePushDevice = z
     platform: MobilePushPlatform,
     app_version: z.string().min(1).max(64),
     listening: z.union([z.literal("all"), z.array(BotName).max(64)]),
+    /**
+     * Opt-in to message previews (§9.4). `false` gets content-free bodies
+     * ("<bot> replied"); `true` gets a redacted excerpt of the reply. Required,
+     * so a phone states its choice on every registration.
+     */
+    previews: z.boolean(),
   })
   .strict();
 export type MobilePushDevice = z.infer<typeof MobilePushDevice>;
@@ -178,9 +185,17 @@ export const MobilePushKind = z.enum(MOBILE_PUSH_KINDS);
 export type MobilePushKind = z.infer<typeof MobilePushKind>;
 
 /**
- * The `data` of an Expo push from a box's gateway watcher. `dedupe` is
- * `<instance>:<session>:<message_count>:<kind>`, so the phone drops a push for
- * an event its own live socket already showed.
+ * The `data` of an Expo push from a box's gateway watcher. `session` is the
+ * stored session id, sent whatever the device's `previews` choice because the
+ * phone needs it to open the conversation.
+ *
+ * `dedupe` is `<instance>:<session>:<n>:<kind>`, where `n` is the watcher's own
+ * event counter for that session: bumped on every transition it pushes for
+ * (a turn settling, the session going `waiting`), monotonic for the life of
+ * the hermeticd process and seeded from its start time, so two events never
+ * share a key — not two `waiting` spells in one turn, not a turn after a
+ * compaction, not an event after a restart. The phone treats it as opaque: it
+ * drops a push whose key it has already seen.
  */
 export const MobilePushData = z.object({
   fleet_id: FleetIdSchema,

@@ -21,12 +21,17 @@ describe("TailscaleBanner", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
-  test("unreachable: on the tailnet, no box answers, with a retry", async () => {
+  test("unreachable: on the tailnet, no box answers, with a retry and Open Tailscale", async () => {
     const onRetry = jest.fn();
-    await renderUi(<TailscaleBanner status="unreachable" onRetry={onRetry} />);
+    const onOpenTailscale = jest.fn();
+    await renderUi(
+      <TailscaleBanner status="unreachable" onRetry={onRetry} onOpenTailscale={onOpenTailscale} />,
+    );
     expect(screen.getByText("On the tailnet, but no box answers")).toBeTruthy();
     await fireEvent.press(screen.getByLabelText("Retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
+    await fireEvent.press(screen.getByLabelText("Open Tailscale"));
+    expect(onOpenTailscale).toHaveBeenCalledTimes(1);
   });
 
   test("ok, unknown and not-yet-probed draw nothing", async () => {

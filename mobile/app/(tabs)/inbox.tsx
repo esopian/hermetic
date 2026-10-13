@@ -10,13 +10,14 @@ import { router } from "expo-router";
 import { useCallback, useMemo } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import {
+  groupCondition,
   groupEntries,
   type NotificationGroup,
   rowDestination,
   unackedIds,
 } from "../../src/client/inbox-logic.ts";
 import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
-import { useInbox } from "../../src/fleet/hooks.ts";
+import { useInbox, useRoster } from "../../src/fleet/hooks.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
 import type { InboxEntry } from "../../src/inbox/store.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
@@ -31,8 +32,20 @@ export default function Inbox() {
   const now = useNow();
   const entries = inbox?.entries ?? [];
   const groups = useMemo(() => groupEntries(entries), [entries]);
+  const roster = useRoster().state;
+  // Bot display titles, so a card says "Marshall" where the entry says "scribe · atlas".
+  const titles = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const swarm of roster?.swarms ?? [])
+      for (const bot of swarm.bots) if (bot.title) map.set(`${swarm.instance} ${bot.name}`, bot.title);
+    return map;
+  }, [roster]);
+  const extra = useMemo(() => ({ now, titles }), [now, titles]);
   const unread = inbox?.unread ?? 0;
-  const needs = inbox?.needsAction ?? 0;
+  // Cards still waiting on the operator: an unread needs-you entry in the run.
+  // Read ones (opened, swiped, or answered from the conversation) do not count,
+  // and a folded run counts once, as the gold markers below it do.
+  const needs = useMemo(() => groups.filter((g) => groupCondition(g).needsUnread).length, [groups]);
 
   const onOpen = useCallback(
     (group: NotificationGroup<InboxEntry>) => {
@@ -108,8 +121,16 @@ export default function Inbox() {
       <FlashList
         data={groups}
         keyExtractor={(g) => g.key}
-        extraData={now}
-        renderItem={({ item }) => <InboxRow group={item} now={now} onOpen={onOpen} onAck={onAck} />}
+        extraData={extra}
+        renderItem={({ item }) => (
+          <InboxRow
+            group={item}
+            label={titles.get(`${item.latest.instance} ${item.latest.bot}`) ?? null}
+            now={now}
+            onOpen={onOpen}
+            onAck={onAck}
+          />
+        )}
         ListEmptyComponent={
           <View style={{ padding: t.space.xl, gap: t.space.sm, alignItems: "center", marginTop: 60 }}>
             <Text variant="title">Nothing waiting.</Text>

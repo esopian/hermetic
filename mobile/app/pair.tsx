@@ -7,7 +7,11 @@
  *
  * Nothing pairs on its own. Every way in lands on a confirmation naming the
  * fleet, the tailnet and the agent count, and only a link `readPairingLink`
- * accepts gets that far. Replacing an existing pairing asks once more.
+ * accepts gets that far. Replacing an existing pairing asks once more, and a
+ * code for a different tailnet says so (`tailnetChange`).
+ *
+ * After pairing the stack is dismissed before the tabs replace it, so a deep
+ * link that opened Pair over another screen leaves nothing to swipe back to.
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
@@ -17,7 +21,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetState } from "../src/fleet/hooks.ts";
 import { type PairedLink, type PairErrorCopy, readPairingLink } from "../src/fleet/pairing.ts";
-import { PairConfirm } from "../src/pair/PairConfirm.tsx";
+import { PairConfirm, tailnetChange } from "../src/pair/PairConfirm.tsx";
 import { PairForm } from "../src/pair/PairForm.tsx";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
@@ -45,6 +49,9 @@ export default function Pair() {
         await pair(link);
         haptic.success();
         setPending(null);
+        // Drop whatever is under Pair (a deep link pushes it over the tabs or a
+        // conversation), so swipe-back cannot return to it.
+        if (router.canDismiss()) router.dismissAll();
         router.replace("/(tabs)");
       } catch (e) {
         haptic.error();
@@ -81,14 +88,22 @@ export default function Pair() {
     // Replacing a working pairing is the one step that loses something: ask again.
     haptic.warning();
     const same = current.payload.fleet_id === pending.payload.fleet_id;
+    const change = tailnetChange(pending, current.payload.tailnet);
+    const body = same
+      ? `This phone is paired with ${current.label} already. Pairing again refreshes its agent list.`
+      : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet and its inbox.`;
     Alert.alert(
-      "Replace the current pairing?",
-      same
-        ? `This phone is paired with ${current.label} already. Pairing again refreshes its agent list.`
-        : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet and its inbox.`,
+      change ? "Switch tailnet?" : "Replace the current pairing?",
+      change
+        ? `${body} The Tailscale app must be signed in to ${change.to} for this phone to reach it.`
+        : body,
       [
         { text: "Keep current", style: "cancel" },
-        { text: "Replace", style: "destructive", onPress: () => void submit(pending) },
+        {
+          text: change ? "Switch tailnet" : "Replace",
+          style: "destructive",
+          onPress: () => void submit(pending),
+        },
       ],
     );
   }, [pending, status, current, submit]);
@@ -204,6 +219,7 @@ export default function Pair() {
           <PairConfirm
             link={pending}
             replacing={status === "paired"}
+            currentTailnet={status === "paired" ? (current?.payload.tailnet ?? null) : null}
             busy={busy}
             onConfirm={confirm}
             onCancel={() => {

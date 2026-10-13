@@ -50,11 +50,23 @@ const RESULTS: Record<string, unknown> = {
 interface Gateway {
   url: string;
   methods: string[];
+  /**
+   * While set, a prompt gets only the turn's opening frames (no completion):
+   * a turn still running on the box. `push` sends it the next frame.
+   */
+  hold: boolean;
+  push(frame: string): void;
   stop(): void;
 }
 
+/** The recorded turn up to and including its first reply delta. */
+const OPENING = RECORDED_TURN.slice(0, 6);
+const NEXT_FRAME = RECORDED_TURN[6] as string;
+
 function startGateway(): Gateway {
   const methods: string[] = [];
+  const sockets = new Set<{ send(data: string): unknown }>();
+  const state = { hold: false };
   const server = Bun.serve<{ token: string }>({
     port: 0,
     hostname: "127.0.0.1",
@@ -81,18 +93,38 @@ function startGateway(): Gateway {
       return new Response("not found", { status: 404 });
     },
     websocket: {
+      open(ws) {
+        sockets.add(ws);
+      },
+      close(ws) {
+        sockets.delete(ws);
+      },
       message(ws, raw) {
         for (const line of String(raw).split("\n")) {
           if (!line.trim()) continue;
           const doc = JSON.parse(line) as { id: number; method: string };
           methods.push(doc.method);
           ws.send(JSON.stringify({ jsonrpc: "2.0", id: doc.id, result: RESULTS[doc.method] ?? {} }));
-          if (doc.method === "prompt.submit") for (const frame of RECORDED_TURN) ws.send(frame);
+          if (doc.method === "prompt.submit")
+            for (const frame of state.hold ? OPENING : RECORDED_TURN) ws.send(frame);
         }
       },
     },
   });
-  return { url: `http://127.0.0.1:${server.port}/`, methods, stop: () => server.stop(true) };
+  return {
+    url: `http://127.0.0.1:${server.port}/`,
+    methods,
+    get hold() {
+      return state.hold;
+    },
+    set hold(on: boolean) {
+      state.hold = on;
+    },
+    push: (frame) => {
+      for (const ws of sockets) ws.send(frame);
+    },
+    stop: () => server.stop(true),
+  };
 }
 
 let gateway: Gateway;
@@ -193,6 +225,48 @@ describe("phone gateway ↔ scripted Hermes gateway", () => {
       .trim();
     expect(said.length).toBeGreaterThan(0);
     store.reset();
+  });
+
+  test("a forgotten turn is let go without session.interrupt; abortTurn still interrupts", async () => {
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i++) await Bun.sleep(5);
+      expect(ok()).toBe(true);
+    };
+    const interrupts = () => gateway.methods.filter((m) => m === "session.interrupt").length;
+    gateway.hold = true;
+    try {
+      const p = phone();
+      const before = interrupts();
+      const { turn_id } = await p.transport.startTurn({
+        instance: "atlas",
+        bot: BOT,
+        session: STORED,
+        message: "ping",
+      });
+      await until(() => p.frames.some((f) => f.type === "delta"));
+      p.transport.forgetTurn?.(turn_id);
+      const delivered = p.frames.length;
+      // The box keeps talking: the pump leaves the stream at this frame and closes it.
+      gateway.push(NEXT_FRAME);
+      await Bun.sleep(100);
+      expect(interrupts()).toBe(before);
+      expect(p.frames).toHaveLength(delivered);
+
+      const q = phone();
+      const second = await q.transport.startTurn({
+        instance: "atlas",
+        bot: BOT,
+        session: STORED,
+        message: "ping",
+      });
+      await until(() => q.frames.some((f) => f.type === "delta"));
+      await q.transport.abortTurn(second.turn_id);
+      await until(() => interrupts() > before);
+      q.transport.dispose();
+      gateway.push(NEXT_FRAME);
+    } finally {
+      gateway.hold = false;
+    }
   });
 
   test("history composes conversation and the durable route over HTTP", async () => {

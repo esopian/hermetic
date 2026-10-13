@@ -11,7 +11,9 @@
  *   keeps the snapshot and sets `stale`.
  * - `chat` — `ConversationStore`: one conversation's transcript, live reply,
  *   queue, requests and observation. `view/subscribe/open/leave/reload/send/
- *   steer/stop/enqueue/unqueue/sendMessage/sendNow/respond/release`.
+ *   steer/stop/enqueue/unqueue/sendMessage/sendNow/respond/release`, and
+ *   `reopen` (restart one conversation's observation, e.g. on foreground).
+ *   `suspend`/`resume`/`endObservations` are the client's (phase, listening).
  * - `roster` — `RosterStore`: the Bots list over every listened box's swarm.
  * - `inbox` — `InboxStore` (`src/inbox/store.ts`): the phone's own last 200
  *   events (pushes and socket-delivered), unread counts and the badge.
@@ -19,9 +21,12 @@
  *   screens call beside the store: `open` (a new thread), `compact`,
  *   `archive`, `steerSubagent`, `abortSubagent`.
  * - `tailscale` — `probe()` / `last()`: the heuristic Tailscale status
- *   (`src/gateway/tailscale.ts`).
- * - `setPhase` / `setWatched` — what the alert decision reads.
- * - `dispose()` — stop every turn pump and observation and drop the stores' state.
+ *   (`src/gateway/tailscale.ts`), probing ready boxes first (`probeHosts`).
+ * - `setPhase` / `setWatched` — what the alert decision reads. `setPhase`
+ *   also detaches turns and closes observations on `"background"` and brings
+ *   them back on `"active"` (`HermeticClient` in `client.ts` says how).
+ * - `dispose()` — detach every turn pump (never interrupting a turn), stop every
+ *   observation, and drop the stores' state.
  *
  * Errors are core's `HermeticError`; `errors.ts` maps a code to the copy a
  * screen shows (`errorCopy`), `chat-logic.ts` `failureCopy` the copy of a

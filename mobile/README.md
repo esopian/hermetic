@@ -1,6 +1,6 @@
 # Hermetic for iPhone
 
-The phone app: an Expo (React Native, iOS-first) companion for a Hermetic fleet. It talks to the
+The phone app: an Expo (React Native, iOS only) companion for a Hermetic fleet. It talks to the
 fleet **directly over the tailnet**, with no laptop in the path:
 
 - chat goes to the Hermes gateway on each box (HTTPS and WSS on 443), through the same adapter the
@@ -34,8 +34,12 @@ bun install
 EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios     # expo run:ios — builds a dev client, opens the simulator
 ```
 
-In fixture mode the Pair screen has a "Use fixture fleet" button (the `main` fleet, `fxtr0001`, with
-the desktop fixture's eleven agents), chat runs on core's canned `fixtureChatClient`, and Settings →
+Fixture mode needs both a development build (`__DEV__`) and the flag set to exactly `1`
+(`fixtureSelected` in `src/fleet/deps.ts`); a release build ignores the flag. In fixture mode the
+Pair screen has a "Use fixture fleet" button (the `main` fleet, `fxtr0001`, with
+the desktop fixture's eleven agents), chat runs on core's fixture chat stack (`createFixtureChatStack`,
+the same canned `fixtureChatClient` the desktop's fixture mode builds, with its activity store), and
+Settings →
 Tailscale can switch what the probe sees between `ok`, `off` and `unreachable`. The flag is inlined
 when Metro transforms the code, so after switching it, start Metro with a clean cache
 (`bunx expo start --clear`, or `expo export --clear`). A release build does not carry the fixture at
@@ -49,20 +53,48 @@ iOS keychain (`expo-secure-store`, this-device-only) as `hermetic.fleet.v2`. Pai
 it, and Settings → Sign out forgets it. To cut a phone off, remove it from the tailnet.
 
 A push registration on a box belongs to the tailnet login that made it: another member cannot update
-or delete it (hermeticd answers 403). It lapses 30 days after the phone last renewed it, and the
-phone renews on each foreground, so a phone removed from the tailnet stops receiving pushes within
-30 days even though its registration was never deleted.
+or delete it. If a box answers 403 because this phone's `device_id` is held there by another login
+(a reinstall that kept the id, say), the phone mints a new id, keeps it, registers once more, and
+tells the boxes that took the old id to forget it.
+
+A registration lapses **72 hours** after the phone last renewed it. The phone renews on every
+foreground, and the background task (below) renews it when the last full renewal is 12 hours old,
+so a phone left in the background keeps receiving pushes. A phone removed from the tailnet can no
+longer renew, and stops receiving pushes within 72 hours even though its registration was never
+deleted.
 
 The app uses native modules (camera, notifications, secure store, keyboard controller, webview), so
 it needs a development build (`bun run ios`), not Expo Go.
+
+## Platforms
+
+iOS only. Android is out of scope: `app.config.ts` carries only the `android` block `expo prebuild`
+needs, and the Android cleartext policy (`usesCleartextTraffic` or a network security config for the
+plain-HTTP calls to hermeticd) is not configured or checked. An Android build is not a supported way
+to run the app.
 
 ## Fleet rollout
 
 A fleet that predates the phone needs three things before the app is fully live: `hermetic artifacts
 push` and `hermetic agent recreate <name>` (a new hermeticd serves `/fleet` and `/push/devices` and
 runs the push watcher), and `hermetic foundation update` (foundation 16 grants the agent role
-`dynamodb:Scan` on the agents table). Until `/fleet` works the phone keeps its QR snapshot and
-refreshes per-box status from `/healthz`.
+`dynamodb:Scan` on the agents table). Until `/fleet` works (it answers `FLEET_LIST_UNAVAILABLE`, or
+no box answers it) the phone keeps its QR snapshot and fills each agent's status from that box's own
+`/healthz`: `ready` where hermeticd answered, `unreachable` where it did not. The listening default
+narrows on those answers, and Settings says "Fleet view: from boxes (foundation update pending)".
+
+## The off-tunnel gate
+
+The Hermes gateway and noVNC are HTTPS through Tailscale Serve, but hermeticd on port 7434 is plain
+HTTP inside the tunnel, and iOS sends that cleartext to any `*.ts.net` name (the ATS exception in
+`app.config.ts`). So every 7434 call — `/fleet`, `/healthz`, `/push/devices` — first passes a gate
+(`src/gateway/hermeticd.ts`): it goes out only if an HTTPS request to the same host
+(`https://<host>/api/health`) succeeded within the last 60 seconds, and otherwise the gate probes
+once. A host whose HTTPS name does not answer is never sent cleartext: the call fails with
+`TUNNEL_UNVERIFIED` ("The box could not be confirmed on the tailnet"), which the screens treat like
+an unreachable box. The Tailscale probe records its successes in the same table, so the app (and the
+background task) probes before it refreshes the fleet. In practice `TUNNEL_UNVERIFIED` means the
+Tailscale app is off, signed in to another tailnet, or the box is down.
 
 ## Push notifications and the EAS project id
 
@@ -77,9 +109,27 @@ EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios     # or EAS_PROJECT_
 alerts locally while it holds its sockets (and for ~25 s after backgrounding); Settings says push is
 unavailable. With one, Settings → Notifications → "Push from the agents" registers the Expo push
 token with each box you listen to (and unregisters it from a box you stop listening to), and the box
-pushes turn-finished, turn-error, needs-you and new-message events. A push and a socket-delivered
-event for the same thing share a `dedupe` key, so you are alerted once. Tapping a needs-you push
-opens the conversation; there is no inline approve or deny.
+pushes turn-finished, turn-error, needs-you and new-message events. While the app is away from the
+screen it draws no local notification of its own for a box that holds its registration: that box's
+push is the one alert. A push and a socket-delivered event for the same thing share a `dedupe` key,
+so you are alerted once. A push whose `data` names another fleet, or an agent the pairing does not
+name, is dropped before it reaches the inbox. Tapping a needs-you push opens the conversation; there
+is no inline approve or deny.
+
+**Previews are opt-in.** Every registration states `previews`, the Settings "Show message previews"
+switch, which is off until you turn it on; changing it re-registers with every listened box. Off, a
+push says only "<bot> replied" or "needs you". On, the box puts a redacted excerpt of the reply in
+the push body, and that text travels through Apple's and Expo's push services. The same switch decides
+whether this phone's own alerts quote the conversation.
+
+**Quiet hours** silence the alerts this phone raises from its own connections; the inbox still
+fills. They do not reach the boxes: pushes still arrive during quiet hours, so use an iOS Focus (or
+turn push off) to silence those too.
+
+**Background refresh.** Every wake (iOS decides when, at most every 15 minutes) probes Tailscale,
+refreshes `/fleet` behind the gate, renews the push registration when it is due, and sets the badge
+from the phone's inbox. It reads no conversation: the boxes' pushes cover what happened while the
+app was away.
 
 ## Tailscale status
 
@@ -95,6 +145,19 @@ Agent list with status, per-agent detail (status, version, host, health), the li
 (phone-local), the agent browser (noVNC), Tailscale status, push on or off, and sign out. Fleet
 switching, volumes, runs, create and destroy stay on the laptop. The phone's inbox is its own: the
 last 200 pushes and socket-delivered events, kept on the device (`src/inbox/store.ts`).
+
+## Running it as an agent
+
+Coding agents drive Metro and the simulator without anything interactive:
+
+- Never open React Native DevTools, and never press `j` (or any key) in Metro. DevTools attaches a
+  debugger to the app's JS runtime and takes over the session.
+- Start Metro non-interactively: `CI=1 npx expo start` (or `CI=1 bunx expo start --clear` after
+  switching the fixture flag). For a native build without a second bundler, run Metro yourself and
+  build with `bunx expo run:ios --no-bundler`.
+- Read logs from Metro's stdout, or from the simulator:
+  `xcrun simctl spawn booted log stream --predicate 'process == "Hermetic"'`.
+- Bundle checks need no simulator: `CI=1 npx expo export --platform ios --output-dir /tmp/mobile-export`.
 
 ## Tests and checks
 

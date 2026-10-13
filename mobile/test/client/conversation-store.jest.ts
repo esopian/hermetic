@@ -42,6 +42,7 @@ function setup() {
     end: (e: { code: string; message: string } | null) => void;
   } | null = null;
   let historyFails = 0;
+  let opens = 0;
   let historyFailCode = "CHAT_UNREACHABLE";
   const transport: ConversationTransport = {
     history: async (input) => {
@@ -86,6 +87,7 @@ function setup() {
     },
     observe: (_target, handlers) => {
       observer = handlers;
+      opens += 1;
       return () => {
         observer = null;
       };
@@ -119,6 +121,8 @@ function setup() {
       historyFailCode = code;
     },
     observe: () => observer!,
+    observing: () => observer !== null,
+    opens: () => opens,
     method: (m: string) => calls.filter((c) => c.method === m),
   };
 }
@@ -293,17 +297,21 @@ describe("sending and streaming", () => {
     expect(s.view().reconnecting).toBe(false);
   });
 
-  test("a turn idle for 10 minutes is dropped, unless a request waits on the operator", async () => {
+  test("a quiet turn is never dropped by a clock: no forget, no interrupt, still running", async () => {
     const s = setup();
     await started(s);
-    s.store.onTurnFrame("T1", 1, block(0, approval()));
-    s.timers.advance(11 * 60_000);
+    s.store.onTurnFrame("T1", 1, block(0, tool()));
+    s.timers.advance(60 * 60_000);
+    await flush();
     expect(s.view().sending).toBe(true);
-    s.store.release(T, "r1");
-    s.timers.advance(10 * 60_000);
+    expect(s.view().dropped).toBe(false);
+    expect(s.method("forget")).toEqual([]);
+    expect(s.method("turn.abort")).toEqual([]);
+    expect(s.timers.pending()).toBe(0);
+    s.store.onTurnFrame("T1", 2, done(1));
+    s.store.onTurnEnd("T1", "done");
     await flush();
     expect(s.view().sending).toBe(false);
-    expect(s.view().dropped).toBe(true);
   });
 });
 
@@ -445,6 +453,16 @@ describe("requests", () => {
     // The box replays the approval: it stays released.
     s.store.onTurnFrame("T1", 2, block(1, approval()));
     expect(s.view().openRequests).toEqual([]);
+  });
+
+  test("respond with no resolved session is refused here, and nothing is sent", async () => {
+    const s = setup();
+    expect(s.store.send(T, "hello")).toBe(true);
+    s.store.onTurnFrame("T1", 1, block(0, approval()));
+    await expect(
+      s.store.respond(T, { request_id: "r1", kind: "approval", choice: "once" }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(s.method("chat.respond")).toEqual([]);
   });
 });
 
@@ -597,6 +615,50 @@ describe("observation ends", () => {
     s.store.open(T);
     expect(s.observe()).not.toBe(first);
     expect(s.view().observe).toBe("live");
+  });
+
+  test("open is idempotent while one runs; reopen restarts it whatever its state", async () => {
+    const s = setup();
+    s.store.open(T);
+    s.store.open(T);
+    expect(s.opens()).toBe(1);
+    s.store.reopen(T);
+    expect(s.opens()).toBe(2);
+    expect(s.view().observe).toBe("live");
+    s.observe().end({ code: "CHAT_UNREACHABLE", message: "gone" });
+    expect(s.view().observe).toBe("failed");
+    s.store.reopen(T);
+    expect(s.opens()).toBe(3);
+    expect(s.view()).toMatchObject({ observe: "live", observeError: null });
+  });
+
+  test("suspend closes every observation; resume re-opens only what is still on screen", async () => {
+    const s = setup();
+    const other: ConversationTarget = { instance: "atlas", bot: "other", session: null };
+    s.store.open(T);
+    s.store.open(other);
+    s.store.leave(other);
+    s.store.suspend();
+    expect(s.observing()).toBe(false);
+    expect(s.view().observe).toBe("off");
+    const before = s.opens();
+    s.store.resume();
+    expect(s.opens()).toBe(before + 1);
+    expect(s.view().observe).toBe("live");
+    expect(s.store.view(other).observe).toBe("off");
+  });
+
+  test("endObservations ends without failing, says why, and resume brings it back", async () => {
+    const s = setup();
+    s.store.open(T);
+    s.store.endObservations((t) => t.instance === "atlas", {
+      code: "UNLISTENED",
+      message: "not listening",
+    });
+    expect(s.observing()).toBe(false);
+    expect(s.view()).toMatchObject({ observe: "off", observeError: { code: "UNLISTENED" } });
+    s.store.resume((t) => t.instance === "atlas");
+    expect(s.view()).toMatchObject({ observe: "live", observeError: null });
   });
 });
 

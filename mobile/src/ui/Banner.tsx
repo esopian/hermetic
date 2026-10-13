@@ -100,8 +100,9 @@ export async function openTailscale(
 /**
  * The Bots screen's Tailscale band, for the two probe answers worth a word
  * (`src/gateway/tailscale.ts`): `off` — no listened box's name resolved — and
- * `unreachable` — names resolve but no box answered. The probe is a
- * heuristic, and the copy says "looks".
+ * `unreachable` — names resolve but no box answered. Both offer "Open
+ * Tailscale"; `unreachable` also keeps "Retry". The probe is a heuristic, and
+ * the copy says "looks".
  */
 export function TailscaleBanner({
   status,
@@ -144,13 +145,14 @@ export function TailscaleBanner({
             : "The boxes you listen to did not answer. They may be stopped, or still starting."}
         </Text>
       </View>
-      <Button
-        label={off ? "Open Tailscale" : "Retry"}
-        variant="secondary"
-        compact
-        busy={busy && !off}
-        onPress={off ? onOpenTailscale : onRetry}
-      />
+      {/* Unreachable keeps Retry (a box may still be starting) and also offers the
+          Tailscale app, since a stalled tunnel looks the same from here. */}
+      <View style={{ gap: t.space.xs }}>
+        {off ? null : (
+          <Button label="Retry" variant="secondary" compact busy={busy} onPress={onRetry} />
+        )}
+        <Button label="Open Tailscale" variant="secondary" compact onPress={onOpenTailscale} />
+      </View>
     </View>
   );
 }

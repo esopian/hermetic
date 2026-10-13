@@ -40,6 +40,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       // tailnet, since the tailnet's own label differs per operator. IP
       // literals (100.64.0.0/10, fd7a:115c:a1e0::/48) are outside ATS anyway.
       // Everything else keeps full ATS.
+      //
+      // The mitigation for keeping this exception is the off-tunnel gate in
+      // `src/gateway/hermeticd.ts`: every 7434 call throws `TUNNEL_UNVERIFIED`
+      // unless an HTTPS probe of that same host (`/api/health` through
+      // Tailscale Serve, whose certificate only a box on the tailnet holds)
+      // succeeded within the last 60 s. So the phone never sends cleartext to
+      // a `ts.net` name it has not just proven is reached through the tunnel.
+      // Change the two together.
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: false,
         NSExceptionDomains: {
@@ -53,6 +61,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         "Hermetic connects to your fleet's agents over your Tailscale network.",
     },
   },
+  // Android is out of scope: the app is iOS only. This block is what
+  // `expo prebuild` needs to generate a project, nothing more. The Android
+  // cleartext policy (`usesCleartextTraffic` or a network security config for
+  // the 7434 calls) is not configured or checked, so an Android build is not a
+  // supported way to run the app (README.md, "Platforms").
   android: {
     package: "com.hermetic.mobile",
     adaptiveIcon: {

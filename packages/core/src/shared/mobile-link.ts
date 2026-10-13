@@ -16,9 +16,11 @@
  * `host` follows a name only where the box's real MagicDNS name differs from
  * the one the phone would derive (`cloudName(fleet_id, name).<tailnet>`). The
  * first `MOBILE_LINK_MAX_AGENTS` agents may carry one; past that the link
- * carries names only, and past `MOBILE_LINK_MAX_LENGTH` characters it drops
- * agents from the end. Either way the phone fills the rest from hermeticd's
- * `GET /fleet`.
+ * carries names only. Past `MOBILE_LINK_MAX_LENGTH` characters it first drops
+ * host overrides, from the end, and only then whole agents, from the end: a
+ * name without its host still lets the phone find the box (the derived name
+ * may be stale, `GET /fleet` corrects it), a name left out does not. Either
+ * way the phone fills the rest from hermeticd's `GET /fleet`.
  *
  * Pure values only — no Zod, no `node:*`, no `URL`/`URLSearchParams` (React
  * Native's are incomplete) — because the phone imports this parser through
@@ -36,7 +38,8 @@ export const MOBILE_LINK_VERSION = 2;
 export const MOBILE_LINK_MAX_AGENTS = 60;
 /**
  * The longest link the encoder emits: under a version-40-L QR's 2,953 bytes,
- * so it always draws. Agents past what fits are dropped from the end.
+ * so it always draws. Past it, host overrides go first, then agents, each from
+ * the end.
  */
 export const MOBILE_LINK_MAX_LENGTH = 2_900;
 /** The parser refuses any input longer than this before looking at it. */
@@ -91,11 +94,7 @@ function payloadProblem(p: MobileLinkPayload): string | null {
 }
 
 function render(p: MobileLinkPayload, agents: readonly MobileLinkAgentEntry[]): string {
-  const list = agents
-    .map((a, i) =>
-      a.host !== undefined && i < MOBILE_LINK_MAX_AGENTS ? `${a.name}:${a.host}` : a.name,
-    )
-    .join(",");
+  const list = agents.map((a) => (a.host !== undefined ? `${a.name}:${a.host}` : a.name)).join(",");
   // Every value is drawn from [A-Za-z0-9.-] (plus `:` and `,` in `agents`,
   // both legal in a query), so nothing needs percent-encoding.
   return (
@@ -112,9 +111,10 @@ function render(p: MobileLinkPayload, agents: readonly MobileLinkAgentEntry[]): 
 /**
  * The link for `payload`. Throws `VALIDATION` on a payload the parser would
  * refuse, so a link this returns always parses. Hosts past
- * `MOBILE_LINK_MAX_AGENTS` are omitted, and agents are dropped from the end
- * until the link is at most `MOBILE_LINK_MAX_LENGTH` characters; parse the
- * result to learn how many it kept.
+ * `MOBILE_LINK_MAX_AGENTS` are omitted. While the link is longer than
+ * `MOBILE_LINK_MAX_LENGTH` characters, host overrides are dropped from the
+ * end, and only when none is left are agents dropped from the end; parse the
+ * result to learn what it kept.
  */
 export function encodeMobileLink(payload: MobileLinkPayload): string {
   const problem = payloadProblem(payload);
@@ -123,11 +123,22 @@ export function encodeMobileLink(payload: MobileLinkPayload): string {
       field: problem,
     });
   }
-  let count = payload.agents.length;
-  let link = render(payload, payload.agents);
+  const agents: MobileLinkAgentEntry[] = payload.agents.map((a, i) =>
+    a.host !== undefined && i < MOBILE_LINK_MAX_AGENTS
+      ? { name: a.name, host: a.host }
+      : { name: a.name },
+  );
+  let link = render(payload, agents);
+  for (let i = agents.length - 1; i >= 0 && link.length > MOBILE_LINK_MAX_LENGTH; i--) {
+    const agent = agents[i];
+    if (agent?.host === undefined) continue;
+    agents[i] = { name: agent.name };
+    link = render(payload, agents);
+  }
+  let count = agents.length;
   while (link.length > MOBILE_LINK_MAX_LENGTH && count > 0) {
     count--;
-    link = render(payload, payload.agents.slice(0, count));
+    link = render(payload, agents.slice(0, count));
   }
   return link;
 }

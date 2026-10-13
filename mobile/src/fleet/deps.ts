@@ -1,15 +1,16 @@
 /**
  * The app's `FleetDeps`: the real platform (keychain, document files, the
  * global `fetch` and `WebSocket`, expo-notifications, background refresh,
- * React Native's `AppState`), or — only when the build was made with
+ * React Native's `AppState`), or — only in a development build made with
  * `EXPO_PUBLIC_HERMETIC_FIXTURE=1` — the fixture kit's doubles in their place.
  *
- * Any other value builds none of the fixture: the chat adapter is the live
- * one, `fetch` is the network's, and the pairing lives under the real keys.
- * And a release build does not even carry it: the fixture module is required
- * only behind the inlined flag, which Metro folds to `false` before it collects
- * dependencies, so neither `src/fixture/` nor core's canned chat client is in
- * the bundle.
+ * Both halves are required: `__DEV__` and the flag. Any other flag value, or
+ * any release build (`__DEV__` false) even with the flag set, builds none of
+ * the fixture: the chat adapter is the live one, `fetch` is the network's, and
+ * the pairing lives under the real keys. A release build made without the flag
+ * does not even carry it: the fixture module is required only behind the
+ * inlined flag, which Metro folds to `false` before it collects dependencies,
+ * so neither `src/fixture/` nor core's canned chat client is in the bundle.
  */
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
@@ -31,22 +32,33 @@ const appState: AppStateLike = {
 
 type FixtureModule = typeof import("../fixture/index.ts");
 
-/** The fixture module, loaded only in a fixture build (see above). */
+/**
+ * The fixture module, loaded only in a fixture development build (see above).
+ * The inlined flag comes first so a build without it folds the whole test to
+ * `false` and the `require` drops out of the bundle.
+ */
 const fixtureModule: FixtureModule | null =
-  process.env.EXPO_PUBLIC_HERMETIC_FIXTURE === "1"
+  process.env.EXPO_PUBLIC_HERMETIC_FIXTURE === "1" && __DEV__
     ? (require("../fixture/index.ts") as FixtureModule)
     : null;
 
+/** Whether this build may run the fixture: a development build, and the flag exactly `"1"`. */
+export function fixtureSelected(flag: string | undefined, dev: boolean): boolean {
+  return dev && flag === "1";
+}
+
 /**
  * Build the app's deps. `flag` is `process.env.EXPO_PUBLIC_HERMETIC_FIXTURE`
- * (Expo inlines it at build time); anything but `"1"` is the real platform.
- * `load` is a test seam: the fixture module, when the build carries it.
+ * (Expo inlines it at build time) and `dev` is `__DEV__`; only both together
+ * select the fixture (`fixtureSelected`). `load` is a test seam: the fixture
+ * module, when the build carries it.
  */
 export function appFleetDeps(
   flag: string | undefined = process.env.EXPO_PUBLIC_HERMETIC_FIXTURE,
   load: () => FixtureModule | null = () => fixtureModule,
+  dev: boolean = __DEV__,
 ): FleetDeps {
-  const kit = flag === "1" ? (load()?.fixtureKit(flag) ?? null) : null;
+  const kit = fixtureSelected(flag, dev) ? (load()?.fixtureKit(flag) ?? null) : null;
   const appVersion = Constants.expoConfig?.version ?? "0.0.0";
   const platform = Platform.OS === "android" ? "android" : "ios";
   const operatorTailnet = process.env.EXPO_PUBLIC_HERMETIC_TAILNET || null;

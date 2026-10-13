@@ -11,10 +11,19 @@
  * | Transition                                         | Push                       |
  * |----------------------------------------------------|----------------------------|
  * | → `idle` with `message_count` grown, tail is a bot | `turn.done`, reply preview |
- * | the same, tail row carries a failure               | `turn.error`, failure text |
+ * | `working` → `idle` with `message_count` dropped    | the same (a compaction)    |
+ * | either, tail row carries a failure                 | `turn.error`, failure text |
  * | any → `waiting`                                    | `needs_action`             |
- * | a session not seen before, first seen `idle`, > 0  | `message` (routine/channel)|
+ * | a session not seen before, first seen `idle`, > 0, | `message` (routine/channel)|
+ * |   active since the previous poll                   |                            |
  *
+ * Each of those transitions bumps the session's event counter, the `<n>` of
+ * the push's dedupe key (`MobilePushData`): two `waiting` spells in one turn
+ * are two events, and so are two turns either side of a compaction.
+ *
+ * Previews are read from the tail (the last assistant row), never from the
+ * list's own `preview`, which is the session's opening line. A device gets
+ * them only if it opted in (`notify.ts`).
  * The tail is read with the chat adapter's `history`, which needs the bot (the
  * Hermes profile) the session belongs to; `swarm` + `sessions` map session →
  * bot every `SESSION_MAP_REFRESH_MS`, and once more on demand when a session
@@ -22,9 +31,17 @@
  * that is pushed under bot `unknown`, as a `message` only, once it goes idle —
  * there is no profile to read its tail from or to open it under.
  *
- * The first answer after start, and after any outage, is a *baseline*: it is
- * recorded and pushes nothing, so a daemon restart does not replay every live
- * session to every phone.
+ * The first answer after start, and the first after the Hermes unit was down,
+ * is a *baseline*: it is recorded and pushes nothing, so a daemon restart does
+ * not replay every live session to every phone. A poll that merely fails (a
+ * throw, a timeout, an answer without a list) keeps what was seen, so a turn
+ * that settles across the failed poll still pushes; it re-baselines only when
+ * nothing had been seen yet.
+ *
+ * At most every `TAILNET_PRUNE_MS` it also asks Tailscale who is on the tailnet
+ * (`tailnetLogins`) and drops the registrations of owners who are not: a member
+ * removed from the tailnet stops receiving pushes within ten minutes rather
+ * than when their registration lapses.
  *
  * Never crashes the daemon. A gateway that does not answer backs the loop off
  * from `WATCH_POLL_MS` to `WATCH_BACKOFF_MAX_MS`; a box whose Hermes unit is
@@ -33,6 +50,7 @@
 import type { BoxAddress, ChatMessage, HermesChatClient } from "@hermetic/core/chat-client";
 import type { ExpoPushSender, ExpoReceiptFetcher } from "@hermetic/core/shared";
 import type { MobilePushKind } from "@hermetic/core/schema";
+import { nodeName, type TailnetMembers } from "../tailscale.ts";
 import type { PushDeviceStore } from "./devices.ts";
 import {
   PUSHES_PER_DEVICE_PER_MINUTE,
@@ -54,6 +72,10 @@ export const TAIL_ROWS = 10;
 export const UNKNOWN_BOT = "unknown";
 /** The loopback address of this box's own dashboard and gateway. */
 export const LOOPBACK_GATEWAY_URL = "http://127.0.0.1:9119/";
+/** The soonest the registrations are checked against the tailnet's members again. */
+export const TAILNET_PRUNE_MS = 10 * 60_000;
+/** Sessions whose event counter is remembered at once; the stalest is forgotten. */
+export const EVENT_COUNTER_MEMORY = 4_096;
 
 export interface WatchDeps {
   readonly chat: HermesChatClient;
@@ -71,6 +93,11 @@ export interface WatchDeps {
   readonly redact: (value: string) => string;
   /** Whether the Hermes unit is up; absent means "ask the gateway anyway". */
   readonly gatewayUp?: () => Promise<boolean>;
+  /**
+   * Who is on the tailnet now (`tailnetLogins` in `tailscale.ts`); `null` when
+   * it cannot be told, and then nothing is pruned. Absent: never pruned.
+   */
+  readonly tailnetLogins?: () => Promise<TailnetMembers | null>;
   readonly baseUrl?: string;
   readonly tuning?: Partial<WatchTuning>;
 }
@@ -95,7 +122,23 @@ export interface LiveSession {
   readonly key: string;
   readonly status: string;
   readonly message_count: number;
-  readonly preview: string;
+  /** When the session last did anything, in milliseconds; `null` when not reported. */
+  readonly last_active: number | null;
+}
+
+/**
+ * `last_active` as milliseconds. Upstream reports epoch seconds as a float
+ * (`1789663313.067`); a value already in milliseconds, or an ISO string, is
+ * read too, and anything else is unknown.
+ */
+function activeAt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0)
+    return value < 1e12 ? value * 1000 : value;
+  if (typeof value === "string") {
+    const at = Date.parse(value);
+    return Number.isNaN(at) ? null : at;
+  }
+  return null;
 }
 
 /** `session.active_list`'s answer, defensively: a malformed row is skipped. */
@@ -118,7 +161,7 @@ export function parseActiveList(value: unknown): LiveSession[] | null {
       key,
       status: row["status"],
       message_count: count,
-      preview: typeof row["preview"] === "string" ? row["preview"] : "",
+      last_active: activeAt(row["last_active"]),
     });
   }
   return out;
@@ -187,8 +230,56 @@ export function createWatcher(deps: WatchDeps): Watcher {
 
   const seen = new Map<string, { status: string; count: number }>();
   const botOf = new Map<string, string>();
+  /** session → its last event number. Outlives `seen`, so a session that leaves and returns never reuses one. */
+  const counters = new Map<string, number>();
+  /**
+   * Where every session's counter starts: this process's start, in seconds.
+   * A transition needs a poll, polls are seconds apart, so no counter of an
+   * earlier process can have reached it, and a key is never reused across a
+   * restart either.
+   */
+  const counterBase = Math.floor(deps.now() / 1000);
   let mapAt = Number.NEGATIVE_INFINITY;
+  let pruneAt = Number.NEGATIVE_INFINITY;
   let baseline = true;
+  /** When the last answered `session.active_list` was asked, in milliseconds. */
+  let lastPollAt: number | null = null;
+
+  function nextEvent(key: string): number {
+    const n = (counters.get(key) ?? counterBase) + 1;
+    counters.delete(key);
+    counters.set(key, n);
+    if (counters.size > EVENT_COUNTER_MEMORY) {
+      const stalest = counters.keys().next().value;
+      if (stalest !== undefined) counters.delete(stalest);
+    }
+    return n;
+  }
+
+  /** Drop the registrations of owners no longer on the tailnet; at most every `TAILNET_PRUNE_MS`. */
+  async function pruneDeparted(): Promise<void> {
+    if (deps.tailnetLogins === undefined) return;
+    const now = deps.now();
+    if (now - pruneAt < TAILNET_PRUNE_MS) return;
+    pruneAt = now;
+    try {
+      const members = await deps.tailnetLogins();
+      // No answer, or one naming nobody, is no evidence that anyone left.
+      if (members === null || members.logins.size === 0) return;
+      const dropped = await deps.devices.pruneOwners((owner) =>
+        owner.startsWith(NODE_OWNER_PREFIX)
+          ? members.nodes.has(nodeName(owner.slice(NODE_OWNER_PREFIX.length)))
+          : members.logins.has(owner),
+      );
+      if (dropped > 0) {
+        deps.log(
+          `push devices: dropped ${dropped} registration${dropped === 1 ? "" : "s"} whose owner left the tailnet`,
+        );
+      }
+    } catch (e) {
+      deps.log(`push watcher: could not check the tailnet's members (${errorText(e)})`);
+    }
+  }
 
   async function refreshMap(): Promise<void> {
     mapAt = deps.now();
@@ -211,34 +302,59 @@ export function createWatcher(deps: WatchDeps): Watcher {
     return botOf.get(key) ?? null;
   }
 
-  function event(kind: MobilePushKind, bot: string, s: LiveSession, text: string): PushEvent {
+  function event(
+    kind: MobilePushKind,
+    bot: string,
+    s: LiveSession,
+    seq: number,
+    text: string,
+  ): PushEvent {
     return {
       kind,
       bot,
       session: s.key,
-      message_count: s.message_count,
-      body: previewText(text, deps.redact),
+      seq,
+      preview: text === "" ? "" : previewText(text, deps.redact),
     };
   }
 
-  /** The push a turn that just settled deserves, read off its tail. */
-  async function settled(s: LiveSession): Promise<PushEvent | null> {
-    const bot = await resolveBot(s.key);
-    if (bot === null) return event("message", UNKNOWN_BOT, s, s.preview);
-    let rows: ChatMessage[];
+  /** The session's tail, or `null` (logged) when it cannot be read. */
+  async function tail(bot: string, key: string): Promise<ChatMessage[] | null> {
     try {
-      rows = await deps.chat.history(box, bot, { session: s.key, limit: TAIL_ROWS });
+      return await deps.chat.history(box, bot, { session: key, limit: TAIL_ROWS });
     } catch (e) {
-      // The turn did settle; without its tail, the gateway's own preview is
-      // the best description of it, and silence would be the worse answer.
-      deps.log(`push watcher: could not read the tail of ${s.key} (${errorText(e)})`);
-      return event("turn.done", bot, s, s.preview);
+      deps.log(`push watcher: could not read the tail of ${key} (${errorText(e)})`);
+      return null;
     }
-    const verdict = tailVerdict(rows);
-    return verdict === null ? null : event(verdict.kind, bot, s, verdict.text);
   }
 
-  async function diff(live: readonly LiveSession[]): Promise<PushEvent[]> {
+  /** The push a turn that just settled deserves, read off its tail. */
+  async function settled(s: LiveSession, seq: number): Promise<PushEvent | null> {
+    const bot = await resolveBot(s.key);
+    if (bot === null) return event("message", UNKNOWN_BOT, s, seq, "");
+    const rows = await tail(bot, s.key);
+    // The turn did settle; without its tail there is no excerpt, but silence
+    // would be the worse answer.
+    if (rows === null) return event("turn.done", bot, s, seq, "");
+    const verdict = tailVerdict(rows);
+    return verdict === null ? null : event(verdict.kind, bot, s, seq, verdict.text);
+  }
+
+  /** A session that arrived already settled (a routine, a channel): its newest reply. */
+  async function arrived(s: LiveSession, seq: number): Promise<PushEvent> {
+    const bot = await resolveBot(s.key);
+    if (bot === null) return event("message", UNKNOWN_BOT, s, seq, "");
+    const rows = await tail(bot, s.key);
+    return event("message", bot, s, seq, rows === null ? "" : (tailVerdict(rows)?.text ?? ""));
+  }
+
+  /**
+   * The events between the last answer and `live`. `since` is when the last
+   * answer was asked for: a session first listed idle is news only if it was
+   * active after that, not one a `respond`, a compaction or a subagent
+   * reconcile merely brought back into the list.
+   */
+  async function diff(live: readonly LiveSession[], since: number | null): Promise<PushEvent[]> {
     const events: PushEvent[] = [];
     const present = new Set<string>();
     for (const s of live) {
@@ -248,21 +364,24 @@ export function createWatcher(deps: WatchDeps): Watcher {
       if (baseline) continue;
       if (s.status === "waiting") {
         if (prev?.status === "waiting") continue;
+        const seq = nextEvent(s.key);
         const bot = await resolveBot(s.key);
         // No profile to open it under: the phone hears about it once it idles.
-        if (bot !== null) events.push(event("needs_action", bot, s, `${bot} is waiting on you`));
+        if (bot !== null) events.push(event("needs_action", bot, s, seq, ""));
         continue;
       }
       if (s.status !== "idle") continue;
       if (prev === undefined) {
-        if (s.message_count > 0) {
-          const bot = (await resolveBot(s.key)) ?? UNKNOWN_BOT;
-          events.push(event("message", bot, s, s.preview));
-        }
+        const fresh = s.last_active !== null && since !== null && s.last_active > since;
+        if (s.message_count > 0 && fresh) events.push(await arrived(s, nextEvent(s.key)));
         continue;
       }
-      if (s.message_count > prev.count) {
-        const pushed = await settled(s);
+      const grew = s.message_count > prev.count;
+      // A count that drops is a compaction rewriting the transcript; if a turn
+      // was running, it has still settled.
+      const compacted = s.message_count < prev.count && prev.status === "working";
+      if (grew || compacted) {
+        const pushed = await settled(s, nextEvent(s.key));
         if (pushed !== null) events.push(pushed);
       }
     }
@@ -271,31 +390,39 @@ export function createWatcher(deps: WatchDeps): Watcher {
     return events;
   }
 
+  /**
+   * A poll that failed without the unit going down. What was seen still
+   * stands, so the next answer is diffed against it; only with nothing seen
+   * is there nothing to diff against, and the next answer is a baseline.
+   */
+  function failed(reason: string): TickOutcome {
+    if (seen.size === 0) baseline = true;
+    return { kind: "down", reason };
+  }
+
   async function tick(): Promise<TickOutcome> {
     try {
+      await pruneDeparted();
       if (deps.gatewayUp && !(await deps.gatewayUp())) {
         baseline = true;
         return { kind: "idle" };
       }
       if (!deps.chat.botModeRpc) return { kind: "idle" };
+      const askedAt = deps.now();
       let live: LiveSession[] | null;
       try {
         live = parseActiveList(await deps.chat.botModeRpc(box, "session.active_list", {}));
       } catch (e) {
-        baseline = true;
-        return { kind: "down", reason: errorText(e) };
+        return failed(errorText(e));
       }
-      if (live === null) {
-        baseline = true;
-        return { kind: "down", reason: "session.active_list answered without a session list" };
-      }
+      if (live === null) return failed("session.active_list answered without a session list");
       if (deps.now() - mapAt >= tuning.mapRefreshMs) await refreshMap();
-      const events = await diff(live);
+      const events = await diff(live, lastPollAt);
+      lastPollAt = askedAt;
       for (const e of events) await notifier.notify(e);
       return { kind: "ok", pushes: events };
     } catch (e) {
-      baseline = true;
-      return { kind: "down", reason: errorText(e) };
+      return failed(errorText(e));
     }
   }
 
@@ -324,6 +451,9 @@ export function createWatcher(deps: WatchDeps): Watcher {
 
   return { tick, run, notifier };
 }
+
+/** How `peerOwner` (`rpc.ts`) names a tagged node's registration. */
+const NODE_OWNER_PREFIX = "node:";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

@@ -9,9 +9,15 @@ import type { ChatMessage, HermesChatClient, Session, Swarm } from "@hermetic/co
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { MobilePushData } from "@hermetic/core/schema";
 import type { ExpoPushMessage, ExpoPushTicket } from "@hermetic/core/shared";
-import { PUSH_DEVICE_TTL_MS, pushDeviceStore, type PushDeviceStore } from "../src/push/devices.ts";
-import { NEEDS_ACTION_CATEGORY, RECEIPT_DELAY_MS } from "../src/push/notify.ts";
 import {
+  PUSH_DEVICE_TTL_MS,
+  deviceTag,
+  pushDeviceStore,
+  type PushDeviceStore,
+} from "../src/push/devices.ts";
+import { NEEDS_ACTION_CATEGORY, RECEIPT_DELAY_MS, contentFreeBody } from "../src/push/notify.ts";
+import {
+  TAILNET_PRUNE_MS,
   UNKNOWN_BOT,
   WATCH_BACKOFF_MAX_MS,
   WATCH_POLL_MS,
@@ -21,6 +27,8 @@ import {
   type WatchDeps,
 } from "../src/push/watch.ts";
 import { redactValue } from "../src/redact.ts";
+import { bunChatSocket, chatSocketFailed } from "../src/push/socket.ts";
+import { tailnetLogins, type TailnetMembers } from "../src/tailscale.ts";
 import { FakeHost } from "./fake-host.ts";
 
 const INSTANCE = "atlas";
@@ -28,7 +36,14 @@ const FLEET = "fxtr0001";
 const TOKEN_A = "ExponentPushToken[FIXTURE-watch-a]";
 const TOKEN_B = "ExponentPushToken[FIXTURE-watch-b]";
 
-type Live = { id: string; status: string; message_count: number; preview?: string };
+type Live = {
+  id: string;
+  status: string;
+  message_count: number;
+  preview?: string;
+  /** Upstream's epoch seconds; long ago unless a test says otherwise. */
+  last_active?: number;
+};
 
 function snapshot(...sessions: Live[]): unknown {
   return {
@@ -38,7 +53,7 @@ function snapshot(...sessions: Live[]): unknown {
       status: s.status,
       message_count: s.message_count,
       preview: s.preview ?? "",
-      last_active: 1,
+      last_active: s.last_active ?? 1,
       started_at: 1,
       model: "m",
       current: false,
@@ -217,14 +232,33 @@ function device(
   id: string,
   token: string,
   listening: MobilePushDevice["listening"] = "all",
+  previews = false,
 ): MobilePushDevice {
-  return { device_id: id, token, platform: "ios", app_version: "1.0.0", listening };
+  return { device_id: id, token, platform: "ios", app_version: "1.0.0", listening, previews };
+}
+
+/** A phone that opted into previews. */
+function previewing(id: string, token: string): MobilePushDevice {
+  return device(id, token, "all", true);
 }
 
 /** Advance the clock one poll and tick. */
 async function step(r: Rig, watcher: ReturnType<typeof createWatcher>) {
   r.clock.now += WATCH_POLL_MS;
   return watcher.tick();
+}
+
+/**
+ * The `<n>` of the k-th event a session raises under a watcher created at the
+ * rig's current clock: its counters start at that moment, in seconds.
+ */
+function nth(r: Rig, k: number): number {
+  return Math.floor(r.clock.now / 1000) + k;
+}
+
+/** The rig's clock in upstream's `last_active` unit, epoch seconds. */
+function nowSeconds(r: Rig): number {
+  return r.clock.now / 1000;
 }
 
 describe("transitions", () => {
@@ -244,7 +278,8 @@ describe("transitions", () => {
   });
 
   test("working → idle with a bot reply is turn.done: exact message, dedupe and data", async () => {
-    const r = await rig();
+    const r = await rig([previewing("a", TOKEN_A)]);
+    const n = nth(r, 1);
     r.chat.bots.set("s1", "granite");
     r.chat.tails.set("s1", [
       message("user", "hi"),
@@ -268,7 +303,7 @@ describe("transitions", () => {
           bot: "granite",
           session: "s1",
           kind: "turn.done",
-          dedupe: "atlas:s1:2:turn.done",
+          dedupe: `atlas:s1:${n}:turn.done`,
         },
         sound: "default",
       },
@@ -278,7 +313,8 @@ describe("transitions", () => {
   });
 
   test("a tail row with a failure is turn.error, its text redacted and cut to 140", async () => {
-    const r = await rig();
+    const r = await rig([previewing("a", TOKEN_A)]);
+    const n = nth(r, 1);
     r.chat.bots.set("s1", "granite");
     const secret = "sk-ant-FIXTUREfixtureFIXTUREfixture0123";
     r.chat.tails.set("s1", [
@@ -298,15 +334,16 @@ describe("transitions", () => {
     const [push] = r.sent;
     const data = MobilePushData.parse(push?.data);
     expect(data.kind).toBe("turn.error");
-    expect(data.dedupe).toBe("atlas:s1:2:turn.error");
+    expect(data.dedupe).toBe(`atlas:s1:${n}:turn.error`);
     expect(push?.body).not.toContain(secret);
     expect(push?.body).toContain("«redacted»");
     expect(push?.body?.length).toBe(140);
     expect(push?.body?.endsWith("…")).toBe(true);
   });
 
-  test("→ waiting is needs_action: high priority, its category, once per message count", async () => {
+  test("→ waiting is needs_action: high priority, its category, once per waiting spell", async () => {
     const r = await rig();
+    const base = nth(r, 0);
     r.chat.bots.set("s1", "atlas");
     r.chat.snapshots.push(
       snapshot({ id: "s1", status: "working", message_count: 3 }),
@@ -318,43 +355,76 @@ describe("transitions", () => {
     const w = createWatcher(r.deps);
     await w.tick();
     for (let i = 0; i < 4; i++) await step(r, w);
-    // The flap at count 3 is one push; still waiting at 5 is not a new arrival.
-    expect(r.sent).toEqual([
-      {
-        to: TOKEN_A,
-        title: "atlas",
-        body: "atlas is waiting on you",
-        data: {
-          fleet_id: FLEET,
-          instance: INSTANCE,
-          bot: "atlas",
-          session: "s1",
-          kind: "needs_action",
-          dedupe: "atlas:s1:3:needs_action",
-        },
-        sound: "default",
-        priority: "high",
-        categoryId: NEEDS_ACTION_CATEGORY,
+    // Two waiting spells in one turn are two events, at the same message count;
+    // still waiting at 5 is not a new arrival.
+    const spell = (k: number): ExpoPushMessage => ({
+      to: TOKEN_A,
+      title: "atlas",
+      body: "atlas is waiting on you",
+      data: {
+        fleet_id: FLEET,
+        instance: INSTANCE,
+        bot: "atlas",
+        session: "s1",
+        kind: "needs_action",
+        dedupe: `atlas:s1:${base + k}:needs_action`,
       },
-    ]);
+      sound: "default",
+      priority: "high",
+      categoryId: NEEDS_ACTION_CATEGORY,
+    });
+    expect(r.sent).toEqual([spell(1), spell(2)]);
   });
 
-  test("a session first seen idle with messages is a message (routine/channel); empty is nothing", async () => {
-    const r = await rig();
+  test("a session first seen idle with messages, active since the last poll, is a message; empty is nothing", async () => {
+    const r = await rig([previewing("a", TOKEN_A)]);
+    const n = nth(r, 1);
     r.chat.bots.set("cron-1", "granite");
+    // The list's own preview is the session's opening line; the push quotes
+    // the reply, read off the tail like a settled turn's.
+    r.chat.tails.set("cron-1", [
+      message("user", "Run the daily digest"),
+      message("bot", "Daily digest: 3 new tickets"),
+    ]);
+    // Active a second after the baseline poll, and before the next.
+    const since = nowSeconds(r) + 1;
     r.chat.snapshots.push(
       snapshot(),
       snapshot(
-        { id: "cron-1", status: "idle", message_count: 2, preview: "Daily digest: 3 new tickets" },
-        { id: "fresh", status: "idle", message_count: 0 },
+        {
+          id: "cron-1",
+          status: "idle",
+          message_count: 2,
+          preview: "Run the daily digest",
+          last_active: since,
+        },
+        { id: "fresh", status: "idle", message_count: 0, last_active: since },
       ),
     );
     const w = createWatcher(r.deps);
     await w.tick();
     await step(r, w);
     expect(r.sent.map((m) => [m.body, (m.data as MobilePushData).dedupe])).toEqual([
-      ["Daily digest: 3 new tickets", "atlas:cron-1:2:message"],
+      ["Daily digest: 3 new tickets", `atlas:cron-1:${n}:message`],
     ]);
+    expect(r.chat.historyCalls).toEqual([{ bot: "granite", session: "cron-1" }]);
+  });
+
+  test("a session newly listed idle but last active before the previous poll is not a message", async () => {
+    // `respond`, `compact` and a subagent reconcile resume a session into the
+    // list without anything new having been said in it.
+    const r = await rig();
+    r.chat.bots.set("old", "granite");
+    r.chat.tails.set("old", [message("bot", "said long ago")]);
+    const w = createWatcher(r.deps);
+    const before = nowSeconds(r) - 60;
+    r.chat.snapshots.push(
+      snapshot(),
+      snapshot({ id: "old", status: "idle", message_count: 8, last_active: before }),
+    );
+    await w.tick();
+    await step(r, w);
+    expect(r.sent).toEqual([]);
     expect(r.chat.historyCalls).toEqual([]);
   });
 
@@ -372,24 +442,26 @@ describe("transitions", () => {
     expect(r.sent).toEqual([]);
   });
 
-  test("a tail that cannot be read still says the turn finished, from the gateway's preview", async () => {
-    const r = await rig();
+  test("a tail that cannot be read still says the turn finished, content-free", async () => {
+    const r = await rig([previewing("a", TOKEN_A)]);
     r.chat.bots.set("s1", "granite");
     r.chat.tails.set("s1", new Error("history unavailable"));
     r.chat.snapshots.push(
       snapshot({ id: "s1", status: "working", message_count: 1 }),
-      snapshot({ id: "s1", status: "idle", message_count: 2, preview: "Done: deployed" }),
+      snapshot({ id: "s1", status: "idle", message_count: 2, preview: "the opening line" }),
     );
     const w = createWatcher(r.deps);
     await w.tick();
     await step(r, w);
+    // Never the list's preview, which is the opening line, not the reply.
     expect(r.sent.map((m) => [(m.data as MobilePushData).kind, m.body])).toEqual([
-      ["turn.done", "Done: deployed"],
+      ["turn.done", "granite replied"],
     ]);
   });
 
   test("an unknown session forces one map refresh, then pushes as `unknown`, message only", async () => {
     const r = await rig();
+    const base = nth(r, 0);
     r.chat.snapshots.push(
       snapshot({ id: "ghost", status: "working", message_count: 1 }),
       snapshot({ id: "ghost", status: "waiting", message_count: 1 }),
@@ -413,9 +485,11 @@ describe("transitions", () => {
         bot: UNKNOWN_BOT,
         session: "ghost",
         kind: "message",
-        dedupe: "atlas:ghost:2:message",
+        // The waiting spell that could not be pushed still counted as an event.
+        dedupe: `atlas:ghost:${base + 2}:message`,
       },
     ]);
+    expect(r.sent.map((m) => m.body)).toEqual([`New message from ${UNKNOWN_BOT}`]);
   });
 
   test("the session map is refreshed every 60 s, not every poll", async () => {
@@ -460,18 +534,18 @@ describe("who is pushed to", () => {
     await step(r, w);
     expect(r.sent).toHaveLength(30);
     expect(w.notifier.droppedTotal()).toBe(1);
-    expect(r.logs.join("\n")).toContain("a reached 30 pushes a minute");
+    expect(r.logs.join("\n")).toContain(`${deviceTag("a")} reached 30 pushes a minute`);
     expect(r.logs.join("\n")).not.toContain("FIXTURE-watch-a");
   });
 });
 
 describe("expiry", () => {
-  test(`a registration unrenewed for ${PUSH_DEVICE_TTL_MS / 86_400_000} days is skipped by the notifier`, async () => {
+  test(`a registration unrenewed for ${PUSH_DEVICE_TTL_MS / 3_600_000} hours is skipped by the notifier`, async () => {
     const r = await rig([device("a", TOKEN_A), device("b", TOKEN_B)]);
-    // Renew only b, a day before the TTL runs out for a.
-    r.host.advance(PUSH_DEVICE_TTL_MS - 86_400_000);
+    // Renew only b, an hour before the TTL runs out for a.
+    r.host.advance(PUSH_DEVICE_TTL_MS - 3_600_000);
     await r.devices.upsert(device("b", TOKEN_B), OWNER);
-    r.host.advance(86_400_000);
+    r.host.advance(3_600_000);
     r.chat.bots.set("s1", "granite");
     r.chat.snapshots.push(snapshot(), snapshot({ id: "s1", status: "waiting", message_count: 1 }));
     const w = createWatcher(r.deps);
@@ -494,7 +568,7 @@ describe("receipts", () => {
     await w.tick();
     await step(r, w);
     expect((await r.devices.list()).map((d) => d.device_id)).toEqual(["b"]);
-    expect(r.logs.join("\n")).toContain("push device a removed: DeviceNotRegistered");
+    expect(r.logs.join("\n")).toContain(`push device ${deviceTag("a")} removed: DeviceNotRegistered`);
   });
 
   test("ok tickets are asked about after 15 minutes; DeviceNotRegistered receipts prune", async () => {
@@ -612,12 +686,248 @@ describe("the loop", () => {
       upsert: async () => ({ ok: true, evicted: null }),
       unregister: async () => ({ ok: true, removed: false }),
       remove: async () => false,
+      pruneOwners: async () => 0,
     };
     const w = createWatcher({ ...r.deps, devices: broken });
     await w.tick();
     const outcome = await step(r, w);
     expect(outcome.kind).toBe("ok");
     expect(r.logs.join("\n")).toContain("could not notify (disk gone)");
+  });
+});
+
+describe("previews are opt-in", () => {
+  test("a phone that did not opt in gets a content-free body; one that did gets the excerpt", async () => {
+    const r = await rig([device("a", TOKEN_A), previewing("b", TOKEN_B)]);
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [message("user", "hi"), message("bot", "The secret plan is ready.")]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    expect(r.sent.map((m) => [m.to, m.body])).toEqual([
+      [TOKEN_A, "granite replied"],
+      [TOKEN_B, "The secret plan is ready."],
+    ]);
+    // The data is the same for both: the session id is routing, not a preview.
+    expect(r.sent[0]?.data).toEqual(r.sent[1]?.data);
+    expect(MobilePushData.parse(r.sent[0]?.data).session).toBe("s1");
+  });
+
+  test("the content-free body of each kind names the bot and nothing else", () => {
+    expect(contentFreeBody("turn.done", "granite")).toBe("granite replied");
+    expect(contentFreeBody("turn.error", "granite")).toBe("granite hit an error");
+    expect(contentFreeBody("needs_action", "granite")).toBe("granite is waiting on you");
+    expect(contentFreeBody("message", "granite")).toBe("New message from granite");
+  });
+
+  test("a failed turn is content-free too unless the phone opted in", async () => {
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [message("bot", "", { failure: { code: "AUTH", message: "key refused" } })]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "idle", message_count: 2 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    expect(r.sent.map((m) => m.body)).toEqual(["granite hit an error"]);
+  });
+});
+
+describe("a failed poll", () => {
+  for (const [label, failure] of [
+    ["a throw", new Error("timed out")],
+    ["an answer without a list", {}],
+  ] as const) {
+    test(`${label} keeps what was seen: idle → working → (fails) → idle still pushes turn.done`, async () => {
+      const r = await rig();
+      r.chat.bots.set("s1", "granite");
+      r.chat.tails.set("s1", [message("user", "go"), message("bot", "done")]);
+      r.chat.snapshots.push(
+        snapshot({ id: "s1", status: "idle", message_count: 2 }),
+        snapshot({ id: "s1", status: "working", message_count: 3 }),
+        failure,
+        snapshot({ id: "s1", status: "idle", message_count: 4 }),
+      );
+      const w = createWatcher(r.deps);
+      await w.tick();
+      await step(r, w);
+      expect((await step(r, w)).kind).toBe("down");
+      await step(r, w);
+      expect(r.sent.map((m) => (m.data as MobilePushData).kind)).toEqual(["turn.done"]);
+    });
+  }
+
+  test("a Hermes unit that was down re-baselines: what settled meanwhile pushes nothing", async () => {
+    let up = true;
+    const r = await rig([device("a", TOKEN_A)], { gatewayUp: async () => up });
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [message("bot", "done")]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 3 }),
+      snapshot({ id: "s1", status: "idle", message_count: 4 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    up = false;
+    expect((await step(r, w)).kind).toBe("idle");
+    up = true;
+    await step(r, w);
+    expect(r.sent).toEqual([]);
+  });
+});
+
+describe("the event counter", () => {
+  test("a message_count that drops mid-turn (compaction) still settles it; at rest it is no event", async () => {
+    const r = await rig();
+    const base = nth(r, 0);
+    r.chat.bots.set("s1", "granite");
+    r.chat.tails.set("s1", [message("user", "go"), message("bot", "compacted and done")]);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 40 }),
+      snapshot({ id: "s1", status: "idle", message_count: 6 }),
+      snapshot({ id: "s1", status: "idle", message_count: 5 }),
+      snapshot({ id: "s1", status: "working", message_count: 6 }),
+      snapshot({ id: "s1", status: "idle", message_count: 6 }),
+      snapshot({ id: "s1", status: "idle", message_count: 7 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 5; i++) await step(r, w);
+    // The compacted turn, then the next one: two events with two keys, though
+    // the second settles at a count the session has had before.
+    expect(r.sent.map((m) => (m.data as MobilePushData).dedupe)).toEqual([
+      `atlas:s1:${base + 1}:turn.done`,
+      `atlas:s1:${base + 2}:turn.done`,
+    ]);
+  });
+
+  test("a session that leaves the list and returns never reuses an event number", async () => {
+    const r = await rig();
+    const base = nth(r, 0);
+    r.chat.bots.set("s1", "granite");
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "waiting", message_count: 1 }),
+      snapshot(),
+      snapshot({ id: "s1", status: "waiting", message_count: 1 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 3; i++) await step(r, w);
+    expect(r.sent.map((m) => (m.data as MobilePushData).dedupe)).toEqual([
+      `atlas:s1:${base + 1}:needs_action`,
+      `atlas:s1:${base + 2}:needs_action`,
+    ]);
+  });
+
+  test("a restarted watcher starts its counters past any the last one reached", async () => {
+    const r = await rig();
+    r.chat.bots.set("s1", "granite");
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "waiting", message_count: 1 }),
+    );
+    const first = createWatcher(r.deps);
+    await first.tick();
+    await step(r, first);
+    r.chat.snapshots.splice(0, r.chat.snapshots.length);
+    r.chat.snapshots.push(
+      snapshot({ id: "s1", status: "working", message_count: 1 }),
+      snapshot({ id: "s1", status: "waiting", message_count: 1 }),
+    );
+    r.clock.now += WATCH_POLL_MS;
+    const second = createWatcher(r.deps);
+    await second.tick();
+    await step(r, second);
+    const keys = r.sent.map((m) => (m.data as MobilePushData).dedupe);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+});
+
+describe("tailnet prune", () => {
+  const STATUS = {
+    Self: { DNSName: "atlas.tail1234.ts.net.", HostName: "atlas" },
+    Peer: {
+      "nodekey:1": { DNSName: "phone.tail1234.ts.net.", HostName: "phone", UserID: 1 },
+      "nodekey:2": { DNSName: "bravo.tail1234.ts.net.", HostName: "bravo", UserID: 2 },
+    },
+    User: {
+      "1": { ID: 1, LoginName: OWNER, DisplayName: "Evan" },
+      "2": { ID: 2, LoginName: "tagged-devices", DisplayName: "tagged devices" },
+    },
+  };
+
+  test("tailnetLogins reads User logins and every node's name from tailscale status --json", async () => {
+    const host = new FakeHost();
+    host.when("tailscale status --json", { stdout: JSON.stringify(STATUS) });
+    const members = await tailnetLogins(host);
+    expect([...(members?.logins ?? [])].sort()).toEqual([OWNER, "tagged-devices"].sort());
+    expect(members?.nodes.has("phone.tail1234.ts.net")).toBe(true);
+    expect(members?.nodes.has("bravo.tail1234.ts.net")).toBe(true);
+    expect(members?.nodes.has("atlas.tail1234.ts.net")).toBe(true);
+
+    host.when("tailscale status --json", { code: 1, stdout: "" });
+    expect(await tailnetLogins(host)).toBeNull();
+    host.when("tailscale status --json", { stdout: "{not json" });
+    expect(await tailnetLogins(host)).toBeNull();
+    host.when("tailscale status --json", { stdout: JSON.stringify({ ...STATUS, User: {} }) });
+    expect(await tailnetLogins(host)).toBeNull();
+  });
+
+  test("owners no longer on the tailnet lose their registrations, at most every ten minutes", async () => {
+    const members: { current: TailnetMembers | null } = {
+      current: {
+        logins: new Set([OWNER]),
+        nodes: new Set(["phone.tail1234.ts.net", "bravo.tail1234.ts.net"]),
+      },
+    };
+    let asked = 0;
+    const r = await rig([device("a", TOKEN_A)], {
+      tailnetLogins: async () => {
+        asked += 1;
+        return members.current;
+      },
+    });
+    await r.devices.upsert(device("gone", TOKEN_B), "former@example.com");
+    await r.devices.upsert(
+      device("ci", "ExponentPushToken[FIXTURE-watch-ci]"),
+      "node:bravo.tail1234.ts.net.",
+    );
+    await r.devices.upsert(
+      device("old-ci", "ExponentPushToken[FIXTURE-watch-oc]"),
+      "node:charlie.tail1234.ts.net",
+    );
+    r.chat.snapshots.push(snapshot());
+    const w = createWatcher(r.deps);
+    await w.tick();
+    expect(asked).toBe(1);
+    expect((await r.devices.list()).map((d) => d.device_id)).toEqual(["a", "ci"]);
+    expect(r.logs.join("\n")).toContain("dropped 2 registrations whose owner left the tailnet");
+
+    // Within ten minutes it does not ask again.
+    await r.devices.upsert(device("gone", TOKEN_B), "former@example.com");
+    await step(r, w);
+    expect(asked).toBe(1);
+    expect((await r.devices.list()).map((d) => d.device_id)).toContain("gone");
+
+    // No answer is no evidence: nothing is pruned.
+    r.clock.now += TAILNET_PRUNE_MS;
+    members.current = null;
+    await w.tick();
+    expect(asked).toBe(2);
+    expect((await r.devices.list()).map((d) => d.device_id)).toContain("gone");
+
+    r.clock.now += TAILNET_PRUNE_MS;
+    members.current = { logins: new Set([OWNER]), nodes: new Set() };
+    await w.tick();
+    expect((await r.devices.list()).map((d) => d.device_id)).toEqual(["a"]);
   });
 });
 
@@ -633,9 +943,18 @@ describe("parsing", () => {
         ],
       }),
     ).toEqual([
-      { key: "stored-1", status: "idle", message_count: 2, preview: "p" },
-      { key: "live-2", status: "working", message_count: 0, preview: "" },
+      { key: "stored-1", status: "idle", message_count: 2, last_active: null },
+      { key: "live-2", status: "working", message_count: 0, last_active: null },
     ]);
+    // `last_active` in upstream's epoch seconds, in milliseconds, or ISO.
+    const at = (value: unknown) =>
+      parseActiveList({
+        sessions: [{ id: "x", status: "idle", message_count: 1, last_active: value }],
+      })?.[0]?.last_active;
+    expect(at(1789663313.5)).toBe(1789663313500);
+    expect(at(1789663313500)).toBe(1789663313500);
+    expect(at("2026-09-01T12:00:00.000Z")).toBe(Date.parse("2026-09-01T12:00:00.000Z"));
+    expect(at("soon")).toBeNull();
     expect(parseActiveList({})).toBeNull();
     expect(parseActiveList(null)).toBeNull();
   });
@@ -655,5 +974,36 @@ describe("parsing", () => {
     });
     expect(tailVerdict([message("user", "q")])).toBeNull();
     expect(tailVerdict([])).toBeNull();
+  });
+});
+
+describe("the chat socket", () => {
+  test("a socket that fails to open says where, never the URL's query (it holds the token)", async () => {
+    const url = "ws://127.0.0.1:9119/api/ws?token=FIXTURE-dashboard-token";
+    expect(chatSocketFailed(url)).toBe("chat socket failed: ws://127.0.0.1:9119/api/ws");
+    expect(chatSocketFailed("not a url ?token=FIXTURE-dashboard-token")).toBe("chat socket failed");
+
+    // Bun's WebSocket, replaced for the one call by one that fails at once.
+    class FailingSocket extends EventTarget {
+      constructor(_url: string, _opts?: unknown) {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("error")));
+      }
+      send(): void {}
+      close(): void {}
+    }
+    const real = globalThis.WebSocket;
+    globalThis.WebSocket = FailingSocket as unknown as typeof WebSocket;
+    try {
+      const socket = bunChatSocket(url, {});
+      const error = await socket.opened.then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+      expect(error?.message).toBe("chat socket failed: ws://127.0.0.1:9119/api/ws");
+      expect(error?.message).not.toContain("FIXTURE-dashboard-token");
+    } finally {
+      globalThis.WebSocket = real;
+    }
   });
 });

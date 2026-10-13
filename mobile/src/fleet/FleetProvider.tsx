@@ -21,20 +21,34 @@ import {
   useState,
 } from "react";
 import { type Alert, createHermeticClient, type HermeticClient } from "../client/client.ts";
+import type { ConversationTarget } from "../client/conversation-store.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
 import type { TailscaleProbe, TailscaleStatus } from "../gateway/tailscale.ts";
 import { InboxStore } from "../inbox/store.ts";
 import { usePrefs } from "../prefs/prefs.tsx";
-import { foregroundDecision, ingestPush, type Notifier, pushDataOf, routeFor } from "./alerts.ts";
+import {
+  belongingData,
+  foregroundDecision,
+  ingestPush,
+  type Notifier,
+  type PushFleet,
+  presentsLocally,
+  routeFor,
+} from "./alerts.ts";
 import type { PairedLink } from "./pairing.ts";
 import {
   allBoxes,
   deviceId,
   listenedBoxes,
+  PREVIEWS_KEY,
+  PUSH_KEY,
+  PUSH_RENEWED_KEY,
   type PushRegistrar,
   type PushStatus,
   PushSync,
+  previewsFrom,
+  rotateDeviceId,
 } from "./push.ts";
 import { FleetStore, type KvStorage, rosterPrefsStorage, type TextFile } from "./store.ts";
 
@@ -106,14 +120,19 @@ export interface FleetContextValue {
   previews: boolean;
   setPreviews(on: boolean): Promise<void>;
   operatorTailnet: string | null;
+  /**
+   * The conversation on screen (the chat screen sets it while focused, and
+   * clears it on blur): what the provider re-opens when the app comes back from
+   * the background.
+   */
+  focusConversation(target: ConversationTarget | null): void;
   /** Fixture builds only; `null` in every real build. */
   fixture: (FixtureControls & { setTailscale(s: Exclude<TailscaleStatus, "unknown">): void }) | null;
 }
 
 export const FleetContext = createContext<FleetContextValue | null>(null);
 
-export const PREVIEWS_KEY = "hermetic.previews";
-export const PUSH_KEY = "hermetic.push";
+export { PREVIEWS_KEY, PUSH_KEY };
 
 export function FleetProvider({
   deps,
@@ -135,19 +154,22 @@ export function FleetProvider({
   const [probing, setProbing] = useState(false);
   const [push, setPush] = useState<PushStatus>({ state: "off" });
   const [pushWanted, setPushWanted] = useState(false);
-  const [previews, setPreviewsState] = useState(true);
+  const [previews, setPreviewsState] = useState(false);
   const { mayAlert } = usePrefs();
   const mayAlertRef = useRef(mayAlert);
   mayAlertRef.current = mayAlert;
-  const previewsRef = useRef(true);
+  const previewsRef = useRef(false);
   const pushWantedRef = useRef(false);
   const clientRef = useRef<HermeticClient | null>(null);
   const linger = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The linger ran out and the client went to `background` (its sockets detached). */
+  const detached = useRef(false);
+  const focused = useRef<ConversationTarget | null>(null);
   const pendingRoute = useRef<string | null>(null);
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
 
-  const { fleet, inbox, pushSync } = useMemo(() => {
+  const { fleet, inbox, pushSync, pushFleet } = useMemo(() => {
     const fleet = new FleetStore({
       secure: deps.secure,
       viewCache: deps.viewCache,
@@ -160,11 +182,21 @@ export function FleetProvider({
       fleet,
       registrar: deps.registrar,
       deviceId: () => deviceId(deps.secure),
+      rotateDeviceId: () => rotateDeviceId(deps.secure),
       token: () => deps.notifier.pushToken(),
       platform: deps.platform,
       appVersion: deps.appVersion,
+      previews: () => previewsRef.current,
+      onRenewed: () => deps.secure.set(PUSH_RENEWED_KEY, nowRef.current()).catch(() => {}),
     });
-    return { fleet, inbox, pushSync };
+    /** What a box's push is checked against: the paired fleet and the agents it names. */
+    const pushFleet = (): PushFleet | null => {
+      const link = fleet.getState().link;
+      return link
+        ? { fleet_id: link.payload.fleet_id, agents: fleet.agents().map((a) => a.name) }
+        : null;
+    };
+    return { fleet, inbox, pushSync, pushFleet };
   }, [deps]);
 
   const probe = useCallback(async () => {
@@ -178,6 +210,12 @@ export function FleetProvider({
       setProbing(false);
     }
   }, []);
+
+  /** Tailscale first (its HTTPS answers open the off-tunnel gate for those hosts), then `/fleet`. */
+  const probeThenRefresh = useCallback(async (): Promise<boolean> => {
+    await probe();
+    return fleet.refresh();
+  }, [fleet, probe]);
 
   const open = useCallback((href: string) => {
     const go = onOpenRef.current;
@@ -203,6 +241,9 @@ export function FleetProvider({
       onAlert: (alert) => {
         // Local delivery off, or inside quiet hours: the inbox still has the entry.
         if (!mayAlertRef.current()) return;
+        // Away from the app, a box holding this phone's registration pushes the
+        // same event itself: one notification, not two.
+        if (!presentsLocally(alert, (instance) => pushSync.covers(instance))) return;
         if (alert.decision === "local") void deps.notifier.presentLocal(alert);
         else setBanner(alert);
       },
@@ -213,12 +254,11 @@ export function FleetProvider({
     next.setPhase(deps.appState.current() === "active" ? "active" : "background");
     const before = fleet.listened().join("\n");
     void next.roster.refresh();
-    void fleet.refresh().then((ok) => {
-      // The first view may narrow the listening default: read the roster again.
-      if (ok && clientRef.current === next && fleet.listened().join("\n") !== before)
+    void probeThenRefresh().then(() => {
+      // The first view (or the boxes' /healthz) may narrow the listening default: read the roster again.
+      if (clientRef.current === next && fleet.listened().join("\n") !== before)
         void next.roster.refresh();
     });
-    void probe();
     void deps.background?.register();
     if (pushWantedRef.current) void pushSync.enable().then(setPush);
     const route = pendingRoute.current;
@@ -227,18 +267,19 @@ export function FleetProvider({
       onOpenRef.current(route);
     }
     return next;
-  }, [deps, fleet, inbox, pushSync, probe]);
+  }, [deps, fleet, inbox, pushSync, probeThenRefresh]);
 
   // Boot: the notification handlers, the inbox, any stored pairing.
   useEffect(() => {
     let live = true;
     void deps.notifier.registerCategories();
     deps.notifier.setForegroundHandler((content, local) =>
-      foregroundDecision(inbox, content, local, nowRef.current()),
+      foregroundDecision(inbox, content, local, nowRef.current(), pushFleet()),
     );
     const offTap = deps.notifier.onTap((content) => {
-      ingestPush(inbox, content, nowRef.current());
-      open(routeFor(pushDataOf(content)));
+      ingestPush(inbox, content, nowRef.current(), pushFleet());
+      // A push for another fleet (or an agent this pairing does not name) opens the inbox.
+      open(routeFor(belongingData(content, pushFleet())));
     });
     void (async () => {
       const [pref, pushPref] = await Promise.all([
@@ -246,12 +287,13 @@ export function FleetProvider({
         deps.secure.get(PUSH_KEY).catch(() => null),
       ]);
       await inbox.load();
-      for (const content of await deps.notifier.presented().catch(() => []))
-        ingestPush(inbox, content, nowRef.current());
       const paired = await fleet.load();
+      // Filed after the pairing loads: a push is checked against it.
+      for (const content of await deps.notifier.presented().catch(() => []))
+        ingestPush(inbox, content, nowRef.current(), pushFleet());
       if (!live) return;
-      previewsRef.current = pref !== "false";
-      setPreviewsState(pref !== "false");
+      previewsRef.current = previewsFrom(pref);
+      setPreviewsState(previewsFrom(pref));
       pushWantedRef.current = pushPref === "on";
       setPushWanted(pushPref === "on");
       if (paired) start();
@@ -263,7 +305,7 @@ export function FleetProvider({
       clientRef.current?.dispose();
       clientRef.current = null;
     };
-  }, [deps, fleet, inbox, start, open]);
+  }, [deps, fleet, inbox, pushFleet, start, open]);
 
   // The app badge follows the inbox.
   useEffect(() => {
@@ -311,22 +353,28 @@ export function FleetProvider({
       if (!c) return;
       if (next === "active") {
         clear();
-        // Marks the focused thread read, too.
+        const wasAway = detached.current;
+        detached.current = false;
+        // Marks the focused thread read, and re-attaches what the background phase detached.
         c.setPhase("active");
+        // The conversation on screen lost its observation with the sockets: start
+        // it afresh, whatever state the last one ended in.
+        const target = focused.current;
+        if (wasAway && target) c.chat.reopen(target);
         void (async () => {
           for (const content of await deps.notifier.presented().catch(() => []))
-            ingestPush(inbox, content, nowRef.current());
+            ingestPush(inbox, content, nowRef.current(), pushFleet());
         })();
-        void fleet.refresh();
+        void probeThenRefresh();
         void c.roster.refresh();
-        void probe();
         if (pushSync.enabled()) void pushSync.sync().then(setPush);
       } else if (next === "background") {
-        // Alerts go to the OS from here on; the sockets linger, then the phase says so.
+        // Alerts go to the OS from here on; the sockets linger, then the phase detaches them.
         c.setPhase("inactive");
         if (!linger.current)
           linger.current = setTimeout(() => {
             linger.current = null;
+            detached.current = true;
             clientRef.current?.setPhase("background");
           }, lingerMs);
       } else c.setPhase("inactive");
@@ -335,7 +383,7 @@ export function FleetProvider({
       off();
       clear();
     };
-  }, [deps, fleet, inbox, pushSync, probe]);
+  }, [deps, inbox, pushSync, pushFleet, probeThenRefresh]);
 
   const pair = useCallback(
     async (link: PairedLink) => {
@@ -369,8 +417,8 @@ export function FleetProvider({
   const refresh = useCallback(async () => {
     const c = clientRef.current;
     if (!c) return;
-    await Promise.all([fleet.refresh(), c.roster.refresh(), probe()]);
-  }, [fleet, probe]);
+    await Promise.all([probeThenRefresh(), c.roster.refresh()]);
+  }, [probeThenRefresh]);
 
   const setPushEnabled = useCallback(
     async (on: boolean) => {
@@ -393,9 +441,15 @@ export function FleetProvider({
       previewsRef.current = on;
       setPreviewsState(on);
       await deps.secure.set(PREVIEWS_KEY, String(on)).catch(() => {});
+      // The boxes hold the choice too: tell every listened one.
+      if (pushSync.enabled()) setPush(await pushSync.sync());
     },
-    [deps],
+    [deps, pushSync],
   );
+
+  const focusConversation = useCallback((target: ConversationTarget | null) => {
+    focused.current = target;
+  }, []);
 
   const fixture = useMemo(() => {
     const controls = deps.fixture;
@@ -428,6 +482,7 @@ export function FleetProvider({
       previews,
       setPreviews,
       operatorTailnet: deps.operatorTailnet,
+      focusConversation,
       fixture,
     }),
     [
@@ -447,6 +502,7 @@ export function FleetProvider({
       previews,
       setPreviews,
       deps,
+      focusConversation,
       fixture,
     ],
   );

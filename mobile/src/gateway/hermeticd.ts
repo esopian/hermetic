@@ -1,21 +1,35 @@
 /**
  * The phone's calls to hermeticd (§6.4, port 7434, plain HTTP inside the
- * tailnet): `GET /fleet` for the live agent list and the push registration
- * routes. Whois-gated on the box; the phone sends nothing but the protocol
- * header (`x-hermetic-rpc`), exactly as the laptop's `aws/rpc.ts` does.
+ * tailnet): `GET /fleet` for the live agent list, `GET /healthz`, and the push
+ * registration routes. Whois-gated on the box; the phone sends nothing but the
+ * protocol header (`x-hermetic-rpc`), exactly as the laptop's `aws/rpc.ts` does.
+ *
+ * **The tunnel gate.** Port 7434 is cleartext, which is safe only while the
+ * packets ride the WireGuard tunnel. A MagicDNS name resolves to the box only
+ * through Tailscale; with Tailscale off, or on a network whose resolver answers
+ * `*.ts.net` itself, the same name could reach some other host across the
+ * local network in the clear. So no request goes to `http://<host>:7434`
+ * until an HTTPS request to `https://<host>/api/health` has succeeded within
+ * the last `TUNNEL_TTL_MS` in this process. A valid TLS certificate for the
+ * `*.ts.net` name proves DNS resolved to the real box (only that box holds
+ * that certificate), so the plaintext hop that follows stays inside the
+ * tunnel. The record is kept per host in memory (`tunnelOk`), fed by the
+ * Tailscale probe (`tailscale.ts`) and, when it is missing or stale, by a
+ * probe made here first. No HTTPS success: `TUNNEL_UNVERIFIED`, and nothing
+ * is sent.
  *
  * Pure: `fetch` is injected, timeouts are the caller's `setTimeout`, nothing
  * imports React Native, so jest and the root e2e test both drive it.
  */
 import { HermeticError, type ErrorCode } from "@hermetic/core/chat-client";
-import { MobileFleetView } from "@hermetic/core/schema";
+import { MobileFleetView, RpcHealth } from "@hermetic/core/schema";
 import {
   HERMETICD_RPC_PORT,
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
 } from "@hermetic/core/shared";
-import { reasonOf } from "../client/errors.ts";
+import { reasonOf, TUNNEL_UNVERIFIED } from "../client/errors.ts";
 
 /**
  * `fetch`, structurally: the adapter's `ChatFetch` shape (not `typeof fetch`,
@@ -25,6 +39,70 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 
 /** How long one hermeticd call may take. */
 export const HERMETICD_TIMEOUT_MS = 8_000;
+
+/* ── the tunnel gate ────────────────────────────────────────────────────── */
+
+/** How long one HTTPS success vouches for a host's plain-HTTP calls. */
+export const TUNNEL_TTL_MS = 60_000;
+/** How long the gate's own HTTPS probe may take. */
+export const TUNNEL_PROBE_TIMEOUT_MS = 3_000;
+/** The dashboard's public health route, served over HTTPS by Tailscale Serve. */
+export const TUNNEL_PROBE_PATH = "/api/health";
+
+/** Host → when (epoch ms) an HTTPS request to it last succeeded, in this process. */
+const tunnelOk = new Map<string, number>();
+
+const tunnelKey = (host: string): string => host.trim().toLowerCase().replace(/\.$/, "");
+
+/** Record an HTTPS probe of `host`: a success vouches for it, a failure withdraws that. */
+export function noteTunnel(host: string, ok: boolean, at: number = Date.now()): void {
+  if (ok) tunnelOk.set(tunnelKey(host), at);
+  else tunnelOk.delete(tunnelKey(host));
+}
+
+/** Whether an HTTPS request to `host` succeeded within `TUNNEL_TTL_MS` of `now`. */
+export function tunnelVerified(host: string, now: number = Date.now()): boolean {
+  const at = tunnelOk.get(tunnelKey(host));
+  return at !== undefined && now - at >= 0 && now - at < TUNNEL_TTL_MS;
+}
+
+/** Forget every host's record (sign out, and tests). */
+export function resetTunnelChecks(): void {
+  tunnelOk.clear();
+}
+
+/**
+ * Pass only when HTTPS to `host` is known to work: from the record when it is
+ * fresh, else by a probe of `https://<host>/api/health` made now. Any HTTP
+ * answer counts — the TLS handshake for the name is the proof, not the status.
+ */
+async function ensureTunnel(fetch: FetchLike, host: string, signal?: AbortSignal): Promise<void> {
+  if (tunnelVerified(host)) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TUNNEL_PROBE_TIMEOUT_MS);
+  const onAbort = (): void => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  const literal = host.includes(":") ? `[${host}]` : host;
+  try {
+    await fetch(`https://${literal}${TUNNEL_PROBE_PATH}`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    noteTunnel(host, true);
+  } catch (error) {
+    noteTunnel(host, false);
+    const { message } = reasonOf(error);
+    throw new HermeticError(
+      TUNNEL_UNVERIFIED as ErrorCode,
+      `${host} did not answer over HTTPS, so nothing was sent to its plain-HTTP port: ${message}`,
+      { host },
+    );
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
 
 /** `http://<host>:7434<path>`: hermeticd listens on the tailnet interface only. */
 export function hermeticdUrl(host: string, path: string): string {
@@ -54,8 +132,10 @@ async function refusalOf(response: Response, host: string): Promise<HermeticErro
 
 /**
  * One call to one box's hermeticd, bounded by `timeoutMs` and the caller's
- * signal. A box that never answered is `HERMETICD_UNAVAILABLE`; one that
- * refused is its own code (`FLEET_LIST_UNAVAILABLE`, `VALIDATION`, …).
+ * signal, behind the tunnel gate. A box whose HTTPS name did not answer is
+ * `TUNNEL_UNVERIFIED` (nothing was sent); a box that never answered on 7434 is
+ * `HERMETICD_UNAVAILABLE`; one that refused is its own code
+ * (`FLEET_LIST_UNAVAILABLE`, `VALIDATION`, `FORBIDDEN`, …).
  */
 export async function callHermeticd(
   fetch: FetchLike,
@@ -63,6 +143,7 @@ export async function callHermeticd(
   path: string,
   init: { method?: string; body?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<Response> {
+  await ensureTunnel(fetch, host, init.signal);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? HERMETICD_TIMEOUT_MS);
   const onAbort = (): void => controller.abort();
@@ -80,6 +161,8 @@ export async function callHermeticd(
       signal: controller.signal,
     });
   } catch (error) {
+    // The route that worked a moment ago may be gone: the next call re-proves it.
+    noteTunnel(host, false);
     const { message } = reasonOf(error);
     throw new HermeticError(
       "HERMETICD_UNAVAILABLE",
@@ -176,8 +259,61 @@ export function firstFleetView(
     function finish(): void {
       settled = true;
       const rank = (e: HermeticError): number =>
-        e.code === "FLEET_LIST_UNAVAILABLE" ? 0 : e.code === "HERMETICD_UNAVAILABLE" ? 2 : 1;
+        e.code === "FLEET_LIST_UNAVAILABLE"
+          ? 0
+          : e.code === "HERMETICD_UNAVAILABLE" || (e.code as string) === TUNNEL_UNVERIFIED
+            ? 2
+            : 1;
       reject([...failures].sort((a, b) => rank(a) - rank(b))[0]);
     }
   });
+}
+
+/* ── GET /healthz ───────────────────────────────────────────────────────── */
+
+/** What one box's `GET /healthz` said, or that it said nothing usable. */
+export interface HealthzAnswer {
+  /** The agent name the box reports, or `null` when it did not answer. */
+  name: string | null;
+  hermeticd_version: string | null;
+  /** The box answered with a health document this build can read. */
+  ok: boolean;
+  /** Why not, when `ok` is false. */
+  error: { code: string; message: string } | null;
+}
+
+/**
+ * `GET http://<host>:7434/healthz` (through the tunnel gate): who the box is
+ * and which hermeticd it runs. For the agent detail and the fallback when a
+ * fleet predates `GET /fleet`. Never throws: a box that did not answer, or
+ * answered with something else, is `ok: false` with the reason.
+ */
+export async function fetchHealthz(
+  host: string,
+  fetch: FetchLike,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<HealthzAnswer> {
+  const failed = (code: string, message: string): HealthzAnswer => ({
+    name: null,
+    hermeticd_version: null,
+    ok: false,
+    error: { code, message },
+  });
+  let body: unknown;
+  try {
+    const response = await callHermeticd(fetch, host, RPC_PATHS.health, opts);
+    body = await response.json();
+  } catch (error) {
+    const { code, message } = reasonOf(error);
+    return failed(error instanceof SyntaxError ? "CHAT_PROTOCOL" : code, message);
+  }
+  const parsed = RpcHealth.safeParse(body);
+  if (!parsed.success)
+    return failed("CHAT_PROTOCOL", `hermeticd on ${host} answered /healthz in an unknown shape`);
+  return {
+    name: parsed.data.name,
+    hermeticd_version: parsed.data.hermeticd_version,
+    ok: true,
+    error: null,
+  };
 }

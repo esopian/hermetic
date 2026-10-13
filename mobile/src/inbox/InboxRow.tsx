@@ -36,11 +36,18 @@ const KIND_CLASS: Record<InboxEntry["kind"], string> = {
 
 function InboxRowImpl({
   group,
+  label,
   now,
   onOpen,
   onAck,
 }: {
   group: NotificationGroup<InboxEntry>;
+  /**
+   * The bot's display title from the roster, when the phone has it. The entry's
+   * own title is `<bot name> · <instance>` (a push names the bot by its slug),
+   * and the instance is already on the card's last line.
+   */
+  label?: string | null;
   now: number;
   onOpen(group: NotificationGroup<InboxEntry>): void;
   onAck(group: NotificationGroup<InboxEntry>): void;
@@ -48,6 +55,7 @@ function InboxRowImpl({
   const t = useTheme();
   const swipe = useRef<SwipeableMethods>(null);
   const row = groupRow(group);
+  const title = label || row.title;
   // The marker and the header count read one rule (`isUnreadRow`); the class
   // colour is the left seam's job and says nothing about read state.
   const unread = groupUnread(group);
@@ -85,7 +93,7 @@ function InboxRowImpl({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${needs ? "Needs you: " : unread ? "Unread: " : ""}${row.title}`}
+        accessibilityLabel={`${needs ? "Needs you: " : unread ? "Unread: " : ""}${title}`}
         accessibilityHint={unread ? "Swipe left to mark read" : undefined}
         onPress={() => onOpen(group)}
         style={({ pressed }) => ({
@@ -117,7 +125,7 @@ function InboxRowImpl({
               style={{ flex: 1 }}
               tone={unread ? "fg" : "fg2"}
             >
-              {row.title}
+              {title}
             </Text>
             <Text mono variant="caption" tone="fg3">
               {railTime(row.at, now)}

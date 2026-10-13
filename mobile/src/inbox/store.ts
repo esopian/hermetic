@@ -9,8 +9,11 @@
  * this phone holds open may show it first. Both carry a `dedupe` key — the
  * box's is `<instance>:<session>:<message_count>:<kind>` — and `ingest` keeps
  * one entry per key. A socket-delivered event does not know the box's message
- * count, so an entry for the same conversation and kind within
- * `SAME_EVENT_MS` of another is the same event too.
+ * count, so its key is phone-local (`PHONE_DEDUPE_MARK`), and a phone-local
+ * entry and a box push for the same conversation and kind within
+ * `SAME_EVENT_MS` of each other are the same event too. Two box pushes are
+ * the same event only when their keys are: two approvals seconds apart are two
+ * things to answer.
  *
  * And the one decision that matters on a phone: whether an event interrupts —
  * in-app banner, local notification, or nothing — without alerting twice
@@ -20,8 +23,25 @@ import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 
 /** The last this many entries are kept. */
 export const INBOX_LIMIT = 200;
-/** Two entries for one conversation and kind this close together are one event. */
+/** A phone-local entry and a box push for one conversation and kind this close together are one event. */
 export const SAME_EVENT_MS = 2 * 60_000;
+/** What marks a `dedupe` key this phone minted for an event its own socket showed (`localDedupe`). */
+export const PHONE_DEDUPE_MARK = ":phone-";
+
+const phoneLocal = (dedupe: string): boolean => dedupe.includes(PHONE_DEDUPE_MARK);
+
+/**
+ * Whether a push is about the fleet this phone is paired with: the same
+ * `fleet_id`, and an agent the fleet has. Checked before a push is filed or
+ * shown, so a stale registration on a box of another fleet (or a re-paired
+ * phone's old one) cannot drop entries into this inbox.
+ */
+export function pushBelongs(
+  data: Pick<MobilePushData, "fleet_id" | "instance">,
+  fleet: { fleet_id: string; agents: readonly string[] },
+): boolean {
+  return data.fleet_id === fleet.fleet_id && fleet.agents.includes(data.instance);
+}
 
 export interface InboxEntry {
   id: string;
@@ -96,7 +116,12 @@ const time = (iso: string): number => {
   return Number.isNaN(t) ? 0 : t;
 };
 
-function sameEvent(a: Pick<InboxEntry, "kind" | "instance" | "bot" | "session" | "at">, b: typeof a) {
+function sameEvent(
+  a: Pick<InboxEntry, "dedupe" | "kind" | "instance" | "bot" | "session" | "at">,
+  b: typeof a,
+) {
+  // The window folds the two paths of one event, never two events on one path.
+  if (phoneLocal(a.dedupe) === phoneLocal(b.dedupe)) return false;
   return (
     a.kind === b.kind &&
     a.instance === b.instance &&

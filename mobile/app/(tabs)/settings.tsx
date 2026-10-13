@@ -170,6 +170,17 @@ export function pushLine(push: PushStatus, wanted: boolean): string {
   return wanted ? "Registering…" : "Off: alerts arrive only while the app holds its connections.";
 }
 
+/**
+ * What Settings says when no box served `/fleet` and each box's own `/healthz`
+ * stands in (`FleetStore`'s fallback). `FLEET_LIST_UNAVAILABLE` is a fleet
+ * whose foundation predates the agents' table scan.
+ */
+export function fleetViewLine(code: string | null): string {
+  return code === "FLEET_LIST_UNAVAILABLE"
+    ? "Fleet view: from boxes (foundation update pending)"
+    : "Fleet view: from boxes (no box answered /fleet)";
+}
+
 const FIXTURE_TAILSCALE = ["ok", "off", "unreachable"] as const;
 
 export default function Settings() {
@@ -237,6 +248,11 @@ export default function Settings() {
             label="Fleet list"
             value={fleet.refreshed_at ? `read ${railTime(fleet.refreshed_at, now)}` : "not read yet"}
           />
+          {fleet.fromBoxes ? (
+            <Text variant="caption" tone="warn" testID="fleet-view-source">
+              {fleetViewLine(fleet.error?.code ?? null)}
+            </Text>
+          ) : null}
           {fleet.error ? (
             <Text variant="caption" tone="warn">
               {fleet.error.message}
@@ -360,13 +376,13 @@ export default function Settings() {
           />
           <Toggle
             label="Show message previews"
-            hint="Off: this phone's own alerts say “Reply ready” or “Needs you” and nothing more."
+            hint="On: notifications quote the reply or question, and the agents' pushes carry that text through Apple's and Expo's push services. Off: they say “Reply ready” or “Needs you” and nothing more."
             value={previews}
             onChange={(v) => void ctx.setPreviews(v)}
           />
           <Toggle
             label="Quiet hours"
-            hint="No alerts on this phone in this window. The inbox still fills."
+            hint="No alerts from this phone's own connections in this window; the inbox still fills. Pushes from the agents still arrive: silence them with iOS Focus, or turn push off."
             value={prefs.quiet.enabled}
             onChange={(v) => update({ quiet: { ...prefs.quiet, enabled: v } })}
           />

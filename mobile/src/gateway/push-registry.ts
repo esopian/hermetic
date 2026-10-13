@@ -9,7 +9,7 @@
  */
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { pushDevicePath, RPC_PATHS } from "@hermetic/core/shared";
-import { reasonOf } from "../client/errors.ts";
+import { errorCode, reasonOf } from "../client/errors.ts";
 import { callHermeticd, type FetchLike } from "./hermeticd.ts";
 
 /** One box to register with: its instance name and MagicDNS host. */
@@ -18,9 +18,30 @@ export interface PushBox {
   host: string;
 }
 
+/**
+ * One box's answer. `forbidden` is the box's 403 `FORBIDDEN`: this `device_id`
+ * is registered there by another tailnet login (a reinstall that kept the id,
+ * or a second member's phone that chose the same one). Retrying cannot fix
+ * it; the caller mints a new `device_id` and registers again. `box` and
+ * `status` are always set here; they are optional only so a registrar double
+ * may answer the bare `{ instance, ok }`.
+ */
 export type PushBoxResult =
-  | { instance: string; ok: true }
-  | { instance: string; ok: false; code: string; message: string };
+  | { instance: string; box?: PushBox; status?: "ok"; ok: true }
+  | {
+      instance: string;
+      box?: PushBox;
+      status?: "failed" | "forbidden";
+      ok: false;
+      code: string;
+      message: string;
+    };
+
+function forbidden(error: unknown): boolean {
+  if (errorCode(error) === "FORBIDDEN") return true;
+  const details = (error as { details?: { status?: unknown } } | null)?.details;
+  return details?.status === 403;
+}
 
 async function each(
   boxes: readonly PushBox[],
@@ -28,13 +49,24 @@ async function each(
 ): Promise<PushBoxResult[]> {
   const settled = await Promise.allSettled(boxes.map((box) => call(box)));
   return settled.map((result, i) => {
-    const instance = boxes[i]?.instance ?? "";
-    if (result.status === "fulfilled") return { instance, ok: true };
-    return { instance, ok: false, ...reasonOf(result.reason) };
+    const box = boxes[i] ?? { instance: "", host: "" };
+    const instance = box.instance;
+    if (result.status === "fulfilled") return { instance, box, status: "ok", ok: true };
+    return {
+      instance,
+      box,
+      status: forbidden(result.reason) ? "forbidden" : "failed",
+      ok: false,
+      ...reasonOf(result.reason),
+    };
   });
 }
 
-/** Register (or update) `device` with every box in `boxes`. */
+/**
+ * Register (or update) `device` with every box in `boxes`. The body is
+ * `device` as given, every field of it (`MobilePushDevice` grows; nothing here
+ * picks fields).
+ */
 export function registerDevice(
   boxes: readonly PushBox[],
   device: MobilePushDevice,

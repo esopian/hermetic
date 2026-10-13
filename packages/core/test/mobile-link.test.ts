@@ -101,6 +101,29 @@ describe("encodeMobileLink / parseMobileLink", () => {
     expect(() => encodeQr(link)).not.toThrow();
   });
 
+  test("past the length limit, host overrides go (from the end) before any agent does", () => {
+    // 60 agents whose names fit easily, but whose hosts together do not.
+    const agents = Array.from({ length: 60 }, (_, i) => ({
+      name: `a${String(i).padStart(2, "0")}`,
+      host: `fxtr0001-a${String(i).padStart(2, "0")}-recreated-again-2.hermetic.ts.net`,
+    }));
+    const full = agents.map((a) => `${a.name}:${a.host}`).join(",");
+    expect(full.length).toBeGreaterThan(MOBILE_LINK_MAX_LENGTH);
+    const link = encodeMobileLink({ ...BASE, agents });
+    expect(link.length).toBeLessThanOrEqual(MOBILE_LINK_MAX_LENGTH);
+    const parsed = parseMobileLink(link);
+    // Every agent is still named.
+    expect(parsed?.agents.map((a) => a.name)).toEqual(agents.map((a) => a.name));
+    // The hosts kept are a prefix: the first agents keep theirs, the last lose them.
+    const kept = parsed?.agents.filter((a) => a.host !== undefined).length ?? 0;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(60);
+    expect(parsed?.agents.slice(0, kept)).toEqual(agents.slice(0, kept));
+    expect(parsed?.agents.slice(kept).every((a) => a.host === undefined)).toBe(true);
+    // And as many as fit: putting the next one back would pass the limit.
+    expect(link.length + `:${agents[kept]?.host}`.length).toBeGreaterThan(MOBILE_LINK_MAX_LENGTH);
+  });
+
   test("the encoder refuses what the parser would refuse", () => {
     expect(() => encodeMobileLink({ ...BASE, fleet_id: "FXTR0001" })).toThrow();
     expect(() => encodeMobileLink({ ...BASE, account_id: "1234" })).toThrow();

@@ -78,6 +78,41 @@ describe("PairConfirm", () => {
     expect(screen.getByLabelText("Replace…")).toBeTruthy();
   });
 
+  test("a code for another tailnet says so and confirms as Switch tailnet", async () => {
+    const onConfirm = jest.fn();
+    await renderUi(
+      <PairConfirm
+        link={paired()}
+        replacing
+        currentTailnet="old-net.ts.net"
+        busy={false}
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("This code is for a different tailnet: old-net.ts.net → hermetic.ts.net"),
+    ).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Switch tailnet"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText("Replace…")).toBeNull();
+  });
+
+  test("the same tailnet (any case) is a plain replace", async () => {
+    await renderUi(
+      <PairConfirm
+        link={paired()}
+        replacing
+        currentTailnet="Hermetic.ts.net"
+        busy={false}
+        onConfirm={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("pair-tailnet-change")).toBeNull();
+    expect(screen.getByLabelText("Replace…")).toBeTruthy();
+  });
+
   test("a hostile alias is shown cleaned", async () => {
     const link = `${LINK.replace("alias=main", `alias=${encodeURIComponent("ev‮il")}`)}`;
     const read = readPairingLink(link);

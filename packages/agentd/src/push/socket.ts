@@ -15,6 +15,16 @@
  */
 import type { ChatSocket } from "@hermetic/core/chat-client";
 
+/** The open failure's message: the endpoint's origin and path, never its query. */
+export function chatSocketFailed(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `chat socket failed: ${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "chat socket failed";
+  }
+}
+
 export function bunChatSocket(
   url: string,
   opts: { signal?: AbortSignal | undefined; headers?: Record<string, string> | undefined },
@@ -38,7 +48,9 @@ export function bunChatSocket(
 
   const opened = new Promise<void>((resolve, reject) => {
     socket.addEventListener("open", () => resolve(), { once: true });
-    socket.addEventListener("error", () => reject(new Error(`chat socket failed: ${url}`)), {
+    // Never the URL: it carries the dashboard's `?token=`, and this message
+    // reaches the watcher's log line.
+    socket.addEventListener("error", () => reject(new Error(chatSocketFailed(url))), {
       once: true,
     });
   });

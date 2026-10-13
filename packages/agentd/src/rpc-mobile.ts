@@ -15,14 +15,18 @@
  * snapshot".
  *
  * The push routes are the listener's one write, and it is bounded on every
- * axis: the body (`PUSH_BODY_MAX_BYTES`, 413), its shape (`MobilePushDevice`,
+ * axis: the body's size (`PUSH_BODY_MAX_BYTES`, 413) and how long it may take
+ * to arrive (`PUSH_BODY_DEADLINE_MS`, 408), its shape (`MobilePushDevice`,
  * 400), how often one peer may write (`PUSH_WRITES_PER_MINUTE`, 429), and how
- * many phones the file may hold (`PUSH_DEVICES_MAX`, `push/devices.ts`).
+ * many phones the file may hold (`PUSH_DEVICES_PER_OWNER` each,
+ * `PUSH_DEVICES_MAX` in all, `push/devices.ts`; a full file is 507).
  * A registration belongs to the login that made it (`peer.owner`, from the
- * gate's whois): another login replacing or deleting that `device_id` is 403
- * `FORBIDDEN`, and the refusal's audit line names the device id and the two
- * logins, nothing else. The token is never logged — a registration's line
- * names the device id and the platform only.
+ * gate's whois) and is keyed by that login and its `device_id`, so another
+ * login posting the same id registers a phone of its own and touches nothing;
+ * deleting an id only another login holds is 403 `FORBIDDEN`, and the
+ * refusal's audit line names the device and the two logins, nothing else.
+ * Neither the token nor the raw device id is ever logged: a line names the
+ * device by `deviceTag` (a sha256 prefix) and the platform only.
  */
 import type {
   Agent,
@@ -46,12 +50,14 @@ import {
   RPC_VERSION_HEADER,
 } from "@hermetic/core/shared";
 import type { Aws } from "./aws.ts";
-import type { PushDeviceStore } from "./push/devices.ts";
+import { PUSH_DEVICES_MAX, deviceTag, type PushDeviceStore } from "./push/devices.ts";
 
 /** How long one Scan answers `GET /fleet`, success or failure. */
 export const FLEET_VIEW_CACHE_MS = 10_000;
 /** The largest registration body read; a `MobilePushDevice` is well under 4 KB. */
 export const PUSH_BODY_MAX_BYTES = 8 * 1024;
+/** How long a registration body may take to arrive before 408. */
+export const PUSH_BODY_DEADLINE_MS = 5_000;
 /** Push-route writes one peer may make per minute before 429. */
 export const PUSH_WRITES_PER_MINUTE = 10;
 const MINUTE_MS = 60_000;
@@ -233,21 +239,41 @@ export function fleetViewSource(deps: FleetViewSourceDeps): () => Promise<Mobile
 
 /* ── POST/DELETE /push/devices ──────────────────────────────────────────── */
 
-/** Read at most `max` bytes of a body; `null` when it is larger. */
-async function readCapped(request: Request, max: number): Promise<string | null> {
+/** Why a body was not read: over the cap, or not delivered by the deadline. */
+type BodyRefusal = { readonly refused: "too-large" } | { readonly refused: "timeout" };
+
+/**
+ * Read at most `max` bytes of a body before `deadline` aborts. A peer that
+ * opens a request and trickles (or never sends) its body would otherwise hold
+ * the handler, and its connection, for as long as it liked.
+ */
+async function readCapped(
+  request: Request,
+  max: number,
+  deadline: AbortSignal,
+): Promise<string | BodyRefusal> {
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > max) return null;
+  if (Number.isFinite(declared) && declared > max) return { refused: "too-large" };
   if (request.body === null) return "";
   const reader = request.body.getReader();
+  const expired = new Promise<null>((resolve) => {
+    if (deadline.aborted) resolve(null);
+    else deadline.addEventListener("abort", () => resolve(null), { once: true });
+  });
   const parts: Uint8Array[] = [];
   let size = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    const next = await Promise.race([reader.read(), expired]);
+    if (next === null) {
+      await reader.cancel().catch(() => undefined);
+      return { refused: "timeout" };
+    }
+    const { done, value } = next;
     if (done) break;
     size += value.byteLength;
     if (size > max) {
       await reader.cancel().catch(() => undefined);
-      return null;
+      return { refused: "too-large" };
     }
     parts.push(value);
   }
@@ -268,6 +294,8 @@ export interface MobileRoutesDeps {
   /** Milliseconds, for the write limiter. */
   readonly now: () => number;
   readonly log?: (message: string) => void;
+  /** The body read's deadline, one per request; `AbortSignal.timeout(PUSH_BODY_DEADLINE_MS)` by default. */
+  readonly bodyDeadline?: () => AbortSignal;
 }
 
 /** The admitted caller, as the whois gate (`rpc.ts`) hands it to the phone routes. */
@@ -300,13 +328,11 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
     return recent.length > PUSH_WRITES_PER_MINUTE;
   }
 
-  function forbidden(deviceId: string, peer: MobilePeer, owner: string, verb: string): Response {
-    say(`push device ${deviceId}: ${verb} by ${peer.owner} refused; registered to ${owner}`);
-    return rpcRefusal(
-      403,
-      `push device ${deviceId} is registered to another tailnet login`,
-      "FORBIDDEN",
-    );
+  const bodyDeadline = deps.bodyDeadline ?? (() => AbortSignal.timeout(PUSH_BODY_DEADLINE_MS));
+
+  function forbidden(deviceId: string, peer: MobilePeer, owner: string): Response {
+    say(`push device ${deviceTag(deviceId)}: delete by ${peer.owner} refused; registered to ${owner}`);
+    return rpcRefusal(403, "that push device is registered to another tailnet login", "FORBIDDEN");
   }
 
   return async (request, url, peer) => {
@@ -339,12 +365,19 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
           "RATE_LIMITED",
         );
       }
-      const text = await readCapped(request, PUSH_BODY_MAX_BYTES);
-      if (text === null) {
+      const text = await readCapped(request, PUSH_BODY_MAX_BYTES, bodyDeadline());
+      if (typeof text !== "string" && text.refused === "too-large") {
         return rpcRefusal(
           413,
           `a push registration is at most ${PUSH_BODY_MAX_BYTES} bytes`,
           "PAYLOAD_TOO_LARGE",
+        );
+      }
+      if (typeof text !== "string") {
+        return rpcRefusal(
+          408,
+          `the push registration did not arrive within ${PUSH_BODY_DEADLINE_MS / 1000} s`,
+          "ABORTED",
         );
       }
       let body: unknown;
@@ -360,11 +393,19 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
         return rpcRefusal(400, `not a MobilePushDevice: ${fields.join(", ")}`, "VALIDATION");
       }
       const stored = await devices.upsert(parsed.data, peer.owner);
-      if (!stored.ok) return forbidden(parsed.data.device_id, peer, stored.owner, "update");
+      const tag = deviceTag(parsed.data.device_id);
+      if (!stored.ok) {
+        say(`push device ${tag}: registration by ${peer.owner} refused; the registry is full`);
+        return rpcRefusal(
+          507,
+          `this box already holds ${PUSH_DEVICES_MAX} push registrations; one must lapse first`,
+          "PAYLOAD_TOO_LARGE",
+        );
+      }
       const { evicted } = stored;
       say(
-        `push device registered: ${parsed.data.device_id} (${parsed.data.platform})` +
-          (evicted ? `; evicted ${evicted} to stay under the cap` : ""),
+        `push device registered: ${tag} (${parsed.data.platform}) by ${peer.owner}` +
+          (evicted ? `; evicted their ${deviceTag(evicted)} to stay under the per-owner cap` : ""),
       );
       return json({ ok: true, device_id: parsed.data.device_id });
     }
@@ -389,9 +430,9 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
         return rpcRefusal(400, "the device id is not valid", "VALIDATION");
       }
       const result = await devices.unregister(id, peer.owner);
-      if (!result.ok) return forbidden(id, peer, result.owner, "delete");
+      if (!result.ok) return forbidden(id, peer, result.owner);
       const { removed } = result;
-      if (removed) say(`push device unregistered: ${id}`);
+      if (removed) say(`push device unregistered: ${deviceTag(id)} by ${peer.owner}`);
       // Idempotent: a phone signing out twice is not an error.
       return json({ ok: true, device_id: id, removed });
     }

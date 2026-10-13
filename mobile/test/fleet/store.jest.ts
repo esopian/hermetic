@@ -9,10 +9,14 @@ import {
   SECURE_CHUNK,
   saveChunked,
 } from "../../src/fleet/store.ts";
+import { resetTunnelChecks } from "../../src/gateway/hermeticd.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
 import { fleetView } from "../helpers/fixtures.ts";
 
 const NOW = "2026-10-13T11:00:00.000Z";
+
+// The off-tunnel gate remembers hosts for 60 s across tests in this process.
+beforeEach(() => resetTunnelChecks());
 
 function paired(
   agents = [
@@ -117,8 +121,10 @@ describe("FleetStore", () => {
     s.calls.length = 0;
     await s.store.setListening("dodo", true);
     await s.store.refresh();
-    expect(s.calls).toHaveLength(3);
-    expect(s.calls.every((c) => c.url.endsWith(":7434/fleet"))).toBe(true);
+    // The off-tunnel gate's HTTPS probes (already fresh from the first refresh) aside.
+    const fleetCalls = s.calls.filter((c) => c.url.includes(":7434/"));
+    expect(fleetCalls).toHaveLength(3);
+    expect(fleetCalls.every((c) => c.url.endsWith(":7434/fleet"))).toBe(true);
     expect(s.calls.some((c) => c.url.includes("dodo"))).toBe(false);
   });
 
@@ -162,10 +168,108 @@ describe("FleetStore", () => {
       view: VIEW,
       error: { code: "FLEET_LIST_UNAVAILABLE" },
     });
-    expect(failing.agents().map((a) => a.status)).toEqual(["ready", "ready", "stopped", "ready"]);
+    // Every box's /healthz refused the same way: each reads unreachable.
+    expect(failing.getState().fromBoxes).toEqual({
+      atlas: "unreachable",
+      corvid: "unreachable",
+      dodo: "unreachable",
+      egret: "unreachable",
+    });
   });
 
-  test("nothing answers: the link alone, stale, HERMETICD_UNAVAILABLE", async () => {
+  test("pre-v16: /fleet unavailable, so each box's /healthz fills its status", async () => {
+    const asked: string[] = [];
+    const secure = memoryKv();
+    const store = new FleetStore({
+      secure,
+      viewCache: memoryFile(),
+      fetch: async () =>
+        new Response(
+          `${JSON.stringify({ type: "error", code: "FLEET_LIST_UNAVAILABLE", message: "no scan" })}\n`,
+          { status: 503 },
+        ),
+      now: () => NOW,
+      healthz: async (host) => {
+        asked.push(host);
+        if (host.startsWith("fxtr0001-atlas")) return { ok: true };
+        if (host.startsWith("fxtr0001-corvid")) return { ok: false };
+        // dodo: the off-tunnel gate would not ask.
+        return { ok: false, error: { code: "TUNNEL_UNVERIFIED" } };
+      },
+    });
+    await store.pair(paired());
+    expect(await store.refresh()).toBe(false);
+    expect(asked.sort()).toEqual([
+      "fxtr0001-atlas.hermetic.ts.net",
+      "fxtr0001-corvid-2.hermetic.ts.net",
+      "fxtr0001-dodo.hermetic.ts.net",
+    ]);
+    expect(store.getState()).toMatchObject({
+      stale: true,
+      error: { code: "FLEET_LIST_UNAVAILABLE" },
+      fromBoxes: { atlas: "ready", corvid: "unreachable" },
+    });
+    expect(store.agents().map((a) => [a.name, a.status])).toEqual([
+      ["atlas", "ready"],
+      ["corvid", "unreachable"],
+      ["dodo", null],
+    ]);
+    // The listening default narrows on the boxes' answers, and is kept.
+    expect(store.listened()).toEqual(["atlas"]);
+    const reloaded = new FleetStore({
+      secure,
+      viewCache: memoryFile(),
+      fetch: async () => json(VIEW),
+      now: () => NOW,
+    });
+    await reloaded.load();
+    expect(reloaded.listened()).toEqual(["atlas"]);
+  });
+
+  test("pre-v16 with every box silent: the default is not narrowed to nothing", async () => {
+    const store = new FleetStore({
+      secure: memoryKv(),
+      viewCache: memoryFile(),
+      fetch: async () => {
+        throw new TypeError("Network request failed");
+      },
+      now: () => NOW,
+      healthz: async () => {
+        throw new TypeError("Network request failed");
+      },
+    });
+    await store.pair(paired());
+    await store.refresh();
+    expect(store.listened()).toEqual(["atlas", "corvid", "dodo"]);
+    expect(store.getState().fromBoxes).toEqual({
+      atlas: "unreachable",
+      corvid: "unreachable",
+      dodo: "unreachable",
+    });
+  });
+
+  test("a /fleet answer after the fallback clears it", async () => {
+    let fleetUp = false;
+    const store = new FleetStore({
+      secure: memoryKv(),
+      viewCache: memoryFile(),
+      fetch: async () => {
+        if (fleetUp) return json(VIEW);
+        throw new TypeError("Network request failed");
+      },
+      now: () => NOW,
+      healthz: async () => ({ ok: false }),
+    });
+    await store.pair(paired());
+    await store.refresh();
+    expect(store.agents().every((a) => a.status === "unreachable")).toBe(true);
+    fleetUp = true;
+    expect(await store.refresh()).toBe(true);
+    expect(store.getState()).toMatchObject({ stale: false, fromBoxes: null });
+    expect(store.agents().find((a) => a.name === "dodo")?.status).toBe("stopped");
+  });
+
+  test("nothing answers, HTTPS included: the link alone, stale, and no 7434 call made", async () => {
     const s = setup(() => {
       throw new TypeError("Network request failed");
     });
@@ -174,14 +278,35 @@ describe("FleetStore", () => {
     expect(s.store.getState()).toMatchObject({
       stale: true,
       view: null,
-      error: { code: "HERMETICD_UNAVAILABLE" },
+      error: { code: "TUNNEL_UNVERIFIED" },
+      // The gate refused every /healthz too: no status is guessed.
+      fromBoxes: null,
     });
     expect(s.store.agents().map((a) => [a.name, a.status])).toEqual([
       ["atlas", null],
       ["corvid", null],
       ["dodo", null],
     ]);
+    expect(s.calls.some((c) => c.url.includes(":7434/"))).toBe(false);
     expect(s.store.hostOf("corvid")).toBe("fxtr0001-corvid-2.hermetic.ts.net");
+  });
+
+  test("on the tailnet but hermeticd silent: HERMETICD_UNAVAILABLE, every box unreachable", async () => {
+    const s = setup((url) => {
+      if (url.startsWith("https://")) return json({ status: "ok" });
+      throw new TypeError("Network request failed");
+    });
+    await s.store.pair(paired());
+    expect(await s.store.refresh()).toBe(false);
+    expect(s.store.getState()).toMatchObject({
+      stale: true,
+      error: { code: "HERMETICD_UNAVAILABLE" },
+    });
+    expect(s.store.agents().map((a) => [a.name, a.status])).toEqual([
+      ["atlas", "unreachable"],
+      ["corvid", "unreachable"],
+      ["dodo", "unreachable"],
+    ]);
   });
 
   test("a /fleet name off the tailnet is never dialled", async () => {

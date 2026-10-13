@@ -12,17 +12,22 @@
  *
  * `refresh()` asks up to three listened boxes at once and takes the first
  * answer. When none answers — no box reachable, or a foundation that does not
- * grant the agent role its scan yet (`FLEET_LIST_UNAVAILABLE`) — the snapshot
- * stays and the state says `stale`. The link's agent list is the floor: an
- * agent the link names and `/fleet` does not is still listed (with no status),
- * and where both name it the view wins.
+ * grant the agent role its scan yet (`FLEET_LIST_UNAVAILABLE`, a fleet before
+ * foundation 16) — the snapshot stays, the state says `stale`, and each box the
+ * pairing names is asked for its own `/healthz` instead (`fromBoxes`): `ready`
+ * where hermeticd answered ok, `unreachable` where it did not, and nothing
+ * where the off-tunnel gate refused to ask (`TUNNEL_UNVERIFIED`). The listening
+ * default narrows on those answers as it would on a view. The link's agent list
+ * is the floor: an agent the link names and `/fleet` does not is still listed
+ * (with no status), and where both name it the view wins, except that a fresher
+ * `/healthz` answer wins over a cached view.
  */
 import type { MobileFleetAgent, MobileFleetView } from "@hermetic/core/schema";
 import { MobileFleetView as MobileFleetViewSchema } from "@hermetic/core/schema";
 import { reasonOf } from "../client/errors.ts";
 import type { RosterPrefs, RosterPrefsStorage } from "../client/roster-store.ts";
 import { agentHost, type FleetHosts } from "../gateway/client.ts";
-import { type FetchLike, firstFleetView } from "../gateway/hermeticd.ts";
+import { type FetchLike, fetchHealthz, firstFleetView } from "../gateway/hermeticd.ts";
 import { type PairedLink, readPairingLink } from "./pairing.ts";
 
 /* ── persistence seams ──────────────────────────────────────────────────── */
@@ -147,14 +152,25 @@ export interface FleetState {
   refreshing: boolean;
   /** Why the last refresh failed (`FLEET_LIST_UNAVAILABLE`, `HERMETICD_UNAVAILABLE`, …). */
   error: { code: string; message: string } | null;
+  /**
+   * Per-agent status read from each box's `/healthz` after `/fleet` failed, or
+   * `null` while `/fleet` answers (or before any fallback ran).
+   */
+  fromBoxes: Readonly<Record<string, BoxStatus>> | null;
 }
+
+/** What a box's own `/healthz` says about it, when `/fleet` could not. */
+export type BoxStatus = "ready" | "unreachable";
+
+/** An agent's status as the phone shows it: the view's, or a `/healthz` fallback's. */
+export type FleetAgentStatus = MobileFleetAgent["status"] | "unreachable";
 
 /** One agent as the phone lists it: the link's floor, with the view's facts when it has them. */
 export interface FleetAgent {
   name: string;
   /** MagicDNS name the phone dials. */
   host: string;
-  status: MobileFleetAgent["status"] | null;
+  status: FleetAgentStatus | null;
   tailscale_ip: string | null;
   version: string | null;
   health: MobileFleetAgent["health"] | null;
@@ -180,6 +196,8 @@ export interface FleetStoreDeps {
   operatorTailnet?: string | null;
   /** Per-box `/fleet` timeout. */
   timeoutMs?: number;
+  /** One box's `/healthz` (the pre-v16 fallback); defaults to `fetchHealthz` over `fetch`. */
+  healthz?: (host: string) => Promise<{ ok: boolean; error?: { code: string } | null }>;
 }
 
 /** How many boxes one refresh asks at once. */
@@ -193,6 +211,7 @@ const EMPTY: FleetState = {
   stale: false,
   refreshing: false,
   error: null,
+  fromBoxes: null,
 };
 
 export class FleetStore {
@@ -287,15 +306,52 @@ export class FleetStore {
         stale: false,
         refreshing: false,
         error: null,
+        fromBoxes: null,
       });
       await this.deps.viewCache.write(JSON.stringify(view)).catch(() => {});
       await this.persist();
       return true;
     } catch (error) {
       if (gen !== this.gen) return false;
-      this.set({ stale: true, refreshing: false, error: reasonOf(error) });
+      const reason = reasonOf(error);
+      // No box served `/fleet`: ask each one about itself instead.
+      const fromBoxes = await this.readBoxes();
+      if (gen !== this.gen) return false;
+      let listening = this.state.listening;
+      const ready = Object.entries(fromBoxes ?? {}).filter(([, status]) => status === "ready");
+      // Narrow the default only on a real answer: with every box silent (the
+      // tunnel down) the pairing's own list is the better guess.
+      const narrowed = this.listeningDefault && ready.length > 0;
+      if (narrowed) {
+        listening = new Set(ready.map(([name]) => name));
+        this.listeningDefault = false;
+      }
+      this.set({ stale: true, refreshing: false, error: reason, fromBoxes, listening });
+      if (narrowed) await this.persist();
       return false;
     }
+  }
+
+  /** Every named box's `/healthz`, at once: `ready`, `unreachable`, or left out when the gate refused. */
+  private async readBoxes(): Promise<Record<string, BoxStatus> | null> {
+    const healthz = this.deps.healthz ?? ((host: string) => fetchHealthz(host, this.deps.fetch));
+    const agents = this.agents();
+    if (agents.length === 0) return null;
+    const answers = await Promise.all(
+      agents.map(async (a): Promise<[string, BoxStatus | null]> => {
+        let answer: { ok: boolean; error?: { code: string } | null };
+        try {
+          answer = await healthz(a.host);
+        } catch (error) {
+          answer = { ok: false, error: reasonOf(error) };
+        }
+        if (answer.ok) return [a.name, "ready"];
+        // The gate did not ask: that says nothing about the box.
+        return [a.name, answer.error?.code === "TUNNEL_UNVERIFIED" ? null : "unreachable"];
+      }),
+    );
+    const known = answers.filter((e): e is [string, BoxStatus] => e[1] !== null);
+    return known.length > 0 ? Object.fromEntries(known) : null;
   }
 
   /* ── reading ──────────────────────────────────────────────────────────── */
@@ -327,13 +383,14 @@ export class FleetStore {
     const hosts = this.hosts();
     if (!hosts) return [];
     const viewed = new Map((this.state.view?.agents ?? []).map((a) => [a.name, a]));
+    const boxes = this.state.fromBoxes;
     return hosts.agents
       .map(({ name }) => {
         const v = viewed.get(name);
         return {
           name,
           host: agentHost(hosts, name),
-          status: v?.status ?? null,
+          status: boxes?.[name] ?? v?.status ?? null,
           tailscale_ip: v?.tailscale_ip ?? null,
           version: v?.version ?? null,
           health: v?.health ?? null,

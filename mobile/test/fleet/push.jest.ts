@@ -1,7 +1,7 @@
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { MobilePushDevice as MobilePushDeviceSchema } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
-import type { PushBox } from "../../src/gateway/push-registry.ts";
+import type { PushBox, PushBoxResult } from "../../src/gateway/push-registry.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
 import {
   DEVICE_ID_KEY,
@@ -11,9 +11,13 @@ import {
   PushSync,
   type PushTokenResult,
   randomId,
+  rotateDeviceId,
 } from "../../src/fleet/push.ts";
 import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
+import { resetTunnelChecks } from "../../src/gateway/hermeticd.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
+
+beforeEach(() => resetTunnelChecks());
 
 const TOKEN = "ExponentPushToken[FIXTURE-token]";
 
@@ -64,16 +68,29 @@ function sync(
   fleet: FleetStore,
   registrar: PushRegistrar,
   token: PushTokenResult = { ok: true, token: TOKEN },
+  opts: { previews?: () => boolean; onRenewed?: () => void } = {},
 ) {
   return new PushSync({
     fleet,
     registrar,
     deviceId: async () => "device-1",
+    rotateDeviceId: async () => "device-2",
     token: async () => token,
     platform: "ios",
     appVersion: "0.1.0",
+    previews: opts.previews ?? (() => false),
+    ...(opts.onRenewed ? { onRenewed: opts.onRenewed } : {}),
   });
 }
+
+/** hermeticd's 403 for a `device_id` another tailnet login holds, as the registrar reports it. */
+const forbidden = (instance: string): PushBoxResult => ({
+  instance,
+  ok: false,
+  code: "FORBIDDEN",
+  message: `${instance}: device id held by another login`,
+  status: "forbidden",
+});
 
 describe("PushSync", () => {
   test("enable registers a valid MobilePushDevice with every listened box", async () => {
@@ -91,7 +108,69 @@ describe("PushSync", () => {
       platform: "ios",
       app_version: "0.1.0",
       listening: "all",
+      previews: false,
     });
+  });
+
+  test("every registration states the previews choice, read when it is sent", async () => {
+    const fleet = await pairedFleet();
+    const reg = recorder();
+    let previews = false;
+    const push = sync(fleet, reg, undefined, { previews: () => previews });
+    await push.enable();
+    previews = true;
+    await push.sync();
+    expect(reg.registered.map((r) => r.device.previews)).toEqual([false, true]);
+    expect(MobilePushDeviceSchema.safeParse(reg.registered[1]?.device).success).toBe(true);
+  });
+
+  test("a full renewal is recorded; a partial one is not", async () => {
+    const fleet = await pairedFleet();
+    const renewed = jest.fn();
+    await sync(fleet, recorder(), undefined, { onRenewed: renewed }).enable();
+    expect(renewed).toHaveBeenCalledTimes(1);
+    const partial: PushRegistrar = {
+      ...recorder(),
+      register: async (boxes) =>
+        boxes.map((b) =>
+          b.instance === "corvid"
+            ? { instance: b.instance, ok: false as const, code: "HERMETICD_UNAVAILABLE", message: "x" }
+            : { instance: b.instance, ok: true as const },
+        ),
+    };
+    await sync(fleet, partial, undefined, { onRenewed: renewed }).enable();
+    expect(renewed).toHaveBeenCalledTimes(1);
+  });
+
+  test("forbidden: a new device id is minted and the registration retried once", async () => {
+    const fleet = await pairedFleet();
+    const reg = recorder();
+    const register = reg.register;
+    reg.register = async (boxes, device) => {
+      const results = await register(boxes, device);
+      // corvid holds device-1 for another login.
+      return device.device_id === "device-1"
+        ? results.map((r) => (r.instance === "corvid" ? forbidden("corvid") : r))
+        : results;
+    };
+    const status = await sync(fleet, reg).enable();
+    expect(reg.registered.map((r) => r.device.device_id)).toEqual(["device-1", "device-2"]);
+    expect(reg.registered[1]?.boxes).toEqual(["atlas", "corvid", "ember"]);
+    // The boxes that took the old id forget it.
+    expect(reg.unregistered).toEqual([{ boxes: ["atlas", "ember"], id: "device-1" }]);
+    expect(status).toMatchObject({ state: "on" });
+    if (status.state === "on") expect(status.boxes.every((b) => b.ok)).toBe(true);
+  });
+
+  test("forbidden twice: one retry only, and the refusal is reported", async () => {
+    const fleet = await pairedFleet();
+    const reg = recorder();
+    const register = reg.register;
+    reg.register = async (boxes, device) =>
+      (await register(boxes, device)).map((r) => (r.instance === "corvid" ? forbidden("corvid") : r));
+    const status = await sync(fleet, reg).enable();
+    expect(reg.registered).toHaveLength(2);
+    expect(status.state === "on" && status.boxes.find((b) => b.instance === "corvid")?.ok).toBe(false);
   });
 
   test("a listening change registers the kept boxes and unregisters the dropped one", async () => {
@@ -130,7 +209,9 @@ describe("PushSync", () => {
   test("one box refusing does not stop the others (hermeticd registrar)", async () => {
     const fleet = await pairedFleet();
     const f = fakeFetch((url) => {
-      if (url.includes("corvid")) throw new TypeError("Network request failed");
+      // corvid answers over HTTPS (the tunnel gate passes) but not on 7434.
+      if (url.includes("corvid") && url.includes(":7434/"))
+        throw new TypeError("Network request failed");
       return json({ ok: true });
     });
     const status = await sync(fleet, hermeticdRegistrar(f.fetch)).enable();
@@ -155,6 +236,13 @@ describe("device id", () => {
     expect(a).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(await deviceId(kv)).toBe(a);
     expect(kv.map.get(DEVICE_ID_KEY)).toBe(a);
+  });
+
+  test("rotation mints a new id and keeps it", async () => {
+    const kv = memoryKv({ [DEVICE_ID_KEY]: "old-id" });
+    const next = await rotateDeviceId(kv, () => "new-id");
+    expect(next).toBe("new-id");
+    expect(await deviceId(kv)).toBe("new-id");
   });
 
   test("a stored value that is not an id is replaced", async () => {

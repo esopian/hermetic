@@ -12,6 +12,13 @@
  */
 import { HermeticError, isHermeticError, redactText } from "@hermetic/core/chat-client";
 
+/**
+ * Phone-local: a plain-HTTP call to hermeticd was not sent because HTTPS to the
+ * same box had not been shown to work (`src/gateway/hermeticd.ts`, the tunnel
+ * gate). Not a core code; the phone raises it and only the phone reads it.
+ */
+export const TUNNEL_UNVERIFIED = "TUNNEL_UNVERIFIED";
+
 /** A thrown value's string `code`, when it carries one. */
 export function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
@@ -37,7 +44,12 @@ export function reasonOf(error: unknown): { code: string; message: string } {
 /** Whether the failure says "could not reach the box" rather than "the box said no". */
 export function isUnreachable(error: unknown): boolean {
   const code = errorCode(error);
-  return code === "CHAT_UNREACHABLE" || code === "HERMETICD_UNAVAILABLE" || code === "ABORTED";
+  return (
+    code === "CHAT_UNREACHABLE" ||
+    code === "HERMETICD_UNAVAILABLE" ||
+    code === TUNNEL_UNVERIFIED ||
+    code === "ABORTED"
+  );
 }
 
 export { HermeticError, isHermeticError };
@@ -76,6 +88,12 @@ export function errorCopy(error: unknown): ErrorCopy {
       return {
         title: "No box's agent service answered.",
         detail: "Showing the agent list from pairing. It refreshes when a box answers on the tailnet.",
+      };
+    case TUNNEL_UNVERIFIED:
+      return {
+        title: "The box could not be confirmed on the tailnet.",
+        detail:
+          "Its secure address did not answer, so nothing was sent to it. Check the Tailscale app is connected and signed in to the fleet's tailnet.",
       };
     case "FLEET_LIST_UNAVAILABLE":
       return {

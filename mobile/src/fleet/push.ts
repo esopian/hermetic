@@ -3,12 +3,23 @@
  * token, kept in step with the listening choice (§9.4).
  *
  * The phone registers with every box it listens to (`listening: "all"`, every
- * bot on that box), on enabling push, on each foreground (a registration lapses
- * 30 days after its last renewal), and whenever the listened set changes; a box
- * dropped from the set is told to forget the phone. Sign out and turning push
- * off unregister everywhere. Each box answers on its own, and a failure on one
- * never stops the others. Pure: the token source and the registrar are handed
- * in, so the provider's tests run on doubles.
+ * bot on that box), on enabling push, on each foreground and from the
+ * background task (a registration lapses 72 hours after its last renewal),
+ * whenever the listened set changes, and when the previews choice changes; a
+ * box dropped from the set is told to forget the phone. Sign out and turning
+ * push off unregister everywhere. Each box answers on its own, and a failure on
+ * one never stops the others.
+ *
+ * Every registration states `previews`: the Settings "Show message previews"
+ * choice, off unless the operator turns it on, because a preview travels
+ * through Apple's and Expo's push services.
+ *
+ * A box that answers `forbidden` holds this phone's `device_id` for another
+ * tailnet login. The phone mints a new id, keeps it, and registers once more
+ * (`PushSync.sync`); the boxes that took the old id are told to forget it.
+ *
+ * Pure: the token source and the registrar are handed in, so the provider's
+ * tests run on doubles.
  */
 import type { MobilePushDevice, MobilePushPlatform } from "@hermetic/core/schema";
 import type { FetchLike } from "../gateway/hermeticd.ts";
@@ -58,6 +69,21 @@ export function allBoxes(fleet: FleetStore): PushBox[] {
 }
 
 export const DEVICE_ID_KEY = "hermetic.device_id";
+/** The operator's push switch (`"on"` / `"off"`), in the keychain. */
+export const PUSH_KEY = "hermetic.push";
+/** The previews choice (`"true"` / `"false"`); absent is off (opt-in). */
+export const PREVIEWS_KEY = "hermetic.previews";
+/** When the registration was last renewed with every listened box (ISO). */
+export const PUSH_RENEWED_KEY = "hermetic.push.renewed_at";
+/** The box keeps a registration 72 h past its last renewal (agentd `PUSH_DEVICE_TTL_MS`). */
+export const PUSH_REGISTRATION_TTL_MS = 72 * 60 * 60_000;
+/** The background task renews once a registration is this old: well inside the TTL. */
+export const PUSH_RENEW_AFTER_MS = 12 * 60 * 60_000;
+
+/** The stored previews choice: on only when the operator turned it on. */
+export function previewsFrom(stored: string | null): boolean {
+  return stored === "true";
+}
 
 /** A random v4 UUID. An identifier, not a secret: the box gates writes on the tailnet login. */
 export function randomId(rand: () => number = Math.random): string {
@@ -74,9 +100,22 @@ export function randomId(rand: () => number = Math.random): string {
 export async function deviceId(kv: KvStorage): Promise<string> {
   const existing = await kv.get(DEVICE_ID_KEY).catch(() => null);
   if (existing && /^[A-Za-z0-9_-]{1,64}$/.test(existing)) return existing;
-  const id = randomId();
+  return rotateDeviceId(kv);
+}
+
+/** Mint a new device id and keep it in place of the old one. */
+export async function rotateDeviceId(kv: KvStorage, mint: () => string = randomId): Promise<string> {
+  const id = mint();
   await kv.set(DEVICE_ID_KEY, id).catch(() => {});
   return id;
+}
+
+/**
+ * A box refused the registration because the `device_id` is held by another
+ * tailnet login (hermeticd's 403).
+ */
+export function isForbidden(result: PushBoxResult): boolean {
+  return !result.ok && result.status === "forbidden";
 }
 
 export interface PushSyncDeps {
@@ -87,6 +126,12 @@ export interface PushSyncDeps {
   token: () => Promise<PushTokenResult>;
   platform: MobilePushPlatform;
   appVersion: string;
+  /** The Settings "Show message previews" choice, read at each registration. */
+  previews: () => boolean;
+  /** Mint and keep a new device id (`rotateDeviceId`), after a `forbidden`. */
+  rotateDeviceId: () => Promise<string>;
+  /** Every listened box took the registration: remember when (`PUSH_RENEWED_KEY`). */
+  onRenewed?: () => void | Promise<void>;
 }
 
 /**
@@ -139,21 +184,40 @@ export class PushSync {
     const keep = new Set(boxes.map((b) => b.instance));
     const dropped = [...this.registered.values()].filter((b) => !keep.has(b.instance));
     const id = await this.deps.deviceId();
-    const device: MobilePushDevice = {
-      device_id: id,
+    const device = (device_id: string): MobilePushDevice => ({
+      device_id,
       token,
       platform: this.deps.platform,
       app_version: this.deps.appVersion,
       listening: "all",
-    };
-    const [results] = await Promise.all([
-      boxes.length > 0 ? this.deps.registrar.register(boxes, device) : Promise.resolve([]),
+      previews: this.deps.previews(),
+    });
+    let [results] = await Promise.all([
+      boxes.length > 0 ? this.deps.registrar.register(boxes, device(id)) : Promise.resolve([]),
       dropped.length > 0 ? this.deps.registrar.unregister(dropped, id) : Promise.resolve([]),
     ]);
+    if (results.some(isForbidden) && this.token === token) {
+      // Another login holds this id on some box: take a new one and try once more.
+      const accepted = new Set(results.filter((r) => r.ok).map((r) => r.instance));
+      const fresh = await this.deps.rotateDeviceId();
+      await this.deps.registrar
+        .unregister(
+          boxes.filter((b) => accepted.has(b.instance)),
+          id,
+        )
+        .catch(() => []);
+      results = await this.deps.registrar.register(boxes, device(fresh));
+    }
     if (this.token !== token) return this.status;
     this.registered = new Map(boxes.map((b) => [b.instance, b]));
     this.status = { state: "on", boxes: results };
+    if (results.length > 0 && results.every((r) => r.ok)) await this.deps.onRenewed?.();
     return this.status;
+  }
+
+  /** Whether the box behind `instance` holds this phone's registration right now. */
+  covers(instance: string): boolean {
+    return this.status.state === "on" && this.status.boxes.some((b) => b.instance === instance && b.ok);
   }
 
   /** Forget the token and unregister from every box it may be on (best effort). */
@@ -169,4 +233,42 @@ export class PushSync {
     }
     return this.status;
   }
+}
+
+export interface RenewDeps {
+  fleet: FleetStore;
+  registrar: PushRegistrar;
+  /** The keychain: the push switch, the previews choice, the device id, the last renewal. */
+  secure: KvStorage;
+  token: () => Promise<PushTokenResult>;
+  platform: MobilePushPlatform;
+  appVersion: string;
+  /** ISO-8601 now. */
+  now: () => string;
+}
+
+/**
+ * The background task's renewal: register again with every listened box when
+ * push is on and the last full renewal is `PUSH_RENEW_AFTER_MS` old (or never
+ * happened), so a phone left in the background keeps its registration inside
+ * the box's 72 h. `null` when there was nothing to do.
+ */
+export async function renewIfDue(deps: RenewDeps): Promise<PushStatus | null> {
+  const get = (key: string) => deps.secure.get(key).catch(() => null);
+  if ((await get(PUSH_KEY)) !== "on") return null;
+  const last = Date.parse((await get(PUSH_RENEWED_KEY)) ?? "");
+  if (Number.isFinite(last) && Date.parse(deps.now()) - last < PUSH_RENEW_AFTER_MS) return null;
+  const previews = previewsFrom(await get(PREVIEWS_KEY));
+  const sync = new PushSync({
+    fleet: deps.fleet,
+    registrar: deps.registrar,
+    deviceId: () => deviceId(deps.secure),
+    rotateDeviceId: () => rotateDeviceId(deps.secure),
+    token: deps.token,
+    platform: deps.platform,
+    appVersion: deps.appVersion,
+    previews: () => previews,
+    onRenewed: () => deps.secure.set(PUSH_RENEWED_KEY, deps.now()).catch(() => {}),
+  });
+  return sync.enable();
 }

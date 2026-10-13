@@ -52,13 +52,18 @@ export default function RootLayout() {
 
 function Shell() {
   const t = useTheme();
-  const { banner, dismissBanner } = useFleetContext();
+  const { banner, dismissBanner, status } = useFleetContext();
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(t.c.bg).catch(() => {});
   }, [t.c.bg]);
   return (
     <>
-      <StatusBar style={t.scheme === "dark" ? "light" : "dark"} />
+      {/*
+        Keyed on the pairing status: signing out (or pairing) left iOS drawing a
+        light status bar over the light scheme until relaunch, and a remount
+        applies the style again.
+      */}
+      <StatusBar key={status} style={t.scheme === "dark" ? "light" : "dark"} />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: t.c.bg },

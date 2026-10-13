@@ -9,10 +9,12 @@ import {
   FIXTURE_TAILNET,
   fixtureKit,
 } from "../../src/fixture/index.ts";
+import { createHermeticClient } from "../../src/client/client.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
 import { hermeticdRegistrar, PushSync } from "../../src/fleet/push.ts";
 import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
 import { probeTailscale } from "../../src/gateway/tailscale.ts";
+import { InboxStore } from "../../src/inbox/store.ts";
 
 const NOW = "2026-10-13T10:00:00.000Z";
 
@@ -107,14 +109,21 @@ describe("fixtureKit", () => {
       fleet,
       registrar: hermeticdRegistrar(k.fetch),
       deviceId: async () => "phone-1",
+      rotateDeviceId: async () => "phone-2",
       token: async () => ({ ok: true, token: k.pushToken }),
       platform: "ios",
       appVersion: "0.1.0",
+      previews: () => false,
     });
     const status = await push.enable();
     expect(status.state).toBe("on");
     expect(k.registry.devicesOn("fxtr0001-atlas.hermetic.ts.net")).toEqual([
-      expect.objectContaining({ device_id: "phone-1", token: FIXTURE_PUSH_TOKEN, listening: "all" }),
+      expect.objectContaining({
+        device_id: "phone-1",
+        token: FIXTURE_PUSH_TOKEN,
+        listening: "all",
+        previews: false,
+      }),
     ]);
     // A stopped agent is not listened, so it was never asked.
     expect(k.registry.devicesOn("fxtr0001-juniper.hermetic.ts.net")).toEqual([]);
@@ -131,4 +140,47 @@ describe("fixtureKit", () => {
     });
     expect(swarm.instance).toBe("atlas");
   });
+
+  test("chat: a sent prompt is one row, and the conversation observes live from the start", async () => {
+    const k = kit();
+    const fleet = await pairedFleet(k);
+    const client = createHermeticClient({
+      fleet,
+      inbox: new InboxStore(memoryFile(), () => NOW),
+      fetch: k.fetch,
+      openSocket: () => {
+        throw new Error("no socket in fixture mode");
+      },
+      chat: k.chat,
+    });
+    const until = async (ok: () => boolean, ms = 8_000) => {
+      const end = Date.now() + ms;
+      while (!ok()) {
+        if (Date.now() > end) throw new Error("timed out");
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    try {
+      const target = { instance: "atlas", bot: "scribe", session: null };
+      client.chat.open(target);
+      await until(() => client.chat.view(target).history === "ready");
+      // Not "Reconnecting…": the fixture's observation has its activity store.
+      expect(client.chat.view(target).observe).toBe("live");
+      const prompt = "FIXTURE prompt sent once";
+      client.chat.send(target, prompt);
+      const said = () =>
+        client.chat
+          .view(target)
+          .messages.filter(
+            (m) =>
+              m.role === "user" && m.blocks.some((b) => b.kind === "text" && b.markdown === prompt),
+          );
+      await until(() => !client.chat.view(target).live && !client.chat.view(target).sending);
+      await until(() => said().every((m) => !m.id.startsWith("local:")));
+      expect(said()).toHaveLength(1);
+      expect(client.chat.view(target).observe).toBe("live");
+    } finally {
+      client.dispose();
+    }
+  }, 20_000);
 });

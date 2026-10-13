@@ -40,7 +40,7 @@ import type {
   TurnStartResult,
   TurnState,
 } from "./chat-types.ts";
-import { errorCode } from "./errors.ts";
+import { errorCode, HermeticError } from "./errors.ts";
 import { realTimers, type TimerHandle, type Timers } from "./timers.ts";
 import {
   blockKey,
@@ -61,8 +61,6 @@ export const MATCH_AHEAD_MS = 5 * 60_000;
 export const HOLD_BEHIND_MS = 60_000;
 export const TURN_HOLD_LIMIT = 200;
 export const EARLY_OBSERVE_LIMIT = 200;
-/** A turn with no frame for this long, and no request waiting on the operator, is dropped. */
-export const TURN_IDLE_MS = 10 * 60_000;
 /** A `reconnecting` observation advisory decays back to `live` after this much quiet. */
 export const OBSERVE_QUIET_MS = 10_000;
 /** History re-read attempts after a dropped stream. */
@@ -331,7 +329,6 @@ interface TurnRun {
   seed: { session: string; at: string };
   segmentAt: string;
   settled: boolean;
-  idle: TimerHandle | null;
   body: string;
 }
 
@@ -372,6 +369,8 @@ interface Rec {
   observeError: Failure | null;
   observeQuiet: TimerHandle | null;
   closeObserve: (() => void) | null;
+  /** On screen: `open` was called and `leave` has not been since. What `resume` re-opens. */
+  opened: boolean;
   rolledOverFrom: string | null;
   view: ConversationView | null;
 }
@@ -427,9 +426,14 @@ export class ConversationStore {
 
   /* ── opening and leaving ────────────────────────────────────────────── */
 
-  /** The conversation is on screen: read what is missing and start observing. */
+  /**
+   * The conversation is on screen: read what is missing and start observing.
+   * Idempotent while an observation runs; one that ended (terminally, by
+   * `suspend`, or by `endObservations`) is started again.
+   */
   open(target: ConversationTarget): void {
     const record = this.record(target);
+    record.opened = true;
     if (record.history === "idle" || record.history === "failed") {
       if (!record.sending && !record.aborting) void this.readHistory(record);
     }
@@ -449,6 +453,7 @@ export class ConversationStore {
   leave(target: ConversationTarget): void {
     const record = this.records.get(conversationKey(target));
     if (!record) return;
+    record.opened = false;
     record.closeObserve?.();
     record.closeObserve = null;
     record.observe = "off";
@@ -456,6 +461,48 @@ export class ConversationStore {
     record.observeQuiet = null;
     if (record.queue.length > 0) record.parked = true;
     this.changed(record);
+  }
+
+  /**
+   * Start the conversation's observation afresh, whatever state the last one
+   * is in (live, failed, ended): what a screen calls when it comes back to the
+   * foreground focused on this conversation. The queue is left as it is.
+   */
+  reopen(target: ConversationTarget): void {
+    const record = this.record(target);
+    this.stopObserve(record, "off", null);
+    this.open(target);
+  }
+
+  /**
+   * Close every observation (the hint socket with it) and keep the record of
+   * which conversations are on screen, for `resume`. The app went to the
+   * background: a suspended phone holds no socket open.
+   */
+  suspend(): void {
+    for (const record of this.records.values())
+      if (record.closeObserve) this.stopObserve(record, "off", null);
+  }
+
+  /**
+   * Re-open (`open` semantics) every conversation still on screen whose
+   * observation is not running, optionally only those `filter` accepts. The
+   * app came back to the foreground, or an agent became listened again.
+   */
+  resume(filter: (target: ConversationTarget) => boolean = () => true): void {
+    for (const record of [...this.records.values()])
+      if (record.opened && !record.closeObserve && filter(record.target)) this.open(record.target);
+  }
+
+  /**
+   * End the observation of every conversation `match` accepts, without calling
+   * it a failure: `observe` goes to `off` (the band shows nothing) and
+   * `observeError` carries `reason`, so a screen can say why. Used when the
+   * operator stops listening to an agent, or it leaves the fleet.
+   */
+  endObservations(match: (target: ConversationTarget) => boolean, reason: Failure): void {
+    for (const record of this.records.values())
+      if (record.closeObserve && match(record.target)) this.stopObserve(record, "off", reason);
   }
 
   async reload(target: ConversationTarget): Promise<boolean> {
@@ -496,11 +543,9 @@ export class ConversationStore {
       seed,
       segmentAt: at,
       settled: false,
-      idle: null,
       body,
     };
     record.run = run;
-    this.tick(record, run);
     this.changed(record);
 
     const turn: TurnRequest = {
@@ -668,9 +713,19 @@ export class ConversationStore {
 
   /* ── requests ───────────────────────────────────────────────────────── */
 
+  /**
+   * Answer a request in this conversation's session. Refused here, before
+   * anything is sent, when the conversation has no session yet: an answer with
+   * no session would be routed by the gateway to whatever it guessed.
+   */
   async respond(target: ConversationTarget, input: RespondInput): Promise<RespondResult> {
     const record = this.record(target);
-    const session = record.resolvedSession ?? target.session ?? record.run?.seed.session ?? "";
+    const session = record.resolvedSession || target.session || record.run?.seed.session || "";
+    if (!session)
+      throw new HermeticError(
+        "VALIDATION",
+        "This conversation has no session yet, so the request cannot be answered from here.",
+      );
     const result = await this.transport.respond({
       ...input,
       instance: target.instance,
@@ -681,15 +736,13 @@ export class ConversationStore {
     return result;
   }
 
-  /** The operator has answered (or skipped) a request: the turn's idle clock runs again. */
+  /** The operator has answered (or skipped) a request: it is no longer open. */
   release(target: ConversationTarget, request_id: string): void {
     const record = this.record(target);
     record.released.add(request_id);
     const run = record.run;
-    if (run) {
+    if (run)
       run.fold = { ...run.fold, openRequests: run.fold.openRequests.filter((id) => id !== request_id) };
-      if (!run.settled) this.tick(record, run);
-    }
     this.changed(record);
   }
 
@@ -713,7 +766,6 @@ export class ConversationStore {
       const inLive = k !== null && (run.fold.live?.blocks.some((b) => blockKey(b) === k) ?? false);
       if (!inLive && this.landOnSegment(record, frame)) {
         run.fold = { ...next, live: run.fold.live };
-        this.tick(record, run);
         this.changed(record);
         return;
       }
@@ -722,7 +774,6 @@ export class ConversationStore {
     run.fold = next;
     record.live = next.live;
     record.activity = next.activity;
-    this.tick(record, run);
     this.changed(record);
     if (frame.type === "block" && this.onRequestOpened) {
       const block = frame.block;
@@ -897,12 +948,21 @@ export class ConversationStore {
     this.changed(record);
   }
 
+  private stopObserve(record: Rec, state: ObserveState, reason: Failure | null): void {
+    record.closeObserve?.();
+    record.closeObserve = null;
+    if (record.observeQuiet !== null) this.timers.clearTimeout(record.observeQuiet);
+    record.observeQuiet = null;
+    record.observe = state;
+    record.observeError = reason;
+    this.changed(record);
+  }
+
   /** Forget everything (sign out / re-pair). */
   reset(): void {
     for (const record of this.records.values()) {
       record.closeObserve?.();
       this.clearReconnect(record);
-      if (record.run?.idle != null) this.timers.clearTimeout(record.run.idle);
       if (record.observeQuiet !== null) this.timers.clearTimeout(record.observeQuiet);
     }
     this.records.clear();
@@ -949,6 +1009,7 @@ export class ConversationStore {
         observeError: null,
         observeQuiet: null,
         closeObserve: null,
+        opened: false,
         rolledOverFrom: null,
         view: null,
       };
@@ -1021,24 +1082,9 @@ export class ConversationStore {
 
   /* ── internals: the turn ────────────────────────────────────────────── */
 
-  private tick(record: Rec, run: TurnRun): void {
-    if (run.idle !== null) this.timers.clearTimeout(run.idle);
-    run.idle = null;
-    if (run.fold.openRequests.length > 0) return;
-    run.idle = this.timers.setTimeout(() => {
-      run.idle = null;
-      if (record.run === run && !run.settled) {
-        if (run.turnId) this.transport.forgetTurn?.(run.turnId);
-        this.end(record, run, false, null);
-      }
-    }, TURN_IDLE_MS);
-  }
-
   private end(record: Rec, run: TurnRun, ok: boolean, error: Failure | null): void {
     if (run.settled || record.run !== run) return;
     run.settled = true;
-    if (run.idle !== null) this.timers.clearTimeout(run.idle);
-    run.idle = null;
     if (run.turnId) this.owners.delete(run.turnId);
     record.activity = "idle";
     record.segments = [];
@@ -1122,8 +1168,6 @@ export class ConversationStore {
         record.gen += 1;
         if (run) {
           run.settled = true;
-          if (run.idle !== null) this.timers.clearTimeout(run.idle);
-          run.idle = null;
           if (run.turnId) {
             this.owners.delete(run.turnId);
             this.transport.forgetTurn?.(run.turnId);

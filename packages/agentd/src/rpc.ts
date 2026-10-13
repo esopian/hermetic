@@ -29,6 +29,7 @@ import {
   HERMES_HOME,
   HERMETICD_RPC_PORT,
   RPC_CONTENT_TYPE,
+  PUSH_DEVICE_ROUTE_PREFIX,
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
@@ -37,6 +38,7 @@ import type { Host } from "./host.ts";
 import { tailscaleIpv4 } from "./tailscale.ts";
 import { AgentdError } from "./errors.ts";
 import { rpcRefusal, type MobileRoutes } from "./rpc-mobile.ts";
+import { deviceTag } from "./push/devices.ts";
 
 export { HERMETICD_RPC_PORT };
 
@@ -297,7 +299,23 @@ function auditLine(
   const login = who?.login === "" || who === null ? "-" : who.login;
   const node = who?.node === "" || who === null ? "-" : who.node;
   const tags = who && who.tags.length > 0 ? who.tags.join(",") : "-";
-  return `rpc ${request.method} ${path} from ${peerIp} node=${node} login=${login} tags=${tags} ${verdict}`;
+  return `rpc ${request.method} ${auditPath(path)} from ${peerIp} node=${node} login=${login} tags=${tags} ${verdict}`;
+}
+
+/**
+ * The path as the audit line spells it: a phone's device id, the one value a
+ * path here carries, is replaced by its `deviceTag` (§9.4).
+ */
+export function auditPath(path: string): string {
+  if (!path.startsWith(PUSH_DEVICE_ROUTE_PREFIX)) return path;
+  const raw = path.slice(PUSH_DEVICE_ROUTE_PREFIX.length);
+  let id = raw;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    // Not decodable: hashed as it came, and the route refuses it anyway.
+  }
+  return `${PUSH_DEVICE_ROUTE_PREFIX}${deviceTag(id)}`;
 }
 
 /**

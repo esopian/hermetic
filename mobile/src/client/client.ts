@@ -22,7 +22,7 @@ import type { FleetStore } from "../fleet/store.ts";
 import { boxAddress, createGatewayClient } from "../gateway/client.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
-import { probeTailscale, type TailscaleProbe } from "../gateway/tailscale.ts";
+import { probeHosts, probeTailscale, type TailscaleProbe } from "../gateway/tailscale.ts";
 import { createGatewayTransport, type GatewayTransport } from "../gateway/transport.ts";
 import {
   type AlertDecision,
@@ -30,6 +30,7 @@ import {
   alertFor,
   type InboxArrival,
   type InboxStore,
+  PHONE_DEDUPE_MARK,
   type WatchedThread,
 } from "../inbox/store.ts";
 import { ConversationStore, type ConversationTarget } from "./conversation-store.ts";
@@ -75,15 +76,19 @@ export function requestAlertBody(block: ApprovalBlock | QuestionBlock): string {
  * The key an event this phone saw on its own socket is filed under. The box
  * keys its pushes `<instance>:<session>:<message_count>:<kind>`, which the
  * phone cannot know; the inbox's same-conversation, same-kind window
- * (`SAME_EVENT_MS`) is what folds the two.
+ * (`SAME_EVENT_MS`) is what folds a phone-local entry (marked by
+ * `PHONE_DEDUPE_MARK`) with the box's push for the same event.
  */
 export function localDedupe(
   where: { instance: string; session: string },
   kind: MobilePushKind,
   ref: string,
 ): string {
-  return `${where.instance}:${where.session}:phone-${ref}:${kind}`;
+  return `${where.instance}:${where.session}${PHONE_DEDUPE_MARK}${ref}:${kind}`;
 }
+
+/** Why an observation ended when its agent stopped being listened (or left the fleet). */
+export const UNLISTENED = "UNLISTENED";
 
 /* ── the client ─────────────────────────────────────────────────────────── */
 
@@ -108,6 +113,26 @@ export interface HermeticClientOptions {
 
 /**
  * What the screens use (`src/client/index.ts` documents each member).
+ *
+ * Phase (`setPhase`):
+ *
+ * - `"background"` — called by the RN layer once its linger after the app left
+ *   the screen has run out. Every running turn pump is detached (forgotten, not
+ *   aborted: each turn keeps running on its box) and every observation is
+ *   closed, hint socket and all. Nothing is interrupted on any box.
+ * - `"active"` after `"background"` — every conversation still on screen is
+ *   re-opened (`chat.resume`, `open` semantics: a fresh snapshot, then hints),
+ *   and every turn detached on the way out is reported gone
+ *   (`chat.onTurnGone`), so the store re-reads its transcript from the box.
+ * - `"inactive"` — alerts only; nothing is detached.
+ *
+ * Addressing: a conversation, roster read or Bot Mode call reaches an agent
+ * only while this phone listens to it and the fleet still has it — the live
+ * `GET /fleet` view when there is one, else the pairing link. Anything else is
+ * refused with `VALIDATION` before a dial. An observation open on an agent that
+ * stops qualifying ends with `observe: "off"` and `observeError.code`
+ * `UNLISTENED` (not a failure); it resumes on its own when the agent is
+ * listened again.
  */
 export interface HermeticClient {
   readonly fleet: FleetStore;
@@ -117,7 +142,7 @@ export interface HermeticClient {
   /** Bot Mode lifecycle and subagent control beside the store (`open`, `compact`, `steerSubagent`, …). */
   readonly gateway: GatewayTransport;
   readonly tailscale: {
-    /** Probe up to three listened boxes; the answer is also kept as `last`. */
+    /** Probe up to three listened boxes, ready ones first; the answer is also kept as `last`. */
     probe(): Promise<TailscaleProbe>;
     last(): TailscaleProbe | null;
   };
@@ -132,12 +157,27 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   const adapter =
     options.chat ?? createGatewayClient({ fetch: options.fetch, openSocket: options.openSocket, now });
 
+  /** In the fleet: the live view when there is one (it wins over the link), else the link. */
+  const inFleet = (instance: string): boolean => {
+    const state = fleet.getState();
+    if (!state.link) return false;
+    if (state.view) return state.view.agents.some((a) => a.name === instance);
+    return state.link.payload.agents.some((a) => a.name === instance);
+  };
+  const addressable = (instance: string): boolean => inFleet(instance) && fleet.isListening(instance);
+
   const address = (instance: string) => {
     const hosts = fleet.hosts();
-    if (!hosts?.agents.some((a) => a.name === instance))
+    if (!hosts || !inFleet(instance))
       throw new HermeticError("VALIDATION", `${instance} is not an agent of the paired fleet`, {
         instance,
       });
+    if (!fleet.isListening(instance))
+      throw new HermeticError(
+        "VALIDATION",
+        `This phone is not listening to ${instance}. Turn listening on to reach it.`,
+        { instance },
+      );
     return boxAddress(hosts, instance);
   };
 
@@ -156,6 +196,9 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   });
 
   let phase: AppPhase = "active";
+  /** Turns detached when the app went to the background, reported gone on its return. */
+  let detached: string[] = [];
+  let suspended = false;
   let watched: WatchedThread | null = null;
   const previews = options.previews ?? (() => true);
   const fleetId = () => fleet.getState().link?.payload.fleet_id ?? "";
@@ -219,7 +262,8 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
           {
             ...base,
             kind: "turn.error",
-            body: outcome.error.code,
+            // What the box's own push says for a failed turn: the failure text, else the code.
+            body: (previews() && outcome.error.message) || outcome.error.code,
             dedupe: localDedupe({ instance: where.instance, session }, "turn.error", outcome.turnId),
           },
           null,
@@ -253,15 +297,22 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   const pairedFleet = fleetId();
   if (pairedFleet) void roster.setFleet(pairedFleet);
   roster.setListening(fleet.listened());
-  const offFleet = fleet.subscribe(() => roster.setListening(fleet.listened()));
+  const unlistened = {
+    code: UNLISTENED,
+    message: "This phone is no longer listening to this agent.",
+  };
+  const offFleet = fleet.subscribe(() => {
+    roster.setListening(fleet.listened());
+    chat.endObservations((t) => !addressable(t.instance), unlistened);
+    if (!suspended)
+      chat.resume((t) => addressable(t.instance) && chat.view(t).observeError?.code === UNLISTENED);
+  });
 
   let lastProbe: TailscaleProbe | null = null;
   const tailscale = {
     probe: async () => {
-      const hosts = fleet
-        .listened()
-        .map((name) => fleet.hostOf(name))
-        .filter((h): h is string => h !== null);
+      const listened = new Set(fleet.listened());
+      const hosts = probeHosts(fleet.agents().filter((a) => listened.has(a.name)));
       lastProbe = await probeTailscale({ hosts, fetch: options.fetch });
       return lastProbe;
     },
@@ -285,6 +336,18 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     setPhase: (next) => {
       const was = phase;
       phase = next;
+      if (next === "background" && !suspended) {
+        suspended = true;
+        detached = [...detached, ...transport.detachTurns()];
+        chat.suspend();
+      }
+      if (next === "active" && suspended) {
+        suspended = false;
+        const gone = detached;
+        detached = [];
+        for (const id of gone) chat.onTurnGone(id);
+        chat.resume((t) => addressable(t.instance));
+      }
       if (next === "active" && was !== "active") readFocused();
     },
     setWatched: (next) => {

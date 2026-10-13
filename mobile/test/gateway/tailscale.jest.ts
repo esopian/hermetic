@@ -1,4 +1,5 @@
-import { classifyProbeError, probeTailscale } from "../../src/gateway/tailscale.ts";
+import { resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
+import { classifyProbeError, probeHosts, probeTailscale } from "../../src/gateway/tailscale.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
 
 /** Errors shaped like what React Native's fetch rejects with on iOS. */
@@ -14,7 +15,7 @@ const RN = {
 
 describe("classifyProbeError", () => {
   test.each([
-    ["bare 'Network request failed' (fast)", RN.bare(), "dns"],
+    ["bare 'Network request failed' (fast): says nothing about DNS", RN.bare(), "network"],
     ["NSURLErrorDomain -1003 / hostname could not be found", RN.cannotFindHost(), "dns"],
     ["NSURLErrorDomain -1001 / timed out", RN.timedOut(), "timeout"],
     ["NSURLErrorDomain -1004 / could not connect", RN.refused(), "refused"],
@@ -65,14 +66,40 @@ describe("probeTailscale", () => {
     expect((await probeTailscale({ hosts: ["a.t.ts.net"], fetch: f.fetch })).status).toBe("ok");
   });
 
-  test("every probe failing to resolve: off", async () => {
-    const f = fakeFetch((url) => {
-      throw url.includes("a.") ? RN.cannotFindHost() : RN.bare();
+  test("every probe failing to resolve, by an explicit DNS signature: off", async () => {
+    const f = fakeFetch(() => {
+      throw RN.cannotFindHost();
     });
     expect(await probeTailscale({ hosts: ["a.t.ts.net", "b.t.ts.net"], fetch: f.fetch })).toEqual({
       status: "off",
       failing: ["a.t.ts.net", "b.t.ts.net"],
     });
+  });
+
+  test("a bare fast 'Network request failed' is unreachable, never off", async () => {
+    const bare = fakeFetch(() => {
+      throw RN.bare();
+    });
+    expect((await probeTailscale({ hosts: ["a.t.ts.net"], fetch: bare.fetch })).status).toBe(
+      "unreachable",
+    );
+    const mixed = fakeFetch((url) => {
+      throw url.includes("a.") ? RN.cannotFindHost() : RN.bare();
+    });
+    expect(
+      (await probeTailscale({ hosts: ["a.t.ts.net", "b.t.ts.net"], fetch: mixed.fetch })).status,
+    ).toBe("unreachable");
+  });
+
+  test("each probe records whether HTTPS to its host worked, for the 7434 gate", async () => {
+    resetTunnelChecks();
+    const f = fakeFetch((url) => {
+      if (url.includes("b.")) throw RN.refused();
+      return json({ status: "ok" });
+    });
+    await probeTailscale({ hosts: ["a.t.ts.net", "b.t.ts.net"], fetch: f.fetch });
+    expect(tunnelVerified("a.t.ts.net")).toBe(true);
+    expect(tunnelVerified("b.t.ts.net")).toBe(false);
   });
 
   test("every probe timing out or refused: unreachable", async () => {
@@ -92,5 +119,28 @@ describe("probeTailscale", () => {
     expect(
       (await probeTailscale({ hosts: ["a.t.ts.net"], fetch: f.fetch, timeoutMs: 10 })).status,
     ).toBe("unreachable");
+  });
+});
+
+describe("probeHosts", () => {
+  test("ready agents first, then the rest, at most three, each once", () => {
+    expect(
+      probeHosts([
+        { host: "a.t.ts.net", status: "error" },
+        { host: "b.t.ts.net", status: null },
+        { host: "c.t.ts.net", status: "ready" },
+        { host: "d.t.ts.net", status: "ready" },
+        { host: "c.t.ts.net", status: "ready" },
+        { host: "e.t.ts.net", status: "ready" },
+        { host: "f.t.ts.net", status: "ready" },
+      ]),
+    ).toEqual(["c.t.ts.net", "d.t.ts.net", "e.t.ts.net"]);
+    expect(
+      probeHosts([
+        { host: "a.t.ts.net", status: "error" },
+        { host: null, status: "ready" },
+        { host: "c.t.ts.net", status: "ready" },
+      ]),
+    ).toEqual(["c.t.ts.net", "a.t.ts.net"]);
   });
 });

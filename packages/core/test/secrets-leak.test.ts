@@ -83,12 +83,18 @@ const FIXTURE_SLUGS: readonly string[] = [
   ),
 ].sort();
 
+/** An Expo push token whose inner part is not a `FIXTURE` sentinel. */
+const EXPO_PUSH_TOKEN_LEAK = /Expo(?:nent)?PushToken\[(?!FIXTURE)/;
+
 function assertClean(haystack: string) {
   for (const secret of SECRETS) {
     expect(haystack).not.toInclude(secret);
   }
   // Nor any tailscale key at all, whatever its value.
   expect(haystack).not.toMatch(/tskey-[A-Za-z0-9-]+/);
+  // Nor any Expo push token but a fixture's (§9.4): whoever holds one can push
+  // to that phone, and the only ones a test may carry are `…[FIXTURE…]`.
+  expect(haystack).not.toMatch(EXPO_PUSH_TOKEN_LEAK);
 }
 
 /**
@@ -121,6 +127,13 @@ function fleetWithSharedProfile(): MemoryBackend {
 }
 
 describe("secrets never leak", () => {
+  test("the sentinel rule: an Expo push token fails the suite unless it is a FIXTURE", () => {
+    expect(() => assertClean("ExponentPushToken[FIXTURE-phone]")).not.toThrow();
+    expect(() => assertClean("ExpoPushToken[FIXTURE-phone]")).not.toThrow();
+    expect(() => assertClean("sent to ExponentPushToken[xAbC123dEfG456]")).toThrow();
+    expect(() => assertClean("sent to ExpoPushToken[xAbC123dEfG456]")).toThrow();
+  });
+
   test("a full create of a bitwarden agent leaks nothing", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });

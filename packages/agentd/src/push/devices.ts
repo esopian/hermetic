@@ -6,75 +6,116 @@
  * here rather than in the route: at most `PUSH_DEVICES_MAX` entries, each one a
  * `MobilePushDeviceRecord` (an Expo token shape, a short id, a listening list of
  * at most 64 bot names, the owner's login and a timestamp), so the file cannot
- * grow past a few tens of kilobytes whatever a caller sends. A registration
- * over the cap evicts the least-recently registered phone rather than refusing
- * the new one: a stale entry (a phone wiped without signing out) must not lock
- * a real one out, and the receipts path prunes dead tokens on its own.
+ * grow past a few tens of kilobytes whatever a caller sends.
  *
- * Two rules make it safe to let any tailnet member write here (§9.4's trust
- * model). A registration belongs to the login that made it (`owner`): another
- * login presenting the same `device_id` may neither replace nor delete it. And
- * it lapses `PUSH_DEVICE_TTL_MS` after its last renewal: the phone renews on
- * every foreground, so only a phone that has stopped — or a member who has been
- * removed from the tailnet and can no longer reach this port — stops being
- * renewed. A lapsed registration is never listed (the notifier skips it) and is
- * dropped from the file on the next load or write.
+ * A record is keyed by `(owner, device_id)`: the login that registered it and
+ * the id the phone chose. Two logins presenting the same `device_id` hold two
+ * records, so nobody can squat another member's id to lock their phone out,
+ * and nobody can touch a record that is not theirs. Each owner may hold
+ * `PUSH_DEVICES_PER_OWNER` records; a fifth phone evicts that owner's least
+ * recently renewed one, never anybody else's. When the file is full of other
+ * owners' live records the registration is refused (`full`) rather than
+ * evicting a stranger: a stale entry lapses on its own (`PUSH_DEVICE_TTL_MS`),
+ * and a member flooding the file can only ever fill their own four slots.
+ *
+ * A registration lapses `PUSH_DEVICE_TTL_MS` after its last renewal: the phone
+ * renews on every foreground, so only a phone that has stopped stops being
+ * renewed. The watcher also drops records whose owner has left the tailnet
+ * (`pruneOwners`). A lapsed registration is never listed (the notifier skips
+ * it) and is dropped from the file on the next load or write.
  *
  * The document is `MobilePushDeviceList`, in registration order, oldest first:
- * the order is the eviction order.
+ * the order is the eviction order within an owner.
  *
- * A push token is never logged from here or from anything that calls this.
+ * A push token is never logged from here or from anything that calls this, and
+ * a device id only as `deviceTag(id)`.
  */
 import {
   MobilePushDevice,
   MobilePushDeviceRecord,
   type MobilePushDeviceList,
 } from "@hermetic/core/schema";
+import { sha256Hex } from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import { STATE_DIR } from "../fleet.ts";
 
 export const PUSH_DEVICES_PATH = `${STATE_DIR}/push-devices.json`;
 /** Phones one box remembers at once (§9.4). */
 export const PUSH_DEVICES_MAX = 32;
-/** How long a registration stands after its last renewal (`POST`): 30 days (§9.4). */
-export const PUSH_DEVICE_TTL_MS = 30 * 24 * 60 * 60_000;
+/** Phones one owner may register with one box; a fifth evicts their oldest. */
+export const PUSH_DEVICES_PER_OWNER = 4;
+/** How long a registration stands after its last renewal (`POST`): 72 hours (§9.4). */
+export const PUSH_DEVICE_TTL_MS = 72 * 60 * 60_000;
 
-/** A write refused because the `device_id` belongs to another login. */
+/**
+ * How a device id appears in a log line: the first twelve hex digits of its
+ * sha256. Enough to follow one phone through the journal, nothing a reader of
+ * the journal could replay as that phone's id.
+ */
+export function deviceTag(deviceId: string): string {
+  return sha256Hex(deviceId).slice(0, 12);
+}
+
+/** A delete refused because the `device_id` is registered only by other logins. */
 export interface PushDeviceForbidden {
   readonly ok: false;
+  readonly reason: "forbidden";
   /** The login the registration belongs to, for the audit line only. */
   readonly owner: string;
+}
+
+/** A registration refused because other owners' live records fill the file. */
+export interface PushDevicesFull {
+  readonly ok: false;
+  readonly reason: "full";
+}
+
+/** One stored record's key. */
+export interface PushDeviceKey {
+  readonly owner: string;
+  readonly device_id: string;
 }
 
 export interface PushDeviceStore {
   /** Every live registration, oldest first; lapsed ones are never listed. */
   list(): Promise<MobilePushDeviceRecord[]>;
   /**
-   * Insert or renew by `device_id`, owned by `owner`; the entry moves to the
-   * newest end and its `renewed_at` becomes now. The input is validated again
-   * here, so a caller cannot store an unchecked shape. Refused, and nothing
-   * written, when a live registration with that id belongs to another login.
-   * Returns the `device_id` evicted to stay under the cap, if any.
+   * Insert or renew `(owner, device_id)`; the entry moves to the newest end and
+   * its `renewed_at` becomes now. The input is validated again here, so a
+   * caller cannot store an unchecked shape. A new record past the owner's
+   * `PUSH_DEVICES_PER_OWNER` evicts that owner's oldest (`evicted`, its
+   * `device_id`); a new record that would pass `PUSH_DEVICES_MAX` when the
+   * owner has nothing to evict is refused (`full`) and nothing is written.
    */
   upsert(
     device: MobilePushDevice,
     owner: string,
-  ): Promise<{ readonly ok: true; readonly evicted: string | null } | PushDeviceForbidden>;
+  ): Promise<{ readonly ok: true; readonly evicted: string | null } | PushDevicesFull>;
   /**
-   * The owner's own delete. `removed: false` when there is nothing live by that
-   * id; refused when the registration belongs to another login.
+   * The owner's own delete of `(owner, deviceId)`. `removed: false` when no
+   * live record anywhere carries that id; refused when only other logins'
+   * records carry it.
    */
   unregister(
     deviceId: string,
     owner: string,
   ): Promise<{ readonly ok: true; readonly removed: boolean } | PushDeviceForbidden>;
   /**
-   * The box's own delete (a `DeviceNotRegistered` receipt), with no owner. With
+   * The box's own delete (a `DeviceNotRegistered` receipt) of one record. With
    * `token`, only if that is still the phone's token — a receipt for an old
    * token must not unregister a phone that has since registered a new one.
    * True when something was removed.
    */
-  remove(deviceId: string, token?: string): Promise<boolean>;
+  remove(key: PushDeviceKey, token?: string): Promise<boolean>;
+  /**
+   * Drop every record whose owner `keep` rejects (an owner who has left the
+   * tailnet). Returns how many were dropped; writes only when that is > 0.
+   */
+  pruneOwners(keep: (owner: string) => boolean): Promise<number>;
+}
+
+function sameKey(d: PushDeviceKey, key: PushDeviceKey): boolean {
+  return d.owner === key.owner && d.device_id === key.device_id;
 }
 
 /**
@@ -138,14 +179,16 @@ export function pushDeviceStore(
           renewed_at: host.now().toISOString(),
         });
         const all = await load();
-        const existing = all.find((d) => d.device_id === device.device_id);
-        if (existing !== undefined && existing.owner !== owner)
-          return { ok: false as const, owner: existing.owner };
-        const current = all.filter((d) => d.device_id !== device.device_id);
+        const current = all.filter((d) => !sameKey(d, device));
         let evicted: string | null = null;
-        while (current.length >= PUSH_DEVICES_MAX) {
-          evicted = current.shift()?.device_id ?? null;
+        // Within the owner first: their fifth phone displaces their oldest.
+        if (current.filter((d) => d.owner === owner).length >= PUSH_DEVICES_PER_OWNER) {
+          const oldest = current.findIndex((d) => d.owner === owner);
+          evicted = current[oldest]?.device_id ?? null;
+          current.splice(oldest, 1);
         }
+        // Never across owners: a full file of other people's phones refuses.
+        if (current.length >= PUSH_DEVICES_MAX) return { ok: false as const, reason: "full" as const };
         await save([...current, device]);
         return { ok: true as const, evicted };
       });
@@ -154,24 +197,38 @@ export function pushDeviceStore(
     unregister(deviceId, owner) {
       return serial(async () => {
         const current = await load();
-        const existing = current.find((d) => d.device_id === deviceId);
+        const key = { owner, device_id: deviceId };
+        if (current.some((d) => sameKey(d, key))) {
+          await save(current.filter((d) => !sameKey(d, key)));
+          return { ok: true as const, removed: true };
+        }
+        const other = current.find((d) => d.device_id === deviceId);
+        if (other !== undefined)
+          return { ok: false as const, reason: "forbidden" as const, owner: other.owner };
         // Nothing live by that id: idempotent, a phone signing out twice is not an error.
-        if (existing === undefined) return { ok: true as const, removed: false };
-        if (existing.owner !== owner) return { ok: false as const, owner: existing.owner };
-        await save(current.filter((d) => d.device_id !== deviceId));
-        return { ok: true as const, removed: true };
+        return { ok: true as const, removed: false };
       });
     },
 
-    remove(deviceId, token) {
+    remove(key, token) {
       return serial(async () => {
         const current = await load();
         const next = current.filter(
-          (d) => !(d.device_id === deviceId && (token === undefined || d.token === token)),
+          (d) => !(sameKey(d, key) && (token === undefined || d.token === token)),
         );
         if (next.length === current.length) return false;
         await save(next);
         return true;
+      });
+    },
+
+    pruneOwners(keep) {
+      return serial(async () => {
+        const current = await load();
+        const next = current.filter((d) => keep(d.owner));
+        const dropped = current.length - next.length;
+        if (dropped > 0) await save(next);
+        return dropped;
       });
     },
   };
@@ -202,8 +259,7 @@ function parse(text: string, log: (message: string) => void): MobilePushDeviceRe
   let dropped = 0;
   for (const entry of raw) {
     const parsed = MobilePushDeviceRecord.safeParse(entry);
-    if (parsed.success && !out.some((d) => d.device_id === parsed.data.device_id))
-      out.push(parsed.data);
+    if (parsed.success && !out.some((d) => sameKey(d, parsed.data))) out.push(parsed.data);
     else dropped += 1;
   }
   if (dropped > 0)

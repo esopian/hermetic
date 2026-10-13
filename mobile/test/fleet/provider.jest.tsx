@@ -11,6 +11,7 @@ import {
   type FleetContextValue,
   type FleetDeps,
   FleetProvider,
+  PREVIEWS_KEY,
   PUSH_KEY,
   useFleetContext,
 } from "../../src/fleet/FleetProvider.tsx";
@@ -77,8 +78,17 @@ async function settle() {
   for (let i = 0; i < 20; i++) await act(flush);
 }
 
-async function setup(seed: Record<string, string> = {}) {
-  const kit = fixtureKit("1", () => NOW) as FixtureKit;
+/** Real time, for the fixture's paced turn. */
+async function waitFor(ok: () => boolean, ms = 10_000) {
+  const end = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > end) throw new Error("timed out");
+    await act(() => new Promise<void>((r) => setTimeout(r, 25)));
+  }
+}
+
+async function setup(seed: Record<string, string> = {}, clock: () => string = () => NOW) {
+  const kit = fixtureKit("1", clock) as FixtureKit;
   const note = fakeNotifier();
   const appState = fakeAppState();
   const secure = memoryKv(seed);
@@ -100,7 +110,7 @@ async function setup(seed: Record<string, string> = {}) {
     appVersion: "0.1.0",
     operatorTailnet: null,
     fixture: { link: kit.link, tailscale: kit.tailscale },
-    now: () => NOW,
+    now: clock,
     lingerMs: 1_000,
   };
   const opened: string[] = [];
@@ -298,5 +308,119 @@ describe("FleetProvider", () => {
     await act(async () => s.value().fixture?.setTailscale("unreachable"));
     await settle();
     expect(s.value().tailscale?.status).toBe("unreachable");
+  });
+
+  test("backgrounded with push on: the box's push is the one alert, no local duplicate", async () => {
+    // The fixture stamps its rows with the wall clock; the store matches the turn against it.
+    const s = await setup({}, () => new Date().toISOString());
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    await act(async () => {
+      await s.value().setPushEnabled(true);
+    });
+    await settle();
+    expect(s.kit.registry.devicesOn(ATLAS)).toHaveLength(1);
+    const client = s.value().client;
+    if (!client) throw new Error("no client");
+    // Away from the screen but inside the linger (the sockets still live).
+    await act(async () => s.appState.set("inactive"));
+    const target = { instance: "atlas", bot: "scribe", session: null };
+    await act(async () => client.chat.open(target));
+    await waitFor(() => client.chat.view(target).history === "ready");
+    await act(async () => {
+      client.chat.send(target, "FIXTURE background turn");
+    });
+    await waitFor(() => client.inbox.getState().entries.some((e) => e.kind === "turn.done"));
+    // Filed in the inbox, but not drawn: atlas pushes the same event itself.
+    expect(s.note.locals).toHaveLength(0);
+  }, 20_000);
+
+  test("backgrounded with push off: this phone alerts locally", async () => {
+    const s = await setup({}, () => new Date().toISOString());
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    const client = s.value().client;
+    if (!client) throw new Error("no client");
+    // Away from the screen but inside the linger (the sockets still live).
+    await act(async () => s.appState.set("inactive"));
+    const target = { instance: "atlas", bot: "scribe", session: null };
+    await act(async () => client.chat.open(target));
+    await waitFor(() => client.chat.view(target).history === "ready");
+    await act(async () => {
+      client.chat.send(target, "FIXTURE background turn");
+    });
+    await waitFor(() => s.note.locals.length > 0);
+    expect(s.note.locals[0]).toMatchObject({ decision: "local", data: { instance: "atlas" } });
+  }, 20_000);
+
+  test("previews: off by default, sent in every registration, and a change re-registers", async () => {
+    const s = await setup();
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    expect(s.value().previews).toBe(false);
+    await act(async () => {
+      await s.value().setPushEnabled(true);
+    });
+    await settle();
+    expect(s.kit.registry.devicesOn(ATLAS)[0]?.previews).toBe(false);
+    await act(() => s.value().setPreviews(true));
+    await settle();
+    expect(s.kit.registry.devicesOn(ATLAS)[0]?.previews).toBe(true);
+    await expect(s.secure.get(PREVIEWS_KEY)).resolves.toBe("true");
+  });
+
+  test("back from the background, the focused conversation is re-opened", async () => {
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] });
+    try {
+      const s = await setup();
+      await settle();
+      await act(() => s.value().pair(s.link()));
+      await settle();
+      const client = s.value().client;
+      if (!client) throw new Error("no client");
+      const reopened: unknown[] = [];
+      const reopen = client.chat.reopen.bind(client.chat);
+      client.chat.reopen = (t) => {
+        reopened.push(t);
+        reopen(t);
+      };
+      const target = { instance: "atlas", bot: "scribe", session: null };
+      await act(async () => s.value().focusConversation(target));
+      // Back before the linger ran out: the sockets never detached, nothing to re-open.
+      await act(async () => s.appState.set("background"));
+      await act(async () => s.appState.set("active"));
+      expect(reopened).toEqual([]);
+      await act(async () => s.appState.set("background"));
+      await act(async () => jest.advanceTimersByTime(1_000));
+      await act(async () => s.appState.set("active"));
+      expect(reopened).toEqual([target]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a push for another fleet is not filed", async () => {
+    const s = await setup();
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    s.note.presented.push({
+      title: "scribe · atlas",
+      body: "done",
+      data: {
+        fleet_id: "sg7k2m4p",
+        instance: "atlas",
+        bot: "scribe",
+        session: "s-1",
+        kind: "turn.done",
+        dedupe: "atlas:s-1:4:turn.done",
+      },
+    });
+    await act(async () => s.appState.set("active"));
+    await settle();
+    expect(s.value().client?.inbox.getState().entries).toHaveLength(0);
   });
 });

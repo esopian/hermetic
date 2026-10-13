@@ -16,3 +16,11 @@
  */
 export { fixtureChatClient } from "./backend/fixture/fixture-chat.ts";
 export type { FixtureChatOptions } from "./backend/fixture/fixture-chat.ts";
+/**
+ * The stack the desktop's fixture mode builds: the chat client wrapped with
+ * Bot Mode and a live activity clock, so recorded rows carry real timestamps.
+ * The phone's fixture mode uses the same one; the bare client stamps a fixed
+ * day and shows every sent prompt twice.
+ */
+export { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
+export type { FixtureChatStack, FixtureChatPacing } from "./backend/fixture/fixture-chat-stack.ts";

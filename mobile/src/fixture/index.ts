@@ -7,7 +7,12 @@
  * production build never constructs any of this. When it is on, the kit hands
  * the provider:
  *
- * - `chat` — core's `fixtureChatClient` (in place of the live Hermes adapter);
+ * - `chat` — core's fixture chat stack (`createFixtureChatStack`, in place of
+ *   the live Hermes adapter): the same `fixtureChatClient` the desktop runs,
+ *   wrapped the same way, with the same scripted-activity store handed to both
+ *   halves. A bare `fixtureChatClient` with no activity leaves `observe` inert
+ *   (the conversation sits on "Reconnecting…") and records a sent prompt under
+ *   its own id beside the phone's placeholder (the prompt shows twice);
  * - `fetch` — a stand-in for the network that answers hermeticd's `GET /fleet`
  *   with a canned `MobileFleetView` for `fxtr0001` (alias `main`, the desktop
  *   fixture's eleven agents), keeps `POST`/`DELETE /push/devices` in an
@@ -25,7 +30,7 @@
  * `@hermetic/core/chat-client-fixture` (`tests/boundaries.test.ts`).
  */
 import type { HermesChatClient } from "@hermetic/core/chat-client";
-import { fixtureChatClient } from "@hermetic/core/chat-client-fixture";
+import { createFixtureChatStack } from "@hermetic/core/chat-client-fixture";
 import type { MobileFleetAgent, MobileFleetView, MobilePushDevice } from "@hermetic/core/schema";
 import { cloudName, encodeMobileLink, RPC_PATHS } from "@hermetic/core/shared";
 import type { FetchLike } from "../gateway/hermeticd.ts";
@@ -249,9 +254,12 @@ export function fixtureKit(
   if (flag !== "1") return null;
   const registry = memoryPushRegistry();
   const tailscale = tailscaleSwitch();
+  // What desktop fixture mode builds (`createHermetic`), with a little pacing so
+  // a streamed reply looks streamed in the simulator.
+  const chat = createFixtureChatStack(true, { delayMs: 40 }).hermes;
+  if (!chat) throw new Error("the fixture chat stack built no client");
   return {
-    // A little pacing, so a streamed reply looks streamed in the simulator.
-    chat: fixtureChatClient({ delayMs: 40 }),
+    chat,
     fetch: fixtureFetch({ registry, tailscale, now }),
     link: fixturePairingLink(),
     pushToken: FIXTURE_PUSH_TOKEN,
