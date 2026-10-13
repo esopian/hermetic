@@ -190,9 +190,12 @@ export function useConversations(
   assemble: Assemble,
   instances?: readonly string[],
   onArrival?: (arrival: ChatArrival) => void,
+  isThreadShown?: (instance: string, bot: string) => boolean,
 ) {
   const arrived = useRef(onArrival);
   arrived.current = onArrival;
+  const shown = useRef(isThreadShown);
+  shown.current = isThreadShown;
   /**
    * The injected calls, reached through a ref rather than closed over.
    *
@@ -761,9 +764,10 @@ export function useConversations(
            * a count the roster already owns, and the roster read reconciles it.
            */
           const note = (): void => {
-            const open =
-              selected.current?.instance === conversation.instance &&
-              selected.current?.bot === conversation.bot;
+            const open = shown.current
+              ? shown.current(conversation.instance, conversation.bot)
+              : selected.current?.instance === conversation.instance &&
+                selected.current?.bot === conversation.bot;
             arrived.current?.({
               instance: conversation.instance,
               bot: conversation.bot,
@@ -1002,83 +1006,88 @@ export function useConversations(
    * Then the transcript is read, because whatever arrived while nothing was
    * watching is missing from the copy on screen.
    */
-  const resumeObservation = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
-    record.observeQuietTimer = null;
-    record.observe = "reconnecting";
-    record.observeError = null;
-    record.observeAttempt = 0;
-    changed();
-    const fail = (code: string, message: string): void => {
-      record.observe = "failed";
-      record.observeError = { code, message };
+  const resumeObservation = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
+      record.observeQuietTimer = null;
+      record.observe = "reconnecting";
+      record.observeError = null;
+      record.observeAttempt = 0;
       changed();
-    };
-    const ask = apiRef.current.resumeObservation;
-    if (!ask) {
-      // Optional for the same reason `chatStream` is: a tree mounted without a
-      // fan-in has no observation to ask back. Nothing falls through to the
-      // fleet-wide listen write — that is the call this route replaced.
-      fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
-      return;
-    }
-    let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
-    try {
+      const fail = (code: string, message: string): void => {
+        record.observe = "failed";
+        record.observeError = { code, message };
+        changed();
+      };
+      const ask = apiRef.current.resumeObservation;
+      if (!ask) {
+        // Optional for the same reason `chatStream` is: a tree mounted without a
+        // fan-in has no observation to ask back. Nothing falls through to the
+        // fleet-wide listen write — that is the call this route replaced.
+        fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
+        return;
+      }
+      let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
+      try {
+        /**
+         * The record's *identity*, not the session it happens to be reading.
+         *
+         * Every other address in this file is `resolvedSession ?? target.session`
+         * because those calls read a conversation, and reading wants the
+         * concrete session. A resume names a *subscription*, and the server keys
+         * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
+         * canonical record has `resolvedSession` filled in by the history read
+         * and moved by every rollover, so sending it here asked the server for a
+         * conversation it does not hold: it started a second pinned observation
+         * of one conversation, left the canonical key's remembered failure in
+         * place, and lost the new subscription again at the next reconcile.
+         * `target.session` is the identity, and the rollover block above keeps it
+         * current for a record that names a session at all.
+         */
+        answer = await ask(record.target.instance, record.target.bot, record.target.session);
+      } catch (error) {
+        fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
+        return;
+      }
+      if (!alive.current || !permits(record.target.instance)) return;
       /**
-       * The record's *identity*, not the session it happens to be reading.
-       *
-       * Every other address in this file is `resolvedSession ?? target.session`
-       * because those calls read a conversation, and reading wants the
-       * concrete session. A resume names a *subscription*, and the server keys
-       * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
-       * canonical record has `resolvedSession` filled in by the history read
-       * and moved by every rollover, so sending it here asked the server for a
-       * conversation it does not hold: it started a second pinned observation
-       * of one conversation, left the canonical key's remembered failure in
-       * place, and lost the new subscription again at the next reconcile.
-       * `target.session` is the identity, and the rollover block above keeps it
-       * current for a record that names a session at all.
+       * The one answer a resume cannot fix by itself. Observations exist only for
+       * boxes this operator has chosen to monitor, so a box that is not listened
+       * to has nothing to resume — and turning listening on from here would be
+       * this store writing a preference that `listening-state.tsx` owns, silently,
+       * off a button that says "Watch again". It is said instead, naming the
+       * screen where the choice lives. (`observing: false` with `listening: true`
+       * is not a state the route can return.)
        */
-      answer = await ask(record.target.instance, record.target.bot, record.target.session);
-    } catch (error) {
-      fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
-      return;
-    }
-    if (!alive.current || !permits(record.target.instance)) return;
-    /**
-     * The one answer a resume cannot fix by itself. Observations exist only for
-     * boxes this operator has chosen to monitor, so a box that is not listened
-     * to has nothing to resume — and turning listening on from here would be
-     * this store writing a preference that `listening-state.tsx` owns, silently,
-     * off a button that says "Watch again". It is said instead, naming the
-     * screen where the choice lives. (`observing: false` with `listening: true`
-     * is not a state the route can return.)
-     */
-    if (!answer.listening) {
-      fail(
-        "OBSERVE_NOT_LISTENING",
-        `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
-      );
-      return;
-    }
-    if (!answer.observing) {
-      fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
-      return;
-    }
-    await readHistory(record);
-    if (record.observe === "reconnecting") {
-      record.observe = "live";
-      changed();
-    }
-  }, [changed, get, permits, readHistory]);
+      if (!answer.listening) {
+        fail(
+          "OBSERVE_NOT_LISTENING",
+          `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
+        );
+        return;
+      }
+      if (!answer.observing) {
+        fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
+        return;
+      }
+      await readHistory(record);
+      if (record.observe === "reconnecting") {
+        record.observe = "live";
+        changed();
+      }
+    },
+    [changed, get, permits, readHistory],
+  );
 
   /** Start a turn. `false` when this store refused to, and nothing was sent. */
   const send = useCallback(
-    (text: string): boolean => {
-      if (!selected.current || !permits(selected.current.instance)) return false;
-      const record = get(selected.current);
+    (text: string, requested?: ChatSelection): boolean => {
+      const where = requested ?? selected.current;
+      if (!where || !permits(where.instance)) return false;
+      const record = get(where);
       const body = text.trim();
       if (!body || record.sending || record.aborting) return false;
       clearReconnect(record);
@@ -1249,9 +1258,10 @@ export function useConversations(
    * message through means (`useSendQueue`).
    */
   const steer = useCallback(
-    async (text: string): Promise<SteerOutcome> => {
-      if (!selected.current || !permits(selected.current.instance)) return "refused";
-      const record = get(selected.current);
+    async (text: string, target?: ChatSelection): Promise<SteerOutcome> => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return "refused";
+      const record = get(where);
       const body = text.trim();
       if (!body) return "refused";
       if (!record.sending || record.aborting) return "idle";
@@ -1333,52 +1343,60 @@ export function useConversations(
    * Read at call time, so a caller acting on a keypress sees the record as it
    * is rather than as the last render left it.
    */
-  const openRequest = useCallback((): string | null => {
-    if (!selected.current || !permits(selected.current.instance)) return null;
-    return openRequestIn(get(selected.current));
-  }, [get, permits]);
+  const openRequest = useCallback(
+    (target?: ChatSelection): string | null => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return null;
+      return openRequestIn(get(where));
+    },
+    [get, permits],
+  );
 
-  const abort = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.aborting) return;
-    record.aborting = true;
-    const turn = record.turn;
-    const cancel = record.cancel;
-    clearReconnect(record);
-    record.dropped = false;
-    changed();
-    try {
-      await apiRef.current.abortTurn(
-        record.target.instance,
-        record.target.bot,
-        record.resolvedSession ?? record.target.session,
-      );
-    } catch (error) {
-      if (alive.current && record.turn === turn)
-        record.turnError = {
-          code: "ABORT_FAILED",
-          message: error instanceof Error ? error.message : String(error),
-        };
-    } finally {
-      if (alive.current && record.turn === turn) {
-        // Invalidate the old stream before cancelling, since cancellation can
-        // synchronously report an end and must not schedule reconnect retries.
-        record.turn += 1;
-        cancel?.();
-        record.cancel = null;
-        record.sending = false;
-        record.segments = [];
-        record.openRequests.clear();
-        record.rearm = null;
-        releaseHeld(record);
-        record.activity = "idle";
-        record.aborting = false;
-        changed();
-        await Promise.all([readHistory(record), readSessions(record)]);
+  const abort = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.aborting) return;
+      record.aborting = true;
+      const turn = record.turn;
+      const cancel = record.cancel;
+      clearReconnect(record);
+      record.dropped = false;
+      changed();
+      try {
+        await apiRef.current.abortTurn(
+          record.target.instance,
+          record.target.bot,
+          record.resolvedSession ?? record.target.session,
+        );
+      } catch (error) {
+        if (alive.current && record.turn === turn)
+          record.turnError = {
+            code: "ABORT_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+          };
+      } finally {
+        if (alive.current && record.turn === turn) {
+          // Invalidate the old stream before cancelling, since cancellation can
+          // synchronously report an end and must not schedule reconnect retries.
+          record.turn += 1;
+          cancel?.();
+          record.cancel = null;
+          record.sending = false;
+          record.segments = [];
+          record.openRequests.clear();
+          record.rearm = null;
+          releaseHeld(record);
+          record.activity = "idle";
+          record.aborting = false;
+          changed();
+          await Promise.all([readHistory(record), readSessions(record)]);
+        }
       }
-    }
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
 
   /**
    * The transcript alone, for a caller that runs on a tick.
@@ -1390,21 +1408,29 @@ export function useConversations(
    * pairing the two put a second gateway read on the tailnet for every tick of
    * a poll that exists to catch new *messages*.
    */
-  const reloadTranscript = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await readHistory(record);
-  }, [changed, clearReconnect, get, readHistory, permits]);
+  const reloadTranscript = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await readHistory(record);
+    },
+    [changed, clearReconnect, get, readHistory, permits],
+  );
 
-  const reloadHistory = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await Promise.all([readHistory(record), readSessions(record)]);
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+  const reloadHistory = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await Promise.all([readHistory(record), readSessions(record)]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
   const stageDraft = useCallback(
     (target: ChatSelection, text: string) => {
       if (!permits(target.instance)) return;
@@ -1432,6 +1458,17 @@ export function useConversations(
     () => ({ state: current.observe, attempt: current.observeAttempt, error: current.observeError }),
     [current.observe, current.observeAttempt, current.observeError],
   );
+  const view = useCallback((target: ChatSelection) => get(target), [get]);
+  const ensure = useCallback(
+    (target: ChatSelection) => {
+      if (!permits(target.instance)) return;
+      const record = get(target);
+      if (!record.historyLoading && !record.historyRead && !record.sending && !record.aborting)
+        void readHistory(record);
+      if (record.sessionsState === "pending") void readSessions(record);
+    },
+    [get, permits, readHistory, readSessions],
+  );
   return {
     ...current,
     turnActivities,
@@ -1453,5 +1490,9 @@ export function useConversations(
     observeTransport,
     resumeObservation,
     subagents,
+    /** A pane reads a record without changing the full view's selection. */
+    view,
+    /** Opening a pane performs the same first reads as selecting a full-view thread. */
+    ensure,
   };
 }
