@@ -194,6 +194,18 @@ export function SocketBand({ state, onRetry }: { state: string; onRetry?: () => 
         sub="Update whichever side is older."
       />
     );
+  // 4503: the laptop answered but has no fleet to serve right now. Still paired.
+  if (state === "unavailable")
+    return (
+      <BandShell
+        tone="warn"
+        pulse
+        testID="band-socket"
+        title="The laptop's bridge is unavailable."
+        sub="It is running but cannot serve this fleet right now (setting up or shutting down). This phone stays paired and keeps retrying."
+        action={onRetry ? { label: "Retry", onPress: onRetry } : null}
+      />
+    );
   return (
     <BandShell
       tone="warn"

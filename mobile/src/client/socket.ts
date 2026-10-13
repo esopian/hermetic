@@ -103,6 +103,13 @@ export type SocketState =
   | "open"
   /** Dropped; a reconnect is scheduled. */
   | "reconnecting"
+  /**
+   * The bridge answered but cannot serve a fleet right now (close 4503: the
+   * laptop is mid-teardown or showing its setup wizard). The token is still
+   * good; reconnecting on the normal backoff continues until it can. Sticky
+   * across attempts until an `auth.ok` or a different kind of drop.
+   */
+  | "unavailable"
   /** The bridge refused this device (revoked, unknown token). Reconnecting will not help. */
   | "unauthorized"
   /** The bridge speaks another protocol version. Reconnecting will not help. */
@@ -132,6 +139,9 @@ export interface SocketEvents {
 }
 
 type Handler<T> = (payload: T) => void;
+
+/** What the phone tells the bridge about itself, so it pushes only when nobody is looking. */
+export type SocketPhase = "foreground" | "background";
 
 /* ── options ────────────────────────────────────────────────────────────── */
 
@@ -167,6 +177,10 @@ interface Pending {
 interface TrackedTurn {
   lastN: number;
   ended: boolean;
+  /** A `turn.resume` for frames this socket skipped is on the wire; out-of-order frames wait for it. */
+  gap?: boolean;
+  /** The bridge said its buffer was truncated: the next frame may jump past `lastN + 1`. */
+  jump?: boolean;
 }
 
 interface Observation {
@@ -180,6 +194,7 @@ interface Observation {
   opening: boolean;
 }
 
+const CONNECTING = 0;
 const OPEN = 1;
 
 export class BridgeSocket {
@@ -202,6 +217,11 @@ export class BridgeSocket {
   private readonly bySubId = new Map<string, string>();
   private readonly handlers = new Map<keyof SocketEvents, Set<Handler<never>>>();
   private _hello: Hello | null = null;
+  private phase: SocketPhase = "foreground";
+  /** The last drop was a 4503: say "unavailable" rather than "reconnecting" until something else happens. */
+  private unavailable = false;
+  /** In-flight `turn.resume` request ids → turn, answered synchronously in `receive`. */
+  private readonly resumes = new Map<string, string>();
 
   constructor(options: BridgeSocketOptions) {
     this.opts = options;
@@ -244,6 +264,7 @@ export class BridgeSocket {
     if (this.ws || this.reconnectTimer !== null) return;
     if (this._state === "unauthorized" || this._state === "mismatch") return;
     this.attempt = 0;
+    this.unavailable = false;
     this.open();
   }
 
@@ -258,14 +279,7 @@ export class BridgeSocket {
     this.clearSilence();
     const ws = this.ws;
     this.ws = null;
-    if (ws) {
-      this.detach(ws);
-      try {
-        ws.close(1000, "client closing");
-      } catch {
-        // already closed
-      }
-    }
+    if (ws) this.retire(ws, 1000, "client closing");
     this.failPending(new BridgeError(CLIENT_ERROR_CODES.DISCONNECTED, "The connection was closed."));
     for (const obs of this.observations.values()) this.clearObservationTimer(obs);
     this.bySubId.clear();
@@ -280,6 +294,17 @@ export class BridgeSocket {
     this.observations.clear();
     this._hello = null;
     if (this._state !== "idle") this.setState("idle");
+  }
+
+  /**
+   * Tell the bridge whether the app is in front. Sent now if the socket is
+   * open, and again after every `auth.ok`; the bridge pushes only to a device
+   * none of whose sockets is in the foreground.
+   */
+  setPhase(phase: SocketPhase): void {
+    if (this.phase === phase) return;
+    this.phase = phase;
+    if (this._state === "open") this.sendRaw({ type: "phase", phase });
   }
 
   /** Allow connecting again after `unauthorized`/`mismatch` (a re-pair). */
@@ -315,14 +340,8 @@ export class BridgeSocket {
     const from = Math.max(after, known?.lastN ?? 0);
     if (!known) this.turns.set(turn_id, { lastN: from, ended: false });
     try {
-      const result = await this.request<TurnResumeResult>({
-        type: "turn.resume",
-        id: this.nextId(),
-        turn_id,
-        after: from,
-      });
-      if (result.truncated) this.emit("turn.truncated", { turn_id });
-      return result;
+      // `turn.truncated` is emitted from `resumeAnswered`, synchronously with the `res`.
+      return await this.sendResume(turn_id, from);
     } catch (error) {
       if (error instanceof BridgeError && error.code === "TURN_GONE") this.forgetGone(turn_id);
       throw error;
@@ -380,7 +399,7 @@ export class BridgeSocket {
       this.setState("unauthorized");
       return;
     }
-    this.setState("connecting");
+    if (!this.unavailable) this.setState("connecting");
     let ws: WebSocketLike;
     try {
       ws = this.opts.createSocket(this.opts.url);
@@ -391,7 +410,7 @@ export class BridgeSocket {
     this.ws = ws;
     ws.onopen = () => {
       if (this.ws !== ws) return;
-      this.setState("authenticating");
+      if (!this.unavailable) this.setState("authenticating");
       const resume = [...this.turns]
         .filter(([, t]) => !t.ended)
         .map(([turn_id, t]) => ({ turn_id, after: t.lastN }));
@@ -431,6 +450,9 @@ export class BridgeSocket {
       obs.opening = false;
       this.clearObservationTimer(obs);
     }
+    // The next `auth` resumes every turn from its `lastN`, which covers any gap.
+    for (const t of this.turns.values()) t.gap = false;
+    this.unavailable = code === MOBILE_CLOSE_CODES.UNAVAILABLE;
     if (code === MOBILE_CLOSE_CODES.UNAUTHORIZED) {
       this.wanted = false;
       this.setState("unauthorized");
@@ -451,7 +473,7 @@ export class BridgeSocket {
   private scheduleReconnect(): void {
     this.clearReconnect();
     this.attempt += 1;
-    this.setState("reconnecting");
+    this.setState(this.unavailable ? "unavailable" : "reconnecting");
     const delay = backoffDelay(this.attempt, this.random);
     this.reconnectTimer = this.timers.setTimeout(() => {
       this.reconnectTimer = null;
@@ -470,19 +492,47 @@ export class BridgeSocket {
       this.silenceTimer = null;
       const ws = this.ws;
       if (!ws) return;
-      try {
-        ws.close(4000, "silent");
-      } catch {
-        // ignore
-      }
       // Do not wait for the OS to deliver `onclose` on a dead link.
-      if (this.ws === ws) this.dropped(4000);
+      this.dropped(4000);
+      this.retire(ws, 4000, "silent");
     }, this.silenceMs);
   }
 
   private clearSilence(): void {
     if (this.silenceTimer !== null) this.timers.clearTimeout(this.silenceTimer);
     this.silenceTimer = null;
+  }
+
+  /**
+   * Close a socket this client is done with, listeners first.
+   *
+   * One still handshaking is not closed there and then: it is closed the
+   * moment it opens. On iOS, closing a WebSocket mid-handshake is the path on
+   * which SocketRocket can report the same socket's end twice, and React
+   * Native drops a socket's native subscriptions on the first report — so the
+   * second arrives with nothing listening ("Sending `websocketClosed` with no
+   * listeners registered", a dev-build warning). A socket already closing or
+   * closed is left alone: its own end event is already on the way.
+   */
+  private retire(ws: WebSocketLike, code: number, reason: string): void {
+    this.detach(ws);
+    if (ws.readyState === CONNECTING) {
+      ws.onopen = () => {
+        ws.onopen = null;
+        try {
+          ws.close(code, reason);
+        } catch {
+          // already gone
+        }
+      };
+      return;
+    }
+    if (ws.readyState !== OPEN) return;
+    try {
+      ws.close(code, reason);
+    } catch {
+      // already gone
+    }
   }
 
   private detach(ws: WebSocketLike): void {
@@ -529,13 +579,24 @@ export class BridgeSocket {
         }
         return;
       }
-      case "res":
+      case "res": {
+        const resumed = this.resumes.get(frame.id);
+        if (resumed !== undefined) this.resumeAnswered(resumed, frame);
         this.settle(frame);
         return;
+      }
       case "turn.frame": {
         const turn = this.turns.get(frame.turn_id);
         if (turn) {
           if (frame.n <= turn.lastN) return;
+          // A frame past the next one means this socket missed some (the bridge
+          // closes a socket it cannot keep up with, and a replay can overlap a
+          // live stream). Hold everything out of order and ask for the rest.
+          if (frame.n !== turn.lastN + 1 && !turn.jump) {
+            this.resumeGap(frame.turn_id, turn);
+            return;
+          }
+          turn.jump = false;
           turn.lastN = frame.n;
         } else this.turns.set(frame.turn_id, { lastN: frame.n, ended: false });
         this.emit("turn.frame", { turn_id: frame.turn_id, n: frame.n, frame: frame.frame });
@@ -544,6 +605,11 @@ export class BridgeSocket {
       case "turn.end": {
         const turn = this.turns.get(frame.turn_id);
         if (turn?.ended) return;
+        // Frames before the end are missing: the resume replays them and the end again.
+        if (turn && frame.n > turn.lastN && !turn.jump) {
+          this.resumeGap(frame.turn_id, turn);
+          return;
+        }
         this.turns.set(frame.turn_id, { lastN: Math.max(turn?.lastN ?? 0, frame.n), ended: true });
         this.emit("turn.end", { turn_id: frame.turn_id, n: frame.n, state: frame.state });
         return;
@@ -586,7 +652,10 @@ export class BridgeSocket {
   private authenticated(hello: Hello): void {
     this._hello = hello;
     this.attempt = 0;
+    this.unavailable = false;
     this.setState("open");
+    // The bridge counts a fresh socket as foreground; say where the app really is.
+    this.sendRaw({ type: "phase", phase: this.phase });
     // A turn this phone was following that the bridge no longer lists has
     // expired from its buffer: the frames are gone, history is the record.
     const live = new Map(hello.active_turns.map((t) => [t.turn_id, t]));
@@ -597,7 +666,10 @@ export class BridgeSocket {
       }
       const summary = live.get(turn_id);
       if (!summary) this.forgetGone(turn_id);
-      else if (summary.truncated) this.emit("turn.truncated", { turn_id });
+      else if (summary.truncated) {
+        t.jump = true;
+        this.emit("turn.truncated", { turn_id });
+      }
     }
     this.emit("hello", hello);
     for (const [, p] of this.pending) {
@@ -607,6 +679,40 @@ export class BridgeSocket {
       }
     }
     for (const obs of this.observations.values()) void this.openObservation(obs);
+  }
+
+  /** Ask once for the frames after `lastN`; later out-of-order frames wait for that answer. */
+  private resumeGap(turn_id: string, turn: TrackedTurn): void {
+    if (turn.gap) return;
+    turn.gap = true;
+    this.sendResume(turn_id, turn.lastN).catch((error: unknown) => {
+      const t = this.turns.get(turn_id);
+      if (t) t.gap = false;
+      if (error instanceof BridgeError && error.code === "TURN_GONE" && t) this.forgetGone(turn_id);
+    });
+  }
+
+  private sendResume(turn_id: string, after: number): Promise<TurnResumeResult> {
+    const id = this.nextId();
+    this.resumes.set(id, turn_id);
+    return this.request<TurnResumeResult>({ type: "turn.resume", id, turn_id, after }).finally(() => {
+      this.resumes.delete(id);
+    });
+  }
+
+  /**
+   * A `turn.resume` answered. Handled here, in the same tick as the `res`,
+   * because the replay follows it on the wire: the gap must be closed and a
+   * truncated buffer's first frame allowed through before those frames land.
+   */
+  private resumeAnswered(turn_id: string, frame: Extract<ServerFrame, { type: "res" }>): void {
+    const turn = this.turns.get(turn_id);
+    if (turn) turn.gap = false;
+    if (!frame.ok) return;
+    if ((frame.result as Partial<TurnResumeResult> | null)?.truncated) {
+      if (turn) turn.jump = true;
+      this.emit("turn.truncated", { turn_id });
+    }
   }
 
   private forgetGone(turn_id: string): void {

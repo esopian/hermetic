@@ -27,6 +27,8 @@ export const CLIENT_ERROR_CODES = {
   NOT_PAIRED: "NOT_PAIRED",
   NO_TARGET: "NO_TARGET",
   BAD_RESPONSE: "BAD_RESPONSE",
+  /** Paired, but the bridge serves another fleet than the pairing link named. */
+  WRONG_FLEET: "WRONG_FLEET",
 } as const;
 
 export function isBridgeError(error: unknown): error is BridgeError {

@@ -337,14 +337,14 @@ describe("BridgeSocket — turns and resume", () => {
     const p = s.socket.startTurn({ instance: "atlas", bot: "scribe", message: "hi" });
     ws.push({ type: "res", id: ws.last("turn.start").id, ok: true, result: { turn_id: "T1" } });
     await p;
-    ws.push({ type: "turn.frame", turn_id: "T1", n: 5, frame: delta(0, "a") });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 1, frame: delta(0, "a") });
     s.socket.close();
     expect(s.socket.state).toBe("idle");
     s.timers.advance(60_000);
     expect(s.factory.sockets).toHaveLength(1);
     s.socket.connect();
     s.factory.current().open();
-    expect(s.factory.current().last("auth").resume).toEqual({ turns: [{ turn_id: "T1", after: 5 }] });
+    expect(s.factory.current().last("auth").resume).toEqual({ turns: [{ turn_id: "T1", after: 1 }] });
   });
 });
 
@@ -404,5 +404,192 @@ describe("BridgeSocket — push frames", () => {
     const ws = authed(s);
     ws.push({ type: "listening", instances: ["atlas", "kestrel"] });
     expect(s.events.listening).toEqual([{ instances: ["atlas", "kestrel"] }]);
+  });
+});
+
+/** A started turn `T1`, with frames 1..`upTo` already seen. */
+async function following(s: ReturnType<typeof setup>, upTo = 2) {
+  const ws = authed(s);
+  const p = s.socket.startTurn({ instance: "atlas", bot: "scribe", message: "hi" });
+  ws.push({ type: "res", id: ws.last("turn.start").id, ok: true, result: { turn_id: "T1" } });
+  await p;
+  for (let n = 1; n <= upTo; n++)
+    ws.push({ type: "turn.frame", turn_id: "T1", n, frame: delta(n - 1, "x") });
+  return ws;
+}
+
+describe("BridgeSocket — frame gaps", () => {
+  test("a skipped frame asks turn.resume once, holds the gap, and the replay fills it in order", async () => {
+    const s = setup();
+    const ws = await following(s, 2);
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 5, frame: delta(4, "e") });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 6, frame: delta(5, "f") });
+    const resumes = ws.sent.filter((f) => f.type === "turn.resume");
+    expect(resumes).toEqual([{ type: "turn.resume", id: expect.any(String), turn_id: "T1", after: 2 }]);
+    expect(s.events["turn.frame"]?.map((e) => e.n)).toEqual([1, 2]);
+
+    ws.push({
+      type: "res",
+      id: resumes[0]!.id,
+      ok: true,
+      result: { turn_id: "T1", state: "running", last_n: 6, truncated: false },
+    });
+    for (const n of [3, 4, 5, 6])
+      ws.push({ type: "turn.frame", turn_id: "T1", n, frame: delta(n - 1, "r") });
+    await flush();
+    expect(s.events["turn.frame"]?.map((e) => e.n)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(s.socket.trackedTurns()).toEqual([{ turn_id: "T1", after: 6, ended: false }]);
+
+    // A later gap is a new gap: one more resume.
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 9, frame: delta(8, "i") });
+    expect(
+      ws.sent.filter((f) => f.type === "turn.resume").map((f) => (f as { after: number }).after),
+    ).toEqual([2, 6]);
+  });
+
+  test("a turn.end past the last frame seen waits for the replay", async () => {
+    const s = setup();
+    const ws = await following(s, 1);
+    ws.push({ type: "turn.end", turn_id: "T1", n: 3, state: "done" });
+    expect(s.events["turn.end"]).toBeUndefined();
+    const resume = ws.last("turn.resume");
+    expect(resume.after).toBe(1);
+    ws.push({
+      type: "res",
+      id: resume.id,
+      ok: true,
+      result: { turn_id: "T1", state: "done", last_n: 3, truncated: false },
+    });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 2, frame: delta(1, "b") });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 3, frame: done(2) });
+    ws.push({ type: "turn.end", turn_id: "T1", n: 3, state: "done" });
+    expect(s.events["turn.frame"]?.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(s.events["turn.end"]).toEqual([{ turn_id: "T1", n: 3, state: "done" }]);
+  });
+
+  test("a truncated replay may jump once, and says so", async () => {
+    const s = setup();
+    const ws = await following(s, 1);
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 50, frame: delta(49, "x") });
+    const resume = ws.last("turn.resume");
+    ws.push({
+      type: "res",
+      id: resume.id,
+      ok: true,
+      result: { turn_id: "T1", state: "running", last_n: 50, truncated: true },
+    });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 40, frame: delta(39, "x") });
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 41, frame: delta(40, "y") });
+    expect(s.events["turn.truncated"]).toEqual([{ turn_id: "T1" }]);
+    expect(s.events["turn.frame"]?.map((e) => e.n)).toEqual([1, 40, 41]);
+    expect(ws.sent.filter((f) => f.type === "turn.resume")).toHaveLength(1);
+  });
+
+  test("a gap resume that finds the turn gone forgets it", async () => {
+    const s = setup();
+    const ws = await following(s, 1);
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 3, frame: delta(2, "c") });
+    ws.push({
+      type: "res",
+      id: ws.last("turn.resume").id,
+      ok: false,
+      error: { code: "TURN_GONE", message: "that turn is no longer held" },
+    });
+    await flush();
+    expect(s.events["turn.gone"]).toEqual([{ turn_id: "T1" }]);
+  });
+
+  test("a socket dropped mid-gap resumes from the last frame seen on the next auth", async () => {
+    const s = setup();
+    const ws = await following(s, 2);
+    ws.push({ type: "turn.frame", turn_id: "T1", n: 4, frame: delta(3, "d") });
+    ws.drop(MOBILE_CLOSE_CODES.SLOW_CONSUMER);
+    expect(s.socket.state).toBe("reconnecting");
+    s.timers.advance(0);
+    s.factory.current().open();
+    expect(s.factory.current().last("auth").resume).toEqual({ turns: [{ turn_id: "T1", after: 2 }] });
+  });
+});
+
+describe("BridgeSocket — app phase", () => {
+  test("the phase goes out after every auth.ok and on each change while open", () => {
+    const s = setup();
+    s.socket.setPhase("background");
+    const ws = authed(s);
+    expect(ws.sent.filter((f) => f.type === "phase")).toEqual([{ type: "phase", phase: "background" }]);
+    s.socket.setPhase("background");
+    s.socket.setPhase("foreground");
+    expect(
+      ws.sent.filter((f) => f.type === "phase").map((f) => (f as { phase: string }).phase),
+    ).toEqual(["background", "foreground"]);
+    ws.drop();
+    s.timers.advance(0);
+    const ws2 = s.factory.current();
+    ws2.open();
+    expect(ws2.sent.some((f) => f.type === "phase")).toBe(false); // not before auth.ok
+    ws2.push({ type: "auth.ok", hello: hello() });
+    expect(ws2.last("phase")).toEqual({ type: "phase", phase: "foreground" });
+  });
+});
+
+describe("BridgeSocket — bridge unavailable (4503)", () => {
+  test("is retried on the normal backoff, keeps its state until auth.ok, and is not revocation", () => {
+    const s = setup();
+    s.socket.connect();
+    const ws = s.factory.current();
+    ws.open();
+    ws.push({ type: "auth.error", error: { code: "NOT_INITIALIZED", message: "no fleet" } });
+    ws.drop(MOBILE_CLOSE_CODES.UNAVAILABLE);
+    expect(s.socket.state).toBe("unavailable");
+    s.timers.advance(0);
+    expect(s.factory.sockets).toHaveLength(2);
+    // Still "unavailable" while the next attempt dials, so the banner does not flicker.
+    expect(s.socket.state).toBe("unavailable");
+    s.factory.current().open();
+    expect(s.socket.state).toBe("unavailable");
+    s.factory.current().drop(MOBILE_CLOSE_CODES.UNAVAILABLE);
+    s.timers.advance(999);
+    expect(s.factory.sockets).toHaveLength(2);
+    s.timers.advance(1);
+    expect(s.factory.sockets).toHaveLength(3);
+    const ws3 = s.factory.current();
+    ws3.open();
+    ws3.push({ type: "auth.ok", hello: hello() });
+    expect(s.socket.state).toBe("open");
+    expect(s.events.state).not.toContain("unauthorized");
+  });
+
+  test("a different drop after 4503 reads as reconnecting again", () => {
+    const s = setup();
+    s.socket.connect();
+    s.factory.current().drop(MOBILE_CLOSE_CODES.UNAVAILABLE);
+    expect(s.socket.state).toBe("unavailable");
+    s.timers.advance(0);
+    s.factory.current().drop(1006);
+    expect(s.socket.state).toBe("reconnecting");
+  });
+});
+
+describe("BridgeSocket — retiring a socket", () => {
+  test("close() mid-handshake waits for the open to close it, and nothing it says afterwards counts", () => {
+    const s = setup();
+    s.socket.connect();
+    const ws = s.factory.current();
+    s.socket.close();
+    expect(ws.closedWith).toBeNull();
+    expect(ws.onclose).toBeNull();
+    expect(ws.onmessage).toBeNull();
+    ws.open();
+    expect(ws.closedWith).toEqual({ code: 1000, reason: "client closing" });
+    expect(ws.sent).toEqual([]); // no auth on a socket being retired
+    expect(s.socket.state).toBe("idle");
+  });
+
+  test("a socket that already closed is not closed again", () => {
+    const s = setup();
+    const ws = authed(s);
+    ws.readyState = 3;
+    s.socket.close();
+    expect(ws.closedWith).toBeNull();
   });
 });

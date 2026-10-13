@@ -10,6 +10,7 @@ import { ActionSheetIOS, Alert, Platform, Pressable, View } from "react-native";
 import { BotsList } from "../../src/bots/BotsList.tsx";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import { useRoster } from "../../src/bridge/hooks.ts";
+import { SocketBand } from "../../src/chat/Bands.tsx";
 import { rosterRows } from "../../src/client/roster-rows.ts";
 import type { Bot } from "../../src/protocol/types.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
@@ -19,9 +20,16 @@ import { useNow } from "../../src/ui/useNow.ts";
 
 const POLL_MS = 60_000;
 
+/** What the header says while the socket is not open; anything unlisted is "connecting". */
+const KICKER_STATE: Record<string, string> = {
+  unavailable: " · bridge unavailable",
+  unauthorized: " · refused",
+  mismatch: " · version mismatch",
+};
+
 export default function Bots() {
   const t = useTheme();
-  const { client, credentials, socketState } = useBridge();
+  const { client, credentials, socketState, reconnect } = useBridge();
   const { state, layout } = useRoster();
   const now = useNow();
   const [refreshing, setRefreshing] = useState(false);
@@ -108,7 +116,7 @@ export default function Bots() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
             <StatusSquare size={8} color={live ? t.c.ok : t.c.warn} pulse={!live} />
             <Kicker numberOfLines={1}>
-              {`${credentials?.fleet.alias ?? credentials?.fleet.fleet_id ?? ""}${live ? "" : " · connecting"}`}
+              {`${credentials?.fleet.alias ?? credentials?.fleet.fleet_id ?? ""}${live ? "" : (KICKER_STATE[socketState] ?? " · connecting")}`}
             </Kicker>
           </View>
           <Text variant="display">Bots</Text>
@@ -134,6 +142,10 @@ export default function Bots() {
           </Text>
         </Pressable>
       </View>
+      {/* Only the states that last: "connecting" flickers by on every resume. */}
+      {socketState === "unavailable" || socketState === "unauthorized" || socketState === "mismatch" ? (
+        <SocketBand state={socketState} onRetry={reconnect} />
+      ) : null}
       <BotsList
         rows={rows}
         loading={loading}

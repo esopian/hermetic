@@ -9,7 +9,7 @@
  * order). Pure: the store holds state and notifies; persistence of pins and
  * folds is the caller's (`RosterPrefsStorage`).
  */
-import type { Bot, Swarm } from "../protocol/types.ts";
+import type { Bot, ChatRole, Swarm } from "../protocol/types.ts";
 
 export type RailFilter = "all" | "unread" | "needs";
 
@@ -199,6 +199,73 @@ export function rosterFooter(layout: RosterLayout): { roster: string; attention:
   };
 }
 
+/* ── the rail, ahead of the roster ───────────────────────────────────────── */
+
+/**
+ * Something this phone saw land in a bot's conversation — its own turn's reply,
+ * or a message the observation delivered — before a roster read has.
+ *
+ * Mirror of the desktop's `ChatArrival` (`packages/ui/src/chat/chat-conversations.ts`).
+ * `unread` adds one to the badge; `false` means the thread is on screen, so the
+ * row's count is cleared locally (the phone's `markSeen` rule). `preview`
+ * moves the quote and who wrote it together; `null` leaves the roster's.
+ */
+export interface RosterArrival {
+  instance: string;
+  bot: string;
+  /** The box's stamp; `null` when only this phone's clock knows, which never moves the time. */
+  at: string | null;
+  unread: boolean;
+  preview: { preview: string; preview_role: ChatRole | null } | null;
+}
+
+/**
+ * One bot's arrivals, held until a roster read covers them — the desktop's
+ * `RailBump` (`packages/ui/src/chat/chat-state.tsx`). `seq` is what keeps the
+ * two honest: a roster read discards every bump stamped before it started, and
+ * keeps the ones that landed while it was in flight.
+ */
+interface RailBump {
+  unread: number;
+  /** The thread was on screen when this landed: the roster's own count is stale. */
+  seen: boolean;
+  at: string | null;
+  preview: RosterArrival["preview"];
+  seq: number;
+}
+
+/** The later of two timestamps, tolerating a null or an unparseable one. */
+function newest(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  const left = Date.parse(a);
+  const right = Date.parse(b);
+  if (Number.isNaN(left)) return b;
+  if (Number.isNaN(right)) return a;
+  return right > left ? b : a;
+}
+
+/** Fold the local bumps into the roster the list draws (desktop `withBumps`). */
+export function withBumps(
+  swarms: readonly Swarm[],
+  bumps: ReadonlyMap<string, Omit<RailBump, "seq">>,
+): Swarm[] {
+  if (bumps.size === 0) return swarms as Swarm[];
+  return swarms.map((swarm) => {
+    let touched = false;
+    const bots = swarm.bots.map((bot) => {
+      const bump = bumps.get(botKey(swarm.instance, bot.name));
+      if (!bump) return bot;
+      const at = newest(bot.last_message_at, bump.at);
+      const unread = (bump.seen ? 0 : bot.unread) + bump.unread;
+      if (unread === bot.unread && at === (bot.last_message_at ?? null) && !bump.preview) return bot;
+      touched = true;
+      return { ...bot, ...bump.preview, unread, last_message_at: at };
+    });
+    return touched ? { ...swarm, bots } : swarm;
+  });
+}
+
 /* ── the store ──────────────────────────────────────────────────────────── */
 
 export interface RosterPrefs {
@@ -244,6 +311,10 @@ export class RosterStore {
   private readonly listeners = new Set<() => void>();
   private gen = 0;
   private fleetId: string | null = null;
+  /** The last roster read, before any bump is folded in. */
+  private listed: readonly Swarm[] = [];
+  private bumps = new Map<string, RailBump>();
+  private bumpSeq = 0;
 
   constructor(
     private readonly source: RosterSource,
@@ -282,12 +353,16 @@ export class RosterStore {
   /** Read swarms and listening together. A stale answer never overwrites a newer one. */
   async refresh(): Promise<boolean> {
     const gen = ++this.gen;
+    // Every bump stamped up to here is answered for by the read below.
+    const mark = this.bumpSeq;
     this.set({ loading: true });
     try {
       const [swarms, listening] = await Promise.all([this.source.swarms(), this.source.listening()]);
       if (gen !== this.gen) return false;
+      this.listed = swarms.swarms;
+      this.bumps = new Map([...this.bumps].filter(([, bump]) => bump.seq > mark));
       this.set({
-        swarms: swarms.swarms,
+        swarms: withBumps(this.listed, this.bumps),
         listening: listening.instances,
         loading: false,
         error: null,
@@ -348,7 +423,7 @@ export class RosterStore {
   /** Locally clear a bot's unread once its conversation is opened (the next read is authoritative). */
   markSeen(instance: string, bot: string): void {
     let touched = false;
-    const swarms = this.state.swarms.map((swarm) => {
+    this.listed = this.listed.map((swarm) => {
       if (swarm.instance !== instance) return swarm;
       const bots = swarm.bots.map((b) => {
         if (b.name !== bot || b.unread === 0) return b;
@@ -357,12 +432,39 @@ export class RosterStore {
       });
       return touched ? { ...swarm, bots } : swarm;
     });
-    if (touched) this.set({ swarms });
+    const key = botKey(instance, bot);
+    const held = this.bumps.get(key);
+    if (held && held.unread > 0) {
+      this.bumps.set(key, { ...held, unread: 0 });
+      touched = true;
+    }
+    if (touched) this.set({ swarms: withBumps(this.listed, this.bumps) });
+  }
+
+  /**
+   * A reply or message landed in a bot's conversation: move its row now —
+   * quote, time, badge — instead of saying "No messages yet" until the next
+   * poll. Additive over the last read, which stays authoritative and prunes it.
+   */
+  noteArrival(arrival: RosterArrival): void {
+    const key = botKey(arrival.instance, arrival.bot);
+    const held = this.bumps.get(key);
+    this.bumps.set(key, {
+      unread: arrival.unread ? (held?.unread ?? 0) + 1 : 0,
+      seen: !arrival.unread || (held?.seen ?? false),
+      at: newest(held?.at, arrival.at),
+      // An arrival that quotes nothing keeps whatever the last one quoted.
+      preview: arrival.preview ?? held?.preview ?? null,
+      seq: ++this.bumpSeq,
+    });
+    this.set({ swarms: withBumps(this.listed, this.bumps) });
   }
 
   reset(): void {
     this.gen += 1;
     this.fleetId = null;
+    this.listed = [];
+    this.bumps = new Map();
     this.set({
       swarms: [],
       listening: [],

@@ -144,6 +144,7 @@ const SOCKET_WORDS: Record<string, string> = {
   authenticating: "authenticating…",
   open: "connected",
   reconnecting: "reconnecting…",
+  unavailable: "laptop bridge unavailable — retrying",
   unauthorized: "refused — this phone was revoked",
   mismatch: "protocol mismatch — update the app or the bridge",
 };

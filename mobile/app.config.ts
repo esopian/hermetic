@@ -28,9 +28,21 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       UIBackgroundModes: ["remote-notification", "fetch", "processing"],
       NSCameraUsageDescription:
         "Hermetic uses the camera to scan the pairing QR code shown on your laptop.",
-      // The bridge and the boxes' noVNC are reached over the tailnet by IP or
-      // MagicDNS name; plain-HTTP loopback/tailnet bridges must be reachable.
-      NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: true },
+      // The bridge is plain HTTP/WS on the tailnet (WireGuard encrypts the
+      // link; see mobile/AGENTS.md, "Transport security"). ATS never covers IP
+      // literals, so 127.0.0.1, 100.64.0.0/10 and fd7a:115c:a1e0::/48 need
+      // nothing. `NSAllowsLocalNetworking` covers `localhost` (an unqualified
+      // name). A MagicDNS name (`laptop.tailXXXX.ts.net`) is a public FQDN to
+      // ATS, so `ts.net` and its subdomains get cleartext HTTP — the narrowest
+      // exception that covers every tailnet, since the tailnet's own label
+      // differs per operator. Everything else keeps full ATS; noVNC is HTTPS.
+      NSAppTransportSecurity: {
+        NSAllowsArbitraryLoads: false,
+        NSAllowsLocalNetworking: true,
+        NSExceptionDomains: {
+          "ts.net": { NSIncludesSubdomains: true, NSExceptionAllowsInsecureHTTPLoads: true },
+        },
+      },
       NSLocalNetworkUsageDescription: "Hermetic connects to the bridge running on your laptop.",
     },
   },

@@ -12,8 +12,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import {
+  noVncOrigin,
   noVncUrl,
   type VncScale as Scale,
+  vncNavigationAllowed,
   vncScaleScript as scaleScript,
 } from "../../src/client/vnc.ts";
 import type { AgentView } from "../../src/protocol/types.ts";
@@ -92,6 +94,9 @@ export default function AgentBrowser() {
         : null,
     [agent, credentials, viewOnly],
   );
+
+  // The one origin the WebView may load; every other navigation goes to the OS.
+  const origin = useMemo(() => (url ? noVncOrigin(url) : null), [url]);
 
   const reconnect = useCallback(() => {
     haptic.light();
@@ -173,7 +178,8 @@ export default function AgentBrowser() {
             setDisplayZoomControls={false}
             bounces={false}
             setSupportMultipleWindows={false}
-            originWhitelist={["https://*"]}
+            originWhitelist={origin ? [origin] : []}
+            onShouldStartLoadWithRequest={(req) => !!origin && vncNavigationAllowed(req.url, origin)}
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => {
               setLoading(false);
@@ -206,8 +212,9 @@ export default function AgentBrowser() {
             : !url
               ? overlay(
                   <Text tone="fg2" style={{ textAlign: "center" }}>
-                    This agent has no tailnet name yet. Its browser is reachable once it has joined the
-                    tailnet.
+                    {agent.tailscale_dns_name
+                      ? `This agent's tailnet name (${agent.tailscale_dns_name}) is not a host this app will load.`
+                      : "This agent has no tailnet name yet. Its browser is reachable once it has joined the tailnet."}
                   </Text>,
                 )
               : loadError

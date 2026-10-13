@@ -24,6 +24,7 @@ import {
   type HermeticClient,
   pairDevice,
 } from "../client/client.ts";
+import { deviceNameFor, pairedFleetMismatch } from "../client/pairing.ts";
 import type { SocketState, WebSocketLike } from "../client/socket.ts";
 import type { Hello, MobilePlatform } from "../protocol/types.ts";
 import { usePrefs } from "../prefs/prefs.tsx";
@@ -61,7 +62,16 @@ export interface BridgeContextValue {
   /** The in-app banner currently showing (foreground alerts). */
   banner: Alert | null;
   dismissBanner(): void;
-  pair(input: { baseUrl: string; code: string; deviceName?: string }): Promise<void>;
+  /**
+   * Pair with a code. `expectFleet` is the fleet id the pairing link named: a
+   * bridge answering for another fleet is refused and nothing is kept.
+   */
+  pair(input: {
+    baseUrl: string;
+    code: string;
+    deviceName?: string;
+    expectFleet?: string | null;
+  }): Promise<void>;
   signOut(): Promise<void>;
   previews: boolean;
   setPreviews(previews: boolean): Promise<void>;
@@ -211,13 +221,21 @@ export function BridgeProvider({
   }, []);
 
   const pair = useCallback(
-    async (input: { baseUrl: string; code: string; deviceName?: string }) => {
-      const { credentials: creds } = await pairDevice({
+    async (input: {
+      baseUrl: string;
+      code: string;
+      deviceName?: string;
+      expectFleet?: string | null;
+    }) => {
+      const { credentials: creds, hello } = await pairDevice({
         baseUrl: input.baseUrl,
         code: input.code,
-        device_name: input.deviceName ?? "iPhone",
+        device_name: deviceNameFor(input.deviceName),
         platform: platform(),
       });
+      // Checked before anything is stored, so a wrong bridge leaves the current pairing alone.
+      const mismatch = pairedFleetMismatch(input.expectFleet, hello);
+      if (mismatch) throw mismatch;
       await saveCredentials(creds, storage);
       start(creds);
     },

@@ -644,7 +644,9 @@ export type ClientFrame =
       session?: string | null;
     }
   | { type: "observe.close"; id: string; sub_id: string }
-  | { type: "pong" };
+  | { type: "pong" }
+  /** Whether the app is on screen; the bridge pushes only to a device with no foreground socket. */
+  | { type: "phase"; phase: "foreground" | "background" };
 
 export type ServerFrame =
   | { type: "auth.ok"; hello: Hello }

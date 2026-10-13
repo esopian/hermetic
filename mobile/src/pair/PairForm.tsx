@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
 import { normalisePairCode, parsePairLink } from "../client/http.ts";
-import { type PairErrorCopy, validHost, validPort } from "../client/pairing.ts";
+import { type PairErrorCopy, pairHostAllowed, validHost, validPort } from "../client/pairing.ts";
 import { MOBILE_PROTOCOL } from "../protocol/constants.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -18,6 +18,10 @@ export interface PairTarget {
   host: string;
   port: number;
   code: string;
+  /** The fleet id a pairing link named; checked against the bridge's answer. */
+  fleet?: string | null;
+  /** The fleet's alias (or id) as the link spelled it, for the confirmation. */
+  name?: string | null;
 }
 
 export function PairForm({
@@ -48,6 +52,7 @@ export function PairForm({
   const normalised = normalisePairCode(code);
   const codeOk = normalised.length === MOBILE_PROTOCOL.PAIR_CODE_LENGTH;
   const ready = validHost(host) && validPort(port) && codeOk;
+  const hostCheck = host.trim() ? pairHostAllowed(host) : null;
 
   const input = {
     borderWidth: t.border.control,
@@ -71,7 +76,7 @@ export function PairForm({
     setHost(parsed.host);
     setPort(String(parsed.port));
     setCode(parsed.code);
-    onSubmit({ host: parsed.host, port: parsed.port, code: parsed.code });
+    onSubmit(parsed);
   };
 
   return (
@@ -123,6 +128,11 @@ export function PairForm({
           style={[input, { width: 96, borderColor: validPort(port) ? t.c.line2 : t.c.bad }]}
         />
       </View>
+      {hostCheck && !hostCheck.ok ? (
+        <Text variant="caption" tone="warn">
+          Not a tailnet address: pairing needs a 100.x, fd7a:115c:a1e0:…, *.ts.net or loopback host.
+        </Text>
+      ) : null}
       <TextInput
         accessibilityLabel="Pairing code"
         value={code}

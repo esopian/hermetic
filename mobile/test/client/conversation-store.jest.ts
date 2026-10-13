@@ -1,4 +1,5 @@
 import {
+  type ConversationArrival,
   type ConversationTarget,
   type ConversationTransport,
   ConversationStore,
@@ -97,11 +98,13 @@ function setup() {
   };
   const settled: unknown[] = [];
   const requests: unknown[] = [];
+  const arrivals: ConversationArrival[] = [];
   const store = new ConversationStore({
     transport,
     timers,
     onTurnSettled: (_t, outcome) => settled.push(outcome),
     onRequestOpened: (_t, r) => requests.push(r),
+    onArrival: (_t, a) => arrivals.push(a),
   });
   return {
     store,
@@ -111,6 +114,7 @@ function setup() {
     starts,
     settled,
     requests,
+    arrivals,
     view: () => store.view(T),
     setSteer: (s: SteerStatus) => {
       steerStatus = s;
@@ -590,5 +594,63 @@ describe("attach", () => {
     ]);
     s.store.onTurnFrame("TX", 1, delta(0, "streamed elsewhere"));
     expect(s.view().live?.blocks).toEqual([{ kind: "text", markdown: "streamed elsewhere" }]);
+  });
+});
+
+describe("the Bots row, ahead of the roster", () => {
+  test("a finished turn reports the recorded reply's words, role and box stamp", async () => {
+    const s = setup();
+    s.store.open(T);
+    await flush();
+    await started(s, "hello");
+    s.store.onTurnFrame("T1", 1, delta(0, "Hi there"));
+    s.history.messages = [
+      msg({ id: "u1", role: "user", text: "hello", at: "2026-10-13T10:00:00.000Z" }),
+      msg({ id: "m1", role: "bot", text: "Hi\nthere", at: "2026-10-13T10:00:05.000Z" }),
+    ];
+    s.store.onTurnFrame("T1", 2, done(1));
+    s.store.onTurnEnd("T1", "done");
+    await flush();
+    expect(s.arrivals).toEqual([
+      {
+        at: "2026-10-13T10:00:05.000Z",
+        unread: false,
+        preview: { preview: "Hi there", preview_role: "bot" },
+      },
+    ]);
+  });
+
+  test("an observed message moves the row once per id; a named session moves only the time", async () => {
+    const s = setup();
+    s.store.open(T);
+    await flush();
+    const message = msg({
+      id: "x1",
+      role: "bot",
+      text: "from the desktop",
+      at: "2026-10-13T11:00:00.000Z",
+    });
+    const event = {
+      type: "message" as const,
+      instance: "atlas",
+      bot: "scribe",
+      session: "s-1",
+      message,
+    };
+    s.observe().event(event);
+    s.observe().event(event);
+    expect(s.arrivals).toEqual([
+      {
+        at: "2026-10-13T11:00:00.000Z",
+        unread: false,
+        preview: { preview: "from the desktop", preview_role: "bot" },
+      },
+    ]);
+
+    const named = { ...T, session: "s-2" };
+    s.store.open(named);
+    await flush();
+    s.observe().event({ ...event, message: { ...message, id: "x2" } });
+    expect(s.arrivals.at(-1)).toEqual({ at: "2026-10-13T11:00:00.000Z", unread: false, preview: null });
   });
 });

@@ -237,6 +237,9 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         );
       }
     },
+    onArrival: (where, arrival) => {
+      roster.noteArrival({ instance: where.instance, bot: where.bot, ...arrival });
+    },
     onRequestOpened: (where, { block }) => {
       const request_id = block.request_id;
       if (!request_id) return;
@@ -322,6 +325,9 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     disconnect: () => socket.close(),
     setPhase: (next) => {
       phase = next;
+      // Only an app on screen is "foreground" to the bridge: `inactive` (the
+      // app switcher, Notification Centre over it) is somebody not looking.
+      socket.setPhase(next === "active" ? "foreground" : "background");
     },
     setWatched: (next) => {
       watched = next;

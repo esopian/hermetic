@@ -4,8 +4,8 @@
  * Mirror of `packages/core/src/mobile/protocol.ts`, value for value and name
  * for name. The phone cannot import core — it is its own toolchain, bundled by
  * Metro — so the root seam test `tests/mobile-seams.test.ts` imports both
- * files and deep-compares every export. Change the contract
- * (`.context/mobile-protocol.md`) first, then both copies.
+ * files and deep-compares every export. Change the contract (`docs/design.md`
+ * §9.4) first, then both copies.
  *
  * Pure values only: no imports, nothing React Native, so bun can load this
  * file from the repo root.
@@ -50,6 +50,9 @@ export const PAIR_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /**
  * The only core methods `rpc` forwards. `chat.send` and `chat.observe` are
  * absent on purpose: they run only as ws turns and subscriptions.
+ * `chat.settings` is forwarded read-only — the bridge drops its params — so a
+ * phone can read the laptop-wide redaction setting but never change it.
+ * `config.show` is absent: `Hello.tailnet` carries the one field a phone needs.
  */
 export const MOBILE_ALLOWED_METHODS = [
   "chat.listening",
@@ -72,7 +75,6 @@ export const MOBILE_ALLOWED_METHODS = [
   "agents.list",
   "agents.get",
   "fleets.list",
-  "config.show",
 ] as const;
 export type MobileAllowedMethod = (typeof MOBILE_ALLOWED_METHODS)[number];
 
@@ -86,7 +88,10 @@ export const MOBILE_ROUTES = Object.freeze({
   ws: "/mobile/v1/ws",
 } as const);
 
-/** Phone → bridge frame types. */
+/**
+ * Phone → bridge frame types. `phase` reports the app's foreground/background
+ * state; a socket counts as foreground from `auth` until it says otherwise.
+ */
 export const MOBILE_CLIENT_FRAMES = [
   "auth",
   "rpc",
@@ -96,6 +101,7 @@ export const MOBILE_CLIENT_FRAMES = [
   "observe.open",
   "observe.close",
   "pong",
+  "phase",
 ] as const;
 export type MobileClientFrameType = (typeof MOBILE_CLIENT_FRAMES)[number];
 
@@ -116,12 +122,24 @@ export const MOBILE_SERVER_FRAMES = [
 ] as const;
 export type MobileServerFrameType = (typeof MOBILE_SERVER_FRAMES)[number];
 
+/**
+ * `UNAUTHORIZED` (4401) is only ever a token failure — the phone forgets its
+ * pairing on it. `UNAVAILABLE` (4503) is a bridge that cannot answer for a fleet
+ * right now (core not initialised, mid-teardown, the wizard showing): the phone
+ * keeps its token and retries. `TOO_MANY_SOCKETS` (4429) is the per-source or
+ * total socket cap, `SLOW_CONSUMER` (1013) a socket whose send buffer filled,
+ * and `INTERNAL` (1011) a bridge-side failure; all three are worth a retry.
+ */
 export const MOBILE_CLOSE_CODES = Object.freeze({
   BAD_FRAME: 4400,
   UNAUTHORIZED: 4401,
   AUTH_DEADLINE: 4408,
   PROTOCOL_MISMATCH: 4426,
+  TOO_MANY_SOCKETS: 4429,
+  UNAVAILABLE: 4503,
   GOING_AWAY: 1001,
+  INTERNAL: 1011,
+  SLOW_CONSUMER: 1013,
 } as const);
 
 export const MOBILE_TURN_STATES = ["running", "done", "error", "aborted"] as const;
@@ -150,6 +168,7 @@ export const MOBILE_HTTP_STATUS = Object.freeze({
   PROTOCOL_MISMATCH: 426,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  NOT_INITIALIZED: 503,
 } as const);
 
 /** Expo notification categories the phone registers, and the approval actions. */

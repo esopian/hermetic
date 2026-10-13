@@ -159,3 +159,17 @@ test("listening frames reach the roster", async () => {
   client.dispose();
   expect(client.socket.state).toBe("idle");
 });
+
+test("the app phase reaches the bridge as a phase frame on the injected socket", async () => {
+  const { client, ws } = await connected();
+  expect(ws.last("phase")).toEqual({ type: "phase", phase: "foreground" });
+  client.setPhase("background");
+  expect(ws.last("phase")).toEqual({ type: "phase", phase: "background" });
+  client.setPhase("inactive");
+  client.setPhase("active");
+  expect(ws.sent.filter((f) => f.type === "phase").map((f) => (f as { phase: string }).phase)).toEqual([
+    "foreground",
+    "background",
+    "foreground",
+  ]);
+});

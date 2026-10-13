@@ -23,6 +23,7 @@ import type {
   ChatFrame,
   ChatMessage,
   ChatObserveEvent,
+  ChatRole,
   HistoryResult,
   RespondResult,
   Session,
@@ -35,6 +36,7 @@ import type {
   TurnState,
   TurnSummary,
 } from "../protocol/types.ts";
+import { previewOf } from "./chat-logic.ts";
 import { BridgeError, CLIENT_ERROR_CODES } from "./errors.ts";
 import { realTimers, type TimerHandle, type Timers } from "./socket.ts";
 import {
@@ -132,6 +134,22 @@ export function insertByStamp(
 
 const isProcessEventMessage = (m: ChatMessage): boolean =>
   m.blocks.length > 0 && m.blocks.every((b) => b.kind === "process_event");
+
+/** What the rail quotes for a message: its prose, attributed when another bot sent it (desktop `previewText`). */
+function previewTextOf(message: ChatMessage): string {
+  const prose = message.blocks
+    .map((b) => (b.kind === "text" ? b.markdown : ""))
+    .filter((text) => text.length > 0)
+    .join("\n");
+  return message.from_bot && prose ? `${message.from_bot.name}: ${prose}` : prose;
+}
+
+/** The rail row's quote for `message`, or `null` when it has none to give. */
+function quoteOf(message: ChatMessage): ConversationArrival["preview"] {
+  if (isProcessEventMessage(message)) return null;
+  const preview = previewOf(previewTextOf(message));
+  return preview ? { preview, preview_role: message.role } : null;
+}
 
 /** Whether the transcript already holds the reply `live` was assembling. */
 export function answered(messages: readonly ChatMessage[], live: ChatMessage): boolean {
@@ -270,6 +288,22 @@ export interface ConversationStoreOptions {
     target: ConversationTarget,
     request: { block: ApprovalBlock | QuestionBlock; turnId: string | null },
   ) => void;
+  /** A reply or message landed: the Bots row moves now rather than at the next poll. */
+  onArrival?: (target: ConversationTarget, arrival: ConversationArrival) => void;
+}
+
+/**
+ * Something landed in a conversation this phone is showing, for the Bots row
+ * to show before the next roster read does (desktop `ChatArrival`). `unread` is
+ * always `false` here: the phone only observes, and only drives turns in, the
+ * conversation on screen.
+ */
+export interface ConversationArrival {
+  /** The box's stamp; `null` when only the assembled stream (this phone's clock) has one. */
+  at: string | null;
+  unread: boolean;
+  /** Canonical conversation only: a named session's words are not what the bot's row quotes. */
+  preview: { preview: string; preview_role: ChatRole } | null;
 }
 
 export interface TurnOutcome {
@@ -343,6 +377,7 @@ export class ConversationStore {
   private readonly timers: Timers;
   private readonly onTurnSettled: ConversationStoreOptions["onTurnSettled"];
   private readonly onRequestOpened: ConversationStoreOptions["onRequestOpened"];
+  private readonly onArrival: ConversationStoreOptions["onArrival"];
   private readonly records = new Map<string, Rec>();
   private readonly owners = new Map<string, string>();
   /** Frames that arrived for a turn before `turn.start` answered with its id. */
@@ -359,6 +394,7 @@ export class ConversationStore {
     this.timers = options.timers ?? realTimers;
     this.onTurnSettled = options.onTurnSettled;
     this.onRequestOpened = options.onRequestOpened;
+    this.onArrival = options.onArrival;
   }
 
   /* ── reading ────────────────────────────────────────────────────────── */
@@ -813,12 +849,15 @@ export class ConversationStore {
         this.observeLive(record);
         const message = event.message;
         if (!record.historyRead) {
-          if (!record.observedEarly.some((m) => m.id === message.id))
+          if (!record.observedEarly.some((m) => m.id === message.id)) {
             record.observedEarly = [...record.observedEarly, message].slice(-EARLY_OBSERVE_LIMIT);
+            this.noteMessage(record, message);
+          }
           break;
         }
         if (record.messages.some((m) => m.id === message.id)) return;
         if (record.observedDuringTurn.some((held) => held.message.id === message.id)) return;
+        this.noteMessage(record, message);
         if (this.coveredByTurn(record, message)) {
           record.observedDuringTurn = [
             ...record.observedDuringTurn,
@@ -1037,11 +1076,42 @@ export class ConversationStore {
     if (record.aborting) return;
     void this.readSessions(record);
     if (!ok && !error) this.reconnect(record, 1);
-    else
+    else {
+      // The row is told after the read: the box's own stamp and words for this
+      // reply arrive with the transcript (desktop `replyArrival`).
+      const assembled = record.live;
       void this.readHistory(record).then(() => {
         record.truncated = false;
+        if (ok) this.noteReply(record, assembled);
         this.drain(record);
       });
+    }
+  }
+
+  /** A message the observation delivered, reported once per id. */
+  private noteMessage(record: Rec, message: ChatMessage): void {
+    this.onArrival?.(record.target, {
+      at: message.at,
+      unread: false,
+      preview: record.target.session === null ? quoteOf(message) : null,
+    });
+  }
+
+  /** The reply this phone just drove to completion, from the transcript if it has it. */
+  private noteReply(record: Rec, live: ChatMessage | null): void {
+    if (!this.onArrival || record.target.session !== null) return;
+    const recorded = [...record.messages]
+      .reverse()
+      .find((m) => m.role !== "user" && !isLocal(m) && !isProcessEventMessage(m));
+    const source = recorded ?? live;
+    const preview = source ? quoteOf(source) : null;
+    if (!preview) return;
+    this.onArrival(record.target, {
+      // The assembled fallback carries this phone's clock, so it moves the words only.
+      at: recorded ? recorded.at : null,
+      unread: false,
+      preview,
+    });
   }
 
   private async abort(record: Rec): Promise<void> {

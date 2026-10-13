@@ -159,3 +159,83 @@ describe("RosterStore", () => {
     expect(store.getState().swarms[0]!.bots[0]!.unread).toBe(0);
   });
 });
+
+describe("arrivals ahead of the roster (desktop RailBump)", () => {
+  function store(swarms: () => ReturnType<typeof swarm>[]) {
+    const source = {
+      swarms: async () => ({ swarms: swarms() }),
+      listening: async () => ({ instances: ["atlas"] }),
+      listen: async () => ({ instances: ["atlas"] }),
+    };
+    return new RosterStore(source);
+  }
+  const row = (s: RosterStore) => s.getState().swarms[0]!.bots[0]!;
+
+  test("a reply moves preview, role and time, and clears the unread at once", async () => {
+    const s = store(() => [swarm("atlas", [bot({ name: "scribe", unread: 2, preview: null })])]);
+    await s.refresh();
+    expect(row(s).preview ?? null).toBeNull();
+    s.noteArrival({
+      instance: "atlas",
+      bot: "scribe",
+      at: "2026-10-13T12:00:00.000Z",
+      unread: false,
+      preview: { preview: "Deployed.", preview_role: "bot" },
+    });
+    expect(row(s)).toMatchObject({
+      preview: "Deployed.",
+      preview_role: "bot",
+      last_message_at: "2026-10-13T12:00:00.000Z",
+      unread: 0,
+    });
+  });
+
+  test("an older stamp never moves the time back; no quote keeps the last one", async () => {
+    const s = store(() => [
+      swarm("atlas", [bot({ name: "scribe", last_message_at: "2026-10-13T12:00:00.000Z" })]),
+    ]);
+    await s.refresh();
+    s.noteArrival({
+      instance: "atlas",
+      bot: "scribe",
+      at: "2026-10-13T13:00:00.000Z",
+      unread: true,
+      preview: { preview: "first", preview_role: "user" },
+    });
+    s.noteArrival({
+      instance: "atlas",
+      bot: "scribe",
+      at: "2026-10-13T09:00:00.000Z",
+      unread: true,
+      preview: null,
+    });
+    expect(row(s)).toMatchObject({
+      preview: "first",
+      preview_role: "user",
+      last_message_at: "2026-10-13T13:00:00.000Z",
+      unread: 2,
+    });
+  });
+
+  test("a roster read that started after the arrival is authoritative; one in flight keeps it", async () => {
+    let listed = [swarm("atlas", [bot({ name: "scribe", preview: "old" })])];
+    const s = store(() => listed);
+    await s.refresh();
+    const arrival = {
+      instance: "atlas",
+      bot: "scribe",
+      at: null,
+      unread: false,
+      preview: { preview: "new", preview_role: "bot" as const },
+    };
+    // In flight when the arrival lands: the answer cannot include it, so the bump stays.
+    const inFlight = s.refresh();
+    s.noteArrival(arrival);
+    await inFlight;
+    expect(row(s).preview).toBe("new");
+    // A later read answers for it.
+    listed = [swarm("atlas", [bot({ name: "scribe", preview: "from the box" })])];
+    await s.refresh();
+    expect(row(s).preview).toBe("from the box");
+  });
+});
