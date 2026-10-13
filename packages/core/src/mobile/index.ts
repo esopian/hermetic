@@ -36,6 +36,7 @@ import { deviceView, type MobileStore } from "./device-store.ts";
 import { issuePairCode } from "./pairing.ts";
 import { MOBILE_PROTOCOL } from "./protocol.ts";
 import { memoryPushSender, expoPushSender, type PushSender } from "./push.ts";
+import { expoReceiptFetcher, type ReceiptFetcher } from "./push-receipts.ts";
 import { startMobileBridge, type MobileBridge, type MobileBridgeEvent } from "./server.ts";
 
 export { MOBILE_PROTOCOL } from "./protocol.ts";
@@ -51,6 +52,8 @@ export interface MobileDeps {
   localTailscale: () => Promise<TailscalePreflight>;
   /** Absent: Expo in real mode, a recording sender in fixture mode. */
   push?: PushSender | undefined;
+  /** Absent: Expo's receipts when `push` is absent in real mode, none otherwise. */
+  receipts?: ReceiptFetcher | undefined;
   clock?: () => number;
 }
 
@@ -96,6 +99,11 @@ export function createMobile(deps: MobileDeps) {
   const push: PushSender =
     deps.push ??
     (deps.fixture ? memoryPushSender() : expoPushSender((input, init) => fetch(input, init)));
+  const receipts: ReceiptFetcher | undefined =
+    deps.receipts ??
+    (deps.push === undefined && !deps.fixture
+      ? expoReceiptFetcher((input, init) => fetch(input, init))
+      : undefined);
   let active: MobileBridge | null = null;
 
   /** Settings, then the tailnet IPv4, then loopback. Fixture mode has no tailnet to bind. */
@@ -134,6 +142,7 @@ export function createMobile(deps: MobileDeps) {
       core: deps.core,
       store: deps.store,
       push,
+      ...(receipts !== undefined ? { receipts } : {}),
       host,
       port,
       app: opts.app,

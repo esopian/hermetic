@@ -46,6 +46,35 @@ describe("mobile rendering", () => {
     expect(renderDevices({ devices: [], serving: null })).toContain("no paired devices");
   });
 
+  test("the fleet column shows the alias when known, else the id, else a dash", () => {
+    const base = {
+      name: "FIXTURE phone",
+      platform: "ios" as const,
+      created_at: "2026-10-13T12:00:00.000Z",
+      last_seen_at: null,
+      push_registered: false,
+      previews: true,
+      enabled: true,
+    };
+    const result = {
+      devices: [
+        { ...base, device_id: "dev-1", fleet_id: "fxtr0001" },
+        { ...base, device_id: "dev-2", fleet_id: "sg7k2m4p" },
+        { ...base, device_id: "dev-3", fleet_id: null },
+      ],
+      serving: null,
+    };
+    const text = renderDevices(result, new Map([["fxtr0001", "main"]]));
+    const lines = text.split("\n");
+    expect(lines.find((l) => l.startsWith("DEVICE"))).toContain("FLEET");
+    expect(lines.find((l) => l.startsWith("dev-1"))).toMatch(/\bmain\b/);
+    expect(lines.find((l) => l.startsWith("dev-1"))).not.toContain("fxtr0001");
+    expect(lines.find((l) => l.startsWith("dev-2"))).toContain("sg7k2m4p");
+    expect(lines.find((l) => l.startsWith("dev-3"))).toContain("—");
+    // Without aliases the id is the whole answer.
+    expect(renderDevices(result)).toContain("fxtr0001");
+  });
+
   test("settings repeat core's warning about a wildcard host", () => {
     const plain = renderSettings({ enabled: true, host: null, port: null });
     expect(plain).not.toContain("warning");

@@ -22,6 +22,7 @@ import { createNotifyLoop } from "./notify-loop.ts";
 import { createPairLimiter } from "./pairing.ts";
 import { MOBILE_CLOSE_CODES, MOBILE_PROTOCOL, MOBILE_ROUTES } from "./protocol.ts";
 import { createPushNotifier, type PushSender } from "./push.ts";
+import type { ReceiptFetcher } from "./push-receipts.ts";
 import { createTurnRegistry } from "./turns.ts";
 import {
   DEFAULT_SOCKET_LIMITS,
@@ -37,6 +38,8 @@ export interface StartMobileBridgeOptions {
   core: () => MobileCore;
   store: MobileStore;
   push: PushSender;
+  /** Follows Expo tickets to their receipts; absent, only the ticket answer is read. */
+  receipts?: ReceiptFetcher;
   host: string;
   /** 0 picks a free port; read the bound one off the result. */
   port: number;
@@ -124,6 +127,7 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
   const push = createPushNotifier({
     store: opts.store,
     sender: opts.push,
+    ...(opts.receipts !== undefined ? { receipts: { fetch: opts.receipts } } : {}),
     isLive: (id) => isLive(id),
     fleetId: () => {
       try {
@@ -302,6 +306,7 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
         clearInterval(heartbeat);
         clearInterval(sweep);
         notify.stop();
+        push.close();
         // Turns first, sockets second: a `turn.start` the stop refuses, and the
         // `turn.end` of every turn it ends, can still reach a socket that is
         // open. Best effort — a refusal that settles after the sockets close

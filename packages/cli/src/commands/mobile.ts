@@ -21,7 +21,12 @@ import {
   MobileServeInput,
   MobileSettingsInput,
 } from "@hermetic/core";
-import type { MobileDevicesResult, MobilePairResult, MobileSettingsResult } from "@hermetic/core";
+import type {
+  Hermetic,
+  MobileDevicesResult,
+  MobilePairResult,
+  MobileSettingsResult,
+} from "@hermetic/core";
 import { encodeQr, qrToTerminal } from "@hermetic/core/shared";
 import { openCtx } from "../context.ts";
 import { declare } from "../declare.ts";
@@ -59,7 +64,15 @@ export function renderPair(result: MobilePairResult, opts: { qr: boolean }): str
   return `${qr}${lines.join("\n")}\nScan with Hermetic on the phone, or enter the host, port and code.\n`;
 }
 
-export function renderDevices(result: MobileDevicesResult): string {
+/**
+ * `aliases` maps a fleet id to its alias, when the caller could read one. A
+ * phone's fleet shows as `alias ?? fleet_id` (§4.6); a row paired before the
+ * column existed has none and shows `—`.
+ */
+export function renderDevices(
+  result: MobileDevicesResult,
+  aliases: ReadonlyMap<string, string> = new Map(),
+): string {
   const serving =
     result.serving === null
       ? "bridge: not running in this process\n"
@@ -69,11 +82,12 @@ export function renderDevices(result: MobileDevicesResult): string {
     d.device_id,
     d.name,
     d.platform,
+    d.fleet_id === null ? "—" : (aliases.get(d.fleet_id) ?? d.fleet_id),
     d.created_at,
     d.last_seen_at ?? "-",
     d.push_registered ? (d.enabled ? (d.previews ? "on" : "on, no previews") : "off") : "-",
   ]);
-  return `${serving}${renderTable(rows, ["DEVICE", "NAME", "PLATFORM", "PAIRED", "LAST SEEN", "PUSH"])}\n`;
+  return `${serving}${renderTable(rows, ["DEVICE", "NAME", "PLATFORM", "FLEET", "PAIRED", "LAST SEEN", "PUSH"])}\n`;
 }
 
 /** The settings, and core's warning about them when it has one. Pure, for a test. */
@@ -84,6 +98,23 @@ export function renderSettings(s: MobileSettingsResult): string {
     `port     ${s.port ?? "(default: 7877)"}\n` +
     (s.warning !== undefined ? `warning: ${s.warning}\n` : "")
   );
+}
+
+/** Fleet aliases for the table; a directory that cannot be read leaves the ids. */
+async function fleetAliases(
+  hermetic: Pick<Hermetic, "fleets">,
+  result: MobileDevicesResult,
+): Promise<Map<string, string>> {
+  const aliases = new Map<string, string>();
+  if (!result.devices.some((d) => d.fleet_id !== null)) return aliases;
+  try {
+    for (const f of (await hermetic.fleets.list()).fleets) {
+      if (f.fleet_id !== null && f.name !== null) aliases.set(f.fleet_id, f.name);
+    }
+  } catch {
+    // The id is the display fallback; a failed lookup must not fail the list.
+  }
+  return aliases;
 }
 
 export function register(program: Command): void {
@@ -123,7 +154,7 @@ export function register(program: Command): void {
         const ctx = await openCtx(cmd);
         const result = await ctx.hermetic.mobile.devices(validate(devicesSchema, {}));
         if (ctx.flags.json) await outJson(result);
-        else await out(renderDevices(result));
+        else await out(renderDevices(result, await fleetAliases(ctx.hermetic, result)));
       }),
   );
 

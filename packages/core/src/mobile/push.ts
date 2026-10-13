@@ -17,12 +17,21 @@ import type { FetchLike } from "../aws/tailscale.ts";
 import { redactText } from "../chat/chat-redact.ts";
 import type { ChatBlock, Notification, TurnSummary } from "../schema/index.ts";
 import type { MobileDeviceRow, MobileStore } from "./device-store.ts";
+import {
+  createReceiptTracker,
+  receiptOf,
+  type PushReceipt,
+  type ReceiptFetcher,
+  type ReceiptTracker,
+} from "./push-receipts.ts";
 import { MOBILE_PROTOCOL, MOBILE_PUSH_CATEGORIES, type MobilePushKind } from "./protocol.ts";
 
 export const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 export const EXPO_PUSH_BATCH = 100;
 /** One batch's whole round trip, body read included. */
 export const EXPO_PUSH_TIMEOUT_MS = 10_000;
+
+export type { PushReceipt } from "./push-receipts.ts";
 
 export interface ExpoPushMessage {
   to: string;
@@ -34,33 +43,10 @@ export interface ExpoPushMessage {
   priority?: "default" | "high";
 }
 
-export type PushReceipt =
-  | { status: "ok"; id?: string }
-  | { status: "error"; message: string; details?: { error?: string } };
-
 export type PushSender = (messages: ExpoPushMessage[]) => Promise<PushReceipt[]>;
 
 function failedBatch(n: number, message: string): PushReceipt[] {
   return Array.from({ length: n }, () => ({ status: "error" as const, message }));
-}
-
-function receiptOf(value: unknown): PushReceipt {
-  if (typeof value !== "object" || value === null) {
-    return { status: "error", message: "malformed receipt" };
-  }
-  const v = value as Record<string, unknown>;
-  if (v["status"] === "ok")
-    return typeof v["id"] === "string" ? { status: "ok", id: v["id"] } : { status: "ok" };
-  const details = v["details"];
-  const error =
-    typeof details === "object" && details !== null
-      ? (details as Record<string, unknown>)["error"]
-      : undefined;
-  return {
-    status: "error",
-    message: typeof v["message"] === "string" ? v["message"] : "push refused",
-    ...(typeof error === "string" ? { details: { error } } : {}),
-  };
 }
 
 /**
@@ -68,9 +54,8 @@ function receiptOf(value: unknown): PushReceipt {
  * `EXPO_PUSH_TIMEOUT_MS`. Never throws: a failure is a receipt.
  *
  * What is read is Expo's push *tickets*. A ticket can say ok while delivery
- * later fails at APNs or FCM, which only the receipts endpoint reports.
- * TODO(mobile): poll `/push/getReceipts` for the ticket ids and clear a token
- * whose receipt says `DeviceNotRegistered`, as the ticket path below does.
+ * later fails at APNs or FCM, which only the receipts endpoint reports; the
+ * notifier follows the ids of `ok` tickets there (`push-receipts.ts`).
  */
 export function expoPushSender(
   fetch: FetchLike,
@@ -268,6 +253,12 @@ export interface PushNotifier {
   notify(event: MobilePushEvent): Promise<void>;
 }
 
+/** What the bridge owns: the notifier its handlers call, and the end of its receipt timer. */
+export interface PushNotifierHandle extends PushNotifier {
+  /** Stop following receipts; later `notify` calls still push. Idempotent. */
+  close(): void;
+}
+
 export interface PushNotifierDeps {
   store: MobileStore;
   sender: PushSender;
@@ -281,9 +272,23 @@ export interface PushNotifierDeps {
   fleetId?: () => string | null;
   /** How many `(device, dedupe)` pairs to remember. */
   remember?: number;
+  /**
+   * Follow the ids of `ok` tickets to their receipts and clear a token whose
+   * receipt says `DeviceNotRegistered`. Absent (fixture mode, most tests): the
+   * ticket answer is all that is read.
+   */
+  receipts?: {
+    fetch: ReceiptFetcher;
+    /** Default `RECEIPT_DELAY_MS`, fifteen minutes. */
+    delayMs?: number;
+    /** Tickets remembered at once; the oldest go first. */
+    cap?: number;
+    clock?: () => number;
+    onError?: (reason: string) => void;
+  };
 }
 
-export function createPushNotifier(deps: PushNotifierDeps): PushNotifier {
+export function createPushNotifier(deps: PushNotifierDeps): PushNotifierHandle {
   const remember = deps.remember ?? 4_096;
   const seen = new Set<string>();
   function mark(key: string): boolean {
@@ -296,7 +301,28 @@ export function createPushNotifier(deps: PushNotifierDeps): PushNotifier {
     return true;
   }
 
+  /** Clear the token a ticket named, unless the phone has registered another since. */
+  function forget(deviceId: string, token: string): void {
+    if (deps.store.device(deviceId)?.expo_push_token !== token) return;
+    deps.store.setPush(deviceId, { expo_push_token: null });
+  }
+
+  const tracker: ReceiptTracker | null =
+    deps.receipts === undefined
+      ? null
+      : createReceiptTracker({
+          fetchReceipts: deps.receipts.fetch,
+          onUnregistered: forget,
+          ...(deps.receipts.delayMs !== undefined ? { delayMs: deps.receipts.delayMs } : {}),
+          ...(deps.receipts.cap !== undefined ? { cap: deps.receipts.cap } : {}),
+          ...(deps.receipts.clock !== undefined ? { clock: deps.receipts.clock } : {}),
+          ...(deps.receipts.onError !== undefined ? { onError: deps.receipts.onError } : {}),
+        });
+
   return {
+    close() {
+      tracker?.close();
+    },
     async notify(event) {
       try {
         const targets: Array<{ device: MobileDeviceRow; message: ExpoPushMessage }> = [];
@@ -316,7 +342,9 @@ export function createPushNotifier(deps: PushNotifierDeps): PushNotifier {
           const target = targets[i];
           if (target === undefined) return;
           if (receipt.status === "error" && receipt.details?.error === "DeviceNotRegistered") {
-            deps.store.setPush(target.device.device_id, { expo_push_token: null });
+            forget(target.device.device_id, target.message.to);
+          } else if (receipt.status === "ok" && receipt.id !== undefined) {
+            tracker?.track(receipt.id, target.device.device_id, target.message.to);
           }
         });
       } catch {
