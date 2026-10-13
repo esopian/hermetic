@@ -14,9 +14,11 @@
  * choice, off unless the operator turns it on, because a preview travels
  * through Apple's and Expo's push services.
  *
- * A box that answers `forbidden` holds this phone's `device_id` for another
- * tailnet login. The phone mints a new id, keeps it, and registers once more
- * (`PushSync.sync`); the boxes that took the old id are told to forget it.
+ * The `device_id` is stable: minted once and never rotated. Boxes key a
+ * registration by the tailnet login that wrote it, so two phones never collide
+ * on an id. A box that answers `forbidden` (403) refused this login at its
+ * whois gate (a transient `tailscale whois` failure, or a tagged node); that is
+ * reported for the box in Settings and retried on the next sync, nothing more.
  *
  * Pure: the token source and the registrar are handed in, so the provider's
  * tests run on doubles.
@@ -97,23 +99,15 @@ export function randomId(rand: () => number = Math.random): string {
 }
 
 /** This phone's stable device id: minted once and kept. */
-export async function deviceId(kv: KvStorage): Promise<string> {
+export async function deviceId(kv: KvStorage, mint: () => string = randomId): Promise<string> {
   const existing = await kv.get(DEVICE_ID_KEY).catch(() => null);
   if (existing && /^[A-Za-z0-9_-]{1,64}$/.test(existing)) return existing;
-  return rotateDeviceId(kv);
-}
-
-/** Mint a new device id and keep it in place of the old one. */
-export async function rotateDeviceId(kv: KvStorage, mint: () => string = randomId): Promise<string> {
   const id = mint();
   await kv.set(DEVICE_ID_KEY, id).catch(() => {});
   return id;
 }
 
-/**
- * A box refused the registration because the `device_id` is held by another
- * tailnet login (hermeticd's 403).
- */
+/** A box refused this phone's tailnet login at its whois gate (hermeticd's 403). */
 export function isForbidden(result: PushBoxResult): boolean {
   return !result.ok && result.status === "forbidden";
 }
@@ -128,8 +122,6 @@ export interface PushSyncDeps {
   appVersion: string;
   /** The Settings "Show message previews" choice, read at each registration. */
   previews: () => boolean;
-  /** Mint and keep a new device id (`rotateDeviceId`), after a `forbidden`. */
-  rotateDeviceId: () => Promise<string>;
   /** Every listened box took the registration: remember when (`PUSH_RENEWED_KEY`). */
   onRenewed?: () => void | Promise<void>;
 }
@@ -184,30 +176,18 @@ export class PushSync {
     const keep = new Set(boxes.map((b) => b.instance));
     const dropped = [...this.registered.values()].filter((b) => !keep.has(b.instance));
     const id = await this.deps.deviceId();
-    const device = (device_id: string): MobilePushDevice => ({
-      device_id,
+    const device: MobilePushDevice = {
+      device_id: id,
       token,
       platform: this.deps.platform,
       app_version: this.deps.appVersion,
       listening: "all",
       previews: this.deps.previews(),
-    });
-    let [results] = await Promise.all([
-      boxes.length > 0 ? this.deps.registrar.register(boxes, device(id)) : Promise.resolve([]),
+    };
+    const [results] = await Promise.all([
+      boxes.length > 0 ? this.deps.registrar.register(boxes, device) : Promise.resolve([]),
       dropped.length > 0 ? this.deps.registrar.unregister(dropped, id) : Promise.resolve([]),
     ]);
-    if (results.some(isForbidden) && this.token === token) {
-      // Another login holds this id on some box: take a new one and try once more.
-      const accepted = new Set(results.filter((r) => r.ok).map((r) => r.instance));
-      const fresh = await this.deps.rotateDeviceId();
-      await this.deps.registrar
-        .unregister(
-          boxes.filter((b) => accepted.has(b.instance)),
-          id,
-        )
-        .catch(() => []);
-      results = await this.deps.registrar.register(boxes, device(fresh));
-    }
     if (this.token !== token) return this.status;
     this.registered = new Map(boxes.map((b) => [b.instance, b]));
     this.status = { state: "on", boxes: results };
@@ -263,7 +243,6 @@ export async function renewIfDue(deps: RenewDeps): Promise<PushStatus | null> {
     fleet: deps.fleet,
     registrar: deps.registrar,
     deviceId: () => deviceId(deps.secure),
-    rotateDeviceId: () => rotateDeviceId(deps.secure),
     token: deps.token,
     platform: deps.platform,
     appVersion: deps.appVersion,

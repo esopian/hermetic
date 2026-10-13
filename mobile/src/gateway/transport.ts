@@ -56,6 +56,7 @@ import type {
   Failure,
 } from "../client/conversation-store.ts";
 import { reasonOf } from "../client/errors.ts";
+import { type LiveStatus, liveStatusOf } from "./active-list.ts";
 import type { RosterSource } from "../client/roster-store.ts";
 
 /** Where the turn pump delivers: the conversation store's turn events. */
@@ -121,6 +122,16 @@ export interface GatewayOps {
 }
 
 export interface GatewayTransport extends ConversationTransport, RosterSource, GatewayOps {
+  /**
+   * `session.active_list` on `instance`'s box, read for `session`: its status
+   * there now, or `null` when the box lists no such live session. Throws when
+   * the gateway cannot say (no Bot Mode RPC, an unreadable answer, no answer).
+   */
+  liveStatus(input: {
+    instance: string;
+    session: string;
+    signal?: AbortSignal;
+  }): Promise<LiveStatus | null>;
   /**
    * Stop following every running turn (`forgetTurn` on each) and answer their
    * ids. The turns keep running on their boxes: nothing is interrupted. The
@@ -358,6 +369,25 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     return ids;
   }
 
+  async function liveStatus(input: {
+    instance: string;
+    session: string;
+    signal?: AbortSignal;
+  }): Promise<LiveStatus | null> {
+    if (!client.botModeRpc)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway does not list its live sessions");
+    const answer = await client.botModeRpc(
+      deps.address(input.instance),
+      "session.active_list",
+      {},
+      input.signal ? { signal: input.signal } : {},
+    );
+    const status = liveStatusOf(answer, input.session);
+    if (status === undefined)
+      throw new HermeticError("CHAT_PROTOCOL", "session.active_list answered without a session list");
+    return status;
+  }
+
   async function abort(input: {
     instance: string;
     bot: string;
@@ -591,6 +621,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     steerSubagent,
     abortSubagent,
     detachTurns,
+    liveStatus,
     dispose: () => {
       detachTurns();
       for (const controller of [...observers]) controller.abort();

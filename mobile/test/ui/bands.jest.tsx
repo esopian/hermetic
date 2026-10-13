@@ -1,5 +1,6 @@
 import { fireEvent, screen } from "@testing-library/react-native";
-import { ThreadBand } from "../../src/chat/Bands.tsx";
+import { RemoteBand, ThreadBand } from "../../src/chat/Bands.tsx";
+import { remoteTurnView } from "../../src/client/chat-logic.ts";
 import {
   openTailscale,
   TAILSCALE_APP_STORE_URL,
@@ -66,5 +67,21 @@ describe("ThreadBand — missing bot", () => {
   test("a missing session says so instead", async () => {
     await renderUi(<ThreadBand state="missing" instance="atlas" bot="scribe" session="s-9" />);
     expect(screen.getByText("scribe on atlas has no such session.")).toBeTruthy();
+  });
+});
+
+describe("RemoteBand", () => {
+  test("a turn still running on the box says so; nothing when there is none", async () => {
+    await renderUi(<RemoteBand remote={remoteTurnView("working")} />);
+    expect(screen.getByTestId("band-remote")).toBeTruthy();
+    expect(screen.getByText("Still running on the box.")).toBeTruthy();
+    await renderUi(<RemoteBand remote={null} />);
+    expect(screen.queryByTestId("band-remote")).toBeNull();
+  });
+
+  test("waiting tells the operator where the request is", async () => {
+    await renderUi(<RemoteBand remote={remoteTurnView("waiting")} />);
+    expect(screen.getByText("Still running on the box — waiting on you.")).toBeTruthy();
+    expect(screen.getByText(/Open the request from history/)).toBeTruthy();
   });
 });

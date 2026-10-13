@@ -16,12 +16,15 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, View } from "react-native";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { Alert, StyleSheet, View } from "react-native";
+import {
+  KeyboardAwareScrollView,
+  type KeyboardAwareScrollViewRef,
+} from "react-native-keyboard-controller";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetState } from "../src/fleet/hooks.ts";
 import { type PairedLink, type PairErrorCopy, readPairingLink } from "../src/fleet/pairing.ts";
-import { PairConfirm, tailnetChange } from "../src/pair/PairConfirm.tsx";
+import { PairConfirm, PairConfirmActions, tailnetChange } from "../src/pair/PairConfirm.tsx";
 import { PairForm } from "../src/pair/PairForm.tsx";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
@@ -39,6 +42,7 @@ export default function Pair() {
   const [pending, setPending] = useState<PairedLink | null>(null);
   const scanned = useRef(false);
   const linked = useRef<string | null>(null);
+  const scroller = useRef<KeyboardAwareScrollViewRef>(null);
 
   const submit = useCallback(
     async (link: PairedLink) => {
@@ -108,6 +112,18 @@ export default function Pair() {
     );
   }, [pending, status, current, submit]);
 
+  const confirmProps = (link: PairedLink) => ({
+    link,
+    replacing: status === "paired",
+    currentTailnet: status === "paired" ? (current?.payload.tailnet ?? null) : null,
+    busy,
+    onConfirm: confirm,
+    onCancel: () => {
+      haptic.select();
+      setPending(null);
+    },
+  });
+
   // A deep link fills the confirmation; it never pairs by itself.
   const deepLink = typeof params.link === "string" ? params.link : null;
   useEffect(() => {
@@ -133,6 +149,7 @@ export default function Pair() {
   return (
     <Screen edges={["top", "bottom"]}>
       <KeyboardAwareScrollView
+        ref={scroller}
         bottomOffset={24}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: t.space.xl, gap: t.space.lg }}
@@ -216,20 +233,30 @@ export default function Pair() {
           />
         ) : null}
         {pending ? (
-          <PairConfirm
-            link={pending}
-            replacing={status === "paired"}
-            currentTailnet={status === "paired" ? (current?.payload.tailnet ?? null) : null}
-            busy={busy}
-            onConfirm={confirm}
-            onCancel={() => {
-              haptic.select();
-              setPending(null);
-            }}
-          />
+          // The buttons are pinned below the scroll view; the card scrolls itself into view.
+          <View
+            onLayout={(e) =>
+              scroller.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - t.space.lg) })
+            }
+          >
+            <PairConfirm {...confirmProps(pending)} actions={false} />
+          </View>
         ) : null}
         <PairForm busy={busy} error={error} onSubmit={propose} />
       </KeyboardAwareScrollView>
+      {pending ? (
+        <View
+          style={{
+            paddingHorizontal: t.space.xl,
+            paddingVertical: t.space.md,
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: t.c.line2,
+            backgroundColor: t.c.bg,
+          }}
+        >
+          <PairConfirmActions {...confirmProps(pending)} />
+        </View>
+      ) : null}
     </Screen>
   );
 }

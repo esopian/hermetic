@@ -53,9 +53,10 @@ iOS keychain (`expo-secure-store`, this-device-only) as `hermetic.fleet.v2`. Pai
 it, and Settings → Sign out forgets it. To cut a phone off, remove it from the tailnet.
 
 A push registration on a box belongs to the tailnet login that made it: another member cannot update
-or delete it. If a box answers 403 because this phone's `device_id` is held there by another login
-(a reinstall that kept the id, say), the phone mints a new id, keeps it, registers once more, and
-tells the boxes that took the old id to forget it.
+or delete it, and two logins never collide on a `device_id`. The phone mints its `device_id` once and
+keeps it. A box that answers 403 refused this phone's login at its `tailscale whois` gate (a transient
+whois failure, or a tagged node); Settings names that box as not registered, and the next sync tries
+again with the same id.
 
 A registration lapses **72 hours** after the phone last renewed it. The phone renews on every
 foreground, and the background task (below) renews it when the last full renewal is 12 hours old,

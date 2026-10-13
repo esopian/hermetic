@@ -48,7 +48,6 @@ import {
   type PushStatus,
   PushSync,
   previewsFrom,
-  rotateDeviceId,
 } from "./push.ts";
 import { FleetStore, type KvStorage, rosterPrefsStorage, type TextFile } from "./store.ts";
 
@@ -182,7 +181,6 @@ export function FleetProvider({
       fleet,
       registrar: deps.registrar,
       deviceId: () => deviceId(deps.secure),
-      rotateDeviceId: () => rotateDeviceId(deps.secure),
       token: () => deps.notifier.pushToken(),
       platform: deps.platform,
       appVersion: deps.appVersion,

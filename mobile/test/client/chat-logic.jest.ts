@@ -192,6 +192,33 @@ describe("activity", () => {
       count: "1 tool",
     });
   });
+
+  test("a group in a turn still running is never called complete or stopped", () => {
+    const step = (key: string) =>
+      ({
+        kind: "activity",
+        category: "notice",
+        key,
+        title: key,
+        state: "done",
+        role: "work",
+      }) as const;
+    const steps = [step("read"), step("plan")];
+    expect(groupSummary(steps, false, "streaming", false)).toMatchObject({
+      status: "Activity complete",
+      count: "2 steps",
+    });
+    expect(groupSummary(steps, false, "streaming", false, true)).toMatchObject({
+      status: "Working…",
+      count: "2 steps",
+    });
+    expect(groupSummary([tool({ status: "running" })], false, "streaming", false).status).toBe(
+      "Activity stopped",
+    );
+    expect(groupSummary([tool({ status: "running" })], false, "streaming", false, true).status).toBe(
+      "Working…",
+    );
+  });
 });
 
 test("noVNC scaling script sets the resize mode", () => {

@@ -1,12 +1,28 @@
 import type { ChatFrame, HermesChatClient } from "@hermetic/core/chat-client";
 import type { MobileFleetView } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
-import { type Alert, createHermeticClient } from "../../src/client/client.ts";
+import {
+  type Alert,
+  createHermeticClient,
+  REMOTE_FAILURES,
+  REMOTE_POLL_MS,
+} from "../../src/client/client.ts";
+import type { Timers } from "../../src/client/timers.ts";
+import { noteTunnel, resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
 import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
 import { InboxStore } from "../../src/inbox/store.ts";
-import { fakeFetch, flush, json } from "../helpers/fakes.ts";
-import { approval, block, bot, delta, done, fleetView, swarm } from "../helpers/fixtures.ts";
+import { FakeTimers, fakeFetch, flush, json } from "../helpers/fakes.ts";
+import {
+  approval,
+  block,
+  bot,
+  delta,
+  done,
+  errorFrame,
+  fleetView,
+  swarm,
+} from "../helpers/fixtures.ts";
 
 const NOW = "2026-10-13T10:00:00.000Z";
 const T = { instance: "atlas", bot: "scribe", session: null };
@@ -24,15 +40,21 @@ interface Watch {
  */
 function adapter(
   frames: ChatFrame[],
-  opts: { hold?: boolean } = {},
+  opts: { hold?: boolean; rpc?: (method: string) => unknown } = {},
 ): HermesChatClient & {
   sent: string[];
   swarmed: string[];
   aborts: string[];
+  abortSessions: (string | undefined)[];
+  steers: string[];
+  rpcs: string[];
   turnSignals: (AbortSignal | undefined)[];
   watches: Watch[];
   histories: string[];
 } {
+  const abortSessions: (string | undefined)[] = [];
+  const steers: string[] = [];
+  const rpcs: string[] = [];
   const sent: string[] = [];
   const swarmed: string[] = [];
   const aborts: string[] = [];
@@ -44,10 +66,14 @@ function adapter(
       if (signal?.aborted) resolve();
       signal?.addEventListener("abort", () => resolve());
     });
+  const rpc = opts.rpc;
   return {
     sent,
     swarmed,
     aborts,
+    abortSessions,
+    steers,
+    rpcs,
     turnSignals,
     watches,
     histories,
@@ -77,10 +103,23 @@ function adapter(
         if (opts.hold) await untilAborted(o?.signal);
       })();
     },
-    abort: async (box) => {
+    abort: async (box, _bot, o) => {
       aborts.push(box.instance);
+      abortSessions.push(o?.session);
       return true;
     },
+    steer: async (_box, _bot, text) => {
+      steers.push(text);
+      return "queued";
+    },
+    ...(rpc
+      ? {
+          botModeRpc: async (_box: unknown, method: string) => {
+            rpcs.push(method);
+            return rpc(method);
+          },
+        }
+      : {}),
     observe: (box, b, o) => {
       const watch = { instance: box.instance, bot: b, signal: o?.signal };
       watches.push(watch);
@@ -115,7 +154,16 @@ const VIEW2: MobileFleetView = fleetView({
   ],
 });
 
-async function setup(frames: ChatFrame[], opts: { hold?: boolean; view?: MobileFleetView } = {}) {
+async function setup(
+  frames: ChatFrame[],
+  opts: {
+    hold?: boolean;
+    view?: MobileFleetView;
+    rpc?: (method: string) => unknown;
+    timers?: Timers;
+    previews?: boolean;
+  } = {},
+) {
   const read = readPairingLink(
     encodeMobileLink({
       fleet_id: "fxtr0001",
@@ -148,6 +196,8 @@ async function setup(frames: ChatFrame[], opts: { hold?: boolean; view?: MobileF
     now: () => NOW,
     chat,
     onAlert: (a) => alerts.push(a),
+    ...(opts.timers ? { timers: opts.timers } : {}),
+    ...(opts.previews !== undefined ? { previews: () => opts.previews as boolean } : {}),
   });
   return { client, chat, alerts, inbox, fleet, fetched: f.calls };
 }
@@ -287,6 +337,188 @@ describe("createHermeticClient", () => {
       "https://fxtr0001-corvid-2.hermetic.ts.net/api/health",
       "https://fxtr0001-atlas.hermetic.ts.net/api/health",
     ]);
+    s.client.dispose();
+  });
+
+  test("a failed turn's phone-local entry says its headline, not its code, with previews off", async () => {
+    const off = await setup([errorFrame("RATE_LIMITED", "slow down")], { previews: false });
+    off.client.chat.send(T, "question");
+    await settle();
+    expect(off.alerts[0]).toMatchObject({ body: "Rate limited", data: { kind: "turn.error" } });
+    expect(off.inbox.getState().entries[0]?.body).toBe("Rate limited");
+    const on = await setup([errorFrame("RATE_LIMITED", "slow down")], { previews: true });
+    on.client.chat.send(T, "question");
+    await settle();
+    expect(on.alerts[0]?.body).toBe("slow down");
+  });
+
+  test("every move into the background or the foreground forgets the tunnel proofs", async () => {
+    const s = await setup([]);
+    const host = "fxtr0001-atlas.hermetic.ts.net";
+    noteTunnel(host, true);
+    s.client.setPhase("background");
+    expect(tunnelVerified(host)).toBe(false);
+    noteTunnel(host, true);
+    s.client.setPhase("active");
+    expect(tunnelVerified(host)).toBe(false);
+    // Inactive (a pulled-down Control Center) is not a network change.
+    noteTunnel(host, true);
+    s.client.setPhase("inactive");
+    expect(tunnelVerified(host)).toBe(true);
+    resetTunnelChecks();
+    s.client.dispose();
+  });
+});
+
+describe("a turn still running on its box after the phone was away", () => {
+  const row = (status: string) => ({
+    sessions: [{ id: "live-1", session_key: "s-1", status, message_count: 3 }],
+  });
+
+  /** A held turn on screen, sent, backgrounded and brought back; `answer` is the box's list. */
+  async function away(answer: () => unknown) {
+    const timers = new FakeTimers();
+    const s = await setup([delta(1, "working on it")], {
+      hold: true,
+      timers,
+      rpc: (method) => {
+        if (method !== "session.active_list") throw new Error(`unexpected ${method}`);
+        return answer();
+      },
+    });
+    s.client.chat.open(T);
+    expect(s.client.chat.send(T, "long job")).toBe(true);
+    await settle();
+    s.client.setPhase("background");
+    await settle();
+    s.client.setPhase("active");
+    await settle();
+    const tick = async (ms: number) => {
+      timers.advance(ms);
+      await settle();
+    };
+    return { ...s, timers, tick };
+  }
+
+  test("busy: still in flight as running on the box, sends are queued, idle releases the queue", async () => {
+    let status = "working";
+    const s = await away(() => row(status));
+    expect(s.chat.rpcs).toEqual(["session.active_list"]);
+    const view = s.client.chat.view(T);
+    expect(view.sending).toBe(true);
+    expect(view.dropped).toBe(false);
+    expect(view.remote).toMatchObject({ status: "working", title: "Still running on the box." });
+    // A plain send never reaches the busy session: it is refused, and the composer queues it.
+    expect(s.client.chat.send(T, "next")).toBe(false);
+    s.client.chat.enqueue(T, "next");
+    await s.tick(REMOTE_POLL_MS);
+    expect(s.chat.rpcs).toHaveLength(2);
+    expect(s.chat.sent).toEqual(["long job"]);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    status = "idle";
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    const after = s.client.chat.view(T);
+    expect(after.remote).toBeNull();
+    expect(after.dropped).toBe(false);
+    expect(after.queue).toEqual([]);
+    expect(s.chat.sent).toEqual(["long job", "next"]);
+    expect(s.chat.aborts).toEqual([]);
+    // Settled: nobody asks after it any more.
+    const asked = s.chat.rpcs.length;
+    await s.tick(REMOTE_POLL_MS * 3);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    s.client.dispose();
+  });
+
+  test("a session gone from the list after running is over too, not dropped", async () => {
+    let answer: unknown = row("starting");
+    const s = await away(() => answer);
+    expect(s.client.chat.view(T).remote?.status).toBe("starting");
+    answer = { sessions: [] };
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(0);
+    expect(s.client.chat.view(T)).toMatchObject({ remote: null, sending: false, dropped: false });
+    s.client.dispose();
+  });
+
+  test("Steer reaches the turn, and Stop interrupts it by its session", async () => {
+    const s = await away(() => row("working"));
+    expect(await s.client.chat.steer(T, "also check the logs")).toBe("queued");
+    expect(s.chat.steers).toEqual(["also check the logs"]);
+    await s.client.chat.stop(T);
+    await settle();
+    expect(s.chat.aborts).toEqual(["atlas"]);
+    expect(s.chat.abortSessions).toEqual(["s-1"]);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null });
+    const asked = s.chat.rpcs.length;
+    await s.tick(REMOTE_POLL_MS * 2);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    s.client.dispose();
+  });
+
+  test("waiting says the turn waits on the operator", async () => {
+    const s = await away(() => row("waiting"));
+    expect(s.client.chat.view(T).remote).toMatchObject({
+      status: "waiting",
+      title: "Still running on the box — waiting on you.",
+    });
+    expect(s.client.chat.view(T).remote?.sub).toContain("Open the request from history");
+    s.client.dispose();
+  });
+
+  test("idle on the first ask is today's gone path: dropped and re-read", async () => {
+    const s = await away(() => row("idle"));
+    await s.tick(0);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null, dropped: true });
+    s.client.dispose();
+  });
+
+  test("no answer on the first ask is today's gone path", async () => {
+    const s = await away(() => {
+      throw new Error("socket closed");
+    });
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null, dropped: true });
+    s.client.dispose();
+  });
+
+  test(`${REMOTE_FAILURES} failed asks in a row while running give the turn up as gone`, async () => {
+    let fail = false;
+    const s = await away(() => {
+      if (fail) throw new Error("socket closed");
+      return row("working");
+    });
+    fail = true;
+    for (let i = 1; i < REMOTE_FAILURES; i++) await s.tick(REMOTE_POLL_MS);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    await s.tick(REMOTE_POLL_MS);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null, dropped: true });
+    s.client.dispose();
+  });
+
+  test("the asking stops when the conversation leaves the screen and resumes when it is back", async () => {
+    const s = await away(() => row("working"));
+    const asked = s.chat.rpcs.length;
+    s.client.chat.leave(T);
+    await s.tick(REMOTE_POLL_MS * 3);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    s.client.chat.open(T);
+    await settle();
+    expect(s.chat.rpcs).toHaveLength(asked + 1);
+    s.client.dispose();
+  });
+
+  test("the asking stops in the background and starts again on the return", async () => {
+    const s = await away(() => row("working"));
+    const asked = s.chat.rpcs.length;
+    s.client.setPhase("background");
+    await s.tick(REMOTE_POLL_MS * 3);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    s.client.setPhase("active");
+    await settle();
+    expect(s.chat.rpcs).toHaveLength(asked + 1);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
     s.client.dispose();
   });
 });

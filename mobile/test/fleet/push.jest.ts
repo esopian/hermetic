@@ -1,6 +1,7 @@
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { MobilePushDevice as MobilePushDeviceSchema } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
+import { pushLine } from "../../app/(tabs)/settings.tsx";
 import type { PushBox, PushBoxResult } from "../../src/gateway/push-registry.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
 import {
@@ -11,7 +12,6 @@ import {
   PushSync,
   type PushTokenResult,
   randomId,
-  rotateDeviceId,
 } from "../../src/fleet/push.ts";
 import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
 import { resetTunnelChecks } from "../../src/gateway/hermeticd.ts";
@@ -74,7 +74,6 @@ function sync(
     fleet,
     registrar,
     deviceId: async () => "device-1",
-    rotateDeviceId: async () => "device-2",
     token: async () => token,
     platform: "ios",
     appVersion: "0.1.0",
@@ -83,12 +82,12 @@ function sync(
   });
 }
 
-/** hermeticd's 403 for a `device_id` another tailnet login holds, as the registrar reports it. */
+/** hermeticd's 403 from its whois gate, as the registrar reports it. */
 const forbidden = (instance: string): PushBoxResult => ({
   instance,
   ok: false,
   code: "FORBIDDEN",
-  message: `${instance}: device id held by another login`,
+  message: `${instance}: tailnet login refused`,
   status: "forbidden",
 });
 
@@ -142,35 +141,32 @@ describe("PushSync", () => {
     expect(renewed).toHaveBeenCalledTimes(1);
   });
 
-  test("forbidden: a new device id is minted and the registration retried once", async () => {
+  test("forbidden: the device id stays put, nothing is retried, and the box is reported", async () => {
     const fleet = await pairedFleet();
-    const reg = recorder();
-    const register = reg.register;
-    reg.register = async (boxes, device) => {
-      const results = await register(boxes, device);
-      // corvid holds device-1 for another login.
-      return device.device_id === "device-1"
-        ? results.map((r) => (r.instance === "corvid" ? forbidden("corvid") : r))
-        : results;
-    };
-    const status = await sync(fleet, reg).enable();
-    expect(reg.registered.map((r) => r.device.device_id)).toEqual(["device-1", "device-2"]);
-    expect(reg.registered[1]?.boxes).toEqual(["atlas", "corvid", "ember"]);
-    // The boxes that took the old id forget it.
-    expect(reg.unregistered).toEqual([{ boxes: ["atlas", "ember"], id: "device-1" }]);
-    expect(status).toMatchObject({ state: "on" });
-    if (status.state === "on") expect(status.boxes.every((b) => b.ok)).toBe(true);
-  });
-
-  test("forbidden twice: one retry only, and the refusal is reported", async () => {
-    const fleet = await pairedFleet();
+    const kv = memoryKv({ [DEVICE_ID_KEY]: "device-1" });
     const reg = recorder();
     const register = reg.register;
     reg.register = async (boxes, device) =>
       (await register(boxes, device)).map((r) => (r.instance === "corvid" ? forbidden("corvid") : r));
-    const status = await sync(fleet, reg).enable();
-    expect(reg.registered).toHaveLength(2);
-    expect(status.state === "on" && status.boxes.find((b) => b.instance === "corvid")?.ok).toBe(false);
+    const push = new PushSync({
+      fleet,
+      registrar: reg,
+      deviceId: () => deviceId(kv),
+      token: async () => ({ ok: true, token: TOKEN }),
+      platform: "ios",
+      appVersion: "0.1.0",
+      previews: () => false,
+    });
+    const status = await push.enable();
+    await push.sync();
+    // One write per box per sync: no rotation, no unregister of the accepted boxes.
+    expect(reg.registered.map((r) => r.device.device_id)).toEqual(["device-1", "device-1"]);
+    expect(reg.unregistered).toEqual([]);
+    expect(kv.map.get(DEVICE_ID_KEY)).toBe("device-1");
+    expect(status.state === "on" && status.boxes.find((b) => b.instance === "corvid")).toMatchObject({
+      ok: false,
+      status: "forbidden",
+    });
   });
 
   test("a listening change registers the kept boxes and unregisters the dropped one", async () => {
@@ -238,13 +234,6 @@ describe("device id", () => {
     expect(kv.map.get(DEVICE_ID_KEY)).toBe(a);
   });
 
-  test("rotation mints a new id and keeps it", async () => {
-    const kv = memoryKv({ [DEVICE_ID_KEY]: "old-id" });
-    const next = await rotateDeviceId(kv, () => "new-id");
-    expect(next).toBe("new-id");
-    expect(await deviceId(kv)).toBe("new-id");
-  });
-
   test("a stored value that is not an id is replaced", async () => {
     const kv = memoryKv({ [DEVICE_ID_KEY]: "not/an id" });
     expect(await deviceId(kv)).not.toBe("not/an id");
@@ -261,5 +250,28 @@ describe("device id", () => {
     } finally {
       globalThis.crypto = c;
     }
+  });
+});
+
+describe("Settings push line", () => {
+  test("a box that refused this login is named as such", () => {
+    const line = pushLine(
+      {
+        state: "on",
+        boxes: [
+          { instance: "atlas", ok: true },
+          forbidden("corvid"),
+          {
+            instance: "ember",
+            ok: false,
+            code: "HERMETICD_UNAVAILABLE",
+            message: "x",
+            status: "failed",
+          },
+        ],
+      },
+      true,
+    );
+    expect(line).toBe("Registered with 1 of 3; not with corvid (refused this login), ember.");
   });
 });

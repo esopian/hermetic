@@ -214,8 +214,9 @@ describe("FleetStore", () => {
       ["corvid", "unreachable"],
       ["dodo", null],
     ]);
-    // The listening default narrows on the boxes' answers, and is kept.
-    expect(store.listened()).toEqual(["atlas"]);
+    // The listening default drops only the box that answered unreachable: the
+    // gate's refusal says nothing about dodo, so it stays. The choice is kept.
+    expect(store.listened()).toEqual(["atlas", "dodo"]);
     const reloaded = new FleetStore({
       secure,
       viewCache: memoryFile(),
@@ -223,7 +224,43 @@ describe("FleetStore", () => {
       now: () => NOW,
     });
     await reloaded.load();
-    expect(reloaded.listened()).toEqual(["atlas"]);
+    expect(reloaded.listened()).toEqual(["atlas", "dodo"]);
+  });
+
+  test("pre-v16: /healthz goes to the listened boxes plus at most three others, in turn", async () => {
+    const names = ["atlas", "bison", "corvid", "dodo", "egret", "finch", "gull", "heron"];
+    let asked: string[] = [];
+    const store = new FleetStore({
+      secure: memoryKv(),
+      viewCache: memoryFile(),
+      fetch: async () =>
+        new Response(
+          `${JSON.stringify({ type: "error", code: "FLEET_LIST_UNAVAILABLE", message: "no scan" })}\n`,
+          { status: 503 },
+        ),
+      now: () => NOW,
+      healthz: async (host) => {
+        const name = host.replace(/^fxtr0001-/, "").replace(/\..*$/, "");
+        asked.push(name);
+        return name === "heron" ? { ok: false } : { ok: true };
+      },
+    });
+    await store.pair(paired(names.map((name) => ({ name }))));
+    // The default (every named box) is listened, so the first refresh asks all.
+    await store.refresh();
+    expect(asked.sort()).toEqual(names);
+    expect(store.listened()).toEqual(names.filter((n) => n !== "heron"));
+    await store.setListening("atlas", true);
+    for (const n of ["bison", "corvid", "dodo", "egret", "finch"]) await store.setListening(n, false);
+    // Listened: atlas, gull. Others: bison, corvid, dodo, egret, finch, heron.
+    asked = [];
+    await store.refresh();
+    expect(asked.sort()).toEqual(["atlas", "bison", "corvid", "dodo", "gull"]);
+    asked = [];
+    await store.refresh();
+    expect(asked.sort()).toEqual(["atlas", "egret", "finch", "gull", "heron"]);
+    // A box not asked this time keeps its last answer.
+    expect(store.getState().fromBoxes).toMatchObject({ bison: "ready", heron: "unreachable" });
   });
 
   test("pre-v16 with every box silent: the default is not narrowed to nothing", async () => {

@@ -19,12 +19,12 @@ export interface PushBox {
 }
 
 /**
- * One box's answer. `forbidden` is the box's 403 `FORBIDDEN`: this `device_id`
- * is registered there by another tailnet login (a reinstall that kept the id,
- * or a second member's phone that chose the same one). Retrying cannot fix
- * it; the caller mints a new `device_id` and registers again. `box` and
- * `status` are always set here; they are optional only so a registrar double
- * may answer the bare `{ instance, ok }`.
+ * One box's answer. `forbidden` is the box's 403 `FORBIDDEN`: hermeticd's
+ * whois gate refused this login on that box (a tagged node, or a transient
+ * `tailscale whois` failure). Registrations are keyed per login on the box, so
+ * an id collision never produces it; the caller keeps its `device_id` and
+ * reports the box in Settings. `box` and `status` are always set here; they
+ * are optional only so a registrar double may answer the bare `{ instance, ok }`.
  */
 export type PushBoxResult =
   | { instance: string; box?: PushBox; status?: "ok"; ok: true }

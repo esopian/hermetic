@@ -27,6 +27,7 @@ const contentOf = (n: Notifications.Notification): NoteContent => ({
   title: n.request.content.title,
   body: n.request.content.body,
   data: n.request.content.data,
+  date: n.date,
 });
 
 export const expoNotifier: Notifier = {

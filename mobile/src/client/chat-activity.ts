@@ -178,12 +178,18 @@ export interface GroupSummary {
   usage: string | null;
 }
 
-/** The group head: what the run is doing or did, and how many steps it took. */
+/**
+ * The group head: what the run is doing or did, and how many steps it took.
+ * `streaming` is this group being the live one; `turnRunning` is the turn it
+ * belongs to still running, so a group that is not live (yet) is never
+ * called complete before the turn settles.
+ */
 export function groupSummary(
   blocks: readonly ChatBlock[],
   streaming: boolean,
   activity: TurnActivity | undefined,
   waiting: boolean,
+  turnRunning = false,
 ): GroupSummary {
   const rows = activityRows(blocks);
   const all = rows.filter((b) => !isStatusBlock(b));
@@ -241,10 +247,14 @@ export function groupSummary(
                         ? "Tools complete"
                         : "Thinking…"))
               : tools.some((b) => b.kind === "tool" && b.status === "running")
-                ? "Activity stopped"
+                ? turnRunning
+                  ? "Working…"
+                  : "Activity stopped"
                 : tools.length
                   ? "Tools complete"
-                  : "Activity complete";
+                  : turnRunning
+                    ? "Working…"
+                    : "Activity complete";
   const count = [
     tools.length
       ? `${tools.length} tool${tools.length === 1 ? "" : "s"}`

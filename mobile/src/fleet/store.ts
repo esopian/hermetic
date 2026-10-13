@@ -13,11 +13,15 @@
  * `refresh()` asks up to three listened boxes at once and takes the first
  * answer. When none answers — no box reachable, or a foundation that does not
  * grant the agent role its scan yet (`FLEET_LIST_UNAVAILABLE`, a fleet before
- * foundation 16) — the snapshot stays, the state says `stale`, and each box the
- * pairing names is asked for its own `/healthz` instead (`fromBoxes`): `ready`
- * where hermeticd answered ok, `unreachable` where it did not, and nothing
- * where the off-tunnel gate refused to ask (`TUNNEL_UNVERIFIED`). The listening
- * default narrows on those answers as it would on a view. The link's agent list
+ * foundation 16) — the snapshot stays, the state says `stale`, and the boxes
+ * are asked for their own `/healthz` instead (`fromBoxes`): every listened box,
+ * plus up to `HEALTHZ_OTHERS` of the rest in turn, so a large fleet is not
+ * swept on every refresh. A box answers `ready` where hermeticd answered ok,
+ * `unreachable` where it did not, and nothing where the off-tunnel gate refused
+ * to ask (`TUNNEL_UNVERIFIED`); a box not asked this time keeps its last answer.
+ * Once some box answers ready, the listening default drops the boxes that
+ * answered `unreachable` and keeps the rest, gate refusals included: the gate
+ * says nothing about the box. The link's agent list
  * is the floor: an agent the link names and `/fleet` does not is still listed
  * (with no status), and where both name it the view wins, except that a fresher
  * `/healthz` answer wins over a cached view.
@@ -202,6 +206,8 @@ export interface FleetStoreDeps {
 
 /** How many boxes one refresh asks at once. */
 export const REFRESH_FAN_OUT = 3;
+/** How many unlistened boxes one pre-v16 refresh asks for `/healthz`, beside the listened ones. */
+export const HEALTHZ_OTHERS = 3;
 
 const EMPTY: FleetState = {
   link: null,
@@ -219,6 +225,8 @@ export class FleetStore {
   private listeningDefault = false;
   private readonly listeners = new Set<() => void>();
   private gen = 0;
+  /** Where the next pre-v16 refresh starts in the unlistened boxes. */
+  private othersCursor = 0;
 
   constructor(private readonly deps: FleetStoreDeps) {}
 
@@ -318,12 +326,20 @@ export class FleetStore {
       const fromBoxes = await this.readBoxes();
       if (gen !== this.gen) return false;
       let listening = this.state.listening;
-      const ready = Object.entries(fromBoxes ?? {}).filter(([, status]) => status === "ready");
-      // Narrow the default only on a real answer: with every box silent (the
-      // tunnel down) the pairing's own list is the better guess.
-      const narrowed = this.listeningDefault && ready.length > 0;
+      // Narrow the default only once some box answered ready: with every box
+      // silent (the tunnel down) the pairing's own list is the better guess.
+      // Only a box that answered `unreachable` is dropped; one the gate would
+      // not ask stays.
+      const narrowed =
+        this.listeningDefault &&
+        fromBoxes !== null &&
+        Object.values(fromBoxes).some((status) => status === "ready");
       if (narrowed) {
-        listening = new Set(ready.map(([name]) => name));
+        listening = new Set(
+          this.agents()
+            .map((a) => a.name)
+            .filter((name) => fromBoxes[name] !== "unreachable"),
+        );
         this.listeningDefault = false;
       }
       this.set({ stale: true, refreshing: false, error: reason, fromBoxes, listening });
@@ -332,11 +348,21 @@ export class FleetStore {
     }
   }
 
-  /** Every named box's `/healthz`, at once: `ready`, `unreachable`, or left out when the gate refused. */
+  /**
+   * The listened boxes' `/healthz`, plus up to `HEALTHZ_OTHERS` unlistened ones
+   * in turn, at once: `ready`, `unreachable`, or left out when the gate refused.
+   * A box not asked this time keeps its last answer.
+   */
   private async readBoxes(): Promise<Record<string, BoxStatus> | null> {
     const healthz = this.deps.healthz ?? ((host: string) => fetchHealthz(host, this.deps.fetch));
-    const agents = this.agents();
-    if (agents.length === 0) return null;
+    const all = this.agents();
+    if (all.length === 0) return null;
+    const listened = all.filter((a) => this.isListening(a.name));
+    const others = all.filter((a) => !this.isListening(a.name));
+    const start = others.length > 0 ? this.othersCursor % others.length : 0;
+    const turn = [...others.slice(start), ...others.slice(0, start)].slice(0, HEALTHZ_OTHERS);
+    this.othersCursor = start + turn.length;
+    const agents = [...listened, ...turn];
     const answers = await Promise.all(
       agents.map(async (a): Promise<[string, BoxStatus | null]> => {
         let answer: { ok: boolean; error?: { code: string } | null };
@@ -350,8 +376,11 @@ export class FleetStore {
         return [a.name, answer.error?.code === "TUNNEL_UNVERIFIED" ? null : "unreachable"];
       }),
     );
+    const asked = new Set(agents.map((a) => a.name));
+    const kept = Object.entries(this.state.fromBoxes ?? {}).filter(([name]) => !asked.has(name));
     const known = answers.filter((e): e is [string, BoxStatus] => e[1] !== null);
-    return known.length > 0 ? Object.fromEntries(known) : null;
+    const merged = [...kept, ...known];
+    return merged.length > 0 ? Object.fromEntries(merged) : null;
   }
 
   /* ── reading ──────────────────────────────────────────────────────────── */

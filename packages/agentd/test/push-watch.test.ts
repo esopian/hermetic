@@ -17,6 +17,7 @@ import {
 } from "../src/push/devices.ts";
 import { NEEDS_ACTION_CATEGORY, RECEIPT_DELAY_MS, contentFreeBody } from "../src/push/notify.ts";
 import {
+  EVENT_COUNTER_MEMORY,
   TAILNET_PRUNE_MS,
   UNKNOWN_BOT,
   WATCH_BACKOFF_MAX_MS,
@@ -256,6 +257,11 @@ function nth(r: Rig, k: number): number {
   return Math.floor(r.clock.now / 1000) + k;
 }
 
+/** The rig's clock moved by `offsetMs`, as a tail row's `at`. */
+function isoAt(r: Rig, offsetMs: number): string {
+  return new Date(r.clock.now + offsetMs).toISOString();
+}
+
 /** The rig's clock in upstream's `last_active` unit, epoch seconds. */
 function nowSeconds(r: Rig): number {
   return r.clock.now / 1000;
@@ -376,7 +382,7 @@ describe("transitions", () => {
     expect(r.sent).toEqual([spell(1), spell(2)]);
   });
 
-  test("a session first seen idle with messages, active since the last poll, is a message; empty is nothing", async () => {
+  test("a session first seen idle with a reply since the last poll is a message; empty is nothing", async () => {
     const r = await rig([previewing("a", TOKEN_A)]);
     const n = nth(r, 1);
     r.chat.bots.set("cron-1", "granite");
@@ -384,7 +390,7 @@ describe("transitions", () => {
     // the reply, read off the tail like a settled turn's.
     r.chat.tails.set("cron-1", [
       message("user", "Run the daily digest"),
-      message("bot", "Daily digest: 3 new tickets"),
+      message("bot", "Daily digest: 3 new tickets", { at: isoAt(r, 1_000) }),
     ]);
     // Active a second after the baseline poll, and before the next.
     const since = nowSeconds(r) + 1;
@@ -410,22 +416,63 @@ describe("transitions", () => {
     expect(r.chat.historyCalls).toEqual([{ bot: "granite", session: "cron-1" }]);
   });
 
-  test("a session newly listed idle but last active before the previous poll is not a message", async () => {
+  test("a session resumed into the list is news only if its tail says something new", async () => {
     // `respond`, `compact` and a subagent reconcile resume a session into the
-    // list without anything new having been said in it.
-    const r = await rig();
-    r.chat.bots.set("old", "granite");
-    r.chat.tails.set("old", [message("bot", "said long ago")]);
-    const w = createWatcher(r.deps);
-    const before = nowSeconds(r) - 60;
-    r.chat.snapshots.push(
-      snapshot(),
-      snapshot({ id: "old", status: "idle", message_count: 8, last_active: before }),
-    );
-    await w.tick();
-    await step(r, w);
-    expect(r.sent).toEqual([]);
-    expect(r.chat.historyCalls).toEqual([]);
+    // list without anything new having been said in it; upstream stamps the
+    // live record's `last_active` with the moment it built it, so the list
+    // alone always calls it fresh.
+    for (const [said, pushes] of [
+      [-60_000, []],
+      [1_000, [["message", "the reply"]]],
+    ] satisfies Array<[number, string[][]]>) {
+      const r = await rig([previewing("a", TOKEN_A)]);
+      r.chat.bots.set("old", "granite");
+      r.chat.tails.set("old", [message("bot", "the reply", { at: isoAt(r, said) })]);
+      const w = createWatcher(r.deps);
+      r.chat.snapshots.push(
+        snapshot(),
+        snapshot({
+          id: "old",
+          status: "idle",
+          message_count: 8,
+          last_active: nowSeconds(r) + WATCH_POLL_MS / 1000 - 0.5,
+        }),
+      );
+      await w.tick();
+      await step(r, w);
+      expect(r.sent.map((m) => [(m.data as MobilePushData).kind, m.body])).toEqual(pushes);
+    }
+  });
+
+  test("a cold resume hydrating 0 → N is no turn; a fresh tail row makes it one", async () => {
+    // Upstream lists a deferred record before its history is hydrated, so the
+    // count climbs with nothing said — through `starting` (the agent build,
+    // which waits on that hydration) or straight from `idle`.
+    for (const middle of ["idle", "starting"]) {
+      for (const [said, pushes] of [
+        [-60_000, []],
+        // Polls at +3 s, +6 s and +9 s: written between the last two.
+        [7_000, [["turn.done", "the reply"]]],
+      ] satisfies Array<[number, string[][]]>) {
+        const r = await rig([previewing("a", TOKEN_A)]);
+        r.chat.bots.set("old", "granite");
+        r.chat.tails.set("old", [
+          message("user", "earlier"),
+          message("bot", "the reply", { at: isoAt(r, said) }),
+        ]);
+        const fresh = nowSeconds(r) + 2;
+        r.chat.snapshots.push(
+          snapshot(),
+          snapshot({ id: "old", status: "idle", message_count: 0, last_active: fresh }),
+          snapshot({ id: "old", status: middle, message_count: 0, last_active: fresh }),
+          snapshot({ id: "old", status: "idle", message_count: 8, last_active: fresh }),
+        );
+        const w = createWatcher(r.deps);
+        await w.tick();
+        for (let i = 0; i < 3; i++) await step(r, w);
+        expect(r.sent.map((m) => [(m.data as MobilePushData).kind, m.body])).toEqual(pushes);
+      }
+    }
   });
 
   test("a turn whose tail ends on the user row (interrupted, no output) pushes nothing", async () => {
@@ -824,6 +871,30 @@ describe("the event counter", () => {
       `atlas:s1:${base + 1}:needs_action`,
       `atlas:s1:${base + 2}:needs_action`,
     ]);
+  });
+
+  test("a session whose counter was forgotten starts past the number it last used", async () => {
+    const r = await rig();
+    r.chat.bots.set("s0", "granite");
+    const crowd = Array.from({ length: EVENT_COUNTER_MEMORY }, (_, i) => ({
+      id: `other-${i}`,
+      status: "waiting",
+      message_count: 1,
+    }));
+    r.chat.snapshots.push(
+      snapshot({ id: "s0", status: "working", message_count: 1 }),
+      snapshot({ id: "s0", status: "waiting", message_count: 1 }),
+      // Every other session's first event: s0's counter is the stalest, and forgotten.
+      snapshot({ id: "s0", status: "waiting", message_count: 1 }, ...crowd),
+      snapshot({ id: "s0", status: "working", message_count: 1 }),
+      snapshot({ id: "s0", status: "waiting", message_count: 1 }),
+    );
+    const w = createWatcher(r.deps);
+    await w.tick();
+    for (let i = 0; i < 4; i++) await step(r, w);
+    const keys = r.sent.map((m) => (m.data as MobilePushData).dedupe);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
   });
 
   test("a restarted watcher starts its counters past any the last one reached", async () => {

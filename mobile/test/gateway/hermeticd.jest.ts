@@ -146,7 +146,7 @@ describe("push registration", () => {
     expect(JSON.parse(calls[0]!.body!)).toEqual(device);
   });
 
-  test("a box's 403 FORBIDDEN is status forbidden, naming the box, so the phone mints a new id", async () => {
+  test("a box's 403 FORBIDDEN is status forbidden, naming the box, and the phone keeps its id", async () => {
     const f = fakeFetch((url) =>
       url.includes("corvid") && url.startsWith("http://")
         ? refusal(403, "FORBIDDEN", "device dev-1 belongs to another login")

@@ -10,12 +10,23 @@
  *
  * | Transition                                         | Push                       |
  * |----------------------------------------------------|----------------------------|
- * | → `idle` with `message_count` grown, tail is a bot | `turn.done`, reply preview |
+ * | → `idle` with `message_count` grown after a turn   | `turn.done`, reply preview |
+ * |   was seen running (`working`/`waiting`), or with  |                            |
+ * |   a tail reply newer than the previous poll        |                            |
  * | `working` → `idle` with `message_count` dropped    | the same (a compaction)    |
  * | either, tail row carries a failure                 | `turn.error`, failure text |
  * | any → `waiting`                                    | `needs_action`             |
  * | a session not seen before, first seen `idle`, > 0, | `message` (routine/channel)|
- * |   active since the previous poll                   |                            |
+ * |   its tail reply newer than the previous poll      |                            |
+ *
+ * News is read off the durable tail, never off the list's `last_active`:
+ * upstream stamps `last_active` with the moment it builds a live record
+ * (`_init_session`, `_deferred_session_record`), so a session merely resumed
+ * into the list — a desktop `compact`, a subagent reconcile, a turn on a
+ * reaped session — looks as fresh as one that just spoke. A cold resume also
+ * hydrates its history after the record is listed, so `message_count` can
+ * climb from 0 with no turn at all; `starting` (the agent being built, which
+ * waits on that hydration) is therefore no evidence of a turn either.
  *
  * Each of those transitions bumps the session's event counter, the `<n>` of
  * the push's dedupe key (`MobilePushData`): two `waiting` spells in one turn
@@ -28,8 +39,10 @@
  * Hermes profile) the session belongs to; `swarm` + `sessions` map session →
  * bot every `SESSION_MAP_REFRESH_MS`, and once more on demand when a session
  * the map does not know reaches a transition. A session still unknown after
- * that is pushed under bot `unknown`, as a `message` only, once it goes idle —
- * there is no profile to read its tail from or to open it under.
+ * that is pushed under bot `unknown`, as a `message` only, once a turn it was
+ * seen running settles — there is no profile to read its tail from or to open
+ * it under, so one first listed idle, whose news only the tail can prove,
+ * pushes nothing.
  *
  * The first answer after start, and the first after the Hermes unit was down,
  * is a *baseline*: it is recorded and pushes nothing, so a daemon restart does
@@ -122,7 +135,11 @@ export interface LiveSession {
   readonly key: string;
   readonly status: string;
   readonly message_count: number;
-  /** When the session last did anything, in milliseconds; `null` when not reported. */
+  /**
+   * When upstream last stamped the session, in milliseconds; `null` when not
+   * reported. Informational only: a resumed session is stamped *now*, so it
+   * is no evidence that anything was said.
+   */
   readonly last_active: number | null;
 }
 
@@ -183,17 +200,34 @@ function rowText(row: ChatMessage): string {
 export function tailVerdict(
   rows: readonly ChatMessage[],
 ): { kind: "turn.done" | "turn.error"; text: string } | null {
+  const verdict = tailRow(rows);
+  return verdict === null ? null : { kind: verdict.kind, text: verdict.text };
+}
+
+/** `tailVerdict`, with when the row it was read from was written (ms; 0 when unknown). */
+function tailRow(
+  rows: readonly ChatMessage[],
+): { kind: "turn.done" | "turn.error"; text: string; at: number } | null {
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i];
     if (row === undefined) continue;
+    const at = Date.parse(row.at);
+    const stamped = Number.isNaN(at) ? 0 : at;
     if (row.failure || (typeof row.error === "string" && row.error !== "")) {
-      return { kind: "turn.error", text: row.failure?.message || row.error || "the turn failed" };
+      return {
+        kind: "turn.error",
+        text: row.failure?.message || row.error || "the turn failed",
+        at: stamped,
+      };
     }
-    if (row.role === "bot") return { kind: "turn.done", text: rowText(row) };
+    if (row.role === "bot") return { kind: "turn.done", text: rowText(row), at: stamped };
     if (row.role === "user") return null;
   }
   return null;
 }
+
+/** The statuses that mean a turn is under way: running, or blocked on the operator. */
+const TURN_STATUSES: ReadonlySet<string> = new Set(["working", "waiting"]);
 
 export interface Watcher {
   /** One poll: read the gateway, diff, push. Never throws. */
@@ -228,7 +262,13 @@ export function createWatcher(deps: WatchDeps): Watcher {
     perDeviceLimit: tuning.perDeviceLimit,
   });
 
-  const seen = new Map<string, { status: string; count: number }>();
+  /**
+   * What the last answer said of each listed session. `turn` is whether a
+   * turn was seen under way (`TURN_STATUSES`) since the session last settled:
+   * the count may catch up a poll after the status goes idle, so it is carried
+   * until a grown or compacted count settles it.
+   */
+  const seen = new Map<string, { status: string; count: number; turn: boolean }>();
   const botOf = new Map<string, string>();
   /** session → its last event number. Outlives `seen`, so a session that leaves and returns never reuses one. */
   const counters = new Map<string, number>();
@@ -239,6 +279,12 @@ export function createWatcher(deps: WatchDeps): Watcher {
    * restart either.
    */
   const counterBase = Math.floor(deps.now() / 1000);
+  /**
+   * Where a counter starts once any has been forgotten: the second of the
+   * latest eviction. An evicted session's counter cannot have outrun the clock
+   * (one event per poll), so a session evicted and seen again starts past it.
+   */
+  let counterFloor = counterBase;
   let mapAt = Number.NEGATIVE_INFINITY;
   let pruneAt = Number.NEGATIVE_INFINITY;
   let baseline = true;
@@ -246,12 +292,13 @@ export function createWatcher(deps: WatchDeps): Watcher {
   let lastPollAt: number | null = null;
 
   function nextEvent(key: string): number {
-    const n = (counters.get(key) ?? counterBase) + 1;
+    const n = (counters.get(key) ?? counterFloor) + 1;
     counters.delete(key);
     counters.set(key, n);
     if (counters.size > EVENT_COUNTER_MEMORY) {
       const stalest = counters.keys().next().value;
       if (stalest !== undefined) counters.delete(stalest);
+      counterFloor = Math.max(counterFloor, Math.floor(deps.now() / 1000));
     }
     return n;
   }
@@ -340,19 +387,32 @@ export function createWatcher(deps: WatchDeps): Watcher {
     return verdict === null ? null : event(verdict.kind, bot, s, seq, verdict.text);
   }
 
-  /** A session that arrived already settled (a routine, a channel): its newest reply. */
-  async function arrived(s: LiveSession, seq: number): Promise<PushEvent> {
+  /**
+   * The tail's verdict for a session whose listing alone proves nothing, when
+   * the row it reads was written after `since`; otherwise `null`. A session
+   * with no bot to read it under, or a tail that cannot be read, has no
+   * evidence of news and pushes nothing.
+   */
+  async function freshTail(
+    s: LiveSession,
+    since: number | null,
+  ): Promise<{ bot: string; kind: "turn.done" | "turn.error"; text: string } | null> {
+    if (since === null) return null;
     const bot = await resolveBot(s.key);
-    if (bot === null) return event("message", UNKNOWN_BOT, s, seq, "");
+    if (bot === null) return null;
     const rows = await tail(bot, s.key);
-    return event("message", bot, s, seq, rows === null ? "" : (tailVerdict(rows)?.text ?? ""));
+    if (rows === null) return null;
+    const verdict = tailRow(rows);
+    if (verdict === null || verdict.at <= since) return null;
+    return { bot, kind: verdict.kind, text: verdict.text };
   }
 
   /**
    * The events between the last answer and `live`. `since` is when the last
-   * answer was asked for: a session first listed idle is news only if it was
-   * active after that, not one a `respond`, a compaction or a subagent
-   * reconcile merely brought back into the list.
+   * answer was asked for. Without a turn seen under way, only a tail row
+   * written after it is news: a `respond`, a compaction, a subagent reconcile
+   * or a cold resume's hydration brings a session back into the list, and
+   * grows its count, without anything new having been said.
    */
   async function diff(live: readonly LiveSession[], since: number | null): Promise<PushEvent[]> {
     const events: PushEvent[] = [];
@@ -360,7 +420,13 @@ export function createWatcher(deps: WatchDeps): Watcher {
     for (const s of live) {
       present.add(s.key);
       const prev = seen.get(s.key);
-      seen.set(s.key, { status: s.status, count: s.message_count });
+      const grew = prev !== undefined && s.message_count > prev.count;
+      // A count that drops is a compaction rewriting the transcript; if a turn
+      // was running, it has still settled.
+      const compacted = prev !== undefined && s.message_count < prev.count && prev.status === "working";
+      const settles = s.status === "idle" && (grew || compacted);
+      const turn = TURN_STATUSES.has(s.status) || (prev?.turn ?? false);
+      seen.set(s.key, { status: s.status, count: s.message_count, turn: turn && !settles });
       if (baseline) continue;
       if (s.status === "waiting") {
         if (prev?.status === "waiting") continue;
@@ -372,18 +438,23 @@ export function createWatcher(deps: WatchDeps): Watcher {
       }
       if (s.status !== "idle") continue;
       if (prev === undefined) {
-        const fresh = s.last_active !== null && since !== null && s.last_active > since;
-        if (s.message_count > 0 && fresh) events.push(await arrived(s, nextEvent(s.key)));
+        // Arrived already settled (a routine, a channel): a `message`, if its
+        // newest reply is new.
+        if (s.message_count === 0) continue;
+        const news = await freshTail(s, since);
+        if (news !== null) events.push(event("message", news.bot, s, nextEvent(s.key), news.text));
         continue;
       }
-      const grew = s.message_count > prev.count;
-      // A count that drops is a compaction rewriting the transcript; if a turn
-      // was running, it has still settled.
-      const compacted = s.message_count < prev.count && prev.status === "working";
-      if (grew || compacted) {
+      if (!settles) continue;
+      if (prev.turn) {
         const pushed = await settled(s, nextEvent(s.key));
         if (pushed !== null) events.push(pushed);
+        continue;
       }
+      // Grown with no turn seen: a turn that ran wholly between two polls, or
+      // a hydration — only a fresh tail row tells them apart.
+      const news = await freshTail(s, since);
+      if (news !== null) events.push(event(news.kind, news.bot, s, nextEvent(s.key), news.text));
     }
     for (const key of [...seen.keys()]) if (!present.has(key)) seen.delete(key);
     baseline = false;

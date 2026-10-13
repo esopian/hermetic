@@ -22,6 +22,21 @@ export interface NoteContent {
   title?: string | null;
   body?: string | null;
   data?: unknown;
+  /**
+   * When the OS delivered it (epoch ms). A notification read from the
+   * notification centre on foreground is filed at this moment, not at the
+   * moment it was read, so it still folds with the entry the phone's own socket
+   * raised for the same event (`SAME_EVENT_MS`).
+   */
+  date?: number | null;
+}
+
+/** When `content` was delivered (ISO), else `fallback`. */
+export function noteTime(content: NoteContent, fallback: string): string {
+  const date = content.date;
+  return typeof date === "number" && Number.isFinite(date) && date > 0
+    ? new Date(date).toISOString()
+    : fallback;
 }
 
 /**
@@ -73,7 +88,8 @@ export function belongingData(
 }
 
 /**
- * File a push in the inbox. `true` when it is new (so worth showing); a push
+ * File a push in the inbox, at the notification's own delivery time when the OS
+ * gave one (`noteTime`), else at `at`. `true` when it is new (so worth showing); a push
  * for an event this phone's socket already showed (same `dedupe`, or the same
  * conversation and kind moments apart) is not, and neither is one for another
  * fleet or an agent the pairing does not name: that one is dropped unfiled.
@@ -86,7 +102,7 @@ export function ingestPush(
 ): boolean {
   const data = belongingData(content, fleet);
   if (!data) return false;
-  return inbox.ingest(arrivalFromPush(data, content, at));
+  return inbox.ingest(arrivalFromPush(data, content, noteTime(content, at)));
 }
 
 /**

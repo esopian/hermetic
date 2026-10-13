@@ -11,7 +11,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { DroppedBand, ObservationBand, ThreadBand, TurnErrorBand } from "../../../src/chat/Bands.tsx";
+import {
+  DroppedBand,
+  ObservationBand,
+  RemoteBand,
+  ThreadBand,
+  TurnErrorBand,
+} from "../../../src/chat/Bands.tsx";
 import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx";
 import { Composer } from "../../../src/chat/Composer.tsx";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
@@ -454,6 +460,7 @@ export default function Conversation() {
           ) : null}
           {/* A turn that ended on an error already has its card (or the band above). */}
           {view?.dropped && !view.turnError && !sending && !missing ? <DroppedBand /> : null}
+          <RemoteBand remote={view?.remote ?? null} />
           <View
             style={{
               borderTopWidth: t.border.control,

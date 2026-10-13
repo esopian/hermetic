@@ -74,6 +74,28 @@ describe("foreground handler", () => {
     expect(inbox.getState().entries).toHaveLength(1);
   });
 
+  test("a push read later from the notification centre is filed at its own delivery time", () => {
+    const inbox = new InboxStore(memoryFile(), () => AT);
+    // The socket raised it during the background linger.
+    inbox.ingest({
+      kind: "turn.done",
+      instance: "atlas",
+      bot: "scribe",
+      session: "s-1",
+      title: "scribe · atlas",
+      body: "the answer",
+      at: AT,
+      dedupe: localDedupe({ instance: "atlas", session: "s-1" }, "turn.done", "t1"),
+    });
+    // Delivered 30 s later, read ten minutes later on foreground: still the same event.
+    const delivered = { ...push(), date: Date.parse("2026-10-13T10:00:30.000Z") };
+    expect(ingestPush(inbox, delivered, "2026-10-13T10:10:00.000Z", FLEET)).toBe(false);
+    expect(inbox.getState().entries).toHaveLength(1);
+    // Without a delivery time the read time stands, and the fold window has passed.
+    expect(ingestPush(inbox, push(), "2026-10-13T10:10:00.000Z", FLEET)).toBe(true);
+    expect(inbox.getState().entries[0]?.at).toBe("2026-10-13T10:10:00.000Z");
+  });
+
   test("a local notification this app scheduled is always shown, and not filed twice", () => {
     const inbox = new InboxStore(memoryFile(), () => AT);
     expect(foregroundDecision(inbox, push(), true, AT, FLEET)).toBe(true);

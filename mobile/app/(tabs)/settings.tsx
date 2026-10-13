@@ -12,7 +12,7 @@ import { railTime } from "../../src/client/chat-logic.ts";
 import { minutesOf } from "../../src/client/inbox-logic.ts";
 import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
 import { useFleetState, useInbox } from "../../src/fleet/hooks.ts";
-import type { PushStatus } from "../../src/fleet/push.ts";
+import { isForbidden, type PushStatus } from "../../src/fleet/push.ts";
 import type { TailscaleStatus } from "../../src/gateway/tailscale.ts";
 import { INBOX_LIMIT } from "../../src/inbox/store.ts";
 import { usePrefs } from "../../src/prefs/prefs.tsx";
@@ -158,7 +158,11 @@ export function pushLine(push: PushStatus, wanted: boolean): string {
     const n = push.boxes.length;
     if (n === 0) return "Push is on; no listened agent to register with.";
     if (failed.length === 0) return `Registered with ${n} agent${n === 1 ? "" : "s"}.`;
-    return `Registered with ${n - failed.length} of ${n}; not with ${failed.map((b) => b.instance).join(", ")}.`;
+    // A 403 is the box's whois gate refusing this login (transient, or a tagged node).
+    const names = failed.map((b) =>
+      isForbidden(b) ? `${b.instance} (refused this login)` : b.instance,
+    );
+    return `Registered with ${n - failed.length} of ${n}; not with ${names.join(", ")}.`;
   }
   if (push.state === "unavailable") {
     if (push.reason === "simulator") return "Push needs a real device.";

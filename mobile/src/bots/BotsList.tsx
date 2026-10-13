@@ -244,6 +244,9 @@ function BotsListImpl(props: BotsListProps) {
       getItemType={(row) => row.kind}
       renderItem={renderItem}
       extraData={now}
+      // A bot that just spoke moves to the top; without this the list holds the
+      // old rows in place and the mover lands above the viewport.
+      maintainVisibleContentPosition={{ disabled: true }}
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={

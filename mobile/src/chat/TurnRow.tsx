@@ -212,6 +212,7 @@ function TurnRowImpl({
               streaming={streaming && index === live && (activity !== "idle" || waiting)}
               activity={activity}
               waiting={waiting}
+              turnRunning={streaming}
             />
           ) : (
             <Block

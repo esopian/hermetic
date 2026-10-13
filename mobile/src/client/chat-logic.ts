@@ -8,6 +8,7 @@
  * a fragment is drawn as text rather than opened. Pure TypeScript.
  */
 import type { ChatBlock, ChatMessage } from "@hermetic/core/chat-client";
+import type { RemoteStatus } from "./chat-types.ts";
 
 /* ── time ────────────────────────────────────────────────────────────────── */
 
@@ -361,6 +362,40 @@ export function failureCopy(code: string | null | undefined, message?: string | 
           "hermetic has no copy for this code, so it is shown verbatim — it is what the box said.",
       };
   }
+}
+
+/**
+ * A failure's one-line headline, for a phone-local notification or inbox
+ * entry when previews are off: the card's title ("Rate limited"), never the
+ * box's own words and never a bare code.
+ */
+export function failureHeadline(code: string | null | undefined): string {
+  return failureCopy(code).title.replace(/\.$/, "");
+}
+
+/** What the band of a turn still running on its box says (`ConversationView.remote`). */
+export interface RemoteTurnView {
+  status: RemoteStatus;
+  title: string;
+  sub: string;
+}
+
+export function remoteTurnView(status: RemoteStatus): RemoteTurnView {
+  if (status === "waiting")
+    return {
+      status,
+      title: "Still running on the box — waiting on you.",
+      sub:
+        "The turn asked for an approval or an answer while the phone was away. Open the request " +
+        "from history to answer it. A message sent now is queued until the turn ends.",
+    };
+  return {
+    status,
+    title: "Still running on the box.",
+    sub:
+      "This turn kept going while the phone was away. Steer it or stop it here; a message sent " +
+      "now is queued until it ends.",
+  };
 }
 
 /** What a refused turn's band says (desktop `turnErrorHeadline`). */

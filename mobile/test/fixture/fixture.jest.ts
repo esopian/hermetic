@@ -109,7 +109,6 @@ describe("fixtureKit", () => {
       fleet,
       registrar: hermeticdRegistrar(k.fetch),
       deviceId: async () => "phone-1",
-      rotateDeviceId: async () => "phone-2",
       token: async () => ({ ok: true, token: k.pushToken }),
       platform: "ios",
       appVersion: "0.1.0",

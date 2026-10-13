@@ -40,7 +40,8 @@ export default function Inbox() {
       for (const bot of swarm.bots) if (bot.title) map.set(`${swarm.instance} ${bot.name}`, bot.title);
     return map;
   }, [roster]);
-  const extra = useMemo(() => ({ now, titles }), [now, titles]);
+  // Keyed on the store's state too, so every store change repaints the rows.
+  const extra = useMemo(() => ({ now, titles, inbox }), [now, titles, inbox]);
   const unread = inbox?.unread ?? 0;
   // Cards still waiting on the operator: an unread needs-you entry in the run.
   // Read ones (opened, swiped, or answered from the conversation) do not count,
@@ -122,6 +123,10 @@ export default function Inbox() {
         data={groups}
         keyExtractor={(g) => g.key}
         extraData={extra}
+        // FlashList holds the visible rows in place by default, so an entry filed
+        // at the top landed above the viewport and showed only after a scroll.
+        // Newest-first wants the new row in view.
+        maintainVisibleContentPosition={{ disabled: true }}
         renderItem={({ item }) => (
           <InboxRow
             group={item}

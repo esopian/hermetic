@@ -1,7 +1,7 @@
 import { encodeMobileLink } from "@hermetic/core/shared";
 import { fireEvent, screen } from "@testing-library/react-native";
 import { type PairedLink, pairingRedirect, readPairingLink } from "../../src/fleet/pairing.ts";
-import { PairConfirm } from "../../src/pair/PairConfirm.tsx";
+import { PairConfirm, PairConfirmActions } from "../../src/pair/PairConfirm.tsx";
 import { PairForm } from "../../src/pair/PairForm.tsx";
 import { renderUi } from "../helpers/render.tsx";
 
@@ -96,6 +96,26 @@ describe("PairConfirm", () => {
     await fireEvent.press(screen.getByLabelText("Switch tailnet"));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(screen.queryByLabelText("Replace…")).toBeNull();
+  });
+
+  test("without its actions the card draws no buttons; the pinned row carries them", async () => {
+    const onConfirm = jest.fn();
+    const props = {
+      link: paired(),
+      replacing: true,
+      currentTailnet: "old-net.ts.net",
+      busy: false,
+      onConfirm,
+      onCancel: jest.fn(),
+    };
+    await renderUi(<PairConfirm {...props} actions={false} />);
+    expect(screen.getByTestId("pair-tailnet-change")).toBeTruthy();
+    expect(screen.queryByLabelText("Switch tailnet")).toBeNull();
+    expect(screen.queryByLabelText("Cancel")).toBeNull();
+    await renderUi(<PairConfirmActions {...props} />);
+    expect(screen.getByLabelText("Cancel")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Switch tailnet"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
   test("the same tailnet (any case) is a plain replace", async () => {

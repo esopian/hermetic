@@ -28,10 +28,11 @@ import type {
   Session,
   SubagentBlock,
 } from "@hermetic/core/chat-client";
-import { previewOf } from "./chat-logic.ts";
+import { previewOf, type RemoteTurnView, remoteTurnView } from "./chat-logic.ts";
 import type {
   AbortResult,
   HistoryResult,
+  RemoteStatus,
   RespondResult,
   SessionsResult,
   SteerResult,
@@ -235,6 +236,12 @@ export interface ConversationView {
   readonly reconnectAttempt: number;
   /** The last turn ended without `done`: what is shown may be incomplete. */
   readonly dropped: boolean;
+  /**
+   * The turn this phone stopped following while it was away is still running
+   * on the box (`onTurnRemote`): its band's copy. `sending` stays `true`, so
+   * the composer offers Steer and Stop and a plain send is queued.
+   */
+  readonly remote: RemoteTurnView | null;
   readonly openRequests: readonly string[];
   /** Requests the operator answered from this phone (the box never closes those in the stream). */
   readonly released: readonly string[];
@@ -296,6 +303,22 @@ export interface ConversationStoreOptions {
   ) => void;
   /** A reply or message landed: the Bots row moves now rather than at the next poll. */
   onArrival?: (target: ConversationTarget, arrival: ConversationArrival) => void;
+  /**
+   * A conversation whose turn is still running on its box came on screen
+   * (`on`) or left it: the client polls the box only while it is shown.
+   */
+  onRemoteShown?: (turn_id: string, on: boolean) => void;
+}
+
+/** Where a turn this store still follows lives (`turnTarget`). */
+export interface TurnWhere {
+  target: ConversationTarget;
+  /** The session it was sent into, once known. */
+  session: string | null;
+  /** The conversation is on screen. */
+  opened: boolean;
+  /** Set while the box reports it still running (`onTurnRemote`). */
+  remote: RemoteStatus | null;
 }
 
 /**
@@ -357,6 +380,7 @@ interface Rec {
   reconnectAttempt: number;
   reconnectTimer: TimerHandle | null;
   dropped: boolean;
+  remote: RemoteStatus | null;
   gen: number;
   run: TurnRun | null;
   segments: string[];
@@ -385,6 +409,7 @@ export class ConversationStore {
   private readonly onTurnSettled: ConversationStoreOptions["onTurnSettled"];
   private readonly onRequestOpened: ConversationStoreOptions["onRequestOpened"];
   private readonly onArrival: ConversationStoreOptions["onArrival"];
+  private readonly onRemoteShown: ConversationStoreOptions["onRemoteShown"];
   private readonly records = new Map<string, Rec>();
   private readonly owners = new Map<string, string>();
   /** Frames that arrived for a turn before `turn.start` answered with its id. */
@@ -402,6 +427,7 @@ export class ConversationStore {
     this.onTurnSettled = options.onTurnSettled;
     this.onRequestOpened = options.onRequestOpened;
     this.onArrival = options.onArrival;
+    this.onRemoteShown = options.onRemoteShown;
   }
 
   /* ── reading ────────────────────────────────────────────────────────── */
@@ -447,6 +473,7 @@ export class ConversationStore {
       });
       this.changed(record);
     }
+    if (record.remote && record.run?.turnId) this.onRemoteShown?.(record.run.turnId, true);
   }
 
   /** The conversation left the screen: stop observing and park its queue. */
@@ -461,6 +488,7 @@ export class ConversationStore {
     record.observeQuiet = null;
     if (record.queue.length > 0) record.parked = true;
     this.changed(record);
+    if (record.remote && record.run?.turnId) this.onRemoteShown?.(record.run.turnId, false);
   }
 
   /**
@@ -841,6 +869,53 @@ export class ConversationStore {
     this.end(record, run, false, null);
   }
 
+  /** Where a turn this store still follows lives; `null` once it settled (or was never seen). */
+  turnTarget(turn_id: string): TurnWhere | null {
+    const record = this.owned(turn_id);
+    if (!record) return null;
+    const session = record.run?.seed.session || record.resolvedSession || record.target.session;
+    return { target: record.target, session, opened: record.opened, remote: record.remote };
+  }
+
+  /**
+   * A turn this phone stopped following while it was away is still running
+   * on its box (`session.active_list` says `working`, `starting` or
+   * `waiting`). It stays in flight — no frames arrive, but Steer and Stop
+   * reach it by its session, and what is sent now is queued — until the box
+   * says it is idle (`onRemoteDone`). Answers whether the turn was still
+   * followed here.
+   */
+  onTurnRemote(turn_id: string, status: RemoteStatus): boolean {
+    const record = this.owned(turn_id);
+    if (!record) return false;
+    if (record.remote === status) return true;
+    record.remote = status;
+    record.activity = "thinking";
+    this.changed(record);
+    return true;
+  }
+
+  /**
+   * The box says a turn `onTurnRemote` kept in flight is over (its session is
+   * idle, or gone from the list). The transcript is re-read as for a turn gone
+   * (`onTurnGone`), but the turn ran to its end, so nothing is marked dropped
+   * and the queue drains once the read lands. A turn not in that state is
+   * `onTurnGone`.
+   */
+  onRemoteDone(turn_id: string): void {
+    const record = this.owned(turn_id);
+    if (!record?.run) return;
+    if (record.remote === null) this.end(record, record.run, false, null);
+    else this.end(record, record.run, false, null, true);
+  }
+
+  private owned(turn_id: string): Rec | null {
+    const key = this.owners.get(turn_id);
+    const record = key ? this.records.get(key) : undefined;
+    const run = record?.run;
+    return record && run && run.turnId === turn_id && !run.settled ? record : null;
+  }
+
   /* ── observation events ─────────────────────────────────────────────── */
 
   onObserveEvent(key: string, event: ChatObserveEvent): void {
@@ -997,6 +1072,7 @@ export class ConversationStore {
         reconnectAttempt: 0,
         reconnectTimer: null,
         dropped: false,
+        remote: null,
         gen: 0,
         run: null,
         segments: [],
@@ -1037,6 +1113,7 @@ export class ConversationStore {
       reconnecting: r.reconnecting,
       reconnectAttempt: r.reconnectAttempt,
       dropped: r.dropped,
+      remote: r.remote ? remoteTurnView(r.remote) : null,
       openRequests: r.run?.fold.openRequests ?? [],
       released: [...r.released],
       queue: r.queue,
@@ -1082,25 +1159,27 @@ export class ConversationStore {
 
   /* ── internals: the turn ────────────────────────────────────────────── */
 
-  private end(record: Rec, run: TurnRun, ok: boolean, error: Failure | null): void {
+  /** `ranOut`: a turn that ran to its end on the box unfollowed (`onRemoteDone`), not a dropped one. */
+  private end(record: Rec, run: TurnRun, ok: boolean, error: Failure | null, ranOut = false): void {
     if (run.settled || record.run !== run) return;
     run.settled = true;
     if (run.turnId) this.owners.delete(run.turnId);
+    record.remote = null;
     record.activity = "idle";
     record.segments = [];
     run.fold = { ...run.fold, openRequests: [] };
     if (!record.aborting) record.sending = false;
     if (!record.sending) this.releaseHeld(record);
     if (error) record.turnError = error;
-    record.dropped = !ok;
-    if (!ok && record.live) record.live = { ...record.live, incomplete: true };
+    record.dropped = !ok && !ranOut;
+    if (!ok && !ranOut && record.live) record.live = { ...record.live, incomplete: true };
     // Nothing drains into a failed or dropped turn (desktop `chat-queue.ts`).
-    if (!ok && record.queue.length > 0) record.parked = true;
+    if (!ok && !ranOut && record.queue.length > 0) record.parked = true;
     this.changed(record);
     this.onTurnSettled?.(record.target, { ok, error, turnId: run.turnId, reply: record.live });
     if (record.aborting) return;
     void this.readSessions(record);
-    if (!ok && !error) this.reconnect(record, 1);
+    if (!ok && !error) this.reconnect(record, 1, ranOut);
     else {
       // The row is told after the read: the box's own stamp and words for this
       // reply arrive with the transcript (desktop `replyArrival`).
@@ -1147,15 +1226,16 @@ export class ConversationStore {
     this.clearReconnect(record);
     record.dropped = false;
     this.changed(record);
+    // A turn still running on its box unfollowed has no pump to stop: it is
+    // interrupted by its session, like one this phone never started.
+    const session = record.resolvedSession ?? record.target.session ?? (run?.seed.session || null);
     try {
-      if (run?.turnId) await this.transport.abortTurn(run.turnId);
+      if (run?.turnId && record.remote === null) await this.transport.abortTurn(run.turnId);
       else
         await this.transport.abort({
           instance: record.target.instance,
           bot: record.target.bot,
-          ...((record.resolvedSession ?? record.target.session)
-            ? { session: (record.resolvedSession ?? record.target.session) as string }
-            : {}),
+          ...(session ? { session } : {}),
         });
     } catch (error) {
       if (record.gen === gen)
@@ -1175,6 +1255,7 @@ export class ConversationStore {
           run.fold = { ...run.fold, openRequests: [] };
         }
         record.sending = false;
+        record.remote = null;
         record.segments = [];
         this.releaseHeld(record);
         record.activity = "idle";
@@ -1186,7 +1267,8 @@ export class ConversationStore {
     }
   }
 
-  private reconnect(record: Rec, attempt: number): void {
+  /** `release`: drain the queue once a read lands (park it if none does). */
+  private reconnect(record: Rec, attempt: number, release = false): void {
     const gen = record.gen;
     record.reconnecting = true;
     record.reconnectAttempt = attempt;
@@ -1198,8 +1280,10 @@ export class ConversationStore {
         if (ok || attempt >= RECONNECT_ATTEMPTS) {
           record.reconnecting = false;
           record.reconnectAttempt = 0;
+          if (release && !ok && record.queue.length > 0) record.parked = true;
           this.changed(record);
-        } else this.reconnect(record, attempt + 1);
+          if (release && ok) this.drain(record);
+        } else this.reconnect(record, attempt + 1, release);
       });
     }, reconnectDelayMs(attempt));
   }

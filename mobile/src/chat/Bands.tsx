@@ -4,7 +4,7 @@
  * composer. A band never hides content and is never dismissed by a timer.
  */
 import { View } from "react-native";
-import type { ThreadState } from "../client/chat-logic.ts";
+import type { RemoteTurnView, ThreadState } from "../client/chat-logic.ts";
 import { turnErrorHeadline } from "../client/chat-logic.ts";
 import type { Failure, ObserveState } from "../client/conversation-store.ts";
 import { useTheme } from "../theme/theme.tsx";
@@ -209,6 +209,24 @@ export function DroppedBand() {
       tone="warn"
       title="The reply stopped arriving."
       sub="The transcript is re-read from the box when the turn ends — that copy is complete."
+    />
+  );
+}
+
+/**
+ * The turn this phone stopped following while it was away is still running
+ * on the box (`ConversationView.remote`). The composer offers Steer and Stop
+ * meanwhile, and a plain send is queued until the box says the turn is over.
+ */
+export function RemoteBand({ remote }: { remote: RemoteTurnView | null }) {
+  if (!remote) return null;
+  return (
+    <BandShell
+      tone={remote.status === "waiting" ? "warn" : "acc"}
+      pulse
+      testID="band-remote"
+      title={remote.title}
+      sub={remote.sub}
     />
   );
 }

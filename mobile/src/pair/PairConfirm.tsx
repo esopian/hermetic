@@ -2,6 +2,10 @@
  * The step between "a pairing link arrived" and "this phone keeps it": which
  * fleet, which tailnet, how many agents. Nothing pairs without a tap here,
  * whether the link came from a QR code, a deep link or a paste.
+ *
+ * The Pair screen pins the buttons (`PairConfirmActions`) to the bottom of the
+ * screen and shows the card without them (`actions={false}`), so Cancel and
+ * Pair stay in view however long the facts above them run.
  */
 import { View } from "react-native";
 import { cleanLabel, type PairedLink, pairConfirmLines } from "../fleet/pairing.ts";
@@ -38,14 +42,7 @@ export function tailnetChange(
   return { from, to, line: `This code is for a different tailnet: ${from} → ${to}` };
 }
 
-export function PairConfirm({
-  link,
-  replacing,
-  currentTailnet = null,
-  busy,
-  onConfirm,
-  onCancel,
-}: {
+interface ConfirmProps {
   link: PairedLink;
   /** This phone is already paired: confirming asks once more before replacing it. */
   replacing: boolean;
@@ -54,7 +51,43 @@ export function PairConfirm({
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
+}
+
+/** Cancel and the confirming button, side by side. */
+export function PairConfirmActions({
+  link,
+  replacing,
+  currentTailnet = null,
+  busy,
+  onConfirm,
+  onCancel,
+}: ConfirmProps) {
+  const t = useTheme();
+  const change = replacing ? tailnetChange(link, currentTailnet) : null;
+  return (
+    <View style={{ flexDirection: "row", gap: t.space.sm }} testID="pair-confirm-actions">
+      <View style={{ flex: 1 }}>
+        <Button label="Cancel" variant="secondary" onPress={onCancel} disabled={busy} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Button
+          label={change ? "Switch tailnet" : replacing ? "Replace…" : "Pair"}
+          busy={busy}
+          onPress={onConfirm}
+        />
+      </View>
+    </View>
+  );
+}
+
+export function PairConfirm({
+  actions = true,
+  ...props
+}: ConfirmProps & {
+  /** Draw the buttons inside the card; `false` when the screen pins them itself. */
+  actions?: boolean;
 }) {
+  const { link, replacing, currentTailnet = null } = props;
   const t = useTheme();
   // Cleaned in `pairConfirmLines`: a link's labels are never shown raw.
   const lines = pairConfirmLines(link);
@@ -88,18 +121,7 @@ export function PairConfirm({
           This replaces the current pairing; you will be asked once more.
         </Text>
       ) : null}
-      <View style={{ flexDirection: "row", gap: t.space.sm }}>
-        <View style={{ flex: 1 }}>
-          <Button label="Cancel" variant="secondary" onPress={onCancel} disabled={busy} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Button
-            label={change ? "Switch tailnet" : replacing ? "Replace…" : "Pair"}
-            busy={busy}
-            onPress={onConfirm}
-          />
-        </View>
-      </View>
+      {actions ? <PairConfirmActions {...props} /> : null}
     </View>
   );
 }

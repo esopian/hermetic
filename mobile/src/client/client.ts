@@ -19,8 +19,9 @@ import {
 } from "@hermetic/core/chat-client";
 import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 import type { FleetStore } from "../fleet/store.ts";
+import { isRunning, type LiveStatus } from "../gateway/active-list.ts";
 import { boxAddress, createGatewayClient } from "../gateway/client.ts";
-import type { FetchLike } from "../gateway/hermeticd.ts";
+import { type FetchLike, resetTunnelChecks } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
 import { probeHosts, probeTailscale, type TailscaleProbe } from "../gateway/tailscale.ts";
 import { createGatewayTransport, type GatewayTransport } from "../gateway/transport.ts";
@@ -33,9 +34,10 @@ import {
   PHONE_DEDUPE_MARK,
   type WatchedThread,
 } from "../inbox/store.ts";
+import { failureHeadline } from "./chat-logic.ts";
 import { ConversationStore, type ConversationTarget } from "./conversation-store.ts";
 import { type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
-import type { Timers } from "./timers.ts";
+import { realTimers, type Timers } from "./timers.ts";
 
 /* ── alerts ─────────────────────────────────────────────────────────────── */
 
@@ -90,6 +92,11 @@ export function localDedupe(
 /** Why an observation ended when its agent stopped being listened (or left the fleet). */
 export const UNLISTENED = "UNLISTENED";
 
+/** How often a turn still running on its box is asked after (`session.active_list`). */
+export const REMOTE_POLL_MS = 3_000;
+/** Failed asks in a row after which a turn still running on its box is reported gone. */
+export const REMOTE_FAILURES = 5;
+
 /* ── the client ─────────────────────────────────────────────────────────── */
 
 export interface HermeticClientOptions {
@@ -122,9 +129,18 @@ export interface HermeticClientOptions {
  *   closed, hint socket and all. Nothing is interrupted on any box.
  * - `"active"` after `"background"` — every conversation still on screen is
  *   re-opened (`chat.resume`, `open` semantics: a fresh snapshot, then hints),
- *   and every turn detached on the way out is reported gone
+ *   and the box of every turn detached on the way out is asked what that
+ *   turn's session is doing (`session.active_list`). Still busy (`working`,
+ *   `starting`, `waiting`): the store keeps the turn in flight as running on
+ *   the box (`chat.onTurnRemote`), and while its conversation is on screen
+ *   the box is asked again every `REMOTE_POLL_MS` until the session is idle
+ *   or gone (`chat.onRemoteDone`: the transcript is re-read, the queue
+ *   released). Idle, gone, or no answer: the turn is reported gone
  *   (`chat.onTurnGone`), so the store re-reads its transcript from the box.
  * - `"inactive"` — alerts only; nothing is detached.
+ *
+ * Every move into `"background"` or `"active"` forgets the hermeticd tunnel
+ * proofs (`resetTunnelChecks`): the network may have changed while away.
  *
  * Addressing: a conversation, roster read or Bot Mode call reaches an agent
  * only while this phone listens to it and the fleet still has it — the live
@@ -262,8 +278,9 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
           {
             ...base,
             kind: "turn.error",
-            // What the box's own push says for a failed turn: the failure text, else the code.
-            body: (previews() && outcome.error.message) || outcome.error.code,
+            // The failure text with previews on; else its headline ("Rate limited"),
+            // which is phone-local copy and never leaves the device.
+            body: (previews() && outcome.error.message) || failureHeadline(outcome.error.code),
             dedupe: localDedupe({ instance: where.instance, session }, "turn.error", outcome.turnId),
           },
           null,
@@ -290,6 +307,11 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         },
         NEEDS_ACTION_CATEGORY,
       );
+    },
+    onRemoteShown: (turnId, on) => {
+      if (on) {
+        if (!suspended) followRemote(turnId, false);
+      } else stopFollowing(turnId);
     },
   });
 
@@ -319,6 +341,81 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     last: () => lastProbe,
   };
 
+  /* ── turns still running on their box ──────────────────────────────── */
+
+  const timers = options.timers ?? realTimers;
+  /** The turns whose box is being asked after, each with its stop. */
+  const following = new Map<string, AbortController>();
+  const pause = (ms: number, signal: AbortSignal) =>
+    new Promise<void>((resolve) => {
+      const handle = timers.setTimeout(resolve, ms);
+      signal.addEventListener(
+        "abort",
+        () => {
+          timers.clearTimeout(handle);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+  const stopFollowing = (turnId: string) => {
+    following.get(turnId)?.abort();
+    following.delete(turnId);
+  };
+
+  /**
+   * Ask a detached turn's box what its session is doing, and keep asking
+   * while the box says it is busy and its conversation is on screen. `back`:
+   * the first ask on the return to the foreground, where anything but "busy"
+   * (idle, gone, no answer) is today's `onTurnGone`.
+   */
+  function followRemote(turnId: string, back: boolean): void {
+    if (following.has(turnId)) return;
+    const stop = new AbortController();
+    following.set(turnId, stop);
+    const { signal } = stop;
+    const done = () => {
+      if (following.get(turnId) === stop) following.delete(turnId);
+    };
+    void (async () => {
+      let failures = 0;
+      for (let first = true; ; first = false) {
+        if (!first) await pause(REMOTE_POLL_MS, signal);
+        if (signal.aborted) return;
+        const where = chat.turnTarget(turnId);
+        if (!where) return done();
+        if (!where.session) {
+          done();
+          return chat.onTurnGone(turnId);
+        }
+        let status: LiveStatus | null;
+        try {
+          status = await transport.liveStatus({
+            instance: where.target.instance,
+            session: where.session,
+            signal,
+          });
+        } catch {
+          if (signal.aborted) return;
+          if ((back && first && !where.remote) || ++failures >= REMOTE_FAILURES) {
+            done();
+            return chat.onTurnGone(turnId);
+          }
+          continue;
+        }
+        if (signal.aborted) return;
+        failures = 0;
+        if (!isRunning(status)) {
+          done();
+          return chat.onRemoteDone(turnId);
+        }
+        chat.onTurnRemote(turnId, status);
+        // Off screen: the turn stays "running on the box" until it is shown again.
+        if (!chat.turnTarget(turnId)?.opened) return done();
+      }
+    })();
+  }
+
   /** Read the thread on screen, if the app is on screen too. */
   const readFocused = () => {
     if (phase !== "active" || !watched?.focused) return;
@@ -336,16 +433,23 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     setPhase: (next) => {
       const was = phase;
       phase = next;
+      if (next !== was && (next === "background" || next === "active")) resetTunnelChecks();
       if (next === "background" && !suspended) {
         suspended = true;
+        // A first ask still out is asked again on the return; a turn already
+        // known to run on its box is asked again when its conversation reopens.
+        for (const turnId of [...following.keys()]) {
+          if (chat.turnTarget(turnId)?.remote === null) detached.push(turnId);
+          stopFollowing(turnId);
+        }
         detached = [...detached, ...transport.detachTurns()];
         chat.suspend();
       }
       if (next === "active" && suspended) {
         suspended = false;
-        const gone = detached;
+        const back = [...new Set(detached)];
         detached = [];
-        for (const id of gone) chat.onTurnGone(id);
+        for (const id of back) followRemote(id, true);
         chat.resume((t) => addressable(t.instance));
       }
       if (next === "active" && was !== "active") readFocused();
@@ -355,6 +459,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       readFocused();
     },
     dispose: () => {
+      for (const turnId of [...following.keys()]) stopFollowing(turnId);
       offFleet();
       transport.dispose();
       chat.reset();

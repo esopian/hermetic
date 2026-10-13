@@ -69,3 +69,10 @@ export interface TurnStartResult {
 
 /** How a turn this phone drove ended. */
 export type TurnState = "done" | "error" | "aborted";
+
+/**
+ * A turn the phone stopped following (the app went to the background) that
+ * its box still reports busy (`session.active_list`): the store shows it as
+ * still running there rather than over.
+ */
+export type RemoteStatus = "working" | "starting" | "waiting";

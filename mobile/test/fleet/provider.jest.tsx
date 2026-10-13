@@ -263,6 +263,46 @@ describe("FleetProvider", () => {
     ).toBe(false);
   });
 
+  test("foreground: a push read late folds with the entry the linger raised, by its delivery time", async () => {
+    let now = NOW;
+    const s = await setup({}, () => now);
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    const inbox = s.value().client?.inbox;
+    if (!inbox) throw new Error("no client");
+    const before = inbox.getState().entries.length;
+    // The phone's socket saw the turn finish during the background linger.
+    inbox.ingest({
+      kind: "turn.done",
+      instance: "atlas",
+      bot: "scribe",
+      session: "s-1",
+      title: "scribe · atlas",
+      body: "done",
+      at: NOW,
+      dedupe: "atlas:s-1:phone-t1:turn.done",
+    });
+    // The box's push for the same event, delivered 30 s later, is read ten minutes on.
+    now = "2026-10-13T10:10:00.000Z";
+    s.note.presented.push({
+      title: "scribe · atlas",
+      body: "done",
+      date: Date.parse("2026-10-13T10:00:30.000Z"),
+      data: {
+        fleet_id: "fxtr0001",
+        instance: "atlas",
+        bot: "scribe",
+        session: "s-1",
+        kind: "turn.done",
+        dedupe: "atlas:s-1:4:turn.done",
+      },
+    });
+    await act(async () => s.appState.set("active"));
+    await settle();
+    expect(inbox.getState().entries).toHaveLength(before + 1);
+  });
+
   test("a tapped push opens its conversation", async () => {
     const s = await setup();
     await settle();

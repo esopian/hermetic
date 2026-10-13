@@ -122,14 +122,17 @@ export function ActivityGroup({
   streaming,
   waiting = false,
   activity,
+  turnRunning = false,
 }: {
   blocks: ChatBlock[];
   streaming: boolean;
   waiting?: boolean;
   activity?: TurnActivity;
+  /** The turn this group is in has not settled (it may not be the live group). */
+  turnRunning?: boolean;
 }) {
   const t = useTheme();
-  const summary = groupSummary(blocks, streaming, activity, waiting);
+  const summary = groupSummary(blocks, streaming, activity, waiting, turnRunning);
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? summary.kids.length > 0;
   if (summary.steps.length === 0 && summary.kids.length === 0 && !streaming) return null;

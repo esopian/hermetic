@@ -13,7 +13,9 @@
  *   queue, requests and observation. `view/subscribe/open/leave/reload/send/
  *   steer/stop/enqueue/unqueue/sendMessage/sendNow/respond/release`, and
  *   `reopen` (restart one conversation's observation, e.g. on foreground).
- *   `suspend`/`resume`/`endObservations` are the client's (phase, listening).
+ *   `suspend`/`resume`/`endObservations` are the client's (phase, listening),
+ *   as are `turnTarget`/`onTurnRemote`/`onRemoteDone`: a turn still running
+ *   on its box after the app was away, shown by `view.remote` (`RemoteBand`).
  * - `roster` — `RosterStore`: the Bots list over every listened box's swarm.
  * - `inbox` — `InboxStore` (`src/inbox/store.ts`): the phone's own last 200
  *   events (pushes and socket-delivered), unread counts and the badge.
