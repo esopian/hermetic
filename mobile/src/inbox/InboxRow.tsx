@@ -2,9 +2,11 @@
  * One inbox card: a run of rows about one conversation folded into one
  * (`groupNotifications`), unread if any member is (`isUnreadRow`, the rule
  * the header's count uses), cleared only when every member is, and needing
- * you when any member still does (`groupCondition`). Class colour on the left seam (grey once the
- * condition has cleared), an unread marker, needs-you in gold, the count of
- * what it folded, and the time. Swipe left to mark it read.
+ * you when any member still does, read or not (`groupCondition`). Class
+ * colour on the left seam (grey once the condition has cleared), an unread
+ * marker (gold only when an unread member needs you, the header's need rule),
+ * needs-you in gold, the count of what it folded, and the time. Swipe left to
+ * mark it read.
  */
 import { memo, useRef } from "react";
 import { Pressable, View } from "react-native";
@@ -44,7 +46,9 @@ function InboxRowImpl({
   const unread = groupUnread(group);
   // Cleared and needs-you read every member too (`groupCondition`), so a card
   // never says "cleared" over a member the header still counts as needing you.
-  const { resolved, needs } = groupCondition(group);
+  // `needs` stays on for a read but open request; the marker's gold follows
+  // `needsUnread`, the header's need count, instead.
+  const { resolved, needs, needsUnread } = groupCondition(group);
   // A resolved row loses emphasis rather than gaining a colour (desktop
   // `NotificationRow`: tone `--line2` once the condition has cleared).
   const edge = resolved ? t.c.line2 : classColor(t.c, needs ? "needs_action" : row.class);
@@ -97,7 +101,7 @@ function InboxRowImpl({
           {unread ? (
             <View
               accessibilityLabel="unread"
-              style={{ width: 8, height: 8, backgroundColor: needs ? t.c.warn : t.c.acc }}
+              style={{ width: 8, height: 8, backgroundColor: needsUnread ? t.c.warn : t.c.acc }}
             />
           ) : null}
         </View>

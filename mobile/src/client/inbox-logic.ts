@@ -68,19 +68,30 @@ export function groupUnread<T extends { read_at?: string | null; resolved_at?: s
 }
 
 /**
- * A folded card's condition, read across every member so it agrees with the
- * unread marker and the header's counts: it is cleared only when *every*
- * member is resolved, and it needs the operator when *any* member is an
- * unresolved `needs_action`. Phone-only: the desktop card draws the latest
- * row's state (`groupRow`), which can say "cleared" while an older member
- * still counts as needing you in the header.
+ * A folded card's condition, read across every member.
+ *
+ * - `resolved`: every member is resolved, so the card says "cleared". One
+ *   open member keeps it open, since the header still counts that member.
+ * - `needs`: some member is an unresolved `needs_action`, *read or not*. This
+ *   drives the "NEEDS YOU" label and the gold seam: reading a needs-action row
+ *   acknowledges it but does not do what it asks, so the card keeps saying so
+ *   until the condition resolves. The header's need count (core `counts`:
+ *   unread *and* unresolved) drops it on read; the card deliberately does not.
+ * - `needsUnread`: some member is an unread, unresolved `needs_action`, the
+ *   exact rule of the header's need count. The unread marker's colour reads
+ *   this, so a gold marker always means the header counts a need on this card.
+ *
+ * Phone-only: the desktop card draws the latest row's state (`groupRow`),
+ * which can say "cleared" while an older member is still open.
  */
-export function groupCondition<T extends { class: string; resolved_at?: string | null }>(
-  group: NotificationGroup<T>,
-): { resolved: boolean; needs: boolean } {
+export function groupCondition<
+  T extends { class: string; read_at?: string | null; resolved_at?: string | null },
+>(group: NotificationGroup<T>): { resolved: boolean; needs: boolean; needsUnread: boolean } {
+  const open = group.rows.filter((r) => r.class === "needs_action" && !r.resolved_at);
   return {
     resolved: group.rows.every((r) => !!r.resolved_at),
-    needs: group.rows.some((r) => r.class === "needs_action" && !r.resolved_at),
+    needs: open.length > 0,
+    needsUnread: open.some(isUnreadRow),
   };
 }
 

@@ -8,8 +8,10 @@
  *   steers it into the running turn — falling back to the head of the queue
  *   and a stop when the box will not take a steer. A line above the input says
  *   which is which (the desktop's footer hint, "Enter queues · ⌘Enter sends now").
- *   Stop stays within reach as a square ■ beside them: the desktop's Esc stops
- *   a turn whatever is typed, so a draft never hides the way out.
+ *   These three sit in a row under the input, so the input keeps the full
+ *   width: Stop stays within reach as a square ■ on the left (the desktop's
+ *   Esc stops a turn whatever is typed, so a draft never hides the way out),
+ *   Send now and Queue on the right.
  * - Stop lives here and only here: the conversation header has none.
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
@@ -78,7 +80,7 @@ export function isAutocorrectEcho(incoming: string, taken: string, elapsedMs: nu
   return changed <= Math.max(1, Math.floor(a.length / 2));
 }
 
-/** Stop as a 44pt square glyph, for the queue row where a labelled button does not fit. */
+/** Stop as a 44pt square glyph, for the queue actions row beside Send now and Queue. */
 function StopSquare({ onPress }: { onPress(): void }) {
   const t = useTheme();
   return (
@@ -244,7 +246,12 @@ function ComposerImpl(props: ComposerProps) {
           Queue waits for the turn · Send now steers it
         </Text>
       ) : null}
-      <View style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}>
+      {/* The input is always the first child of this row, in every mode, so
+          switching modes never remounts it (focus and the keyboard stay). */}
+      <View
+        testID="composer-input-row"
+        style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}
+      >
         <TextInput
           keyboardAppearance={t.scheme}
           ref={input}
@@ -288,7 +295,34 @@ function ComposerImpl(props: ComposerProps) {
               props.onSend(text);
             }}
           />
-        ) : mode === "queue" ? (
+        ) : mode === "stop" || mode === "stopping" ? (
+          <Button
+            label={mode === "stopping" ? "Stopping" : "Stop"}
+            accessibilityLabel="Stop turn"
+            variant="destructive"
+            busy={mode === "stopping"}
+            haptic={false}
+            onPress={() => {
+              haptic.warning();
+              props.onStop();
+            }}
+          />
+        ) : null}
+      </View>
+      {mode === "queue" ? (
+        // Three targets beside the input left it a third of a phone's width,
+        // so a draft wrapped at once; under it the input keeps the full row.
+        // Stop sits apart on the left, the two ways to send on the right.
+        <View
+          testID="composer-queue-actions"
+          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+        >
+          <StopSquare
+            onPress={() => {
+              haptic.warning();
+              props.onStop();
+            }}
+          />
           <View style={{ flexDirection: "row", gap: t.space.xs }}>
             <Button
               label="Send now"
@@ -317,27 +351,9 @@ function ComposerImpl(props: ComposerProps) {
                 props.onQueue(text);
               }}
             />
-            <StopSquare
-              onPress={() => {
-                haptic.warning();
-                props.onStop();
-              }}
-            />
           </View>
-        ) : (
-          <Button
-            label={mode === "stopping" ? "Stopping" : "Stop"}
-            accessibilityLabel="Stop turn"
-            variant="destructive"
-            busy={mode === "stopping"}
-            haptic={false}
-            onPress={() => {
-              haptic.warning();
-              props.onStop();
-            }}
-          />
-        )}
-      </View>
+        </View>
+      ) : null}
     </View>
   );
 }

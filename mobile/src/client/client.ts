@@ -315,6 +315,16 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     ack: (input) => rpc("notifications.ack", input),
   });
 
+  /**
+   * Read the thread on screen, if the app is on screen too: what landed for it
+   * while the app was inactive or in the background was not acked on arrival
+   * (that needs `active`), and the operator is looking at it now.
+   */
+  const ackFocused = () => {
+    if (phase !== "active" || !watched?.focused) return;
+    void inbox.ackThread(watched.instance, watched.bot);
+  };
+
   const offs = [
     socket.on("turn.frame", (e) => conversations.onTurnFrame(e.turn_id, e.n, e.frame)),
     socket.on("turn.end", (e) => conversations.onTurnEnd(e.turn_id, e.state)),
@@ -326,7 +336,11 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     socket.on("hello", (hello) => {
       roster.setListening(hello.listening);
       for (const summary of hello.active_turns) conversations.attach(summary);
-      void inbox.refresh();
+      // A reconnect (a resume after the socket lingered out, say) learns what
+      // arrived meanwhile from this read; the thread on screen is read at once.
+      void inbox.refresh().then((ok) => {
+        if (ok) ackFocused();
+      });
     }),
     socket.on("listening", (e) => {
       roster.setListening(e.instances);
@@ -365,10 +379,12 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     connect: () => socket.connect(),
     disconnect: () => socket.close(),
     setPhase: (next) => {
+      const was = phase;
       phase = next;
       // Only an app on screen is "foreground" to the bridge: `inactive` (the
       // app switcher, Notification Centre over it) is somebody not looking.
       socket.setPhase(next === "active" ? "foreground" : "background");
+      if (next === "active" && was !== "active") ackFocused();
     },
     setWatched: (next) => {
       watched = next;

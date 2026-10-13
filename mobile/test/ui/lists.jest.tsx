@@ -14,6 +14,7 @@ import { isUnreadRow } from "../../src/client/notifications-store.ts";
 import { botsEmpty, previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
 import { rosterLayout } from "../../src/client/roster-store.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
+import { palettes } from "../../src/theme/tokens.ts";
 import { bot, notification, swarm } from "../helpers/fixtures.ts";
 import { NOW, renderUi } from "../helpers/render.tsx";
 
@@ -287,7 +288,7 @@ describe("inbox", () => {
     ])[0];
     if (!group) throw new Error("no group");
     expect(group.count).toBe(2);
-    expect(groupCondition(group)).toEqual({ resolved: false, needs: true });
+    expect(groupCondition(group)).toEqual({ resolved: false, needs: true, needsUnread: true });
     await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
     expect(screen.queryByText("cleared")).toBeNull();
     expect(screen.getByText("NEEDS YOU")).toBeTruthy();
@@ -303,7 +304,30 @@ describe("inbox", () => {
       }),
     ])[0];
     if (!settled) throw new Error("no group");
-    expect(groupCondition(settled)).toEqual({ resolved: true, needs: false });
+    expect(groupCondition(settled)).toEqual({ resolved: true, needs: false, needsUnread: false });
+  });
+
+  test("InboxRow: a read but open request still says NEEDS YOU, but the unread marker is not gold", async () => {
+    // The header's need count is unread + unresolved needs_action (core
+    // `counts`): a read approval is not in it, so the marker for the card's
+    // other unread member must not draw the need colour.
+    const group = groupNotifications([
+      notification({ id: "r2", class: "info", title: "Reply ready", at: "2026-10-13T11:59:00.000Z" }),
+      notification({
+        id: "r1",
+        class: "needs_action",
+        title: "Approval needed",
+        at: "2026-10-13T11:58:00.000Z",
+        read_at: "2026-10-13T11:58:30.000Z",
+      }),
+    ])[0];
+    if (!group) throw new Error("no group");
+    expect(groupCondition(group)).toEqual({ resolved: false, needs: true, needsUnread: false });
+    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
+    expect(screen.getByText("NEEDS YOU")).toBeTruthy();
+    const marker = screen.getByLabelText("unread").props.style.backgroundColor;
+    expect([palettes.dark.acc, palettes.light.acc]).toContain(marker);
+    expect([palettes.dark.warn, palettes.light.warn]).not.toContain(marker);
   });
 
   test("tap goes to the conversation, or the agent", () => {

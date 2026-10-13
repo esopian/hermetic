@@ -155,9 +155,10 @@ test("notification frames update the inbox and alert unless watching", async () 
   expect(alerts).toEqual([
     expect.objectContaining({ decision: "banner", title: "ops replied", body: "deploy finished" }),
   ]);
-  // The header count is the bridge's (its frame said 2); the rows say which
-  // are read: the one about the watched thread was read as it landed.
-  expect(client.inbox.badgeCount()).toBe(2);
+  // The frame said 2, but it was counted before the bridge applied our ack of
+  // n1 (still unanswered): the phone takes that ack off again, so the badge
+  // matches the rows. The one about the watched thread was read as it landed.
+  expect(client.inbox.badgeCount()).toBe(1);
   expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
   expect(client.inbox.unreadFor("kestrel", "ops")).toBe(1);
 });
@@ -172,6 +173,76 @@ test("a failed turn's chat.error in the watched thread does not badge it; in bac
   client.setPhase("background");
   ws.push({ type: "notification", row: error("e2"), counts: { unread: 1, needs_action: 0 } });
   expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
+});
+
+test("once our ack is answered, a notification frame's counts are taken as sent", async () => {
+  const { client, ws, answer } = await connected();
+  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+  ws.push({
+    type: "notification",
+    row: notification({ id: "n1" }),
+    counts: { unread: 1, needs_action: 0 },
+  });
+  expect(ws.sent).toContainEqual(
+    expect.objectContaining({ method: "notifications.ack", params: { ids: ["n1"] } }),
+  );
+  answer();
+  await flush();
+  ws.push({
+    type: "notification",
+    row: notification({ id: "n2", ref: "kestrel/ops" }),
+    counts: { unread: 1, needs_action: 0 },
+  });
+  expect(client.inbox.badgeCount()).toBe(1);
+});
+
+test("coming back to the app reads what landed in the thread on screen meanwhile", async () => {
+  const { client, ws } = await connected();
+  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+  client.setPhase("background");
+  ws.push({
+    type: "notification",
+    row: notification({ id: "e1", kind: "chat.error", class: "bad" }),
+    counts: { unread: 1, needs_action: 0 },
+  });
+  ws.push({
+    type: "notification",
+    row: notification({ id: "o1", ref: "kestrel/ops" }),
+    counts: { unread: 2, needs_action: 0 },
+  });
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
+  client.setPhase("inactive");
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(1);
+  client.setPhase("active");
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
+  expect(client.inbox.unreadFor("kestrel", "ops")).toBe(1);
+  expect(client.inbox.badgeCount()).toBe(1);
+  expect(ws.last("rpc")).toMatchObject({ method: "notifications.ack", params: { ids: ["e1"] } });
+});
+
+test("a reconnect reads the thread on screen once the inbox is re-read", async () => {
+  const { client, ws } = await connected();
+  client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+  ws.push({ type: "auth.ok", hello: hello() });
+  const list = ws.last("rpc");
+  expect(list).toMatchObject({ method: "notifications.list" });
+  ws.push({
+    type: "res",
+    id: (list as { id: string }).id,
+    ok: true,
+    result: {
+      notifications: [notification({ id: "e9", kind: "chat.error", class: "bad" })],
+      unread: 1,
+      needs_action: 0,
+      snoozed: 0,
+      history: 0,
+      next_snooze_at: null,
+      mutes: [],
+    },
+  });
+  await flush();
+  expect(client.inbox.unreadFor("atlas", "scribe")).toBe(0);
+  expect(ws.last("rpc")).toMatchObject({ method: "notifications.ack", params: { ids: ["e9"] } });
 });
 
 test("listening frames reach the roster", async () => {

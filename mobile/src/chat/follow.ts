@@ -69,3 +69,174 @@ export function shouldRepin(input: {
 }): boolean {
   return input.following && !input.dragging && !input.momentum;
 }
+
+/**
+ * How long the bottom inset must hold still before a re-pin follows it.
+ * `KeyboardChatScrollView` reports the inset on every frame of the keyboard's
+ * animation, and on iOS its own `keyboardLiftBehavior="whenAtEnd"` lift is
+ * already moving the content with the keyboard on the UI thread. A JS
+ * `scrollToOffset` per frame would race that lift and jitter, so the
+ * transcript re-pins once, to the final inset, after the animation settles.
+ * A little over three frames: the frames of one animation arrive about 16 ms
+ * apart, or bunched together when the JS thread is busy.
+ */
+export const INSET_SETTLE_MS = 60;
+
+/**
+ * How long after a release with fling velocity to wait for the momentum to
+ * begin. iOS sends `onMomentumScrollBegin` straight after the drag ends when
+ * there is one; if it never comes (the velocity was too small to start a
+ * deceleration), the touch has ended and a growth skipped under the finger
+ * must still be caught up.
+ */
+export const MOMENTUM_GRACE_MS = 150;
+
+/** Timers, injectable for tests; the default is the global pair. */
+export interface PinTimers {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const globalTimers: PinTimers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * The transcript's follow state machine, kept out of the component so it can
+ * be driven event by event in a test. The component forwards the scroll
+ * view's events; the controller decides when to scroll.
+ *
+ * - Content growth re-pins at once while following and no touch is moving
+ *   the list (`shouldRepin`).
+ * - An inset change (the keyboard moving) re-pins only once the inset has
+ *   settled (`INSET_SETTLE_MS`), to its final value.
+ * - A touch's end catches up a growth skipped during it: at release with no
+ *   velocity, at momentum end, or `MOMENTUM_GRACE_MS` after a release with
+ *   velocity when no momentum begins.
+ */
+export class PinController {
+  following = true;
+  /** The offset the last programmatic pin left, or null before any (or once not following). */
+  pinnedY: number | null = null;
+  readonly size = { content: 0, viewport: 0, inset: 0 };
+  readonly touch = { dragging: false, momentum: false };
+  private insetTimer: unknown = null;
+  private graceTimer: unknown = null;
+
+  constructor(
+    private readonly deps: {
+      scrollTo(offset: number, animated: boolean): void;
+      /** Called whenever following is set: each edge, and each explicit pin request. */
+      onFollowing(following: boolean): void;
+      timers?: PinTimers;
+    },
+  ) {}
+
+  private get timers(): PinTimers {
+    return this.deps.timers ?? globalTimers;
+  }
+
+  setFollowing(following: boolean): void {
+    this.following = following;
+    if (!following) this.pinnedY = null;
+    this.deps.onFollowing(following);
+  }
+
+  /** Scroll to the end of the measured content plus the inset below it. */
+  pinToEnd(animated: boolean): void {
+    const y = endOffset(this.size.content, this.size.viewport, this.size.inset);
+    this.deps.scrollTo(y, animated);
+    this.pinnedY = y;
+  }
+
+  private repinIfFree(): void {
+    if (shouldRepin({ following: this.following, ...this.touch })) this.pinToEnd(false);
+  }
+
+  onScroll(e: {
+    offsetY: number;
+    contentHeight: number;
+    viewportHeight: number;
+    /** iOS reports the inset with every scroll event; elsewhere the last one heard stands. */
+    insetBottom?: number;
+  }): void {
+    if (e.insetBottom !== undefined) this.size.inset = e.insetBottom;
+    const gap = fromBottom({
+      offsetY: e.offsetY,
+      contentHeight: e.contentHeight,
+      viewportHeight: e.viewportHeight,
+      insetBottom: this.size.inset,
+    });
+    const next = nextFollowing({
+      following: this.following,
+      atBottom: gap <= AT_BOTTOM_SLACK,
+      offsetY: e.offsetY,
+      pinnedY: this.pinnedY,
+    });
+    // Only the reader's own drag or fling ends following: a programmatic
+    // pin, a layout pass or the list opening at the bottom raise scroll
+    // events too, at offsets the content has already outgrown.
+    const reader = this.touch.dragging || this.touch.momentum;
+    if (next !== this.following && (next || reader)) this.setFollowing(next);
+  }
+
+  onContentSize(height: number): void {
+    this.size.content = height;
+    this.repinIfFree();
+  }
+
+  onViewport(height: number): void {
+    this.size.viewport = height;
+  }
+
+  onInset(bottom: number): void {
+    this.size.inset = bottom;
+    if (this.insetTimer !== null) this.timers.clear(this.insetTimer);
+    this.insetTimer = this.timers.set(() => {
+      this.insetTimer = null;
+      this.repinIfFree();
+    }, INSET_SETTLE_MS);
+  }
+
+  dragBegin(): void {
+    this.cancelGrace();
+    this.touch.dragging = true;
+  }
+
+  dragEnd(velocityY: number | undefined): void {
+    this.touch.dragging = false;
+    if (!velocityY) {
+      this.repinIfFree();
+      return;
+    }
+    // A fling ends the touch at momentum end, unless the momentum never begins.
+    this.cancelGrace();
+    this.graceTimer = this.timers.set(() => {
+      this.graceTimer = null;
+      this.repinIfFree();
+    }, MOMENTUM_GRACE_MS);
+  }
+
+  momentumBegin(): void {
+    this.cancelGrace();
+    this.touch.momentum = true;
+  }
+
+  momentumEnd(): void {
+    this.touch.momentum = false;
+    this.repinIfFree();
+  }
+
+  /** Drop pending timers (unmount). */
+  dispose(): void {
+    this.cancelGrace();
+    if (this.insetTimer !== null) this.timers.clear(this.insetTimer);
+    this.insetTimer = null;
+  }
+
+  private cancelGrace(): void {
+    if (this.graceTimer !== null) this.timers.clear(this.graceTimer);
+    this.graceTimer = null;
+  }
+}

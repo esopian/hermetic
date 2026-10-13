@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react-native";
+import { fireEvent, screen, within } from "@testing-library/react-native";
 import { useState } from "react";
 import {
   Composer,
@@ -112,6 +112,26 @@ describe("Composer", () => {
     await fireEvent.changeText(screen.getByLabelText("Message"), "redirect");
     await fireEvent.press(screen.getByLabelText("Send now"));
     expect(h.onSendNow).toHaveBeenCalledWith("redirect");
+  });
+
+  test("queue mode: the input keeps its row; Stop, Send now and Queue sit under it", async () => {
+    const h = handlers();
+    await renderUi(<Harness {...base} {...h} sending />);
+    const before = screen.getByLabelText("Message");
+    // Typing switches stop → queue mode without remounting the input (focus and keyboard stay).
+    await fireEvent.changeText(before, "steer this");
+    expect(screen.getByLabelText("Message")).toBe(before);
+    const row = within(screen.getByTestId("composer-input-row"));
+    expect(row.getByLabelText("Message")).toBeTruthy();
+    for (const label of ["Stop turn", "Send now", "Queue"]) {
+      expect(row.queryByLabelText(label)).toBeNull();
+      expect(within(screen.getByTestId("composer-queue-actions")).getByLabelText(label)).toBeTruthy();
+    }
+    // Back to stop mode: the actions row goes, the input is still the same one.
+    await fireEvent.changeText(screen.getByLabelText("Message"), "");
+    expect(screen.queryByTestId("composer-queue-actions")).toBeNull();
+    expect(screen.getByLabelText("Message")).toBe(before);
+    expect(row.getByLabelText("Stop turn")).toBeTruthy();
   });
 
   test("stopping: the button is busy", async () => {

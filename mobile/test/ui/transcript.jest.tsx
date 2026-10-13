@@ -1,6 +1,14 @@
 import { act, renderHook } from "@testing-library/react-native";
 import type { TranscriptItem } from "../../src/chat/Transcript.tsx";
-import { endOffset, fromBottom, nextFollowing, shouldRepin } from "../../src/chat/follow.ts";
+import {
+  endOffset,
+  fromBottom,
+  INSET_SETTLE_MS,
+  MOMENTUM_GRACE_MS,
+  nextFollowing,
+  PinController,
+  shouldRepin,
+} from "../../src/chat/follow.ts";
 import { transcriptItems } from "../../src/chat/Transcript.tsx";
 import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 import { useThrottled } from "../../src/ui/useThrottled.ts";
@@ -59,6 +67,79 @@ describe("following the live end", () => {
     expect(shouldRepin({ following: true, dragging: true, momentum: false })).toBe(false);
     expect(shouldRepin({ following: true, dragging: false, momentum: true })).toBe(false);
     expect(shouldRepin({ following: false, dragging: false, momentum: false })).toBe(false);
+  });
+});
+
+describe("PinController", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function controller() {
+    const scrollTo = jest.fn<void, [number, boolean]>();
+    const pin = new PinController({ scrollTo, onFollowing: jest.fn() });
+    pin.onViewport(600);
+    pin.onContentSize(1000);
+    scrollTo.mockClear();
+    return { pin, scrollTo };
+  }
+
+  test("the keyboard's per-frame inset changes re-pin once, to the settled inset", () => {
+    const { pin, scrollTo } = controller();
+    // KeyboardChatScrollView reports every frame of the keyboard animation;
+    // the native whenAtEnd lift is moving the content meanwhile.
+    for (const bottom of [40, 120, 210, 280, 300]) {
+      pin.onInset(bottom);
+      jest.advanceTimersByTime(16);
+    }
+    expect(scrollTo).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(INSET_SETTLE_MS);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    // The follow math still counts the inset: the end is past the content by it.
+    expect(scrollTo).toHaveBeenCalledWith(endOffset(1000, 600, 300), false);
+  });
+
+  test("a settled inset does not re-pin a reader who scrolled away", () => {
+    const { pin, scrollTo } = controller();
+    pin.dragBegin();
+    pin.onScroll({ offsetY: 100, contentHeight: 1000, viewportHeight: 600 });
+    pin.dragEnd(0);
+    expect(pin.following).toBe(false);
+    pin.onInset(300);
+    jest.advanceTimersByTime(INSET_SETTLE_MS);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  test("a fling whose momentum never begins still catches up the skipped growth", () => {
+    const { pin, scrollTo } = controller();
+    pin.dragBegin();
+    pin.onContentSize(1200); // grew under the finger: not re-pinned
+    expect(scrollTo).not.toHaveBeenCalled();
+    pin.dragEnd(0.4);
+    expect(scrollTo).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(MOMENTUM_GRACE_MS);
+    expect(scrollTo).toHaveBeenCalledWith(endOffset(1200, 600), false);
+  });
+
+  test("a fling whose momentum begins waits for momentum end", () => {
+    const { pin, scrollTo } = controller();
+    pin.dragBegin();
+    pin.onContentSize(1200);
+    pin.dragEnd(0.4);
+    pin.momentumBegin();
+    jest.advanceTimersByTime(MOMENTUM_GRACE_MS * 2);
+    expect(scrollTo).not.toHaveBeenCalled();
+    pin.momentumEnd();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  test("dispose drops pending re-pins", () => {
+    const { pin, scrollTo } = controller();
+    pin.onInset(300);
+    pin.dragBegin();
+    pin.dragEnd(0.4);
+    pin.dispose();
+    jest.advanceTimersByTime(MOMENTUM_GRACE_MS + INSET_SETTLE_MS);
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 });
 

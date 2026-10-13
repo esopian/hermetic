@@ -176,6 +176,11 @@ export class NotificationsStore {
   private readonly listeners = new Set<() => void>();
   private gen = 0;
   private unreadIndex: Map<string, number> | null = null;
+  /**
+   * Rows this phone acknowledged whose ack the bridge has not answered yet,
+   * each with whether it counted as a need. See `ingest`.
+   */
+  private readonly inflight = new Map<string, { needs: boolean }>();
   readonly dedupe: DedupeSet;
 
   constructor(
@@ -231,6 +236,15 @@ export class NotificationsStore {
   /**
    * A `notification` frame: upsert the row and take the bridge's counts.
    * Returns whether this row is new to the phone.
+   *
+   * The frame's counts were computed when the bridge raised it. A frame that
+   * lands while one of our acks is still unanswered was very likely counted
+   * before that ack was applied (the ack and its answer share the socket with
+   * the frames, in order), so the rows it acknowledged are taken off again;
+   * otherwise one stale frame puts back a badge the operator just cleared. Once
+   * the ack is answered the frames are taken as sent. If the bridge did apply
+   * the ack before counting, the badge reads low by those rows until the next
+   * frame or `refresh`, which is the error worth having.
    */
   ingest(row: Notification, counts: NotificationCounts): boolean {
     const at = this.state.rows.findIndex((r) => r.id === row.id);
@@ -238,7 +252,16 @@ export class NotificationsStore {
       at === -1
         ? sortRows([row, ...this.state.rows])
         : this.state.rows.map((r, i) => (i === at ? row : r));
-    this.set({ rows, counts });
+    let { unread, needs_action } = counts;
+    for (const [id, acked] of this.inflight) {
+      if (id === row.id) continue;
+      unread -= 1;
+      if (acked.needs) needs_action -= 1;
+    }
+    this.set({
+      rows,
+      counts: { unread: Math.max(0, unread), needs_action: Math.max(0, needs_action) },
+    });
     return at === -1;
   }
 
@@ -251,10 +274,13 @@ export class NotificationsStore {
     // unacknowledged but was never in `unread`.
     let cleared = 0;
     let needs = 0;
+    const counted: string[] = [];
     const rows = this.state.rows.map((r) => {
       if (!wanted.has(r.id) || r.read_at) return r;
       if (isUnreadRow(r)) {
         cleared += 1;
+        counted.push(r.id);
+        this.inflight.set(r.id, { needs: r.class === "needs_action" });
         if (r.class === "needs_action") needs += 1;
       }
       return { ...r, read_at: now };
@@ -270,6 +296,8 @@ export class NotificationsStore {
       await this.source.ack({ ids: [...ids] });
     } catch {
       void this.refresh();
+    } finally {
+      for (const id of counted) this.inflight.delete(id);
     }
   }
 
@@ -285,6 +313,7 @@ export class NotificationsStore {
 
   reset(): void {
     this.gen += 1;
+    this.inflight.clear();
     this.set({ rows: [], counts: { unread: 0, needs_action: 0 }, loading: false, error: null });
   }
 

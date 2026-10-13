@@ -36,7 +36,7 @@ import { useTheme } from "../theme/theme.tsx";
 import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
-import { AT_BOTTOM_SLACK, endOffset, fromBottom, nextFollowing, shouldRepin } from "./follow.ts";
+import { PinController } from "./follow.ts";
 import { TurnRow } from "./TurnRow.tsx";
 
 export type TranscriptItem =
@@ -180,103 +180,70 @@ function TranscriptImpl({
     else if (lastKey !== seenKey.current) setUnseen(true);
   }, [lastKey, away]);
 
-  // Following state lives in a ref: it changes on every scroll event, and only
-  // its edge (following ↔ not) is drawn, as the pill.
-  const pin = useRef<{ following: boolean; pinnedY: number | null }>({
-    following: true,
-    pinnedY: null,
-  });
-  // `inset` is the scroll view's bottom content inset: the keyboard's height
-  // while it is up (`KeyboardChatScrollView` adds it on iOS), so the live end
-  // sits above the keyboard rather than under it.
-  const size = useRef({ content: 0, viewport: 0, inset: 0 });
-
-  const setFollowing = useCallback((following: boolean) => {
-    pin.current.following = following;
-    if (!following) pin.current.pinnedY = null;
-    setAway(!following);
-    if (following) setUnseen(false);
-  }, []);
-
-  const touch = useRef({ dragging: false, momentum: false });
-
-  // An explicit offset from the measured content, not `scrollToEnd`: inside
-  // `onContentSizeChange` FlashList's own layout has not caught up with the
-  // new height yet, so its idea of "the end" is the old one.
-  const pinToEnd = useCallback((animated: boolean) => {
-    const y = endOffset(size.current.content, size.current.viewport, size.current.inset);
-    list.current?.scrollToOffset({ offset: y, animated });
-    pin.current.pinnedY = y;
-  }, []);
+  // Following state lives in a controller (`PinController`, `follow.ts`): it
+  // changes on every scroll event, and only its edge (following ↔ not) is
+  // drawn, as the pill. Its size includes the scroll view's bottom content
+  // inset: the keyboard's height while it is up (`KeyboardChatScrollView` adds
+  // it on iOS), so the live end sits above the keyboard rather than under it.
+  // Pins use an explicit offset from the measured content, not `scrollToEnd`:
+  // inside `onContentSizeChange` FlashList's own layout has not caught up with
+  // the new height yet, so its idea of "the end" is the old one.
+  const [pin] = useState(
+    () =>
+      new PinController({
+        scrollTo: (offset, animated) => list.current?.scrollToOffset({ offset, animated }),
+        onFollowing: (following) => {
+          setAway(!following);
+          if (following) setUnseen(false);
+        },
+      }),
+  );
+  useEffect(() => () => pin.dispose(), [pin]);
 
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement, contentInset } = e.nativeEvent;
-      // iOS reports the inset with every scroll event; elsewhere keep the last one heard.
-      if (contentInset) size.current.inset = contentInset.bottom;
-      const gap = fromBottom({
+      pin.onScroll({
         offsetY: contentOffset.y,
         contentHeight: contentSize.height,
         viewportHeight: layoutMeasurement.height,
-        insetBottom: size.current.inset,
+        ...(contentInset ? { insetBottom: contentInset.bottom } : {}),
       });
-      const next = nextFollowing({
-        following: pin.current.following,
-        atBottom: gap <= AT_BOTTOM_SLACK,
-        offsetY: contentOffset.y,
-        pinnedY: pin.current.pinnedY,
-      });
-      // Only the reader's own drag or fling ends following: a programmatic
-      // pin, a layout pass or the list opening at the bottom raise scroll
-      // events too, at offsets the content has already outgrown.
-      const reader = touch.current.dragging || touch.current.momentum;
-      if (next !== pin.current.following && (next || reader)) setFollowing(next);
     },
-    [setFollowing],
+    [pin],
   );
 
   // A streaming reply grows its row without adding one; re-pin on every growth
   // while following, without animation, so the text runs on like a terminal
   // instead of lagging and catching up in jumps. Not under the reader's finger
-  // or fling (`shouldRepin`): the drag decides (`onScroll`), and a growth it
-  // skipped is caught up when the touch ends still following.
-  const onContentSizeChange = useCallback(
-    (_w: number, h: number) => {
-      size.current.content = h;
-      if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
-    },
-    [pinToEnd],
+  // or fling: the drag decides (`onScroll`), and a growth it skipped is caught
+  // up when the touch ends still following.
+  const onContentSizeChange = useCallback((_w: number, h: number) => pin.onContentSize(h), [pin]);
+
+  // The keyboard moving changes the inset, and with it where the end is. It
+  // reports every animation frame; the controller re-pins once it settles,
+  // leaving the frames in between to the native `whenAtEnd` lift.
+  const scrollOverrides = useMemo(
+    () => ({ onContentInsetChange: (insets: { bottom: number }) => pin.onInset(insets.bottom) }),
+    [pin],
   );
 
-  // The keyboard moving changes the inset, and with it where the end is.
-  const onContentInsetChange = useCallback(
-    (insets: { bottom: number }) => {
-      size.current.inset = insets.bottom;
-      if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
-    },
-    [pinToEnd],
+  const onLayout = useCallback(
+    (e: LayoutChangeEvent) => pin.onViewport(e.nativeEvent.layout.height),
+    [pin],
   );
-  const scrollOverrides = useMemo(() => ({ onContentInsetChange }), [onContentInsetChange]);
-
-  const touchEnded = useCallback(() => {
-    if (shouldRepin({ following: pin.current.following, ...touch.current })) pinToEnd(false);
-  }, [pinToEnd]);
-
-  const onLayout = useCallback((e: LayoutChangeEvent) => {
-    size.current.viewport = e.nativeEvent.layout.height;
-  }, []);
 
   useEffect(() => {
     if (pinSignal === 0) return;
-    setFollowing(true);
-    pinToEnd(true);
-  }, [pinSignal, setFollowing, pinToEnd]);
+    pin.setFollowing(true);
+    pin.pinToEnd(true);
+  }, [pinSignal, pin]);
 
   const jump = useCallback(() => {
     haptic.light();
-    setFollowing(true);
-    pinToEnd(true);
-  }, [setFollowing, pinToEnd]);
+    pin.setFollowing(true);
+    pin.pinToEnd(true);
+  }, [pin]);
 
   const renderItem = useCallback(
     ({ item }: { item: TranscriptItem }) =>
@@ -331,21 +298,11 @@ function TranscriptImpl({
         onScroll={onScroll}
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
-        onScrollBeginDrag={() => {
-          touch.current.dragging = true;
-        }}
-        onScrollEndDrag={(e) => {
-          touch.current.dragging = false;
-          // A release with no fling ends the touch here; a fling ends it at momentum end.
-          if (!e.nativeEvent.velocity?.y) touchEnded();
-        }}
-        onMomentumScrollBegin={() => {
-          touch.current.momentum = true;
-        }}
-        onMomentumScrollEnd={() => {
-          touch.current.momentum = false;
-          touchEnded();
-        }}
+        onScrollBeginDrag={() => pin.dragBegin()}
+        // A release with no fling ends the touch here; a fling ends it at momentum end.
+        onScrollEndDrag={(e) => pin.dragEnd(e.nativeEvent.velocity?.y)}
+        onMomentumScrollBegin={() => pin.momentumBegin()}
+        onMomentumScrollEnd={() => pin.momentumEnd()}
         // Reaches `ChatScroll` (FlashList passes these to its scroll component).
         overrideProps={scrollOverrides}
         scrollEventThrottle={64}
