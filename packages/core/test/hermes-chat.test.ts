@@ -2855,4 +2855,31 @@ describe("hermes-chat · liveUsage", () => {
     expect(await live.liveUsage(BOX, "default", "durable-1")).toMatchObject({ context_used: 10 });
     expect(deadlines).toEqual([LIVE_USAGE_DEADLINE_MS, LIVE_USAGE_DEADLINE_MS]);
   });
+
+  test("a lookup that never settles (a hung dial) gives up on the total budget", async () => {
+    // The pool awaits the socket's dial before a request's own deadline
+    // starts, so only a budget over the whole lookup bounds `chat.history`.
+    const live = createLiveUsage({ rpc: () => new Promise<never>(() => {}) }, { budgetMs: 20 });
+    const started = performance.now();
+    expect(await live.liveUsage(BOX, "default", "durable-1")).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("an aborted lookup still rejects inside the budget", async () => {
+    const controller = new AbortController();
+    const live = createLiveUsage(
+      {
+        rpc: (_box, _method, _params, opts) =>
+          new Promise<never>((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), {
+              once: true,
+            });
+          }),
+      },
+      { budgetMs: 60_000 },
+    );
+    const pending = live.liveUsage(BOX, "default", "durable-1", { signal: controller.signal });
+    controller.abort(new Error("page left"));
+    await expect(pending).rejects.toThrow("page left");
+  });
 });
