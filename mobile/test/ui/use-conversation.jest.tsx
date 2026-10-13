@@ -9,10 +9,10 @@ const mockStore = {
   view: { seq: 0 } as unknown as ConversationView,
 };
 
-jest.mock("../../src/bridge/BridgeProvider.tsx", () => ({
-  useBridge: () => ({
+jest.mock("../../src/fleet/FleetProvider.tsx", () => ({
+  useFleetContext: () => ({
     client: {
-      conversations: {
+      chat: {
         subscribe: (listener: Listener) => {
           mockStore.listeners.add(listener);
           return () => mockStore.listeners.delete(listener);
@@ -23,7 +23,7 @@ jest.mock("../../src/bridge/BridgeProvider.tsx", () => ({
   }),
 }));
 
-import { oncePerFrame, useConversation } from "../../src/bridge/hooks.ts";
+import { oncePerFrame, useConversation } from "../../src/fleet/hooks.ts";
 
 const target: ConversationTarget = { instance: "atlas", bot: "scribe", session: null };
 const key = JSON.stringify([target.instance, target.bot, target.session]);

@@ -167,6 +167,20 @@ export function rpcAccess(who: Whois | null, allowedTags: readonly string[] = []
   return { allowed: true, reason: "tailnet member" };
 }
 
+/**
+ * The identity a phone registration is bound to (§9.4): the tailnet login
+ * `whois` reported for an admitted peer. A tagged node the gate admits through
+ * `allowedTags` has no person behind it — every such node reports the shared
+ * `tagged-devices` login — so it is identified by its node name instead, and
+ * two tagged nodes can no more touch each other's registrations than two people.
+ */
+export function peerOwner(who: Whois): string {
+  if (who.tags.length > 0 || who.login === "" || who.login === TAGGED_DEVICES_LOGIN) {
+    return `node:${who.node}`;
+  }
+  return who.login;
+}
+
 /** `(request, peerIp) => Response` — an `app.fetch`-shaped handler, testable in-process. */
 export type RpcHandler = (request: Request, peerIp: string) => Promise<Response>;
 
@@ -403,7 +417,12 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
       );
     }
 
-    const mobile = deps.mobile ? await deps.mobile(request, url, peerIp) : null;
+    // `who` is non-null past the gate (`rpcAccess` refuses a null); the
+    // fallback only satisfies the type.
+    const mobile =
+      deps.mobile && who
+        ? await deps.mobile(request, url, { ip: peerIp, owner: peerOwner(who) })
+        : null;
     if (mobile !== null) return mobile;
 
     return refuse(404, `no such route: ${request.method} ${url.pathname}`, "NOT_FOUND");

@@ -1,128 +1,103 @@
 /**
  * Pair: scan the QR the laptop shows (`hermetic mobile pair`, or Settings →
- * Mobile on the desktop), follow the same `hermetic://pair?…` link opened as
- * a deep link, or paste it / type host, port and code. The token goes to the
- * keychain through the provider; nothing else is kept.
+ * Pair a phone in the desktop app), follow the same `hermetic://fleet?v=2&…`
+ * link opened as a deep link (`+native-intent.tsx` hands it here as `link`),
+ * or paste it. The link carries no secret: it names the fleet, its tailnet and
+ * its agents, and the phone reaches them over Tailscale.
  *
- * Nothing pairs on its own. Every way in — a scan, a deep link, a pasted link,
- * the form — lands on a confirmation naming the bridge, the fleet and the name
- * this phone will send, and only a host on the tailnet (or loopback) gets that
- * far (`pairHostAllowed`). Replacing an existing pairing asks once more.
+ * Nothing pairs on its own. Every way in lands on a confirmation naming the
+ * fleet, the tailnet and the agent count, and only a link `readPairingLink`
+ * accepts gets that far. Replacing an existing pairing asks once more.
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
-import * as Device from "expo-device";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { useBridge } from "../src/bridge/BridgeProvider.tsx";
-import { baseUrlFor, normalisePairCode, parsePairLink } from "../src/client/http.ts";
-import {
-  deviceNameFor,
-  type PairErrorCopy,
-  pairErrorCopy,
-  pairProposal,
-} from "../src/client/pairing.ts";
+import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
+import { useFleetState } from "../src/fleet/hooks.ts";
+import { type PairedLink, type PairErrorCopy, readPairingLink } from "../src/fleet/pairing.ts";
 import { PairConfirm } from "../src/pair/PairConfirm.tsx";
-import { PairForm, type PairTarget } from "../src/pair/PairForm.tsx";
-import { MOBILE_PROTOCOL } from "../src/protocol/constants.ts";
+import { PairForm } from "../src/pair/PairForm.tsx";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
 import { Button, Kicker, Screen, Text } from "../src/ui/index.ts";
 
 export default function Pair() {
   const t = useTheme();
-  const { pair, status, credentials } = useBridge();
-  const params = useLocalSearchParams<{
-    host?: string;
-    port?: string;
-    code?: string;
-    fleet?: string;
-    name?: string;
-  }>();
+  const { pair, status, operatorTailnet, fixture } = useFleetContext();
+  const current = useFleetState().link;
+  const params = useLocalSearchParams<{ link?: string }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PairErrorCopy | null>(null);
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  const [pending, setPending] = useState<PairTarget | null>(null);
+  const [pending, setPending] = useState<PairedLink | null>(null);
   const scanned = useRef(false);
-  const linked = useRef(false);
-  const deviceName = deviceNameFor(Device.deviceName);
-
-  const deepLink: PairTarget | null =
-    params.host && params.code
-      ? {
-          host: String(params.host),
-          // Absent means the default; anything else is checked as given (`pairProposal`).
-          port: params.port ? Number(params.port) : MOBILE_PROTOCOL.DEFAULT_PORT,
-          code: normalisePairCode(String(params.code)),
-          fleet: params.fleet ? String(params.fleet) : null,
-          name: params.name ? String(params.name) : null,
-        }
-      : null;
+  const linked = useRef<string | null>(null);
 
   const submit = useCallback(
-    async (target: PairTarget) => {
+    async (link: PairedLink) => {
       if (busy) return;
       setBusy(true);
       setError(null);
       try {
-        await pair({
-          baseUrl: baseUrlFor(target.host, target.port),
-          code: normalisePairCode(target.code),
-          deviceName,
-          expectFleet: target.fleet ?? null,
-        });
+        await pair(link);
         haptic.success();
         setPending(null);
         router.replace("/(tabs)");
       } catch (e) {
         haptic.error();
-        setPending(null);
-        setError(pairErrorCopy(e, `${target.host}:${target.port}`));
+        setError({
+          title: "This phone could not keep the pairing.",
+          detail: e instanceof Error ? e.message : String(e),
+        });
       } finally {
         setBusy(false);
       }
     },
-    [busy, pair, deviceName],
+    [busy, pair],
   );
 
-  /**
-   * Every way in stops here: refuse a bad port, an off-tailnet host or a
-   * malformed fleet id, else ask before pairing with the cleaned target.
-   */
-  const propose = useCallback((target: PairTarget) => {
-    const proposal = pairProposal(target);
-    if (!proposal.ok) {
-      haptic.error();
-      setPending(null);
-      setError(proposal.error);
-      return;
-    }
-    setError(null);
-    setPending(proposal.target);
-  }, []);
+  /** Every way in stops here: refuse what is not a pairing link, else ask before keeping it. */
+  const propose = useCallback(
+    (text: string) => {
+      const proposal = readPairingLink(text, { operatorTailnet });
+      if (!proposal.ok) {
+        haptic.error();
+        setPending(null);
+        setError(proposal.error);
+        return;
+      }
+      setError(null);
+      setPending(proposal.link);
+    },
+    [operatorTailnet],
+  );
 
   const confirm = useCallback(() => {
     if (!pending) return;
-    if (status !== "paired" || !credentials) return void submit(pending);
+    if (status !== "paired" || !current) return void submit(pending);
     // Replacing a working pairing is the one step that loses something: ask again.
     haptic.warning();
-    const current = credentials.fleet.alias ?? credentials.fleet.fleet_id;
+    const same = current.payload.fleet_id === pending.payload.fleet_id;
     Alert.alert(
       "Replace the current pairing?",
-      `This phone is paired with ${current} at ${credentials.baseUrl}. Pairing with ${pending.host}:${pending.port} signs it out of that bridge.`,
+      same
+        ? `This phone is paired with ${current.label} already. Pairing again refreshes its agent list.`
+        : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet and its inbox.`,
       [
         { text: "Keep current", style: "cancel" },
         { text: "Replace", style: "destructive", onPress: () => void submit(pending) },
       ],
     );
-  }, [pending, status, credentials, submit]);
+  }, [pending, status, current, submit]);
 
   // A deep link fills the confirmation; it never pairs by itself.
+  const deepLink = typeof params.link === "string" ? params.link : null;
   useEffect(() => {
-    if (!deepLink || linked.current || status === "loading") return;
-    linked.current = true;
+    if (!deepLink || linked.current === deepLink || status === "loading") return;
+    linked.current = deepLink;
     propose(deepLink);
   }, [deepLink, status, propose]);
 
@@ -136,7 +111,7 @@ export default function Pair() {
     } else
       setError({
         title: "Camera access is off.",
-        detail: "Allow it in iOS Settings → Hermetic, or paste the link / enter the code below.",
+        detail: "Allow it in iOS Settings → Hermetic, or paste the link below.",
       });
   };
 
@@ -147,13 +122,22 @@ export default function Pair() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: t.space.xl, gap: t.space.lg }}
       >
-        <Kicker>Hermetic</Kicker>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <Kicker style={{ flex: 1 }}>Hermetic</Kicker>
+          {status === "paired" && router.canGoBack() ? (
+            <Button label="Cancel" variant="secondary" compact onPress={() => router.back()} />
+          ) : null}
+        </View>
         <Text variant="display">Pair this phone</Text>
         <Text tone="fg2">
-          On your laptop run <Text mono>hermetic mobile pair</Text>, or open Settings → Mobile in the
-          desktop app, then scan the code it shows.
+          On your laptop run <Text mono>hermetic mobile pair</Text>, or open Settings → Pair a phone in
+          the desktop app, then scan the code it shows.
         </Text>
-        {status === "paired" && credentials ? (
+        <Text variant="bodySmall" tone="fg3">
+          The phone talks to the fleet over Tailscale: install the Tailscale app and sign in to the
+          fleet's tailnet first.
+        </Text>
+        {status === "paired" && current ? (
           <View
             style={{
               borderLeftWidth: t.border.control,
@@ -162,7 +146,7 @@ export default function Pair() {
             }}
           >
             <Text variant="bodySmall" tone="warn">
-              {`Paired with ${credentials.fleet.alias ?? credentials.fleet.fleet_id}. Pairing again replaces it.`}
+              {`Paired with ${current.label}. Pairing again replaces it.`}
             </Text>
           </View>
         ) : null}
@@ -177,12 +161,13 @@ export default function Pair() {
               barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
               onBarcodeScanned={({ data }) => {
                 if (scanned.current) return;
-                const parsed = parsePairLink(data);
-                if (!parsed) return;
+                // Only our links stop the scanner; any other QR is ignored.
+                if (!readPairingLink(data, { operatorTailnet }).ok && !/^hermetic:\/\//i.test(data))
+                  return;
                 scanned.current = true;
                 haptic.medium();
                 setScanning(false);
-                propose(parsed);
+                propose(data);
               }}
             />
             <View
@@ -203,13 +188,21 @@ export default function Pair() {
           label={scanning ? "Cancel scan" : "Scan QR code"}
           variant={scanning ? "secondary" : "primary"}
           haptic={false}
-          busy={busy && scanned.current}
           onPress={() => void startScan()}
         />
+        {fixture ? (
+          <Button
+            label="Use fixture fleet"
+            variant="secondary"
+            onPress={() => {
+              haptic.select();
+              propose(fixture.link);
+            }}
+          />
+        ) : null}
         {pending ? (
           <PairConfirm
-            target={pending}
-            deviceName={deviceName}
+            link={pending}
             replacing={status === "paired"}
             busy={busy}
             onConfirm={confirm}
@@ -219,7 +212,7 @@ export default function Pair() {
             }}
           />
         ) : null}
-        <PairForm initial={deepLink} busy={busy} error={error} onSubmit={propose} />
+        <PairForm busy={busy} error={error} onSubmit={propose} />
       </KeyboardAwareScrollView>
     </Screen>
   );

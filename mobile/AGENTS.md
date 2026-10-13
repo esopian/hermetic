@@ -3,7 +3,7 @@
 Read `mobile/README.md` (layout, commands, the import rule) and the root `AGENTS.md` (conventions,
 commit and PR rules). The design is `docs/design.md` §9.4. This directory is its own toolchain; run
 everything from `mobile/` with bun. Run `bun install` at the repo root first: Metro resolves
-`../packages/core` and the root `node_modules/zod`.
+`../packages/core`, and core's `zod` from `packages/core/node_modules/zod` (where the core file sits).
 
 - Expo SDK 57. Expo changes every SDK: check `https://docs.expo.dev/versions/v57.0.0/` (or
   `https://docs.expo.dev/llms.txt`) before using an API from memory. Add native packages with

@@ -1,23 +1,17 @@
 /**
- * Conversation: the transcript (history read + the bridge's observation of
- * this conversation + this phone's own turns, all through the client
- * layer's `ConversationStore`), the bands that say what is wrong, the
- * composer, the session switcher and the subagent sheet.
+ * Conversation: the transcript (history read + this phone's observation of
+ * the conversation on the box's gateway + its own turns, all through the
+ * client layer's `ConversationStore`, `client.chat`), the bands that say what
+ * is wrong, the composer, the session switcher and the subagent sheet. What
+ * the store does not cover — a new thread, compact, an answer into another
+ * session, subagent control — goes to the gateway directly (`client.gateway`).
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useBridge } from "../../../src/bridge/BridgeProvider.tsx";
-import { useConversation, useRoster } from "../../../src/bridge/hooks.ts";
-import {
-  DroppedBand,
-  ObservationBand,
-  SocketBand,
-  ThreadBand,
-  TurnErrorBand,
-} from "../../../src/chat/Bands.tsx";
+import { DroppedBand, ObservationBand, ThreadBand, TurnErrorBand } from "../../../src/chat/Bands.tsx";
 import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx";
 import { Composer } from "../../../src/chat/Composer.tsx";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
@@ -27,14 +21,10 @@ import { subagentsIn } from "../../../src/client/chat-activity.ts";
 import { composerState, type ThreadState, threadState } from "../../../src/client/chat-logic.ts";
 import { turnErrorNeedsBand } from "../../../src/client/chat-recovery.ts";
 import { questionsOf } from "../../../src/client/chat-requests.ts";
+import type { RespondResult } from "../../../src/client/chat-types.ts";
 import type { ConversationTarget, RespondInput } from "../../../src/client/conversation-store.ts";
-import type {
-  AbortResult,
-  AgentView,
-  ChatConversation,
-  RespondResult,
-  SteerResult,
-} from "../../../src/protocol/types.ts";
+import { useFleetContext } from "../../../src/fleet/FleetProvider.tsx";
+import { useConversation, useFleetAgents, useFleetState, useRoster } from "../../../src/fleet/hooks.ts";
 import { useTheme } from "../../../src/theme/theme.tsx";
 import type { AvatarStatus } from "../../../src/ui/avatar/avatar-seed.ts";
 import { haptic } from "../../../src/ui/haptics.ts";
@@ -65,7 +55,9 @@ export default function Conversation() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ instance: string; bot: string; session?: string }>();
-  const { client, credentials, socketState, reconnect, servedFleet, rePair } = useBridge();
+  const { client } = useFleetContext();
+  const fleetState = useFleetState();
+  const agents = useFleetAgents();
   const { state: roster } = useRoster();
   const now = useNow();
   const target = useMemo<ConversationTarget>(
@@ -80,15 +72,15 @@ export default function Conversation() {
   const [draft, setDraft] = useState("");
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [subagentId, setSubagentId] = useState<string | null>(null);
-  const [agent, setAgent] = useState<AgentView | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const fleetId = credentials?.fleet.fleet_id ?? "";
+  const fleetId = fleetState.link?.payload.fleet_id ?? "";
+  const agent = agents.find((a) => a.name === target.instance) ?? null;
 
   // Open: read what is missing and watch. Leave: stop watching, park the queue.
   useEffect(() => {
     if (!client) return;
-    client.conversations.open(target);
-    return () => client.conversations.leave(target);
+    client.chat.open(target);
+    return () => client.chat.leave(target);
   }, [client, target]);
 
   // Focused: this is the watched thread (no banners for it), and its unread clears.
@@ -97,22 +89,10 @@ export default function Conversation() {
       if (!client) return;
       client.setWatched({ instance: target.instance, bot: target.bot, focused: true });
       client.roster.markSeen(target.instance, target.bot);
-      void client.inbox.ackThread(target.instance, target.bot);
+      client.inbox.markThreadRead(target.instance, target.bot);
       return () => client.setWatched(null);
     }, [client, target.instance, target.bot]),
   );
-
-  useEffect(() => {
-    if (!client) return;
-    let live = true;
-    client
-      .rpc<AgentView>("agents.get", { name: target.instance })
-      .then((a) => live && setAgent(a))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [client, target.instance]);
 
   const swarm = roster?.swarms.find((s) => s.instance === target.instance) ?? null;
   const botRow = swarm?.bots.find((b) => b.name === target.bot) ?? null;
@@ -138,7 +118,7 @@ export default function Conversation() {
     return next;
   }, [messages, live, sending, now]);
   const state = threadState({
-    status: agent?.display_status ?? null,
+    status: agent?.status ?? null,
     reachable: swarm?.reachable ?? true,
     reconnecting: view?.reconnecting ?? false,
     empty: view?.history === "ready" && messages.length === 0 && !live,
@@ -180,7 +160,7 @@ export default function Conversation() {
   const onRefresh = useCallback(() => {
     if (!client) return;
     setRefreshing(true);
-    void client.conversations.reload(target).finally(() => setRefreshing(false));
+    void client.chat.reload(target).finally(() => setRefreshing(false));
   }, [client, target]);
   const session = view?.sessions.find((s) => s.id === (view.resolvedSession ?? target.session)) ?? null;
   const onCanonical = target.session === null || session?.kind === "canonical";
@@ -196,16 +176,17 @@ export default function Conversation() {
 
   const respond = useCallback(
     async (input: RespondInput, messageSession: string | null): Promise<RespondResult> => {
-      if (!client) throw new Error("Not connected to a bridge.");
+      if (!client) throw new Error("This phone is not paired.");
       const s = messageSession || view?.resolvedSession || target.session;
-      if (!s) return client.conversations.respond(target, input);
-      const result = await client.rpc<RespondResult>("chat.respond", {
+      if (!s) return client.chat.respond(target, input);
+      // An answer in another session's message goes to that session.
+      const result = await client.gateway.respond({
         ...input,
         instance: target.instance,
         bot: target.bot,
         session: s,
       });
-      client.conversations.release(target, input.request_id);
+      client.chat.release(target, input.request_id);
       return result;
     },
     [client, target, view?.resolvedSession],
@@ -223,7 +204,7 @@ export default function Conversation() {
   const openNewSession = useCallback(
     async (prompt?: string) => {
       if (!client) return;
-      const opened = await client.rpc<ChatConversation>("chat.open", {
+      const opened = await client.gateway.open({
         instance: target.instance,
         bot: target.bot,
         new_session: true,
@@ -232,8 +213,8 @@ export default function Conversation() {
       setSessionsOpen(false);
       if (prompt) {
         const next = { instance: opened.instance, bot: opened.bot, session: opened.session };
-        client.conversations.open(next);
-        client.conversations.sendMessage(next, prompt);
+        client.chat.open(next);
+        client.chat.sendMessage(next, prompt);
       }
       router.replace(chatPath(opened.instance, opened.bot, opened.session) as never);
     },
@@ -255,15 +236,15 @@ export default function Conversation() {
         haptic.select();
         setDraft(text);
       },
-      retry: (prompt) => client?.conversations.sendMessage(target, prompt) ?? false,
+      retry: (prompt) => client?.chat.sendMessage(target, prompt) ?? false,
       compact: async () => {
         if (!client) return;
-        await client.rpc("chat.compact", {
+        await client.gateway.compact({
           instance: target.instance,
           bot: target.bot,
           ...(view?.resolvedSession ? { session: view.resolvedSession } : {}),
         });
-        await client.conversations.reload(target);
+        await client.chat.reload(target);
       },
       newSession: (prompt) => openNewSession(prompt),
     }),
@@ -296,10 +277,9 @@ export default function Conversation() {
     };
     return {
       steer: async (text) =>
-        (await client.rpc<SteerResult>("chat.steer", { ...where, text, subagent_id: subagentId }))
-          .status,
+        (await client.gateway.steerSubagent({ ...where, text, subagent_id: subagentId })).status,
       stop: async () =>
-        (await client.rpc<AbortResult>("chat.abort", { ...where, subagent_id: subagentId })).aborted,
+        (await client.gateway.abortSubagent({ ...where, subagent_id: subagentId })).aborted,
     };
   }, [client, subagentId, target, view?.resolvedSession]);
 
@@ -308,7 +288,7 @@ export default function Conversation() {
     (text: string) => {
       if (!client) return;
       setPinSignal((n) => n + 1);
-      if (!client.conversations.sendMessage(target, text)) client.conversations.enqueue(target, text);
+      if (!client.chat.sendMessage(target, text)) client.chat.enqueue(target, text);
     },
     [client, target],
   );
@@ -325,7 +305,7 @@ export default function Conversation() {
           ).catch(() => null);
         }
         setPinSignal((n) => n + 1);
-        const outcome = await client.conversations.sendNow(target, text, queuedId ?? null);
+        const outcome = await client.chat.sendNow(target, text, queuedId ?? null);
         if (outcome === "redirected" || outcome === "queued" || outcome === "sent") haptic.success();
         else if (outcome === "refused") {
           haptic.error();
@@ -378,7 +358,7 @@ export default function Conversation() {
     () => (
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Open browser"
+        accessibilityLabel="Open agent"
         onPress={() => router.push(`/agent/${encodeURIComponent(target.instance)}`)}
         style={{
           minWidth: t.touch.min,
@@ -409,13 +389,6 @@ export default function Conversation() {
         }}
       >
         <Stack.Screen options={{ headerTitle, headerRight, title: botTitle ?? target.bot }} />
-        <SocketBand
-          state={socketState}
-          onRetry={reconnect}
-          servedFleet={servedFleet}
-          pairedFleet={credentials?.fleet ?? null}
-          onRePair={() => void rePair()}
-        />
         <ThreadBand
           state={state}
           instance={target.instance}
@@ -429,8 +402,8 @@ export default function Conversation() {
             state={view.observe}
             error={view.observeError}
             onResume={() => {
-              client?.conversations.leave(target);
-              client?.conversations.open(target);
+              client?.chat.leave(target);
+              client?.chat.open(target);
             }}
           />
         ) : null}
@@ -471,7 +444,7 @@ export default function Conversation() {
           {view?.turnError && !missing && turnErrorNeedsBand(messages, view.live) ? (
             <TurnErrorBand error={view.turnError} />
           ) : null}
-          {view?.dropped && !sending && !missing ? <DroppedBand truncated={view.truncated} /> : null}
+          {view?.dropped && !sending && !missing ? <DroppedBand /> : null}
           <View
             style={{
               borderTopWidth: t.border.control,
@@ -493,14 +466,14 @@ export default function Conversation() {
               parked={view?.queueParked ?? false}
               questionOpen={!!openQuestion && questionsOf(openQuestion).length > 0}
               onSend={onSend}
-              onQueue={(text) => client?.conversations.enqueue(target, text)}
+              onQueue={(text) => client?.chat.enqueue(target, text)}
               onSendNow={onSendNow}
-              onStop={() => void client?.conversations.stop(target)}
-              onUnqueue={(id) => client?.conversations.unqueue(target, id)}
+              onStop={() => void client?.chat.stop(target)}
+              onUnqueue={(id) => client?.chat.unqueue(target, id)}
             />
             {!sending && !composer.enabled ? null : (
               <Kicker tone={sending ? "acc" : "fg3"} style={{ marginTop: t.space.xs, fontSize: 9 }}>
-                {`${sending ? (view?.aborting ? "stopping…" : "turn in flight") : "over the bridge"} · ${onCanonical ? "Bot Chat" : sessionLabel(session)}`}
+                {`${sending ? (view?.aborting ? "stopping…" : "turn in flight") : `on ${target.instance}`} · ${onCanonical ? "Bot Chat" : sessionLabel(session)}`}
               </Kicker>
             )}
           </View>

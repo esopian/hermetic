@@ -1,9 +1,10 @@
 /** Screen-facing hooks over the client layer's stores (`useSyncExternalStore`). */
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { ConversationTarget, ConversationView } from "../client/conversation-store.ts";
-import type { InboxState } from "../client/notifications-store.ts";
 import type { RosterLayout, RosterState } from "../client/roster-store.ts";
-import { useBridge } from "./BridgeProvider.tsx";
+import type { InboxState } from "../inbox/store.ts";
+import { useFleetContext } from "./FleetProvider.tsx";
+import type { FleetAgent, FleetState } from "./store.ts";
 
 const noop = () => () => {};
 
@@ -41,7 +42,7 @@ export function oncePerFrame(
 }
 
 export function useConversation(target: ConversationTarget | null): ConversationView | null {
-  const { client } = useBridge();
+  const { client } = useFleetContext();
   const key = target ? JSON.stringify([target.instance, target.bot, target.session]) : null;
   // Keyed on the target's identity, not its object, so a fresh literal each render is stable.
   const stable = useMemo(() => target, [key]);
@@ -50,7 +51,7 @@ export function useConversation(target: ConversationTarget | null): Conversation
     (fn: () => void) => {
       if (!client || !key) return noop();
       const wake = oncePerFrame(fn);
-      const off = client.conversations.subscribe((k) => {
+      const off = client.chat.subscribe((k) => {
         if (k === key || k === "*") wake.notify();
       });
       return () => {
@@ -60,15 +61,12 @@ export function useConversation(target: ConversationTarget | null): Conversation
     },
     [client, key],
   );
-  const get = useCallback(
-    () => (client && stable ? client.conversations.view(stable) : null),
-    [client, stable],
-  );
+  const get = useCallback(() => (client && stable ? client.chat.view(stable) : null), [client, stable]);
   return useSyncExternalStore(subscribe, get, get);
 }
 
 export function useRoster(): { state: RosterState | null; layout: RosterLayout | null } {
-  const { client } = useBridge();
+  const { client } = useFleetContext();
   const subscribe = useCallback(
     (fn: () => void) => {
       if (!client) return noop();
@@ -99,11 +97,32 @@ export function useRoster(): { state: RosterState | null; layout: RosterLayout |
 }
 
 export function useInbox(): InboxState | null {
-  const { client } = useBridge();
+  const { client } = useFleetContext();
   const subscribe = useCallback(
     (fn: () => void) => (client ? client.inbox.subscribe(fn) : noop()),
     [client],
   );
   const get = useCallback(() => client?.inbox.getState() ?? null, [client]);
   return useSyncExternalStore(subscribe, get, get);
+}
+
+/** The paired fleet's state: link, view, listening, refresh status. */
+export function useFleetState(): FleetState {
+  const { fleet } = useFleetContext();
+  const subscribe = useCallback((fn: () => void) => fleet.subscribe(fn), [fleet]);
+  const get = useCallback(() => fleet.getState(), [fleet]);
+  return useSyncExternalStore(subscribe, get, get);
+}
+
+/** Every agent of the paired fleet (the link's, merged with `/fleet`), name-sorted. */
+export function useFleetAgents(): FleetAgent[] {
+  const { fleet } = useFleetContext();
+  const state = useFleetState();
+  return useMemo(() => fleet.agents(), [fleet, state]);
+}
+
+/** The fleet's display label: its alias, else its id. */
+export function useFleetLabel(): string {
+  const state = useFleetState();
+  return state.link?.label ?? "";
 }

@@ -7,7 +7,7 @@ import { useState } from "react";
 import { Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { railTime } from "../client/chat-logic.ts";
-import type { Session } from "../protocol/types.ts";
+import type { Session } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import { Badge } from "../ui/Badge.tsx";
 import { Button } from "../ui/Button.tsx";

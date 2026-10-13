@@ -6,7 +6,7 @@ import { Block } from "../../src/chat/blocks/Block.tsx";
 import { FailureCard } from "../../src/chat/blocks/Failure.tsx";
 import { TurnRow } from "../../src/chat/TurnRow.tsx";
 import { turnRows } from "../../src/client/chat-turns.ts";
-import type { ChatBlock } from "../../src/protocol/types.ts";
+import type { ChatBlock } from "@hermetic/core/chat-client";
 import { approval, msg, question, subagent, tool } from "../helpers/fixtures.ts";
 import { NOW, renderUi, scope } from "../helpers/render.tsx";
 

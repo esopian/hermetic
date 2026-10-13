@@ -1,21 +1,25 @@
 /**
- * Settings: the bridge and this device, the connection, listened instances,
- * notification delivery (push, previews, local alerts, quiet hours),
- * appearance, haptics, signing out, and about.
+ * Settings: the paired fleet and its tailnet, the Tailscale status, listened
+ * instances, notification delivery (push from the boxes, previews, alerts on
+ * this phone, quiet hours), the inbox, appearance, haptics, re-pairing and
+ * signing out, and about. Nothing bridge-shaped: the phone talks to the boxes.
  */
 import Constants from "expo-constants";
 import { router } from "expo-router";
 import { type ReactNode, useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, TextInput, View } from "react-native";
-import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
-import { useRoster } from "../../src/bridge/hooks.ts";
-import { easProjectId } from "../../src/bridge/notifications.ts";
+import { railTime } from "../../src/client/chat-logic.ts";
 import { minutesOf } from "../../src/client/inbox-logic.ts";
+import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
+import { useFleetState, useInbox } from "../../src/fleet/hooks.ts";
+import type { PushStatus } from "../../src/fleet/push.ts";
+import type { TailscaleStatus } from "../../src/gateway/tailscale.ts";
+import { INBOX_LIMIT } from "../../src/inbox/store.ts";
 import { usePrefs } from "../../src/prefs/prefs.tsx";
-import { MOBILE_PROTOCOL } from "../../src/protocol/constants.ts";
 import { type SchemePreference, useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
 import { Button, Kicker, Screen, StatusSquare, Text, ToggleSwitch } from "../../src/ui/index.ts";
+import { useNow } from "../../src/ui/useNow.ts";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const t = useTheme();
@@ -139,43 +143,60 @@ function TimeField({
   );
 }
 
-const SOCKET_WORDS: Record<string, string> = {
-  idle: "not connected",
-  connecting: "connecting…",
-  authenticating: "authenticating…",
-  open: "connected",
-  reconnecting: "reconnecting…",
-  unavailable: "laptop bridge unavailable — retrying",
-  unauthorized: "refused — this phone was revoked or needs to pair again",
-  mismatch: "protocol mismatch — update the app or the bridge",
-  wrong_fleet: "the bridge serves another fleet now — re-pair",
+/** The Tailscale probe's answer, worded as the heuristic it is. */
+const TAILSCALE_WORDS: Record<TailscaleStatus, string> = {
+  ok: "Tailscale looks connected",
+  off: "Tailscale is off or not signed in",
+  unreachable: "On the tailnet, but no box answers",
+  unknown: "Not checked: no listened agent to ask",
 };
+
+/** What Settings says about push. */
+export function pushLine(push: PushStatus, wanted: boolean): string {
+  if (push.state === "on") {
+    const failed = push.boxes.filter((b) => !b.ok);
+    const n = push.boxes.length;
+    if (n === 0) return "Push is on; no listened agent to register with.";
+    if (failed.length === 0) return `Registered with ${n} agent${n === 1 ? "" : "s"}.`;
+    return `Registered with ${n - failed.length} of ${n}; not with ${failed.map((b) => b.instance).join(", ")}.`;
+  }
+  if (push.state === "unavailable") {
+    if (push.reason === "simulator") return "Push needs a real device.";
+    if (push.reason === "denied") return "Notifications are off for Hermetic in iOS Settings.";
+    if (push.reason === "no-project-id")
+      return "This build has no EAS project id: alerts arrive only while the app holds its connections.";
+    return `Push failed: ${push.message ?? "unknown error"}`;
+  }
+  return wanted ? "Registering…" : "Off: alerts arrive only while the app holds its connections.";
+}
+
+const FIXTURE_TAILSCALE = ["ok", "off", "unreachable"] as const;
 
 export default function Settings() {
   const t = useTheme();
-  const bridge = useBridge();
-  const { credentials, socketState, hello, previews, push } = bridge;
-  const { state } = useRoster();
+  const ctx = useFleetContext();
+  const { tailscale, probing, previews, push, pushWanted, fixture } = ctx;
+  const fleet = useFleetState();
+  const inbox = useInbox();
   const { prefs, update } = usePrefs();
+  const now = useNow();
   const [pushBusy, setPushBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const live = socketState === "open";
-  const fatal =
-    socketState === "unauthorized" || socketState === "mismatch" || socketState === "wrong_fleet";
-  const listening = state?.listening ?? [];
+  const link = fleet.link;
+  const listening = ctx.fleet.listened();
+  const status = tailscale?.status ?? null;
 
   const signOut = () => {
     haptic.warning();
     Alert.alert(
-      "Sign out of this bridge?",
-      "This phone forgets its token. Nothing on the laptop changes; run “hermetic mobile revoke” there if you want the device gone.",
+      "Sign out of this fleet?",
+      "This phone forgets the pairing and its inbox, and asks the agents it listens to to stop pushing to it. To cut a phone off for good, remove it from the tailnet.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Sign out",
           style: "destructive",
           onPress: () => {
-            void bridge.signOut().then(() => router.replace("/pair"));
+            void ctx.signOut().then(() => router.replace("/pair"));
           },
         },
       ],
@@ -188,52 +209,119 @@ export default function Settings() {
         <View
           style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.md, paddingBottom: t.space.sm }}
         >
-          <Kicker>{credentials?.fleet.alias ?? credentials?.fleet.fleet_id ?? ""}</Kicker>
+          <Kicker>{link?.label ?? ""}</Kicker>
           <Text variant="display">Settings</Text>
         </View>
 
-        <Section title="Bridge">
-          <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-            <StatusSquare
-              size={10}
-              color={live ? t.c.ok : fatal ? t.c.bad : t.c.warn}
-              pulse={!live && !fatal}
-            />
-            <Text weight={700} style={{ flex: 1 }}>
-              {SOCKET_WORDS[socketState] ?? socketState}
-            </Text>
-            {socketState === "wrong_fleet" ? (
-              <Button
-                label="Re-pair"
-                variant="secondary"
-                compact
-                onPress={() => void bridge.rePair()}
-              />
-            ) : null}
-            <Button label="Reconnect" variant="secondary" compact onPress={bridge.reconnect} />
-          </View>
-          <Row label="Host" value={credentials?.baseUrl} />
+        <Section title="Fleet">
           <Row
             label="Fleet"
             value={
-              credentials ? `${credentials.fleet.alias ?? "—"} · ${credentials.fleet.fleet_id}` : null
-            }
-          />
-          <Row
-            label="Region"
-            value={credentials ? `${credentials.fleet.region} · ${credentials.fleet.account_id}` : null}
-          />
-          <Row label="Device" value={hello?.device.name ?? credentials?.device_id} mono={!hello} />
-          <Row
-            label="Served by"
-            value={
-              hello
-                ? `${hello.host.app} ${hello.host.version}${hello.host.fixture ? " · fixture" : ""}`
+              link
+                ? link.payload.alias && link.payload.alias !== link.payload.fleet_id
+                  ? `${link.label} · ${link.payload.fleet_id}`
+                  : link.payload.fleet_id
                 : null
             }
           />
-          <Row label="Protocol" value={String(hello?.protocol ?? MOBILE_PROTOCOL.PROTOCOL_VERSION)} />
-          <Row label="Tailnet" value={credentials?.tailnet ?? null} />
+          <Row label="Tailnet" value={link?.payload.tailnet} />
+          <Row
+            label="Region"
+            value={link ? `${link.payload.region} · ${link.payload.account_id}` : null}
+          />
+          <Row
+            label="Agents"
+            value={`${ctx.fleet.agents().length}${fleet.stale ? " · list from pairing" : ""}`}
+          />
+          <Row
+            label="Fleet list"
+            value={fleet.refreshed_at ? `read ${railTime(fleet.refreshed_at, now)}` : "not read yet"}
+          />
+          {fleet.error ? (
+            <Text variant="caption" tone="warn">
+              {fleet.error.message}
+            </Text>
+          ) : null}
+        </Section>
+
+        <Section title="Tailscale">
+          <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+            <StatusSquare
+              size={10}
+              color={
+                status === "ok"
+                  ? t.c.ok
+                  : status === "off"
+                    ? t.c.bad
+                    : status === "unreachable"
+                      ? t.c.warn
+                      : t.c.fg3
+              }
+              pulse={probing}
+            />
+            <Text weight={700} style={{ flex: 1 }}>
+              {status ? TAILSCALE_WORDS[status] : "Checking…"}
+            </Text>
+            <Button
+              label="Check again"
+              variant="secondary"
+              compact
+              busy={probing}
+              onPress={() => void ctx.probeTailscale()}
+            />
+          </View>
+          {tailscale && tailscale.failing.length > 0 && status === "ok" ? (
+            <Text variant="caption" tone="warn">
+              {`Did not answer: ${tailscale.failing.join(", ")}`}
+            </Text>
+          ) : null}
+          <Text variant="caption" tone="fg3">
+            A guess from asking up to three listened agents: iOS does not let an app ask the Tailscale
+            app directly.
+          </Text>
+          {fixture ? (
+            <View style={{ gap: t.space.xs }}>
+              <Text variant="caption" tone="acc">
+                Fixture build: pick what the probe sees.
+              </Text>
+              <View accessibilityRole="radiogroup" style={{ flexDirection: "row" }}>
+                {FIXTURE_TAILSCALE.map((s, i) => {
+                  const on = fixture.tailscale.get() === s;
+                  return (
+                    <Pressable
+                      key={s}
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Fixture Tailscale ${s}`}
+                      accessibilityState={{ checked: on }}
+                      onPress={() => {
+                        haptic.select();
+                        fixture.setTailscale(s);
+                      }}
+                      style={{
+                        flex: 1,
+                        height: t.touch.min,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderWidth: t.border.control,
+                        borderColor: t.c.fg,
+                        marginLeft: i === 0 ? 0 : -t.border.control,
+                        backgroundColor: on ? t.c.fg : "transparent",
+                      }}
+                    >
+                      <Text
+                        variant="caption"
+                        weight={800}
+                        uppercase
+                        style={{ color: on ? t.c.bg : t.c.fg, letterSpacing: 1 }}
+                      >
+                        {s}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
         </Section>
 
         <Section title="Listening">
@@ -249,21 +337,32 @@ export default function Settings() {
 
         <Section title="Notifications">
           <Toggle
-            label="Notifications"
-            hint="Turn-finished, needs-you and inbox alerts, here and as push."
-            value={prefs.notifications}
+            label="Push from the agents"
+            hint="Each listened agent sends turn-finished, failed, needs-you and new-message pushes to this phone."
+            value={pushWanted}
+            disabled={pushBusy}
             onChange={(v) => {
-              update({ notifications: v });
-              void bridge.setPushEnabled(v).then((ok) => {
-                if (!ok) setNote("The bridge did not take the change; it applies on this phone only.");
-              });
+              setPushBusy(true);
+              void ctx
+                .setPushEnabled(v)
+                .then((r) => (r.state === "unavailable" ? haptic.warning() : haptic.success()))
+                .finally(() => setPushBusy(false));
             }}
+          />
+          <Text variant="caption" tone={push.state === "unavailable" ? "warn" : "fg3"}>
+            {pushLine(push, pushWanted)}
+          </Text>
+          <Toggle
+            label="Alerts on this phone"
+            hint="Banners and notifications for what this phone sees on its own connections."
+            value={prefs.notifications}
+            onChange={(v) => update({ notifications: v })}
           />
           <Toggle
             label="Show message previews"
-            hint="Off: alerts say “Reply ready” or “Needs you” and nothing more."
+            hint="Off: this phone's own alerts say “Reply ready” or “Needs you” and nothing more."
             value={previews}
-            onChange={(v) => void bridge.setPreviews(v)}
+            onChange={(v) => void ctx.setPreviews(v)}
           />
           <Toggle
             label="Quiet hours"
@@ -285,39 +384,16 @@ export default function Settings() {
               />
             </View>
           ) : null}
-          <Button
-            label={push?.ok ? "Push registered" : "Enable push"}
-            variant="secondary"
-            busy={pushBusy}
-            disabled={!!push?.ok}
-            onPress={() => {
-              setPushBusy(true);
-              void bridge
-                .enablePush()
-                .then((r) => (r?.ok ? haptic.success() : haptic.warning()))
-                .finally(() => setPushBusy(false));
-            }}
+        </Section>
+
+        <Section title="Inbox">
+          <Row
+            label="Kept"
+            value={`${inbox?.entries.length ?? 0} of ${INBOX_LIMIT} · ${inbox?.unread ?? 0} unread`}
           />
           <Text variant="caption" tone="fg3">
-            {push === null
-              ? easProjectId()
-                ? "Push is not registered yet."
-                : "This build has no EAS project id: alerts arrive only while the app holds its connection."
-              : push.ok
-                ? "Push registered with the bridge."
-                : push.reason === "simulator"
-                  ? "Push needs a real device."
-                  : push.reason === "denied"
-                    ? "Notifications are off for Hermetic in iOS Settings."
-                    : push.reason === "no-project-id"
-                      ? "This build has no EAS project id."
-                      : `Push failed: ${push.message ?? "unknown error"}`}
+            The inbox lives on this phone only: pushes it received and events its own connections saw.
           </Text>
-          {note ? (
-            <Text variant="caption" tone="warn">
-              {note}
-            </Text>
-          ) : null}
         </Section>
 
         <Section title="Appearance">
@@ -360,22 +436,28 @@ export default function Settings() {
         </Section>
 
         <Section title="This phone">
-          <Button label="Sign out of this bridge" variant="destructive" onPress={signOut} />
+          <Button
+            label="Re-pair (scan again)"
+            variant="secondary"
+            onPress={() => router.push("/pair")}
+          />
+          <Button label="Sign out" variant="destructive" onPress={signOut} />
           <Text variant="caption" tone="fg3">
-            Signing out forgets the token on this phone only.
+            Signing out forgets the pairing on this phone. Nothing on the laptop or the boxes changes
+            beyond this phone's push registration.
           </Text>
         </Section>
 
         <Section title="About">
           <Row
             label="App"
-            value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"}`}
+            value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"}${fixture ? " · fixture" : ""}`}
             mono={false}
           />
-          <Row label="Protocol" value={String(MOBILE_PROTOCOL.PROTOCOL_VERSION)} />
           <Text variant="caption" tone="fg3">
-            A remote head for a Hermetic fleet. It talks only to the bridge on your laptop; the agent
-            browser is loaded straight from the box over the tailnet.
+            A remote head for a Hermetic fleet. It talks to the agents directly over your tailnet: chat
+            with each box's Hermes gateway, the fleet list and push registration with hermeticd, and the
+            agent browser from the box.
           </Text>
         </Section>
       </ScrollView>

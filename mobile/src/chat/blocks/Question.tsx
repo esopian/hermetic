@@ -29,7 +29,7 @@ import {
   skippedAnswer,
   typeOther,
 } from "../../client/chat-requests.ts";
-import type { QuestionBlock } from "../../protocol/types.ts";
+import type { QuestionBlock } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";

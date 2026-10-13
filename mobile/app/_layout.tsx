@@ -3,7 +3,7 @@
  * Importing `background.ts` defines the background-refresh task at load time,
  * which TaskManager requires.
  */
-import "../src/bridge/background.ts";
+import "../src/fleet/background.ts";
 import { useFonts } from "expo-font";
 import { router, SplashScreen, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -12,15 +12,20 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { BridgeProvider, useBridge } from "../src/bridge/BridgeProvider.tsx";
-import { routeFor } from "../src/bridge/notifications.ts";
-import { secureStorage } from "../src/bridge/storage.ts";
+import { routeFor } from "../src/fleet/alerts.ts";
+import { appFleetDeps } from "../src/fleet/deps.ts";
+import { FleetProvider, useFleetContext } from "../src/fleet/FleetProvider.tsx";
+import { secureKv } from "../src/fleet/persist.ts";
 import { PrefsProvider } from "../src/prefs/prefs.tsx";
 import { FONT_ASSETS } from "../src/theme/fonts.ts";
 import { ThemeProvider, useTheme } from "../src/theme/theme.tsx";
 import { Banner } from "../src/ui/Banner.tsx";
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
+
+/** Built once: real, or the fixture kit's when the build asked for it (`deps.ts`). */
+const FLEET_DEPS = appFleetDeps();
+const openHref = (href: string) => router.push(href as never);
 
 export default function RootLayout() {
   const [loaded, error] = useFonts(FONT_ASSETS);
@@ -32,11 +37,11 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <KeyboardProvider>
-          <ThemeProvider storage={secureStorage}>
-            <PrefsProvider storage={secureStorage}>
-              <BridgeProvider>
+          <ThemeProvider storage={secureKv}>
+            <PrefsProvider storage={secureKv}>
+              <FleetProvider deps={FLEET_DEPS} onOpen={openHref}>
                 <Shell />
-              </BridgeProvider>
+              </FleetProvider>
             </PrefsProvider>
           </ThemeProvider>
         </KeyboardProvider>
@@ -47,7 +52,7 @@ export default function RootLayout() {
 
 function Shell() {
   const t = useTheme();
-  const { banner, dismissBanner } = useBridge();
+  const { banner, dismissBanner } = useFleetContext();
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(t.c.bg).catch(() => {});
   }, [t.c.bg]);
@@ -69,7 +74,7 @@ function Shell() {
         {/* The title is what VoiceOver reads on the next screen's back button. */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false, title: "Hermetic" }} />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
-        <Stack.Screen name="agent/[name]" options={{ title: "Browser" }} />
+        <Stack.Screen name="agent/[name]" options={{ title: "Agent" }} />
         <Stack.Screen
           name="listening"
           options={{

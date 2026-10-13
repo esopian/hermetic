@@ -6,7 +6,7 @@
 import { memo, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { activityOf, dispatchedOnly, glyphOf, timeText } from "../../client/chat-activity.ts";
-import type { SubagentBlock } from "../../protocol/types.ts";
+import type { SubagentBlock } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import type { Palette } from "../../theme/tokens.ts";
 import { haptic } from "../../ui/haptics.ts";

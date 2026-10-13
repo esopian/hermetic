@@ -1,8 +1,8 @@
 /**
  * The phone's own preferences — haptics, notification delivery, quiet hours —
- * persisted in the same store as the theme. Nothing here leaves the phone
- * except `notifications.enabled`, which Settings also sends to the bridge
- * (`push/settings`) so pushes stop at the source.
+ * persisted in the same store as the theme. Nothing here leaves the phone:
+ * they decide whether this phone interrupts for an event its own sockets saw.
+ * Push from the boxes is switched on and off separately (Settings → Push).
  */
 import {
   createContext,
@@ -13,7 +13,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { PrefStorage } from "../bridge/storage.ts";
+import type { KvStorage as PrefStorage } from "../fleet/store.ts";
 import { inQuietHours, type QuietHours } from "../client/inbox-logic.ts";
 import { setHapticsEnabled } from "../ui/haptics.ts";
 

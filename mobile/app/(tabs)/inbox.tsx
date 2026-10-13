@@ -1,77 +1,69 @@
 /**
- * Inbox: `notifications.list` rows, newest first, runs about one conversation
- * folded into one card. Live `notification` frames land on top. Tap opens the
- * conversation (or the agent's browser); swipe marks read; "Mark all read"
- * clears the lot. The app icon badge follows the unread count.
+ * Inbox: the phone's own last 200 events (`src/inbox/store.ts`) — pushes
+ * from the boxes and what this phone's sockets saw — newest first, runs about
+ * one conversation folded into one card. Tap opens the conversation; swipe
+ * marks read; "Mark all read" clears the lot. The app icon badge follows the
+ * unread count.
  */
 import { FlashList } from "@shopify/flash-list";
 import { router } from "expo-router";
 import { useCallback, useMemo } from "react";
-import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
-import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
-import { useInbox } from "../../src/bridge/hooks.ts";
+import { Pressable, StyleSheet, View } from "react-native";
 import {
-  groupNotifications,
+  groupEntries,
   type NotificationGroup,
   rowDestination,
   unackedIds,
 } from "../../src/client/inbox-logic.ts";
+import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
+import { useInbox } from "../../src/fleet/hooks.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
-import type { Notification } from "../../src/protocol/types.ts";
+import type { InboxEntry } from "../../src/inbox/store.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
-import { Kicker, Screen, SkeletonRow, Text } from "../../src/ui/index.ts";
+import { Kicker, Screen, Text } from "../../src/ui/index.ts";
 import { useNow } from "../../src/ui/useNow.ts";
-import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 
 export default function Inbox() {
   const t = useTheme();
-  const { client } = useBridge();
+  const { client } = useFleetContext();
   const inbox = useInbox();
   const now = useNow();
-  const read = useCallback(() => {
-    haptic.light();
-    return client?.inbox.refresh() ?? Promise.resolve();
-  }, [client]);
-  // A floor on the spinner, as on Bots (`usePullRefresh`).
-  const { refreshing, onRefresh } = usePullRefresh(read);
-  const rows = inbox?.rows ?? [];
-  const groups = useMemo(() => groupNotifications(rows), [rows]);
-  const unread = inbox?.counts.unread ?? 0;
-  const needs = inbox?.counts.needs_action ?? 0;
+  const entries = inbox?.entries ?? [];
+  const groups = useMemo(() => groupEntries(entries), [entries]);
+  const unread = inbox?.unread ?? 0;
+  const needs = inbox?.needsAction ?? 0;
 
   const onOpen = useCallback(
-    (group: NotificationGroup<Notification>) => {
+    (group: NotificationGroup<InboxEntry>) => {
       haptic.select();
       const ids = unackedIds(group.rows);
-      if (ids.length) void client?.inbox.ack(ids);
+      if (ids.length) client?.inbox.markRead(ids);
       const where = rowDestination(group.latest);
-      if (where?.kind === "chat")
-        router.push(`/chat/${encodeURIComponent(where.instance)}/${encodeURIComponent(where.bot)}`);
-      else if (where?.kind === "agent") router.push(`/agent/${encodeURIComponent(where.name)}`);
+      const session = where.session ? `?session=${encodeURIComponent(where.session)}` : "";
+      router.push(
+        `/chat/${encodeURIComponent(where.instance)}/${encodeURIComponent(where.bot)}${session}` as never,
+      );
     },
     [client],
   );
 
   const onAck = useCallback(
-    (group: NotificationGroup<Notification>) => {
+    (group: NotificationGroup<InboxEntry>) => {
       const ids = unackedIds(group.rows);
       if (ids.length) {
         haptic.success();
-        void client?.inbox.ack(ids);
+        client?.inbox.markRead(ids);
       }
     },
     [client],
   );
 
   const markAll = () => {
-    const ids = unackedIds(rows);
-    if (!ids.length) return;
+    if (unread === 0) return;
     haptic.success();
-    void client?.inbox.ack(ids);
+    client?.inbox.markAllRead();
   };
-
-  const loading = !!inbox?.loading && rows.length === 0;
 
   return (
     <Screen>
@@ -118,33 +110,14 @@ export default function Inbox() {
         keyExtractor={(g) => g.key}
         extraData={now}
         renderItem={({ item }) => <InboxRow group={item} now={now} onOpen={onOpen} onAck={onAck} />}
-        refreshControl={
-          <RefreshControl tintColor={t.c.fg3} refreshing={refreshing} onRefresh={onRefresh} />
-        }
         ListEmptyComponent={
-          loading ? (
-            <View>
-              {[0, 1, 2, 3].map((i) => (
-                <SkeletonRow key={i} />
-              ))}
-            </View>
-          ) : inbox?.error ? (
-            <View style={{ padding: t.space.xl, gap: t.space.sm }}>
-              <Text tone="bad" weight={700}>
-                Could not read the inbox.
-              </Text>
-              <Text variant="bodySmall" tone="fg2">
-                {inbox.error}
-              </Text>
-            </View>
-          ) : (
-            <View style={{ padding: t.space.xl, gap: t.space.sm, alignItems: "center", marginTop: 60 }}>
-              <Text variant="title">Nothing waiting.</Text>
-              <Text variant="bodySmall" tone="fg3" style={{ textAlign: "center" }}>
-                Replies, approvals and questions from listened instances land here.
-              </Text>
-            </View>
-          )
+          <View style={{ padding: t.space.xl, gap: t.space.sm, alignItems: "center", marginTop: 60 }}>
+            <Text variant="title">Nothing waiting.</Text>
+            <Text variant="bodySmall" tone="fg3" style={{ textAlign: "center" }}>
+              Replies, approvals and questions from listened instances land here. The inbox lives on
+              this phone: the last 200 events.
+            </Text>
+          </View>
         }
       />
     </Screen>

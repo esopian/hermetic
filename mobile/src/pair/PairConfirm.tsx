@@ -1,35 +1,22 @@
 /**
- * The step between "a pairing link arrived" and "this phone holds a token":
- * which bridge, which fleet, and the name this phone will give itself. Nothing
- * pairs without a tap here, whether the values came from a QR code, a deep
- * link, a pasted link or the form.
+ * The step between "a pairing link arrived" and "this phone keeps it": which
+ * fleet, which tailnet, how many agents. Nothing pairs without a tap here,
+ * whether the link came from a QR code, a deep link or a paste.
  */
 import { View } from "react-native";
-import { pairConfirmLabels } from "../client/pairing.ts";
+import { type PairedLink, pairConfirmLines } from "../fleet/pairing.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
-import type { PairTarget } from "./PairForm.tsx";
 
-function Line({
-  label,
-  value,
-  mono,
-  unknown = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  /** A placeholder for a value not known yet: muted, not bold. */
-  unknown?: boolean;
-}) {
+function Line({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <View style={{ gap: 2 }}>
       <Text variant="caption" tone="fg3" uppercase style={{ letterSpacing: 1 }}>
         {label}
       </Text>
-      <Text mono={mono} weight={unknown ? 400 : 700} tone={unknown ? "fg2" : undefined} selectable>
+      <Text mono={mono} weight={700} selectable>
         {value}
       </Text>
     </View>
@@ -37,15 +24,13 @@ function Line({
 }
 
 export function PairConfirm({
-  target,
-  deviceName,
+  link,
   replacing,
   busy,
   onConfirm,
   onCancel,
 }: {
-  target: PairTarget;
-  deviceName: string;
+  link: PairedLink;
   /** This phone is already paired: confirming asks once more before replacing it. */
   replacing: boolean;
   busy: boolean;
@@ -53,8 +38,8 @@ export function PairConfirm({
   onCancel(): void;
 }) {
   const t = useTheme();
-  // Cleaned here as well as in `pairProposal`: a link's name is never shown raw.
-  const { bridge, fleet } = pairConfirmLabels(target);
+  // Cleaned in `pairConfirmLines`: a link's labels are never shown raw.
+  const lines = pairConfirmLines(link);
   return (
     <View
       accessibilityRole="summary"
@@ -67,12 +52,12 @@ export function PairConfirm({
       }}
     >
       <Kicker>Confirm pairing</Kicker>
-      <Line label="Bridge" value={bridge} mono />
-      <Line label="Fleet" value={fleet ?? "Shown once paired"} mono={!!fleet} unknown={!fleet} />
-      <Line label="This phone will be called" value={deviceName} />
+      <Line label="Fleet" value={lines.fleet} mono />
+      <Line label="Tailnet" value={lines.tailnet} mono />
+      <Line label="Agents" value={lines.agents} />
       <Text variant="bodySmall" tone="fg2">
-        Only pair with a bridge you started. It will be able to send this phone notifications, and this
-        phone will be able to chat with every agent in that fleet.
+        There is no secret in this code: it names the fleet and its agents. This phone reaches them only
+        through Tailscale, signed in to that tailnet.
       </Text>
       {replacing ? (
         <Text variant="bodySmall" tone="warn">

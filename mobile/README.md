@@ -18,8 +18,10 @@ fleet's tailnet, so it needs the **Tailscale iOS app signed into the same tailne
 `mobile/` is **not** a root workspace (same as `site/`): it has its own `package.json`, `bun.lock`,
 TypeScript config, Biome config and Jest. Root `bun run check` does not touch it (CI has its own
 `mobile` job); from the repo root, `bun run mobile:check` (`mobile:test`, `mobile:ios`) runs the
-matching script here. Metro does resolve `../packages/core` and the root `node_modules/zod`, so run
-`bun install` at the repo root before `mobile/`.
+matching script here. Metro resolves `../packages/core`, and core's own imports (`zod` among them)
+resolve from where the core file sits: `zod` comes from `packages/core/node_modules/zod`, which the
+root install links, and nothing needs to exist at `../node_modules/zod`. So run `bun install` at the
+repo root before `mobile/`.
 
 ## Run it
 
@@ -32,12 +34,24 @@ bun install
 EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios     # expo run:ios — builds a dev client, opens the simulator
 ```
 
+In fixture mode the Pair screen has a "Use fixture fleet" button (the `main` fleet, `fxtr0001`, with
+the desktop fixture's eleven agents), chat runs on core's canned `fixtureChatClient`, and Settings →
+Tailscale can switch what the probe sees between `ok`, `off` and `unreachable`. The flag is inlined
+when Metro transforms the code, so after switching it, start Metro with a clean cache
+(`bunx expo start --clear`, or `expo export --clear`). A release build does not carry the fixture at
+all: `src/fleet/deps.ts` requires it only behind the inlined flag, which Metro folds away.
+
 Real use: install the Tailscale app on the phone and sign in to the fleet's tailnet. On the laptop
 run `hermetic mobile pair` (or open Settings → Pair a phone in the desktop app) and scan the QR from
 the app's pairing screen, or paste the `hermetic://fleet?v=2&…` link. The link names the fleet and a
 snapshot of its agents and carries no secret; the phone shows a confirm screen, then stores it in the
 iOS keychain (`expo-secure-store`, this-device-only) as `hermetic.fleet.v2`. Pairing again replaces
 it, and Settings → Sign out forgets it. To cut a phone off, remove it from the tailnet.
+
+A push registration on a box belongs to the tailnet login that made it: another member cannot update
+or delete it (hermeticd answers 403). It lapses 30 days after the phone last renewed it, and the
+phone renews on each foreground, so a phone removed from the tailnet stops receiving pushes within
+30 days even though its registration was never deleted.
 
 The app uses native modules (camera, notifications, secure store, keyboard controller, webview), so
 it needs a development build (`bun run ios`), not Expo Go.
@@ -61,10 +75,11 @@ EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios     # or EAS_PROJECT_
 
 `app.config.ts` puts it in `extra.eas.projectId`. Without one the app still pairs and chats, and
 alerts locally while it holds its sockets (and for ~25 s after backgrounding); Settings says push is
-unavailable. With one, Settings → "Enable push" registers the Expo push token with each box you
-listen to, and the box pushes turn-finished, turn-error, needs-you and new-message events. A push and
-a socket-delivered event for the same thing share a `dedupe` key, so you are alerted once. Tapping a
-needs-you push opens the conversation; there is no inline approve or deny.
+unavailable. With one, Settings → Notifications → "Push from the agents" registers the Expo push
+token with each box you listen to (and unregisters it from a box you stop listening to), and the box
+pushes turn-finished, turn-error, needs-you and new-message events. A push and a socket-delivered
+event for the same thing share a `dedupe` key, so you are alerted once. Tapping a needs-you push
+opens the conversation; there is no inline approve or deny.
 
 ## Tailscale status
 
@@ -98,23 +113,31 @@ file under the repo, and these are Jest suites.
 
 ```
 app/                 expo-router screens: pair, (tabs)/{index (Bots), inbox, settings},
-                     chat/[instance]/[bot], agent/[name] (noVNC), listening (instance picker sheet)
+                     chat/[instance]/[bot], agent/[name] (detail + noVNC), listening (instance
+                     picker sheet); +native-intent.tsx turns a hermetic://fleet link into /pair
+src/client/          the client layer, no React: createHermeticClient (client.ts), the
+                     conversation and roster stores, turn reducer, chat and inbox logic, errors,
+                     the noVNC URL (vnc.ts)
 src/gateway/         transport over @hermetic/core/chat-client: client, socket opener, polyfills
-                     (AbortSignal.timeout/any, structuredClone), tailscale status; no React
-src/fleet/           FleetProvider.tsx (paired fleet in SecureStore, /fleet refresh, push
-                     registration, AppState), hooks, notifications, background refresh
-src/fixture/         fixture mode: fixtureChatClient, canned fleet view, canned Tailscale
-                     status, memory push registry (the only importer of chat-client-fixture)
-src/inbox/store.ts   the phone-local inbox (last 200 entries, JSON in the document directory)
+                     (AbortSignal.timeout/any, structuredClone), hermeticd calls (/fleet,
+                     /push/devices), tailscale status; no React, React Native or Expo
+src/fleet/           FleetProvider.tsx (client, AppState, alerts, push, Tailscale) and hooks.ts;
+                     store.ts (pairing, /fleet view, listening), pairing.ts, persist.ts
+                     (SecureStore, document files), push.ts (registration), alerts.ts and
+                     notifications.ts (expo-notifications), background.ts, deps.ts (real or fixture)
+src/fixture/         fixture mode: fixtureChatClient, canned fleet view and pairing link, canned
+                     Tailscale status, memory push registry (the only importer of chat-client-fixture)
+src/inbox/           store.ts, the phone-local inbox (last 200 entries, JSON in the document
+                     directory); InboxRow.tsx
 src/chat/            the conversation: block renderers (blocks/), markdown → native, turn rows,
                      transcript list, composer, bands, session and subagent sheets, ChatScope
-src/bots/            Bots list rows and body;  src/pair/  pairing form and confirm screen
+src/bots/            Bots list rows and body;  src/pair/  paste form and confirm card
 src/prefs/           phone-only preferences (haptics, local alerts, quiet hours)
 src/theme/           desktop tokens (both schemes), fonts, scale, useTheme()
 src/ui/              primitives: Text, Kicker, Button, Avatar (seeded blob), StatusSquare, Skeleton, Badge,
-                     haptics (one switch for every tap), useNow
+                     Banner (in-app alert, Tailscale band), haptics (one switch for every tap), useNow
 assets/fonts/        Archivo + JetBrains Mono static TTFs (OFL)
-test/                jest suites
+test/                jest suites (client, gateway, fleet, fixture, inbox, ui) and helpers/
 ```
 
 ## Rules

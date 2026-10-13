@@ -1,13 +1,13 @@
 /** Bots · Inbox · Settings. */
 import { Redirect, Tabs } from "expo-router";
 import { type ColorValue, Text } from "react-native";
-import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
-import { useInbox } from "../../src/bridge/hooks.ts";
+import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
+import { useInbox } from "../../src/fleet/hooks.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
 
 export default function TabsLayout() {
   const t = useTheme();
-  const { status } = useBridge();
+  const { status } = useFleetContext();
   const inbox = useInbox();
   if (status === "unpaired") return <Redirect href="/pair" />;
   const glyph =
@@ -15,8 +15,8 @@ export default function TabsLayout() {
     ({ color }: { color: ColorValue }) => (
       <Text style={{ color, fontFamily: t.mono(700), fontSize: 16 }}>{g}</Text>
     );
-  const needs = inbox?.counts.needs_action ?? 0;
-  const unread = inbox?.counts.unread ?? 0;
+  const needs = inbox?.needsAction ?? 0;
+  const unread = inbox?.unread ?? 0;
   return (
     <Tabs
       screenOptions={{

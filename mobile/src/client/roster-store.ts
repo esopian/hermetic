@@ -376,7 +376,7 @@ export class RosterStore {
     }
   }
 
-  /** The bridge's `listening` frame. */
+  /** The fleet store's listening choice changed. */
   setListening(instances: readonly string[]): void {
     this.set({ listening: [...instances] });
   }

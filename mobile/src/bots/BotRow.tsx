@@ -7,7 +7,7 @@
 import { memo } from "react";
 import { Pressable, View } from "react-native";
 import { previewLine, rowTime } from "../client/roster-rows.ts";
-import type { Bot } from "../protocol/types.ts";
+import type { Bot } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
 import { Badge } from "../ui/Badge.tsx";

@@ -1,52 +1,53 @@
 import { fireEvent, screen } from "@testing-library/react-native";
-import { SocketBand, ThreadBand } from "../../src/chat/Bands.tsx";
-import { ThemeProvider } from "../../src/theme/theme.tsx";
+import { ThreadBand } from "../../src/chat/Bands.tsx";
+import {
+  openTailscale,
+  TAILSCALE_APP_STORE_URL,
+  TAILSCALE_URL,
+  TailscaleBanner,
+} from "../../src/ui/Banner.tsx";
 import { renderUi } from "../helpers/render.tsx";
 
-const main = { fleet_id: "fxtr0001", alias: "main" };
-
-describe("SocketBand — wrong fleet", () => {
-  test("names the fleet the bridge serves now and offers a re-pair, not a retry", async () => {
-    const onRePair = jest.fn();
+describe("TailscaleBanner", () => {
+  test("off: says so and opens Tailscale, not a retry", async () => {
     const onRetry = jest.fn();
+    const onOpenTailscale = jest.fn();
     await renderUi(
-      <SocketBand
-        state="wrong_fleet"
-        servedFleet={{ fleet_id: "sg7k2m4p", alias: "staging" }}
-        pairedFleet={main}
-        onRetry={onRetry}
-        onRePair={onRePair}
-      />,
+      <TailscaleBanner status="off" onRetry={onRetry} onOpenTailscale={onOpenTailscale} />,
     );
-    expect(screen.getByText("This bridge now serves staging; re-pair to use it.")).toBeTruthy();
-    expect(screen.getByText(/paired with main/)).toBeTruthy();
-    expect(screen.queryByLabelText("Retry")).toBeNull();
-    await fireEvent.press(screen.getByLabelText("Re-pair"));
-    expect(onRePair).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Tailscale is off or not signed in")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Open Tailscale"));
+    expect(onOpenTailscale).toHaveBeenCalledTimes(1);
     expect(onRetry).not.toHaveBeenCalled();
   });
 
-  test("an unaliased fleet reads as its id; a bare refusal says another fleet", async () => {
-    const { rerender } = await renderUi(
-      <SocketBand
-        state="wrong_fleet"
-        servedFleet={{ fleet_id: "sg7k2m4p", alias: null }}
-        pairedFleet={main}
-      />,
-    );
-    expect(screen.getByText("This bridge now serves sg7k2m4p; re-pair to use it.")).toBeTruthy();
-    await rerender(
-      <ThemeProvider>
-        <SocketBand state="wrong_fleet" servedFleet={null} pairedFleet={main} />
-      </ThemeProvider>,
-    );
-    expect(screen.getByText(/serves another fleet; re-pair/)).toBeTruthy();
+  test("unreachable: on the tailnet, no box answers, with a retry", async () => {
+    const onRetry = jest.fn();
+    await renderUi(<TailscaleBanner status="unreachable" onRetry={onRetry} />);
+    expect(screen.getByText("On the tailnet, but no box answers")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  test("an unauthorized phone still reads as revoked", async () => {
-    await renderUi(<SocketBand state="unauthorized" />);
-    expect(screen.getByText("The bridge no longer knows this phone.")).toBeTruthy();
-    expect(screen.getByText(/never re-paired after a laptop upgrade/)).toBeTruthy();
+  test("ok, unknown and not-yet-probed draw nothing", async () => {
+    for (const status of ["ok", "unknown", null] as const) {
+      await renderUi(<TailscaleBanner status={status} onRetry={jest.fn()} />);
+      expect(screen.queryByTestId("band-tailscale")).toBeNull();
+    }
+  });
+
+  test("Open Tailscale uses the app when iOS says it can, else the App Store", async () => {
+    const opened: string[] = [];
+    const linking = (can: boolean) => ({
+      canOpenURL: async () => can,
+      openURL: async (url: string) => {
+        opened.push(url);
+        return true;
+      },
+    });
+    await openTailscale(linking(true));
+    await openTailscale(linking(false));
+    expect(opened).toEqual([TAILSCALE_URL, TAILSCALE_APP_STORE_URL]);
   });
 });
 

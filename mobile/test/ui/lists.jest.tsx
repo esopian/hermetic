@@ -2,20 +2,19 @@ import { fireEvent, screen } from "@testing-library/react-native";
 import { BotRow } from "../../src/bots/BotRow.tsx";
 import { FilterChips } from "../../src/bots/BotsList.tsx";
 import {
-  groupNotifications,
-  groupRow,
   groupCondition,
+  groupEntries,
+  groupRow,
   groupUnread,
   inQuietHours,
   rowDestination,
   unackedIds,
 } from "../../src/client/inbox-logic.ts";
-import { isUnreadRow } from "../../src/client/notifications-store.ts";
 import { botsEmpty, previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
 import { rosterLayout } from "../../src/client/roster-store.ts";
 import { InboxRow } from "../../src/inbox/InboxRow.tsx";
 import { palettes } from "../../src/theme/tokens.ts";
-import { bot, notification, swarm } from "../helpers/fixtures.ts";
+import { bot, inboxEntry, swarm } from "../helpers/fixtures.ts";
 import { NOW, renderUi } from "../helpers/render.tsx";
 
 describe("bots list rows", () => {
@@ -185,162 +184,109 @@ describe("bots list, nothing to show", () => {
 });
 
 describe("inbox", () => {
-  const rows = [
-    notification({ id: "n4", at: "2026-10-13T11:04:00.000Z", ref: "atlas/scribe" }),
-    notification({ id: "n3", at: "2026-10-13T11:03:00.000Z", ref: "atlas/scribe", read_at: "x" }),
-    notification({
+  const entries = [
+    inboxEntry({ id: "n4", at: "2026-10-13T11:04:00.000Z" }),
+    inboxEntry({ id: "n3", at: "2026-10-13T11:03:00.000Z", read_at: "x" }),
+    inboxEntry({
       id: "n2",
       at: "2026-10-13T11:02:00.000Z",
-      kind: "operation.failed",
-      source: "operation",
-      class: "bad",
-      ref: null,
-      agent: "atlas",
-      title: "stop failed",
+      kind: "turn.error",
+      bot: "pilot",
+      title: "pilot · atlas",
+      body: "RATE_LIMITED",
     }),
-    notification({ id: "n1", at: "2026-10-13T11:01:00.000Z", ref: "atlas/scribe" }),
+    inboxEntry({ id: "n1", at: "2026-10-13T11:01:00.000Z" }),
   ];
 
-  test("consecutive rows about one conversation fold; another row breaks the run", () => {
-    const groups = groupNotifications(rows);
+  test("consecutive entries about one conversation and kind fold; another breaks the run", () => {
+    const groups = groupEntries(entries);
     expect(groups.map((g) => g.count)).toEqual([2, 1, 1]);
     expect(groups[0]?.latest.id).toBe("n4");
-    expect(groups[0]?.key).toBe("chat.message:atlas/scribe@n3");
+    expect(groups[0]?.key).toBe("turn.done:atlas/scribe@n3");
   });
 
   test("a folded card is unread if any member is", () => {
-    const [first] = groupNotifications([
-      notification({ id: "a", read_at: "x", at: "2026-10-13T11:05:00.000Z" }),
-      notification({ id: "b", at: "2026-10-13T11:04:00.000Z" }),
+    const [first] = groupEntries([
+      inboxEntry({ id: "a", read_at: "x", at: "2026-10-13T11:05:00.000Z" }),
+      inboxEntry({ id: "b", at: "2026-10-13T11:04:00.000Z" }),
     ]);
     if (!first) throw new Error("no group");
     expect(groupRow(first).read_at).toBeNull();
+    expect(groupUnread(first)).toBe(true);
+    expect(unackedIds(first.rows)).toEqual(["b"]);
   });
 
-  test("unread means unacknowledged and still holding: the header's rule, per row and per card", () => {
-    expect(isUnreadRow(notification({}))).toBe(true);
-    expect(isUnreadRow(notification({ read_at: "x" }))).toBe(false);
-    // Resolved but never read: not in core's `unread` count, so no marker.
-    expect(isUnreadRow(notification({ resolved_at: "x" }))).toBe(false);
-    const list = [
-      notification({ id: "u", class: "warn", kind: "agent.health", source: "agent", ref: null }),
-      notification({
-        id: "r",
-        class: "warn",
-        kind: "fleet.advisory",
-        source: "fleet",
-        ref: null,
-        resolved_at: "x",
-      }),
-      notification({
-        id: "k",
-        class: "ok",
-        kind: "operation.done",
-        source: "operation",
-        ref: null,
-        read_at: "x",
-      }),
-    ];
-    const groups = groupNotifications(list);
-    // The header counts exactly the rows that carry a marker.
-    expect(groups.filter(groupUnread).length).toBe(list.filter(isUnreadRow).length);
-    expect(groups.map(groupUnread)).toEqual([true, false, false]);
-    // "Mark read" still acknowledges the resolved row.
-    expect(unackedIds(list)).toEqual(["u", "r"]);
-  });
-
-  test("InboxRow: a resolved, unread row has no unread marker and says it cleared", async () => {
-    const group = groupNotifications([
-      notification({
-        id: "v1",
-        class: "warn",
-        kind: "fleet.advisory",
-        source: "fleet",
-        ref: null,
-        title: "vol-1 has no agent",
-        resolved_at: "2026-10-13T11:00:00.000Z",
-      }),
-    ])[0];
-    if (!group) throw new Error("no group");
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
-    expect(screen.queryByLabelText("unread")).toBeNull();
-    expect(screen.getByText("cleared")).toBeTruthy();
-    expect(screen.getByLabelText("vol-1 has no agent")).toBeTruthy();
-  });
-
-  test("InboxRow: a folded card is cleared only when every member is, and needs you while any member does", async () => {
-    // Latest member resolved, an older one still needing the operator: the
-    // header counts that need, so the card must not say "cleared".
-    const group = groupNotifications([
-      notification({
-        id: "n2",
-        class: "info",
-        title: "Reply ready",
+  test("InboxRow: unread dot, needs-you tone, the folded count; tap opens", async () => {
+    const onOpen = jest.fn();
+    const group = groupEntries([
+      inboxEntry({
+        id: "x2",
+        kind: "needs_action",
+        body: "Approval needed: rm -rf build",
         at: "2026-10-13T11:59:00.000Z",
-        resolved_at: "2026-10-13T11:59:30.000Z",
       }),
-      notification({
-        id: "n1",
-        class: "needs_action",
-        title: "Approval needed",
-        at: "2026-10-13T11:58:00.000Z",
-      }),
+      inboxEntry({ id: "x1", kind: "needs_action", at: "2026-10-13T11:58:00.000Z" }),
     ])[0];
     if (!group) throw new Error("no group");
-    expect(group.count).toBe(2);
-    expect(groupCondition(group)).toEqual({ resolved: false, needs: true, needsUnread: true });
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
-    expect(screen.queryByText("cleared")).toBeNull();
+    await renderUi(<InboxRow group={group} now={NOW} onOpen={onOpen} onAck={jest.fn()} />);
     expect(screen.getByText("NEEDS YOU")).toBeTruthy();
+    expect(screen.getByText("2 events")).toBeTruthy();
+    expect(screen.getByText("Approval needed: rm -rf build")).toBeTruthy();
     expect(screen.getByLabelText("unread")).toBeTruthy();
-
-    const settled = groupNotifications([
-      notification({ id: "m2", class: "info", resolved_at: "x", at: "2026-10-13T11:59:00.000Z" }),
-      notification({
-        id: "m1",
-        class: "needs_action",
-        resolved_at: "x",
-        at: "2026-10-13T11:58:00.000Z",
-      }),
-    ])[0];
-    if (!settled) throw new Error("no group");
-    expect(groupCondition(settled)).toEqual({ resolved: true, needs: false, needsUnread: false });
+    await fireEvent.press(screen.getByLabelText("Needs you: scribe · atlas"));
+    expect(onOpen).toHaveBeenCalledWith(group);
   });
 
-  test("InboxRow: a read but open request still says NEEDS YOU, but the unread marker is not gold", async () => {
-    // The header's need count is unread + unresolved needs_action (core
-    // `counts`): a read approval is not in it, so the marker for the card's
-    // other unread member must not draw the need colour.
-    const group = groupNotifications([
-      notification({ id: "r2", class: "info", title: "Reply ready", at: "2026-10-13T11:59:00.000Z" }),
-      notification({
+  test("InboxRow: a read needs-you card still says NEEDS YOU, but the unread marker is not gold", async () => {
+    const group = groupEntries([
+      inboxEntry({ id: "r2", kind: "needs_action", at: "2026-10-13T11:59:00.000Z" }),
+      inboxEntry({
         id: "r1",
-        class: "needs_action",
-        title: "Approval needed",
+        kind: "needs_action",
         at: "2026-10-13T11:58:00.000Z",
         read_at: "2026-10-13T11:58:30.000Z",
       }),
     ])[0];
     if (!group) throw new Error("no group");
-    expect(groupCondition(group)).toEqual({ resolved: false, needs: true, needsUnread: false });
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
-    expect(screen.getByText("NEEDS YOU")).toBeTruthy();
+    expect(groupCondition(group)).toEqual({ needs: true, needsUnread: true });
+    const read = groupEntries([
+      inboxEntry({ id: "d2", at: "2026-10-13T11:59:00.000Z" }),
+      inboxEntry({ id: "d1", kind: "needs_action", at: "2026-10-13T11:58:00.000Z", read_at: "x" }),
+    ]);
+    // Different kinds never fold: the done row and the read needs-you row are two cards.
+    expect(read).toHaveLength(2);
+    expect(groupCondition(read[1] as NonNullable<(typeof read)[1]>)).toEqual({
+      needs: true,
+      needsUnread: false,
+    });
+    await renderUi(
+      <InboxRow
+        group={read[0] as NonNullable<(typeof read)[0]>}
+        now={NOW}
+        onOpen={jest.fn()}
+        onAck={jest.fn()}
+      />,
+    );
     const marker = screen.getByLabelText("unread").props.style.backgroundColor;
     expect([palettes.dark.acc, palettes.light.acc]).toContain(marker);
     expect([palettes.dark.warn, palettes.light.warn]).not.toContain(marker);
   });
 
-  test("tap goes to the conversation, or the agent", () => {
-    expect(rowDestination(notification({ ref: "atlas/scribe" }))).toEqual({
+  test("InboxRow: a failed turn says FAILED and names the agent", async () => {
+    const group = groupEntries([inboxEntry({ kind: "turn.error", body: "RATE_LIMITED" })])[0];
+    if (!group) throw new Error("no group");
+    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
+    expect(screen.getByText("FAILED")).toBeTruthy();
+    expect(screen.getByText("atlas")).toBeTruthy();
+  });
+
+  test("tap goes to the conversation and its session", () => {
+    expect(rowDestination(inboxEntry({ session: "s-7" }))).toEqual({
       kind: "chat",
       instance: "atlas",
       bot: "scribe",
+      session: "s-7",
     });
-    expect(
-      rowDestination(
-        notification({ kind: "agent.health", source: "agent", ref: null, agent: "atlas" }),
-      ),
-    ).toEqual({ kind: "agent", name: "atlas" });
   });
 
   test("quiet hours cross midnight and equal ends are off", () => {
@@ -351,30 +297,5 @@ describe("inbox", () => {
     expect(inQuietHours(at(7), q)).toBe(false);
     expect(inQuietHours(at(23), { ...q, end: "22:00" })).toBe(false);
     expect(inQuietHours(at(23), { ...q, enabled: false })).toBe(false);
-  });
-
-  test("InboxRow: unread dot, needs-you tone, the folded count; tap opens", async () => {
-    const onOpen = jest.fn();
-    const group = groupNotifications([
-      notification({
-        id: "x2",
-        class: "needs_action",
-        title: "Approval needed",
-        at: "2026-10-13T11:59:00.000Z",
-      }),
-      notification({
-        id: "x1",
-        class: "needs_action",
-        title: "Approval needed",
-        at: "2026-10-13T11:58:00.000Z",
-      }),
-    ])[0];
-    if (!group) throw new Error("no group");
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={onOpen} onAck={jest.fn()} />);
-    expect(screen.getByText("NEEDS YOU")).toBeTruthy();
-    expect(screen.getByText("2 messages")).toBeTruthy();
-    expect(screen.getByLabelText("unread")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Needs you: Approval needed"));
-    expect(onOpen).toHaveBeenCalledWith(group);
   });
 });

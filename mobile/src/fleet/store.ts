@@ -20,6 +20,7 @@
 import type { MobileFleetAgent, MobileFleetView } from "@hermetic/core/schema";
 import { MobileFleetView as MobileFleetViewSchema } from "@hermetic/core/schema";
 import { reasonOf } from "../client/errors.ts";
+import type { RosterPrefs, RosterPrefsStorage } from "../client/roster-store.ts";
 import { agentHost, type FleetHosts } from "../gateway/client.ts";
 import { type FetchLike, firstFleetView } from "../gateway/hermeticd.ts";
 import { type PairedLink, readPairingLink } from "./pairing.ts";
@@ -66,6 +67,34 @@ export function memoryFile(initial: string | null = null): TextFile & { text: ()
     remove: async () => {
       text = null;
     },
+  };
+}
+
+/** `kv` under `prefix`: fixture mode keeps its pairing beside, never over, a real one. */
+export function prefixedKv(kv: KvStorage, prefix: string): KvStorage {
+  return {
+    get: (key) => kv.get(`${prefix}${key}`),
+    set: (key, value) => kv.set(`${prefix}${key}`, value),
+    remove: (key) => kv.remove(`${prefix}${key}`),
+  };
+}
+
+/** Where the Bots list keeps its pins and folds, per fleet. */
+export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
+  return {
+    async load(fleetId) {
+      const raw = await kv.get(`hermetic.rail.${fleetId}`).catch(() => null);
+      if (!raw) return null;
+      try {
+        const v = JSON.parse(raw) as Partial<RosterPrefs>;
+        const strings = (x: unknown) =>
+          Array.isArray(x) ? x.filter((s): s is string => typeof s === "string") : [];
+        return { pinned: strings(v.pinned), folded: strings(v.folded) };
+      } catch {
+        return null;
+      }
+    },
+    save: (fleetId, prefs) => kv.set(`hermetic.rail.${fleetId}`, JSON.stringify(prefs)),
   };
 }
 

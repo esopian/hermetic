@@ -17,7 +17,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { fmtMs, formatPayload, toolVerdict } from "../../client/chat-logic.ts";
 import { resultText, subjectOf, tableOf } from "../../client/chat-turns.ts";
-import type { ToolBlock as ToolBlockType } from "../../protocol/types.ts";
+import type { ToolBlock as ToolBlockType } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Kicker } from "../../ui/Kicker.tsx";
 import { Text } from "../../ui/Text.tsx";

@@ -152,3 +152,17 @@ export function pairConfirmLines(paired: PairedLink): {
     agents: `${n} agent${n === 1 ? "" : "s"}`,
   };
 }
+
+/**
+ * Where an incoming system URL goes. A `hermetic://fleet?…` link (a scanned QR
+ * opened by the Camera app, or a tapped link) becomes `/pair?link=<the link>`,
+ * so the Pair screen reads it whole and shows the confirmation; it never pairs
+ * by itself. Anything else is left as it came.
+ */
+export function pairingRedirect(path: string): string {
+  const q = path.indexOf("?");
+  const head = q === -1 ? path : path.slice(0, q);
+  if (!/^(hermetic:\/\/|\/)?fleet\/?$/i.test(head)) return path;
+  if (q === -1) return "/pair";
+  return `/pair?link=${encodeURIComponent(`${MOBILE_LINK_PREFIX}${path.slice(q)}`)}`;
+}

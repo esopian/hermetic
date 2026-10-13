@@ -7,7 +7,8 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
  * project id, which is read from the environment so each operator can supply
  * their own (`EXPO_PUBLIC_PROJECT_ID`, or `EAS_PROJECT_ID` as EAS itself sets
  * it). Without one the app runs and pairs normally, and push registration is
- * skipped (see README.md).
+ * skipped (see README.md). `EXPO_PUBLIC_HERMETIC_FIXTURE=1` builds fixture
+ * mode (`src/fixture/`); it is read in the app, not here.
  */
 const projectId = process.env.EXPO_PUBLIC_PROJECT_ID || process.env.EAS_PROJECT_ID || undefined;
 
@@ -28,22 +29,28 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       UIBackgroundModes: ["remote-notification", "fetch", "processing"],
       NSCameraUsageDescription:
         "Hermetic uses the camera to scan the pairing QR code shown on your laptop.",
-      // The bridge is plain HTTP/WS on the tailnet (WireGuard encrypts the
-      // link; see mobile/AGENTS.md, "Transport security"). ATS never covers IP
-      // literals, so 127.0.0.1, 100.64.0.0/10 and fd7a:115c:a1e0::/48 need
-      // nothing. `NSAllowsLocalNetworking` covers `localhost` (an unqualified
-      // name). A MagicDNS name (`laptop.tailXXXX.ts.net`) is a public FQDN to
-      // ATS, so `ts.net` and its subdomains get cleartext HTTP — the narrowest
-      // exception that covers every tailnet, since the tailnet's own label
-      // differs per operator. Everything else keeps full ATS; noVNC is HTTPS.
+      // The phone talks to the boxes over the tailnet (WireGuard encrypts and
+      // authenticates every link; see mobile/AGENTS.md, "Transport security").
+      // The Hermes gateway, noVNC and the Tailscale probe are HTTPS through
+      // Tailscale Serve and need no exception. hermeticd (`GET /fleet`,
+      // `/push/devices`) is plain HTTP on port 7434 inside the tunnel, and ATS
+      // blocks cleartext to a public FQDN, which is what a MagicDNS name
+      // (`box.tailXXXX.ts.net`) is to iOS. So `ts.net` and its subdomains keep
+      // cleartext HTTP: the narrowest exception that covers every operator's
+      // tailnet, since the tailnet's own label differs per operator. IP
+      // literals (100.64.0.0/10, fd7a:115c:a1e0::/48) are outside ATS anyway.
+      // Everything else keeps full ATS.
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: false,
-        NSAllowsLocalNetworking: true,
         NSExceptionDomains: {
           "ts.net": { NSIncludesSubdomains: true, NSExceptionAllowsInsecureHTTPLoads: true },
         },
       },
-      NSLocalNetworkUsageDescription: "Hermetic connects to the bridge running on your laptop.",
+      // `canOpenURL("tailscale://")` answers only for schemes listed here
+      // (the Bots screen's "Open Tailscale").
+      LSApplicationQueriesSchemes: ["tailscale"],
+      NSLocalNetworkUsageDescription:
+        "Hermetic connects to your fleet's agents over your Tailscale network.",
     },
   },
   android: {

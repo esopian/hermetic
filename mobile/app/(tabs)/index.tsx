@@ -1,19 +1,21 @@
 /**
  * Bots (home): the listened instances' bots, grouped and ordered by the
  * desktop rail's rules — pinned block on top, one collapsible bucket per
- * instance, needs-you first. Pull to refresh (`chat.swarms`); polled every
- * 60 s while in front. "Listening" opens the instance picker.
+ * instance, needs-you first. Pull to refresh (each box's swarm, the fleet
+ * view and the Tailscale probe); polled every 60 s while in front.
+ * "Listening" opens the instance picker. A band says when Tailscale looks off
+ * or no listened box answers (`TailscaleBanner`).
  */
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo } from "react";
 import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from "react-native";
+import type { Bot } from "@hermetic/core/chat-client";
 import { BotsList } from "../../src/bots/BotsList.tsx";
-import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
-import { useRoster } from "../../src/bridge/hooks.ts";
-import { SocketBand } from "../../src/chat/Bands.tsx";
-import { BANDED_SOCKET_STATES, rosterRows } from "../../src/client/roster-rows.ts";
-import type { Bot } from "../../src/protocol/types.ts";
+import { rosterRows } from "../../src/client/roster-rows.ts";
+import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
+import { useFleetState, useRoster } from "../../src/fleet/hooks.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
+import { TailscaleBanner } from "../../src/ui/Banner.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
 import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 import { Kicker, Screen, StatusSquare, Text } from "../../src/ui/index.ts";
@@ -21,17 +23,10 @@ import { useNow } from "../../src/ui/useNow.ts";
 
 const POLL_MS = 60_000;
 
-/** What the header says while the socket is not open; anything unlisted is "connecting". */
-const KICKER_STATE: Record<string, string> = {
-  unavailable: " · bridge unavailable",
-  unauthorized: " · refused",
-  mismatch: " · version mismatch",
-  wrong_fleet: " · bridge serves another fleet",
-};
-
 export default function Bots() {
   const t = useTheme();
-  const { client, credentials, socketState, reconnect, servedFleet, rePair } = useBridge();
+  const { client, tailscale, probing, probeTailscale, refresh } = useFleetContext();
+  const fleet = useFleetState();
   const { state, layout } = useRoster();
   const now = useNow();
 
@@ -93,12 +88,16 @@ export default function Bots() {
   const read = useCallback(() => {
     if (!client) return Promise.resolve();
     haptic.light();
-    return Promise.all([client.roster.refresh(), client.inbox.refresh()]);
-  }, [client]);
+    return refresh();
+  }, [client, refresh]);
   const { refreshing, onRefresh } = usePullRefresh(client ? read : null);
 
-  const live = socketState === "open";
-  const banded = BANDED_SOCKET_STATES.has(socketState);
+  const status = tailscale?.status ?? null;
+  const banded = status === "off" || status === "unreachable";
+  const live = !banded && !fleet.stale;
+  const kicker = `${fleet.link?.label ?? ""}${
+    banded ? " · tailnet unreachable" : fleet.stale ? " · fleet list from pairing" : ""
+  }`;
   const loading = !state?.readAt && (state?.loading ?? true) && !state?.error;
 
   return (
@@ -117,10 +116,8 @@ export default function Bots() {
       >
         <View style={{ flex: 1, gap: 4 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-            <StatusSquare size={8} color={live ? t.c.ok : t.c.warn} pulse={!live} />
-            <Kicker numberOfLines={1}>
-              {`${credentials?.fleet.alias ?? credentials?.fleet.fleet_id ?? ""}${live ? "" : (KICKER_STATE[socketState] ?? " · connecting")}`}
-            </Kicker>
+            <StatusSquare size={8} color={live ? t.c.ok : t.c.warn} pulse={probing} />
+            <Kicker numberOfLines={1}>{kicker}</Kicker>
           </View>
           <Text variant="display">Bots</Text>
         </View>
@@ -147,16 +144,14 @@ export default function Bots() {
           </Text>
         </Pressable>
       </View>
-      {/* Only the states that last: "connecting" flickers by on every resume. */}
-      {banded ? (
-        <SocketBand
-          state={socketState}
-          onRetry={reconnect}
-          servedFleet={servedFleet}
-          pairedFleet={credentials?.fleet ?? null}
-          onRePair={() => void rePair()}
-        />
-      ) : null}
+      <TailscaleBanner
+        status={status}
+        busy={probing}
+        onRetry={() => {
+          haptic.light();
+          void probeTailscale().then(() => client?.roster.refresh());
+        }}
+      />
       <BotsList
         rows={rows}
         loading={loading}
@@ -166,7 +161,7 @@ export default function Bots() {
         filter={state?.filter ?? "all"}
         needs={layout?.needsYou ?? 0}
         listening={state?.listening.length ?? 0}
-        fleetId={credentials?.fleet.fleet_id ?? ""}
+        fleetId={fleet.link?.payload.fleet_id ?? ""}
         now={now}
         refreshing={refreshing}
         onRefresh={onRefresh}

@@ -370,9 +370,9 @@ export function turnErrorHeadline(code: string): string {
       return "The turn could not be stopped.";
     case "FLEET_MISMATCH":
     case "NO_TARGET":
-      return "Not sent: this phone is showing a fleet the bridge is no longer serving.";
+      return "Not sent: that agent is not part of the fleet this phone is paired with.";
     case "WRONG_FLEET":
-      return "Not sent: the bridge now serves another fleet. Re-pair to use it.";
+      return "Not sent: this phone is paired with another fleet. Re-pair to use it.";
     default:
       return "The message was not sent.";
   }

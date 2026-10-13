@@ -1,16 +1,16 @@
 /**
- * Agent browser: the box's noVNC desktop in a WebView, loaded straight from
- * the box over the tailnet (`vnc.ts`) — the one thing the phone does not go
- * through the bridge for, so the phone must be on the tailnet (Tailscale app
- * connected). View-only by default; Fit / 1:1 switches noVNC's scaling;
- * pinch-zoom is the WebView's own.
+ * Agent: what the fleet says about one box (status, Hermes version, host,
+ * health, from `GET /fleet` merged with the pairing link), and its browser —
+ * the box's noVNC desktop in a WebView, loaded straight from the box over the
+ * tailnet (`vnc.ts`, the phone's checked mirror of core's
+ * `agentDesktopClientUrl`), so Tailscale must be connected. View-only by
+ * default; Fit / 1:1 switches noVNC's scaling; pinch-zoom is the WebView's own.
  */
 import { Stack, useLocalSearchParams } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { useBridge } from "../../src/bridge/BridgeProvider.tsx";
 import {
   noVncOrigin,
   noVncRefusalText,
@@ -19,7 +19,9 @@ import {
   vncNavigationAllowed,
   vncScaleScript as scaleScript,
 } from "../../src/client/vnc.ts";
-import type { AgentView } from "../../src/protocol/types.ts";
+import { useFleetContext } from "../../src/fleet/FleetProvider.tsx";
+import { useFleetAgents, useFleetState } from "../../src/fleet/hooks.ts";
+import type { FleetAgent } from "../../src/fleet/store.ts";
 import { useTheme } from "../../src/theme/theme.tsx";
 import { haptic } from "../../src/ui/haptics.ts";
 import { Button, Kicker, StatusSquare, Text } from "../../src/ui/index.ts";
@@ -56,15 +58,40 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress(): v
   );
 }
 
+/** The health block as one line: what is down, else "healthy". */
+export function healthLine(health: FleetAgent["health"]): string {
+  if (!health) return "no heartbeat yet";
+  const down = (["hermes", "tailscale", "disk", "dashboard"] as const).filter(
+    (k) => health[k] === false,
+  );
+  return down.length === 0 ? "healthy" : `${down.join(", ")} down`;
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", gap: t.space.sm }}>
+      <Text variant="caption" tone="fg3" uppercase style={{ width: 64, letterSpacing: 0.8 }}>
+        {label}
+      </Text>
+      <Text mono variant="caption" selectable numberOfLines={1} style={{ flex: 1 }}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 export default function AgentBrowser() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { name } = useLocalSearchParams<{ name: string }>();
-  const { client, credentials, hello } = useBridge();
-  // The bridge's tailnet: a box's reported name must sit under it to be loaded.
-  const tailnet = hello?.tailnet ?? credentials?.tailnet ?? null;
-  const [agent, setAgent] = useState<AgentView | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { fleet } = useFleetContext();
+  const fleetState = useFleetState();
+  const agents = useFleetAgents();
+  // The paired tailnet: a box's reported name must sit under it to be loaded.
+  const tailnet = fleetState.link?.payload.tailnet ?? null;
+  const fleetId = fleetState.link?.payload.fleet_id ?? null;
+  const agent = agents.find((a) => a.name === String(name)) ?? null;
   const [viewOnly, setViewOnly] = useState(true);
   const [scale, setScale] = useState<Scale>("fit");
   const [loading, setLoading] = useState(true);
@@ -72,31 +99,15 @@ export default function AgentBrowser() {
   const [generation, setGeneration] = useState(0);
   const web = useRef<WebView>(null);
 
-  // Re-read on Reconnect too (`generation`), so a failed read can be retried
-  // from this screen rather than only by leaving it.
-  useEffect(() => {
-    if (!client || !name || generation < 0) return;
-    let live = true;
-    setError(null);
-    client
-      .rpc<AgentView>("agents.get", { name: String(name) })
-      .then((a) => live && setAgent(a))
-      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      live = false;
-    };
-  }, [client, name, generation]);
-
+  const host = agent?.host ?? null;
   const vnc = useMemo(
     () =>
       agent
-        ? noVncTarget(agent, tailnet, credentials?.fleet.fleet_id ?? null, {
-            viewOnly,
-            ...(agent.browsers[0] ? { servePath: agent.browsers[0].serve_path } : {}),
-          })
+        ? noVncTarget({ name: agent.name, tailscale_dns_name: host }, tailnet, fleetId, { viewOnly })
         : null,
-    [agent, tailnet, credentials, viewOnly],
+    [agent, host, tailnet, fleetId, viewOnly],
   );
+  const status = agent?.status ?? null;
   const url = vnc?.ok ? vnc.url : null;
 
   // The one origin the WebView may load; every other navigation goes to the OS.
@@ -107,7 +118,8 @@ export default function AgentBrowser() {
     setLoadError(null);
     setLoading(true);
     setGeneration((g) => g + 1);
-  }, []);
+    void fleet.refresh();
+  }, [fleet]);
 
   useEffect(() => {
     web.current?.injectJavaScript(scaleScript(scale));
@@ -146,10 +158,10 @@ export default function AgentBrowser() {
           borderBottomColor: t.c.line,
         }}
       >
-        <StatusSquare status={agent?.display_status ?? "pending"} size={8} />
+        {status ? <StatusSquare status={status} size={8} /> : <StatusSquare size={8} color={t.c.fg3} />}
         {/* The status only: the View only chip beside it already says the mode. */}
         <Kicker style={{ flex: 1 }} numberOfLines={1}>
-          {agent?.display_status ?? ""}
+          {status ?? "status unknown"}
         </Kicker>
         <Chip label="View only" on={viewOnly} onPress={() => setViewOnly((v) => !v)} />
         <Chip
@@ -169,6 +181,27 @@ export default function AgentBrowser() {
           </Text>
         </Pressable>
       </View>
+      {agent ? (
+        <View
+          style={{
+            gap: 2,
+            paddingHorizontal: t.space.md,
+            paddingVertical: t.space.sm,
+            borderBottomWidth: 1,
+            borderBottomColor: t.c.line,
+          }}
+        >
+          <Fact label="Hermes" value={agent.version ?? "unknown"} />
+          <Fact
+            label="Host"
+            value={agent.tailscale_ip ? `${agent.host} · ${agent.tailscale_ip}` : agent.host}
+          />
+          <Fact
+            label="Health"
+            value={agent.live ? healthLine(agent.health) : "not in the last fleet list"}
+          />
+        </View>
+      ) : null}
       <View style={{ flex: 1 }}>
         {url ? (
           <WebView
@@ -200,61 +233,56 @@ export default function AgentBrowser() {
             }}
           />
         ) : null}
-        {error
+        {!agent
           ? overlay(
               <>
                 <Text tone="bad" weight={700}>
-                  Could not read this agent.
-                </Text>
-                <Text variant="bodySmall" tone="fg2" style={{ textAlign: "center" }}>
-                  {error}
+                  {`${String(name)} is not an agent of the paired fleet.`}
                 </Text>
                 <Button label="Try again" variant="secondary" onPress={reconnect} />
               </>,
             )
-          : !agent
-            ? overlay(<ActivityIndicator color={t.c.fg3} />)
-            : !url
+          : !url
+            ? overlay(
+                <Text tone="fg2" style={{ textAlign: "center" }}>
+                  {noVncRefusalText(
+                    vnc && !vnc.ok ? vnc.reason : "no_name",
+                    vnc?.host ?? host,
+                    tailnet,
+                  )}
+                </Text>,
+              )
+            : loadError
               ? overlay(
-                  <Text tone="fg2" style={{ textAlign: "center" }}>
-                    {noVncRefusalText(
-                      vnc && !vnc.ok ? vnc.reason : "no_name",
-                      agent.tailscale_dns_name ?? vnc?.host ?? null,
-                      tailnet,
-                    )}
-                  </Text>,
+                  <>
+                    <Text weight={800} variant="title">
+                      The browser did not load.
+                    </Text>
+                    <Text variant="bodySmall" tone="fg2" style={{ textAlign: "center" }}>
+                      {loadError}
+                    </Text>
+                    <Text variant="bodySmall" tone="fg3" style={{ textAlign: "center" }}>
+                      The desktop is served from the box over the tailnet: this phone must be on it,
+                      with the Tailscale app connected.
+                    </Text>
+                    <Button label="Reconnect" onPress={reconnect} />
+                    <Button
+                      label="Open in Safari"
+                      variant="secondary"
+                      onPress={() => void Linking.openURL(url).catch(() => {})}
+                    />
+                  </>,
                 )
-              : loadError
+              : loading
                 ? overlay(
                     <>
-                      <Text weight={800} variant="title">
-                        The browser did not load.
+                      <ActivityIndicator color={t.c.fg3} />
+                      <Text mono variant="caption" tone="fg3">
+                        connecting over the tailnet…
                       </Text>
-                      <Text variant="bodySmall" tone="fg2" style={{ textAlign: "center" }}>
-                        {loadError}
-                      </Text>
-                      <Text variant="bodySmall" tone="fg3" style={{ textAlign: "center" }}>
-                        The desktop is served from the box over the tailnet: this phone must be on it,
-                        with the Tailscale app connected.
-                      </Text>
-                      <Button label="Reconnect" onPress={reconnect} />
-                      <Button
-                        label="Open in Safari"
-                        variant="secondary"
-                        onPress={() => void Linking.openURL(url).catch(() => {})}
-                      />
                     </>,
                   )
-                : loading
-                  ? overlay(
-                      <>
-                        <ActivityIndicator color={t.c.fg3} />
-                        <Text mono variant="caption" tone="fg3">
-                          connecting over the tailnet…
-                        </Text>
-                      </>,
-                    )
-                  : null}
+                : null}
       </View>
       <View style={{ height: insets.bottom, backgroundColor: t.c.bg }} />
     </View>

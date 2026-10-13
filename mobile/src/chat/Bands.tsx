@@ -158,7 +158,7 @@ export function ThreadBand({
   }
 }
 
-/** The bridge's live watch on this conversation: reconnecting, or gone with a way back. */
+/** This phone's live watch on this conversation: reconnecting, or gone with a way back. */
 export function ObservationBand({
   state,
   error,
@@ -190,87 +190,6 @@ export function ObservationBand({
   );
 }
 
-/** How a fleet reads to a person: its alias, else its id. */
-const fleetLabel = (fleet: { fleet_id: string; alias: string | null } | null | undefined) =>
-  fleet ? (fleet.alias ?? fleet.fleet_id) : null;
-
-/** The phone's own connection to the bridge, when it is not up. */
-export function SocketBand({
-  state,
-  onRetry,
-  servedFleet,
-  pairedFleet,
-  onRePair,
-}: {
-  state: string;
-  onRetry?: () => void;
-  /** In `wrong_fleet`: what the bridge serves now, when it said. */
-  servedFleet?: { fleet_id: string; alias: string | null } | null;
-  /** The fleet this phone was paired on. */
-  pairedFleet?: { fleet_id: string; alias: string | null } | null;
-  onRePair?: () => void;
-}) {
-  if (state === "open" || state === "idle") return null;
-  // The laptop switched fleets: the token still exists but is bound to the old one.
-  if (state === "wrong_fleet") {
-    const served = fleetLabel(servedFleet);
-    const paired = fleetLabel(pairedFleet);
-    return (
-      <BandShell
-        tone="bad"
-        testID="band-socket"
-        title={
-          served
-            ? `This bridge now serves ${served}; re-pair to use it.`
-            : "This bridge now serves another fleet; re-pair to use it."
-        }
-        sub={`This phone was paired with ${paired ?? "another fleet"}, which the laptop no longer serves. Re-pairing forgets this pairing first.`}
-        action={onRePair ? { label: "Re-pair", onPress: onRePair } : null}
-      />
-    );
-  }
-  if (state === "unauthorized")
-    return (
-      <BandShell
-        tone="bad"
-        testID="band-socket"
-        title="The bridge no longer knows this phone."
-        sub="It was revoked on the laptop, was never re-paired after a laptop upgrade, or its handshake was rejected. Sign out in Settings and pair again."
-      />
-    );
-  if (state === "mismatch")
-    return (
-      <BandShell
-        tone="bad"
-        testID="band-socket"
-        title="This app and the bridge speak different versions."
-        sub="Update whichever side is older."
-      />
-    );
-  // 4503: the laptop answered but has no fleet to serve right now. Still paired.
-  if (state === "unavailable")
-    return (
-      <BandShell
-        tone="warn"
-        pulse
-        testID="band-socket"
-        title="The laptop's bridge is unavailable."
-        sub="It is running but cannot serve this fleet right now (setting up or shutting down). This phone stays paired and keeps retrying."
-        action={onRetry ? { label: "Retry", onPress: onRetry } : null}
-      />
-    );
-  return (
-    <BandShell
-      tone="warn"
-      pulse
-      testID="band-socket"
-      title={state === "reconnecting" ? "Reconnecting to the bridge…" : "Connecting to the bridge…"}
-      sub="Replies resume from where they stopped once the connection is back."
-      action={onRetry && state === "reconnecting" ? { label: "Retry", onPress: onRetry } : null}
-    />
-  );
-}
-
 /** A turn the box refused, or one stopped with no reply: the band is its only record. */
 export function TurnErrorBand({ error }: { error: Failure }) {
   return (
@@ -284,13 +203,11 @@ export function TurnErrorBand({ error }: { error: Failure }) {
 }
 
 /** The last turn ended without a `done`: what is shown may be incomplete. */
-export function DroppedBand({ truncated }: { truncated: boolean }) {
+export function DroppedBand() {
   return (
     <BandShell
       tone="warn"
-      title={
-        truncated ? "Some of this reply was not kept by the bridge." : "The reply stopped arriving."
-      }
+      title="The reply stopped arriving."
       sub="The transcript is re-read from the box when the turn ends — that copy is complete."
     />
   );

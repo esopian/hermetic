@@ -151,7 +151,24 @@ export const MobilePushDevice = z
   .strict();
 export type MobilePushDevice = z.infer<typeof MobilePushDevice>;
 
-export const MobilePushDeviceList = z.object({ devices: z.array(MobilePushDevice) });
+/**
+ * One registration as the box stores it: the phone's `MobilePushDevice` plus
+ * two fields the box sets and the phone never sends (§9.4).
+ *
+ * - `owner` — who registered it: the tailnet login `tailscale whois` reported
+ *   for the registering peer. Only that login may update or delete it.
+ * - `renewed_at` — the last `POST` for this `device_id`. A registration not
+ *   renewed for `PUSH_DEVICE_TTL_MS` (agentd) is skipped and then pruned, so a
+ *   member removed from the tailnet stops receiving pushes on their own.
+ */
+export const MobilePushDeviceRecord = MobilePushDevice.extend({
+  owner: z.string().min(1).max(256),
+  renewed_at: Iso,
+}).strict();
+export type MobilePushDeviceRecord = z.infer<typeof MobilePushDeviceRecord>;
+
+/** `push-devices.json` on the box: the stored registrations, oldest first. */
+export const MobilePushDeviceList = z.object({ devices: z.array(MobilePushDeviceRecord) });
 export type MobilePushDeviceList = z.infer<typeof MobilePushDeviceList>;
 
 /* ── Push payload ───────────────────────────────────────────────────────── */

@@ -7,7 +7,8 @@
  */
 import { createContext, useContext } from "react";
 import type { RespondInput } from "../client/conversation-store.ts";
-import type { RespondResult } from "../protocol/types.ts";
+import type { ChatMessage } from "@hermetic/core/chat-client";
+import type { RespondResult } from "../client/chat-types.ts";
 
 export interface ChatScopeValue {
   fleetId: string;
@@ -30,7 +31,7 @@ export interface ChatScopeValue {
   /** Open a new session and send `prompt` into it. */
   newSession?: (prompt: string) => Promise<void>;
   /** Every message in the conversation, for a failure card to find its prompt. */
-  messages?: readonly import("../protocol/types.ts").ChatMessage[];
+  messages?: readonly ChatMessage[];
 }
 
 export const ChatScope = createContext<ChatScopeValue | null>(null);

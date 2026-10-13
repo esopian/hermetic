@@ -20,7 +20,7 @@ import {
   offeredChoices,
   SENT,
 } from "../../client/chat-requests.ts";
-import type { ApprovalBlock, ApprovalChoice } from "../../protocol/types.ts";
+import type { ApprovalBlock, ApprovalChoice } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";

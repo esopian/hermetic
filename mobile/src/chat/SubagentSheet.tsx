@@ -21,7 +21,7 @@ import {
   UNOBSERVED_TEXT,
 } from "../client/chat-activity.ts";
 import { threadTime } from "../client/chat-logic.ts";
-import type { SubagentBlock } from "../protocol/types.ts";
+import type { SubagentBlock } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { haptic } from "../ui/haptics.ts";

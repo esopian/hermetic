@@ -14,7 +14,7 @@ import { closedRequests, keepsCard, openRequests } from "../client/chat-requests
 import type { TurnRow as TurnRowType } from "../client/chat-turns.ts";
 import { isLocal } from "../client/conversation-store.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
-import type { ChatMessage } from "../protocol/types.ts";
+import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
@@ -52,7 +52,7 @@ function OperatorBubble({
   answered: boolean;
 }) {
   const t = useTheme();
-  // A reply already under it means the bridge took it, echo or not.
+  // A reply already under it means the box took it, echo or not.
   const pending = isLocal(message) && !answered;
   const text = message.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("");
   const steer = message.id.startsWith("local:steer:");

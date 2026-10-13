@@ -12,7 +12,7 @@ import {
 import { transcriptItems } from "../../src/chat/Transcript.tsx";
 import { usePullRefresh } from "../../src/ui/usePullRefresh.ts";
 import { useThrottled } from "../../src/ui/useThrottled.ts";
-import type { ChatMessage } from "../../src/protocol/types.ts";
+import type { ChatMessage } from "@hermetic/core/chat-client";
 import { msg } from "../helpers/fixtures.ts";
 import { NOW } from "../helpers/render.tsx";
 

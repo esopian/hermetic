@@ -1,12 +1,11 @@
 /**
- * One inbox card: a run of rows about one conversation folded into one
- * (`groupNotifications`), unread if any member is (`isUnreadRow`, the rule
- * the header's count uses), cleared only when every member is, and needing
- * you when any member still does, read or not (`groupCondition`). Class
- * colour on the left seam (grey once the condition has cleared), an unread
+ * One inbox card: a run of entries about one conversation and kind folded
+ * into one (`groupEntries`), unread if any member is, and needing you when any
+ * member is a needs-you event (`groupCondition`). Kind colour on the left seam
+ * (gold for needs-you, red for a failed turn, grey once read), an unread
  * marker (gold only when an unread member needs you, the header's need rule),
- * needs-you in gold, the count of what it folded, and the time. Swipe left to
- * mark it read.
+ * the count of what it folded, the agent, and the time. Swipe left to mark it
+ * read.
  */
 import { memo, useRef } from "react";
 import { Pressable, View } from "react-native";
@@ -20,12 +19,20 @@ import {
   groupUnread,
   type NotificationGroup,
 } from "../client/inbox-logic.ts";
-import type { Notification } from "../protocol/types.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { classColor } from "../theme/tokens.ts";
 import { codeSpans } from "../ui/codeSpans.tsx";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
+import type { InboxEntry } from "./store.ts";
+
+/** The seam colour's class for an entry kind. */
+const KIND_CLASS: Record<InboxEntry["kind"], string> = {
+  needs_action: "needs_action",
+  "turn.error": "bad",
+  "turn.done": "ok",
+  message: "info",
+};
 
 function InboxRowImpl({
   group,
@@ -33,10 +40,10 @@ function InboxRowImpl({
   onOpen,
   onAck,
 }: {
-  group: NotificationGroup<Notification>;
+  group: NotificationGroup<InboxEntry>;
   now: number;
-  onOpen(group: NotificationGroup<Notification>): void;
-  onAck(group: NotificationGroup<Notification>): void;
+  onOpen(group: NotificationGroup<InboxEntry>): void;
+  onAck(group: NotificationGroup<InboxEntry>): void;
 }) {
   const t = useTheme();
   const swipe = useRef<SwipeableMethods>(null);
@@ -44,14 +51,11 @@ function InboxRowImpl({
   // The marker and the header count read one rule (`isUnreadRow`); the class
   // colour is the left seam's job and says nothing about read state.
   const unread = groupUnread(group);
-  // Cleared and needs-you read every member too (`groupCondition`), so a card
-  // never says "cleared" over a member the header still counts as needing you.
-  // `needs` stays on for a read but open request; the marker's gold follows
+  // `needs` stays on for a read needs-you member; the marker's gold follows
   // `needsUnread`, the header's need count, instead.
-  const { resolved, needs, needsUnread } = groupCondition(group);
-  // A resolved row loses emphasis rather than gaining a colour (desktop
-  // `NotificationRow`: tone `--line2` once the condition has cleared).
-  const edge = resolved ? t.c.line2 : classColor(t.c, needs ? "needs_action" : row.class);
+  const { needs, needsUnread } = groupCondition(group);
+  // A read card loses emphasis rather than keeping its colour.
+  const edge = unread ? classColor(t.c, needs ? "needs_action" : KIND_CLASS[row.kind]) : t.c.line2;
   return (
     <ReanimatedSwipeable
       ref={swipe}
@@ -119,9 +123,9 @@ function InboxRowImpl({
               {railTime(row.at, now)}
             </Text>
           </View>
-          {row.detail ? (
+          {row.body ? (
             <Text variant="bodySmall" tone="fg2" numberOfLines={2}>
-              {codeSpans(row.detail)}
+              {codeSpans(row.body)}
             </Text>
           ) : null}
           <View style={{ flexDirection: "row", gap: t.space.sm }}>
@@ -130,19 +134,17 @@ function InboxRowImpl({
                 NEEDS YOU
               </Text>
             ) : null}
-            {resolved ? (
-              <Text mono variant="caption" tone="fg3">
-                cleared
+            {row.kind === "turn.error" ? (
+              <Text mono variant="caption" weight={700} tone="bad">
+                FAILED
               </Text>
             ) : null}
             {group.count > 1 ? (
-              <Text mono variant="caption" tone="fg3">{`${group.count} messages`}</Text>
+              <Text mono variant="caption" tone="fg3">{`${group.count} events`}</Text>
             ) : null}
-            {row.agent ? (
-              <Text mono variant="caption" tone="fg3">
-                {row.agent}
-              </Text>
-            ) : null}
+            <Text mono variant="caption" tone="fg3">
+              {row.instance}
+            </Text>
           </View>
         </View>
       </Pressable>

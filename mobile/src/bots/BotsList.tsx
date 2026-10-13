@@ -8,7 +8,7 @@ import { memo, useCallback } from "react";
 import { Pressable, RefreshControl, TextInput, View } from "react-native";
 import type { RailFilter } from "../client/roster-store.ts";
 import { botsEmpty, type RosterRow } from "../client/roster-rows.ts";
-import type { Bot } from "../protocol/types.ts";
+import type { Bot } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import { Badge } from "../ui/Badge.tsx";
 import { Button } from "../ui/Button.tsx";

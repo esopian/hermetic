@@ -18,8 +18,11 @@
  * axis: the body (`PUSH_BODY_MAX_BYTES`, 413), its shape (`MobilePushDevice`,
  * 400), how often one peer may write (`PUSH_WRITES_PER_MINUTE`, 429), and how
  * many phones the file may hold (`PUSH_DEVICES_MAX`, `push/devices.ts`).
- * The token is never logged — a registration's line names the device id and
- * the platform only.
+ * A registration belongs to the login that made it (`peer.owner`, from the
+ * gate's whois): another login replacing or deleting that `device_id` is 403
+ * `FORBIDDEN`, and the refusal's audit line names the device id and the two
+ * logins, nothing else. The token is never logged — a registration's line
+ * names the device id and the platform only.
  */
 import type {
   Agent,
@@ -114,6 +117,12 @@ function fleetAgent(row: Agent): MobileFleetAgentType | null {
  * failing the list — one malformed row must not hide every healthy agent from
  * the phone. The account id is not on any row, so it is read off the role ARN
  * the manifest records (the stack ARN as a fallback).
+ *
+ * The `_fleet` row must name the manifest's own `fleet_id`. The Scan is
+ * fleet-scoped by IAM (`FleetList` names this stack's agents table and no
+ * other), so a disagreement means the manifest points this box at a table that
+ * is not its fleet's; the view is refused rather than served under either
+ * identity.
  */
 export function buildFleetView(
   items: readonly Record<string, unknown>[],
@@ -122,6 +131,12 @@ export function buildFleetView(
   readAt: Date,
 ): { view: MobileFleetView; skipped: number } {
   if (fleetRow === null) throw new FleetListUnavailable(`the agents table has no ${FLEET_KEY} row`);
+  const rowFleetId = str(fleetRow["fleet_id"]);
+  if (rowFleetId !== manifest.fleet_id) {
+    throw new FleetListUnavailable(
+      `the agents table's ${FLEET_KEY} row names fleet ${rowFleetId ?? "(none)"}, not this box's fleet ${manifest.fleet_id}`,
+    );
+  }
   const agents: MobileFleetAgentType[] = [];
   let skipped = 0;
   for (const item of items) {
@@ -141,7 +156,7 @@ export function buildFleetView(
   const foundation = fleetRow["foundation_version"];
   const candidate = {
     fleet: {
-      fleet_id: str(fleetRow["fleet_id"]) ?? manifest.fleet_id,
+      fleet_id: manifest.fleet_id,
       alias: str(fleetRow["fleet_name"]) ?? manifest.name ?? null,
       tailnet: str(fleetRow["tailnet"]) ?? "",
       region: str(fleetRow["region"]) ?? manifest.region,
@@ -255,8 +270,16 @@ export interface MobileRoutesDeps {
   readonly log?: (message: string) => void;
 }
 
-/** `(request, url, peerIp)` → a response, or `null` when the path is not a phone route. */
-export type MobileRoutes = (request: Request, url: URL, peerIp: string) => Promise<Response | null>;
+/** The admitted caller, as the whois gate (`rpc.ts`) hands it to the phone routes. */
+export interface MobilePeer {
+  /** The peer's tailnet address; keys the write limiter. */
+  readonly ip: string;
+  /** Who it is (`peerOwner`): the login a registration it makes is bound to. */
+  readonly owner: string;
+}
+
+/** `(request, url, peer)` → a response, or `null` when the path is not a phone route. */
+export type MobileRoutes = (request: Request, url: URL, peer: MobilePeer) => Promise<Response | null>;
 
 export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
   const say = deps.log ?? (() => {});
@@ -277,7 +300,17 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
     return recent.length > PUSH_WRITES_PER_MINUTE;
   }
 
-  return async (request, url, peerIp) => {
+  function forbidden(deviceId: string, peer: MobilePeer, owner: string, verb: string): Response {
+    say(`push device ${deviceId}: ${verb} by ${peer.owner} refused; registered to ${owner}`);
+    return rpcRefusal(
+      403,
+      `push device ${deviceId} is registered to another tailnet login`,
+      "FORBIDDEN",
+    );
+  }
+
+  return async (request, url, peer) => {
+    const peerIp = peer.ip;
     const path = url.pathname;
 
     if (path === RPC_PATHS.fleet && deps.fleetView) {
@@ -326,7 +359,9 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
         const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "(body)"))];
         return rpcRefusal(400, `not a MobilePushDevice: ${fields.join(", ")}`, "VALIDATION");
       }
-      const { evicted } = await devices.upsert(parsed.data);
+      const stored = await devices.upsert(parsed.data, peer.owner);
+      if (!stored.ok) return forbidden(parsed.data.device_id, peer, stored.owner, "update");
+      const { evicted } = stored;
       say(
         `push device registered: ${parsed.data.device_id} (${parsed.data.platform})` +
           (evicted ? `; evicted ${evicted} to stay under the cap` : ""),
@@ -353,7 +388,9 @@ export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
       if (!MobilePushDevice.shape.device_id.safeParse(id).success) {
         return rpcRefusal(400, "the device id is not valid", "VALIDATION");
       }
-      const removed = await devices.remove(id);
+      const result = await devices.unregister(id, peer.owner);
+      if (!result.ok) return forbidden(id, peer, result.owner, "delete");
+      const { removed } = result;
       if (removed) say(`push device unregistered: ${id}`);
       // Idempotent: a phone signing out twice is not an error.
       return json({ ok: true, device_id: id, removed });

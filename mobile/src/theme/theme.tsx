@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 import { Appearance, useColorScheme } from "react-native";
-import type { PrefStorage } from "../bridge/storage.ts";
+import type { KvStorage as PrefStorage } from "../fleet/store.ts";
 import { mono, sans } from "./fonts.ts";
 import { border, motion, space, touch, type } from "./scale.ts";
 import { type Palette, palettes, type SchemeName } from "./tokens.ts";

@@ -11,9 +11,17 @@ import {
   PUSH_WRITES_PER_MINUTE,
   accountOfArn,
 } from "../src/rpc-mobile.ts";
-import { TAGGED_DEVICES_LOGIN } from "../src/rpc.ts";
-import { RecordingSink, TEST_AGENTS_TABLE, TEST_EVENTS_TABLE } from "./fixtures.ts";
-import { STRANGER_IP, agentRow, fleetRow, mobileRig } from "./mobile-fixtures.ts";
+import { TAGGED_DEVICES_LOGIN, peerOwner } from "../src/rpc.ts";
+import { RecordingSink, TEST_AGENTS_TABLE, TEST_EVENTS_TABLE, makeFleetManifest } from "./fixtures.ts";
+import {
+  MEMBER,
+  OTHER_MEMBER,
+  OTHER_MEMBER_IP,
+  STRANGER_IP,
+  agentRow,
+  fleetRow,
+  mobileRig,
+} from "./mobile-fixtures.ts";
 
 const TOKEN = "ExponentPushToken[FIXTURE-rpc-mobile]";
 
@@ -142,6 +150,28 @@ describe("GET /fleet", () => {
     expect(view.fleet.foundation_version).toBe(0);
   });
 
+  test("the view carries the manifest's own fleet_id, from a _fleet row that names it", async () => {
+    const rig = mobileRig();
+    const view = MobileFleetView.parse(await (await rig.call("GET", RPC_PATHS.fleet)).json());
+    expect(view.fleet.fleet_id).toBe(makeFleetManifest().fleet_id);
+    expect(fleetRow()["fleet_id"]).toBe(makeFleetManifest().fleet_id);
+  });
+
+  test("a _fleet row naming another fleet, or none, is 503: a mis-pointed manifest serves nothing", async () => {
+    for (const fleet_id of ["sg7k2m4p", undefined]) {
+      const rig = mobileRig({
+        items: [fleetRow({ fleet_id }), agentRow()],
+        fleet: fleetRow({ fleet_id }),
+      });
+      const response = await rig.call("GET", RPC_PATHS.fleet);
+      expect(response.status).toBe(503);
+      const error = await errorOf(response);
+      expect(error.code).toBe("FLEET_LIST_UNAVAILABLE");
+      expect(error.message).toContain(makeFleetManifest().fleet_id);
+      expect(error.message).not.toContain("atlas");
+    }
+  });
+
   test("POST /fleet is 405", async () => {
     expect((await mobileRig().call("POST", RPC_PATHS.fleet, "{}")).status).toBe(405);
   });
@@ -185,7 +215,9 @@ describe("POST /push/devices", () => {
     expect(await response.json()).toEqual({ ok: true, device_id: "phone-1" });
     const file = rig.host.files.get(PUSH_DEVICES_PATH);
     expect(file?.mode).toBe("0600");
-    expect(JSON.parse(file?.content ?? "{}")).toEqual({ devices: [device()] });
+    expect(JSON.parse(file?.content ?? "{}")).toEqual({
+      devices: [{ ...device(), owner: MEMBER.login, renewed_at: rig.host.now().toISOString() }],
+    });
     const audit = rig.audit.join("\n");
     expect(audit).toContain("push device registered: phone-1 (ios)");
     expect(audit).not.toContain("FIXTURE-rpc-mobile");
@@ -278,5 +310,86 @@ describe("DELETE /push/devices/<device_id>", () => {
   test("an id outside the device_id shape is 400", async () => {
     const response = await mobileRig().call("DELETE", pushDevicePath("../../etc/passwd"));
     expect(response.status).toBe(400);
+  });
+});
+
+describe("a registration belongs to the login that made it (§9.4)", () => {
+  test("the owner may renew and delete; renewal moves renewed_at", async () => {
+    const rig = mobileRig();
+    expect((await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()))).status).toBe(200);
+    rig.host.advance(60_000);
+    const renewed = await rig.call(
+      "POST",
+      RPC_PATHS.pushDevices,
+      JSON.stringify(device({ listening: ["granite"] })),
+    );
+    expect(renewed.status).toBe(200);
+    const stored = JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}");
+    expect(stored.devices).toEqual([
+      {
+        ...device({ listening: ["granite"] }),
+        owner: MEMBER.login,
+        renewed_at: rig.host.now().toISOString(),
+      },
+    ]);
+    expect((await rig.call("DELETE", pushDevicePath("phone-1"))).status).toBe(200);
+  });
+
+  test("another member's POST or DELETE on the same device_id is 403 FORBIDDEN and changes nothing", async () => {
+    const rig = mobileRig();
+    await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()));
+    const before = rig.host.files.get(PUSH_DEVICES_PATH)?.content;
+
+    const hijack = await rig.call(
+      "POST",
+      RPC_PATHS.pushDevices,
+      JSON.stringify(device({ token: "ExponentPushToken[FIXTURE-hijack]" })),
+      OTHER_MEMBER_IP,
+    );
+    expect(hijack.status).toBe(403);
+    const error = await errorOf(hijack);
+    expect(error.code).toBe("FORBIDDEN");
+    // The caller is not told whose phone it is.
+    expect(error.message).not.toContain(MEMBER.login);
+
+    const silence = await rig.call("DELETE", pushDevicePath("phone-1"), null, OTHER_MEMBER_IP);
+    expect(silence.status).toBe(403);
+    expect((await errorOf(silence)).code).toBe("FORBIDDEN");
+    expect(rig.host.files.get(PUSH_DEVICES_PATH)?.content).toBe(before);
+
+    const refusals = rig.audit.filter((line) => line.startsWith("push device phone-1:"));
+    expect(refusals).toEqual([
+      `push device phone-1: update by ${OTHER_MEMBER.login} refused; registered to ${MEMBER.login}`,
+      `push device phone-1: delete by ${OTHER_MEMBER.login} refused; registered to ${MEMBER.login}`,
+    ]);
+    const audit = rig.audit.join("\n");
+    expect(audit).not.toContain("FIXTURE-rpc-mobile");
+    expect(audit).not.toContain("FIXTURE-hijack");
+  });
+
+  test("another member registering their own device_id is fine", async () => {
+    const rig = mobileRig();
+    await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(device()));
+    const own = await rig.call(
+      "POST",
+      RPC_PATHS.pushDevices,
+      JSON.stringify(device({ device_id: "phone-2", token: "ExponentPushToken[FIXTURE-two]" })),
+      OTHER_MEMBER_IP,
+    );
+    expect(own.status).toBe(200);
+    const stored = JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}");
+    expect(
+      stored.devices.map((d: { device_id: string; owner: string }) => [d.device_id, d.owner]),
+    ).toEqual([
+      ["phone-1", MEMBER.login],
+      ["phone-2", OTHER_MEMBER.login],
+    ]);
+  });
+
+  test("peerOwner: a person is their login, a tagged node its node name", () => {
+    expect(peerOwner(MEMBER)).toBe(MEMBER.login);
+    expect(
+      peerOwner({ login: TAGGED_DEVICES_LOGIN, node: "bravo.tailnet.ts.net", tags: ["tag:ci"] }),
+    ).toBe("node:bravo.tailnet.ts.net");
   });
 });

@@ -9,7 +9,7 @@ import type { ChatMessage, HermesChatClient, Session, Swarm } from "@hermetic/co
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { MobilePushData } from "@hermetic/core/schema";
 import type { ExpoPushMessage, ExpoPushTicket } from "@hermetic/core/shared";
-import { pushDeviceStore, type PushDeviceStore } from "../src/push/devices.ts";
+import { PUSH_DEVICE_TTL_MS, pushDeviceStore, type PushDeviceStore } from "../src/push/devices.ts";
 import { NEEDS_ACTION_CATEGORY, RECEIPT_DELAY_MS } from "../src/push/notify.ts";
 import {
   UNKNOWN_BOT,
@@ -151,6 +151,8 @@ function scriptedChat(): ScriptedChat {
 }
 
 interface Rig {
+  /** The store's host: its clock is what registrations expire against. */
+  host: FakeHost;
   chat: ScriptedChat;
   devices: PushDeviceStore;
   sent: ExpoPushMessage[];
@@ -169,8 +171,9 @@ async function rig(
 ): Promise<Rig> {
   const host = new FakeHost();
   const store = pushDeviceStore(host);
-  for (const d of devices) await store.upsert(d);
+  for (const d of devices) await store.upsert(d, OWNER);
   const r: Rig = {
+    host,
     chat: scriptedChat(),
     devices: store,
     sent: [],
@@ -207,6 +210,8 @@ async function rig(
   };
   return r;
 }
+
+const OWNER = "evan@example.com";
 
 function device(
   id: string,
@@ -460,6 +465,22 @@ describe("who is pushed to", () => {
   });
 });
 
+describe("expiry", () => {
+  test(`a registration unrenewed for ${PUSH_DEVICE_TTL_MS / 86_400_000} days is skipped by the notifier`, async () => {
+    const r = await rig([device("a", TOKEN_A), device("b", TOKEN_B)]);
+    // Renew only b, a day before the TTL runs out for a.
+    r.host.advance(PUSH_DEVICE_TTL_MS - 86_400_000);
+    await r.devices.upsert(device("b", TOKEN_B), OWNER);
+    r.host.advance(86_400_000);
+    r.chat.bots.set("s1", "granite");
+    r.chat.snapshots.push(snapshot(), snapshot({ id: "s1", status: "waiting", message_count: 1 }));
+    const w = createWatcher(r.deps);
+    await w.tick();
+    await step(r, w);
+    expect(r.sent.map((m) => m.to)).toEqual([TOKEN_B]);
+  });
+});
+
 describe("receipts", () => {
   test("a DeviceNotRegistered ticket removes the phone at once", async () => {
     const r = await rig([device("a", TOKEN_A), device("b", TOKEN_B)]);
@@ -508,7 +529,7 @@ describe("receipts", () => {
     const w = createWatcher(r.deps);
     await w.tick();
     await step(r, w);
-    await r.devices.upsert(device("a", "ExponentPushToken[FIXTURE-watch-new]"));
+    await r.devices.upsert(device("a", "ExponentPushToken[FIXTURE-watch-new]"), OWNER);
     r.receipts.set("ticket-0", {
       status: "error",
       message: "gone",
@@ -588,7 +609,8 @@ describe("the loop", () => {
       list: async () => {
         throw new Error("disk gone");
       },
-      upsert: async () => ({ evicted: null }),
+      upsert: async () => ({ ok: true, evicted: null }),
+      unregister: async () => ({ ok: true, removed: false }),
       remove: async () => false,
     };
     const w = createWatcher({ ...r.deps, devices: broken });

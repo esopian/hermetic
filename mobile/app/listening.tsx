@@ -1,16 +1,16 @@
 /**
- * The instance picker (a sheet over Bots and Settings): every agent in the
- * fleet (`agents.list`) with its status, and a switch per row that listens or
- * stops listening (`chat.listen`). Only listened instances show bots and
- * raise chat notifications — on this phone and on the laptop alike.
+ * The instance picker (a sheet over Bots and Settings): every agent of the
+ * paired fleet (the pairing link's, merged with `GET /fleet`) with its status,
+ * and a switch per row that listens or stops listening. The choice is this
+ * phone's own (`FleetStore.setListening`): only listened instances show bots,
+ * raise alerts, and are asked to push to this phone.
  */
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { FlatList, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useBridge } from "../src/bridge/BridgeProvider.tsx";
-import { useRoster } from "../src/bridge/hooks.ts";
-import type { AgentView } from "../src/protocol/types.ts";
+import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
+import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
 import { Button, Kicker, SkeletonRow, StatusSquare, Text, ToggleSwitch } from "../src/ui/index.ts";
@@ -18,29 +18,14 @@ import { Button, Kicker, SkeletonRow, StatusSquare, Text, ToggleSwitch } from ".
 export default function Listening() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { client } = useBridge();
-  const { state } = useRoster();
-  const [agents, setAgents] = useState<AgentView[] | null>(null);
+  const { client, fleet } = useFleetContext();
+  const fleetState = useFleetState();
+  const agents = useFleetAgents();
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    if (!client) return;
-    try {
-      const list = await client.rpc<AgentView[]>("agents.list", {});
-      setAgents(Array.isArray(list) ? [...list].sort((a, b) => a.name.localeCompare(b.name)) : []);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [client]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const listening = new Set(state?.listening ?? []);
+  const load = () => fleet.refresh();
+  const listening = new Set(fleet.listened());
 
   // The list is the sheet's root view: a form sheet sizes its first scroll
   // view to the sheet, and anything laid out beside it (a header row) gets
@@ -49,7 +34,7 @@ export default function Listening() {
   return (
     <FlatList
       style={{ flex: 1, backgroundColor: t.c.bg }}
-      data={agents ?? []}
+      data={agents}
       keyExtractor={(a) => a.name}
       stickyHeaderIndices={[0]}
       contentContainerStyle={{ paddingBottom: insets.bottom + t.space.xl }}
@@ -84,7 +69,7 @@ export default function Listening() {
         </View>
       }
       ListFooterComponent={
-        agents && agents.length > 0 ? (
+        agents.length > 0 ? (
           <View style={{ padding: t.space.lg, gap: t.space.sm }}>
             {/* A failed switch lands here: the list is not empty, so the
                 empty state that shows a load error is not on screen. */}
@@ -93,15 +78,20 @@ export default function Listening() {
                 {error}
               </Text>
             ) : null}
+            {fleetState.stale ? (
+              <Text variant="bodySmall" tone="warn">
+                No box answered for the fleet list: statuses are from the last answer, or unknown.
+              </Text>
+            ) : null}
             <Text variant="bodySmall" tone="fg3">
-              Listened instances show their bots on the Bots tab and raise chat notifications. The
-              choice is shared with the laptop.
+              Listened instances show their bots on the Bots tab, raise alerts, and push to this phone.
+              The choice is kept on this phone only.
             </Text>
           </View>
         ) : null
       }
       ListEmptyComponent={
-        agents === null && !error ? (
+        fleetState.refreshing ? (
           <View>
             {[0, 1, 2, 3].map((i) => (
               <SkeletonRow key={i} />
@@ -109,10 +99,8 @@ export default function Listening() {
           </View>
         ) : (
           <View style={{ padding: t.space.lg, gap: t.space.sm }}>
-            <Text tone={error ? "bad" : "fg3"}>{error ?? "This fleet has no agents."}</Text>
-            {error ? (
-              <Button label="Try again" variant="secondary" onPress={() => void load()} />
-            ) : null}
+            <Text tone="fg3">This fleet has no agents.</Text>
+            <Button label="Try again" variant="secondary" onPress={() => void load()} />
           </View>
         )
       }
@@ -130,18 +118,18 @@ export default function Listening() {
               borderBottomColor: t.c.line,
             }}
           >
-            <StatusSquare status={item.display_status} />
+            {item.status ? <StatusSquare status={item.status} /> : <StatusSquare color={t.c.fg3} />}
             <View style={{ flex: 1 }}>
               <Text mono weight={700}>
                 {item.name}
               </Text>
               <Text mono variant="caption" tone="fg3">
-                {item.display_status}
+                {item.status ?? "status unknown"}
               </Text>
             </View>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Open ${item.name}'s browser`}
+              accessibilityLabel={`Open ${item.name}`}
               onPress={() => {
                 // Close the sheet first: pushed from inside it, the browser
                 // lands in the sheet's own context with no back button.
@@ -162,8 +150,11 @@ export default function Listening() {
               onValueChange={(next) => {
                 haptic.select();
                 setPending(item.name);
-                void client?.roster
-                  .listen(item.name, next)
+                setError(null);
+                const change = client
+                  ? client.roster.listen(item.name, next)
+                  : fleet.setListening(item.name, next);
+                void change
                   .catch((e: unknown) => {
                     haptic.error();
                     setError(e instanceof Error ? e.message : String(e));

@@ -10,7 +10,7 @@ import {
   openRequests,
   questionsOf,
 } from "../../src/client/chat-requests.ts";
-import type { QuestionBlock } from "../../src/protocol/types.ts";
+import type { QuestionBlock } from "@hermetic/core/chat-client";
 import { approval, question } from "../helpers/fixtures.ts";
 import { NOW, renderUi, scope } from "../helpers/render.tsx";
 

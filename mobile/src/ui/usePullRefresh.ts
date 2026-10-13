@@ -1,7 +1,7 @@
 /**
  * Pull-to-refresh state with a floor on how long the spinner shows.
  *
- * A bridge read on the tailnet can answer within a frame or two of the
+ * A read on the tailnet can answer within a frame or two of the
  * release. Ending the refresh while the list is still settling from the pull
  * made iOS snap the content back under the still-visible spinner, which then
  * sat over the first row (on Bots, the search box). Holding `refreshing` for

@@ -20,7 +20,14 @@ import {
 } from "./fixtures.ts";
 
 export const MEMBER: Whois = { login: "evan@example.com", node: "phone.tailnet.ts.net", tags: [] };
+/** A second tailnet member, on `OTHER_MEMBER_IP` in every rig. */
+export const OTHER_MEMBER: Whois = {
+  login: "mallory@example.com",
+  node: "other-phone.tailnet.ts.net",
+  tags: [],
+};
 export const PHONE_IP = "100.64.0.7";
+export const OTHER_MEMBER_IP = "100.64.0.99";
 export const STRANGER_IP = "203.0.113.9";
 
 /** An agents-table item that parses with core's `Agent`. */
@@ -114,7 +121,12 @@ export function mobileRig(
     name: TEST_NAME,
     hermeticdVersion: "0.1.0",
     configHash: async () => null,
-    whois: async (ip) => (ip.startsWith("100.64.") ? (options.peer ?? MEMBER) : null),
+    whois: async (ip) =>
+      ip === OTHER_MEMBER_IP
+        ? OTHER_MEMBER
+        : ip.startsWith("100.64.")
+          ? (options.peer ?? MEMBER)
+          : null,
     log,
     mobile: makeMobileRoutes({
       fleetView: fleetViewSource({ aws, manifest: () => manifest, now: () => host.now(), log }),

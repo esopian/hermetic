@@ -16,7 +16,7 @@ import {
   recoveryPlan,
 } from "../../client/chat-recovery.ts";
 import { threadTime } from "../../client/chat-logic.ts";
-import type { ChatFailure } from "../../protocol/types.ts";
+import type { ChatFailure } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";

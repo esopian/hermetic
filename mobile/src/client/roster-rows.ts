@@ -129,18 +129,6 @@ export function rowTime(bot: Pick<Bot, "last_message_at">, now: number): string 
   return bot.last_message_at ? railTime(bot.last_message_at, now) : "";
 }
 
-/**
- * Socket states that last, and that a screen states in its own band. While one
- * holds, a list that could not be read says nothing more: the band already
- * names the cause ("connecting" flickers by on every resume, so it is not one).
- */
-export const BANDED_SOCKET_STATES: ReadonlySet<string> = new Set([
-  "unavailable",
-  "unauthorized",
-  "mismatch",
-  "wrong_fleet",
-]);
-
 export type BotsEmpty = "loading" | "covered" | "error" | "nomatch" | "empty";
 
 /** What the Bots list shows when it has no rows: one message, never the band's twice. */

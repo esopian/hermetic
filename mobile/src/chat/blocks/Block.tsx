@@ -6,7 +6,7 @@
 import { memo } from "react";
 import { blockKind } from "../../client/chat-logic.ts";
 import type { ClosedRequest } from "../../client/chat-requests.ts";
-import type { ChatBlock } from "../../protocol/types.ts";
+import type { ChatBlock } from "@hermetic/core/chat-client";
 import { Markdown } from "../Markdown.tsx";
 import { PlainText } from "../PlainText.tsx";
 import { ActivityGroup } from "./Activity.tsx";

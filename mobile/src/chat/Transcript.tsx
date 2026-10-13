@@ -31,7 +31,7 @@ import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { type TurnRow as TurnRowType, turnRows } from "../client/chat-turns.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
-import type { ChatMessage } from "../protocol/types.ts";
+import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
 import { haptic } from "../ui/haptics.ts";

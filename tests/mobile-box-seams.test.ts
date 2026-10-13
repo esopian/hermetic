@@ -8,7 +8,8 @@
  *  - `GET /fleet`, built from the agent rows core's own fixture fleet holds,
  *    parses with `MobileFleetView`;
  *  - a `MobilePushDevice` body round-trips through `POST /push/devices` into
- *    the file the watcher reads, unchanged;
+ *    the file the watcher reads, unchanged, beside the `owner` and
+ *    `renewed_at` the box adds (`MobilePushDeviceRecord`);
  *  - the `data` of every push the watcher sends parses with `MobilePushData`,
  *    and its `dedupe` is the documented `<instance>:<session>:<count>:<kind>`.
  *
@@ -33,7 +34,7 @@ import { PUSH_DEVICES_PATH, pushDeviceStore } from "../packages/agentd/src/push/
 import { createWatcher } from "../packages/agentd/src/push/watch.ts";
 import { redactValue } from "../packages/agentd/src/redact.ts";
 import { FakeHost } from "../packages/agentd/test/fake-host.ts";
-import { agentRow, fleetRow, mobileRig } from "../packages/agentd/test/mobile-fixtures.ts";
+import { MEMBER, agentRow, fleetRow, mobileRig } from "../packages/agentd/test/mobile-fixtures.ts";
 
 const DEVICE: MobilePushDevice = {
   device_id: "seam-phone",
@@ -75,14 +76,16 @@ describe("GET /fleet → MobileFleetView", () => {
 });
 
 describe("POST /push/devices → push-devices.json", () => {
-  test("the body round-trips into the file unchanged, as a MobilePushDeviceList", async () => {
+  test("the body round-trips into the file unchanged, as a MobilePushDeviceList, owned by the caller", async () => {
     const rig = mobileRig();
     const response = await rig.call("POST", RPC_PATHS.pushDevices, JSON.stringify(DEVICE));
     expect(response.status).toBe(200);
     const file = MobilePushDeviceList.parse(
       JSON.parse(rig.host.files.get(PUSH_DEVICES_PATH)?.content ?? "{}"),
     );
-    expect(file.devices).toEqual([DEVICE]);
+    expect(file.devices).toEqual([
+      { ...DEVICE, owner: MEMBER.login, renewed_at: rig.host.now().toISOString() },
+    ]);
   });
 });
 
@@ -90,7 +93,7 @@ describe("the watcher's push → MobilePushData", () => {
   test("every kind's data parses, with the documented dedupe", async () => {
     const host = new FakeHost();
     const devices = pushDeviceStore(host);
-    await devices.upsert({ ...DEVICE, listening: "all" });
+    await devices.upsert({ ...DEVICE, listening: "all" }, MEMBER.login);
     const sent: ExpoPushMessage[] = [];
     const snapshots: unknown[] = [
       { sessions: [{ id: "l1", session_key: "s-turn", status: "working", message_count: 1 }] },

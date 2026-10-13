@@ -21,7 +21,7 @@ import type {
   ProcessEventBlock as ProcessEventBlockType,
   ReasoningBlock as ReasoningBlockType,
   SourcesBlock as SourcesBlockType,
-} from "../../protocol/types.ts";
+} from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Kicker } from "../../ui/Kicker.tsx";
 import { Text } from "../../ui/Text.tsx";
