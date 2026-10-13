@@ -3,8 +3,12 @@
  *
  * A pair code is eight Crockford base32 characters drawn with
  * `crypto.randomInt`, single-use, short-lived, and stored only as its sha256.
- * Redeeming one mints a device token — `hmt_` plus 32 random bytes in
- * base64url — which is returned once and stored only as its sha256.
+ * That is 40 bits: the hash keeps the code out of a casual read of the
+ * database, but anyone holding a copy could brute-force it, so the real bound
+ * is the ten-minute TTL and single use, not the hash. Redeeming one mints a
+ * device token — `hmt_` plus 32 random bytes in base64url — which is returned
+ * once and stored only as its sha256; at 256 bits, that hash is as good as
+ * gone.
  *
  * Verification hashes the presented token, looks the hash up, and compares the
  * two digests with `timingSafeEqual`; an unknown token is compared against a
@@ -118,6 +122,7 @@ export function issuePairCode(
   const expires_at = new Date(
     opts.now + (opts.ttlMs ?? MOBILE_PROTOCOL.PAIR_CODE_TTL_MS),
   ).toISOString();
+  // A digest, not a KDF: see the header — the TTL is what bounds a copied code.
   store.insertPairCode({
     code_sha256: sha256Hex(code),
     created_at: nowIso,

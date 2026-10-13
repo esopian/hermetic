@@ -37,7 +37,7 @@ export interface MobileCore {
     swarms(input: unknown, opts?: CallOpts): Promise<unknown>;
     sessions(input: unknown, opts?: CallOpts): Promise<unknown>;
     history(input: unknown, opts?: CallOpts): Promise<unknown>;
-    open(input: unknown, opts?: CallOpts): Promise<unknown>;
+    open(input: unknown, opts?: CallOpts): Promise<{ session: string }>;
     compact(input: unknown, opts?: CallOpts): Promise<unknown>;
     archive(input: unknown, opts?: CallOpts): Promise<unknown>;
     respond(input: unknown, opts?: CallOpts): Promise<unknown>;
@@ -54,9 +54,11 @@ export interface MobileCore {
   };
   agents: {
     list(input?: unknown): Promise<unknown>;
-    get(input: unknown): Promise<unknown>;
+    /** Takes the bare name, not the `{name}` request the surface validates. */
+    get(name: string): Promise<unknown>;
   };
   fleets: { list(input?: unknown): Promise<unknown> };
+  /** Read once at bridge start for `Hello.tailnet`; not reachable from a phone. */
   config: { show(): Promise<{ tailnet: string | null }> };
 }
 
@@ -74,16 +76,17 @@ const TABLE: Record<MobileAllowedMethod, RpcCall> = {
   "chat.respond": (c, p, signal) => c.chat.respond(p, { signal }),
   "chat.abort": (c, p, signal) => c.chat.abort(p, { signal }),
   "chat.steer": (c, p, signal) => c.chat.steer(p, { signal }),
-  "chat.settings": (c, p) => c.chat.settings(p),
+  // Read-only from a phone: the redaction setting is laptop-wide, so whatever
+  // the phone sent, core is asked to read.
+  "chat.settings": (c) => c.chat.settings({}),
   "notifications.list": (c, p) => c.notifications.list(p),
   "notifications.ack": (c, p) => c.notifications.ack(p),
   "notifications.clear": (c, p) => c.notifications.clear(p),
   "notifications.snooze": (c, p) => c.notifications.snooze(p),
   "notifications.mute": (c, p) => c.notifications.mute(p),
   "agents.list": (c, p) => c.agents.list(p),
-  "agents.get": (c, p) => c.agents.get(p),
+  "agents.get": (c, p) => c.agents.get((p as { name: string }).name),
   "fleets.list": (c, p) => c.fleets.list(p),
-  "config.show": (c) => c.config.show(),
 };
 
 /** The allowlist as a lookup that inherits nothing. */

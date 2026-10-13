@@ -21,7 +21,7 @@ import {
   MobileServeInput,
   MobileSettingsInput,
 } from "@hermetic/core";
-import type { MobileDevicesResult, MobilePairResult, MobileSettings } from "@hermetic/core";
+import type { MobileDevicesResult, MobilePairResult, MobileSettingsResult } from "@hermetic/core";
 import { encodeQr, qrToTerminal } from "@hermetic/core/shared";
 import { openCtx } from "../context.ts";
 import { declare } from "../declare.ts";
@@ -76,11 +76,13 @@ export function renderDevices(result: MobileDevicesResult): string {
   return `${serving}${renderTable(rows, ["DEVICE", "NAME", "PLATFORM", "PAIRED", "LAST SEEN", "PUSH"])}\n`;
 }
 
-function renderSettings(s: MobileSettings): string {
+/** The settings, and core's warning about them when it has one. Pure, for a test. */
+export function renderSettings(s: MobileSettingsResult): string {
   return (
     `enabled  ${s.enabled ? "yes" : "no"}\n` +
     `host     ${s.host ?? "(default: this laptop's Tailscale IPv4)"}\n` +
-    `port     ${s.port ?? "(default: 7877)"}\n`
+    `port     ${s.port ?? "(default: 7877)"}\n` +
+    (s.warning !== undefined ? `warning: ${s.warning}\n` : "")
   );
 }
 
@@ -174,7 +176,7 @@ export function register(program: Command): void {
         "after",
         "\nThe bridge never binds 0.0.0.0 unless told to. Phones reach it over the\n" +
           "tailnet; pair one with `hermetic mobile pair`. Ctrl-C closes every phone\n" +
-          "connection and stops any turn a phone started.\n",
+          "connection and asks the box to stop any turn a phone started.\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

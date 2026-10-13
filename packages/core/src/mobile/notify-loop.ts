@@ -7,6 +7,11 @@
  * process at all. The watermark starts at the moment the loop is built, so a
  * bridge that starts does not replay the whole inbox at every phone.
  *
+ * Core's `since` is strictly newer, at millisecond resolution, so two rows
+ * raised in the same millisecond on either side of a read would lose the
+ * second. The loop therefore asks from one millisecond before its watermark
+ * and remembers the ids it already sent at the watermark's millisecond.
+ *
  * A headless bridge also ticks `chat.swarms` — the roster read is what makes
  * core raise `chat.message` rows (§4.9), and without the desktop poller nobody
  * else would. The desktop host leaves it off.
@@ -43,6 +48,8 @@ export function createNotifyLoop(deps: NotifyLoopDeps): NotifyLoop {
   const pollMs = deps.pollMs ?? MOBILE_PROTOCOL.NOTIFY_POLL_MS;
   const swarmsMs = deps.swarmsMs ?? MOBILE_PROTOCOL.SWARMS_TICK_MS;
   let watermark = new Date(clock()).toISOString();
+  /** Ids already delivered whose `at` is exactly `watermark`. */
+  let atWatermark = new Set<string>();
   let chain: Promise<void> = Promise.resolve();
   let stopped = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -50,13 +57,21 @@ export function createNotifyLoop(deps: NotifyLoopDeps): NotifyLoop {
 
   async function read(): Promise<void> {
     try {
-      const result = await deps.list(watermark);
+      const since = new Date(Date.parse(watermark) - 1).toISOString();
+      const result = await deps.list(since);
       if (stopped) return;
       const counts = { unread: result.unread, needs_action: result.needs_action };
       // Oldest first, so a burst arrives in the order it was raised.
       for (const row of [...result.notifications].reverse()) {
-        // `since` is strictly-newer already; the watermark only moves forward.
-        if (row.at > watermark) watermark = row.at;
+        if (row.at < watermark) continue;
+        if (row.at === watermark) {
+          if (atWatermark.has(row.id)) continue;
+          atWatermark.add(row.id);
+        } else {
+          // The watermark only moves forward.
+          watermark = row.at;
+          atWatermark = new Set([row.id]);
+        }
         if (row.muted) continue;
         deps.onRow(row, counts);
       }

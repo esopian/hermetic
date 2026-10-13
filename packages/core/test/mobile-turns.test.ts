@@ -2,22 +2,30 @@
  * The bridge's turn registry (`mobile/turns.ts`): a turn runs to the end with
  * nobody attached, every frame gets a bridge `n`, a resume replays exactly what
  * came after `after`, a full buffer drops the oldest and says so, finished
- * turns are swept after retention, and an abort ends the turn `aborted`.
+ * turns are swept after retention, and an abort ends the turn `aborted`. A
+ * turn learns its session from `chat.open` before it sends, and a shutdown
+ * (`stopAll`) asks the box to stop every running turn, bounded.
  */
 import { describe, expect, test } from "bun:test";
 import { HermeticError } from "../src/errors.ts";
 import type { ChatFrame } from "../src/schema/index.ts";
 import { createTurnRegistry, type TurnEvent } from "../src/mobile/turns.ts";
 
-/** A `chat.send` the test feeds by hand. */
-function manualSend() {
+/** A `chat.send` the test feeds by hand, behind a `chat.open` that names the session. */
+function manualSend(session = "canon-1") {
   const queue: Array<ChatFrame | Error | null> = [];
   let wake: (() => void) | null = null;
   const sent: unknown[] = [];
+  const opened: unknown[] = [];
   let signal: AbortSignal | null = null;
   return {
     sent,
+    opened,
     signal: () => signal,
+    async open(input: { session?: string | undefined }): Promise<{ session: string }> {
+      opened.push(input);
+      return { session: input.session ?? session };
+    },
     push(item: ChatFrame | Error | null) {
       queue.push(item);
       wake?.();
@@ -55,13 +63,19 @@ describe("turn registry", () => {
     const chat = manualSend();
     const ends: string[] = [];
     const reg = createTurnRegistry({
+      open: chat.open,
       send: chat.send,
       abort: async () => ({}),
       onEnd: (t, info) => ends.push(`${t.state}:${info.reply}`),
     });
-    const t = reg.start(INPUT);
+    const t = await reg.start(INPUT);
     expect(t.state).toBe("running");
-    expect(chat.sent).toEqual([{ instance: "atlas", bot: "default", message: "hi" }]);
+    // No session asked for: `chat.open` named the canonical one, and the send went into it.
+    expect(chat.opened).toEqual([{ instance: "atlas", bot: "default" }]);
+    expect(chat.sent).toEqual([
+      { instance: "atlas", bot: "default", message: "hi", session: "canon-1" },
+    ]);
+    expect(t.session).toBe("canon-1");
     chat.push(delta(7, "Hel"));
     chat.push(delta(7, "lo"));
     chat.push(done(9));
@@ -89,8 +103,8 @@ describe("turn registry", () => {
 
   test("a resume replays only n > after, then goes live", async () => {
     const chat = manualSend();
-    const reg = createTurnRegistry({ send: chat.send, abort: async () => ({}) });
-    const t = reg.start(INPUT);
+    const reg = createTurnRegistry({ open: chat.open, send: chat.send, abort: async () => ({}) });
+    const t = await reg.start(INPUT);
     chat.push(delta(1, "a"));
     chat.push(delta(2, "b"));
     chat.push(delta(3, "c"));
@@ -108,8 +122,8 @@ describe("turn registry", () => {
 
   test("a detached listener hears nothing more", async () => {
     const chat = manualSend();
-    const reg = createTurnRegistry({ send: chat.send, abort: async () => ({}) });
-    const t = reg.start(INPUT);
+    const reg = createTurnRegistry({ open: chat.open, send: chat.send, abort: async () => ({}) });
+    const t = await reg.start(INPUT);
     const live: TurnEvent[] = [];
     const attached = reg.attach(t.turn_id, 0, (e) => live.push(e));
     chat.push(delta(1, "a"));
@@ -123,8 +137,13 @@ describe("turn registry", () => {
 
   test("a full buffer drops the oldest and marks the turn truncated", async () => {
     const chat = manualSend();
-    const reg = createTurnRegistry({ send: chat.send, abort: async () => ({}), maxFrames: 3 });
-    const t = reg.start(INPUT);
+    const reg = createTurnRegistry({
+      open: chat.open,
+      send: chat.send,
+      abort: async () => ({}),
+      maxFrames: 3,
+    });
+    const t = await reg.start(INPUT);
     for (let i = 1; i <= 5; i++) chat.push(delta(i, String(i)));
     chat.push(done(6));
     chat.push(null);
@@ -141,23 +160,25 @@ describe("turn registry", () => {
     let now = 1_000_000;
     const chat = manualSend();
     const reg = createTurnRegistry({
+      open: chat.open,
       send: chat.send,
       abort: async () => ({}),
       clock: () => now,
       retentionMs: 1_000,
     });
-    const finished = reg.start(INPUT);
+    const finished = await reg.start(INPUT);
     chat.push(done(1));
     chat.push(null);
     await settle();
     const chat2 = manualSend();
     const reg2 = createTurnRegistry({
+      open: chat2.open,
       send: chat2.send,
       abort: async () => ({}),
       clock: () => now,
       retentionMs: 1,
     });
-    const running = reg2.start(INPUT);
+    const running = await reg2.start(INPUT);
     now += 1_000;
     reg.sweep();
     expect(reg.summary(finished.turn_id)).not.toBeNull();
@@ -167,13 +188,14 @@ describe("turn registry", () => {
     expect(reg.summary(finished.turn_id)).toBeNull();
     expect(reg.attach(finished.turn_id, 0, () => {})).toBeNull();
     expect(reg2.summary(running.turn_id)?.state).toBe("running");
-    reg2.stopAll();
+    await reg2.stopAll();
   });
 
   test("abort asks core to stop the conversation, and the turn ends aborted", async () => {
     const chat = manualSend();
     const aborts: unknown[] = [];
     const reg = createTurnRegistry({
+      open: chat.open,
       send: chat.send,
       abort: async (input) => {
         aborts.push(input);
@@ -181,7 +203,7 @@ describe("turn registry", () => {
         return {};
       },
     });
-    const t = reg.start({ ...INPUT, session: "s1" });
+    const t = await reg.start({ ...INPUT, session: "s1" });
     chat.push(delta(1, "partial"));
     await settle();
     expect(await reg.abort(t.turn_id)).toBe(true);
@@ -195,12 +217,13 @@ describe("turn registry", () => {
   test("a stop the box refuses still ends the read", async () => {
     const chat = manualSend();
     const reg = createTurnRegistry({
+      open: chat.open,
       send: chat.send,
       abort: async () => {
         throw new HermeticError("CHAT_UNREACHABLE", "box gone");
       },
     });
-    const t = reg.start(INPUT);
+    const t = await reg.start(INPUT);
     await reg.abort(t.turn_id);
     await settle();
     expect(chat.signal()?.aborted).toBe(true);
@@ -211,19 +234,20 @@ describe("turn registry", () => {
     const chat = manualSend();
     const ends: string[] = [];
     const reg = createTurnRegistry({
+      open: chat.open,
       send: chat.send,
       abort: async () => ({}),
       onEnd: (t, info) => ends.push(`${t.state}:${info.error?.code}`),
     });
-    const a = reg.start(INPUT);
+    const a = await reg.start(INPUT);
     chat.push({ type: "error", code: "CHAT_TURN_FAILED", message: "nope" });
     chat.push(null);
     await settle();
     expect(reg.summary(a.turn_id)?.state).toBe("error");
 
     const chat2 = manualSend();
-    const reg2 = createTurnRegistry({ send: chat2.send, abort: async () => ({}) });
-    const b = reg2.start(INPUT);
+    const reg2 = createTurnRegistry({ open: chat2.open, send: chat2.send, abort: async () => ({}) });
+    const b = await reg2.start(INPUT);
     chat2.push(new HermeticError("CHAT_UNREACHABLE", "box gone"));
     await settle();
     const replay = reg2.attach(b.turn_id, 0, () => {})?.replay ?? [];
@@ -236,14 +260,81 @@ describe("turn registry", () => {
     expect(ends).toEqual(["error:CHAT_TURN_FAILED"]);
   });
 
-  test("a request core refuses throws from start and registers nothing", () => {
+  test("a request core refuses throws from start and registers nothing", async () => {
     const reg = createTurnRegistry({
+      open: async () => ({ session: "s" }),
       send: () => {
         throw new HermeticError("VALIDATION", "listen first");
       },
       abort: async () => ({}),
     });
-    expect(() => reg.start(INPUT)).toThrow("listen first");
+    await expect(reg.start(INPUT)).rejects.toThrow("listen first");
+    const refusedOpen = createTurnRegistry({
+      open: async () => {
+        throw new HermeticError("CHAT_UNREACHABLE", "box gone");
+      },
+      send: () => {
+        throw new Error("send must not run when open refused");
+      },
+      abort: async () => ({}),
+    });
+    await expect(refusedOpen.start(INPUT)).rejects.toThrow("box gone");
     expect(reg.list()).toEqual([]);
+    expect(refusedOpen.list()).toEqual([]);
+  });
+
+  test("a new_session turn runs in the session chat.open created, and its abort names it", async () => {
+    const chat = manualSend("fresh-7");
+    const aborts: unknown[] = [];
+    const reg = createTurnRegistry({
+      open: chat.open,
+      send: chat.send,
+      abort: async (input) => {
+        aborts.push(input);
+        chat.push(null);
+        return {};
+      },
+    });
+    const t = await reg.start({ ...INPUT, new_session: true });
+    expect(chat.opened).toEqual([{ instance: "atlas", bot: "default", new_session: true }]);
+    // The send continues what open made; it does not ask for yet another new one.
+    expect(chat.sent).toEqual([
+      { instance: "atlas", bot: "default", message: "hi", session: "fresh-7" },
+    ]);
+    expect(reg.summary(t.turn_id)?.session).toBe("fresh-7");
+    await reg.abort(t.turn_id);
+    expect(aborts).toEqual([{ instance: "atlas", bot: "default", session: "fresh-7" }]);
+  });
+
+  test("stopAll asks the box to stop each running turn, then ends the reads", async () => {
+    const chat = manualSend();
+    const aborts: unknown[] = [];
+    const reg = createTurnRegistry({
+      open: chat.open,
+      send: chat.send,
+      abort: async (input) => {
+        aborts.push(input);
+        return {};
+      },
+    });
+    await reg.start(INPUT);
+    await reg.stopAll();
+    expect(aborts).toEqual([{ instance: "atlas", bot: "default", session: "canon-1" }]);
+    expect(chat.signal()?.aborted).toBe(true);
+    expect(reg.list()).toEqual([]);
+  });
+
+  test("stopAll is bounded: a box that never answers costs the timeout, no more", async () => {
+    const chat = manualSend();
+    const reg = createTurnRegistry({
+      open: chat.open,
+      send: chat.send,
+      abort: () => new Promise<never>(() => {}),
+    });
+    await reg.start(INPUT);
+    const started = Date.now();
+    await reg.stopAll({ timeoutMs: 50 });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(chat.signal()?.aborted).toBe(true);
   });
 });

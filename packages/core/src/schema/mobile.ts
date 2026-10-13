@@ -107,6 +107,14 @@ export const MobileSettings = z.object({
 });
 export type MobileSettings = z.infer<typeof MobileSettings>;
 
+/**
+ * What `mobile.settings` answers: the settings as stored, plus a `warning` when
+ * they say something a head should repeat to the operator — today, a wildcard
+ * host, which binds every interface and is not an address a phone can reach.
+ */
+export const MobileSettingsResult = MobileSettings.extend({ warning: z.string().optional() });
+export type MobileSettingsResult = z.infer<typeof MobileSettingsResult>;
+
 export const MobileServeInput = z
   .object({
     host: Host.optional(),
@@ -164,10 +172,25 @@ export type MobileHello = z.infer<typeof MobileHello>;
 
 /* ── HTTP bodies ────────────────────────────────────────────────────────── */
 
+/**
+ * C0/C1 controls, and the bidi marks and overrides (U+200E/F, U+202A–E,
+ * U+2066–9) that would let a phone name itself so it reads differently in the
+ * device list than it is stored.
+ */
+const UNSAFE_NAME_CHARS = /[\p{Cc}\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
+/** A phone's self-chosen name: trimmed, 1–64 characters, nothing that reorders or hides text. */
+export const MobileDeviceName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .refine((v) => !UNSAFE_NAME_CHARS.test(v), "no control or bidi-override characters");
+
 export const MobilePairRequest = z
   .object({
     code: z.string().min(1).max(32),
-    device_name: z.string().min(1).max(64),
+    device_name: MobileDeviceName,
     platform: MobilePlatformSchema,
   })
   .strict();
@@ -211,6 +234,10 @@ export type MobileErrorBody = z.infer<typeof MobileErrorBody>;
 /* ── WebSocket: phone → bridge ──────────────────────────────────────────── */
 
 const FrameId = z.string().min(1).max(128);
+
+/** Where the phone app is: on screen, or backgrounded (and soon suspended). */
+export const MobileAppPhase = z.enum(["foreground", "background"]);
+export type MobileAppPhase = z.infer<typeof MobileAppPhase>;
 
 export const MobileTurnStartBody = z.object({
   instance: AgentName,
@@ -265,6 +292,7 @@ export const MobileClientFrame = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("observe.close"), id: FrameId, sub_id: z.string().min(1) }),
   z.object({ type: z.literal("pong") }),
+  z.object({ type: z.literal("phase"), phase: MobileAppPhase }),
 ]);
 export type MobileClientFrame = z.infer<typeof MobileClientFrame>;
 

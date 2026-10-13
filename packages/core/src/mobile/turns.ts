@@ -3,9 +3,11 @@
  * phone is still listening, with its frames kept so a phone that dropped can
  * pick up where it left off.
  *
- * A turn is detached from every socket. `start` calls `chat.send` (so a bad
- * request throws to the caller before anything is registered), then drains it
- * in the background. Each frame gets a bridge-assigned `n` — 1-based, strictly
+ * A turn is detached from every socket. `start` resolves the conversation
+ * with `chat.open` — so the turn knows the session it runs in, and an abort or
+ * a push names that session rather than "the canonical one, whichever that is
+ * now" — then calls `chat.send` into it (so a bad request throws to the caller
+ * before anything is registered), then drains it in the background. Each frame gets a bridge-assigned `n` — 1-based, strictly
  * increasing per turn — and core's own `seq` inside the frame is left alone:
  * it is upstream's per-session counter and means something else.
  *
@@ -17,10 +19,15 @@
  * to stop it (or the stream simply ended) without one; `error` on an `error`
  * frame or a throw. A throw is turned into an `error` frame so a reader sees
  * why the turn ended.
+ *
+ * `stopAll` (a bridge shutting down) asks the box to stop every running turn
+ * with `chat.abort`, waits a short, bounded while for those to land, then ends
+ * the reads: a phone-started turn does not keep spending tokens on a box after
+ * the bridge that started it is gone.
  */
 import { randomUUID } from "node:crypto";
 import { isHermeticError } from "../errors.ts";
-import type { ChatFrame, ChatSendInput, TurnSummary } from "../schema/index.ts";
+import type { ChatFrame, ChatOpenInput, ChatSendInput, TurnSummary } from "../schema/index.ts";
 import { redactText } from "../chat/chat-redact.ts";
 import { MOBILE_PROTOCOL, type MobileTurnState } from "./protocol.ts";
 
@@ -45,6 +52,8 @@ export interface TurnStartInput {
 }
 
 export interface TurnRegistryDeps {
+  /** `chat.open`: the conversation a turn runs in, created when `new_session` asks. */
+  open: (input: ChatOpenInput) => Promise<{ session: string }>;
   send: (input: ChatSendInput, opts: { signal: AbortSignal }) => AsyncIterable<ChatFrame>;
   abort: (input: { instance: string; bot: string; session?: string }) => Promise<unknown>;
   clock?: () => number;
@@ -65,8 +74,11 @@ export interface TurnAttach {
   detach(): void;
 }
 
+/** How long `stopAll` waits for the box to take its `chat.abort`s. */
+export const STOP_ALL_ABORT_MS = 2_000;
+
 export interface TurnRegistry {
-  start(input: TurnStartInput): TurnSummary;
+  start(input: TurnStartInput): Promise<TurnSummary>;
   /** `null` for an unknown or swept turn. The listener sees only what follows `replay`. */
   attach(turnId: string, after: number, listener: TurnListener): TurnAttach | null;
   /** `false` for an unknown turn or one already over. */
@@ -75,8 +87,8 @@ export interface TurnRegistry {
   /** Running turns and finished ones still within retention. */
   list(): TurnSummary[];
   sweep(): void;
-  /** Abort every running turn and forget everything. */
-  stopAll(): void;
+  /** Ask the box to stop every running turn (bounded), end their reads, forget everything. */
+  stopAll(opts?: { timeoutMs?: number }): Promise<void>;
 }
 
 interface Turn {
@@ -195,16 +207,31 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
     }
   }
 
+  function abortOnBox(t: Turn): Promise<unknown> {
+    return deps.abort({
+      instance: t.instance,
+      bot: t.bot,
+      ...(t.session !== null ? { session: t.session } : {}),
+    });
+  }
+
   return {
-    start(input) {
+    async start(input) {
       sweep();
       const controller = new AbortController();
+      // The conversation first: a refusal here is the caller's error, and what
+      // it answers is the session every later frame, abort and push names.
+      const conversation = await deps.open({
+        instance: input.instance,
+        bot: input.bot,
+        ...(input.session !== undefined ? { session: input.session } : {}),
+        ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
+      });
       const request: ChatSendInput = {
         instance: input.instance,
         bot: input.bot,
         message: input.message,
-        ...(input.session !== undefined ? { session: input.session } : {}),
-        ...(input.new_session !== undefined ? { new_session: input.new_session } : {}),
+        session: conversation.session,
       };
       // Synchronous on purpose: a request core refuses is the caller's error,
       // not a turn that ended at once.
@@ -214,7 +241,7 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
         device_id: input.device_id,
         instance: input.instance,
         bot: input.bot,
-        session: input.session ?? null,
+        session: conversation.session,
         started_at: new Date(clock()).toISOString(),
         state: "running",
         frames: [],
@@ -260,11 +287,7 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
       if (t === undefined || t.state !== "running") return false;
       t.abortRequested = true;
       try {
-        await deps.abort({
-          instance: t.instance,
-          bot: t.bot,
-          ...(t.session !== null ? { session: t.session } : {}),
-        });
+        await abortOnBox(t);
       } catch {
         // The box would not take the stop; ending our read still ends the turn here.
         t.controller.abort();
@@ -284,14 +307,21 @@ export function createTurnRegistry(deps: TurnRegistryDeps): TurnRegistry {
 
     sweep,
 
-    stopAll() {
-      for (const t of turns.values()) {
-        if (t.state === "running") {
-          t.abortRequested = true;
-          t.controller.abort();
-        }
-      }
+    async stopAll(opts = {}) {
+      const running = [...turns.values()].filter((t) => t.state === "running");
       turns.clear();
+      for (const t of running) t.abortRequested = true;
+      if (running.length > 0) {
+        // Best effort: a box that will not answer costs at most the timeout.
+        const stops = running.map((t) => Promise.resolve().then(() => abortOnBox(t)));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, opts.timeoutMs ?? STOP_ALL_ABORT_MS);
+        });
+        await Promise.race([Promise.allSettled(stops), timeout]);
+        clearTimeout(timer);
+      }
+      for (const t of running) t.controller.abort();
     },
   };
 }

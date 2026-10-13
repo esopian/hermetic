@@ -26,6 +26,7 @@ import type {
   MobilePairResult,
   MobileRevokeResult,
   MobileSettings,
+  MobileSettingsResult,
   OpEvent,
   TailscalePreflight,
 } from "../schema/index.ts";
@@ -71,6 +72,16 @@ const LOOPBACK = "127.0.0.1";
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const WILDCARD = new Set(["0.0.0.0", "::", "[::]"]);
 
+/** Is this a bind-every-interface host rather than an address? */
+export function isWildcardHost(host: string | null | undefined): boolean {
+  return host !== null && host !== undefined && WILDCARD.has(host);
+}
+
+/** What `mobile.settings` says about a wildcard host, in every head. */
+export const WILDCARD_HOST_WARNING =
+  "the bridge binds every interface: anything that can reach this laptop can try a token, " +
+  "and pair URLs advertise the Tailscale IPv4 (or 127.0.0.1) instead";
+
 function parse<T>(schema: ZodType<T>, input: unknown, what: string): T {
   const result = schema.safeParse(input ?? {});
   if (result.success) return result.data;
@@ -91,6 +102,11 @@ export function createMobile(deps: MobileDeps) {
   async function defaultHost(): Promise<string> {
     const configured = deps.store.settings().host;
     if (configured !== null) return configured;
+    return await reachableHost();
+  }
+
+  /** The tailnet IPv4, else loopback: an address, never a wildcard. */
+  async function reachableHost(): Promise<string> {
     if (deps.fixture) return LOOPBACK;
     try {
       const probe = await deps.localTailscale();
@@ -137,9 +153,19 @@ export function createMobile(deps: MobileDeps) {
     const req = parse(MobilePairInput, input, "mobile pair");
     const target = deps.core().target;
     if (target === null) throw new HermeticError("NOT_INITIALIZED", "no fleet to pair a phone with");
-    // A wildcard bind is where the bridge listens, not where a phone can reach it.
-    const running = active !== null && !WILDCARD.has(active.host) ? active : null;
-    const host = req.host ?? running?.host ?? (await defaultHost());
+    if (isWildcardHost(req.host)) {
+      throw new HermeticError(
+        "VALIDATION",
+        "a wildcard is where a bridge listens, not an address a phone can reach; name an address",
+        { host: req.host },
+      );
+    }
+    // A wildcard bind (running, or in settings) is where the bridge listens,
+    // not where a phone can reach it: the URL names the tailnet or loopback.
+    const running = active !== null && !isWildcardHost(active.host) ? active : null;
+    const fallback = await defaultHost();
+    const host =
+      req.host ?? running?.host ?? (isWildcardHost(fallback) ? await reachableHost() : fallback);
     const port = req.port ?? running?.port ?? defaultPort();
     const issued = issuePairCode(deps.store, { now: clock(), ttlMs: req.ttl_ms, name: req.name });
     const params = new URLSearchParams({
@@ -173,13 +199,15 @@ export function createMobile(deps: MobileDeps) {
     return { revoked };
   }
 
-  async function settings(input: unknown = {}): Promise<MobileSettings> {
+  async function settings(input: unknown = {}): Promise<MobileSettingsResult> {
     const req = parse(MobileSettingsInput, input, "mobile settings");
     const patch: Partial<MobileSettings> = {};
     if (req.enabled !== undefined) patch.enabled = req.enabled;
     if (req.host !== undefined) patch.host = req.host;
     if (req.port !== undefined) patch.port = req.port;
-    return Object.keys(patch).length === 0 ? deps.store.settings() : deps.store.setSettings(patch);
+    const stored =
+      Object.keys(patch).length === 0 ? deps.store.settings() : deps.store.setSettings(patch);
+    return isWildcardHost(stored.host) ? { ...stored, warning: WILDCARD_HOST_WARNING } : stored;
   }
 
   /**

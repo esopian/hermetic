@@ -70,6 +70,8 @@ export async function startInit(
   ops: OpRegistry,
   input: InitInput,
   log?: AppLog,
+  /** Called once the new fleet is adopted (the phone bridge follows the instance). */
+  onAdopted?: () => void,
 ): Promise<{ op_id: string; op: OpSummary }> {
   const session = state.session;
   if (!session) {
@@ -158,6 +160,7 @@ export async function startInit(
       try {
         await state.adopt();
         log?.line("info", "init", "adopted the new fleet; serving the dashboard");
+        onAdopted?.();
       } catch (e) {
         // `adopt()` already recorded `adoptError`; the fleet exists either way,
         // and swallowing this is better than an unhandled rejection taking the

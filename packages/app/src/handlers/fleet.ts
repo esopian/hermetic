@@ -145,6 +145,8 @@ export async function fleetsSwitch(ctx: HandlerContext, params: unknown) {
    */
   await chatOwner.reset();
   void chatOwner.sync();
+  // The phone bridge served the fleet just left; restart it on this one.
+  await ctx.mobile?.sync();
   // The id the switch landed on, which is not necessarily what was asked for:
   // the request may name a display alias, and the resolver answers with the
   // fleet's own id.

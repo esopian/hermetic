@@ -68,9 +68,32 @@ function messageOf(e: unknown): string {
 
 type Follow = "off" | "following" | "unavailable";
 
-/** The QR for a pair URL, drawn from core's encoder. The SVG is numbers only: no input text reaches the markup. */
+/** A pair URL as an SVG QR, or `null` when it is too long for the encoder (a long host name). */
+function qrSvgOf(url: string): string | null {
+  try {
+    return qrToSvg(encodeQr(url));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The QR for a pair URL, drawn from core's encoder. The SVG is numbers only: no
+ * input text reaches the markup. A URL the encoder cannot fit shows as text
+ * instead — the phone can still pair by pasting it or typing the code.
+ */
 function PairQr({ url }: { url: string }) {
-  const svg = useMemo(() => qrToSvg(encodeQr(url)), [url]);
+  const svg = useMemo(() => qrSvgOf(url), [url]);
+  if (svg === null) {
+    return (
+      <span className="mob-pair-url" data-testid="pair-url">
+        <span className="kicker">Pair URL (too long for a QR)</span>
+        <span className="mono" style={{ overflowWrap: "anywhere" }}>
+          {url}
+        </span>
+      </span>
+    );
+  }
   return (
     <span
       className="mob-qr"

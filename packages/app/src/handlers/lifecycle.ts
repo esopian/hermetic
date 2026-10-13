@@ -68,7 +68,7 @@ export async function init(ctx: HandlerContext, params: unknown): Promise<Accept
       'init needs the twelve-digit account id typed back; send {"account_id_typed": "…"}',
     );
   }
-  return await startInit(state, ops, input, opts.log);
+  return await startInit(state, ops, input, opts.log, () => void ctx.mobile?.sync());
 }
 
 export async function teardown(ctx: HandlerContext, params: unknown): Promise<Accepted> {

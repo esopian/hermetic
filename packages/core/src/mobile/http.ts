@@ -60,8 +60,17 @@ function authenticate(ctx: BridgeCtx, req: Request): MobileDeviceRow {
   return device;
 }
 
-/** The answer to one HTTP request that is not a WebSocket upgrade. */
-export async function handleHttp(ctx: BridgeCtx, req: Request, source: string): Promise<Response> {
+/**
+ * The answer to one HTTP request that is not a WebSocket upgrade. `untimed`
+ * lifts the server's idle timeout off this request; it is called only once the
+ * request has authenticated and is about to wait on core.
+ */
+export async function handleHttp(
+  ctx: BridgeCtx,
+  req: Request,
+  source: string,
+  untimed: () => void = () => {},
+): Promise<Response> {
   const url = new URL(req.url);
   const route = `${req.method} ${url.pathname}`;
   const isRpc = url.pathname === MOBILE_ROUTES.rpc;
@@ -85,6 +94,11 @@ export async function handleHttp(ctx: BridgeCtx, req: Request, source: string): 
         // The limiter is checked before the body is even read.
         ctx.limiter.check(source, ctx.clock());
         const body = await readBody(req, MobilePairRequest);
+        // A bridge with no fleet cannot build the `Hello` a pairing answers
+        // with; refusing before the code is spent leaves it for a retry.
+        if (ctx.core().target === null) {
+          throw new HermeticError("NOT_INITIALIZED", "this laptop has no fleet to serve");
+        }
         const { token, device } = redeemPairCode(ctx.store, body, {
           now: ctx.clock(),
           source,
@@ -101,6 +115,7 @@ export async function handleHttp(ctx: BridgeCtx, req: Request, source: string): 
 
       case `POST ${MOBILE_ROUTES.rpc}`: {
         authenticate(ctx, req);
+        untimed();
         const body = await readBody(req, MobileRpcRequest);
         const core = ctx.core();
         guardFleet(core, body.target);

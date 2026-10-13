@@ -9,8 +9,9 @@
  * cut to 140 characters, and a device with previews off gets a fixed body
  * instead ("Reply ready", "Needs you"). Inbox rows are already worded by core
  * without message text. Each push carries a dedupe key, and the notifier sends
- * a key to a device at most once; a phone whose socket is live gets the frame
- * instead of the push.
+ * a key to a device at most once; a phone with a socket open in the foreground
+ * gets the frame instead of the push. A backgrounded app may be suspended
+ * before it can raise an alert from a frame, so it gets both and dedupes.
  */
 import type { FetchLike } from "../aws/tailscale.ts";
 import { redactText } from "../chat/chat-redact.ts";
@@ -20,6 +21,8 @@ import { MOBILE_PROTOCOL, MOBILE_PUSH_CATEGORIES, type MobilePushKind } from "./
 
 export const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 export const EXPO_PUSH_BATCH = 100;
+/** One batch's whole round trip, body read included. */
+export const EXPO_PUSH_TIMEOUT_MS = 10_000;
 
 export interface ExpoPushMessage {
   to: string;
@@ -60,9 +63,21 @@ function receiptOf(value: unknown): PushReceipt {
   };
 }
 
-/** Expo's push API, a batch of 100 per request. Never throws: a failure is a receipt. */
-export function expoPushSender(fetch: FetchLike, opts: { url?: string } = {}): PushSender {
+/**
+ * Expo's push API, a batch of 100 per request, each bounded by
+ * `EXPO_PUSH_TIMEOUT_MS`. Never throws: a failure is a receipt.
+ *
+ * What is read is Expo's push *tickets*. A ticket can say ok while delivery
+ * later fails at APNs or FCM, which only the receipts endpoint reports.
+ * TODO(mobile): poll `/push/getReceipts` for the ticket ids and clear a token
+ * whose receipt says `DeviceNotRegistered`, as the ticket path below does.
+ */
+export function expoPushSender(
+  fetch: FetchLike,
+  opts: { url?: string; timeoutMs?: number } = {},
+): PushSender {
   const url = opts.url ?? EXPO_PUSH_URL;
+  const timeoutMs = opts.timeoutMs ?? EXPO_PUSH_TIMEOUT_MS;
   return async (messages) => {
     const receipts: PushReceipt[] = [];
     for (let i = 0; i < messages.length; i += EXPO_PUSH_BATCH) {
@@ -76,6 +91,7 @@ export function expoPushSender(fetch: FetchLike, opts: { url?: string } = {}): P
             "content-type": "application/json",
           },
           body: JSON.stringify(batch),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (!response.ok) {
           receipts.push(...failedBatch(batch.length, `push service answered ${response.status}`));
@@ -255,7 +271,7 @@ export interface PushNotifier {
 export interface PushNotifierDeps {
   store: MobileStore;
   sender: PushSender;
-  /** A device with a live socket gets the frame instead. */
+  /** A device with a foreground socket gets the frame instead. */
   isLive: (deviceId: string) => boolean;
   /** How many `(device, dedupe)` pairs to remember. */
   remember?: number;

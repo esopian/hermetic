@@ -52,7 +52,12 @@ export async function mobileDevices(ctx: HandlerContext, params: unknown) {
 }
 
 export async function mobileRevoke(ctx: HandlerContext, params: unknown) {
-  return await ctx.hermetic().mobile.revoke(parseInput(mobileRevokeSchema, params));
+  const input = parseInput(mobileRevokeSchema, params);
+  const result = await ctx.hermetic().mobile.revoke(input);
+  // The phone's sockets go now, not at the next heartbeat, whichever instance
+  // the hosted bridge belongs to.
+  if (result.revoked) ctx.mobile?.dropDevice(input.device_id);
+  return result;
 }
 
 export async function mobileSettings(ctx: HandlerContext, params: unknown) {

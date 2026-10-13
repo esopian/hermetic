@@ -3,7 +3,18 @@
  *
  * A socket is nobody until it sends `auth` within `AUTH_DEADLINE_MS`; until
  * then any other frame closes it 4401. After `auth.ok` it may call allowlisted
- * methods (`rpc`), start, resume and abort turns, and open observations.
+ * methods (`rpc`), start, resume and abort turns, and open observations. A
+ * bridge that cannot build `Hello` (no fleet, a teardown or the wizard) closes
+ * 4503 instead: 4401 is only ever a token the bridge does not honour.
+ *
+ * A socket also says whether its app is in the foreground (`phase`). Only a
+ * foreground socket makes its device "live" for push suppression: a
+ * backgrounded app gets both the frame and the push, and dedupes them.
+ *
+ * Nothing a handler throws reaches the process: a store or core failure
+ * outside a request's own error path closes that one socket 1011. A frame the
+ * transport would not take closes it 1013, so the phone reconnects and resumes
+ * from its last `n` rather than missing a frame silently.
  *
  * Turns outlive sockets (`turns.ts`): a socket only *attaches* to a turn, and
  * closing it detaches. Observations do not: each is a guest of the shared
@@ -14,7 +25,7 @@
  * it uses, so nothing here depends on how the socket was accepted.
  */
 import { randomUUID } from "node:crypto";
-import type { ChatObserveEvent } from "../schema/index.ts";
+import type { ChatObserveEvent, MobileAppPhase } from "../schema/index.ts";
 import { ChatObserveInput, MobileClientFrame } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import { type BridgeCtx, buildHello, guardFleet, wireError } from "./bridge-ctx.ts";
@@ -34,11 +45,16 @@ export interface SocketData {
   subs: Map<string, AbortController>;
   /** Turns this socket is attached to: `turn_id` → detach. */
   turns: Map<string, () => void>;
+  /** In-flight `rpc` calls, aborted when the socket closes. */
+  rpcs: Set<AbortController>;
+  /** The app's phase as the phone last reported it; foreground from `auth` until told otherwise. */
+  phase: MobileAppPhase;
   closed: boolean;
 }
 
 export interface MobileSocket {
   data: SocketData;
+  /** Bun's answer: bytes sent, `-1` queued under backpressure, `0` dropped. */
   send(text: string): unknown;
   close(code?: number, reason?: string): void;
 }
@@ -52,15 +68,29 @@ export function newSocketData(source: string, now: number): SocketData {
     lastSeen: now,
     subs: new Map(),
     turns: new Map(),
+    rpcs: new Set(),
+    phase: "foreground",
     closed: false,
   };
 }
 
+export interface SocketHubLimits {
+  /** Sockets of any kind, across every source. */
+  maxSockets: number;
+  /** Not-yet-authenticated sockets from one source address. */
+  maxPreAuthPerSource: number;
+}
+
+export const DEFAULT_SOCKET_LIMITS: SocketHubLimits = { maxSockets: 64, maxPreAuthPerSource: 8 };
+
 export interface SocketHub {
+  /** Would one more socket from `source` fit under the caps? */
+  admits(source: string): boolean;
   open(ws: MobileSocket): void;
   message(ws: MobileSocket, raw: string | Buffer): Promise<void>;
   close(ws: MobileSocket): void;
   broadcast(frame: Record<string, unknown>): void;
+  /** Does this device have an open socket whose app is in the foreground? */
   isLive(deviceId: string): boolean;
   /** Ping every socket, drop the silent and the revoked. */
   heartbeat(): void;
@@ -75,17 +105,26 @@ export interface SocketHub {
 
 type ClientFrame = MobileClientFrame;
 
-export function createSocketHub(ctx: BridgeCtx): SocketHub {
+export function createSocketHub(
+  ctx: BridgeCtx,
+  limits: SocketHubLimits = DEFAULT_SOCKET_LIMITS,
+): SocketHub {
   const sockets = new Set<MobileSocket>();
-  const live = new Map<string, number>();
 
+  /**
+   * One frame to one socket. A frame the transport dropped (`0`) or refused
+   * (a throw) closes the socket 1013: a turn frame lost in silence would leave
+   * the phone's `n` with a gap it cannot see, while a reconnect resumes it.
+   */
   function send(ws: MobileSocket, frame: Record<string, unknown>): void {
     if (ws.data.closed) return;
+    let sent: unknown;
     try {
-      ws.send(JSON.stringify(frame));
+      sent = ws.send(JSON.stringify(frame));
     } catch {
-      /* a socket that cannot take a frame is closing; its close handler cleans up */
+      sent = 0;
     }
+    if (sent === 0) shut(ws, MOBILE_CLOSE_CODES.SLOW_CONSUMER, "send failed");
   }
 
   function shut(ws: MobileSocket, code: number, reason: string): void {
@@ -133,10 +172,14 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
     for (const event of attached.replay) turnFrame(ws, event);
   }
 
-  function markLive(deviceId: string, delta: number): void {
-    const next = (live.get(deviceId) ?? 0) + delta;
-    if (next <= 0) live.delete(deviceId);
-    else live.set(deviceId, next);
+  function preAuthFrom(source: string): number {
+    let n = 0;
+    for (const ws of sockets) if (ws.data.device === null && ws.data.source === source) n++;
+    return n;
+  }
+
+  function admits(source: string): boolean {
+    return sockets.size < limits.maxSockets && preAuthFrom(source) < limits.maxPreAuthPerSource;
   }
 
   async function onAuth(ws: MobileSocket, frame: Extract<ClientFrame, { type: "auth" }>) {
@@ -148,6 +191,7 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
       shut(ws, MOBILE_CLOSE_CODES.PROTOCOL_MISMATCH, "protocol mismatch");
       return;
     }
+    // A store that throws here escapes to `message`, which closes the socket 1011.
     const device = verifyToken(ctx.store, frame.token);
     if (device === null) {
       send(ws, {
@@ -160,17 +204,21 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
     if (ws.data.deadline !== null) clearTimeout(ws.data.deadline);
     ws.data.deadline = null;
     ws.data.device = device;
+    ws.data.phase = "foreground";
     ctx.store.touch(device.device_id, new Date(ctx.clock()).toISOString());
-    markLive(device.device_id, 1);
     ctx.emit({ type: "device", device_id: device.device_id, action: "connected" });
     let hello: Awaited<ReturnType<typeof buildHello>>;
     try {
       hello = await buildHello(ctx, device);
     } catch (e) {
+      // The token is good; the bridge has no fleet to answer for right now.
       send(ws, { type: "auth.error", error: wireError(e).body });
-      shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "no fleet");
+      shut(ws, MOBILE_CLOSE_CODES.UNAVAILABLE, "unavailable");
       return;
     }
+    // The socket may have gone while `Hello` was built; attaching a dead one
+    // to a turn would leave a listener nobody detaches.
+    if (ws.data.closed) return;
     send(ws, { type: "auth.ok", hello });
     for (const resume of frame.resume?.turns ?? []) {
       const attached = attachTurn(ws, resume.turn_id, resume.after);
@@ -235,11 +283,15 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
         return;
       case "pong":
         return;
+      case "phase":
+        ws.data.phase = frame.phase;
+        return;
       case "rpc": {
+        const controller = new AbortController();
+        ws.data.rpcs.add(controller);
         try {
           const core = ctx.core();
           guardFleet(core, frame.target);
-          const controller = new AbortController();
           const result = await forwardRpc(core, frame.method, frame.params, controller.signal);
           res(ws, frame.id, result);
           if (frame.method === "chat.listen") {
@@ -247,14 +299,16 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
           }
         } catch (e) {
           resError(ws, frame.id, e);
+        } finally {
+          ws.data.rpcs.delete(controller);
         }
         return;
       }
       case "turn.start": {
-        let summary: ReturnType<typeof ctx.turns.start>;
+        let summary: Awaited<ReturnType<typeof ctx.turns.start>>;
         try {
           guardFleet(ctx.core(), frame.target);
-          summary = ctx.turns.start({
+          summary = await ctx.turns.start({
             device_id: device.device_id,
             instance: frame.turn.instance,
             bot: frame.turn.bot,
@@ -264,6 +318,11 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
           });
         } catch (e) {
           resError(ws, frame.id, e);
+          return;
+        }
+        // The turn runs whether or not this socket is still here to see it.
+        if (ws.data.closed) {
+          broadcast({ type: "turn.started", turn: summary });
           return;
         }
         const attached = attachTurn(ws, summary.turn_id, 0);
@@ -303,11 +362,18 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
       case "observe.open": {
         try {
           guardFleet(ctx.core(), frame.target);
-          const input = ChatObserveInput.parse({
+          const parsed = ChatObserveInput.safeParse({
             instance: frame.instance,
             bot: frame.bot,
             ...(typeof frame.session === "string" ? { session: frame.session } : {}),
           });
+          if (!parsed.success) {
+            const issues = parsed.error.issues.map(
+              (i) => `${i.path.join(".") || "(root)"}: ${i.message}`,
+            );
+            throw new HermeticError("VALIDATION", "observe.open does not validate", { issues });
+          }
+          const input = parsed.data;
           const subId = randomUUID();
           const controller = new AbortController();
           ws.data.subs.set(subId, controller);
@@ -332,8 +398,57 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
     for (const ws of sockets) if (ws.data.device !== null) send(ws, frame);
   }
 
+  /** One frame, start to finish. Throws only what a handler did not expect. */
+  async function handle(ws: MobileSocket, raw: string | Buffer): Promise<void> {
+    ws.data.lastSeen = ctx.clock();
+    const text = typeof raw === "string" ? raw : raw.toString("utf8");
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      protocolError(ws, "frame is not JSON");
+      return;
+    }
+    const parsed = MobileClientFrame.safeParse(value);
+    if (!parsed.success) {
+      // Before auth, a frame that is not a well-formed `auth` is an unauthorized socket.
+      if (ws.data.device === null) {
+        send(ws, {
+          type: "auth.error",
+          error: { code: "UNAUTHORIZED", message: "authenticate first" },
+        });
+        shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
+        return;
+      }
+      protocolError(ws, "frame does not validate");
+      return;
+    }
+    const frame = parsed.data;
+    const device = ws.data.device;
+    if (device === null) {
+      if (frame.type !== "auth") {
+        send(ws, {
+          type: "auth.error",
+          error: { code: "UNAUTHORIZED", message: "authenticate first" },
+        });
+        shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
+        return;
+      }
+      await onAuth(ws, frame);
+      return;
+    }
+    await onFrame(ws, device, frame);
+  }
+
   return {
+    admits,
+
     open(ws) {
+      // Counted before this socket joins: at the cap, it is the one refused.
+      if (!admits(ws.data.source)) {
+        shut(ws, MOBILE_CLOSE_CODES.TOO_MANY_SOCKETS, "too many sockets");
+        return;
+      }
       sockets.add(ws);
       ws.data.deadline = setTimeout(() => {
         if (ws.data.device === null) shut(ws, MOBILE_CLOSE_CODES.AUTH_DEADLINE, "auth deadline");
@@ -341,44 +456,13 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
     },
 
     async message(ws, raw) {
-      ws.data.lastSeen = ctx.clock();
-      const text = typeof raw === "string" ? raw : raw.toString("utf8");
-      let value: unknown;
       try {
-        value = JSON.parse(text);
+        await handle(ws, raw);
       } catch {
-        protocolError(ws, "frame is not JSON");
-        return;
+        // A store or core failure outside a request's own error path: this
+        // socket goes, the process and every other socket stay.
+        shut(ws, MOBILE_CLOSE_CODES.INTERNAL, "internal error");
       }
-      const parsed = MobileClientFrame.safeParse(value);
-      if (!parsed.success) {
-        // Before auth, a frame that is not a well-formed `auth` is an unauthorized socket.
-        if (ws.data.device === null) {
-          send(ws, {
-            type: "auth.error",
-            error: { code: "UNAUTHORIZED", message: "authenticate first" },
-          });
-          shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
-          return;
-        }
-        protocolError(ws, "frame does not validate");
-        return;
-      }
-      const frame = parsed.data;
-      const device = ws.data.device;
-      if (device === null) {
-        if (frame.type !== "auth") {
-          send(ws, {
-            type: "auth.error",
-            error: { code: "UNAUTHORIZED", message: "authenticate first" },
-          });
-          shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "unauthorized");
-          return;
-        }
-        await onAuth(ws, frame);
-        return;
-      }
-      await onFrame(ws, device, frame);
     },
 
     close(ws) {
@@ -390,9 +474,10 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
       ws.data.turns.clear();
       for (const controller of ws.data.subs.values()) controller.abort();
       ws.data.subs.clear();
+      for (const controller of ws.data.rpcs) controller.abort();
+      ws.data.rpcs.clear();
       const device = ws.data.device;
       if (device !== null) {
-        markLive(device.device_id, -1);
         ctx.emit({ type: "device", device_id: device.device_id, action: "disconnected" });
       }
     },
@@ -400,7 +485,11 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
     broadcast,
 
     isLive(deviceId) {
-      return (live.get(deviceId) ?? 0) > 0;
+      for (const ws of sockets) {
+        if (ws.data.closed || ws.data.phase !== "foreground") continue;
+        if (ws.data.device?.device_id === deviceId) return true;
+      }
+      return false;
     },
 
     heartbeat() {
@@ -408,7 +497,13 @@ export function createSocketHub(ctx: BridgeCtx): SocketHub {
       for (const ws of [...sockets]) {
         const device = ws.data.device;
         if (device === null) continue;
-        const current = ctx.store.device(device.device_id);
+        let current: ReturnType<typeof ctx.store.device>;
+        try {
+          current = ctx.store.device(device.device_id);
+        } catch {
+          shut(ws, MOBILE_CLOSE_CODES.INTERNAL, "internal error");
+          continue;
+        }
         if (current === null || current.revoked_at !== null) {
           shut(ws, MOBILE_CLOSE_CODES.UNAUTHORIZED, "revoked");
           continue;

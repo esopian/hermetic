@@ -553,7 +553,10 @@ const MIGRATIONS: Migration[] = [
      * Local for the reason the inbox is: a phone pairs with *this laptop*, and
      * a colleague on the same fleet pairs their own. Neither table ever holds
      * a raw secret — a device is found by the sha256 of its token and a code
-     * by the sha256 of the code — so a copied database pairs nothing.
+     * by the sha256 of the code. A token is 256 random bits, so its hash gives
+     * a copied database nothing to sign in with. A code is only 40 bits: its
+     * hash slows a casual read, not a determined one, and what bounds a copied
+     * code is its ten-minute life and single use.
      */
     name: "mobile-devices",
     version: 16,

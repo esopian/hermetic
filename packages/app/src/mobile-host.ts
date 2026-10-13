@@ -7,8 +7,9 @@
  * `mobileBridgeHost(hermetic)`); this module decides its lifetime and fans its
  * events out to the pages that follow it (`mobile.serve`). It never ticks
  * `chat.swarms` — the fleet poller already does — and it follows the current
- * `Hermetic`: a fleet switch restarts the bridge on the new one at the next
- * `sync()` or `ensureStarted()`.
+ * `Hermetic`: every handler that swaps it (a fleet switch, the wizard adopting
+ * a fresh `init`, a teardown's reset) calls `sync()`, which restarts the
+ * bridge on the new instance, or stops it when there is no fleet to serve.
  *
  * What it logs is ids, urls and outcomes. Never a token, a pair code, a
  * message or a request's params.
@@ -26,8 +27,18 @@ export interface MobileHost {
   /** Start the bridge on the current `Hermetic` (restarting it after a fleet switch). */
   ensureStarted(): Promise<MobileServeStatus>;
   stop(reason?: string): Promise<void>;
-  /** Start or stop to match `mobile.settings.enabled`. Never throws. */
+  /**
+   * Start, restart or stop to match the current `Hermetic` and its
+   * `mobile.settings.enabled`. No fleet (the wizard, mid-teardown) stops it.
+   * Never throws.
+   */
   sync(): Promise<void>;
+  /**
+   * Close a revoked device's sockets on the hosted bridge now. Core's revoke
+   * already does this for the bridge its own instance hosts; this covers a
+   * bridge still owned by the instance a swap is replacing.
+   */
+  dropDevice(deviceId: string): void;
   status(): MobileServeStatus | null;
   /** A `status` frame now, then every bridge event, until the handle closes. */
   follow(sink: StreamSink): StreamHandle;
@@ -105,11 +116,20 @@ export function createMobileHost(deps: MobileHostDeps): MobileHost {
     stop: (reason = "stopped") => serial(() => stopNow(reason)),
     sync: () =>
       serial(async () => {
+        let reason = "no fleet";
+        let enabled = false;
         try {
           const hermetic = deps.hermetic();
-          const enabled = hermetic.target !== null && mobileBridgeHost(hermetic).settings().enabled;
+          if (hermetic.target !== null) {
+            enabled = mobileBridgeHost(hermetic).settings().enabled;
+            reason = "disabled";
+          }
+        } catch {
+          // No instance at all (between a teardown and the wizard): nothing to serve.
+        }
+        try {
           if (enabled) await startNow();
-          else await stopNow("disabled");
+          else await stopNow(reason);
         } catch (e) {
           deps.log?.line("warn", "mobile", "bridge could not start", {
             code: typeof e === "object" && e !== null && "code" in e ? String(e.code) : "INTERNAL",
@@ -117,6 +137,16 @@ export function createMobileHost(deps: MobileHostDeps): MobileHost {
         }
       }),
     status: () => bridge?.status() ?? null,
+    dropDevice(deviceId) {
+      if (bridge === null) return;
+      let current: Hermetic | null = null;
+      try {
+        current = deps.hermetic();
+      } catch {
+        /* no instance: the bridge is a leftover, drop on it */
+      }
+      if (current !== owner) bridge.dropDevice(deviceId);
+    },
     follow(sink) {
       followers.add(sink);
       void sink({ event: "status", data: bridge?.status() ?? null });

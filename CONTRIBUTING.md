@@ -336,7 +336,9 @@ Prerequisites, only to run the app in the iOS simulator:
 - macOS with **Xcode** (the full app, not only the command line tools) and an iOS simulator runtime
   installed from Xcode → Settings → Components.
 - **CocoaPods** (`brew install cocoapods`): the first `bun run ios` generates `mobile/ios/` and runs
-  `pod install`. `ios/` is generated and git-ignored.
+  `pod install`. `ios/` is generated and git-ignored. Run root tests with the bun pinned in
+  `.bun-version`: bun 1.3 mis-scans the generated `mobile/ios/Pods` tree (thousands of header
+  symlinks) during `bun test` discovery and every spawn-based test then sees empty output.
 - Node, which Expo's CLI runs on, alongside Bun.
 
 ```

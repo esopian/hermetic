@@ -3,7 +3,7 @@
  * the code, the URL and a QR; the device table never shows a token.
  */
 import { describe, expect, test } from "bun:test";
-import { renderDevices, renderPair } from "../src/commands/mobile.ts";
+import { renderDevices, renderPair, renderSettings } from "../src/commands/mobile.ts";
 
 const PAIR = {
   code: "ABCD2345",
@@ -43,5 +43,18 @@ describe("mobile rendering", () => {
     expect(text).toContain("FIXTURE phone");
     expect(text).toContain("on, no previews");
     expect(renderDevices({ devices: [], serving: null })).toContain("no paired devices");
+  });
+
+  test("settings repeat core's warning about a wildcard host", () => {
+    const plain = renderSettings({ enabled: true, host: null, port: null });
+    expect(plain).not.toContain("warning");
+    const wild = renderSettings({
+      enabled: true,
+      host: "0.0.0.0",
+      port: null,
+      warning: "the bridge binds every interface",
+    });
+    expect(wild).toContain("host     0.0.0.0");
+    expect(wild).toContain("warning: the bridge binds every interface");
   });
 });

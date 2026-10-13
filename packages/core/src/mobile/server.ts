@@ -23,7 +23,13 @@ import { createPairLimiter } from "./pairing.ts";
 import { MOBILE_CLOSE_CODES, MOBILE_PROTOCOL, MOBILE_ROUTES } from "./protocol.ts";
 import { createPushNotifier, type PushSender } from "./push.ts";
 import { createTurnRegistry } from "./turns.ts";
-import { createSocketHub, newSocketData, type SocketData } from "./ws.ts";
+import {
+  DEFAULT_SOCKET_LIMITS,
+  type SocketHubLimits,
+  createSocketHub,
+  newSocketData,
+  type SocketData,
+} from "./ws.ts";
 
 export type { MobileBridgeEvent } from "./bridge-ctx.ts";
 
@@ -44,7 +50,12 @@ export interface StartMobileBridgeOptions {
   authDeadlineMs?: number;
   notifyPollMs?: number;
   turnRetentionMs?: number;
+  /** Socket caps; default 64 in all and 8 unauthenticated per source address. */
+  limits?: Partial<SocketHubLimits>;
 }
+
+/** An HTTP connection idle this long is closed. WebSockets keep their own (none: the heartbeat decides). */
+export const HTTP_IDLE_TIMEOUT_S = 60;
 
 export interface MobileBridge {
   readonly host: string;
@@ -68,6 +79,29 @@ export function bridgeUrl(host: string, port: number): string {
 }
 
 type ApprovalOrQuestion = Extract<ChatBlock, { kind: "approval" | "question" }>;
+
+const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * Does a request's `Host` name this bridge? A defence against DNS rebinding,
+ * where a page on some other origin resolves its own name to the bridge's
+ * address: such a request carries a multi-label name the attacker controls. So
+ * an IP literal, `localhost`, a single-label (MagicDNS short) name, any
+ * `*.ts.net` name and the bound host pass, and every other dotted name is
+ * refused. A missing header (HTTP/1.0) is let through.
+ */
+export function hostAllowed(header: string | null, bound: string): boolean {
+  if (header === null || header === "") return true;
+  let name = header.toLowerCase();
+  if (name.startsWith("[")) return true; // a bracketed IPv6 literal, port or not
+  const colon = name.lastIndexOf(":");
+  if (colon !== -1) name = name.slice(0, colon);
+  if (name.endsWith(".")) name = name.slice(0, -1);
+  if (name === bound.toLowerCase() || name === "localhost") return true;
+  if (IPV4_LITERAL.test(name)) return true;
+  if (!name.includes(".")) return true;
+  return name.endsWith(".ts.net");
+}
 
 export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise<MobileBridge> {
   const clock = opts.clock ?? (() => Date.now());
@@ -94,6 +128,7 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
   });
 
   const turns = createTurnRegistry({
+    open: (input) => opts.core().chat.open(input),
     send: (input, o) => opts.core().chat.send(input, o),
     abort: (input) => opts.core().chat.abort(input),
     clock,
@@ -139,7 +174,7 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
     heartbeatMs: opts.heartbeatMs ?? MOBILE_PROTOCOL.HEARTBEAT_MS,
     authDeadlineMs: opts.authDeadlineMs ?? MOBILE_PROTOCOL.AUTH_DEADLINE_MS,
   };
-  const hub = createSocketHub(ctx);
+  const hub = createSocketHub(ctx, { ...DEFAULT_SOCKET_LIMITS, ...opts.limits });
   broadcast = hub.broadcast;
   isLive = hub.isLive;
 
@@ -157,14 +192,27 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
   const server = Bun.serve<SocketData>({
     hostname: opts.host,
     port: opts.port,
-    // Turns and observations are long and quiet; the heartbeat decides liveness.
-    idleTimeout: 0,
+    // HTTP only: a connection that sends nothing for a minute goes. Turns and
+    // observations live on the WebSocket, whose own timeout is off below.
+    idleTimeout: HTTP_IDLE_TIMEOUT_S,
     // The transport refuses an oversized body before a route reads it.
     maxRequestBodySize: MOBILE_PROTOCOL.MAX_PAYLOAD_BYTES,
     async fetch(req, srv) {
       const source = srv.requestIP(req)?.address ?? "";
+      if (!hostAllowed(req.headers.get("host"), opts.host)) {
+        return new Response(
+          JSON.stringify({ code: "FORBIDDEN", message: "this bridge does not answer to that host" }),
+          { status: 403, headers: { "content-type": "application/json" } },
+        );
+      }
       const url = new URL(req.url);
       if (url.pathname === MOBILE_ROUTES.ws) {
+        if (!hub.admits(source)) {
+          return new Response(
+            JSON.stringify({ code: "RATE_LIMITED", message: "too many open sockets" }),
+            { status: 429, headers: { "content-type": "application/json" } },
+          );
+        }
         if (srv.upgrade(req, { data: newSocketData(source, clock()) })) return undefined;
         return new Response(
           JSON.stringify({ code: "VALIDATION", message: "expected a WebSocket upgrade" }),
@@ -174,11 +222,16 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
           },
         );
       }
-      return await handleHttp(ctx, req, source);
+      // A forwarded call (a compaction, a slow history read) may outlast the
+      // HTTP idle timeout; only an authenticated one is let off it.
+      return await handleHttp(ctx, req, source, () => srv.timeout(req, 0));
     },
     websocket: {
       maxPayloadLength: MOBILE_PROTOCOL.MAX_PAYLOAD_BYTES,
       idleTimeout: 0,
+      // A phone that stops reading is closed rather than buffered without end;
+      // it reconnects and resumes from its last `n`.
+      closeOnBackpressureLimit: true,
       open: (ws) => hub.open(ws),
       message: (ws, raw) => hub.message(ws, raw),
       close: (ws) => hub.close(ws),
@@ -189,7 +242,13 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
   const url = bridgeUrl(opts.host, port);
   const started_at = new Date(clock()).toISOString();
 
-  const heartbeat = setInterval(() => hub.heartbeat(), ctx.heartbeatMs);
+  const heartbeat = setInterval(() => {
+    try {
+      hub.heartbeat();
+    } catch {
+      /* one bad tick costs a ping, never the process */
+    }
+  }, ctx.heartbeatMs);
   const sweep = setInterval(() => turns.sweep(), 60_000);
   notify.start();
   // The tailnet names the noVNC host on the phone; read once, never fatal.
@@ -235,7 +294,7 @@ export async function startMobileBridge(opts: StartMobileBridgeOptions): Promise
         clearInterval(sweep);
         notify.stop();
         hub.closeAll(MOBILE_CLOSE_CODES.GOING_AWAY, "bridge shutting down");
-        turns.stopAll();
+        await turns.stopAll();
         await pool.stop();
         // Let the 1001s reach their sockets before the listener goes.
         const deadline = Date.now() + 1_000;

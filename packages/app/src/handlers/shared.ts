@@ -107,7 +107,7 @@ export const TEARDOWN_PLANNING = "teardown:planning";
  * `AppState.resetToUninitialized`).
  */
 export function afterTeardown(
-  { state, ops }: HandlerContext,
+  { state, ops, mobile }: HandlerContext,
   opId: string,
   plan: { summary?: PlanSummary; warnings: string[] },
   resetLocal: boolean,
@@ -140,6 +140,8 @@ export function afterTeardown(
       }
     } finally {
       state.endTeardown();
+      // A reset swapped (or dropped) the instance the phone bridge serves.
+      void mobile?.sync();
     }
   });
 }

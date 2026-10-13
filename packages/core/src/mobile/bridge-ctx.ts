@@ -42,7 +42,7 @@ export interface BridgeCtx {
   emit: (event: MobileBridgeEvent) => void;
   /** Late-bound to the hub: tell every authenticated socket. */
   broadcast: (frame: Record<string, unknown>) => void;
-  /** Late-bound to the hub: does this device have a live socket? */
+  /** Late-bound to the hub: does this device have a socket open in the foreground? */
   isLive: (deviceId: string) => boolean;
   heartbeatMs: number;
   authDeadlineMs: number;
