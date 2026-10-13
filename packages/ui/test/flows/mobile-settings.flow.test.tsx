@@ -8,10 +8,12 @@
  * in the table is the bridge's `paired` event reaching the page through
  * `mobile.serve` — not a test calling the store behind its back.
  */
-import { act, cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
+import { act, cleanup, render, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { StrictMode, createElement } from "react";
 import { HermeticError, MOBILE_PROTOCOL, MOBILE_ROUTES, mobileBridgeHost } from "@hermetic/core";
 import { dispatch } from "../../../app/src/handlers/dispatch.ts";
+import { MobileSection } from "../../src/components/settings/MobileSection.tsx";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
 let harness: FlowHarness | null = null;
@@ -79,7 +81,7 @@ test("serve, pair a phone, see it arrive, revoke it, stop", async () => {
   expect(settingsCalls(h)).toContainEqual({ enabled: true });
   const status = h.ctx.mobile?.status() ?? null;
   if (status === null) throw new Error("enabling did not start the hosted bridge");
-  await waitFor(() => expect(screen.getByText(status.url)).toBeDefined());
+  await waitFor(() => expect(screen.getByText(`${status.host}:${status.port}`)).toBeDefined());
   expect(screen.getByText("listening")).toBeDefined();
 
   // Pair: a QR and the code, grouped for reading aloud.
@@ -260,6 +262,52 @@ test("a bridge that cannot start says why, until it serves again", async () => {
   });
   await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
   expect(screen.queryByText(/Bridge failed to start/)).toBeNull();
+  await act(async () => {
+    await host.stop("test");
+  });
+}, 20_000);
+
+test("under StrictMode, as the app mounts it, the page still loads its settings and phones", async () => {
+  // The app's entry wraps the page in StrictMode, whose mount, cleanup, mount
+  // once left the page's liveness flag false and every answer dropped.
+  harness = await flowHarness();
+  render(createElement(StrictMode, null, createElement(MobileSection)));
+
+  await waitFor(() => expect(toggle().disabled).toBe(false));
+  await waitFor(() => expect(screen.getByText("No phones paired")).toBeDefined());
+  expect(screen.queryByText("reading paired phones…")).toBeNull();
+});
+
+test("a follow refused while the bridge could not start is asked again once a new address saves", async () => {
+  harness = await flowHarness({ mobileHost: true });
+  const h = harness;
+  const host = h.ctx.mobile;
+  if (host === undefined) throw new Error("the harness hosts a bridge");
+  const core = mobileBridgeHost(h.ctx.state.hermetic);
+  const start = core.start;
+  core.start = async () => {
+    throw new HermeticError("CONFLICT", "port 8787 is taken");
+  };
+  gotoHash("#settings/mobile");
+  mountPortal();
+  const user = userEvent.setup();
+
+  try {
+    // On, but the bridge cannot start: the host refuses the follow.
+    await waitFor(() => expect(toggle().disabled).toBe(false));
+    await user.click(toggle());
+    await waitFor(() => expect(toggle().checked).toBe(true));
+    await waitFor(() => expect(screen.getByText(/live status unavailable/)).toBeDefined());
+  } finally {
+    core.start = start;
+  }
+
+  // A new address restarts the bridge, and the page follows it again.
+  const hostField = screen.getByLabelText<HTMLInputElement>("Host");
+  await user.type(hostField, "127.0.0.1");
+  await user.click(screen.getByRole("button", { name: "Save address" }));
+  await waitFor(() => expect(screen.getByText("listening")).toBeDefined());
+  await waitFor(() => expect(screen.queryByText(/live status unavailable/)).toBeNull());
   await act(async () => {
     await host.stop("test");
   });

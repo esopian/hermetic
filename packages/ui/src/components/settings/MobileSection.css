@@ -1,7 +1,4 @@
 /* Settings › Mobile: the pair panel and the address row's actions. */
-.mob-port {
-  width: 120px;
-}
 .mob-addr-acts {
   display: flex;
   align-items: center;
@@ -16,6 +13,11 @@
 }
 .mob-addr-acts .btn {
   height: 32px;
+}
+/* Two full buttons side by side: the list's 2px text-action gap merges their borders. */
+.mob-addr-acts .st-acts-in,
+.mob-pair-acts.st-acts-in {
+  gap: 8px;
 }
 .mob-pair {
   display: grid;

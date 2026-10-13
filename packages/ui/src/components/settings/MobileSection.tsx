@@ -36,6 +36,7 @@ import {
   draftOf,
   fmtClock,
   fmtCountdown,
+  fmtHostPort,
   fmtStamp,
   formatPairCode,
   isWildcardHost,
@@ -148,9 +149,7 @@ function PairPanel({
             {formatPairCode(pairing.code)}
           </output>
           <span className="kicker">Bridge</span>
-          <span className="mono">
-            {pairing.host}:{pairing.port}
-          </span>
+          <span className="mono">{fmtHostPort(pairing.host, pairing.port)}</span>
           <p className="st-hint">
             Scan the code with the Hermetic app, or type it in. The phone must be on the tailnet —
             signed in to the same Tailscale network as this laptop. A code works once.
@@ -240,6 +239,12 @@ export function MobileSection() {
   const [devices, setDevices] = useState<MobileDeviceView[] | null>(null);
   const [serving, setServing] = useState<MobileServingView | null>(null);
   const [follow, setFollow] = useState<Follow>("off");
+  /**
+   * Bumped by a saved address: the host restarts the bridge on it, and a
+   * follow that was refused while the old address could not start (the host
+   * refuses `mobile.serve` then) is asked again rather than left "unavailable".
+   */
+  const [followKey, setFollowKey] = useState(0);
   const [connected, setConnected] = useState<Set<string>>(() => new Set());
   const [lastEvent, setLastEvent] = useState<{ text: string; at: number } | null>(null);
   /** Why the bridge is not serving, as `mobile.serve` last said; cleared by any status. */
@@ -251,12 +256,16 @@ export function MobileSection() {
   const [error, setError] = useState<string | null>(null);
   const [ticked, flash] = useSavedTick();
   const live = useRef(true);
-  useEffect(
-    () => () => {
+  // Set on every mount, not only by the initial value: StrictMode (the app's
+  // entry wraps the page in it) unmounts and remounts once, and a ref that
+  // stayed false from that first cleanup would drop every answer the page asks
+  // for, leaving it on "reading paired phones…" for good.
+  useEffect(() => {
+    live.current = true;
+    return () => {
       live.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -293,6 +302,7 @@ export function MobileSection() {
 
   const enabled = settings?.enabled === true;
   useEffect(() => {
+    void followKey; // a dependency only: a new key is a new follow
     if (!enabled) {
       setFollow("off");
       return;
@@ -318,7 +328,7 @@ export function MobileSection() {
         if (event.kind === "paired" || event.kind === "device") void refreshDevices();
       },
     });
-  }, [enabled, refreshDevices]);
+  }, [enabled, followKey, refreshDevices]);
 
   async function toggle(next: boolean) {
     setBusy("enabled");
@@ -346,6 +356,7 @@ export function MobileSection() {
       const saved = await setMobileSettings(parsed.patch);
       setSettings(saved);
       setDraft(draftOf(saved));
+      setFollowKey((k) => k + 1);
       flash();
       await refreshDevices();
     } catch (e) {
@@ -415,8 +426,11 @@ export function MobileSection() {
       <Block title="Bridge" right={<SavedTick on={ticked} />}>
         <Facts
           items={[
-            { k: "Bridge", v: bridgeState.v, ...(bridgeState.tone ? { tone: bridgeState.tone } : {}) },
-            { k: "Listening on", v: serving?.url ?? "—" },
+            { k: "Status", v: bridgeState.v, ...(bridgeState.tone ? { tone: bridgeState.tone } : {}) },
+            {
+              k: "Listening on",
+              v: serving === null ? "—" : fmtHostPort(serving.host, serving.port),
+            },
             { k: "Phones connected", v: serving === null ? "—" : String(serving.connected) },
             {
               k: "Last event",
@@ -484,7 +498,7 @@ export function MobileSection() {
         >
           <input
             id="mobile-port"
-            className="key-input mob-port"
+            className="key-input st-num"
             type="text"
             inputMode="numeric"
             autoComplete="off"

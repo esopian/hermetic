@@ -10,6 +10,7 @@ import {
   describeFeedEvent,
   draftOf,
   fmtCountdown,
+  fmtHostPort,
   fmtStamp,
   formatPairCode,
   isWildcardHost,
@@ -123,7 +124,7 @@ describe("the feed", () => {
       message: "INTERNAL",
     });
     const event = { kind: "error", code: "X", message: "m" } as const;
-    expect(describeFeedEvent(event, (id) => id)).toBe("bridge failed to start");
+    expect(describeFeedEvent(event, (id) => id)).toBe("start failed");
     expect(nextConnected(new Set(["a"]), event)).toEqual(new Set(["a"]));
   });
 
@@ -174,4 +175,11 @@ describe("formatting", () => {
     expect(platformLabel("android")).toBe("Android");
     expect(platformLabel("other")).toBe("Other");
   });
+});
+
+test("fmtHostPort shows where the bridge is without a scheme, bracketing IPv6", () => {
+  expect(fmtHostPort("100.64.0.7", 7877)).toBe("100.64.0.7:7877");
+  expect(fmtHostPort("laptop.tail1234.ts.net", 8080)).toBe("laptop.tail1234.ts.net:8080");
+  expect(fmtHostPort("fd7a:115c:a1e0::1", 7877)).toBe("[fd7a:115c:a1e0::1]:7877");
+  expect(fmtHostPort("[::1]", 7877)).toBe("[::1]:7877");
 });

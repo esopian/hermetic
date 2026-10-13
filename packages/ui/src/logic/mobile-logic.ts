@@ -67,6 +67,15 @@ export function formatPairCode(code: string): string {
   return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
 }
 
+/**
+ * `100.64.0.7:7877`: where the bridge is, as a person reads it. No scheme, so
+ * a tailnet name fits a fact cell; an IPv6 literal is bracketed as in a URL.
+ */
+export function fmtHostPort(host: string, port: number): string {
+  const literal = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${literal}:${port}`;
+}
+
 /** `4:05` until a deadline, `0:00` once it has passed. */
 export function fmtCountdown(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -157,7 +166,7 @@ export function describeFeedEvent(
     case "status":
       return event.status === null ? "bridge stopped" : null;
     case "error":
-      return "bridge failed to start";
+      return "start failed";
   }
 }
 
