@@ -86,8 +86,10 @@ from it on demand:
   The needs-you mark comes from the roster, from this phone's unread `needs_action` inbox entries
   (a box's push; reading the thread clears it), and from a request still open in a turn this phone
   follows, which stays until it is answered, expires or its turn ends, however the thread was read.
-  When such a request closes, its own `needs_action` entry (and a box push folded into it) is
-  marked read too, so neither source holds the mark up alone.
+  When such a request closes, its own `needs_action` entry is marked read too, and so is a box
+  push folded into it once it was the conversation's last open request, so neither source holds
+  the mark up alone. A request whose stream the phone merely lost is not a close: its entry stays
+  unread until the thread is read.
   A followed turn the phone let go in the background and found `waiting` on its box keeps the mark
   only while the box says so: off screen the phone asks again every 30 s
   (`REMOTE_WAITING_POLL_MS`), so a request answered on the desktop clears it within one ask. A row's

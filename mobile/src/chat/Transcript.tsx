@@ -350,20 +350,22 @@ function TranscriptImpl({
               borderRadius: 999,
               // A quiet round pill over the page: bg3 lifts it a step in dark,
               // light keeps its card fill; a hairline and a soft shadow give the
-              // edge. Unseen messages tint the label, not the whole pill.
-              backgroundColor: pressed ? t.c.sel : dark ? t.c.bg3 : t.c.card,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: t.c.line2,
+              // edge. Unseen messages ring the pill in the accent; the label
+              // stays fg, since accent text on the light card is too faint.
+              backgroundColor: dark ? t.c.bg3 : t.c.card,
+              opacity: pressed ? 0.7 : 1,
+              borderWidth: unseen ? 1 : StyleSheet.hairlineWidth,
+              borderColor: unseen ? t.c.acc : t.c.line2,
               shadowColor: "#000",
               shadowOpacity: dark ? 0.4 : 0.12,
               shadowRadius: 8,
               shadowOffset: { width: 0, height: 2 },
             })}
           >
-            <Text variant="caption" weight={600} tone={unseen ? "acc" : "fg"} style={{ fontSize: 13 }}>
+            <Text variant="caption" weight={600} tone="fg" style={{ fontSize: 13 }}>
               {unseen ? "New · Latest" : "Latest"}
             </Text>
-            <Text variant="caption" weight={600} tone={unseen ? "acc" : "fg2"} style={{ fontSize: 13 }}>
+            <Text variant="caption" weight={600} tone="fg2" style={{ fontSize: 13 }}>
               ↓
             </Text>
           </Pressable>
