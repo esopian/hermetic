@@ -166,7 +166,11 @@ describe("honcho: a fresh box", () => {
     // d. Its dirs, as the account; not the cluster's.
     expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${esc(DIR)}$`, 1);
     expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${esc(honchoTiktokenDir)}$`, 1);
-    expectNotRan(host, `install -d .*${esc(honchoPgDataDir)}`);
+    expect(
+      host.commands.filter(
+        (command) => command.includes("install -d ") && command.includes(honchoPgDataDir),
+      ),
+    ).toEqual([]);
     // e. The whole tree at the sha, not sparse, as the account.
     expectRan(
       host,

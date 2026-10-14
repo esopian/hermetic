@@ -322,7 +322,7 @@ describe("openviking", () => {
 
     expectRan(
       host,
-      `^runuser -u hermes -- curl -fsSL --retry 3 -o \\S+ ${MODEL.url.replace(/[.?]/g, "\\$&")}$`,
+      `^runuser -u hermes -- curl -fsSL --retry 3 -o \\S+ ${MODEL.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
       1,
     );
     expect(parseBlob(host.files.get(MODEL_PATH)?.content)).toEqual({
