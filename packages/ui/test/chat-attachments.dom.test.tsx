@@ -5,10 +5,11 @@
  * removing a chip stops its work or deletes what the box staged; and only
  * `blob:` URLs this page minted pass `safeImageSrc`.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useReducer } from "react";
 import { FILES_LIMITS } from "@hermetic/core/shared";
 import { act, cleanup, render, waitFor } from "./dom.ts";
+import { stubUploadFetch } from "./chat-fixtures.tsx";
 import {
   attachmentErrorText,
   chunkOffsets,
@@ -58,9 +59,10 @@ function fakeApi(
       return Promise.resolve(answer(...(args as never[])));
     };
   const api: AttachmentsApi = {
-    chunkOpen: rec("chunkOpen", () => ({ upload_id: `up_${++n}` })) as never,
-    chunkAppend: rec("chunkAppend", () => ({ received: 0 })) as never,
-    chunkClose: rec("chunkClose", () => ({})) as never,
+    uploadOpen: rec("uploadOpen", () => {
+      const upload_id = `up_${++n}`;
+      return { upload_id, url: `http://127.0.0.1:1/upload/${upload_id}` };
+    }) as never,
     chunkDiscard: rec("chunkDiscard", () => ({ discarded: true })) as never,
     filesCapability: rec("filesCapability", () => ({ files: true, hermeticd_version: "x" })) as never,
     filesDiscard: rec("filesDiscard", () => ({ deleted: true })) as never,
@@ -126,7 +128,13 @@ function staged(id: string): Parameters<StageHandlers["onDone"]>[0] {
   } as never;
 }
 
+let restoreFetch: () => void = () => undefined;
+beforeEach(() => {
+  restoreFetch = stubUploadFetch();
+});
+
 afterEach(() => {
+  restoreFetch();
   cleanup();
   setBlobBudget(null);
   resetThumbnails();
@@ -173,7 +181,7 @@ describe("pure helpers", () => {
 });
 
 describe("the pipeline", () => {
-  test("a drop goes in chunks at their offsets, is staged by upload id, and is taken by a send", async () => {
+  test("a drop is opened as one streamed upload, staged by its id, and taken by a send", async () => {
     const fake = fakeApi();
     const h = mount(fake);
     const MiB = FILES_LIMITS.chunkBytes;
@@ -181,8 +189,8 @@ describe("the pipeline", () => {
     act(() => h.files().addFiles([file]));
     expect(h.files().items[0]?.state).toBe("uploading");
     await waitFor(() => expect(fake.stages).toHaveLength(1));
-    const offsets = fake.calls.filter((c) => c.name === "chunkAppend").map((c) => c.args[1]);
-    expect(offsets).toEqual([0, MiB, 2 * MiB]);
+    expect(fake.calls.find((c) => c.name === "uploadOpen")?.args).toEqual(["big.bin", 2 * MiB + 5]);
+    expect(fake.calls.some((c) => c.name === "chunkAppend")).toBe(false);
     expect(fake.stages[0]!.upload_id).toBe("up_1");
     expect(summarize(h.files().items)).toEqual({ ready: 0, uploading: 1, failed: 0 });
     act(() => fake.stages[0]!.handlers.onDone(staged("f_one")));
@@ -199,20 +207,17 @@ describe("the pipeline", () => {
     expect(h.files().items[0]?.file_id).toBe("f_one");
   });
 
-  test("a drop over 64 MiB, and the eleventh file, are chips that never reach the bridge", async () => {
+  test("a drop of any size streams, and the eleventh file is a chip that never reaches the bridge", async () => {
     const fake = fakeApi();
     const h = mount(fake);
     const huge = { name: "huge.iso", size: FILES_LIMITS.chunkUploadBytes + 1, type: "" } as File;
     act(() => h.files().addFiles([huge]));
-    expect(h.files().items[0]?.error?.message).toBe("use ⊕ for files over 64 MB");
+    expect(h.files().items[0]?.state).toBe("uploading");
     const many = Array.from({ length: 10 }, (_, i) => new File(["x"], `f${i}.txt`));
     act(() => h.files().addFiles(many));
     const errors = h.files().items.filter((a) => a.state === "error");
-    expect(errors.map((a) => a.error?.message)).toEqual([
-      "use ⊕ for files over 64 MB",
-      "max 10 files per message",
-    ]);
-    expect(fake.calls.filter((c) => c.name === "chunkOpen")).toHaveLength(9);
+    expect(errors.map((a) => a.error?.message)).toEqual(["max 10 files per message"]);
+    expect(fake.calls.filter((c) => c.name === "uploadOpen")).toHaveLength(10);
   });
 
   test("removing a chip closes its stage, and removing a staged one deletes it on the box", async () => {

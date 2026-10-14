@@ -119,6 +119,17 @@ export const FilesChunkOpenInput = z.object({
 });
 export type FilesChunkOpenInput = z.infer<typeof FilesChunkOpenInput>;
 
+/**
+ * Open a streamed upload: the page then PUTs the file to the URL this answers
+ * (`app/src/upload-port.ts`). No size cap: the fleet's `files.max_bytes` is
+ * checked by the stage and by the box.
+ */
+export const FilesUploadOpenInput = z.object({
+  name: z.string().min(1).max(1024),
+  size: z.number().int().nonnegative(),
+});
+export type FilesUploadOpenInput = z.infer<typeof FilesUploadOpenInput>;
+
 /** One chunk, base64, at most `FILES_LIMITS.chunkBytes` decoded. */
 export const FilesChunkAppendInput = z.object({
   upload_id: ChunkUploadId,

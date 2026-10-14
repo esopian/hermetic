@@ -39,6 +39,7 @@ import {
   statFile,
   throttled,
 } from "./stage.ts";
+import { collectStream, peekHead } from "./stream-source.ts";
 import type { UploadRegistry } from "./uploads.ts";
 
 /**
@@ -118,7 +119,8 @@ type SecretSettle = "taken" | "refused" | "pending" | "unknown";
 /** What a put reads, once resolved. */
 type Source =
   | { kind: "bytes"; name: string; size: number; bytes: Uint8Array }
-  | { kind: "path"; name: string; size: number; path: string };
+  | { kind: "path"; name: string; size: number; path: string }
+  | { kind: "stream"; name: string; size: number; body: AsyncIterable<Uint8Array> };
 
 function parseInput(input: unknown): FilesPutInput {
   const result = FilesPutInput.safeParse(input);
@@ -141,6 +143,7 @@ function parseInput(input: unknown): FilesPutInput {
 async function readWhole(src: Source, limit: number, instance: string): Promise<Uint8Array> {
   if (src.size > limit) throw tooLarge(instance, src.size, limit);
   if (src.kind === "bytes") return src.bytes;
+  if (src.kind === "stream") return await collectStream(src.body, src.size);
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await readFile(src.path));
@@ -240,6 +243,9 @@ export function createFilesPut(deps: PutDeps) {
         size: source.size,
         path: source.path,
       };
+    }
+    if (source.kind === "stream") {
+      return { kind: "stream", name: nameFor(source.name), size: source.size, body: source.body };
     }
     return {
       kind: "bytes",
@@ -453,14 +459,26 @@ export function createFilesPut(deps: PutDeps) {
     instance: string,
     input: FilesPutInput,
     slot: FileRequest,
-    src: Source,
+    resolved: Source,
     held: Uint8Array[],
     controller: AbortController,
     lane: Lane,
   ): AsyncGenerator<FilesPutEvent, { result: FilesFulfilResult; ssm_slot?: string }> {
     const signal = controller.signal;
-    const head =
-      src.kind === "bytes" ? src.bytes.subarray(0, FILES_LIMITS.sniffBytes) : await readHead(src.path);
+    // A streamed body is read only as far as the checks need: the page's
+    // request stays blocked behind them, and a secret is collected whole below
+    // from a body that replays what was read.
+    let src = resolved;
+    let head: Uint8Array;
+    if (resolved.kind === "stream") {
+      const peeked = await peekHead(resolved.body, FILES_LIMITS.sniffBytes);
+      src = { ...resolved, body: peeked.body };
+      head = peeked.head;
+    } else if (resolved.kind === "bytes") {
+      head = resolved.bytes.subarray(0, FILES_LIMITS.sniffBytes);
+    } else {
+      head = await readHead(resolved.path);
+    }
     const mime = sniffMime(head, src.name);
     const keyLike = looksLikeKeyMaterial(head, src.name);
     const secret =
@@ -545,8 +563,11 @@ export function createFilesPut(deps: PutDeps) {
     }
 
     if (src.size > slot.max_bytes) throw tooLarge(instance, src.size, slot.max_bytes);
-    let sha256: string;
-    if (src.kind === "bytes") {
+    // A streamed body has no digest ahead of its bytes: the box hashes it.
+    let sha256: string | undefined;
+    if (src.kind === "stream") {
+      sha256 = undefined;
+    } else if (src.kind === "bytes") {
       sha256 = sha256Of(src.bytes);
     } else {
       const path = src.path;
@@ -562,7 +583,7 @@ export function createFilesPut(deps: PutDeps) {
         return hash.digest("hex");
       });
     }
-    const from = src.kind === "bytes" ? 0 : 0.2;
+    const from = src.kind === "path" ? 0.2 : 0;
     const result: FilesFulfilResult = yield* pump(controller, async (emit) => {
       const step = throttled(emit, "upload", from, 1, src.size, "sent", ctx.nowIso);
       step(0);
@@ -572,8 +593,13 @@ export function createFilesPut(deps: PutDeps) {
         {
           fileName: stored,
           size: src.size,
-          body: src.kind === "bytes" ? src.bytes : fileChunks(src.path, src.size, signal),
-          sha256,
+          body:
+            src.kind === "stream"
+              ? src.body
+              : src.kind === "bytes"
+                ? src.bytes
+                : fileChunks(src.path, src.size, signal),
+          ...(sha256 !== undefined ? { sha256 } : {}),
         },
         { signal, onProgress: step, ...(input.not_secret ? { notSecret: true } : {}) },
       );
@@ -653,7 +679,8 @@ export function createFilesPut(deps: PutDeps) {
         // head's "Replace" to send again (its "Cancel" discards it).
         const sensitive = slot === null || lane.secret || held.length > 0;
         const keptToAsk = replaceAsked && origin === "path";
-        if (upload_id !== null && (ok || sensitive) && !keptToAsk) uploads.discard(upload_id);
+        if (upload_id !== null && (ok || sensitive || origin === "stream") && !keptToAsk)
+          uploads.discard(upload_id);
         if (sensitive && src?.kind === "bytes") src.bytes.fill(0);
         for (const b of held) b.fill(0);
       }

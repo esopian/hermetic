@@ -129,13 +129,11 @@ export function fakeFiles(): { api: AttachmentsApi; stages: FakeStage[] } {
   const names = new Map<string, string>();
   let n = 0;
   const api: AttachmentsApi = {
-    chunkOpen: (name) => {
+    uploadOpen: (name) => {
       const upload_id = `up_${++n}`;
       names.set(upload_id, name);
-      return Promise.resolve({ upload_id }) as never;
+      return Promise.resolve({ upload_id, url: `http://127.0.0.1:1/upload/${upload_id}` }) as never;
     },
-    chunkAppend: () => Promise.resolve({ received: 0 }) as never,
-    chunkClose: () => Promise.resolve({}) as never,
     chunkDiscard: () => Promise.resolve({ discarded: true }) as never,
     filesCapability: () => Promise.resolve({ files: true, hermeticd_version: "x" }) as never,
     filesDiscard: () => Promise.resolve({ deleted: true }) as never,
@@ -331,4 +329,16 @@ export function mount(h: Harness) {
       <ChatView />
     </ChatProvider>,
   );
+}
+
+/**
+ * The loopback upload port, answered: every PUT of a dropped file is taken at
+ * once. Call in a `beforeEach`; the returned function restores `fetch`.
+ */
+export function stubUploadFetch(): () => void {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+  return () => {
+    globalThis.fetch = real;
+  };
 }

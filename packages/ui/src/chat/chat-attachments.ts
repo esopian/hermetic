@@ -9,10 +9,10 @@
  *
  * Two ways in, one way through:
  *
- * - A drop or a paste hands the page a `File` and no path. Its bytes go to the
- *   main process in base64 chunks of `FILES_LIMITS.chunkBytes`, capped at
- *   `FILES_LIMITS.chunkUploadBytes`; anything larger is an error chip pointing
- *   at ⊕, which never moves bytes through the webview.
+ * - A drop or a paste hands the page a `File` and no path. The page PUTs the
+ *   file to the main process's loopback upload port (`putStream`) while
+ *   `files.stage` reads the upload and sends it on to the box, so the bytes
+ *   pass straight through with no copy held and no size cap of their own.
  * - ⊕ (or ⌘⇧A) opens the native dialog in the main process
  *   (`files.pickNative`), which answers upload ids and never a path.
  *
@@ -30,7 +30,7 @@ import type { Conversation } from "./chat-conversation-record.ts";
 import { key } from "./chat-conversation-record.ts";
 import { fmtBytes } from "./chat-logic.ts";
 import type { ChatSelection } from "./chat-types.ts";
-import { sendChunks } from "./chunk-upload.ts";
+import { putStream } from "./chunk-upload.ts";
 
 /** One chip in the composer's tray. Replaced, never mutated, so a render sees it move. */
 export interface DraftAttachment {
@@ -41,9 +41,9 @@ export interface DraftAttachment {
   /** The browser's guess until staged, then the box's sniffed type. */
   mime: string;
   state: "uploading" | "staged" | "error";
-  /** 0..1 across the whole trip: chunks into the main process, then the box. */
+  /** 0..1 across the whole trip, which is one pipe: the page's file through the main process to the box. */
   progress: number;
-  phase?: "send" | "hash" | "upload";
+  phase?: "hash" | "upload";
   file_id?: string;
   error?: { code: string; message: string };
   /** The chip can be sent again with `not_secret` (a `FILE_LOOKS_SECRET` refusal). */
@@ -97,14 +97,7 @@ export interface AttachmentsControl {
 /** The calls the pipeline makes, injectable so a test can count them. */
 export type AttachmentsApi = Pick<
   typeof filesApi,
-  | "chunkOpen"
-  | "chunkAppend"
-  | "chunkClose"
-  | "chunkDiscard"
-  | "filesCapability"
-  | "filesDiscard"
-  | "pickNative"
-  | "stageUpload"
+  "uploadOpen" | "chunkDiscard" | "filesCapability" | "filesDiscard" | "pickNative" | "stageUpload"
 >;
 
 const NO_ITEMS: readonly DraftAttachment[] = [];
@@ -198,6 +191,8 @@ interface Job {
   upload: string | null;
   /** Closes the `files.stage` stream while it runs. */
   closeStage: (() => void) | null;
+  /** Aborts the file's PUT to the upload port while it runs. */
+  abortSend?: (() => void) | null;
   cancelled: boolean;
 }
 
@@ -297,7 +292,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
     [get, patch, release],
   );
 
-  /** Stage a closed upload on the box. `base` is how far the chunks already took the bar. */
+  /** Stage an upload on the box. `base` is how far the bar already is when the stage starts reading. */
   const stage = useCallback(
     (target: ChatSelection, local_id: string, upload_id: string, base: number, not_secret: boolean) => {
       const job = jobs.current.get(local_id);
@@ -313,6 +308,9 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
         },
         onDone: (frame) => {
           job.closeStage = null;
+          // However it ended, nothing more is wanted from the page's PUT.
+          job.abortSend?.();
+          job.abortSend = null;
           // Only a successful stage consumes the upload; a refusal leaves it
           // held, and `fail` (or the `remove` that cancelled it) discards it.
           if (frame.type === "staged") job.upload = null;
@@ -345,29 +343,35 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
     [patch, fail, release],
   );
 
-  /** A drop or a paste: chunks into the main process, then the stage. */
+  /**
+   * A drop or a paste: the stage starts reading the upload while the page
+   * PUTs the file to the loopback port, so the bytes pass straight through the
+   * main process to the box. A stage that fails first (a key-looking file)
+   * closes the pipe, which ends the PUT.
+   */
   const sendBytes = useCallback(
     async (target: ChatSelection, local_id: string, file: File, not_secret: boolean) => {
       const job = jobs.current.get(local_id);
       if (!job) return;
-      const calls = apiRef.current;
       try {
-        const upload_id = await sendChunks(calls, file, file.name, {
-          onOpen: (id) => {
-            job.upload = id;
-          },
-          onChunk: (sent, size) =>
-            patch(target, local_id, {
-              phase: "send",
-              progress: size === 0 ? 0.5 : (sent / size) * 0.5,
-            }),
-          cancelled: () => job.cancelled,
-        });
-        if (upload_id === null) {
+        const { upload_id, url } = await apiRef.current.uploadOpen(file.name, file.size);
+        job.upload = upload_id;
+        if (job.cancelled) {
           release(job);
           return;
         }
-        stage(target, local_id, upload_id, 0.5, not_secret);
+        stage(target, local_id, upload_id, 0, not_secret);
+        const abort = new AbortController();
+        job.abortSend = () => abort.abort();
+        putStream(url, file, abort.signal).catch((e: unknown) => {
+          // A stage that has answered owns the outcome; this is only a PUT
+          // that failed while it was still waiting for bytes that never came.
+          if (job.cancelled || job.closeStage === null) return;
+          job.closeStage();
+          job.closeStage = null;
+          const code = typeof e === "object" && e !== null && "code" in e ? String(e.code) : "INTERNAL";
+          fail(target, local_id, code, e instanceof Error ? e.message : String(e));
+        });
       } catch (e) {
         if (job.cancelled) {
           release(job);
@@ -377,7 +381,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
         fail(target, local_id, code, e instanceof Error ? e.message : String(e));
       }
     },
-    [patch, stage, fail, release],
+    [stage, fail, release],
   );
 
   /** Slots left under the per-message cap. The one `LIMIT` chip takes none. */
@@ -430,18 +434,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
           over += 1;
           continue;
         }
-        if (file.size > FILES_LIMITS.chunkUploadBytes) {
-          add(target, {
-            ...chip,
-            state: "error",
-            error: {
-              code: "DROP_TOO_LARGE",
-              message: `use ⊕ for files over ${MB(FILES_LIMITS.chunkUploadBytes)}`,
-            },
-          });
-          continue;
-        }
-        const local_id = add(target, { ...chip, phase: "send" });
+        const local_id = add(target, { ...chip, phase: "upload" });
         jobs.current.set(local_id, { target, file, upload: null, closeStage: null, cancelled: false });
         void sendBytes(target, local_id, file, false);
       }
@@ -531,6 +524,8 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
       job.cancelled = true;
       job.closeStage?.();
       job.closeStage = null;
+      job.abortSend?.();
+      job.abortSend = null;
       release(job);
     },
     [release],
@@ -586,7 +581,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
         patch(target, local_id, {
           state: "uploading",
           progress: 0,
-          phase: "send",
+          phase: "upload",
           error: undefined,
           secretOverride: undefined,
           retryable: undefined,

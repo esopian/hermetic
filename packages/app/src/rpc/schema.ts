@@ -26,6 +26,7 @@ import type {
   FilesChunkAppendInput,
   FilesChunkOpenInput,
   FilesChunkRefInput,
+  FilesUploadOpenInput,
   FilesContentInput,
   FilesGetFrame,
   FilesPutFrame,
@@ -182,6 +183,7 @@ export type MachineryRequests = {
    * native open dialog.
    */
   "files.stage.abort": RpcRequest<StreamRef, StreamClosed>;
+  "files.upload.open": RpcRequest<Input<typeof FilesUploadOpenInput>, Answer<typeof files.uploadOpen>>;
   "files.chunk.open": RpcRequest<Input<typeof FilesChunkOpenInput>, Answer<typeof files.chunkOpen>>;
   "files.chunk.append": RpcRequest<
     Input<typeof FilesChunkAppendInput>,
@@ -284,6 +286,7 @@ export const MACHINERY_REQUEST_NAMES = [
   "logs.open",
   "logs.close",
   "files.stage.abort",
+  "files.upload.open",
   "files.chunk.open",
   "files.chunk.append",
   "files.chunk.close",

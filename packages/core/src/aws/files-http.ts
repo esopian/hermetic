@@ -239,8 +239,8 @@ export class HermeticdFiles implements FilesApi {
     const headers: Record<string, string> = {
       "content-type": "application/octet-stream",
       "content-length": String(upload.size),
-      [CONTENT_DIGEST_HEADER]: formatContentDigest(upload.sha256),
     };
+    if (upload.sha256) headers[CONTENT_DIGEST_HEADER] = formatContentDigest(upload.sha256);
     if (upload.sessionId) headers[FILES_SESSION_HEADER] = upload.sessionId;
     if (upload.notSecret) headers[FILES_NOT_SECRET_HEADER] = "1";
     // The cast narrows the buffer type only: a body is never a shared buffer here.
@@ -355,9 +355,9 @@ export class HermeticdFiles implements FilesApi {
     const headers: Record<string, string> = {
       "content-type": "application/octet-stream",
       "content-length": String(upload.size),
-      [CONTENT_DIGEST_HEADER]: formatContentDigest(upload.sha256),
       [FILES_NAME_HEADER]: encodeURIComponent(upload.fileName),
     };
+    if (upload.sha256) headers[CONTENT_DIGEST_HEADER] = formatContentDigest(upload.sha256);
     if (opts.notSecret) headers[FILES_NOT_SECRET_HEADER] = "1";
     if (opts.secretAs) headers[FILES_SECRET_AS_HEADER] = opts.secretAs;
     const body: BodyInit =

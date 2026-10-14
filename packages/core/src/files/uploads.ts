@@ -3,16 +3,19 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { HermeticError } from "../errors.ts";
 import { FILES_LIMITS, sanitizeFileName } from "../shared/files.ts";
+import { streamChunks } from "./stream-source.ts";
 
 /**
  * The upload registry: bytes a webview drop sent over the bridge in chunks,
- * and paths the native file dialog picked, each under an opaque `up_…` id the
- * page can stage by.
+ * bytes the page streams to the loopback upload port, and paths the native
+ * file dialog picked, each under an opaque `up_…` id the page can stage by.
  *
  * In memory only. A chunked upload's bytes are never written to the laptop's
  * disk — they live here until `files.stage` sends them or the entry is
  * discarded or idles out — and a registered path is never shown to the page,
- * which only ever holds the id.
+ * which only ever holds the id. A streamed upload holds no more than the
+ * pipe's own buffer: the page's request body is read only as fast as the box
+ * takes it, so a file of any size passes through.
  */
 
 const MiB = 1024 * 1024;
@@ -31,7 +34,9 @@ export const UPLOAD_LIMITS = {
 /** What `files.stage` reads a registered upload as. */
 export type UploadSource =
   | { kind: "bytes"; name: string; size: number; bytes: Uint8Array }
-  | { kind: "path"; name: string; size: number; path: string };
+  | { kind: "path"; name: string; size: number; path: string }
+  /** One pass only: the bytes are read as the page sends them and cannot be taken again. */
+  | { kind: "stream"; name: string; size: number; body: AsyncIterable<Uint8Array> };
 
 interface ChunkEntry {
   kind: "bytes";
@@ -53,7 +58,21 @@ interface PathEntry {
   touched: number;
 }
 
-type Entry = ChunkEntry | PathEntry;
+interface StreamEntry {
+  kind: "stream";
+  name: string;
+  size: number;
+  touched: number;
+  /** The pipe: `feed` writes the page's request body in, `take`'s reader pulls it out. */
+  pipe: TransformStream<Uint8Array, Uint8Array>;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  fed: boolean;
+  taken: boolean;
+  /** A request body is being written: not swept as idle, however long the upload takes. */
+  active: boolean;
+}
+
+type Entry = ChunkEntry | PathEntry | StreamEntry;
 
 /**
  * Where an upload came from: a webview drop sent in chunks, a path the native
@@ -61,11 +80,24 @@ type Entry = ChunkEntry | PathEntry;
  * of those, the CLI's `--secret-stdin` text, which answers a text secret
  * request and nothing else.
  */
-export type UploadOrigin = "chunks" | "path" | "held" | "secret_text";
+export type UploadOrigin = "chunks" | "path" | "held" | "secret_text" | "stream";
 
 export interface UploadRegistry {
   /** Reserve a chunked upload of `size` bytes. */
   open(input: { name: string; size: number }): { upload_id: string };
+  /**
+   * Reserve a streamed upload of `size` bytes: nothing is held until `feed`
+   * is called with the page's request body, and `files.stage`/`files.put`
+   * read it as it arrives. No size cap here — the fleet's cap is checked by
+   * the stage and by the box.
+   */
+  openStream(input: { name: string; size: number }): { upload_id: string };
+  /**
+   * Pipe a request body into a streamed upload, as fast as its reader takes
+   * it. Resolves once all `size` bytes are through; rejects (and fails the
+   * reader) on a short or long body, a second feed, or a discard.
+   */
+  feed(upload_id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
   /** Add the next chunk. `offset` must be exactly the bytes received so far. */
   append(upload_id: string, offset: number, bytes: Uint8Array): { received: number };
   /** Finish a chunked upload; the bytes received must be the size it was opened with. */
@@ -133,13 +165,21 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
     const entry = entries.get(id);
     if (entry === undefined) return false;
     if (entry.kind === "bytes") for (const p of entry.parts) p.fill(0);
+    // Fails whoever reads the pipe and whoever feeds it; a no-op once it closed cleanly.
+    if (entry.kind === "stream") {
+      void entry.writer
+        .abort(new HermeticError("ABORTED", "the upload was discarded"))
+        .catch(() => undefined);
+    }
     return entries.delete(id);
   };
 
   /** Drop everything idle past `idleMs`. Run on every call: there is no timer to leak. */
   const sweep = (): void => {
     const cutoff = now() - limits.idleMs;
-    for (const [id, e] of entries) if (e.touched < cutoff) forget(id);
+    for (const [id, e] of entries) {
+      if (e.touched < cutoff && !(e.kind === "stream" && e.active)) forget(id);
+    }
   };
 
   const get = (upload_id: string): Entry => {
@@ -153,7 +193,7 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
   const getChunked = (upload_id: string): ChunkEntry => {
     const entry = get(upload_id);
     if (entry.kind !== "bytes") {
-      throw new HermeticError("VALIDATION", "that upload is a picked file and takes no chunks");
+      throw new HermeticError("VALIDATION", "that upload is not a chunked one and takes no chunks");
     }
     return entry;
   };
@@ -190,6 +230,75 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
         touched: now(),
       });
       return { upload_id };
+    },
+
+    openStream({ name, size }) {
+      sweep();
+      const clean = cleanName(name);
+      if (!Number.isInteger(size) || size < 0) {
+        throw new HermeticError("VALIDATION", "an upload's size must be a whole number of bytes");
+      }
+      const pipe = new TransformStream<Uint8Array, Uint8Array>();
+      const upload_id = `up_${randomUUID()}`;
+      entries.set(upload_id, {
+        kind: "stream",
+        name: clean,
+        size,
+        touched: now(),
+        pipe,
+        writer: pipe.writable.getWriter(),
+        fed: false,
+        taken: false,
+        active: false,
+      });
+      return { upload_id };
+    },
+
+    async feed(upload_id, body) {
+      const entry = get(upload_id);
+      if (entry.kind !== "stream") {
+        throw new HermeticError("VALIDATION", "that upload does not take a streamed body");
+      }
+      if (entry.fed) throw new HermeticError("CONFLICT", "that upload already has its body");
+      entry.fed = true;
+      entry.active = true;
+      const reader = body?.getReader() ?? null;
+      let received = 0;
+      try {
+        for (;;) {
+          const next = reader === null ? { done: true as const } : await reader.read();
+          if (next.done) break;
+          const chunk = next.value;
+          received += chunk.byteLength;
+          if (received > entry.size) {
+            throw new HermeticError(
+              "VALIDATION",
+              "the body is longer than the size the upload declared",
+            );
+          }
+          // Resolves when the reader has room: this is the backpressure that keeps memory flat.
+          await entry.writer.write(chunk);
+        }
+        if (received !== entry.size) {
+          throw new HermeticError(
+            "VALIDATION",
+            `the body was ${received} bytes, not the ${entry.size} declared`,
+            { received, size: entry.size },
+          );
+        }
+        await entry.writer.close();
+      } catch (e) {
+        const failure =
+          e instanceof HermeticError
+            ? e
+            : new HermeticError("ABORTED", "the upload stopped before it finished");
+        await entry.writer.abort(failure).catch(() => undefined);
+        await reader?.cancel().catch(() => undefined);
+        throw failure;
+      } finally {
+        entry.active = false;
+        entry.touched = now();
+      }
     },
 
     append(upload_id, offset, bytes) {
@@ -290,6 +399,7 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
       const entry = entries.get(upload_id);
       if (entry === undefined) return null;
       if (entry.kind === "path") return "path";
+      if (entry.kind === "stream") return "stream";
       if (entry.held === "secret_text") return "secret_text";
       return entry.held === "bytes" ? "held" : "chunks";
     },
@@ -298,6 +408,21 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
       const entry = get(upload_id);
       if (entry.kind === "path") {
         return { kind: "path", name: entry.name, size: entry.size, path: entry.path };
+      }
+      if (entry.kind === "stream") {
+        if (entry.taken) {
+          throw new HermeticError(
+            "CONFLICT",
+            "that upload is already being sent; upload the file again",
+          );
+        }
+        entry.taken = true;
+        return {
+          kind: "stream",
+          name: entry.name,
+          size: entry.size,
+          body: streamChunks(entry.pipe.readable),
+        };
       }
       if (!entry.closed) {
         throw new HermeticError("CONFLICT", "the upload is still receiving chunks; close it first");

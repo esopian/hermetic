@@ -244,6 +244,8 @@ export function createFiles(deps: FilesDeps) {
     internal: {
       uploads: {
         open: uploads.open,
+        openStream: uploads.openStream,
+        feed: uploads.feed,
         append: uploads.append,
         close: uploads.close,
         registerPath: uploads.registerPath,

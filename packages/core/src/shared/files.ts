@@ -133,7 +133,7 @@ export const FILES_LIMITS = {
   secretEphemeralBytes: 1 * MiB,
   secretTextBytes: 64 * KiB,
   attachmentsPerTurn: 10,
-  /** The most a webview drop may hold in main-process memory across its chunks. */
+  /** The most the chunk registry holds in main-process memory (text secrets, CLI stdin); a dropped file streams instead. */
   chunkUploadBytes: 64 * MiB,
   chunkBytes: 1 * MiB,
   /** A write is refused if it would leave less free than this… */

@@ -19,12 +19,14 @@
  *
  * ## No paths from the page
  *
- * The page never names a file on this laptop. A drop or a paste arrives as
- * chunks (`files.chunk.*`), held in core's in-memory registry and never written
- * to disk; the native dialog (`files.pickNative`, owned by the desktop shell)
- * registers its pick in the same registry. Either way the page stages by
- * `chunk_upload_id`, and a request carrying `source.path` is refused
- * `UNSUPPORTED` before anything reads it.
+ * The page never names a file on this laptop. A drop or a paste is PUT by the
+ * page to the loopback upload port (`files.upload.open`, `upload-port.ts`) and
+ * piped through core's upload registry to the box as it arrives, never held
+ * whole and never written to disk; a text secret arrives as small chunks
+ * (`files.chunk.*`) held in the same registry; the native dialog
+ * (`files.pickNative`, owned by the desktop shell) registers its pick there
+ * too. Either way the page stages by `chunk_upload_id`, and a request
+ * carrying `source.path` is refused `UNSUPPORTED` before anything reads it.
  *
  * A download is the mirror image: the native folder dialog
  * (`files.saveNative`) registers the folder with core and answers an opaque
@@ -57,6 +59,7 @@ import {
   FilesChunkAppendInput,
   FilesChunkOpenInput,
   FilesChunkRefInput,
+  FilesUploadOpenInput,
   FilesContentInput,
   FilesDeclineInput,
   FilesEntryRefInput,
@@ -82,6 +85,7 @@ import type {
 import { looksLikeKeyMaterial } from "@hermetic/core/shared";
 import { declareMachineryRpc, declareRpc } from "../declare.ts";
 import { requireTarget, stillBound, withTarget } from "../target.ts";
+import { uploadPort } from "../upload-port.ts";
 import type { Targeted } from "../target.ts";
 import { parseInput } from "../validation.ts";
 import type { HandlerContext } from "./ctx.ts";
@@ -101,6 +105,7 @@ export const filesRmSchema = declareRpc("files.rm", FilesRmInput);
 
 /** Closes a `files.stage` stream: the chip's cancel while it uploads. */
 export const FILES_STAGE_ABORT = declareMachineryRpc("files.stage.abort");
+export const FILES_UPLOAD_OPEN = declareMachineryRpc("files.upload.open");
 export const FILES_CHUNK_OPEN = declareMachineryRpc("files.chunk.open");
 export const FILES_CHUNK_APPEND = declareMachineryRpc("files.chunk.append");
 export const FILES_CHUNK_CLOSE = declareMachineryRpc("files.chunk.close");
@@ -367,6 +372,19 @@ export async function stageAbort(ctx: HandlerContext, params: unknown): Promise<
   return { closed: ctx.streams.close(stream_id) };
 }
 
+/**
+ * A drop or paste: reserve a streamed upload and answer the loopback URL the
+ * page PUTs the file to (`upload-port.ts`). The page then runs `files.stage`
+ * or `files.put` on the id at the same time, which reads the bytes as they
+ * arrive and sends them on.
+ */
+export async function uploadOpen(ctx: HandlerContext, params: unknown) {
+  const input = parseInput(FilesUploadOpenInput, params);
+  const uploads = ctx.hermetic().files.internal.uploads;
+  const { upload_id } = uploads.openStream(input);
+  return { upload_id, url: uploadPort.url(upload_id, (body) => uploads.feed(upload_id, body)) };
+}
+
 export async function chunkOpen(ctx: HandlerContext, params: unknown) {
   const input = parseInput(FilesChunkOpenInput, params);
   return ctx.hermetic().files.internal.uploads.open(input);
@@ -523,6 +541,7 @@ export const filesHandlers = {
   "files.stage": (ctx: HandlerContext, params: unknown, sink?: StreamSink) =>
     stage(ctx, params, requireSink(sink)),
   [FILES_STAGE_ABORT]: stageAbort,
+  [FILES_UPLOAD_OPEN]: uploadOpen,
   [FILES_CHUNK_OPEN]: chunkOpen,
   [FILES_CHUNK_APPEND]: chunkAppend,
   [FILES_CHUNK_CLOSE]: chunkClose,

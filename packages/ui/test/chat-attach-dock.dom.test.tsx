@@ -17,10 +17,17 @@ import { ChatProvider } from "../src/chat/chat-state.tsx";
 import { ChatView } from "../src/chat/components/ChatView.tsx";
 import { ChatShell } from "../src/chat/components/ChatShell.tsx";
 import { useChatEntry } from "../src/chat/chat-entry-state.tsx";
-import { fakeFiles, harness, sendable, sessionOf, swarmOf } from "./chat-fixtures.tsx";
+import { fakeFiles, harness, sendable, sessionOf, stubUploadFetch, swarmOf } from "./chat-fixtures.tsx";
 import type { Harness } from "./chat-fixtures.tsx";
 
-afterEach(cleanup);
+let restoreFetch: () => void = () => undefined;
+beforeEach(() => {
+  restoreFetch = stubUploadFetch();
+});
+afterEach(() => {
+  restoreFetch();
+  cleanup();
+});
 
 function EntryFrames() {
   const entry = useChatEntry()!;

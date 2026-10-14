@@ -21,7 +21,7 @@ import type { SecretTextAs } from "../shared/files.ts";
 export interface FilesApi {
   /**
    * `PUT /files/stage/:name`. `size` is sent as `Content-Length` and `sha256`
-   * as `Content-Digest`; the box refuses a body that does not match either.
+   * as `Content-Digest` when known; the box refuses a body that does not match either.
    * `onProgress` is called with the bytes sent so far.
    */
   stage(
@@ -90,8 +90,12 @@ export interface FilesFulfilUpload {
   fileName: string;
   size: number;
   body: AsyncIterable<Uint8Array> | Uint8Array;
-  /** Lowercase hex SHA-256 of the whole body. */
-  sha256: string;
+  /**
+   * Lowercase hex SHA-256 of the whole body. Absent for a body that is being
+   * streamed through from the page: the digest travels ahead of the bytes, so
+   * it cannot be known, and the box hashes what it receives and reports it.
+   */
+  sha256?: string;
 }
 
 export interface FilesFulfilOptions {
@@ -119,8 +123,8 @@ export interface FilesStageUpload {
   fileName: string;
   size: number;
   body: AsyncIterable<Uint8Array> | Uint8Array;
-  /** Lowercase hex SHA-256 of the whole body. */
-  sha256: string;
+  /** Lowercase hex SHA-256 of the whole body; absent for a streamed-through body (see `FilesFulfilUpload`). */
+  sha256?: string;
   sessionId?: string;
   notSecret?: boolean;
 }

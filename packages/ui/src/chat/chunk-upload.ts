@@ -1,12 +1,17 @@
 /**
- * Bytes the page holds, into the main process's upload registry
- * (`files.chunk.*`, `app/src/handlers/files.ts`).
+ * Bytes the page holds, into the main process.
  *
- * A drop or a paste hands the page a `File` and no path, and a text secret is
- * bytes the operator typed. Either is sent in base64 chunks of
- * `FILES_LIMITS.chunkBytes` and named afterwards by the upload id this answers,
- * which is all a `files.stage` or a `files.put` carries. The composer's tray
- * (`chat-attachments.ts`) and the request cards (`FileRequest.tsx`) share it.
+ * A drop or a paste hands the page a `File` and no path. It is sent with
+ * `putStream`: one `fetch` of the `File` to the loopback upload port
+ * (`app/src/upload-port.ts`), which the browser reads from disk as the request
+ * goes, so the page copies nothing and no size is too big. `files.stage` or
+ * `files.put` runs on the upload id at the same time and sends the bytes on to
+ * the box as they arrive.
+ *
+ * A text secret is bytes the operator typed, small and never a `File`: it goes
+ * in base64 chunks of `FILES_LIMITS.chunkBytes` (`sendChunks`) and is named
+ * afterwards by the upload id this answers. The composer's tray
+ * (`chat-attachments.ts`) and the request cards (`FileRequest.tsx`) share both.
  */
 import { FILES_LIMITS } from "@hermetic/core/shared";
 import type * as filesApi from "../api/files.ts";
@@ -79,4 +84,32 @@ export async function sendChunks(
   }
   await calls.chunkClose(upload_id);
   return stop() ? null : upload_id;
+}
+
+/**
+ * PUTs `file` to the loopback URL `files.upload.open` answered. Resolves when
+ * the main process has taken every byte; rejects with the refusal's `code`
+ * when it did not. An `abort` resolves quietly: whoever aborted knows.
+ *
+ * The `File` is the request body itself, never read into the page: WebKit and
+ * Chromium both stream it from disk. The request is read only as fast as the
+ * box takes the bytes, so this is also how long the whole transfer takes.
+ */
+export async function putStream(url: string, file: Blob, signal: AbortSignal): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "PUT", body: file, signal });
+  } catch (e) {
+    if (signal.aborted) return;
+    throw Object.assign(new Error("the upload could not reach the app"), {
+      code: "UPLOAD_FAILED",
+      cause: e,
+    });
+  }
+  if (res.ok) return;
+  const body = (await res.json().catch(() => null)) as { code?: unknown; message?: unknown } | null;
+  throw Object.assign(
+    new Error(typeof body?.message === "string" ? body.message : `the upload failed (${res.status})`),
+    { code: typeof body?.code === "string" ? body.code : "UPLOAD_FAILED" },
+  );
 }

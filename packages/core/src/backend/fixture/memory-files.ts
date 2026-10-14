@@ -198,7 +198,7 @@ export class MemoryFiles implements FilesApi {
     const bytes = await readAll(upload.body, opts.onProgress, opts.signal);
     if (bytes.byteLength !== upload.size) throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    if (sha256 !== upload.sha256.toLowerCase() || name.includes(E2E_FILE_DIGEST)) {
+    if ((upload.sha256 && sha256 !== upload.sha256.toLowerCase()) || name.includes(E2E_FILE_DIGEST)) {
       throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
     }
     const head = bytes.subarray(0, FILES_LIMITS.sniffBytes);
@@ -705,7 +705,7 @@ export class MemoryFiles implements FilesApi {
     const bytes = await readAll(upload.body, opts.onProgress, opts.signal);
     if (bytes.byteLength !== upload.size) throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
     const sha = createHash("sha256").update(bytes).digest("hex");
-    if (sha !== upload.sha256.toLowerCase() || name.includes(E2E_FILE_DIGEST)) {
+    if ((upload.sha256 && sha !== upload.sha256.toLowerCase()) || name.includes(E2E_FILE_DIGEST)) {
       throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
     }
 

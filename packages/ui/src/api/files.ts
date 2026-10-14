@@ -21,6 +21,14 @@ export type FilesStageFrame = NonNullable<HermeticRPC["webview"]["messages"]["fi
 export type StagedFile = Extract<FilesStageFrame, { type: "staged" }>["file"];
 export type FilesStageProgress = Extract<FilesStageFrame, { type: "progress" }>;
 
+/**
+ * Reserve a streamed upload for a dropped or pasted file: answers its id and
+ * the loopback URL the page PUTs the file to (`putStream`).
+ */
+export function uploadOpen(name: string, size: number): Promise<Answer<"files.upload.open">> {
+  return transport().request("files.upload.open", { name, size });
+}
+
 export function chunkOpen(name: string, size: number): Promise<Answer<"files.chunk.open">> {
   return transport().request("files.chunk.open", { name, size });
 }

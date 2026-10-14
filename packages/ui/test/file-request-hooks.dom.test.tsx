@@ -7,8 +7,9 @@
  * Assertions compare strings, numbers and booleans, never DOM nodes.
  */
 import { act, cleanup, render } from "./dom.ts";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { FileRequestSlot } from "../src/api/files.ts";
+import { stubUploadFetch } from "./chat-fixtures.tsx";
 import { type FilePut, type PutApi, useFilePut, useLetGoWhenClosed } from "../src/chat/use-file-put.ts";
 import {
   FILE_REQUEST_BACKOFF_MAX_MS,
@@ -19,7 +20,14 @@ import {
   useFileRequest,
 } from "../src/chat/use-file-request.ts";
 
-afterEach(cleanup);
+let restoreFetch: () => void = () => undefined;
+beforeEach(() => {
+  restoreFetch = stubUploadFetch();
+});
+afterEach(() => {
+  restoreFetch();
+  cleanup();
+});
 
 /** Let every settled promise's continuation run. */
 const flush = () => act(async () => await new Promise((r) => setTimeout(r, 0)));
@@ -134,6 +142,12 @@ describe("useFilePut", () => {
     let opened = 0;
     const releases: (() => void)[] = [];
     const api = {
+      // A drop or paste: held here while the main process "opens" the upload.
+      uploadOpen: async () => {
+        if (opts.holdAppend) await new Promise<void>((resolve) => releases.push(resolve));
+        opened += 1;
+        return { upload_id: `up_${opened}`, url: `http://127.0.0.1:1/upload/up_${opened}` };
+      },
       chunkOpen: async () => {
         opened += 1;
         return { upload_id: `up_${opened}` };
@@ -214,9 +228,8 @@ describe("useFilePut", () => {
     await flush();
     act(() => m.put().putFile(file("second.log")));
     await flush();
-    // The first job's upload went the moment it was replaced.
-    expect(fake.discarded).toEqual(["up_1"]);
-    // Both sends finish their chunks; only the current one is put.
+    // Both opens finish; the first job was replaced meanwhile, so its upload
+    // goes the moment it exists and only the current one is put.
     for (const release of fake.releases) release();
     await flush();
     await flush();

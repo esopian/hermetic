@@ -37,7 +37,7 @@ Where to read for common tasks:
 packages/core     SDK: all logic, all AWS, SQLite, DynamoDB. Zod schemas in packages/core/src/schema/.
 packages/cli      Commander head. Imports core in-process. Never imports the app package.
 packages/app      Electrobun head: desktop main process, typed RPC over core; bundles ui's page.
-packages/ui       React. Webview only. Talks to the main process over Electrobun RPC.
+packages/ui       React. Webview only. Talks to the main process over Electrobun RPC, plus one loopback `PUT` for a dropped file's bytes (`packages/app/src/upload-port.ts`).
 packages/agentd   hermeticd node agent. Imports ONLY `@hermetic/core/schema` and `@hermetic/core/shared`.
 ```
 

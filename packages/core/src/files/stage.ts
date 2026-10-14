@@ -19,6 +19,7 @@ import {
   sniffMime,
 } from "../shared/files.ts";
 import { validateName } from "../shared/naming.ts";
+import { peekHead } from "./stream-source.ts";
 import type { UploadRegistry } from "./uploads.ts";
 
 /**
@@ -47,7 +48,8 @@ export interface StageDeps {
 /** What a stage reads, once resolved: its bytes or its path, and the name it goes up under. */
 type Resolved =
   | { kind: "bytes"; name: string; size: number; bytes: Uint8Array; upload_id: string }
-  | { kind: "path"; name: string; size: number; path: string; upload_id: string | null };
+  | { kind: "path"; name: string; size: number; path: string; upload_id: string | null }
+  | { kind: "stream"; name: string; size: number; body: AsyncIterable<Uint8Array>; upload_id: string };
 
 const READ_CHUNK = 1024 * 1024;
 
@@ -250,7 +252,24 @@ export function createFilesStage(deps: StageDeps) {
     if (source.kind === "path") {
       return { kind: "path", name: nameFor(name), size: source.size, path: source.path, upload_id };
     }
+    if (source.kind === "stream") {
+      return { kind: "stream", name: nameFor(name), size: source.size, body: source.body, upload_id };
+    }
     return { kind: "bytes", name: nameFor(name), size: source.size, bytes: source.bytes, upload_id };
+  }
+
+  /**
+   * The head the checks sniff. A streamed body is read only this far first
+   * (the page's request stays blocked behind the checks, so a refusal costs no
+   * upload), and the source answered carries a body that replays what was read.
+   */
+  async function withHead(src: Resolved): Promise<{ src: Resolved; head: Uint8Array }> {
+    if (src.kind === "stream") {
+      const peeked = await peekHead(src.body, FILES_LIMITS.sniffBytes);
+      return { src: { ...src, body: peeked.body }, head: peeked.head };
+    }
+    if (src.kind === "bytes") return { src, head: src.bytes.subarray(0, FILES_LIMITS.sniffBytes) };
+    return { src, head: await readHead(src.path) };
   }
 
   /** The two checks the box would make, made first so a refusal costs no upload. */
@@ -290,22 +309,27 @@ export function createFilesStage(deps: StageDeps) {
       opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
       if (opts.signal?.aborted) controller.abort();
       const signal = controller.signal;
+      // A streamed upload is read once and cannot be taken again, so it ends
+      // with the stage, however the stage ends.
+      let streamed: string | null = null;
       try {
         aborted(signal);
         // The account and fleet this SDK was opened for, before a byte is read
         // or sent (§4.6), like every other method that reaches a box.
         await ctx.guardFleet();
         await ctx.getAgent(instance);
-        const src = await resolve(parsed);
-        const head =
-          src.kind === "bytes"
-            ? src.bytes.subarray(0, FILES_LIMITS.sniffBytes)
-            : await readHead(src.path);
+        const resolved = await resolve(parsed);
+        if (resolved.kind === "stream") streamed = resolved.upload_id;
+        const { src, head } = await withHead(resolved);
         preflight(instance, src, head, parsed.not_secret === true);
         aborted(signal);
 
-        let sha256: string;
-        if (src.kind === "bytes") {
+        // The digest goes in a header ahead of the body, so a streamed body
+        // has none: the box hashes what it receives and reports it.
+        let sha256: string | undefined;
+        if (src.kind === "stream") {
+          sha256 = undefined;
+        } else if (src.kind === "bytes") {
           sha256 = createHash("sha256").update(src.bytes).digest("hex");
         } else {
           const path = src.path;
@@ -323,7 +347,7 @@ export function createFilesStage(deps: StageDeps) {
           });
         }
 
-        const from = src.kind === "bytes" ? 0 : 0.2;
+        const from = src.kind === "path" ? 0.2 : 0;
         const result: FilesStageResult = yield* pump(controller, async (emit) => {
           const progress = throttled(emit, "upload", from, 1, src.size, "sent", ctx.nowIso);
           progress(0);
@@ -332,8 +356,13 @@ export function createFilesStage(deps: StageDeps) {
             {
               fileName: src.name,
               size: src.size,
-              body: src.kind === "bytes" ? src.bytes : fileChunks(src.path, src.size, signal),
-              sha256,
+              body:
+                src.kind === "stream"
+                  ? src.body
+                  : src.kind === "bytes"
+                    ? src.bytes
+                    : fileChunks(src.path, src.size, signal),
+              ...(sha256 !== undefined ? { sha256 } : {}),
               ...(parsed.session ? { sessionId: parsed.session } : {}),
               ...(parsed.not_secret ? { notSecret: true } : {}),
             },
@@ -350,6 +379,7 @@ export function createFilesStage(deps: StageDeps) {
         throw e;
       } finally {
         opts.signal?.removeEventListener("abort", onOuterAbort);
+        if (streamed !== null) uploads.discard(streamed);
       }
     })();
   }

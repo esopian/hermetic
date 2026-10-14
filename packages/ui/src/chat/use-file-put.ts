@@ -15,11 +15,9 @@
  * closing under the question (the card calls `keep`) discards it too.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FILES_LIMITS } from "@hermetic/core/shared";
 import * as filesApi from "../api/files.ts";
 import type { PutOptions } from "../api/files.ts";
-import { sendChunks } from "./chunk-upload.ts";
-import { DROP_TOO_LARGE } from "./file-request-logic.ts";
+import { putStream, sendChunks } from "./chunk-upload.ts";
 
 export type PutState =
   | { phase: "idle" }
@@ -34,7 +32,7 @@ export type PutState =
 
 export type PutApi = Pick<
   typeof filesApi,
-  "chunkOpen" | "chunkAppend" | "chunkClose" | "chunkDiscard" | "putUpload"
+  "uploadOpen" | "chunkOpen" | "chunkAppend" | "chunkClose" | "chunkDiscard" | "putUpload"
 >;
 
 /** What a job sends, kept so a "Replace" can send it again. */
@@ -48,6 +46,8 @@ interface Job {
   /** An upload this card opened and has not handed to a put yet. */
   upload: string | null;
   close: (() => void) | null;
+  /** Aborts the file's PUT to the upload port while it runs. */
+  abortSend?: (() => void) | null;
   /** The job's source and options, until it ends; text bytes are zeroed then. */
   source: Source | null;
   opts: PutOptions;
@@ -55,7 +55,7 @@ interface Job {
 
 export interface FilePut {
   state: PutState;
-  /** A drop or a paste: through the page, capped at `FILES_LIMITS.chunkUploadBytes`. */
+  /** A drop or a paste: the page PUTs the file to the loopback upload port while the put reads it. */
   putFile: (file: File, opts?: PutOptions) => void;
   /** A native pick: the main process already holds the bytes. */
   putUpload: (upload_id: string, size: number, opts?: PutOptions) => void;
@@ -119,6 +119,8 @@ export function useFilePut(
   const fail = useCallback((current: Job, code: string, message: string, replace_slot?: string) => {
     if (job.current !== current) return;
     job.current = null;
+    current.abortSend?.();
+    current.abortSend = null;
     if (replace_slot !== undefined && current.source !== null) {
       // Held for the operator's answer. Core kept a native pick registered
       // for this (a path, no bytes); a page upload it forgot, and the page
@@ -158,6 +160,7 @@ export function useFilePut(
           }
           // The box consumed the upload; there is nothing left to discard.
           current.upload = null;
+          current.abortSend = null;
           job.current = null;
           release(current);
           setState({ phase: "idle" });
@@ -173,6 +176,8 @@ export function useFilePut(
     current.cancelled = true;
     current.close?.();
     current.close = null;
+    current.abortSend?.();
+    current.abortSend = null;
     discard(current);
     release(current);
   };
@@ -189,9 +194,41 @@ export function useFilePut(
   const sendThenPut = useCallback(
     async (source: Extract<Source, { kind: "file" | "bytes" }>, opts: PutOptions) => {
       const current = start(source, opts);
-      const body = source.kind === "bytes" ? source.bytes : source.file;
-      const name = source.kind === "bytes" ? source.name : source.file.name;
-      const total = body instanceof Uint8Array ? body.byteLength : body.size;
+      if (source.kind === "file") {
+        const file = source.file;
+        setState({ phase: "uploading", progress: 0, sent: 0, total: file.size });
+        try {
+          const { upload_id, url } = await apiRef.current.uploadOpen(file.name, file.size);
+          current.upload = upload_id;
+          if (current.cancelled || job.current !== current) {
+            discard(current);
+            release(current);
+            return;
+          }
+          // The put reads the upload as the PUT writes it: one pipe, page to box.
+          put(current, upload_id, file.size, 0);
+          const abort = new AbortController();
+          current.abortSend = () => abort.abort();
+          putStream(url, file, abort.signal).catch((e: unknown) => {
+            // A put that has answered owns the outcome (`fail` ignores a stale job).
+            if (current.cancelled || job.current !== current) return;
+            current.close?.();
+            current.close = null;
+            fail(current, codeOf(e), e instanceof Error ? e.message : String(e));
+          });
+        } catch (e) {
+          if (current.cancelled) {
+            discard(current);
+            release(current);
+            return;
+          }
+          fail(current, codeOf(e), e instanceof Error ? e.message : String(e));
+        }
+        return;
+      }
+      const body = source.bytes;
+      const name = source.name;
+      const total = body.byteLength;
       setState({ phase: "uploading", progress: 0, sent: 0, total });
       try {
         const upload_id = await sendChunks(apiRef.current, body, name, {
@@ -228,10 +265,6 @@ export function useFilePut(
   const putFile = useCallback(
     (file: File, opts: PutOptions = {}) => {
       forgetAsk();
-      if (file.size > FILES_LIMITS.chunkUploadBytes) {
-        setState({ phase: "error", code: "DROP_TOO_LARGE", message: DROP_TOO_LARGE });
-        return;
-      }
       void sendThenPut({ kind: "file", file }, opts);
     },
     [sendThenPut],

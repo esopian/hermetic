@@ -76,7 +76,9 @@ test("a dropped file is staged, and the turn carries its id", async () => {
     timeout: 4_000,
   });
   expect(pane.querySelector(".ch-file-status")?.textContent).toContain("✓ staged");
-  expect(harness!.calls.filter((c) => c.name === "files.chunk.append")).toHaveLength(1);
+  // A drop streams to the loopback upload port: one open, no chunk calls.
+  expect(harness!.calls.filter((c) => c.name === "files.upload.open")).toHaveLength(1);
+  expect(harness!.calls.filter((c) => c.name === "files.chunk.append")).toHaveLength(0);
   expect(pane.querySelector(".ch-attach-sum")?.textContent).toContain("1 ready");
 
   await userEvent.type(composer, "look at this{Enter}");

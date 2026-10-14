@@ -108,6 +108,7 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   // The composer's attachments. The chunk registry is this
   // process's memory, the capability probe and the thumbnail are reads.
   "files.stage.abort": "closes a stream this head opened",
+  "files.upload.open": "reserves a streamed upload in this head's memory; nothing leaves the laptop",
   "files.chunk.open": "reserves bytes in this head's memory; nothing leaves the laptop",
   "files.chunk.append": "adds bytes in this head's memory; nothing leaves the laptop",
   "files.chunk.close": "seals bytes in this head's memory; nothing leaves the laptop",

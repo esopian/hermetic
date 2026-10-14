@@ -166,6 +166,3 @@ export async function looksLikeKey(file: Blob, name: string): Promise<boolean> {
     head.fill(0);
   }
 }
-
-/** The copy for a drop or paste too large to send through the page. */
-export const DROP_TOO_LARGE = `use Choose file… for files over ${capLabel(FILES_LIMITS.chunkUploadBytes)}`;
