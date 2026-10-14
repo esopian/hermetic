@@ -33,6 +33,7 @@ import {
   runRecorderFor,
 } from "@hermetic/core";
 import { createChatOwner } from "../chat-owner.ts";
+import { type ChatWatchdog, createChatWatchdog } from "../chat-watchdog.ts";
 import { dispatch } from "../handlers/dispatch.ts";
 import { createStreamRegistry } from "../handlers/streams.ts";
 import type { HandlerContext } from "../handlers/ctx.ts";
@@ -118,6 +119,15 @@ if (process.env[HERMETICD_ENV] === undefined) process.env[HERMETICD_ENV] = paths
 if (process.env[STAGES_ENV] === undefined) process.env[STAGES_ENV] = paths.stagesDir;
 
 /**
+ * The chat coverage watchdog (`chat-watchdog.ts`), built below once the chat
+ * owner exists. The poller is built inside `openState`, before either, so its
+ * hooks reach the watchdog through this binding rather than capturing it; a
+ * scan that lands before it is assigned is simply not heard, and the launch
+ * sync covers that window.
+ */
+let chatWatchdog: ChatWatchdog | null = null;
+
+/**
  * A laptop that has never run `init` still gets a window — that is what the
  * wizard is for. `NOT_INITIALIZED` is an outcome here, not a failure.
  */
@@ -125,6 +135,10 @@ const state = await openState({
   fixture,
   ...(fixture ? { fixtureOptions: fixtureOptionsFromEnv(process.env) } : {}),
   uninitialized,
+  pollerHooks: {
+    onReachable: (names) => void chatWatchdog?.reachable(names),
+    onRoster: (swarms) => void chatWatchdog?.roster(swarms),
+  },
 });
 
 // The real directory, not `state.home`: fixture state calls its home
@@ -150,6 +164,24 @@ const ops = new OpRegistry({
  * Hermes Desktop, another operator's CLI or a routine (`chat-owner.ts`).
  */
 const chatOwner = createChatOwner({ hermetic: () => state.hermetic, log });
+
+/**
+ * Insurance for that set: a listened box that was down at launch, or a
+ * conversation whose read gave up, is picked up again once the poller sees the
+ * box answering — without an operator pressing anything. It only ever asks the
+ * owner to sync, resume or restart an observation; it sends nothing.
+ */
+const watchdog = createChatWatchdog({
+  owner: chatOwner,
+  listening: async () => (await state.hermetic.chat.listening({})).instances,
+  // "No answer yet" is not "no agents": before the first scan, nothing is skipped as stopped.
+  agents: () => {
+    const scan = state.poller?.snapshot();
+    return scan?.scanned === true ? scan.agents : null;
+  },
+  log,
+});
+chatWatchdog = watchdog;
 
 /**
  * The in-app terminal's sessions (issue #18), one table for the process: a
@@ -469,9 +501,9 @@ const closingWindows: StoppableServer = {
   stop: () => windows.closeAll(),
 };
 
-/** Poller, chat, pools, windows — but not the process; the close guard exits. */
+/** Poller, watchdog, chat, pools, windows — but not the process; the close guard exits. */
 const teardown = (reason: string): Promise<void> =>
-  shutdown({ server: closingWindows, state, log, chat: chatOwner, terminals }, reason);
+  shutdown({ server: closingWindows, state, log, watchdog, chat: chatOwner, terminals }, reason);
 
 /**
  * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
@@ -641,6 +673,7 @@ updater.start();
  * observe" and says so in the log.
  */
 void chatOwner.sync();
+watchdog.start();
 
 /**
  * Last of all, and only on a dev build: the shell's way in

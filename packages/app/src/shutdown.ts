@@ -36,6 +36,12 @@ export interface StoppableObservations {
   stop(): Promise<void>;
 }
 
+/** As much of the chat coverage watchdog as a shutdown needs (`chat-watchdog.ts`). */
+export interface StoppableWatchdog {
+  /** Disarms every timer. Synchronous: it holds nothing worth waiting for. */
+  stop(): void;
+}
+
 /** As much of the terminal host as a shutdown needs (`terminal/host.ts`). */
 export interface StoppableTerminals {
   /** Hangs up every live session. Synchronous: nothing after a quit gets to wait. */
@@ -47,6 +53,8 @@ export interface ShutdownTarget {
   state?: PollingState;
   log?: AppLog;
   chat?: StoppableObservations;
+  /** Stopped before `chat`, so nothing re-pins what the owner is letting go of. */
+  watchdog?: StoppableWatchdog;
   terminals?: StoppableTerminals;
 }
 
@@ -78,6 +86,16 @@ export async function shutdown(target: ShutdownTarget, signal: string): Promise<
     target.state?.poller?.stop();
   } catch {
     // A poller that will not stop must not stop the process from stopping.
+  }
+  /**
+   * The coverage watchdog before the observations it watches: a sync or a
+   * resume it fired mid-teardown would otherwise be asking a stopping owner to
+   * hold something again. Synchronous, like the poller.
+   */
+  try {
+    target.watchdog?.stop();
+  } catch {
+    // Same rule as the poller.
   }
   /**
    * The chat observations this process holds (`chat-owner.ts`). Aborting one

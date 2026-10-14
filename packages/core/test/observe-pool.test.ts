@@ -163,11 +163,14 @@ const ref = (bot: string, session: string | null = null): ChatConversationRef =>
 
 const pools: ObservePool[] = [];
 
-function harness(options: { throws?: unknown; maxRememberedFailures?: number } = {}) {
+function harness(
+  options: { throws?: unknown; maxRememberedFailures?: number; now?: () => number } = {},
+) {
   const upstream = script(options);
   const pool = createObservePool({
     observe: upstream.observe,
     log: upstream.log,
+    ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.maxRememberedFailures === undefined
       ? {}
       : { maxRememberedFailures: options.maxRememberedFailures }),
@@ -246,7 +249,15 @@ describe("one upstream read per conversation", () => {
     await settle();
 
     expect(upstream.calls("atlas/default#thread-7")).toBe(1);
-    expect(pool.held()).toEqual([{ ref: ref("default", "thread-7"), pinned: false, session: null }]);
+    expect(pool.held()).toEqual([
+      {
+        ref: ref("default", "thread-7"),
+        pinned: false,
+        session: null,
+        health: null,
+        healthSince: null,
+      },
+    ]);
 
     await first.leave();
     await settle();
@@ -477,6 +488,35 @@ describe("a reader that connects late learns the observation's health", () => {
     await settle();
 
     expect(pool.snapshots().map((seed) => seed.event.type)).toEqual(["snapshot"]);
+  });
+
+  test("a held entry reports its health kind and when the unhealthy streak began", async () => {
+    let clock = 1_000;
+    const { upstream, pool } = harness({ now: () => clock });
+    pool.pin(ref("default"));
+    await settle();
+    upstream.push("atlas/default", snapshot("default"));
+    await settle();
+    expect(pool.held()[0]).toMatchObject({ health: null, healthSince: null });
+
+    upstream.push("atlas/default", reconnecting("default", 1));
+    await settle();
+    expect(pool.held()[0]).toMatchObject({ health: "reconnect", healthSince: 1_000 });
+
+    // A later attempt in the same streak keeps the streak's start.
+    clock = 5_000;
+    upstream.push("atlas/default", reconnecting("default", 2));
+    await settle();
+    expect(pool.held()[0]).toMatchObject({ health: "reconnect", healthSince: 1_000 });
+
+    // A read that arrived ends the streak; the next one starts afresh.
+    upstream.push("atlas/default", message("default", "back"));
+    await settle();
+    expect(pool.held()[0]).toMatchObject({ health: null, healthSince: null });
+    clock = 9_000;
+    upstream.push("atlas/default", reconnecting("default", 1));
+    await settle();
+    expect(pool.held()[0]).toMatchObject({ health: "reconnect", healthSince: 9_000 });
   });
 
   test("a pinned conversation that failed is remembered, replayed, and not re-read", async () => {

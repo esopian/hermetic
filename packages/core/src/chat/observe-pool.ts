@@ -88,6 +88,20 @@ export interface ObservePoolEntry {
   pinned: boolean;
   /** The session the held read names, or `null` before the first read. */
   session: string | null;
+  /**
+   * What the subscription last said about its own health: `reconnect` while
+   * core is retrying the upstream read, `error` in the instant between a
+   * terminal failure and the entry leaving `held()`, `null` while it is well.
+   * The kind only — the event itself, with its message, is a reader's.
+   */
+  health: "reconnect" | "error" | null;
+  /**
+   * When the current unhealthy streak began (`ObservePoolDeps.now`), or `null`
+   * while the subscription is well. A second `reconnect` in the same streak
+   * keeps the first one's time, so a watchdog can tell a read that has been
+   * retrying for ten minutes from one that started retrying just now.
+   */
+  healthSince: number | null;
 }
 
 /**
@@ -167,6 +181,8 @@ export interface ObservePoolDeps {
   log?: (level: ObservePoolLogLevel, message: string, fields: Record<string, unknown>) => void;
   /** Override for tests; the ceiling on `RememberedFailure` entries. */
   maxRememberedFailures?: number;
+  /** The clock `ObservePoolEntry.healthSince` is read from; `Date.now` by default. */
+  now?: () => number;
 }
 
 export interface ObservePool {
@@ -303,6 +319,8 @@ interface Subscription {
    * a read that worked.
    */
   health: ChatHealthEvent | null;
+  /** When `health` last went from `null` to a complaint; `null` while it is well. */
+  healthSince: number | null;
   /** The last `busy` event, replayed after `snapshot` to whoever attaches next. */
   busy: ChatBusyEvent | null;
   pinned: boolean;
@@ -313,6 +331,7 @@ interface Subscription {
 export function createObservePool(deps: ObservePoolDeps): ObservePool {
   const classify = deps.classify ?? defaultClassify;
   const maxFailures = deps.maxRememberedFailures ?? OBSERVE_POOL_MAX_REMEMBERED_FAILURES;
+  const now = deps.now ?? Date.now;
   const subs = new Map<string, Subscription>();
   const failures = new Map<string, RememberedFailure>();
   const fanIn = new Set<(event: PooledChatEvent) => void>();
@@ -368,6 +387,17 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
     }
   }
 
+  /**
+   * Set or clear a subscription's complaint, keeping the time its streak
+   * began: the start of the first complaint after a healthy read, not the
+   * latest one.
+   */
+  function setHealth(sub: Subscription, health: ChatHealthEvent | null): void {
+    if (health === null) sub.healthSince = null;
+    else if (sub.health === null) sub.healthSince = now();
+    sub.health = health;
+  }
+
   function emit(sub: Subscription, event: ChatObserveEvent | null): void {
     for (const listener of [...sub.listeners]) {
       try {
@@ -412,8 +442,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         // A subagent update is live data arriving, so it ends a complaint too.
         if (event.type === "busy") sub.busy = event;
         else if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
-          sub.health = null;
-        else sub.health = masked(event);
+          setHealth(sub, null);
+        else setHealth(sub, masked(event));
         if (event.type === "error") {
           log("error", "observation failed", {
             ...where(sub.ref),
@@ -441,7 +471,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
           code: failure.code,
           message: failure.message,
         };
-        sub.health = ended;
+        setHealth(sub, ended);
         emit(sub, ended);
       }
     } finally {
@@ -460,6 +490,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       listeners: new Set(),
       snapshot: null,
       health: null,
+      healthSince: null,
       busy: null,
       pinned,
       joiners: 0,
@@ -537,6 +568,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         ref: sub.ref,
         pinned: sub.pinned,
         session: sub.snapshot?.type === "snapshot" ? sub.snapshot.session : null,
+        health: sub.health?.type ?? null,
+        healthSince: sub.healthSince,
       }));
     },
     has(ref) {

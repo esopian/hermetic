@@ -20,6 +20,7 @@ import {
   getPoller,
   POLL_INTERVAL_MS,
   type FleetEvent,
+  type PollerHooks,
 } from "../src/poller.ts";
 import { testHome } from "./home.ts";
 
@@ -611,5 +612,325 @@ describe("flushNotifications", () => {
     });
     await poller.flushNotifications();
     expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * The two facts a tick lends the chat owner's coverage keeper (`PollerHooks`),
+ * so it never pays for a scan or a tailnet sweep of its own. `onReachable` is
+ * an *edge*, not a level: a box steady in `ready` is already covered, and the
+ * first scan is the baseline the launch sync covers, so both must stay quiet.
+ */
+describe("the poller hooks", () => {
+  type Row = { name: string; display_status: string };
+
+  /**
+   * A fleet whose rows the test rewrites between scans, with a clock that
+   * starts the roster read due and a `chat.swarms` the test can make throw.
+   */
+  function hooked(initial: Row[], over: { swarms?: () => Promise<unknown> } = {}) {
+    let rows = initial;
+    let clock = 4_000_000;
+    const calls = { swarms: 0 };
+    const reachable: string[][] = [];
+    const rosters: unknown[][] = [];
+    const roster = [{ instance: "atlas", bots: [] }];
+    const stub = {
+      agents: { list: async () => rows as unknown as AgentView[] },
+      foundation: { status: async () => ({}) },
+      volumes: { list: async () => ({ volumes: [] }) },
+      chat: {
+        swarms: async () => {
+          calls.swarms += 1;
+          if (over.swarms) return over.swarms();
+          return { swarms: roster };
+        },
+      },
+      notifications: {
+        list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
+      },
+    } as unknown as Hermetic;
+    const hooks: PollerHooks = {
+      onReachable: (names) => void reachable.push(names),
+      onRoster: (swarms) => void rosters.push(swarms),
+    };
+    const poller = new FleetPoller(stub, () => clock, hooks);
+    return {
+      poller,
+      calls,
+      reachable,
+      rosters,
+      roster,
+      set: (next: Row[]) => void (rows = next),
+      advance: (ms: number) => void (clock += ms),
+    };
+  }
+
+  test("the first scan is the baseline and reports nothing", async () => {
+    const { poller, reachable } = hooked([
+      { name: "atlas", display_status: "ready" },
+      { name: "ember", display_status: "degraded" },
+    ]);
+    await poller.poll();
+    expect(reachable).toEqual([]);
+  });
+
+  test("a failed first scan does not make the next one a transition", async () => {
+    // `scanned` flips on an error too; judging the next scan against the empty
+    // map it left would report the whole fleet as having just come up.
+    let fail = true;
+    const seen: string[][] = [];
+    const stub = {
+      agents: {
+        list: async () => {
+          if (fail) throw new Error("no such fleet");
+          return [{ name: "atlas", display_status: "ready" }] as unknown as AgentView[];
+        },
+      },
+      foundation: { status: async () => ({}) },
+      volumes: { list: async () => ({ volumes: [] }) },
+      chat: { swarms: async () => ({ swarms: [] }) },
+      notifications: {
+        list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
+      },
+    } as unknown as Hermetic;
+    const poller = new FleetPoller(stub, Date.now, { onReachable: (n) => void seen.push(n) });
+    await poller.poll();
+    fail = false;
+    await poller.poll();
+    expect(seen).toEqual([]);
+  });
+
+  test("stopped to ready fires once, with the name", async () => {
+    const { poller, reachable, set } = hooked([{ name: "atlas", display_status: "stopped" }]);
+    await poller.poll();
+    set([{ name: "atlas", display_status: "ready" }]);
+    await poller.poll();
+    expect(reachable).toEqual([["atlas"]]);
+    // Steady afterwards: the edge is reported once, not on every tick.
+    await poller.poll();
+    expect(reachable).toEqual([["atlas"]]);
+  });
+
+  test("a recreate through stopped and bootstrapping fires on the way back", async () => {
+    const { poller, reachable, set } = hooked([{ name: "atlas", display_status: "ready" }]);
+    await poller.poll();
+    set([{ name: "atlas", display_status: "stopped" }]);
+    await poller.poll();
+    set([{ name: "atlas", display_status: "bootstrapping" }]);
+    await poller.poll();
+    expect(reachable).toEqual([]);
+    set([{ name: "atlas", display_status: "ready" }]);
+    await poller.poll();
+    expect(reachable).toEqual([["atlas"]]);
+  });
+
+  test("bootstrapping to degraded fires", async () => {
+    const { poller, reachable, set } = hooked([{ name: "ember", display_status: "bootstrapping" }]);
+    await poller.poll();
+    set([{ name: "ember", display_status: "degraded" }]);
+    await poller.poll();
+    expect(reachable).toEqual([["ember"]]);
+  });
+
+  test("a box steady in ready, or moving within the reachable pair, does not fire", async () => {
+    const { poller, reachable, set } = hooked([
+      { name: "atlas", display_status: "ready" },
+      { name: "ember", display_status: "degraded" },
+    ]);
+    await poller.poll();
+    await poller.poll();
+    // ready→degraded and degraded→ready: talkable throughout.
+    set([
+      { name: "atlas", display_status: "degraded" },
+      { name: "ember", display_status: "ready" },
+    ]);
+    await poller.poll();
+    expect(reachable).toEqual([]);
+  });
+
+  test("an agent appearing after the baseline already ready fires", async () => {
+    const { poller, reachable, set } = hooked([{ name: "atlas", display_status: "ready" }]);
+    await poller.poll();
+    set([
+      { name: "atlas", display_status: "ready" },
+      { name: "corvid", display_status: "ready" },
+    ]);
+    await poller.poll();
+    expect(reachable).toEqual([["corvid"]]);
+  });
+
+  test("several agents coming up in one scan are one call, names sorted", async () => {
+    const { poller, reachable, set } = hooked([
+      { name: "zephyr", display_status: "stopped" },
+      { name: "atlas", display_status: "bootstrapping" },
+      { name: "ember", display_status: "error" },
+    ]);
+    await poller.poll();
+    set([
+      { name: "zephyr", display_status: "ready" },
+      { name: "atlas", display_status: "degraded" },
+      { name: "ember", display_status: "ready" },
+      { name: "corvid", display_status: "stopped" },
+    ]);
+    await poller.poll();
+    expect(reachable).toEqual([["atlas", "ember", "zephyr"]]);
+  });
+
+  test("a hook that throws costs itself, not the poll", async () => {
+    let rows: Row[] = [{ name: "atlas", display_status: "stopped" }];
+    let clock = 5_000_000;
+    const stub = {
+      agents: { list: async () => rows as unknown as AgentView[] },
+      foundation: { status: async () => ({}) },
+      volumes: { list: async () => ({ volumes: [] }) },
+      chat: { swarms: async () => ({ swarms: [] }) },
+      notifications: {
+        list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
+      },
+    } as unknown as Hermetic;
+    const thrown = { reachable: 0, roster: 0 };
+    const poller = new FleetPoller(stub, () => clock, {
+      onReachable: () => {
+        thrown.reachable += 1;
+        throw new Error("the watchdog fell over");
+      },
+      onRoster: () => {
+        thrown.roster += 1;
+        throw new Error("so did the roster half");
+      },
+    });
+    const seen: FleetEvent[] = [];
+    poller.subscribe((e) => seen.push(e));
+    await poller.poll();
+    rows = [{ name: "atlas", display_status: "ready" }];
+    clock += CHAT_INTERVAL_MS;
+    seen.length = 0;
+    await poller.poll();
+    expect(thrown).toEqual({ reachable: 1, roster: 1 });
+    // The upsert and the `poll` frame still went out after both hooks threw.
+    expect(upserted(seen)).toEqual(["atlas"]);
+    expect(seen.filter((e) => e.type === "poll")).toHaveLength(1);
+  });
+
+  test("a stopped poller calls neither hook", async () => {
+    const { poller, reachable, rosters, set, advance } = hooked([
+      { name: "atlas", display_status: "stopped" },
+    ]);
+    await poller.poll();
+    poller.stop();
+    set([{ name: "atlas", display_status: "ready" }]);
+    advance(CHAT_INTERVAL_MS);
+    await poller.poll();
+    expect(reachable).toEqual([]);
+    expect(rosters).toEqual([]);
+  });
+
+  test("a stop while the roster is in the air calls no hook", async () => {
+    let open = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      open = () => resolve();
+    });
+    const rosters: unknown[] = [];
+    let asked = 0;
+    const stub = {
+      agents: {
+        list: async () => [{ name: "atlas", display_status: "ready" }] as unknown as AgentView[],
+      },
+      foundation: { status: async () => ({}) },
+      volumes: { list: async () => ({ volumes: [] }) },
+      chat: {
+        // Ignores the signal on purpose: the guard under test is the poller's
+        // own, not whether core honoured the abort.
+        swarms: async () => {
+          asked += 1;
+          await held;
+          return { swarms: [] };
+        },
+      },
+      notifications: {
+        list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
+      },
+    } as unknown as Hermetic;
+    const poller = new FleetPoller(stub, Date.now, { onRoster: (s) => void rosters.push(s) });
+    const running = poller.poll();
+    // Let the scan reach the roster read before stopping.
+    await Bun.sleep(1);
+    poller.stop();
+    open();
+    await running;
+    // The read was really in the air, or this proves nothing about the guard.
+    expect(asked).toBe(1);
+    expect(rosters).toEqual([]);
+  });
+
+  test("onRoster gets the swarms a successful read returned", async () => {
+    const { poller, rosters, roster } = hooked([{ name: "atlas", display_status: "ready" }]);
+    await poller.poll();
+    expect(rosters).toHaveLength(1);
+    expect(rosters[0]).toBe(roster);
+  });
+
+  test("onRoster is quiet when the read throws", async () => {
+    const { poller, calls, rosters } = hooked([{ name: "atlas", display_status: "ready" }], {
+      swarms: () => Promise.reject(new Error("no route to host")),
+    });
+    await poller.poll();
+    expect(calls.swarms).toBe(1);
+    expect(rosters).toEqual([]);
+  });
+
+  test("onRoster is quiet when the read is skipped", async () => {
+    // Nothing reachable: the gate skips the read entirely.
+    const off = hooked([{ name: "atlas", display_status: "stopped" }]);
+    await off.poller.poll();
+    expect(off.calls.swarms).toBe(0);
+    expect(off.rosters).toEqual([]);
+
+    // Not due: the second tick inside the interval reads nothing new.
+    const on = hooked([{ name: "atlas", display_status: "ready" }]);
+    await on.poller.poll();
+    on.advance(POLL_INTERVAL_MS);
+    await on.poller.poll();
+    expect(on.calls.swarms).toBe(1);
+    expect(on.rosters).toHaveLength(1);
+  });
+});
+
+describe("getPoller and hooks", () => {
+  function stub(rows: () => unknown[]): Hermetic {
+    return {
+      agents: { list: async () => rows() as AgentView[] },
+      foundation: { status: async () => ({}) },
+      volumes: { list: async () => ({ volumes: [] }) },
+      chat: { swarms: async () => ({ swarms: [] }) },
+      notifications: {
+        list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
+      },
+    } as unknown as Hermetic;
+  }
+
+  test("a replacement poller reports to the hooks of the call that built it", async () => {
+    let status = "stopped";
+    const rows = () => [{ name: "atlas", display_status: status }];
+    const oldSeen: string[][] = [];
+    const newSeen: string[][] = [];
+    const old = getPoller(stub(rows), "fixture:getpoller-hooks", {
+      onReachable: (n) => void oldSeen.push(n),
+    });
+    const fresh = getPoller(stub(rows), "fixture:getpoller-hooks", {
+      onReachable: (n) => void newSeen.push(n),
+    });
+    try {
+      expect(fresh).not.toBe(old);
+      // `start()` ran the baseline scan already; wait it out, then flip.
+      await fresh.poll();
+      status = "ready";
+      await fresh.poll();
+      expect(newSeen).toEqual([["atlas"]]);
+      expect(oldSeen).toEqual([]);
+    } finally {
+      fresh.stop();
+    }
   });
 });

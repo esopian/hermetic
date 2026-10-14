@@ -569,6 +569,25 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       // The row is this run's: a rollback may delete it again (`rollback.ts`).
       ledger.claimed = true;
       await appendEvent(name, "create", `requested (${size})`, null, "creating");
+      /**
+       * §9.2: a new agent is listened to by default. Here, at the claim, rather
+       * than at handoff or `done`: the claim happens once per incarnation, so a
+       * create that fails and is finished later by `rerun` or a re-run create
+       * (the `resume` branch below, which never comes here) is still listened
+       * to, and a listen the operator turned off in between is never turned back
+       * on. A rollback that deletes this row purges it again (below).
+       */
+      try {
+        await deps.listenLocal?.(fleet.fleet_id, agent);
+      } catch (e) {
+        yield say(
+          "claim",
+          0.03,
+          `could not listen to ${name} on this machine (${e instanceof Error ? e.message : String(e)}); turn it on with \`hermetic chat listen ${name}\``,
+          nowIso(),
+          "warn",
+        );
+      }
     } else {
       yield say("resume", 0.05, `resuming an interrupted create of ${name}`, nowIso(), "warn");
       agent = await acquireLock(claim.agent, owner);
@@ -1177,7 +1196,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        */
       if (parsed.rollback_on_failure && !hasCode(e, "ABORTED") && !opts.signal?.aborted) {
         try {
-          yield* rollbackCreate(
+          const outcome = yield* rollbackCreate(
             rollbackDeps(owner, keepLock, (a) => {
               agent = a;
             }),
@@ -1187,6 +1206,15 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
             reached,
             { ...(opts.signal ? { signal: opts.signal } : {}) },
           );
+          /**
+           * §6.7: a deleted row is a released name, so what this laptop keeps
+           * about it goes too — above all the listen the claim turned on, which
+           * would otherwise name an instance that does not exist. Best effort,
+           * like the release's own purge.
+           */
+          if (outcome.undone.includes("row")) {
+            await deps.purgeLocal?.(fleet.fleet_id, name).catch(() => undefined);
+          }
         } catch {
           // The original failure is the one the operator needs; see below.
         }

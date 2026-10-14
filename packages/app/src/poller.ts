@@ -5,7 +5,7 @@
  * incremental sync is what makes this cheap enough to be the only source of
  * live state.
  */
-import type { AgentView, Hermetic, Notification } from "@hermetic/core";
+import type { AgentView, ChatSwarmsResult, Hermetic, Notification } from "@hermetic/core";
 
 /**
  * The fleet tick. A minute, not seconds: every tick is a real DynamoDB scan
@@ -72,6 +72,40 @@ export const ADVISORY_INTERVAL_MS = 60_000;
  * a bot that cannot be talked to.
  */
 export const CHAT_INTERVAL_MS = 120_000;
+
+/**
+ * What the chat owner's coverage keeper hears from a tick. Must not throw into
+ * the poller.
+ *
+ * Hooks rather than another `subscribe` frame because neither of these is
+ * something a browser renders: they are the poller lending a module in the main
+ * process the two facts it already paid for — which boxes just became worth
+ * talking to, and the roster it just read — so that module never has to buy
+ * them again with a scan or a tailnet sweep of its own.
+ */
+export interface PollerHooks {
+  /**
+   * Agents whose `display_status` entered `ready` or `degraded` in this scan:
+   * from any other status, or newly appeared after the first scan. Never
+   * called for the first successful scan (that is the baseline the launch sync
+   * covers), never with an empty array, at most once per scan, names sorted.
+   */
+  onReachable?(names: string[]): void;
+  /**
+   * The roster `pollChat` just read, as returned, after a successful read
+   * only. A read that threw, or a tick that did not read, says nothing.
+   */
+  onRoster?(swarms: ChatSwarmsResult["swarms"]): void;
+}
+
+/**
+ * The statuses in which a box could plausibly answer a dashboard. `degraded` is
+ * in: it is a box answering badly, not one that is not answering. Shared by the
+ * roster gate and `onReachable`, so "worth asking" means one thing here.
+ */
+function reachable(status: AgentView["display_status"] | undefined): boolean {
+  return status === "ready" || status === "degraded";
+}
 
 export type FleetEvent =
   /**
@@ -178,6 +212,13 @@ export class FleetPoller {
   /** Flipped by the first scan that comes back at all, error or not. */
   private scanned = false;
   /**
+   * Flipped by the first scan whose `agents.list` succeeded. Separate from
+   * `scanned`, which an error also flips: an `onReachable` judged against the
+   * empty map a failed first scan leaves behind would report every ready box in
+   * the fleet as having just come up.
+   */
+  private baselined = false;
+  /**
    * The high-water mark of what has been pushed to clients: rows at or before
    * it have been delivered (or predate this process, which is the same thing
    * for a live stream). Starts at *now* rather than at the epoch so a portal
@@ -228,6 +269,8 @@ export class FleetPoller {
     private readonly hermetic: Hermetic,
     /** Injectable so a test can drive the advisory cadence without a real minute. */
     private readonly now: () => number = Date.now,
+    /** Optional, and last, so every caller that predates them is unchanged. */
+    private readonly hooks: PollerHooks = {},
   ) {}
 
   start(): this {
@@ -279,6 +322,21 @@ export class FleetPoller {
   }
 
   /**
+   * Run one hook, synchronously, so it sees the state of the tick that raised
+   * it. A hook is a guest in the tick: one that throws costs itself and never
+   * the scan, the frames or the watermark after it. And a stopped poller has
+   * nobody left to tell, exactly as `emit` does.
+   */
+  private notify(call: (hooks: PollerHooks) => void): void {
+    if (this.halted) return;
+    try {
+      call(this.hooks);
+    } catch {
+      /* a listener's failure is its own; the poll goes on */
+    }
+  }
+
+  /**
    * One tick. The interval calls this, and so does anything that wants a scan
    * driven by hand rather than by the clock — a fleet switch, and the tests.
    *
@@ -316,9 +374,26 @@ export class FleetPoller {
     this.at = at;
     this.scanned = true;
 
+    // Read before the loop below overwrites `agents`: a transition is the
+    // status the last scan recorded against the one this scan read. The first
+    // successful scan has no "before" to compare to, so it reports nothing.
+    const baselined = this.baselined;
+    this.baselined = true;
+    const cameUp: string[] = [];
     const seen = new Set<string>();
     for (const agent of rows) {
       seen.add(agent.name);
+      // Entering the reachable pair, not moving within it: ready→degraded and
+      // back is one box that was talkable throughout. A recreate passes through
+      // `stopped`/`bootstrapping` on its way back, so it counts; a box this
+      // poller has never seen counts too, since it was not reachable *here*.
+      if (
+        baselined &&
+        reachable(agent.display_status) &&
+        !reachable(this.agents.get(agent.name)?.display_status)
+      ) {
+        cameUp.push(agent.name);
+      }
       const print = fingerprint(agent);
       if (this.prints.get(agent.name) !== print) {
         this.prints.set(agent.name, print);
@@ -333,6 +408,10 @@ export class FleetPoller {
       this.agents.delete(name);
       this.prints.delete(name);
       this.emit({ type: "removed", at, name });
+    }
+    if (cameUp.length > 0) {
+      cameUp.sort();
+      this.notify((h) => h.onReachable?.(cameUp));
     }
     await this.pollAdvisories();
     if (this.halted) return;
@@ -385,11 +464,12 @@ export class FleetPoller {
   /**
    * The chat source's tick (§4.9).
    *
-   * It reads the roster and throws the answer away. The roster is the chat
-   * view's data and the browser holds its own copy; what this call is for is
-   * the side effect core performs while answering it — diffing each bot's last
-   * message against a stored watermark and writing a `chat.message` row for
-   * anything that moved. The row leaves on the fleet stream like every other.
+   * It reads the roster and sends none of it to the browser. The roster is the
+   * chat view's data and the browser holds its own copy; what this call is for
+   * is the side effect core performs while answering it — diffing each bot's
+   * last message against a stored watermark and writing a `chat.message` row
+   * for anything that moved. The row leaves on the fleet stream like every
+   * other. The one consumer of the answer itself is `onRoster`.
    *
    * **It asks nothing when nothing can answer.** `chat.swarms` fans out over
    * the tailnet and a box that is stopped does not refuse, it times out, so a
@@ -407,10 +487,7 @@ export class FleetPoller {
   private async pollChat(): Promise<void> {
     const now = this.now();
     if (!due(now - this.chatAt, CHAT_INTERVAL_MS)) return;
-    const reachable = [...this.agents.values()].some(
-      (a) => a.display_status === "ready" || a.display_status === "degraded",
-    );
-    if (!reachable) return;
+    if (![...this.agents.values()].some((a) => reachable(a.display_status))) return;
     // Stamped before the read, like the advisory tick, so a slow fan-out cannot
     // drift the cadence out by however long it took.
     this.chatAt = now;
@@ -418,7 +495,11 @@ export class FleetPoller {
       // The one read in a tick that takes a signal, and the one that makes a
       // shutdown wait: a tailnet fan-out at a box that is not answering costs a
       // full timeout, and `stop()` should not have to sit through it.
-      await this.hermetic.chat.swarms({}, { signal: this.aborter.signal });
+      const result = await this.hermetic.chat.swarms({}, { signal: this.aborter.signal });
+      // Handed on rather than thrown away when someone is listening: the
+      // coverage keeper wants the same roster, and a second sweep for it would
+      // double this read's tailnet cost for no new answer.
+      this.notify((h) => h.onRoster?.(result.swarms));
     } catch {
       /* a roster the tailnet would not answer costs the notification, not the poll */
     }
@@ -499,13 +580,21 @@ interface PollerSlot {
  * teardown, an attach to the fleet already served) is a new `Hermetic`, and a
  * poller left reading the old one reports a world nothing else is looking at.
  * Replacing it still stops the old interval, so neither case leaks one.
+ *
+ * `hooks` are not part of the key. They belong to whoever asked: the poller
+ * handed back for the same fleet keeps the hooks it was built with, and a
+ * replacement is built with the ones given to the call that replaced it.
  */
-export function getPoller(hermetic: Hermetic, key: string): FleetPoller {
+export function getPoller(hermetic: Hermetic, key: string, hooks: PollerHooks = {}): FleetPoller {
   const g = globalThis as typeof globalThis & { __hermeticPoller?: PollerSlot };
   const existing = g.__hermeticPoller;
   if (existing && existing.key === key && existing.hermetic === hermetic) return existing.poller;
   existing?.poller.stop();
-  const slot: PollerSlot = { key, hermetic, poller: new FleetPoller(hermetic).start() };
+  const slot: PollerSlot = {
+    key,
+    hermetic,
+    poller: new FleetPoller(hermetic, Date.now, hooks).start(),
+  };
   g.__hermeticPoller = slot;
   return slot.poller;
 }
