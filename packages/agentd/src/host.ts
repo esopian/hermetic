@@ -258,7 +258,7 @@ export async function pipeIntoChild(
     const chunk = next.value;
     bytes += chunk.byteLength;
     try {
-      proc.stdin.write(chunk);
+      await proc.stdin.write(chunk);
       // Backpressure: a 256 MiB upload must not sit in this process's memory
       // because the disk was slower than the network.
       const won = await Promise.race([

@@ -809,8 +809,12 @@ describe("idle bounds on JSON bodies and downloads (round 2, finding 8)", () => 
 });
 
 describe("streaming into a child, which error wins (round 2, finding 9)", () => {
-  const child = (exited: Promise<number>, flush: () => unknown = () => undefined): PipedChild => ({
-    stdin: { write: () => undefined, flush, end: () => undefined },
+  const child = (
+    exited: Promise<number>,
+    flush: () => unknown = () => undefined,
+    write: () => unknown = () => undefined,
+  ): PipedChild => ({
+    stdin: { write, flush, end: () => undefined },
     stderr: new Response("cat: No space left on device").body as ReadableStream<Uint8Array>,
     exited,
     kill: () => undefined,
@@ -841,6 +845,20 @@ describe("streaming into a child, which error wins (round 2, finding 9)", () => 
     const epipe = () =>
       Promise.reject(Object.assign(new Error("EPIPE: broken pipe"), { code: "EPIPE" }));
     const err = await pipeIntoChild(child(exited, epipe), body(), "writing as hermes").catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentdError);
+    expect((err as Error).message).toMatch(/exited 2: cat: No space left on device/);
+  });
+
+  test("an asynchronous write failure reports the child's exit code and stderr", async () => {
+    async function* body(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array(16);
+    }
+    const exited = new Promise<number>((resolve) => setTimeout(() => resolve(2), 5));
+    const epipe = () =>
+      Promise.reject(Object.assign(new Error("EPIPE: broken pipe"), { code: "EPIPE" }));
+    const err = await pipeIntoChild(child(exited, undefined, epipe), body(), "writing as hermes").catch(
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(AgentdError);
