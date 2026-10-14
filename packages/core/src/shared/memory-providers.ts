@@ -50,6 +50,35 @@ export type MemoryProvider = (typeof MEMORY_PROVIDER_IDS)[number];
  */
 export const MEMORY_PROVIDER_NONE = "none" as const;
 
+/**
+ * What a memory choice costs the box and where its work happens, for a
+ * picker's chips and the CLI's help. **Display estimates, not enforced
+ * limits**: nothing in core or on the box checks them, and they vary with the
+ * agent's workload. The one enforced number is `min_mem_gib`, which is kept
+ * on the spec itself rather than restated here (`memoryResourceFacts` reads it
+ * for the RAM floor). Approximate figures carry a leading `~`.
+ */
+export interface MemoryResources {
+  /** Instance memory the provider adds beside Hermes, e.g. `"~1 GiB idle"`. */
+  readonly added_ram: string;
+  /** Disk it takes on the data volume (venvs, models, its store when young). */
+  readonly disk: string;
+  /** systemd units hermeticd runs for it beside Hermes. */
+  readonly services: number;
+  /** What those units are, or where the work runs when there are none. */
+  readonly services_note?: string;
+  /** The model calls it makes with the agent's credential, or `"none"`. */
+  readonly model_calls: string;
+  /**
+   * Where its embeddings are computed: `box` a local model, `provider` the
+   * agent's own vendor (`PROVIDER_EMBEDDING_VENDORS`), `provider-or-box` the
+   * vendor when it serves embeddings and a local model otherwise.
+   */
+  readonly embeddings: "none" | "box" | "provider" | "provider-or-box";
+  /** Where the memory store lives. */
+  readonly storage: string;
+}
+
 export interface MemoryProviderSpec {
   readonly label: string;
   /** One line for a picker. */
@@ -90,6 +119,8 @@ export interface MemoryProviderSpec {
    */
   readonly pip: readonly string[];
   readonly docs: string;
+  /** Display estimates for pickers and help (`MemoryResources`); not enforced. */
+  readonly resources: MemoryResources;
 }
 
 /**
@@ -136,6 +167,15 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     // as designed.
     pip: ["numpy"],
     docs: `${DOCS}#holographic`,
+    resources: {
+      added_ram: "~50 MB",
+      disk: "<100 MB",
+      services: 0,
+      services_note: "in Hermes",
+      model_calls: "none",
+      embeddings: "none",
+      storage: "on box",
+    },
   },
   hindsight: {
     label: "Hindsight (local server)",
@@ -149,6 +189,14 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     // mode needs only the HTTP client; the server runs from its own venv.
     pip: ["hindsight-client==0.10.3"],
     docs: `${DOCS}#hindsight`,
+    resources: {
+      added_ram: "~1 GiB idle",
+      disk: "~3 GiB",
+      services: 1,
+      model_calls: "extraction per turn",
+      embeddings: "box",
+      storage: "on box",
+    },
   },
   openviking: {
     label: "OpenViking (local server)",
@@ -161,6 +209,14 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     // `httpx` is the plugin's only dependency and Hermes already ships it.
     pip: [],
     docs: `${DOCS}#openviking`,
+    resources: {
+      added_ram: "~0.5–1 GiB",
+      disk: "~1.5 GiB",
+      services: 1,
+      model_calls: "summaries per session",
+      embeddings: "provider-or-box",
+      storage: "on box",
+    },
   },
   honcho: {
     label: "Honcho (local server)",
@@ -176,6 +232,15 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
     // this exact version (`tools/lazy_deps.py`); 2.x speaks the server's v3 API.
     pip: ["honcho-ai==2.2.0"],
     docs: `${DOCS}#honcho`,
+    resources: {
+      added_ram: "~0.9 GiB",
+      disk: "~1.5 GiB",
+      services: 3,
+      services_note: "db, api, worker",
+      model_calls: "deriver per turn + dialectic on demand",
+      embeddings: "provider",
+      storage: "on box",
+    },
   },
 };
 
@@ -189,6 +254,123 @@ export function isMemoryProvider(x: string): x is MemoryProvider {
 
 export function memoryProviderIsService(id: MemoryProvider): boolean {
   return MEMORY_PROVIDERS[id].kind === "service";
+}
+
+// --- Resource estimates, for every head ------------------------------------
+
+/**
+ * How a picker draws the "no external provider" answer: Hermes's built-in
+ * memory only. A display descriptor, not a catalogue entry — `none` is not a
+ * `MemoryProvider` and never reaches `MEMORY_PROVIDER_IDS` or the Zod enum.
+ */
+export const MEMORY_NONE_SPEC: {
+  readonly label: string;
+  readonly summary: string;
+  readonly resources: MemoryResources;
+} = {
+  label: "None (built-in only)",
+  summary: "Hermes MEMORY.md / USER.md only.",
+  resources: {
+    added_ram: "0",
+    disk: "0",
+    services: 0,
+    model_calls: "none",
+    embeddings: "none",
+    storage: "on box",
+  },
+};
+
+/**
+ * The caveat every head shows beside the facts: they are estimates, and only
+ * the RAM floor is a rule.
+ */
+export const MEMORY_RESOURCE_ESTIMATE_NOTE =
+  "Figures are estimates for a typical agent, not limits; only the RAM floor is enforced.";
+
+/** The facts `memoryResourceFacts` returns, in display order. */
+export const MEMORY_RESOURCE_FACT_KEYS = [
+  "ram_floor",
+  "added_ram",
+  "disk",
+  "services",
+  "model_calls",
+  "embeddings",
+  "storage",
+] as const;
+export type MemoryResourceFactKey = (typeof MEMORY_RESOURCE_FACT_KEYS)[number];
+
+/** One fact about a memory choice, as a chip (`label: value`) or a help line. */
+export interface MemoryResourceFact {
+  readonly key: MemoryResourceFactKey;
+  readonly label: string;
+  readonly value: string;
+}
+
+const FACT_LABELS: Readonly<Record<MemoryResourceFactKey, string>> = {
+  ram_floor: "RAM",
+  added_ram: "Added RAM",
+  disk: "Disk",
+  services: "Services",
+  model_calls: "Model calls",
+  embeddings: "Embeddings",
+  storage: "Storage",
+};
+
+/** The vendors that fall back to a local embedding model, alphabetically, as `anthropic/bedrock`. */
+function localEmbeddingVendors(): string {
+  return PROVIDER_IDS.filter((v) => !PROVIDER_EMBEDDING_VENDORS.includes(v))
+    .sort()
+    .join("/");
+}
+
+function embeddingsValue(
+  kind: MemoryResources["embeddings"],
+  vendor: Provider | null | undefined,
+): string {
+  switch (kind) {
+    case "none":
+      return "none";
+    case "box":
+      return "on box";
+    case "provider":
+      return "provider";
+    case "provider-or-box":
+      if (vendor === null || vendor === undefined) {
+        return `provider (local model on ${localEmbeddingVendors()})`;
+      }
+      return PROVIDER_EMBEDDING_VENDORS.includes(vendor) ? "provider" : "on box (local model)";
+  }
+}
+
+/**
+ * Every fact about a memory choice, in `MEMORY_RESOURCE_FACT_KEYS` order, for
+ * the create drawer, Settings, the agent drawer and `hermetic agent create
+ * --help` alike — one function so no head words a figure differently.
+ *
+ * `ram_floor` is the enforced `min_mem_gib` (`≥ N GiB`), `any size` for an
+ * in-process provider, `—` for none; a head may append the smallest size that
+ * meets it. Everything else is a display estimate (`MemoryResources`). With
+ * `vendor` known, an embeddings answer that depends on it (`provider-or-box`)
+ * is the effective one; without it, the general rule.
+ */
+export function memoryResourceFacts(
+  choice: MemoryProvider | typeof MEMORY_PROVIDER_NONE,
+  vendor?: Provider | null,
+): readonly MemoryResourceFact[] {
+  const none = choice === MEMORY_PROVIDER_NONE;
+  const r = none ? MEMORY_NONE_SPEC.resources : MEMORY_PROVIDERS[choice].resources;
+  const minGib = none ? 0 : MEMORY_PROVIDERS[choice].min_mem_gib;
+  const values: Record<MemoryResourceFactKey, string> = {
+    ram_floor: none ? "—" : minGib > 0 ? `≥ ${String(minGib)} GiB` : "any size",
+    added_ram: r.added_ram,
+    disk: r.disk,
+    services:
+      r.services_note === undefined ? String(r.services) : `${String(r.services)} (${r.services_note})`,
+    model_calls: r.model_calls,
+    embeddings: embeddingsValue(r.embeddings, vendor),
+    storage: r.storage,
+  };
+  return MEMORY_RESOURCE_FACT_KEYS.map((key) => ({ key, label: FACT_LABELS[key], value: values[key] }));
 }
 
 // --- The on-box service ----------------------------------------------------

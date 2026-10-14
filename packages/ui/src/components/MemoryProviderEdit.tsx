@@ -21,13 +21,14 @@ import type { AgentView } from "../api/index.ts";
 import {
   type MemoryChoice,
   currentMemoryChoice,
-  memoryChoiceHint,
+  memoryAgentCard,
   memoryChoiceIsService,
   memoryChoiceLabel,
   memoryOptions,
   memorySwitchesLive,
 } from "../logic/memory-logic.ts";
 import { saveErrorMessage } from "../logic/set-errors.ts";
+import { MemoryProviderCard } from "./MemoryProviderCard.tsx";
 
 export function MemoryProviderEdit({
   agent,
@@ -54,7 +55,7 @@ export function MemoryProviderEdit({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectId = useId();
-  const hintId = useId();
+  const fitId = useId();
 
   const option = options.find((o) => o.value === choice);
   const changed = choice !== current;
@@ -62,6 +63,7 @@ export function MemoryProviderEdit({
   const fromLabel = memoryChoiceLabel(current);
   const toLabel = memoryChoiceLabel(choice);
   const fromProvider = current === "none" ? null : fromLabel;
+  const card = memoryAgentCard(choice, agent);
 
   async function confirm() {
     setSaving(true);
@@ -107,7 +109,7 @@ export function MemoryProviderEdit({
           <select
             id={selectId}
             className="select-input"
-            aria-describedby={hintId}
+            aria-describedby={fitId}
             // The editor opens on a click of its own Change button; the chooser is the next thing.
             autoFocus
             value={choice}
@@ -118,15 +120,25 @@ export function MemoryProviderEdit({
             }}
           >
             {options.map((o) => (
-              <option key={o.value} value={o.value} disabled={o.disabled}>
+              <option key={o.value} value={o.value} disabled={o.disabled} title={o.reason ?? undefined}>
                 {o.label}
               </option>
             ))}
           </select>
         </div>
-        <div id={hintId} className="name-hint" style={{ color: "var(--fg3)" }}>
-          {blocked ?? memoryChoiceHint(choice)}
-        </div>
+        {/*
+          The card under the select: what the choice costs the box, with the
+          embeddings chip for this agent's vendor, and the fit on its size —
+          the same refusals the disabled options carry (`memoryAgentCard`).
+          No size switch: changing the size is a recreate, not this flow.
+        */}
+        <MemoryProviderCard
+          choice={choice}
+          vendor={card.vendor}
+          fit={card.fit}
+          variant="attached"
+          fitId={fitId}
+        />
       </div>
 
       {changed && blocked === null ? (

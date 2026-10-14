@@ -20,6 +20,7 @@ import {
 import { renderOp } from "../stream.ts";
 import { assertConfirmable, confirmPlan } from "../confirm.ts";
 import { declare } from "../declare.ts";
+import { memoryHelpText } from "../memory-help.ts";
 import {
   HermeticError,
   MEMORY_PROVIDER_IDS,
@@ -310,7 +311,8 @@ export function register(program: Command): void {
           "model calls makes them with the agent's own provider credential. A provider\n" +
           "that runs a server (hindsight, openviking, honcho) needs a size with room for\n" +
           "it, or the create is refused before anything exists. honcho also needs an\n" +
-          "agent provider with an embeddings endpoint (openai, openrouter, nous, vercel).\n",
+          "agent provider with an embeddings endpoint (openai, openrouter, nous, vercel).\n" +
+          memoryHelpText(),
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -537,7 +539,8 @@ export function register(program: Command): void {
           "re-rendering the configuration and restarting Hermes on the box.\n" +
           "\nA --memory switch reaches a running box the same way (`plan rollout`, then\n" +
           "`apply`). The old provider's data stays on the volume, so switching back finds it —\n" +
-          "except openviking's after a rebinding that changes how the agent embeds.\n",
+          "except openviking's after a rebinding that changes how the agent embeds.\n" +
+          memoryHelpText(),
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

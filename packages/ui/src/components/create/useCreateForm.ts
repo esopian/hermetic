@@ -45,8 +45,8 @@ import type { MachineField, MachineState } from "../../logic/create-presets.ts";
 import { usePresets } from "../../state/presets-store.ts";
 import type { PresetView } from "@hermetic/core/shared";
 import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
-import { fleetDefaultMemory, memoryUndersized, memoryVendorBlock } from "../../logic/memory-logic.ts";
-import type { MemoryChoice } from "../../logic/memory-logic.ts";
+import { fleetDefaultMemory, memoryFit } from "../../logic/memory-logic.ts";
+import type { MemoryChoice, MemoryFitResult } from "../../logic/memory-logic.ts";
 import { profileById, readyProfiles } from "../../logic/provider-logic.ts";
 import { suggestedName } from "../../logic/volume-logic.ts";
 import type { ProfilesState } from "../../state/state.tsx";
@@ -355,30 +355,40 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    */
   const memGib = inherits("size") ? null : sizeSpec(size).memGib;
   /**
-   * A provider whose server needs more instance memory than the chosen size
-   * has: core would refuse the create with `MEMORY_PROVIDER_UNDERSIZED`
-   * (`memory-binding.ts`, against the same size table), so Create is held here
-   * and the drawer says what to change. Said outside Customize, because an
-   * inherited fleet default blocks with it folded.
-   */
-  /**
    * The agent's vendor, when the chosen profile is one this create can use.
    * Null until a ready profile is picked: nothing is held back on a guess.
    */
   const vendor = chosenReady ? profile.provider : null;
   /**
-   * A provider whose model calls the agent's vendor cannot carry: core refuses
-   * the create with `MEMORY_LLM_UNSUPPORTED` (`assertMemoryLlm`), so the
-   * picker marks it and says why, in the spec's own words.
+   * What the effective choice — stated or inherited — means for this create:
+   * one `memoryFit` answer that the Memory card draws and the gate below reads,
+   * so the warning on screen and Create being held cannot disagree. Undefined
+   * when the effective choice is an unread fleet default: core decides.
    */
-  const memoryProvider = memoryEffective === undefined ? null : memoryEffective;
-  const vendorNote = memoryProvider === null ? null : memoryVendorBlock(memoryProvider, vendor);
+  const memoryChoice: MemoryChoice | undefined =
+    memoryEffective === undefined ? undefined : (memoryEffective ?? MEMORY_PROVIDER_NONE);
+  const memoryFitResult: MemoryFitResult | null =
+    memoryChoice === undefined
+      ? null
+      : memoryFit(memoryChoice, { sizeId: memGib === null ? null : size, memGib, vendor });
+  /**
+   * A provider whose server needs more instance memory than the chosen size
+   * has (core's `MEMORY_PROVIDER_UNDERSIZED`, `memory-binding.ts`, against the
+   * same size table), or whose model calls the agent's vendor cannot carry
+   * (`MEMORY_LLM_UNSUPPORTED`, `assertMemoryLlm`): Create is held, and the
+   * drawer says what to change. Said outside Customize as well, because an
+   * inherited fleet default blocks with it folded.
+   */
+  const memoryProvider =
+    memoryChoice === undefined || memoryChoice === MEMORY_PROVIDER_NONE ? null : memoryChoice;
   const memoryBlock =
-    memoryProvider !== null && memGib !== null && memoryUndersized(memoryProvider, memGib)
-      ? `${MEMORY_PROVIDERS[memoryProvider].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryProvider].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
-      : memoryProvider !== null && vendorNote !== null
-        ? `${MEMORY_PROVIDERS[memoryProvider].label} memory is not available on this provider profile: ${vendorNote} — pick another profile, or another memory provider`
-        : null;
+    memoryProvider === null || memoryFitResult === null
+      ? null
+      : memoryFitResult.state === "undersized"
+        ? `${MEMORY_PROVIDERS[memoryProvider].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryProvider].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
+        : memoryFitResult.state === "vendor-blocked"
+          ? `${MEMORY_PROVIDERS[memoryProvider].label} memory is not available on this provider profile: ${String(memoryFitResult.message)} — pick another profile, or another memory provider`
+          : null;
   const disabled = !trimmed || taken || invalid || submitting || !chosenReady || memoryBlock !== null;
 
   /**
@@ -622,6 +632,8 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     fleetMemory,
     memGib,
     memoryEffective,
+    memoryChoice,
+    memoryFit: memoryFitResult,
     vendor,
     memoryBlock,
     presets,

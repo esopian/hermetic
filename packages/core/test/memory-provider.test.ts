@@ -35,6 +35,13 @@ import {
   type Provider,
 } from "../src/schema/index.ts";
 import { PROVIDER_IDS } from "../src/shared/providers.ts";
+import {
+  MEMORY_NONE_SPEC,
+  MEMORY_RESOURCE_ESTIMATE_NOTE,
+  MEMORY_RESOURCE_FACT_KEYS,
+  PROVIDER_EMBEDDING_VENDORS,
+  memoryResourceFacts,
+} from "../src/shared/index.ts";
 import { renderAgentConfig, type RenderInput } from "../src/render/render.ts";
 import { memoryLlmFor, renderMemory } from "../src/render/render-memory.ts";
 import {
@@ -102,6 +109,62 @@ describe("the memory provider catalogue", () => {
     }
     for (const s of ["none", "builtin", "default", "", "supermemory", "mem0", "retaindb"])
       expect(isMemoryProvider(s)).toBe(false);
+  });
+});
+
+describe("memory resource estimates", () => {
+  const factsOf = (choice: Parameters<typeof memoryResourceFacts>[0], vendor?: Provider | null) =>
+    Object.fromEntries(memoryResourceFacts(choice, vendor).map((f) => [f.key, f.value]));
+
+  test("every provider and none carries complete resources, and every fact has a value", () => {
+    for (const r of [...MEMORY_PROVIDERS_LIST.map((p) => p.resources), MEMORY_NONE_SPEC.resources]) {
+      expect(r.added_ram.length).toBeGreaterThan(0);
+      expect(r.disk.length).toBeGreaterThan(0);
+      expect(Number.isInteger(r.services)).toBe(true);
+      expect(r.model_calls.length).toBeGreaterThan(0);
+      expect(["none", "box", "provider", "provider-or-box"]).toContain(r.embeddings);
+      expect(r.storage.length).toBeGreaterThan(0);
+    }
+    for (const choice of [...MEMORY_PROVIDER_IDS, "none"] as const) {
+      const facts = memoryResourceFacts(choice);
+      expect(facts.map((f) => f.key)).toEqual([...MEMORY_RESOURCE_FACT_KEYS]);
+      for (const f of facts) {
+        expect(f.label.length).toBeGreaterThan(0);
+        expect(f.value.length).toBeGreaterThan(0);
+      }
+    }
+    expect(MEMORY_NONE_SPEC.label).toBe("None (built-in only)");
+    expect(MEMORY_RESOURCE_ESTIMATE_NOTE).toContain("estimates");
+  });
+
+  test("the RAM floor is the enforced min_mem_gib, not a second number", () => {
+    expect(factsOf("hindsight")["ram_floor"]).toBe(
+      `≥ ${String(MEMORY_PROVIDERS.hindsight.min_mem_gib)} GiB`,
+    );
+    expect(factsOf("openviking")["ram_floor"]).toBe(
+      `≥ ${String(MEMORY_PROVIDERS.openviking.min_mem_gib)} GiB`,
+    );
+    expect(factsOf("holographic")["ram_floor"]).toBe("any size");
+    expect(factsOf("none")["ram_floor"]).toBe("—");
+    expect(factsOf("honcho")["services"]).toBe("3 (db, api, worker)");
+    expect(factsOf("holographic")["services"]).toBe("0 (in Hermes)");
+    expect(factsOf("hindsight")["services"]).toBe("1");
+  });
+
+  test("openviking's embeddings follow the vendor: provider where it serves them, a local model otherwise", () => {
+    const local = PROVIDER_IDS.filter((v) => !PROVIDER_EMBEDDING_VENDORS.includes(v)).sort();
+    expect(local).toEqual(["anthropic", "bedrock"]);
+    expect(factsOf("openviking")["embeddings"]).toBe("provider (local model on anthropic/bedrock)");
+    expect(factsOf("openviking", null)["embeddings"]).toBe(
+      "provider (local model on anthropic/bedrock)",
+    );
+    for (const v of PROVIDER_EMBEDDING_VENDORS)
+      expect(factsOf("openviking", v)["embeddings"]).toBe("provider");
+    for (const v of local) expect(factsOf("openviking", v)["embeddings"]).toBe("on box (local model)");
+    // The others do not move with the vendor.
+    expect(factsOf("hindsight", "anthropic")["embeddings"]).toBe("on box");
+    expect(factsOf("honcho", "openai")["embeddings"]).toBe("provider");
+    expect(factsOf("holographic", "openai")["embeddings"]).toBe("none");
   });
 });
 

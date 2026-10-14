@@ -12,6 +12,7 @@
  */
 import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { HermeticError } from "@hermetic/core";
 import { MEMORY_PROVIDERS } from "@hermetic/core/shared";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
@@ -130,6 +131,10 @@ test("create: Honcho is blocked on an anthropic profile with the catalogue's not
   await waitFor(() => expect(within(drawer).getAllByText(new RegExp(note)).length).toBeGreaterThan(0));
   expect(create().disabled).toBe(true);
   expect(paramsOf(h, "agents.create").length).toBe(0);
+  // The card under the select carries the same reason, with no size to switch to.
+  const card = drawer.querySelector<HTMLElement>('[data-memory-card="honcho"]') as HTMLElement;
+  expect(within(card).getByRole("status").textContent).toBe(note);
+  expect(within(card).queryByRole("button", { name: /Switch to/ })).toBeNull();
 
   // Back on a vendor that serves embeddings, the choice is sent.
   await user.click(within(drawer).getByRole("button", { name: /^Brain/ }));
@@ -177,7 +182,9 @@ test("create: a size too small for a provider's server marks it, and an inherite
 
   const option = (v: string) => [...select.options].find((o) => o.value === v) as HTMLOptionElement;
   await waitFor(() => expect(option("hindsight").disabled).toBe(true));
-  expect(option("hindsight").textContent).toBe(`${HINDSIGHT} — needs ≥ 8 GiB`);
+  // Named by the size it needs, as the card's fit line names it.
+  expect(option("hindsight").textContent).toBe(`${HINDSIGHT} — needs small or larger`);
+  expect(option("openviking").textContent).toBe("OpenViking (local server) — needs xsmall or larger");
   expect(option("openviking").disabled).toBe(true);
   expect(option("holographic").disabled).toBe(false);
   // The inherited hindsight would be refused by core, so Create waits, and says why.
@@ -191,8 +198,103 @@ test("create: a size too small for a provider's server marks it, and an inherite
   expect(within(drawer).queryByText(/needs at least 8 GiB/)).toBeNull();
 }, 20_000);
 
-function memorySelect(): HTMLSelectElement {
-  return screen.getByLabelText("Default memory provider") as HTMLSelectElement;
+/*
+ * The resource card under the Memory select: the effective choice's summary
+ * and chips, and its fit against the size this create gets. An undersized
+ * provider says which size it needs and offers it; taking the offer moves the
+ * size the same way the size picker does, and Create comes back.
+ */
+test("create: the memory card warns on a size too small, and Switch moves the size", async () => {
+  harness = await flowHarness();
+  mountPortal();
+  const user = userEvent.setup();
+  const { drawer, select, create } = await openMemoryPicker(user, "wren");
+  const card = () => drawer.querySelector<HTMLElement>("[data-memory-card]");
+
+  // The fleet default (None on main) is named beside the label, and its card is drawn.
+  // Once, as the field's own tag, while the field inherits.
+  await waitFor(() => expect(within(drawer).getAllByText("fleet default: None").length).toBe(1));
+  expect(within(drawer).getByText("fleet default: None").className).toBe("cr-deftag");
+  expect(card()?.dataset["memoryCard"]).toBe("none");
+  expect(within(card() as HTMLElement).getByText("Hermes MEMORY.md / USER.md only.")).toBeTruthy();
+
+  // Hindsight on the Standard preset (medium, 32 GiB) fits.
+  await user.selectOptions(select, "hindsight");
+  await waitFor(() => expect(card()?.dataset["memoryCard"]).toBe("hindsight"));
+  // Changed: the tag is `changed · reset`, and the default is still named once.
+  expect(within(drawer).getByRole("button", { name: "Reset Memory" })).toBeTruthy();
+  expect(within(drawer).getAllByText("fleet default: None").length).toBe(1);
+  expect(within(drawer).getByText("fleet default: None").className).toBe("mem-fleetdef");
+  expect(within(card() as HTMLElement).getByText(MEMORY_PROVIDERS.hindsight.summary)).toBeTruthy();
+  expect(card()?.querySelector('[data-fact="ram_floor"]')?.textContent).toBe("RAM: ≥ 8 GiB (small+)");
+  expect(within(card() as HTMLElement).getByRole("status").textContent).toBe("");
+  expect(create().disabled).toBe(false);
+  // The select is described by the card's fit line.
+  expect(select.getAttribute("aria-describedby")).toBe(
+    within(card() as HTMLElement).getByRole("status").id,
+  );
+
+  // xsmall (t4g.medium, 4 GiB) does not.
+  const more = within(drawer).queryByRole("button", { name: /More sizes/ });
+  if (more !== null) await user.click(more);
+  await user.click(within(drawer).getByRole("button", { name: /t4g\.medium/ }));
+  await waitFor(() =>
+    expect(within(card() as HTMLElement).getByRole("status").textContent).toBe(
+      "Needs size small (16 GiB) or larger. Selected: xsmall (4 GiB)",
+    ),
+  );
+  expect(create().disabled).toBe(true);
+  // One live region says it: the drawer's own line stays quiet while the card is shown,
+  // and takes over once Customize is folded away.
+  const blockLine = () => drawer.querySelector("[data-memory-block]");
+  expect(blockLine()?.getAttribute("role") ?? null).toBeNull();
+  await user.click(within(drawer).getByRole("button", { name: /Customize/ }));
+  await waitFor(() => expect(blockLine()?.getAttribute("role")).toBe("status"));
+  await user.click(within(drawer).getByRole("button", { name: /Customize/ }));
+  await waitFor(() => expect(blockLine()?.getAttribute("role") ?? null).toBeNull());
+
+  // Switch: the size becomes small, as if picked, and the warning and the hold go.
+  await user.click(within(card() as HTMLElement).getByRole("button", { name: "Switch to small →" }));
+  await waitFor(() =>
+    expect(
+      within(drawer)
+        .getByRole("button", { name: /r8g\.large/ })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
+  expect(within(drawer).getByRole("button", { name: "Reset Size" })).toBeTruthy();
+  expect(within(card() as HTMLElement).getByRole("status").textContent).toBe("");
+  expect(within(card() as HTMLElement).queryByRole("button", { name: /Switch to/ })).toBeNull();
+  // The button went with the warning; focus stays on the Memory field, not the drawer's top.
+  // (Looked up again: folding Customize above remounted the select.)
+  expect(document.activeElement?.id).toBe(within(drawer).getByLabelText("Memory").id);
+  expect(within(drawer).queryByText(/needs at least 8 GiB/)).toBeNull();
+  expect(create().disabled).toBe(false);
+}, 20_000);
+
+test("create: the staging fleet's default is named once, in the Memory tag, and carded", async () => {
+  harness = await flowHarness({ fleet: "staging" });
+  mountPortal();
+  const user = userEvent.setup();
+  const { drawer } = await openMemoryPicker(user, "wren");
+  await waitFor(() => expect(within(drawer).getByText(`fleet default: ${HINDSIGHT}`)).toBeTruthy());
+  const card = drawer.querySelector<HTMLElement>("[data-memory-card]") as HTMLElement;
+  expect(card.dataset["memoryCard"]).toBe("hindsight");
+}, 20_000);
+
+function memoryGroup(): HTMLElement {
+  return screen.getByRole("radiogroup", { name: "Default memory provider" });
+}
+
+function memoryRadio(name: string): HTMLInputElement {
+  return within(memoryGroup()).getByRole("radio", { name }) as HTMLInputElement;
+}
+
+function checkedValue(): string | undefined {
+  return within(memoryGroup())
+    .getAllByRole("radio")
+    .map((r) => r as HTMLInputElement)
+    .find((r) => r.checked)?.value;
 }
 
 function providerRow(provider: string): HTMLElement {
@@ -201,57 +303,188 @@ function providerRow(provider: string): HTMLElement {
   return el;
 }
 
-test("Settings › Defaults: each provider says where it runs and what it needs", async () => {
+function saveDefault(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "Save default" }) as HTMLButtonElement;
+}
+
+/** Which rows carry the Fleet default tag (the saved default, not the pick). */
+function taggedRows(): string[] {
+  return [...memoryGroup().querySelectorAll<HTMLElement>("[data-field^='memory-provider-']")]
+    .filter((r) => r.querySelector(".mem-tag-default") !== null)
+    .map((r) => (r.dataset["field"] ?? "").replace("memory-provider-", ""));
+}
+
+test("Settings › Defaults: every choice is a radio with its resource chips, and Honcho names the vendors it cannot serve", async () => {
   harness = await flowHarness();
   gotoHash("#settings/defaults");
   mountPortal();
 
-  await waitFor(() => expect(memorySelect().value).toBe(""));
-  expect([...memorySelect().options].map((o) => o.value)).toEqual([
-    "",
+  await waitFor(() => expect(checkedValue()).toBe("none"));
+  const radios = within(memoryGroup()).getAllByRole("radio") as HTMLInputElement[];
+  expect(radios.map((r) => r.value)).toEqual([
+    "none",
     "holographic",
     "hindsight",
     "openviking",
     "honcho",
   ]);
-  const holo = providerRow("holographic").textContent ?? "";
-  expect(holo).toContain("Inside Hermes");
-  expect(holo).not.toContain("Needs ≥");
-  expect(holo).not.toContain("model provider");
-  const hind = providerRow("hindsight").textContent ?? "";
-  expect(hind).toContain("Runs on the box");
-  expect(hind).toContain("Needs ≥ 8 GiB");
-  expect(hind).toContain("Uses the agent's model provider");
-  expect(providerRow("openviking").textContent).toContain("Needs ≥ 4 GiB");
-  const honcho = providerRow("honcho").textContent ?? "";
-  expect(honcho).toContain("Runs on the box");
-  expect(honcho).toContain("Needs ≥ 4 GiB");
-  expect(honcho).toContain("Uses the agent's model provider");
+  // One native group: a single tab stop, and the arrow keys move within it.
+  expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+  expect(radios[0]?.name).not.toBe("");
+  expect(memoryRadio("None (built-in only)").checked).toBe(true);
+  expect(taggedRows()).toEqual(["none"]);
+
+  // Chips with no vendor: the general statements.
+  const chip = (provider: string, fact: string) =>
+    providerRow(provider).querySelector<HTMLElement>(`[data-fact="${fact}"]`)?.textContent ?? "";
+  expect(chip("none", "services")).toContain("0");
+  expect(chip("hindsight", "ram_floor")).toContain("8 GiB (small+)");
+  expect(chip("openviking", "embeddings")).toContain("local model on anthropic/bedrock");
+  expect(chip("honcho", "embeddings")).toContain("provider");
+  expect(document.querySelectorAll(".mem-est").length).toBe(1);
+
+  // Honcho, and only Honcho, says which vendors it cannot serve.
+  expect(providerRow("honcho").textContent).toContain(
+    "Not available for anthropic / bedrock agents: no embeddings API",
+  );
+  for (const p of ["none", "holographic", "hindsight", "openviking"]) {
+    expect(providerRow(p).querySelector(".mem-opt-note")).toBeNull();
+  }
   // Nothing about keys is left anywhere on the page.
   expect(document.body.textContent).not.toMatch(/\bkey missing\b|Set .* key|shared slot memory-/);
 }, 20_000);
 
-test("Settings › Defaults: the default saves at once, and None clears it", async () => {
+test("Settings › Defaults: a pick is staged, Save writes it and moves the tag, and None clears it", async () => {
   harness = await flowHarness();
   const h = harness;
   gotoHash("#settings/defaults");
   mountPortal();
   const user = userEvent.setup();
 
-  await waitFor(() => expect(memorySelect().value).toBe(""));
-  await user.selectOptions(memorySelect(), "holographic");
-  await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(1));
-  expect(paramsOf(h, "settings.set")[0]?.["default_memory_provider"]).toBe("holographic");
-  await waitFor(() => expect(memorySelect().value).toBe("holographic"));
+  await waitFor(() => expect(checkedValue()).toBe("none"));
+  expect(saveDefault().disabled).toBe(true);
+  await user.click(memoryRadio(HINDSIGHT));
+  // Staged: the row is picked, nothing is written, the tag stays on the saved default.
+  expect(checkedValue()).toBe("hindsight");
+  expect(providerRow("hindsight").classList.contains("on")).toBe(true);
+  expect(paramsOf(h, "settings.set").length).toBe(0);
+  expect(taggedRows()).toEqual(["none"]);
 
-  await user.selectOptions(memorySelect(), "");
+  const metaBefore = paramsOf(h, "meta.get").length;
+  await user.click(saveDefault());
+  await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(1));
+  expect(paramsOf(h, "settings.set")[0]?.["default_memory_provider"]).toBe("hindsight");
+  await waitFor(() => expect(taggedRows()).toEqual(["hindsight"]));
+  await waitFor(() => expect(paramsOf(h, "meta.get").length).toBeGreaterThan(metaBefore));
+  expect(saveDefault().disabled).toBe(true);
+  // The pressed button is now disabled: focus is back on the checked radio, not the body.
+  await waitFor(() => expect(document.activeElement?.id).toBe(memoryRadio(HINDSIGHT).id));
+  expect(memoryRadio(HINDSIGHT).id).not.toBe("");
+
+  await user.click(memoryRadio("None (built-in only)"));
+  await user.click(saveDefault());
   await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(2));
   expect(paramsOf(h, "settings.set")[1]?.["default_memory_provider"]).toBeNull();
-  await waitFor(() => expect(memorySelect().value).toBe(""));
+  await waitFor(() => expect(taggedRows()).toEqual(["none"]));
+  expect(checkedValue()).toBe("none");
 
   // Re-read from the head, not just the write's answer: the cleared default holds.
   const got = await h.ctx.hermetic().settings.get();
   expect(got.settings.default_memory_provider ?? null).toBeNull();
+}, 20_000);
+
+test("Settings › Defaults: Revert drops a staged pick and writes nothing", async () => {
+  harness = await flowHarness({ fleet: "staging" });
+  const h = harness;
+  gotoHash("#settings/defaults");
+  mountPortal();
+  const user = userEvent.setup();
+
+  await waitFor(() => expect(checkedValue()).toBe("hindsight"));
+  expect(taggedRows()).toEqual(["hindsight"]);
+  await user.click(memoryRadio("Holographic (local)"));
+  expect(checkedValue()).toBe("holographic");
+  await user.click(screen.getByRole("button", { name: "Revert" }));
+  expect(checkedValue()).toBe("hindsight");
+  // Revert's button is gone: focus returns to the checked (saved) radio.
+  await waitFor(() => expect(document.activeElement?.id).toBe(memoryRadio(HINDSIGHT).id));
+  expect(paramsOf(h, "settings.set").length).toBe(0);
+}, 20_000);
+
+test("Settings › Defaults: a refused save shows the refusal, writes nothing and gives focus back to Save", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  h.intercept("settings.set", () => {
+    // A browser's focus fixup moves focus off a button disabled while focused
+    // (Save, while the write runs); happy-dom leaves it there, so do it here.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    throw new HermeticError("CONFLICT", "settings changed since they were read");
+  });
+  gotoHash("#settings/defaults");
+  mountPortal();
+  const user = userEvent.setup();
+
+  await waitFor(() => expect(checkedValue()).toBe("none"));
+  await user.click(memoryRadio(HINDSIGHT));
+  await user.click(saveDefault());
+  await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(1));
+  const row = document.querySelector<HTMLElement>(
+    '[data-field="default_memory_provider"]',
+  ) as HTMLElement;
+  await waitFor(() =>
+    expect(row.textContent).toContain("CONFLICT · settings changed since they were read"),
+  );
+  // The pick is still staged and Save is live again: the operator can retry.
+  expect(checkedValue()).toBe("hindsight");
+  expect(taggedRows()).toEqual(["none"]);
+  expect(saveDefault().disabled).toBe(false);
+  // Save was disabled while the write ran; focus is back on it, not the body.
+  expect(saveDefault().id).not.toBe("");
+  await waitFor(() => expect(document.activeElement?.id).toBe(saveDefault().id));
+}, 20_000);
+
+test("Settings › Defaults: a stored default this build does not know is shown as such and can be cleared", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  // A newer build wrote a provider this one has no entry for. Settings is
+  // seeded from meta's copy; once a write lands, the head's own answer stands.
+  h.intercept("meta.get", async (_params, passthrough) => {
+    const got = (await passthrough()) as { settings: { settings: Record<string, unknown> } };
+    if (paramsOf(h, "settings.set").length > 0) return got;
+    const settings = {
+      ...got.settings,
+      settings: { ...got.settings.settings, default_memory_provider: "mem0" },
+    };
+    return { ...got, settings };
+  });
+  gotoHash("#settings/defaults");
+  mountPortal();
+  const user = userEvent.setup();
+
+  const note = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>(".mem-def-unknown");
+    if (el === null) throw new Error("no unknown-default note");
+    return el;
+  });
+  expect(note.textContent).toContain("Stored default: mem0 (unknown to this version)");
+  expect(memoryGroup().getAttribute("aria-describedby")).toBe(note.id);
+  // Nothing claims to be the default, and nothing is checked.
+  expect(taggedRows()).toEqual([]);
+  expect(checkedValue()).toBeUndefined();
+  expect(saveDefault().disabled).toBe(true);
+
+  // None differs from what is stored, so it can be saved, and is sent as null.
+  await user.click(memoryRadio("None (built-in only)"));
+  const row = document.querySelector<HTMLElement>(
+    '[data-field="default_memory_provider"]',
+  ) as HTMLElement;
+  expect(row.textContent).toContain("was mem0");
+  expect(saveDefault().disabled).toBe(false);
+  await user.click(saveDefault());
+  await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(1));
+  expect(paramsOf(h, "settings.set")[0]?.["default_memory_provider"]).toBeNull();
+  await waitFor(() => expect(taggedRows()).toEqual(["none"]));
+  expect(document.querySelector(".mem-def-unknown")).toBeNull();
 }, 20_000);
 
 /*
@@ -266,10 +499,11 @@ test("a default saved in Settings is the drawer's default straight away, with no
   mountPortal();
   const user = userEvent.setup();
 
-  await waitFor(() => expect(memorySelect().value).toBe(""));
-  await user.selectOptions(memorySelect(), "hindsight");
+  await waitFor(() => expect(checkedValue()).toBe("none"));
+  await user.click(memoryRadio(HINDSIGHT));
+  await user.click(saveDefault());
   await waitFor(() => expect(paramsOf(h, "settings.set").length).toBe(1));
-  await waitFor(() => expect(memorySelect().value).toBe("hindsight"));
+  await waitFor(() => expect(taggedRows()).toEqual(["hindsight"]));
 
   gotoHash("#fleet");
   const { select } = await openMemoryPicker(user, "wren");
@@ -321,7 +555,7 @@ test("agent detail: Honcho is named by its label on the agent seeded with it", a
  * The agent drawer's memory switch: Change → choose → read what the switch
  * does → Switch memory, which saves the provider on the row and rolls the one
  * agent out (`plan.rollout`, then `apply`). `fathom` is small (16 GiB, enough
- * for every provider), running, on the anthropic profile, with no provider.
+ * for every provider), running, on the bedrock profile, with no provider.
  */
 test("agent detail: switching memory saves, rolls out, and the row names the new provider", async () => {
   harness = await flowHarness();
@@ -370,6 +604,52 @@ test("agent detail: switching memory saves, rolls out, and the row names the new
   await waitFor(() => expect(within(fathom).getByText(HINDSIGHT)).toBeTruthy());
   expect(within(fathom).queryByLabelText("Memory provider")).toBeNull();
   expect((await h.ctx.hermetic().agents.get("fathom")).memory?.provider).toBe("hindsight");
+}, 20_000);
+
+/*
+ * The chooser cards the chosen option for this agent: chips with the
+ * embeddings answer for its vendor, and the fit on its size. `fathom` is small
+ * (16 GiB) on the bedrock profile with no provider, so Hindsight fits and
+ * Honcho is refused for the vendor.
+ */
+test("agent detail: the chooser cards the chosen provider, fitted to the agent", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  mountPortal();
+  const user = userEvent.setup();
+  expect((await h.ctx.hermetic().agents.get("fathom")).provider).toBe("bedrock");
+
+  const fathom = await openConfig(user, "fathom");
+  await user.click(await within(fathom).findByRole("button", { name: "Change memory provider" }));
+  const select = within(fathom).getByLabelText("Memory provider") as HTMLSelectElement;
+  const card = () => fathom.querySelector<HTMLElement>("[data-memory-card]") as HTMLElement;
+  expect(card().dataset["memoryCard"]).toBe("none");
+
+  await user.selectOptions(select, "hindsight");
+  expect(card().dataset["memoryCard"]).toBe("hindsight");
+  expect(card().textContent).toContain(MEMORY_PROVIDERS.hindsight.summary);
+  expect(card().querySelector('[data-fact="ram_floor"]')?.textContent).toContain("8 GiB (small+)");
+  const fit = card().querySelector<HTMLElement>(".mem-fit") as HTMLElement;
+  expect(fit.dataset["fit"]).toBe("fits");
+  // The select is described by the fit line, a live region present while it is empty.
+  const msg = within(card()).getByRole("status");
+  expect(select.getAttribute("aria-describedby")).toBe(msg.id);
+  expect(msg.textContent).toBe("");
+  // No size switch here: a size change is not this flow.
+  expect(within(card()).queryByRole("button")).toBeNull();
+
+  // OpenViking's embeddings are the effective answer for bedrock.
+  await user.selectOptions(select, "openviking");
+  expect(card().querySelector('[data-fact="embeddings"]')?.textContent).toContain(
+    "on box (local model)",
+  );
+
+  // Honcho stays offered but disabled, with core's reason on the option.
+  const honcho = within(select).getByRole("option", {
+    name: `${HONCHO} — not for bedrock`,
+  }) as HTMLOptionElement;
+  expect(honcho.disabled).toBe(true);
+  expect(honcho.title).toBe(MEMORY_PROVIDERS.honcho.vendors_note as string);
 }, 20_000);
 
 test("agent detail: a provider the agent's vendor cannot serve is offered disabled, with the reason", async () => {
