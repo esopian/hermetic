@@ -547,6 +547,20 @@ const MIGRATIONS: Migration[] = [
     statements: [],
     columns: [{ table: "notifications", column: "restored_at", type: "TEXT" }],
   },
+  {
+    /**
+     * When this laptop first saw an agent's current, not-yet-announced bad
+     * health status (§4.9). An `agent.health` alert waits for the trouble to
+     * hold, so the scan that first sees it has to leave a mark the next scan —
+     * possibly in another process, the CLI's or the app's — can measure from.
+     * Null whenever nothing is pending. Chat watermarks share the table and
+     * never set it.
+     */
+    name: "agent-health-pending",
+    version: 16,
+    statements: [],
+    columns: [{ table: "agent_status_seen", column: "pending_since", type: "TEXT" }],
+  },
 ];
 
 /**

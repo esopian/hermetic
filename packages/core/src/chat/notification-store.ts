@@ -198,9 +198,22 @@ export interface NotificationStore {
    * what "hidden until it changes" means, and the change is the new row.
    */
   resolve(key: string): void;
-  /** The last `display_status` this laptop saw for an agent, or null. */
+  /**
+   * The last `display_status` this laptop announced (or silently recorded) for
+   * an agent, or null. A bad status still waiting out its hold is not here; see
+   * `pendingSince`.
+   */
   seenStatus(fleet: string | null, agent: string): string | null;
+  /** Records the status and clears `pendingSince`. */
   setSeenStatus(fleet: string | null, agent: string, status: string): void;
+  /**
+   * When this laptop first saw the agent's current bad health status that has
+   * not been announced yet (ISO), or null when nothing is pending. Lives on the
+   * seen row, so `forgetSeen` forgets it too; a subject with no seen row has
+   * nothing pending and setting it is a no-op.
+   */
+  pendingSince(fleet: string | null, agent: string): string | null;
+  setPendingSince(fleet: string | null, agent: string, at: string | null): void;
   forgetSeen(fleet: string | null, agent: string): void;
   /**
    * Forgets every seen subject in this fleet that begins with `prefix` — a

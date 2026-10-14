@@ -36,7 +36,7 @@
 import { HermeticError } from "../../errors.ts";
 import { CHAT_ERROR_CODES } from "./hermes-chat-types.ts";
 import type { BoxAddress, HermesChatOptions } from "./hermes-chat-types.ts";
-import type { Rpc } from "./hermes-chat-rpc.ts";
+import { type Rpc, untilAbort } from "./hermes-chat-rpc.ts";
 
 /** How long a socket with no leases is kept before it is closed. See the header. */
 export const REQUEST_POOL_IDLE_MS = 15_000;
@@ -221,36 +221,6 @@ export function createRequestPool(deps: RequestPoolDeps): RequestPool {
     entry.idle.unref?.();
   }
 
-  const aborted = (): HermeticError =>
-    new HermeticError("ABORTED", "operation aborted during chat connect", {
-      phase: "chat connect",
-    });
-
-  /**
-   * Await `promise`, but stop awaiting it if the caller hangs up.
-   *
-   * The dial itself is not cancelled — it is shared, and one participant
-   * leaving is not the others' problem. The listener is removed on every path,
-   * for the reason `nextEvent` gives: a pane that probes and aborts repeatedly
-   * would otherwise pin a dead listener per attempt to a signal it still holds.
-   */
-  async function untilAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-    if (!signal) return promise;
-    if (signal.aborted) throw aborted();
-    let onAbort: (() => void) | null = null;
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<never>((_resolve, reject) => {
-          onAbort = () => reject(aborted());
-          signal.addEventListener("abort", onAbort, { once: true });
-        }),
-      ]);
-    } finally {
-      if (onAbort !== null) signal.removeEventListener("abort", onAbort);
-    }
-  }
-
   async function request(
     box: BoxAddress,
     method: string,
@@ -259,6 +229,8 @@ export function createRequestPool(deps: RequestPoolDeps): RequestPool {
   ): Promise<unknown> {
     const entry = acquire(box);
     try {
+      // Only the wait ends on an abort, not the dial: it is shared, and one
+      // participant leaving is not the others' problem.
       const rpc = await untilAbort(entry.dial, opts.signal);
       return await rpc.request(method, params, opts.deadlineMs, { signal: opts.signal });
     } finally {

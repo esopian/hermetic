@@ -9,8 +9,8 @@
  * Nothing waits: the reconnect's backoff is injected, so a five-attempt budget
  * costs no wall-clock at all.
  */
-import { describe, expect, test } from "bun:test";
-import { createHermesChat } from "../src/chat/hermes/hermes-chat.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import { createHermesChat, disposeChatRequestPools } from "../src/chat/hermes/hermes-chat.ts";
 import type {
   BoxAddress,
   ChatFetch,
@@ -27,6 +27,10 @@ import {
   SESSION_CREATE_RESULT,
   SESSION_ID,
 } from "./fixtures/hermes-frames.ts";
+
+// A conversation's socket outlives its turn now (`hermes-chat-session-socket.ts`);
+// close every held one so no test inherits another's.
+afterEach(() => disposeChatRequestPools());
 
 const BOX: BoxAddress = {
   instance: "veronica",
@@ -174,7 +178,9 @@ function harness(
         q.close();
       },
     };
-    void opts;
+    // As the runtime's socket does (`chat-transport.ts`): the dial's signal is
+    // the socket's lifetime, and its abort closes it.
+    opts.signal?.addEventListener("abort", () => socket.close(), { once: true });
     sockets.push(socket);
     return socket;
   };
@@ -315,6 +321,8 @@ describe("hermes-chat · turn continuation", () => {
       "client.capabilities",
       "session.resume",
       "session.events.since",
+      // Released to the hold, it stops answering prompts until the next turn.
+      "client.capabilities",
     ]);
     expect(sinceCalls(h.sockets[1])[0]?.last_seen).toBe(42);
     // The reattach is stamped like every other door into a session. On resume
@@ -495,7 +503,13 @@ describe("hermes-chat · turn continuation", () => {
     for await (const frame of chat.send(BOX, "d", "again")) second.push(ChatFrame.parse(frame));
     expect(h.sockets).toHaveLength(2);
     // The verdict is remembered: the second turn spends no request learning it.
-    expect(h.sockets[1]?.methods()).toEqual(["client.capabilities", "session.create", "prompt.submit"]);
+    // The trailing `client.capabilities` is the release withdrawing prompts.
+    expect(h.sockets[1]?.methods()).toEqual([
+      "client.capabilities",
+      "session.create",
+      "prompt.submit",
+      "client.capabilities",
+    ]);
     expect(second.at(-1)?.type).toBe("done");
   });
 
