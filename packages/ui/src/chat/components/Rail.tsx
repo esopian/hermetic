@@ -242,7 +242,7 @@ export function Rail({
    */
   const inbox = useUnreadChatByConversation();
   const unreadOf = (instance: string, bot: string) => inbox.get(`${instance}/${bot}`) ?? 0;
-  const buckets = railBuckets<BotView>(swarms, { scope, filter, query, unreadOf });
+  const buckets = railBuckets<BotView>(swarms, { scope, filter, query, unreadOf, open: selection });
   const foot = railFooter(buckets);
   const one = scope.kind === "instance";
 

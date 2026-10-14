@@ -7,7 +7,7 @@
  * failed turn whatever they happen to be.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render } from "./dom.ts";
+import { cleanup, fireEvent, render, screen } from "./dom.ts";
 import type { ChatBlockView, ChatMessageView } from "../src/api/index.ts";
 import type { SwarmView } from "../src/api/index.ts";
 import { Message } from "../src/chat/components/Message.tsx";
@@ -201,6 +201,8 @@ describe("intentional silence on the rail", () => {
         activities={[]}
       />,
     );
+    // BotRail opens on Unread; these markers sit on bots with nothing unread.
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
     expect(quoted()).toEqual(expected);
   });
 

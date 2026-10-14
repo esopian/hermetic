@@ -35,6 +35,7 @@ import {
   type ListOutbox,
   type MediaPiece,
 } from "./hermes-chat-media.ts";
+import type { SessionLease, SessionSockets } from "./hermes-chat-session-socket.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
 import {
   createSubagentLedgers,
@@ -107,6 +108,12 @@ export interface ChatTurnDeps {
    * chip carries `bytes: 0` and no digest.
    */
   listOutbox?: ListOutbox | undefined;
+  /**
+   * The client's held session sockets (`hermes-chat-session-socket.ts`): a
+   * conversation keeps one socket across turns, so the gateway never reaps the
+   * session — and the background processes it owns — between them.
+   */
+  sockets: SessionSockets;
 }
 
 /** What a caller may tune about a turn's reconnect. */
@@ -122,7 +129,14 @@ export function createChatTurn(deps: ChatTurnDeps) {
   const waitMs = deps.waitMs;
   // One factory per client, because the "this gateway cannot replay" memo it
   // holds has the same answer for every turn against that box.
-  const continuation = createTurnResume({ connect: deps.connect, now: deps.now, ...deps.resumeTuning });
+  // A reconnect's socket is a shared one too, so a turn that ends on it can
+  // hand it to the conversation's hold — and, like a lease's, it is dialled
+  // detached from the turn's signal, which the app aborts once the turn ends.
+  const continuation = createTurnResume({
+    connect: deps.sockets.connect,
+    now: deps.now,
+    ...deps.resumeTuning,
+  });
   const subagents = deps.subagents ?? createSubagentLedgers({ now: deps.now });
 
   /**
@@ -156,15 +170,21 @@ export function createChatTurn(deps: ChatTurnDeps) {
     box: BoxAddress,
     bot: string,
     stored: string,
+    signal: AbortSignal | undefined,
   ): Promise<{ runtime: string; info: Record<string, unknown> | null }> {
     const result = rec(
-      await rpc.request("session.resume", {
-        session_id: stored,
-        profile: bot,
-        source: HERMETIC_SESSION_SOURCE,
-        defer_history: true,
-        omit_messages: true,
-      }),
+      await rpc.request(
+        "session.resume",
+        {
+          session_id: stored,
+          profile: bot,
+          source: HERMETIC_SESSION_SOURCE,
+          defer_history: true,
+          omit_messages: true,
+        },
+        undefined,
+        { signal },
+      ),
     );
     const runtime = str(result?.session_id);
     if (!runtime)
@@ -195,13 +215,19 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // arrives.
     yield status(message, "connecting");
 
-    let rpc: Rpc;
+    // The conversation's held socket when it has one, else a fresh dial that
+    // the session's ids below turn into the hold. Never closed here: the
+    // `finally` hands it back, and the socket stays attached to the session.
+    // Neither kind closes when `opts.signal` aborts, so every request below
+    // carries the signal itself.
+    let lease: SessionLease;
     try {
-      rpc = await deps.connect(box, opts.signal);
+      lease = await deps.sockets.lease(box, bot, opts.session ?? null, opts.signal);
     } catch (e) {
       yield errorFrame(e);
       return;
     }
+    const rpc: Rpc = lease.rpc;
 
     let active: { runtime: string; stored: string | null } | null = null;
     /** Images this turn queued on the session; taken back unless the prompt was accepted. */
@@ -210,21 +236,50 @@ export function createChatTurn(deps: ChatTurnDeps) {
     let pump: TurnPump | null = null;
     let delegation: ReturnType<typeof subagentTurn> | null = null;
     let requests: TurnFileRequests | null = null;
+    // Whether the box may be running this turn, and whether a frame has said
+    // it is over: between the two, a turn that stops being read owes the box a
+    // `session.interrupt` (see `stopBox`).
+    let prompted = false;
+    let ended = false;
     const key = turnKey(box, bot);
+    /**
+     * Tell the box to stop a turn this scope is leaving unfinished.
+     *
+     * The stream's own abort and timeout paths interrupt before they end; this
+     * covers the ones that never reach it — an abort while `prompt.submit`
+     * awaits its reply, which surfaces as a thrown `ABORTED`, and a consumer
+     * that stops iterating mid-stream. On a held socket nothing else stops the
+     * turn: the socket stays attached, so the gateway's orphan reap that used
+     * to end an abandoned turn never comes.
+     */
+    async function stopBox(): Promise<void> {
+      if (!prompted || ended) return;
+      ended = true;
+      await pump?.interrupt().catch(() => null);
+    }
     try {
       // Before the session exists, so the gateway already counts this socket
       // as one that answers prompts when the turn's first approval arrives.
+      // Sent on a held socket too: it is idempotent, and cheap.
       await advertiseServerRequests(rpc, opts.signal);
       let session: string;
       let stored = opts.session ?? null;
       let info: Record<string, unknown> | null;
       if (opts.session) {
-        ({ runtime: session, info } = await resume(rpc, box, bot, opts.session));
+        // On a held socket as well as a fresh one: this is the re-attach, and
+        // its `info` is what `contextUsageBlock` reads below.
+        ({ runtime: session, info } = await resume(rpc, box, bot, opts.session, opts.signal));
+        lease.keep(opts.session, session);
       } else {
         // Stamped so `session.list` can tell this session from the box's own TUI
         // (`HERMETIC_SESSION_SOURCE`); `portal` still comes only from the local record.
         const created = rec(
-          await rpc.request("session.create", { profile: bot, source: HERMETIC_SESSION_SOURCE }),
+          await rpc.request(
+            "session.create",
+            { profile: bot, source: HERMETIC_SESSION_SOURCE },
+            undefined,
+            { signal: opts.signal },
+          ),
         );
         const runtime = str(created?.session_id);
         if (!runtime)
@@ -235,6 +290,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
         session = runtime;
         stored = str(created?.stored_session_id);
         info = rec(created?.info);
+        // A create that names no durable id leaves nothing to hold the socket
+        // under, and the turn closes it on the way out as it always did.
+        if (stored) lease.keep(stored, runtime);
       }
       // The window the gateway already holds for this session, said before the
       // prompt goes in. A session still live on the box answers its resume with
@@ -271,10 +329,23 @@ export function createChatTurn(deps: ChatTurnDeps) {
         : text;
       pump = continuation.pump({ rpc, box, bot, session });
       const baseline = await pump.probe(opts.signal);
-      // The last moment a stop can still take the queued images back.
-      if (queued.size > 0) checkAbort(opts.signal, "prompt submit");
+      // Checked here rather than left to the request: on a gateway that cannot
+      // replay, `probe` sends nothing and never looks at the signal, so an
+      // abort that landed while the consumer paused above would surface as a
+      // rejected `prompt.submit` that was never sent — and `stopBox` would then
+      // interrupt a session this prompt never reached, which may be running
+      // the gateway's own reply to a finished background process.
+      checkAbort(opts.signal, "prompt.submit");
+      prompted = true;
       const submitted = rec(
-        await rpc.request("prompt.submit", { session_id: session, profile: bot, text: prompt }),
+        await rpc.request(
+          "prompt.submit",
+          { session_id: session, profile: bot, text: prompt },
+          undefined,
+          {
+            signal: opts.signal,
+          },
+        ),
       );
       accepted = true;
       // Everything the socket delivered before this point — `gateway.ready`,
@@ -294,7 +365,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         sessions: [session, stored],
         signal: opts.signal,
       });
-      yield* stream(
+      for await (const frame of stream(
         rpc,
         pump,
         session,
@@ -306,18 +377,32 @@ export function createChatTurn(deps: ChatTurnDeps) {
         delegation,
         requests,
         outboxOnce(deps.listOutbox, box.instance, opts.signal),
-      );
+      )) {
+        if (frame.type === "done" || frame.type === "error") ended = true;
+        yield frame;
+      }
     } catch (e) {
+      // Once the prompt is in, every failure but the gateway's own refusal
+      // leaves the box running a turn nobody reads: an abort, a reply that
+      // timed out, a socket that died. The held socket no longer closes, so
+      // the orphan reap that used to end such a turn never comes — the box has
+      // to be told. A refusal (a JSON-RPC error reply, `details.code`) is the
+      // one case where nothing started, and an interrupt would stop whatever
+      // else the session is doing.
+      if (!refused(e)) await stopBox();
+      ended = true;
       yield errorFrame(e);
     } finally {
-      // Before the socket closes: upstream keeps a session's image queue across
-      // an interrupt, so an image left there rides along with the next prompt.
-      // A stop has closed the turn's socket by now, so the detach may need a
-      // connection of its own (`detachQueued`).
+      // A consumer that stopped reading before the turn's last frame.
+      await stopBox();
+      // Before the socket is released: upstream keeps a session's image queue
+      // across an interrupt, so an image left there rides along with the next
+      // prompt. The held socket outlives a stop, but it may have died with the
+      // turn, so the detach may need a connection of its own (`detachQueued`).
       if (!accepted && active && queued.size > 0) {
         await detachQueued({
           rpc,
-          live: !opts.signal?.aborted,
+          live: true,
           reconnect: (signal) => deps.connect(box, signal),
           session: active.runtime,
           paths: [...queued],
@@ -330,11 +415,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
         entries?.delete(active);
         if (entries?.size === 0) activeTurns.delete(key);
       }
-      // The pump, not `rpc`: a turn that reconnected is holding a socket this
-      // scope never opened, and closing the original would leave the live one
-      // attached to a gateway nobody is reading.
-      if (pump) pump.close();
-      else rpc.close();
+      // Released, not closed: the socket stays attached so the gateway never
+      // reaps the session between turns. The pump's socket rather than `rpc`,
+      // because a turn that reconnected ends on a socket this scope never
+      // opened, and that is the one the hold must keep.
+      lease.release(pump ? pump.detach() : rpc);
     }
   }
 
@@ -894,13 +979,17 @@ export function createChatTurn(deps: ChatTurnDeps) {
    * same way: this process's own turn map first, and only then a lazy
    * profile-scoped resume of the durable session — a separate CLI process has
    * no turn map, and a lazy resume attaches without warming a backend.
+   *
+   * A conversation this process holds a socket for is reached on that socket,
+   * which is already attached; `release` leaves it open. Anything else is a
+   * socket dialled for the call, which `release` closes.
    */
   async function runningTurn(
     box: BoxAddress,
     bot: string,
     method: string,
     opts: SendOptions,
-  ): Promise<{ rpc: Rpc; runtime: string } | null> {
+  ): Promise<{ rpc: Rpc; runtime: string; release(): void } | null> {
     const entries = [...(activeTurns.get(turnKey(box, bot)) ?? [])];
     const matches = opts.session ? entries.filter((entry) => entry.stored === opts.session) : entries;
     if (matches.length > 1)
@@ -909,12 +998,20 @@ export function createChatTurn(deps: ChatTurnDeps) {
       ? undefined
       : (opts.session ?? (await deps.conversation(box, bot, opts))?.session);
     if (!matches[0]?.runtime && !stored) return null;
-    const rpc = await deps.connect(box, opts.signal);
+    const holdKey = matches[0]?.stored ?? stored;
+    const held = holdKey ? deps.sockets.peek(box, bot, holdKey) : null;
+    // A local turn's runtime is only reached on the hold when the hold is
+    // attached to that same runtime.
+    const shared = held && (!matches[0]?.runtime || held.runtime === matches[0].runtime) ? held : null;
+    const rpc: Rpc = shared ? shared.rpc : await deps.connect(box, opts.signal);
+    const release = (): void => {
+      if (!shared) rpc.close();
+    };
     try {
       let runtime = matches[0]?.runtime;
       if (!runtime) {
         if (!stored) {
-          rpc.close();
+          release();
           return null;
         }
         // A separate CLI process has no local turn map. Lazy profile-scoped
@@ -957,7 +1054,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
               `${box.instance}: resume did not report whether the session is running`,
             );
           if (!result.running) {
-            rpc.close();
+            release();
             return null;
           }
           if (rec(result.info)?.lazy === true)
@@ -973,9 +1070,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
             `${box.instance}: resume named no runtime session`,
           );
       }
-      return { rpc, runtime };
+      return { rpc, runtime, release };
     } catch (e) {
-      rpc.close();
+      release();
       throw e;
     }
   }
@@ -988,7 +1085,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await found.rpc.request("session.interrupt", { session_id: found.runtime, profile: bot });
       return true;
     } finally {
-      found.rpc.close();
+      found.release();
     }
   }
 
@@ -1030,7 +1127,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (e instanceof HermeticError && e.details?.code === REDIRECT_UNSUPPORTED) return "rejected";
       throw e;
     } finally {
-      found.rpc.close();
+      found.release();
     }
   }
 
@@ -1057,6 +1154,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       message,
       block,
     };
+  }
+
+  /** A JSON-RPC error reply: the gateway answered, and the answer was no. */
+  function refused(e: unknown): boolean {
+    return e instanceof HermeticError && typeof e.details?.code === "number";
   }
 
   function errorFrame(e: unknown): ChatFrame {

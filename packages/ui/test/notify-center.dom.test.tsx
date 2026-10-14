@@ -66,6 +66,11 @@ function tabs(): HTMLButtonElement[] {
   return [...document.querySelectorAll(".nt-tabs button")] as HTMLButtonElement[];
 }
 
+/** The centre opens on Unread; a test that needs the whole inbox presses All, as an operator would. */
+async function showAll(): Promise<void> {
+  await userEvent.click(screen.getByRole("button", { name: /^All\b/ }));
+}
+
 function rowOf(title: string): HTMLElement {
   const el = screen.getByText(title).closest(".nt-item");
   if (!(el instanceof HTMLElement)) throw new Error(`no row for ${title}`);
@@ -73,10 +78,24 @@ function rowOf(title: string): HTMLElement {
 }
 
 describe("NotificationCenter", () => {
+  test("opens on the Unread tab, listing only what is unread", async () => {
+    const fake = fakeInbox(SEED);
+    render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+
+    await waitFor(() =>
+      expect(tabs().map((t) => t.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]),
+    );
+    expect(tabs()[1]?.textContent).toBe("Unread 2");
+    expect(document.querySelectorAll(".nt-item").length).toBe(2);
+    expect(screen.queryByText("Foundation v8 is available")).toBeNull();
+  });
+
   test("pins `Waiting on you` above the time sections, with tone and unread state", async () => {
     const fake = fakeInbox(SEED);
     render(<Harness api={fake.api} />);
     await screen.findByText("create failed · marrow");
+    await showAll();
 
     const sections = [...document.querySelectorAll(".nt-sec")].map((s) =>
       s.firstChild?.textContent?.trim(),
@@ -107,6 +126,9 @@ describe("NotificationCenter", () => {
   test("clicking a row with no action marks it read, through the API", async () => {
     const fake = fakeInbox(SEED);
     render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+    // Reading the row takes it off Unread; All keeps it on screen to be checked.
+    await showAll();
     await userEvent.click(
       await screen.findByRole("button", { name: "Mark read: create failed · marrow" }),
     );
@@ -135,6 +157,9 @@ describe("NotificationCenter", () => {
   test("`Clear N read` takes the read rows out of the inbox, and undo brings them back", async () => {
     const fake = fakeInbox(SEED);
     render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+    // The read row is not on Unread, so the bulk verb needs the whole list.
+    await showAll();
     await screen.findByText("Foundation v8 is available");
 
     await userEvent.click(screen.getByRole("button", { name: /Clear 1 read/ }));
@@ -205,6 +230,9 @@ describe("NotificationCenter", () => {
     });
     const fake = fakeInbox([...SEED, resolved]);
     render(<Harness api={fake.api} />);
+    await screen.findByText("create failed · marrow");
+    // A cleared condition is history, so Unread leaves it out; All draws it.
+    await showAll();
     await screen.findByText("Foundation update available");
 
     const row = document.querySelector('[data-resolved="true"]');
@@ -223,6 +251,10 @@ describe("NotificationCenter", () => {
     render(<Harness api={fake.api} />);
 
     await screen.findByText("All clear");
+    // Opens on Unread, so the empty state says nothing is unread.
+    expect(tabs()[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/Nothing unread\./)).toBeTruthy();
+    await showAll();
     expect(screen.getByText(/Inbox zero\./)).toBeTruthy();
     expect(screen.getByRole("button", { name: "View history →" })).toBeTruthy();
     await userEvent.click(tabs()[0]!);

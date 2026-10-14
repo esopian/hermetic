@@ -6,8 +6,9 @@
 import { describe, expect, test } from "bun:test";
 import { HermeticError } from "../src/errors.ts";
 import { readRpc } from "../src/chat/hermes/hermes-chat-rpc.ts";
+import { createSessionSockets } from "../src/chat/hermes/hermes-chat-session-socket.ts";
 import { createChatTurn, type ChatTurnDeps } from "../src/chat/hermes/hermes-chat-turn.ts";
-import type { ChatSocket, TurnAttachments } from "../src/chat/hermes/hermes-chat-types.ts";
+import type { BoxAddress, ChatSocket, TurnAttachments } from "../src/chat/hermes/hermes-chat-types.ts";
 import { ChatFrame, type FilesCommitResult } from "../src/schema/index.ts";
 import { HERMES_HOME } from "../src/shared/hermes.ts";
 
@@ -139,8 +140,10 @@ function attachments(
 
 function turnFor(g: ReturnType<typeof gateway>) {
   const rpc = readRpc(g.socket, 1_000, "sindri");
+  const connect = () => Promise.resolve(rpc);
   return createChatTurn({
-    connect: () => Promise.resolve(rpc),
+    connect,
+    sockets: createSessionSockets({ connect }),
     now: () => NOW,
     waitMs: 2_000,
     conversation: (() => Promise.resolve(null)) as unknown as ChatTurnDeps["conversation"],
@@ -225,21 +228,23 @@ describe("hermes chat · a turn with attachments", () => {
     if (last?.type === "error") expect(last.code).toBe("ABORTED");
   });
 
-  test("a stop that closes the turn's socket still detaches, over a fresh connection", async () => {
-    // As `chat-transport.ts` does: the signal a socket was opened with closes it.
+  test("a stop whose socket died with it still detaches, over a fresh connection", async () => {
     const controller = new AbortController();
     const sockets: ReturnType<typeof gateway>[] = [];
     const signals: (AbortSignal | undefined)[] = [];
+    const connect = (_box: BoxAddress, signal: AbortSignal | undefined) => {
+      const g = gateway((call) => {
+        if (call.method === "image.attach") controller.abort();
+      });
+      sockets.push(g);
+      signals.push(signal);
+      // The held socket outlives a stop; this one drops at the same moment.
+      controller.signal.addEventListener("abort", () => g.socket.close(), { once: true });
+      return Promise.resolve(readRpc(g.socket, 1_000, "sindri"));
+    };
     const turn = createChatTurn({
-      connect: (_box, signal) => {
-        const g = gateway((call) => {
-          if (call.method === "image.attach") controller.abort();
-        });
-        sockets.push(g);
-        signals.push(signal);
-        signal?.addEventListener("abort", () => g.socket.close(), { once: true });
-        return Promise.resolve(readRpc(g.socket, 1_000, "sindri"));
-      },
+      connect,
+      sockets: createSessionSockets({ connect }),
       now: () => NOW,
       waitMs: 2_000,
       conversation: (() => Promise.resolve(null)) as unknown as ChatTurnDeps["conversation"],

@@ -171,8 +171,39 @@ function botRail(props: Partial<Parameters<typeof BotRail>[0]> = {}) {
   );
 }
 
+/** BotRail opens on Unread; a test that wants the whole roster presses All, as an operator would. */
+function showAll() {
+  fireEvent.click(screen.getByRole("button", { name: "All" }));
+}
+
+test("the bot rail opens on Unread, which hides a bot and a room with nothing new", () => {
+  botRail();
+
+  expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByText("Pun Corner")).toBeNull();
+  expect(screen.queryByText("the default bot")).toBeNull();
+
+  showAll();
+  expect(screen.getByText("Pun Corner")).toBeTruthy();
+  expect(screen.getByText("the default bot")).toBeTruthy();
+});
+
+test("under Unread the open bot and the open room stay listed with nothing new", () => {
+  botRail({ selection: { instance: "veronica", bot: "default", session: null } });
+  expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("the default bot")).toBeTruthy();
+  expect(screen.queryByText("Pun Corner")).toBeNull();
+  cleanup();
+
+  botRail({ room: room() as never });
+  expect(screen.getByText("Pun Corner")).toBeTruthy();
+  expect(screen.queryByText("the default bot")).toBeNull();
+});
+
 test("a room with nothing pending is hidden under `Needs you`", async () => {
   botRail();
+  showAll();
   expect(screen.getByText("Pun Corner")).toBeTruthy();
 
   const needs = screen.getByRole("button", { name: "Needs you" });
@@ -237,6 +268,7 @@ test("clicking the Sessions tab switches the rail and flips aria-selected", asyn
     last_message_at: "2026-09-19T10:00:00.000Z",
   } as unknown as SessionView;
   botRail({ sessions: [session] });
+  showAll();
 
   const bots = screen.getByRole("tab", { name: /Bots/ });
   const sessions = screen.getByRole("tab", { name: "Sessions" });

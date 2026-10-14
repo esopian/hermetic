@@ -922,10 +922,18 @@ export function railBuckets<B extends BotLike>(
     query?: string;
     /** The inbox's unread `chat.*` rows per bot, when the rail has an inbox to read. */
     unreadOf?: RailUnreadLookup;
+    /**
+     * The bot that owns the open thread. The filter never hides it: reading a
+     * conversation is what clears it from Unread, and a rail that dropped it
+     * then would claim nothing is open. The query still applies.
+     */
+    open?: { instance: string; bot: string } | null;
   } = { scope: { kind: "all" } },
 ): RailBucket<B>[] {
   const filter = opts.filter ?? "all";
   const unreadOf = opts.unreadOf ?? (() => 0);
+  const open = opts.open ?? null;
+  const isOpen = (b: B) => open !== null && b.instance === open.instance && b.name === open.bot;
   const query = (opts.query ?? "").trim();
   const scope = opts.scope;
   const scoped =
@@ -934,7 +942,8 @@ export function railBuckets<B extends BotLike>(
   const buckets: RailBucket<B>[] = [];
   for (const swarm of scoped) {
     const kept = swarm.bots.filter(
-      (b) => matchesFilter(b, filter, unreadOf(b.instance, b.name)) && matchesQuery(b, query),
+      (b) =>
+        (isOpen(b) || matchesFilter(b, filter, unreadOf(b.instance, b.name))) && matchesQuery(b, query),
     );
     if (kept.length === 0 && swarm.reachable) continue;
 

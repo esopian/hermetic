@@ -426,7 +426,7 @@ export function ChatProvider({
   const [swarmsLoading, setSwarmsLoading] = useState(false);
   const [swarmsError, setSwarmsError] = useState<string | null>(null);
   const [scope, setScope] = useState<RailScope>({ kind: "all" });
-  const [filter, setFilter] = useState<RailFilter>("all");
+  const [filter, setFilter] = useState<RailFilter>("unread");
   const [query, setQuery] = useState("");
   /** `doctor`'s reading of this machine's own tailscale, once it has been asked. */
   const [localTailnet, setLocalTailnet] = useState<{ ok: boolean; detail: string } | null>(null);

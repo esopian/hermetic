@@ -59,7 +59,7 @@ export function NotificationCenter({
   /** Open file requests (§8.6): rows of their own above the inbox, counted as needing you. */
   const fileRequests = useFileRequestsIfAvailable()?.all.length ?? 0;
   const needsYou = notify.needsAction + fileRequests;
-  const [tab, setTab] = useState<CenterTab>("all");
+  const [tab, setTab] = useState<CenterTab>("unread");
   const [focus, setFocus] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const now = Date.now();
