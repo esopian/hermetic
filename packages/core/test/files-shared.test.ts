@@ -378,7 +378,9 @@ describe("looksLikeKeyMaterial", () => {
       );
     }
     expect(looksLikeKeyMaterial(enc("-----BEGIN PGP PRIVATE KEY BLOCK-----\n"), "k.asc")).toBe(true);
-    expect(looksLikeKeyMaterial(enc("junk\n-----BEGIN PRIVATE KEY-----\n"), "bundle.pem")).toBe(true);
+    expect(looksLikeKeyMaterial(enc("fixture junk\n-----BEGIN PRIVATE KEY-----\n"), "bundle.pem")).toBe(
+      true,
+    );
   });
 
   test("PKCS#12 and DER keys by extension", () => {

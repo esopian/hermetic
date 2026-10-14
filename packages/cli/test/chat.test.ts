@@ -630,7 +630,16 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
   const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-chat-"));
 
   async function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return runPiped(undefined, ...args);
+  }
+
+  /** `run`, with `input` piped on stdin: the message's way in when it is too long for argv. */
+  async function runPiped(
+    input: string | undefined,
+    ...args: string[]
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
     const proc = Bun.spawn([await cliBinary(), ...args], {
+      ...(input === undefined ? {} : { stdin: new Blob([input]) }),
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, HERMETIC_FIXTURE: "1", HERMETIC_NO_TTY: "1", HERMETIC_HOME: HOME },
@@ -733,7 +742,8 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
   test("a turn the schema refuses is refused before any --attach file is staged", async () => {
     const notes = join(HOME, "never staged.txt");
     writeFileSync(notes, "FIXTURE\n");
-    const { code, stderr } = await run("chat", "atlas", "x".repeat(200_001), "--attach", notes);
+    // On stdin: Linux refuses any one argv string over 128 KiB (E2BIG).
+    const { code, stderr } = await runPiped("x".repeat(200_001), "chat", "atlas", "--attach", notes);
     expect(code).not.toBe(0);
     expect(stderr).not.toContain("staged");
   });
