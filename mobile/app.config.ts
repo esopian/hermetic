@@ -55,7 +55,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
       },
       // `canOpenURL("tailscale://")` answers only for schemes listed here
-      // (the Bots screen's "Open Tailscale").
+      // (the Tailscale strip's "Open Tailscale" on home and Settings).
       LSApplicationQueriesSchemes: ["tailscale"],
       NSLocalNetworkUsageDescription:
         "Hermetic connects to your fleet's agents over your Tailscale network.",

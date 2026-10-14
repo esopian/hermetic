@@ -40,6 +40,8 @@ describe("conversation header", () => {
     expect(props.onBack).toHaveBeenCalledTimes(1);
     expect(props.onSessions).toHaveBeenCalledTimes(1);
     expect(props.onMore).toHaveBeenCalledTimes(1);
+    // The avatar is not a second VoiceOver element beside the title button.
+    expect(screen.queryByLabelText(/— ready/)).toBeNull();
   });
 
   test("a separate session names itself under the title; the Bot Chat says nothing", async () => {
@@ -53,12 +55,13 @@ describe("conversation header", () => {
     const actions = { sessions: jest.fn(), browser: jest.fn(), markRead: jest.fn() };
     for (const pick of [0, 1, 2, 3]) {
       sheet.mockImplementationOnce((_options, callback) => callback(pick));
-      conversationMenu("Scribe", actions);
+      conversationMenu("Scribe", "#f1efe9", actions);
     }
     expect(sheet.mock.calls[0]?.[0]).toMatchObject({
       title: "Scribe",
       options: ["Sessions", "Agent browser", "Mark read", "Cancel"],
       cancelButtonIndex: 3,
+      tintColor: "#f1efe9",
     });
     expect(actions.sessions).toHaveBeenCalledTimes(1);
     expect(actions.browser).toHaveBeenCalledTimes(1);

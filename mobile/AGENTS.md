@@ -15,9 +15,10 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
   `src/fixture/` is fixture mode, and `src/inbox/store.ts` is the phone-local inbox store (unread,
   failure and alert events; it has no screen).
 - Screens (`mobile/README.md`, "Screens"): one home with no tab bar and no inbox screen (gear →
-  Settings, search → the Search screen, `+` → the New chat sheet, then the primary bot as a hero
-  and the other listened bots as a flat list carrying their unread and needs-you marks), and the
-  conversation with a slim bar (back, avatar and name, one overflow menu). Every icon button goes
+  Settings, search → the Search screen, `+` → the New chat sheet; then a hero row of the bots pinned
+  on this phone, or each listened instance's default bot when none is pinned; then the other bots
+  in one quiet section per instance, carrying their unread and needs-you marks). There is no
+  "primary bot". The conversation has a slim bar (back, avatar and name, one overflow menu). Every icon button goes
   through `src/ui/IconButton.tsx`, which carries the accessibility label and the 44pt target.
 - `src/gateway/` stays free of `react`, `react-native` and `expo-*` imports, with every effect
   injected, so the root `tests/mobile-gateway-e2e.test.ts` can drive it under bun against a scripted

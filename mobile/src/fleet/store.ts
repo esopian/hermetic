@@ -88,7 +88,10 @@ export function prefixedKv(kv: KvStorage, prefix: string): KvStorage {
   };
 }
 
-/** Where home keeps its pins, folds and primary bot, per fleet. */
+/**
+ * Where home keeps its pins and folds, per fleet. An older save's extra fields
+ * (a `primary` bot, from before home showed every pin) are dropped on load.
+ */
 export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
   return {
     async load(fleetId) {
@@ -101,7 +104,6 @@ export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
         return {
           pinned: strings(v.pinned),
           folded: strings(v.folded),
-          primary: typeof v.primary === "string" ? v.primary : null,
         };
       } catch {
         return null;

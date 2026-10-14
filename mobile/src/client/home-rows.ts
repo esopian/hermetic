@@ -1,13 +1,14 @@
 /**
- * The home screen as data: which bot is the hero (the operator's primary), the
- * flat list of every other listened bot in the order the screen draws it, and
- * what each row says (badge, quiet suffix, failed mark, time, preview).
- * Pure: the screen renders, this decides what there is to render.
+ * The home screen as data: the hero (every bot pinned on this phone, else the
+ * default bot of each listened instance), then one quiet section per listened
+ * instance holding the rest of its bots, and what each row says (badge,
+ * failed mark, time, preview). Pure: the screen renders, this decides what
+ * there is to render.
  */
 import type { Bot, Swarm } from "@hermetic/core/chat-client";
 import type { InboxEntry } from "../inbox/store.ts";
 import { previewLine } from "./roster-rows.ts";
-import { botKey, unreadBadge } from "./roster-store.ts";
+import { botKey, compareBuckets, railUnread, unreadBadge } from "./roster-store.ts";
 
 /* ── time ───────────────────────────────────────────────────────────────── */
 
@@ -59,40 +60,6 @@ export function homePreview(bot: Bot): { text: string; sent: boolean } {
   return { text: previewLine(bot), sent: false };
 }
 
-/* ── the primary bot ────────────────────────────────────────────────────── */
-
-/**
- * The hero's bot key. The stored choice while its instance is still listened
- * and the bot is still there (or its box is down, so absence proves nothing);
- * else the default bot of the first listened instance that answered; else the
- * first bot of any; else none. Never writes: a fallback is not a choice, so the
- * stored one comes back when its bot does.
- */
-export function resolvePrimary(
-  swarms: readonly Swarm[],
-  listening: readonly string[],
-  stored: string | null,
-): string | null {
-  const listened = new Set(listening);
-  const live = swarms.filter((s) => listened.has(s.instance));
-  if (stored) {
-    const at = stored.indexOf("/");
-    const instance = at > 0 ? stored.slice(0, at) : "";
-    const name = at > 0 ? stored.slice(at + 1) : "";
-    const swarm = live.find((s) => s.instance === instance);
-    if (swarm && (!swarm.reachable || swarm.bots.some((b) => b.name === name))) return stored;
-  }
-  // Listening order, not the order the reads came back in.
-  const ordered = [...live].sort(
-    (a, b) => listening.indexOf(a.instance) - listening.indexOf(b.instance),
-  );
-  for (const swarm of ordered) {
-    const bot = swarm.bots.find((b) => b.is_default) ?? swarm.bots[0];
-    if (bot) return botKey(bot.instance, bot.name);
-  }
-  return null;
-}
-
 /* ── failed turns ───────────────────────────────────────────────────────── */
 
 /**
@@ -115,18 +82,51 @@ export function failedBots(entries: readonly InboxEntry[]): Set<string> {
   return failed;
 }
 
+/**
+ * Bots with an unread `needs_action` entry in the phone's inbox. A real box's
+ * roster always says `needs_action: false` (the gateway's session list carries
+ * no such flag), so the push the box's watcher raised for a clarify or an
+ * approval is the only way home learns a bot is waiting. Reading the thread
+ * (opening it, or Mark read) clears it.
+ */
+export function needsBots(entries: readonly InboxEntry[]): Set<string> {
+  const needs = new Set<string>();
+  for (const e of entries) {
+    if (!e.read_at && e.kind === "needs_action") needs.add(botKey(e.instance, e.bot));
+  }
+  return needs;
+}
+
 /* ── the rows ───────────────────────────────────────────────────────────── */
 
 export interface HomeRow {
   key: string;
   bot: Bot;
-  /** `!` needs you, a count when unread, else null (`unreadBadge`). */
+  /** `!` needs you, a count when unread, else null (`unreadBadge`, inbox needs included). */
   badge: string | null;
-  /** The instance, said quietly after the name when it is needed to tell bots apart. */
+  /**
+   * The bot's own name, said quietly after its title only when another bot of
+   * the same instance shows the same title; otherwise null.
+   */
   suffix: string | null;
   reachable: boolean;
   failed: boolean;
   pinned: boolean;
+  /** Something Mark read can clear: roster or inbox unread (inbox needs included), or a failed mark. */
+  clearable: boolean;
+}
+
+export interface HomeSection {
+  instance: string;
+  reachable: boolean;
+  /** Why the box did not answer, when it did not. */
+  reason: string | null;
+  /** Folded by the operator (never when unreachable: there is nothing to unfold to). */
+  folded: boolean;
+  /** Every bot of the instance not already in the hero, needs-you → unread → recent → name. */
+  rows: HomeRow[];
+  needs: boolean;
+  unread: number;
 }
 
 export interface HomeInput {
@@ -134,23 +134,33 @@ export interface HomeInput {
   listening: readonly string[];
   /** Pinned bot keys, in pin order. */
   pinned: readonly string[];
-  /** The stored primary (`RosterPrefs.primary`); resolved here with `resolvePrimary`. */
-  primary: string | null;
+  /** Folded instances (`RosterPrefs.folded`). */
+  folded?: readonly string[];
   /** Inbox unread rows for one bot (`InboxStore.unreadFor`). */
   unreadOf?: (instance: string, bot: string) => number;
   /** Keys from `failedBots`. */
   failed?: ReadonlySet<string>;
+  /** Keys from `needsBots`. */
+  needs?: ReadonlySet<string>;
 }
 
 export interface HomeLayout {
-  hero: HomeRow | null;
-  /** Pinned first (pin order), then needs-you, unread, most recent, name. */
-  rows: HomeRow[];
-  /** Listened instances whose box did not answer, so their bots are missing from `rows`. */
-  down: { instance: string; reason: string | null }[];
+  /**
+   * The big avatars at the top: the pinned bots in pin order, else the default
+   * bot of each listened instance that answered, in listening order.
+   */
+  hero: HomeRow[];
+  /** Whether the hero is the operator's pins (starred) or the instances' defaults. */
+  heroPinned: boolean;
+  /**
+   * One per listened instance the roster read, ordered like the desktop rail
+   * (`compareBuckets`). A reachable section the hero emptied is left out; an
+   * unreachable one stays, as the header that says so.
+   */
+  sections: HomeSection[];
 }
 
-/** A bot the roster could not list because its box is down: enough to draw the hero. */
+/** A pinned bot the roster could not list because its box is down: enough to draw it. */
 function absentBot(instance: string, name: string): Bot {
   return {
     instance,
@@ -172,75 +182,153 @@ const stamp = (iso: string | null | undefined): number => {
 
 const displayName = (bot: Bot): string => (bot.title || bot.name).trim().toLowerCase();
 
+/** Needs-you, then unread, then most recent message, then name. */
+export function compareHomeRows(a: HomeRow, b: HomeRow): number {
+  const an = a.badge === "!";
+  const bn = b.badge === "!";
+  if (an !== bn) return an ? -1 : 1;
+  const au = a.badge !== null;
+  const bu = b.badge !== null;
+  if (au !== bu) return au ? -1 : 1;
+  const at = stamp(b.bot.last_message_at) - stamp(a.bot.last_message_at);
+  if (at !== 0) return at;
+  return displayName(a.bot).localeCompare(displayName(b.bot), "en-US");
+}
+
 export function homeRows(input: HomeInput): HomeLayout {
   const listened = new Set(input.listening);
-  const swarms = input.swarms.filter((s) => listened.has(s.instance));
+  // Listening order, not the order the reads came back in.
+  const order = (instance: string) => input.listening.indexOf(instance);
+  const swarms = input.swarms
+    .filter((s) => listened.has(s.instance))
+    .sort((a, b) => order(a.instance) - order(b.instance));
   const unreadOf = input.unreadOf ?? (() => 0);
   const failed = input.failed ?? new Set<string>();
-  const reachable = new Map(swarms.map((s) => [s.instance, s.reachable]));
-  const bots = swarms.flatMap((s) => s.bots);
-
-  const names = new Map<string, number>();
-  for (const bot of bots) names.set(displayName(bot), (names.get(displayName(bot)) ?? 0) + 1);
-  const many = swarms.length > 1;
+  const needs = input.needs ?? new Set<string>();
   const pinned = new Set(input.pinned);
+  const folded = new Set(input.folded ?? []);
+  const byInstance = new Map(swarms.map((s) => [s.instance, s]));
 
-  const row = (bot: Bot): HomeRow => {
+  const row = (bot: Bot, reachable: boolean, suffix: string | null = null): HomeRow => {
     const key = botKey(bot.instance, bot.name);
+    const extra = unreadOf(bot.instance, bot.name);
+    const isFailed = failed.has(key);
     return {
       key,
       bot,
-      badge: unreadBadge(bot, unreadOf(bot.instance, bot.name)),
-      suffix: many || (names.get(displayName(bot)) ?? 0) > 1 ? bot.instance : null,
-      reachable: reachable.get(bot.instance) ?? true,
-      failed: failed.has(key),
+      badge: unreadBadge({ ...bot, needs_action: bot.needs_action || needs.has(key) }, extra),
+      suffix,
+      reachable,
+      failed: isFailed,
       pinned: pinned.has(key),
+      clearable: railUnread(bot, extra) > 0 || needs.has(key) || isFailed,
     };
   };
 
-  const heroKey = resolvePrimary(swarms, input.listening, input.primary);
-  let hero: HomeRow | null = null;
-  if (heroKey) {
-    const found = bots.find((b) => botKey(b.instance, b.name) === heroKey);
-    if (found) hero = row(found);
-    else {
-      const at = heroKey.indexOf("/");
-      hero = { ...row(absentBot(heroKey.slice(0, at), heroKey.slice(at + 1))), reachable: false };
-    }
+  // The hero: the pins still listened to. A pin on a down box is kept and dimmed
+  // (an unreachable swarm lists no bots, so absence proves nothing); a pin its
+  // answering box no longer lists is gone.
+  const pinnedHero: HomeRow[] = [];
+  for (const key of input.pinned) {
+    const at = key.indexOf("/");
+    if (at <= 0) continue;
+    const swarm = byInstance.get(key.slice(0, at));
+    if (!swarm) continue;
+    const name = key.slice(at + 1);
+    const bot = swarm.bots.find((b) => b.name === name);
+    if (bot) pinnedHero.push(row(bot, swarm.reachable));
+    else if (!swarm.reachable) pinnedHero.push(row(absentBot(swarm.instance, name), false));
   }
+  const heroPinned = pinnedHero.length > 0;
+  const hero = heroPinned
+    ? pinnedHero
+    : swarms.flatMap((s) => {
+        const bot = s.bots.find((b) => b.is_default) ?? s.bots[0];
+        return bot ? [row(bot, s.reachable)] : [];
+      });
+  const inHero = new Set(hero.map((r) => r.key));
 
-  const byKey = new Map(bots.map((b) => [botKey(b.instance, b.name), b] as const));
-  const pinnedRows = input.pinned
-    .filter((k) => k !== heroKey)
-    .map((k) => byKey.get(k))
-    .filter((b): b is Bot => b !== undefined)
-    .map(row);
-
-  // The badge carries the inbox's unread too, so a push that beat the roster
-  // read still lifts its bot.
-  const rest = bots
-    .filter((b) => {
-      const k = botKey(b.instance, b.name);
-      return k !== heroKey && !pinned.has(k);
-    })
-    .map(row)
-    .sort((a, b) => {
-      const an = a.badge === "!";
-      const bn = b.badge === "!";
-      if (an !== bn) return an ? -1 : 1;
-      const au = a.badge !== null;
-      const bu = b.badge !== null;
-      if (au !== bu) return au ? -1 : 1;
-      const at = stamp(b.bot.last_message_at) - stamp(a.bot.last_message_at);
-      if (at !== 0) return at;
-      return displayName(a.bot).localeCompare(displayName(b.bot), "en-US");
+  const sections: HomeSection[] = [];
+  for (const swarm of swarms) {
+    const titles = new Map<string, number>();
+    for (const b of swarm.bots) titles.set(displayName(b), (titles.get(displayName(b)) ?? 0) + 1);
+    const rows = swarm.bots
+      .filter((b) => !inHero.has(botKey(b.instance, b.name)))
+      .map((b) => row(b, swarm.reachable, (titles.get(displayName(b)) ?? 0) > 1 ? b.name : null))
+      .sort(compareHomeRows);
+    if (swarm.reachable && rows.length === 0) continue;
+    sections.push({
+      instance: swarm.instance,
+      reachable: swarm.reachable,
+      reason: swarm.reachable ? null : (swarm.unreachable_reason ?? null),
+      folded: swarm.reachable && folded.has(swarm.instance),
+      rows,
+      needs: rows.some((r) => r.badge === "!"),
+      unread: rows.reduce((n, r) => n + railUnread(r.bot, unreadOf(r.bot.instance, r.bot.name)), 0),
     });
-
-  return {
-    hero,
-    rows: [...pinnedRows, ...rest],
-    down: swarms
-      .filter((s) => !s.reachable)
-      .map((s) => ({ instance: s.instance, reason: s.unreachable_reason ?? null })),
+  }
+  const lastAt = (s: HomeSection): string | null => {
+    let best: string | null = null;
+    for (const r of s.rows) {
+      if (stamp(r.bot.last_message_at) > stamp(best)) best = r.bot.last_message_at ?? null;
+    }
+    return best;
   };
+  sections.sort((a, b) =>
+    compareBuckets(
+      { ...a, needsAction: a.needs, lastAt: lastAt(a) },
+      { ...b, needsAction: b.needs, lastAt: lastAt(b) },
+    ),
+  );
+
+  return { hero, heroPinned, sections };
+}
+
+/** One entry of home's flat list: a section header, or a bot row under it. */
+export type HomeItem =
+  | { type: "section"; key: string; section: HomeSection }
+  | { type: "row"; key: string; row: HomeRow };
+
+/** The sections as one flat list for a virtualised list; a folded section's rows are left out. */
+export function homeItems(sections: readonly HomeSection[]): HomeItem[] {
+  const items: HomeItem[] = [];
+  for (const section of sections) {
+    items.push({ type: "section", key: `section:${section.instance}`, section });
+    if (section.folded) continue;
+    for (const row of section.rows) items.push({ type: "row", key: row.key, row });
+  }
+  return items;
+}
+
+/**
+ * Every listened bot the roster listed, as a home row keyed by `botKey`, for
+ * screens that draw bots by home's rules outside home's layout (search).
+ */
+export function homeRowsByKey(input: Omit<HomeInput, "pinned" | "folded">): Map<string, HomeRow> {
+  // No pins, so the hero is the defaults; with them every listed bot is either there or in a section.
+  const layout = homeRows({ ...input, pinned: [] });
+  const rows = [...layout.hero, ...layout.sections.flatMap((s) => s.rows)];
+  return new Map(rows.map((r) => [r.key, r]));
+}
+
+/**
+ * What a section header says about its instance: nothing while it answers;
+ * else the fleet view's word when it is a telling one ("stopped",
+ * "bootstrapping"), or "unreachable". `status` is the key for the header's
+ * dot (`statusColor`).
+ */
+export function sectionState(
+  reachable: boolean,
+  agentStatus: string | null | undefined,
+): { word: string | null; status: string } {
+  // It answered, so it is up whatever an older fleet view says; only "degraded" adds anything.
+  if (reachable) return { word: null, status: agentStatus === "degraded" ? "degraded" : "ready" };
+  const telling =
+    agentStatus &&
+    agentStatus !== "ready" &&
+    agentStatus !== "degraded" &&
+    agentStatus !== "unreachable";
+  return telling
+    ? { word: agentStatus, status: agentStatus }
+    : { word: "unreachable", status: "unreachable" };
 }

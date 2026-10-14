@@ -1,14 +1,13 @@
 /**
- * The long-press menu of a home bot (hero or row): Make primary · Pin/Unpin ·
- * Open agent browser · Mark read · Cancel. An iOS action sheet, an alert
- * elsewhere. `botMenuItems` decides what the menu holds; `showBotMenu` draws it.
+ * The long-press menu of a home bot (hero or row): Pin/Unpin · Open agent
+ * browser · Mark read · Cancel. An iOS action sheet, an alert elsewhere.
+ * `botMenuItems` decides what the menu holds; `showBotMenu` draws it.
  */
 import type { Bot } from "@hermetic/core/chat-client";
 import { ActionSheetIOS, Alert, Platform } from "react-native";
 import { haptic } from "../ui/haptics.ts";
 
 export interface BotMenuActions {
-  makePrimary(): void;
   togglePin(): void;
   openBrowser(): void;
   markRead(): void;
@@ -19,25 +18,28 @@ export interface BotMenuItem {
   run: keyof BotMenuActions;
 }
 
-/** The menu's items, in order. The primary bot offers no "Make primary" (it already is). */
-export function botMenuItems(state: {
-  primary: boolean;
+export interface BotMenuState {
   pinned: boolean;
-  unread: boolean;
-}): BotMenuItem[] {
-  const items: BotMenuItem[] = [];
-  if (!state.primary) items.push({ label: "Make primary", run: "makePrimary" });
-  // The hero is never also a pinned row, so pinning it would change nothing on screen.
-  if (!state.primary) items.push({ label: state.pinned ? "Unpin" : "Pin", run: "togglePin" });
-  items.push({ label: "Open agent browser", run: "openBrowser" });
-  if (state.unread) items.push({ label: "Mark read", run: "markRead" });
+  /** Mark read would clear something: unread, an inbox needs-you, or a failed mark (`HomeRow.clearable`). */
+  clearable: boolean;
+}
+
+/** The menu's items, in order. Mark read only when there is something for it to clear. */
+export function botMenuItems(state: BotMenuState): BotMenuItem[] {
+  const items: BotMenuItem[] = [
+    { label: state.pinned ? "Unpin" : "Pin", run: "togglePin" },
+    { label: "Open agent browser", run: "openBrowser" },
+  ];
+  if (state.clearable) items.push({ label: "Mark read", run: "markRead" });
   return items;
 }
 
+/** `tint` colours the sheet's buttons (the app's own ink, not the system blue). */
 export function showBotMenu(
   bot: Bot,
-  state: { primary: boolean; pinned: boolean; unread: boolean },
+  state: BotMenuState,
   actions: BotMenuActions,
+  tint: string,
 ): void {
   haptic.medium();
   const items = botMenuItems(state);
@@ -47,7 +49,12 @@ export function showBotMenu(
   };
   if (Platform.OS === "ios") {
     ActionSheetIOS.showActionSheetWithOptions(
-      { title, options: [...items.map((i) => i.label), "Cancel"], cancelButtonIndex: items.length },
+      {
+        title,
+        options: [...items.map((i) => i.label), "Cancel"],
+        cancelButtonIndex: items.length,
+        tintColor: tint,
+      },
       (index) => run(items[index]),
     );
     return;

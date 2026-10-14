@@ -12,7 +12,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { routeFor } from "../src/fleet/alerts.ts";
+import { openRoute, type RouteNavigator, routeFor } from "../src/fleet/alerts.ts";
 import { appFleetDeps } from "../src/fleet/deps.ts";
 import { FleetProvider, useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { secureKv } from "../src/fleet/persist.ts";
@@ -25,7 +25,11 @@ void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 /** Built once: real, or the fixture kit's when the build asked for it (`deps.ts`). */
 const FLEET_DEPS = appFleetDeps();
-const openHref = (href: string) => router.push(href as never);
+const NAV: RouteNavigator = {
+  push: (href) => router.push(href as never),
+  dismissTo: (href) => router.dismissTo(href as never),
+};
+const openHref = (href: string) => openRoute(href, NAV);
 
 export default function RootLayout() {
   const [loaded, error] = useFonts(FONT_ASSETS);
@@ -89,7 +93,8 @@ function Shell() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.6, 1],
             sheetGrabberVisible: true,
-            contentStyle: { backgroundColor: t.c.bg },
+            // A raised surface, so the sheet reads apart from the screen under it.
+            contentStyle: { backgroundColor: t.c.bg2 },
           }}
         />
         <Stack.Screen
@@ -99,7 +104,8 @@ function Shell() {
             presentation: "formSheet",
             sheetAllowedDetents: [0.6, 1],
             sheetGrabberVisible: true,
-            contentStyle: { backgroundColor: t.c.bg },
+            // A raised surface, so the sheet reads apart from the screen under it.
+            contentStyle: { backgroundColor: t.c.bg2 },
           }}
         />
       </Stack>
@@ -108,7 +114,7 @@ function Shell() {
         onDismiss={dismissBanner}
         onOpen={(alert) => {
           dismissBanner();
-          router.push(routeFor(alert.data) as never);
+          openHref(routeFor(alert.data));
         }}
       />
     </>

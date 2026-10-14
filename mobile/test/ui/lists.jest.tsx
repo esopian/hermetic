@@ -1,7 +1,8 @@
 import { fireEvent, screen } from "@testing-library/react-native";
 import { botMenuItems } from "../../src/bots/botMenu.ts";
-import { HomeBotRow } from "../../src/bots/HomeBotRow.tsx";
-import { HomeHero } from "../../src/bots/HomeHero.tsx";
+import { edgeBadge, HomeBotRow } from "../../src/bots/HomeBotRow.tsx";
+import { HERO_MANY, HERO_SOLO, HomeHero, heroSize } from "../../src/bots/HomeHero.tsx";
+import type { HomeRow } from "../../src/client/home-rows.ts";
 import { inQuietHours } from "../../src/client/inbox-logic.ts";
 import { previewLine } from "../../src/client/roster-rows.ts";
 import { palettes } from "../../src/theme/tokens.ts";
@@ -84,12 +85,22 @@ describe("HomeBotRow", () => {
   });
 
   test("needs you: the gold pill instead of the dot; failed: the red mark; suffix", async () => {
-    await renderUi(row({ badge: "!", failed: true, suffix: "corvid" }));
+    await renderUi(row({ badge: "!", failed: true, suffix: "scribe-2" }));
     expect(screen.getByTestId("row-needs")).toBeTruthy();
     expect(screen.queryByTestId("row-unread")).toBeNull();
     expect(screen.getByTestId("row-failed")).toBeTruthy();
-    expect(screen.getByText(" · corvid")).toBeTruthy();
-    expect(screen.getByLabelText("Scribe on corvid, needs you, last turn failed")).toBeTruthy();
+    expect(screen.getByText(" · scribe-2")).toBeTruthy();
+    expect(screen.getByLabelText("Scribe (scribe-2), needs you, last turn failed")).toBeTruthy();
+  });
+
+  test("no preview: one centred line, the marks beside the time", async () => {
+    const quiet = bot({ name: "scribe", title: "", last_message_at: minutesAgo(5) });
+    await renderUi(row({ bot: quiet, badge: "1" }));
+    expect(screen.queryByText("No messages yet")).toBeNull();
+    const time = screen.getByText(/^\d{1,2}:\d{2} [AP]M$/);
+    const dot = screen.getByTestId("row-unread");
+    // The dot shares the time's line rather than a second, empty one.
+    expect(time.parent?.parent).toBe(dot.parent?.parent?.parent);
   });
 
   test("the operator's last word drops the You: prefix for the sent glyph", async () => {
@@ -100,57 +111,93 @@ describe("HomeBotRow", () => {
 });
 
 describe("HomeHero", () => {
-  test("unread and needs-you badges sit on the avatar; a down box says so", async () => {
+  const heroRow = (over: Partial<HomeRow> = {}): HomeRow => ({
+    key: "atlas/ops",
+    bot: bot({ name: "ops", title: "Ops" }),
+    badge: null,
+    suffix: null,
+    reachable: true,
+    failed: false,
+    pinned: false,
+    clearable: false,
+    ...over,
+  });
+
+  test("unread and needs-you badges sit on the avatar; defaults carry no star", async () => {
     const onPress = jest.fn();
+    const onLongPress = jest.fn();
     await renderUi(
       <HomeHero
-        bot={bot({ name: "ops", title: "Ops" })}
+        rows={[heroRow({ badge: "2" })]}
+        starred={false}
         fleetId="fxtr0001"
-        badge="2"
-        suffix={null}
-        reachable
-        status={null}
         onPress={onPress}
+        onLongPress={onLongPress}
       />,
     );
     expect(screen.getByTestId("hero-unread")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Primary bot: Ops, 2 unread"));
-    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("hero-star")).toBeNull();
+    const ops = screen.getByLabelText("Default bot: Ops, 2 unread");
+    await fireEvent.press(ops);
+    expect(onPress).toHaveBeenCalledWith(expect.objectContaining({ key: "atlas/ops" }));
+    await fireEvent(ops, "longPress");
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
 
+  test("pins: a star each; needs-you on one, a down box dimmed and said", async () => {
     await renderUi(
       <HomeHero
-        bot={bot({ name: "ops", title: "Ops" })}
+        rows={[
+          heroRow({ badge: "!", pinned: true }),
+          heroRow({
+            key: "corvid/wren",
+            bot: bot({ instance: "corvid", name: "wren", title: "Wren" }),
+            reachable: false,
+            pinned: true,
+          }),
+        ]}
+        starred
         fleetId="fxtr0001"
-        badge="!"
-        suffix={null}
-        reachable={false}
-        status="corvid is stopped"
         onPress={jest.fn()}
+        onLongPress={jest.fn()}
       />,
     );
+    expect(screen.getAllByTestId("hero-star")).toHaveLength(2);
     expect(screen.getByTestId("hero-needs")).toBeTruthy();
     expect(screen.queryByTestId("hero-unread")).toBeNull();
-    expect(screen.getByText("corvid is stopped")).toBeTruthy();
+    expect(screen.getByLabelText("Pinned bot: Wren, box not answering")).toBeTruthy();
+  });
+
+  test("hero size: one is larger; three of the smaller fit a 393 pt phone", () => {
+    expect(heroSize(1)).toBe(HERO_SOLO);
+    expect(heroSize(3)).toBe(HERO_MANY);
+    expect(HERO_SOLO).toBeGreaterThan(HERO_MANY);
+    expect(3 * (HERO_MANY + 24) + 2 * 12).toBeLessThanOrEqual(393);
+  });
+
+  test("badges sit on the blob's edge at 45 degrees, not the box corner", () => {
+    const { left, top } = edgeBadge(100, 20, "top");
+    // Centre at (50 + 35.36, 50 - 35.36).
+    expect(left + 10).toBeCloseTo(85.36, 1);
+    expect(top + 10).toBeCloseTo(14.64, 1);
+    expect(edgeBadge(100, 20, "bottom").top + 10).toBeCloseTo(85.36, 1);
   });
 });
 
 describe("botMenuItems", () => {
-  test("make primary, pin or unpin, the browser, and mark read only when there is something", () => {
-    expect(botMenuItems({ primary: false, pinned: false, unread: true }).map((i) => i.label)).toEqual([
-      "Make primary",
+  test("pin or unpin, the browser, and mark read only when it clears something", () => {
+    expect(botMenuItems({ pinned: false, clearable: true }).map((i) => i.label)).toEqual([
       "Pin",
       "Open agent browser",
       "Mark read",
     ]);
-    expect(botMenuItems({ primary: false, pinned: true, unread: false }).map((i) => i.label)).toEqual([
-      "Make primary",
+    expect(botMenuItems({ pinned: true, clearable: false }).map((i) => i.label)).toEqual([
       "Unpin",
       "Open agent browser",
     ]);
-    expect(botMenuItems({ primary: true, pinned: false, unread: true }).map((i) => i.run)).toEqual([
-      "openBrowser",
+    expect(botMenuItems({ pinned: false, clearable: false }).map((i) => i.run)).not.toContain(
       "markRead",
-    ]);
+    );
   });
 });
 

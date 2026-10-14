@@ -3,6 +3,7 @@ import {
   foregroundDecision,
   ingestPush,
   type NoteContent,
+  openRoute,
   presentsLocally,
   type PushFleet,
   pushDataOf,
@@ -44,6 +45,18 @@ describe("routeFor", () => {
       "/chat/atlas/scribe?session=a%2Fb",
     );
     expect(routeFor(null)).toBe("/home");
+  });
+});
+
+describe("openRoute", () => {
+  test("a conversation is pushed; home is dismissed back to, never stacked twice", () => {
+    const nav = { push: jest.fn(), dismissTo: jest.fn() };
+    openRoute(routeFor(pushDataOf(push())), nav);
+    expect(nav.push).toHaveBeenCalledWith("/chat/atlas/scribe?session=s-1");
+    expect(nav.dismissTo).not.toHaveBeenCalled();
+    openRoute(routeFor(null), nav);
+    expect(nav.dismissTo).toHaveBeenCalledWith("/home");
+    expect(nav.push).toHaveBeenCalledTimes(1);
   });
 });
 

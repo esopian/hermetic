@@ -73,22 +73,32 @@ There is no tab bar and no inbox screen. Everything lives on one home screen, an
 from it on demand:
 
 - **Home**: a bare bar with three round buttons (the gear on the left, search and `+` on the
-  right), then the primary bot as a hero (large avatar with a star, its name, its unread or needs-you
-  state), then every other listened bot as a flat list: avatar, name, time of the last message, a
+  right). Under it, the hero: a row of large avatars, each with its name and its unread or needs-you
+  state. The hero holds every bot pinned on this phone (a star marks a pin); with nothing pinned, it
+  holds the default bot of each listened instance. A few sit centred; more scroll sideways. Below
+  the hero, the other listened bots, in one quiet section per instance: the instance's name in muted
+  capitals with a status dot, and its bots under it (avatar, name, time of the last message, a
   one-line preview, and at the row's edge an accent dot when unread, a gold `!` when the bot needs
-  you, a red mark when its last turn failed. The instance is named after a bot only when more than one
-  instance is listened or two bots share a name. Long-press a row for Make primary, Pin, the agent
-  browser and Mark read. The Tailscale band appears under the bar only when something is wrong.
-- **Settings** (the gear): pairing and sign-out, listened instances, the primary bot, notifications,
-  appearance, Tailscale detail, the agent list (detail and noVNC), and the version.
+  you, a red mark when its last turn failed). A box that does not answer says so in its header, and
+  its rows are dimmed. Inside a section, bots needing you come first, then unread, then the most
+  recent message, then name; sections that answer come before those that do not, then those with
+  something needing you or unread, then the most recent. A bot in the hero is not repeated below.
+  The needs-you mark comes from this phone's unread `needs_action` inbox entries as well as the
+  roster. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
+  The Tailscale band appears under the bar only when something is wrong.
+- **Settings** (the gear): pairing and sign-out, listened instances, notifications, appearance,
+  Tailscale detail, the agent list (detail and noVNC), and the version.
 - **Search** (the magnifier): an autofocused field over the listened bots, matching name, title,
   description, instance and the last message's preview, ignoring case and spaces
   (`src/client/search.ts`). A result opens the bot's chat; Cancel returns home.
 - **New chat** (`+`): a sheet listing the listened bots. A pick opens a new, separate session with
   that bot (`/chat/<instance>/<bot>?fresh=1`, opened once with `new_session`), leaving its Bot Chat
   as it was. Its last row, "Add instance…", opens the instance picker.
-- **Conversation**: a slim bar (back, the bot's avatar and name, which opens the session switcher, and
-  one overflow menu for Sessions, the agent browser and Mark read), the transcript and the composer.
+- **Conversation**: a slim bar (a round back button, the bot's avatar and name, which opens the
+  session switcher, and one round overflow button for Sessions, the agent browser and Mark read), the
+  transcript with the operator's words in soft rounded bubbles, and a pill-shaped composer with a
+  round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread; opening a
+  separate session clears only that session's inbox entries.
 
 The phone-local inbox store (`src/inbox/store.ts`) has no screen of its own: it feeds the unread
 and failure marks on the home rows, the app badge and notification routing. A notification tap opens
@@ -269,6 +279,6 @@ test/                jest suites (client, gateway, fleet, fixture, inbox, ui) an
 - Visual language is the desktop's palette and type (`docs/ui-brief.md`): Archivo + JetBrains Mono,
   the accent and warn colours, dark by default. The chrome is softer than the desktop's: round 44pt
   icon buttons with a hairline ring (`IconButton`), round avatars, a rounded search field, list rows
-  with no borders or separators. Content (cards, bands, the composer) keeps the desktop's square
-  edges. Mobile breakpoints are in scope
+  with no borders or separators, a pill composer with a round Send, and rounded operator bubbles.
+  Content cards and bands keep the desktop's square edges. Mobile breakpoints are in scope
   here (the desktop app's "mobile is out of scope" rule is about its own window).

@@ -4,7 +4,7 @@
  * A read on the tailnet can answer within a frame or two of the
  * release. Ending the refresh while the list is still settling from the pull
  * made iOS snap the content back under the still-visible spinner, which then
- * sat over the first row (on Bots, the search box). Holding `refreshing` for
+ * sat over the first row. Holding `refreshing` for
  * `MIN_REFRESH_MS` lets the list settle under the spinner first, so the end of
  * the refresh is one clean animation.
  */

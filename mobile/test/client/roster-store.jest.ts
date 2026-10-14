@@ -140,7 +140,7 @@ describe("RosterStore", () => {
   test("pins persist per fleet", async () => {
     const saved: unknown[] = [];
     const store = new RosterStore(source(), {
-      load: async () => ({ pinned: ["atlas/x"], folded: [], primary: null }),
+      load: async () => ({ pinned: ["atlas/x"], folded: [] }),
       save: async (fleet, prefs) => {
         saved.push([fleet, prefs]);
       },
@@ -149,7 +149,7 @@ describe("RosterStore", () => {
     expect(store.getState().prefs.pinned).toEqual(["atlas/x"]);
     store.togglePinned("atlas", "scribe");
     store.togglePinned("atlas", "x");
-    expect(saved.at(-1)).toEqual(["fxtr0001", { pinned: ["atlas/scribe"], folded: [], primary: null }]);
+    expect(saved.at(-1)).toEqual(["fxtr0001", { pinned: ["atlas/scribe"], folded: [] }]);
   });
 
   test("markSeen clears a bot's unread locally", async () => {

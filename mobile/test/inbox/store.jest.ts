@@ -3,6 +3,7 @@ import { memoryFile } from "../../src/fleet/store.ts";
 import {
   alertFor,
   arrivalFromPush,
+  entryLive,
   INBOX_LIMIT,
   InboxStore,
   pushBelongs,
@@ -119,6 +120,39 @@ describe("InboxStore", () => {
     expect(inbox.unreadFor("atlas", "scribe")).toBe(0);
     expect(inbox.badgeCount()).toBe(1);
     expect(inbox.getState().entries.find((e) => e.dedupe === "a")?.read_at).toBe(NOW);
+  });
+
+  test("entries home cannot show are marked read, so the badge cannot stick", () => {
+    const { inbox } = setup();
+    const before = "2026-10-13T10:00:00.000Z";
+    const after = "2026-10-13T12:30:00.000Z";
+    inbox.ingest(arrival({ dedupe: "a", instance: "atlas", bot: "scribe", at: before }));
+    // Unlistened instance.
+    inbox.ingest(arrival({ dedupe: "b", instance: "kestrel", bot: "x", at: before }));
+    // Deleted bot: the box answered after the entry and no longer lists it.
+    inbox.ingest(arrival({ dedupe: "c", instance: "atlas", bot: "gone", at: before }));
+    // A bot newer than the read: kept, the next read may list it.
+    inbox.ingest(arrival({ dedupe: "d", instance: "atlas", bot: "fresh", at: after }));
+    // A box that did not answer, or one not read yet: nothing proves its bots gone.
+    inbox.ingest(arrival({ dedupe: "e", instance: "corvid", bot: "pilot", at: before }));
+    inbox.ingest(arrival({ dedupe: "f", instance: "heron", bot: "h", at: before }));
+    expect(inbox.badgeCount()).toBe(6);
+    const roster = {
+      listening: ["atlas", "corvid", "heron"],
+      swarms: [
+        { instance: "atlas", reachable: true, bots: [{ name: "scribe" }] },
+        { instance: "corvid", reachable: false, bots: [] },
+      ] as never,
+    };
+    inbox.markReadUnless(entryLive(roster, Date.parse(NOW)));
+    expect(
+      inbox
+        .getState()
+        .entries.filter((e) => !e.read_at)
+        .map((e) => e.dedupe)
+        .sort(),
+    ).toEqual(["a", "d", "e", "f"]);
+    expect(inbox.badgeCount()).toBe(4);
   });
 
   test("load reads the file back, dropping anything malformed; a broken file is empty", async () => {

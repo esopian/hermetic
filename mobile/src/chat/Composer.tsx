@@ -23,7 +23,8 @@
  * the padding again and an empty input opens several lines tall.
  */
 import { memo, useRef } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import Svg, { Path } from "react-native-svg";
 import type { QueuedMessage } from "../client/conversation-store.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -105,6 +106,77 @@ function StopSquare({ onPress }: { onPress(): void }) {
   );
 }
 
+/** Drawn diameter of the round Send and Stop; the tap target is 44pt. */
+const ROUND = 36;
+
+/**
+ * Send (accent, an up arrow) or Stop (a red square) as a round button at the
+ * end of the input row, the shape of the app's other icon buttons. Disabled,
+ * Send goes flat; stopping, Stop dims and says it is busy.
+ */
+function RoundAction({
+  kind,
+  label,
+  disabled = false,
+  busy = false,
+  onPress,
+}: {
+  kind: "send" | "stop";
+  label: string;
+  disabled?: boolean;
+  busy?: boolean;
+  onPress(): void;
+}) {
+  const t = useTheme();
+  const send = kind === "send";
+  const fill = send ? (disabled ? t.c.bg3 : t.c.acc) : t.c.bg2;
+  const glyph = send ? (disabled ? t.c.fg3 : t.c.accFg) : t.c.bad;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: disabled || busy, busy }}
+      disabled={disabled || busy}
+      onPress={onPress}
+      hitSlop={(t.touch.min - ROUND) / 2}
+      // Level with the input's last line, however tall it has grown.
+      style={({ pressed }) => ({
+        marginBottom: (LINE + PAD_Y - ROUND) / 2,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: ROUND,
+          height: ROUND,
+          borderRadius: ROUND / 2,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: fill,
+          borderWidth: send ? 0 : StyleSheet.hairlineWidth,
+          borderColor: t.c.line2,
+          opacity: busy ? 0.5 : 1,
+        }}
+      >
+        {send ? (
+          <Svg width={18} height={18} viewBox="0 0 24 24">
+            <Path
+              d="M12 19.5V5M5.5 11.5 12 5l6.5 6.5"
+              stroke={glyph}
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          </Svg>
+        ) : (
+          <View style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: glyph }} />
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
 const LINE = 21;
 const MAX_LINES = 6;
 /** Vertical padding inside the input, top plus bottom. */
@@ -144,9 +216,8 @@ function QueuedRow({
         flexDirection: "row",
         alignItems: "center",
         gap: t.space.sm,
-        paddingLeft: t.space.sm,
-        borderWidth: 1,
-        borderColor: t.c.line,
+        paddingLeft: t.space.md,
+        borderRadius: 14,
         backgroundColor: t.c.bg2,
       }}
     >
@@ -166,8 +237,8 @@ function QueuedRow({
         }}
         style={{ paddingHorizontal: t.space.sm, minHeight: t.touch.min, justifyContent: "center" }}
       >
-        <Text mono variant="caption" weight={700} tone="acc">
-          SEND NOW
+        <Text variant="bodySmall" weight={700} tone="acc">
+          Send now
         </Text>
       </Pressable>
       <Pressable
@@ -275,19 +346,20 @@ function ComposerImpl(props: ComposerProps) {
             paddingHorizontal: t.space.md,
             paddingTop: PAD_Y / 2,
             paddingBottom: PAD_Y / 2,
-            borderWidth: t.border.control,
-            borderColor: editable ? t.c.line2 : t.c.line,
-            backgroundColor: editable ? t.c.bg : t.c.bg2,
-            borderRadius: 0,
+            // A soft pill, filled rather than boxed.
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: t.c.line,
+            backgroundColor: t.c.bg2,
+            opacity: editable ? 1 : 0.6,
+            borderRadius: (LINE + PAD_Y) / 2,
             textAlignVertical: "top",
           }}
         />
         {mode === "send" || mode === "disabled" ? (
-          <Button
+          <RoundAction
+            kind="send"
             label="Send"
-            accessibilityLabel="Send"
             disabled={mode === "disabled" || !draft.trim()}
-            haptic={false}
             onPress={() => {
               const text = take();
               if (!text) return;
@@ -296,12 +368,10 @@ function ComposerImpl(props: ComposerProps) {
             }}
           />
         ) : mode === "stop" || mode === "stopping" ? (
-          <Button
-            label={mode === "stopping" ? "Stopping" : "Stop"}
-            accessibilityLabel="Stop turn"
-            variant="destructive"
+          <RoundAction
+            kind="stop"
+            label="Stop turn"
             busy={mode === "stopping"}
-            haptic={false}
             onPress={() => {
               haptic.warning();
               props.onStop();

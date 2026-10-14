@@ -3,6 +3,10 @@
  * and turns accent when pressed; secondary is a 2px fg outline; destructive is
  * a bad outline that fills when pressed. Zero radius. 44pt tall minimum.
  *
+ * `soft` is the home and Settings look (Grok-like chrome): the same colours in
+ * a rounded pill with a sentence-case label, and a thin quiet outline for the
+ * secondary variant. The chat surfaces keep the square slab.
+ *
  * A disabled primary (Send with an empty draft) is drawn in its own colours,
  * not faded: fading the fg fill left a grey block whose label fell under 3:1
  * in the light scheme. `primaryColors` is the one place that decides.
@@ -27,6 +31,8 @@ export interface ButtonProps extends Omit<PressableProps, "children" | "style"> 
   compact?: boolean;
   /** A light tap on press (default on). */
   haptic?: boolean;
+  /** Rounded pill, sentence-case label (home, Settings, sheets). */
+  soft?: boolean;
   style?: ViewStyle;
 }
 
@@ -46,6 +52,7 @@ export function Button({
   busy = false,
   compact = false,
   haptic = true,
+  soft = false,
   disabled,
   onPress,
   style,
@@ -75,19 +82,26 @@ export function Button({
               ? t.c.bad
               : "transparent";
         const edge =
-          variant === "destructive" ? t.c.bad : variant === "primary" ? primary.edge : t.c.fg;
+          variant === "destructive"
+            ? t.c.bad
+            : variant === "primary"
+              ? primary.edge
+              : soft
+                ? t.c.line2
+                : t.c.fg;
+        const height = compact ? 32 : t.touch.min;
         return [
           {
-            minHeight: compact ? 32 : t.touch.min,
+            minHeight: height,
             paddingHorizontal: compact ? t.space.md : t.space.lg,
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "row",
             gap: t.space.sm,
             backgroundColor: fill,
-            borderWidth: t.border.control,
+            borderWidth: soft && variant === "secondary" ? 1 : t.border.control,
             borderColor: edge,
-            borderRadius: 0,
+            borderRadius: soft ? height / 2 : 0,
             opacity: off && !quiet ? 0.45 : 1,
           } satisfies ViewStyle,
           style,
@@ -117,10 +131,14 @@ export function Button({
                 flexShrink: 1,
                 textAlign: "center",
                 color,
-                fontFamily: t.sans(variant === "primary" ? 900 : 700),
-                fontSize: compact ? 11 : 13,
-                letterSpacing: 0.6,
-                textTransform: "uppercase",
+                ...(soft
+                  ? { fontFamily: t.sans(600), fontSize: compact ? 13 : 16 }
+                  : {
+                      fontFamily: t.sans(variant === "primary" ? 900 : 700),
+                      fontSize: compact ? 11 : 13,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase" as const,
+                    }),
               }}
             >
               {label}

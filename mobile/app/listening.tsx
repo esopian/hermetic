@@ -7,13 +7,14 @@
  */
 import { router } from "expo-router";
 import { useState } from "react";
-import { FlatList, Pressable, RefreshControl, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
-import { Button, Kicker, SkeletonRow, StatusSquare, Text, ToggleSwitch } from "../src/ui/index.ts";
+import { statusColor } from "../src/theme/tokens.ts";
+import { Button, Icon, SkeletonRow, Text, ToggleSwitch } from "../src/ui/index.ts";
 
 export default function Listening() {
   const t = useTheme();
@@ -33,7 +34,7 @@ export default function Listening() {
   // sticky first row instead.
   return (
     <FlatList
-      style={{ flex: 1, backgroundColor: t.c.bg }}
+      style={{ flex: 1, backgroundColor: t.c.bg2 }}
       data={agents}
       keyExtractor={(a) => a.name}
       stickyHeaderIndices={[0]}
@@ -53,19 +54,21 @@ export default function Listening() {
           style={{
             flexDirection: "row",
             alignItems: "center",
-            paddingHorizontal: t.space.lg,
+            paddingHorizontal: t.space.xl,
             paddingTop: t.space.xl,
-            paddingBottom: t.space.lg,
-            backgroundColor: t.c.bg,
-            borderBottomWidth: t.border.control,
-            borderBottomColor: t.c.fg,
+            paddingBottom: t.space.md,
+            backgroundColor: t.c.bg2,
           }}
         >
           <View style={{ flex: 1, gap: 2 }}>
-            <Kicker>{`${listening.size} listened`}</Kicker>
-            <Text variant="heading">Listening</Text>
+            <Text variant="title" weight={700}>
+              Listening
+            </Text>
+            <Text variant="bodySmall" tone="fg3">
+              {listening.size === 0 ? "None yet" : `${listening.size} of ${agents.length} instances`}
+            </Text>
           </View>
-          <Button label="Done" variant="secondary" compact onPress={() => router.back()} />
+          <Button label="Done" variant="secondary" soft compact onPress={() => router.back()} />
         </View>
       }
       ListFooterComponent={
@@ -100,68 +103,90 @@ export default function Listening() {
         ) : (
           <View style={{ padding: t.space.lg, gap: t.space.sm }}>
             <Text tone="fg3">This fleet has no agents.</Text>
-            <Button label="Try again" variant="secondary" onPress={() => void load()} />
+            <Button label="Try again" variant="secondary" soft onPress={() => void load()} />
           </View>
         )
       }
-      renderItem={({ item }) => {
+      renderItem={({ item, index }) => {
         const on = listening.has(item.name);
         return (
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: t.space.md,
-              paddingHorizontal: t.space.lg,
-              minHeight: 60,
-              borderBottomWidth: 1,
-              borderBottomColor: t.c.line,
-            }}
-          >
-            {item.status ? <StatusSquare status={item.status} /> : <StatusSquare color={t.c.fg3} />}
-            <View style={{ flex: 1 }}>
-              <Text mono weight={700}>
-                {item.name}
-              </Text>
-              <Text mono variant="caption" tone="fg3">
-                {item.status ?? "status unknown"}
-              </Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Open ${item.name}`}
-              onPress={() => {
-                // Close the sheet first: pushed from inside it, the browser
-                // lands in the sheet's own context with no back button.
-                router.back();
-                router.push(`/agent/${encodeURIComponent(item.name)}`);
+          <View>
+            {/* An inset hairline between rows; no rule above the first. */}
+            {index === 0 ? null : (
+              <View
+                style={{
+                  height: StyleSheet.hairlineWidth,
+                  backgroundColor: t.c.line,
+                  marginLeft: t.space.xl + 8 + t.space.md,
+                }}
+              />
+            )}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: t.space.md,
+                paddingLeft: t.space.xl,
+                paddingRight: t.space.lg,
+                minHeight: 60,
               }}
-              // A 44pt target around a one-glyph label.
-              style={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
             >
-              <Text mono tone="fg2">
-                ◫
-              </Text>
-            </Pressable>
-            <ToggleSwitch
-              accessibilityLabel={`Listen to ${item.name}`}
-              value={on}
-              disabled={pending === item.name}
-              onValueChange={(next) => {
-                haptic.select();
-                setPending(item.name);
-                setError(null);
-                const change = client
-                  ? client.roster.listen(item.name, next)
-                  : fleet.setListening(item.name, next);
-                void change
-                  .catch((e: unknown) => {
-                    haptic.error();
-                    setError(e instanceof Error ? e.message : String(e));
-                  })
-                  .finally(() => setPending(null));
-              }}
-            />
+              <View
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: item.status ? statusColor(t.c, item.status).color : t.c.fg3,
+                }}
+              />
+              <View style={{ flex: 1 }}>
+                <Text weight={600}>{item.name}</Text>
+                <Text variant="bodySmall" tone="fg3">
+                  {item.status ?? "status unknown"}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${item.name}`}
+                onPress={() => {
+                  // Close the sheet first: pushed from inside it, the browser
+                  // lands in the sheet's own context with no back button.
+                  router.back();
+                  router.push(`/agent/${encodeURIComponent(item.name)}`);
+                }}
+                // A 44pt target around a small chevron.
+                style={({ pressed }) => ({
+                  minWidth: 44,
+                  minHeight: 44,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: pressed ? 0.5 : 1,
+                })}
+              >
+                <View style={{ transform: [{ rotate: "180deg" }] }}>
+                  <Icon name="back" size={16} color={t.c.fg3} />
+                </View>
+              </Pressable>
+              <ToggleSwitch
+                accessibilityLabel={`Listen to ${item.name}`}
+                value={on}
+                disabled={pending === item.name}
+                onValueChange={(next) => {
+                  haptic.select();
+                  setPending(item.name);
+                  setError(null);
+                  const change = client
+                    ? client.roster.listen(item.name, next)
+                    : fleet.setListening(item.name, next);
+                  void change
+                    .catch((e: unknown) => {
+                      haptic.error();
+                      setError(e instanceof Error ? e.message : String(e));
+                    })
+                    .finally(() => setPending(null));
+                }}
+              />
+            </View>
           </View>
         );
       }}

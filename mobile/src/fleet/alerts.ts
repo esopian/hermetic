@@ -67,11 +67,30 @@ export function pushDataOf(content: NoteContent | null | undefined): MobilePushD
   return parsed.success ? parsed.data : null;
 }
 
+export const HOME_ROUTE = "/home";
+
 /** Where a tapped notification goes: its conversation (and session), else home. */
 export function routeFor(data: Pick<MobilePushData, "instance" | "bot" | "session"> | null): string {
-  if (!data) return "/home";
+  if (!data) return HOME_ROUTE;
   const session = data.session ? `?session=${encodeURIComponent(data.session)}` : "";
   return `/chat/${encodeURIComponent(data.instance)}/${encodeURIComponent(data.bot)}${session}`;
+}
+
+/** The two router moves `openRoute` chooses between (expo-router's `router`, structurally). */
+export interface RouteNavigator {
+  push(href: string): void;
+  dismissTo(href: string): void;
+}
+
+/**
+ * Go where a notification (or the in-app banner) points. A conversation is
+ * pushed over whatever is on screen; home is never pushed, since the stack's
+ * root already is home and a push would stack a second one: `dismissTo` pops
+ * back to it (or, with no home in the stack, replaces the screen with it).
+ */
+export function openRoute(href: string, nav: RouteNavigator): void {
+  if (href === HOME_ROUTE) nav.dismissTo(href);
+  else nav.push(href);
 }
 
 /**

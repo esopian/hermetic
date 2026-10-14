@@ -9,7 +9,7 @@ import { router } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import { FlatList, Pressable, TextInput, View } from "react-native";
 import { HomeBotRow } from "../src/bots/HomeBotRow.tsx";
-import { failedBots, type HomeRow, homeRows } from "../src/client/home-rows.ts";
+import { failedBots, type HomeRow, homeRowsByKey, needsBots } from "../src/client/home-rows.ts";
 import { botKey } from "../src/client/roster-store.ts";
 import { searchBots } from "../src/client/search.ts";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
@@ -31,25 +31,23 @@ export default function Search() {
   const [query, setQuery] = useState("");
   const fleetId = fleet.link?.payload.fleet_id ?? "";
 
-  // Every listened bot as a home row (badge, suffix, reachability, failure),
-  // so a result is drawn by the home's own rules.
-  const { bots, rowsByKey } = useMemo(() => {
+  // Every listened bot as a home row (badge, reachability, failure), so a
+  // result is drawn by the home's own rules.
+  const { bots, rowsByKey, many } = useMemo(() => {
     const swarms = state?.swarms ?? [];
     const listening = state?.listening ?? [];
-    const layout = homeRows({
-      swarms,
-      listening,
-      pinned: [],
-      primary: null,
-      unreadOf: client?.inbox.unreadFor,
-      failed: failedBots(inbox?.entries ?? []),
-    });
-    const rows = layout.hero ? [layout.hero, ...layout.rows] : layout.rows;
+    const entries = inbox?.entries ?? [];
     const listened = new Set(listening);
     return {
-      // Only bots the roster listed: a hero standing in for a down box is not searchable.
       bots: swarms.filter((s) => listened.has(s.instance)).flatMap((s) => s.bots),
-      rowsByKey: new Map(rows.map((r) => [r.key, r])),
+      rowsByKey: homeRowsByKey({
+        swarms,
+        listening,
+        ...(client ? { unreadOf: client.inbox.unreadFor } : {}),
+        failed: failedBots(entries),
+        needs: needsBots(entries),
+      }),
+      many: listening.length > 1,
     };
   }, [state?.swarms, state?.listening, client, inbox?.entries]);
 
@@ -178,7 +176,8 @@ export default function Search() {
             fleetId={fleetId}
             now={now}
             badge={item.badge}
-            suffix={item.suffix}
+            // Results mix instances with no section headers, so the instance is said here.
+            suffix={many ? item.bot.instance : item.suffix}
             reachable={item.reachable}
             failed={item.failed}
             onPress={() => onOpen(item.bot)}

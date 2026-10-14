@@ -1,6 +1,6 @@
 /**
- * The conversation's bar, in the home's soft chrome: a back chevron, the bot's
- * round avatar and name (a tap opens the session switcher; a separate session
+ * The conversation's bar, in the home's soft chrome: a round back button, the
+ * bot's round avatar and name (a tap opens the session switcher; a separate session
  * names itself under the name), and one overflow button for the rest
  * (`conversationMenu`). Drawn in the screen, not by the native header, so a
  * streamed delta re-renders this memoised bar and never resets screen options.
@@ -48,17 +48,18 @@ function ChatHeaderImpl({
       style={{
         flexDirection: "row",
         alignItems: "center",
-        gap: t.space.xs,
+        gap: t.space.sm,
         paddingTop: insets.top + t.space.xs,
         paddingBottom: t.space.sm,
-        paddingHorizontal: t.space.xs,
+        paddingHorizontal: t.space.md,
         backgroundColor: t.c.bg,
         // The transcript scrolls up to this rule, not under the bar.
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: t.c.line,
       }}
     >
-      <IconButton icon="back" label="Back" ring={false} onPress={onBack} />
+      {/* 36pt drawn, the round buttons of the home bar; the tap target stays 44pt. */}
+      <IconButton icon="back" label="Back" size={BUTTON} onPress={onBack} />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${title}, ${session ?? "Bot Chat"}. Switch session`}
@@ -75,15 +76,22 @@ function ChatHeaderImpl({
           opacity: pressed ? 0.6 : 1,
         })}
       >
-        <Avatar
-          fleet_id={fleetId}
-          instance={instance}
-          bot={bot}
-          size={32}
-          status={status}
-          activity={activity}
-          label={title}
-        />
+        {/* The button's own label says who this is; the avatar is not a second element. */}
+        <View
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          <Avatar
+            fleet_id={fleetId}
+            instance={instance}
+            bot={bot}
+            size={32}
+            status={status}
+            activity={activity}
+            label={title}
+          />
+        </View>
         <View style={{ flexShrink: 1 }}>
           <Text weight={600} numberOfLines={1} style={{ fontSize: 17, lineHeight: 21 }}>
             {title}
@@ -95,12 +103,14 @@ function ChatHeaderImpl({
           ) : null}
         </View>
       </Pressable>
-      <IconButton icon="more" label="More" ring={false} onPress={onMore} />
+      <IconButton icon="more" label="More" size={BUTTON} onPress={onMore} />
     </View>
   );
 }
 
 export const ChatHeader = memo(ChatHeaderImpl);
+
+const BUTTON = 36;
 
 export interface ConversationMenu {
   sessions(): void;
@@ -108,8 +118,8 @@ export interface ConversationMenu {
   markRead(): void;
 }
 
-/** The overflow menu: Sessions, Agent browser, Mark read, Cancel. */
-export function conversationMenu(title: string, actions: ConversationMenu): void {
+/** The overflow menu: Sessions, Agent browser, Mark read, Cancel. `tint` colours its buttons. */
+export function conversationMenu(title: string, tint: string, actions: ConversationMenu): void {
   haptic.light();
   const items: [string, () => void][] = [
     ["Sessions", actions.sessions],
@@ -118,7 +128,12 @@ export function conversationMenu(title: string, actions: ConversationMenu): void
   ];
   if (Platform.OS === "ios") {
     ActionSheetIOS.showActionSheetWithOptions(
-      { title, options: [...items.map(([label]) => label), "Cancel"], cancelButtonIndex: items.length },
+      {
+        title,
+        options: [...items.map(([label]) => label), "Cancel"],
+        cancelButtonIndex: items.length,
+        tintColor: tint,
+      },
       (index) => items[index]?.[1](),
     );
     return;

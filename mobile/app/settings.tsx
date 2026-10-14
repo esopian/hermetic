@@ -1,6 +1,6 @@
 /**
  * Settings, behind home's gear: a grouped list of everything admin. Bots (the
- * primary bot, the listened instances), the fleet's agents (each opens its
+ * listened instances), the fleet's agents (each opens its
  * detail and browser), the Tailscale status, notification delivery (push from
  * the boxes, previews, alerts on this phone, quiet hours), appearance and
  * haptics, the paired fleet, re-pairing and signing out, and about. Nothing
@@ -8,23 +8,12 @@
  */
 import Constants from "expo-constants";
 import { router } from "expo-router";
-import { Children, type ReactNode, useEffect, useMemo, useState } from "react";
-import {
-  ActionSheetIOS,
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from "react-native";
+import { Children, type ReactNode, useEffect, useState } from "react";
+import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { railTime } from "../src/client/chat-logic.ts";
-import { resolvePrimary } from "../src/client/home-rows.ts";
 import { minutesOf } from "../src/client/inbox-logic.ts";
-import { botKey } from "../src/client/roster-store.ts";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
-import { useFleetAgents, useFleetState, useRoster } from "../src/fleet/hooks.ts";
+import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { isForbidden, type PushStatus } from "../src/fleet/push.ts";
 import type { TailscaleStatus } from "../src/gateway/tailscale.ts";
 import { usePrefs } from "../src/prefs/prefs.tsx";
@@ -51,19 +40,18 @@ function Group({ title, note, children }: { title?: string; note?: ReactNode; ch
       ) : null}
       <View style={{ backgroundColor: t.c.bg2, borderRadius: RADIUS, overflow: "hidden" }}>
         {rows.map((row, i) => (
-          <View
-            // Rows are positional and never reorder.
-            key={i}
-            style={
-              i === 0
-                ? undefined
-                : {
-                    borderTopWidth: StyleSheet.hairlineWidth,
-                    borderTopColor: t.c.line,
-                    marginLeft: t.space.lg,
-                  }
-            }
-          >
+          // Rows are positional and never reorder.
+          <View key={i}>
+            {/* Only the hairline is inset; the row itself spans the card, so every label lines up. */}
+            {i === 0 ? null : (
+              <View
+                style={{
+                  height: StyleSheet.hairlineWidth,
+                  backgroundColor: t.c.line,
+                  marginLeft: t.space.lg,
+                }}
+              />
+            )}
             {row}
           </View>
         ))}
@@ -361,64 +349,15 @@ const SCHEMES: readonly SchemePreference[] = ["system", "dark", "light"];
 export default function Settings() {
   const t = useTheme();
   const ctx = useFleetContext();
-  const { client, tailscale, probing, previews, push, pushWanted, fixture } = ctx;
+  const { tailscale, probing, previews, push, pushWanted, fixture } = ctx;
   const fleet = useFleetState();
   const agents = useFleetAgents();
-  const { state: roster } = useRoster();
   const { prefs, update } = usePrefs();
   const now = useNow();
   const [pushBusy, setPushBusy] = useState(false);
   const link = fleet.link;
   const listening = ctx.fleet.listened();
   const status = tailscale?.status ?? null;
-
-  // Every listened bot, for the primary picker; the current choice as home resolves it.
-  const bots = useMemo(() => {
-    const listened = new Set(roster?.listening ?? []);
-    return (roster?.swarms ?? []).filter((s) => listened.has(s.instance)).flatMap((s) => s.bots);
-  }, [roster]);
-  const primaryKey = resolvePrimary(
-    roster?.swarms ?? [],
-    roster?.listening ?? [],
-    roster?.prefs.primary ?? null,
-  );
-  const many = new Set(bots.map((b) => b.instance)).size > 1;
-  const named = (b: { title: string; name: string; instance: string }) =>
-    `${b.title || b.name}${many ? ` · ${b.instance}` : ""}`;
-  const primaryBot = bots.find((b) => botKey(b.instance, b.name) === primaryKey);
-  const primaryLabel = primaryBot ? named(primaryBot) : (primaryKey ?? "None");
-
-  const pickPrimary = () => {
-    if (bots.length === 0) {
-      router.push("/listening");
-      return;
-    }
-    const choose = (index: number) => {
-      const bot = bots[index];
-      if (!bot) return;
-      haptic.success();
-      client?.roster.setPrimary(bot.instance, bot.name);
-    };
-    const labels = bots.map((b) =>
-      botKey(b.instance, b.name) === primaryKey ? `✓ ${named(b)}` : named(b),
-    );
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title: "Primary bot",
-          message: "Shown large at the top of home.",
-          options: [...labels, "Cancel"],
-          cancelButtonIndex: labels.length,
-        },
-        choose,
-      );
-    } else {
-      Alert.alert("Primary bot", undefined, [
-        ...labels.map((text, i) => ({ text, onPress: () => choose(i) })),
-        { text: "Cancel", style: "cancel" as const },
-      ]);
-    }
-  };
 
   const signOut = () => {
     haptic.warning();
@@ -471,7 +410,6 @@ export default function Settings() {
           title="Bots"
           note={<Note>Listened instances show their bots on home and raise notifications.</Note>}
         >
-          <Item label="Primary bot" value={primaryLabel} onPress={pickPrimary} testID="primary-bot" />
           <Item
             label="Listening"
             value={

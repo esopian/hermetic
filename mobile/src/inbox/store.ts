@@ -2,8 +2,8 @@
  * The phone's own inbox (§9.4): the last 200 things that happened in the
  * conversations it listens to — pushes received from the boxes and events its
  * own live sockets delivered — kept in a JSON file in the document directory.
- * No laptop store is read. Unread counts drive the tab badge, the app icon
- * badge and the per-bot badges.
+ * No laptop store is read. Unread counts drive the app icon badge and the
+ * per-bot badges on home.
  *
  * Two paths deliver one event: a box's watcher pushes it (Expo), and a socket
  * this phone holds open may show it first. Both carry a `dedupe` key — the
@@ -19,6 +19,7 @@
  * in-app banner, local notification, or nothing — without alerting twice
  * (`alertFor`). Pure: the file and the clock are injected.
  */
+import type { Swarm } from "@hermetic/core/chat-client";
 import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 
 /** The last this many entries are kept. */
@@ -207,11 +208,16 @@ export class InboxStore {
     );
   }
 
-  markAllRead(): void {
-    this.markRead(this.state.entries.filter((e) => !e.read_at).map((e) => e.id));
+  /**
+   * Mark read every unread entry `live` turns down: entries no screen can show
+   * any more (an instance no longer listened to, a bot its box no longer lists),
+   * which would otherwise hold the app badge up with nothing to clear it.
+   */
+  markReadUnless(live: (entry: InboxEntry) => boolean): void {
+    this.markRead(this.state.entries.filter((e) => !e.read_at && !live(e)).map((e) => e.id));
   }
 
-  /** Unread entries about one bot, for the Bots row's badge. */
+  /** Unread entries about one bot, for the bot's badge on home. */
   unreadFor = (instance: string, bot: string): number => {
     if (!this.unreadIndex) {
       const index = new Map<string, number>();
@@ -256,6 +262,29 @@ export class InboxStore {
     }
     for (const l of [...this.listeners]) l();
   }
+}
+
+/**
+ * Whether an entry can still be shown on home, judged against a roster read
+ * landed at `readAt`: its instance is listened to, and its bot is listed — or
+ * nothing proves it gone (the instance was not read, its box did not answer, or
+ * the entry is newer than the read and may name a bot created since).
+ */
+export function entryLive(
+  roster: {
+    listening: readonly string[];
+    swarms: readonly Pick<Swarm, "instance" | "reachable" | "bots">[];
+  },
+  readAt: number,
+): (entry: Pick<InboxEntry, "instance" | "bot" | "at">) => boolean {
+  const listened = new Set(roster.listening);
+  const swarms = new Map(roster.swarms.map((s) => [s.instance, s]));
+  return (entry) => {
+    if (!listened.has(entry.instance)) return false;
+    const swarm = swarms.get(entry.instance);
+    if (!swarm?.reachable || time(entry.at) >= readAt) return true;
+    return swarm.bots.some((b) => b.name === entry.bot);
+  };
 }
 
 function sortEntries(entries: readonly InboxEntry[]): InboxEntry[] {

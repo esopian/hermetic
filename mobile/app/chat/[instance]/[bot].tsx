@@ -11,7 +11,7 @@
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, View } from "react-native";
+import { Alert, StyleSheet, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -25,6 +25,7 @@ import { ChatHeader, conversationMenu } from "../../../src/chat/ChatHeader.tsx";
 import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx";
 import { Composer } from "../../../src/chat/Composer.tsx";
 import { isFresh } from "../../../src/chat/new-chat.ts";
+import { markConversationRead } from "../../../src/chat/read.ts";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
 import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentSheet.tsx";
 import { Transcript, type TranscriptItem, transcriptItems } from "../../../src/chat/Transcript.tsx";
@@ -39,7 +40,7 @@ import { useConversation, useFleetAgents, useFleetState, useRoster } from "../..
 import { useTheme } from "../../../src/theme/theme.tsx";
 import type { AvatarStatus } from "../../../src/ui/avatar/avatar-seed.ts";
 import { haptic } from "../../../src/ui/haptics.ts";
-import { Avatar, Kicker, SkeletonRow, Text } from "../../../src/ui/index.ts";
+import { Avatar, SkeletonRow, Text } from "../../../src/ui/index.ts";
 import { useNow } from "../../../src/ui/useNow.ts";
 import { useThrottled } from "../../../src/ui/useThrottled.ts";
 
@@ -101,20 +102,30 @@ export default function Conversation() {
     return () => client.chat.leave(target);
   }, [client, target, freshPending]);
 
-  // Focused: this is the watched thread (no banners for it), and its unread clears.
+  // False once this screen is gone: a new session opened after the operator
+  // left must not replace whatever screen is in front by then.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  // Focused: this is the watched thread (no banners for it). Not while a new
+  // session is still opening: the Bot Chat is not this screen's thread then,
+  // and a foreground re-open would watch it with nothing to leave it.
   useFocusEffect(
     useCallback(() => {
-      if (!client) return;
+      if (!client || freshPending) return;
       client.setWatched({ instance: target.instance, bot: target.bot, focused: true });
       // Back from the background, the provider re-opens this one.
       focusConversation(target);
-      client.roster.markSeen(target.instance, target.bot);
-      client.inbox.markThreadRead(target.instance, target.bot);
       return () => {
         client.setWatched(null);
         focusConversation(null);
       };
-    }, [client, target, focusConversation]),
+    }, [client, target, focusConversation, freshPending]),
   );
 
   const swarm = roster?.swarms.find((s) => s.instance === target.instance) ?? null;
@@ -192,6 +203,25 @@ export default function Conversation() {
   }, [client, target]);
   const session = view?.sessions.find((s) => s.id === (view.resolvedSession ?? target.session)) ?? null;
   const onCanonical = target.session === null || session?.kind === "canonical";
+  // What this screen shows as read: the Bot Chat clears the bot, a separate
+  // session only its own entries (`markConversationRead`). A `?session=` that
+  // turns out to be the canonical one (a notification tap) counts as the Bot Chat.
+  const readTarget = useMemo(
+    () => ({
+      instance: target.instance,
+      bot: target.bot,
+      session: onCanonical ? null : target.session,
+    }),
+    [target, onCanonical],
+  );
+
+  // Focused, its unread clears.
+  useFocusEffect(
+    useCallback(() => {
+      if (!client || freshPending) return;
+      markConversationRead(client, readTarget);
+    }, [client, freshPending, readTarget]),
+  );
 
   // A clarify still open in the running turn: "Send now" skips it before steering.
   const openQuestion = useMemo(() => {
@@ -237,6 +267,7 @@ export default function Conversation() {
         bot: target.bot,
         new_session: true,
       });
+      if (!alive.current) return;
       haptic.success();
       setSessionsOpen(false);
       if (prompt) {
@@ -256,6 +287,7 @@ export default function Conversation() {
     if (!client || !freshPending || freshStarted.current) return;
     freshStarted.current = true;
     openNewSession().catch((e: unknown) => {
+      if (!alive.current) return;
       haptic.error();
       setFreshPending(false);
       router.setParams({ fresh: undefined });
@@ -366,17 +398,16 @@ export default function Conversation() {
   const onSessions = useCallback(() => setSessionsOpen(true), []);
   const onMore = useCallback(
     () =>
-      conversationMenu(title, {
+      conversationMenu(title, t.c.fg, {
         sessions: () => setSessionsOpen(true),
         browser: () => router.push(`/agent/${encodeURIComponent(target.instance)}`),
         markRead: () => {
           if (!client) return;
           haptic.success();
-          client.roster.markSeen(target.instance, target.bot);
-          client.inbox.markThreadRead(target.instance, target.bot);
+          markConversationRead(client, readTarget);
         },
       }),
-    [title, client, target],
+    [title, t.c.fg, client, target, readTarget],
   );
 
   const loading =
@@ -462,8 +493,8 @@ export default function Conversation() {
           <RemoteBand remote={view?.remote ?? null} />
           <View
             style={{
-              borderTopWidth: t.border.control,
-              borderTopColor: t.c.fg,
+              borderTopWidth: StyleSheet.hairlineWidth,
+              borderTopColor: t.c.line,
               backgroundColor: t.c.bg,
               paddingHorizontal: t.space.sm,
               paddingTop: t.space.sm,
@@ -486,11 +517,6 @@ export default function Conversation() {
               onStop={() => void client?.chat.stop(target)}
               onUnqueue={(id) => client?.chat.unqueue(target, id)}
             />
-            {!sending && !composer.enabled ? null : (
-              <Kicker tone={sending ? "acc" : "fg3"} style={{ marginTop: t.space.xs, fontSize: 9 }}>
-                {`${sending ? (view?.aborting ? "stopping…" : "turn in flight") : `on ${target.instance}`} · ${onCanonical ? "Bot Chat" : sessionLabel(session)}`}
-              </Kicker>
-            )}
           </View>
         </KeyboardStickyView>
         <SessionSheet

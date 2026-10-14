@@ -6,7 +6,7 @@
  * box speaking for itself (a system row).
  */
 import { memo } from "react";
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { activeGroup, sections } from "../client/chat-activity.ts";
 import { fmtCount, threadTime } from "../client/chat-logic.ts";
 import { failureOf } from "../client/chat-recovery.ts";
@@ -25,6 +25,7 @@ import { FailureCard } from "./blocks/Failure.tsx";
 import { PlainText } from "./PlainText.tsx";
 
 const GUTTER = 36;
+const BUBBLE_RADIUS = 18;
 
 function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   const t = useTheme();
@@ -67,11 +68,15 @@ function OperatorBubble({
         marginBottom: t.space.xs,
       }}
     >
+      {/* A soft filled bubble, its corner nearest the operator's edge tucked in;
+          a steer keeps a hairline of accent. */}
       <View
         style={{
-          backgroundColor: t.c.bg3,
-          borderWidth: 1,
-          borderColor: steer ? t.c.acc : t.c.line,
+          backgroundColor: t.c.sel,
+          borderRadius: BUBBLE_RADIUS,
+          borderBottomRightRadius: 6,
+          borderWidth: steer ? StyleSheet.hairlineWidth : 0,
+          borderColor: t.c.acc,
           paddingHorizontal: t.space.md,
           paddingVertical: t.space.sm,
           maxWidth: "100%",

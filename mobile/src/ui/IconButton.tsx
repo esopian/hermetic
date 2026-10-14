@@ -1,6 +1,6 @@
 /**
  * The round chrome button of the home and conversation bars: a 44pt circle
- * with a hairline ring and one line-drawn glyph. Every icon button in the app
+ * with a thin ring (no fill) and one line-drawn glyph. Every icon button in the app
  * goes through here, so each one carries an accessibility label and a 44pt
  * tap target.
  */
@@ -121,9 +121,11 @@ export function IconButton({
             borderRadius: size / 2,
             alignItems: "center",
             justifyContent: "center",
-            borderWidth: ring ? StyleSheet.hairlineWidth : 0,
-            borderColor: t.c.line2,
-            backgroundColor: pressed ? t.c.sel : ring ? t.c.bg2 : "transparent",
+            // A ring only, in the quieter line colour: a filled disc inside a ring read heavy,
+            // in the light scheme above all. The press shows as a soft fill.
+            borderWidth: ring ? StyleSheet.hairlineWidth * 2 : 0,
+            borderColor: t.c.line,
+            backgroundColor: pressed ? t.c.sel : "transparent",
           }}
         >
           <Icon name={icon} size={Math.round(size * 0.48)} color={t.c.fg} />

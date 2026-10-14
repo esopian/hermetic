@@ -25,7 +25,7 @@ import type { ConversationTarget } from "../client/conversation-store.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
 import type { TailscaleProbe, TailscaleStatus } from "../gateway/tailscale.ts";
-import { InboxStore } from "../inbox/store.ts";
+import { entryLive, InboxStore } from "../inbox/store.ts";
 import { usePrefs } from "../prefs/prefs.tsx";
 import {
   belongingData,
@@ -317,6 +317,19 @@ export function FleetProvider({
     return inbox.subscribe(sync);
   }, [deps, inbox]);
 
+  // Entries home can no longer show (an unlistened instance, a deleted bot)
+  // are marked read after each roster read, so they cannot pin the app badge.
+  useEffect(() => {
+    if (!client) return;
+    const prune = () => {
+      const roster = client.roster.getState();
+      if (roster.readAt === null) return;
+      inbox.markReadUnless(entryLive(roster, roster.readAt));
+    };
+    prune();
+    return client.roster.subscribe(prune);
+  }, [client, inbox]);
+
   // A listening change re-registers push: new boxes get the token, dropped ones forget it.
   useEffect(() => {
     let key = fleet.listened().join("\n");
@@ -328,7 +341,7 @@ export function FleetProvider({
     });
   }, [fleet, pushSync]);
 
-  // A Bots read that failed: say whether Tailscale is the reason.
+  // A roster read that failed: say whether Tailscale is the reason.
   useEffect(() => {
     if (!client) return;
     let error: string | null = client.roster.getState().error;

@@ -155,6 +155,34 @@ describe("FleetProvider", () => {
     expect(s.value().fixture?.link).toBe(s.kit.link);
   });
 
+  test("an unlistened instance's unread entries stop holding the badge up", async () => {
+    const s = await setup();
+    await settle();
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    const client = s.value().client!;
+    await act(async () => {
+      client.inbox.ingest({
+        kind: "turn.done",
+        instance: "atlas",
+        bot: "scribe",
+        session: "s-1",
+        title: "scribe · atlas",
+        body: "done",
+        at: NOW,
+        dedupe: "atlas:s-1:4:turn.done",
+      });
+    });
+    await settle();
+    expect(s.note.badges.at(-1)).toBe(1);
+    await act(async () => {
+      await client.roster.listen("atlas", false);
+    });
+    await settle();
+    expect(client.inbox.getState().unread).toBe(0);
+    expect(s.note.badges.at(-1)).toBe(0);
+  });
+
   test("a stored pairing is restored on boot", async () => {
     const first = await setup();
     await settle();

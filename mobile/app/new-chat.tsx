@@ -138,7 +138,20 @@ export default function NewChat() {
               backgroundColor: pressed ? t.c.sel : "transparent",
             })}
           >
-            <Avatar fleet_id={fleetId} instance={bot.instance} bot={bot.name} size={40} label={name} />
+            {/* The row's label says who; the avatar is not a second element. */}
+            <View
+              accessible={false}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              <Avatar
+                fleet_id={fleetId}
+                instance={bot.instance}
+                bot={bot.name}
+                size={40}
+                label={name}
+              />
+            </View>
             <Text numberOfLines={1} style={{ flex: 1, fontSize: 17 }}>
               <Text weight={600} style={{ fontSize: 17 }}>
                 {name}

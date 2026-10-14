@@ -223,7 +223,7 @@ export interface ConversationStoreOptions {
     target: ConversationTarget,
     request: { block: ApprovalBlock | QuestionBlock; turnId: string | null },
   ) => void;
-  /** A reply or message landed: the Bots row moves now rather than at the next poll. */
+  /** A reply or message landed: the home row moves now rather than at the next poll. */
   onArrival?: (target: ConversationTarget, arrival: ConversationArrival) => void;
   /**
    * A conversation whose turn is still running on its box came on screen
@@ -250,7 +250,7 @@ export interface TurnWhere {
 }
 
 /**
- * Something landed in a conversation this phone is showing, for the Bots row
+ * Something landed in a conversation this phone is showing, for the home row
  * to show before the next roster read does (desktop `ChatArrival`). `unread` is
  * always `false` here: the phone only observes, and only drives turns in, the
  * conversation on screen.
