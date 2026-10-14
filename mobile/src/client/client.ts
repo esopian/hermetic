@@ -338,10 +338,16 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
    * (`onRequestOpened`), by key, until the request closes: answered here or
    * elsewhere (the box says the turn moved on), cancelled, timed out, or its
    * turn over. Then the entry is marked read, with a box push folded into it
-   * (`markEventRead`), so home's needs-you mark from the inbox (`needsBots`)
+   * once no other request of that conversation is open (`markEventRead`: the
+   * push names a waiting spell, not a request), so home's needs-you mark from
+   * the inbox (`needsBots`)
    * clears with the live one (`chat.waiting()`). A turn running on its box
    * unfollowed and still `waiting` keeps every request it had open: which one
-   * it waits on is not known.
+   * it waits on is not known. A turn whose stream ended without a word
+   * (`onTurnGone`: the reconnect budget spent, or the box unreachable on the
+   * way back from the background) says nothing about its requests, which may
+   * still wait on the box: the entry is let go unread, for the operator to
+   * read with the thread.
    */
   const openNeeds = new Map<
     string,
@@ -360,7 +366,19 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         if (view.remote || view.openRequests.includes(need.request_id)) continue;
       }
       openNeeds.delete(key);
-      inbox.markEventRead(need.arrival);
+      // Dropped with no error is a stream gone without a word (`onTurnGone`);
+      // a turn that failed on its box (`turnError`) is a definite close.
+      const ended = chat.view(t);
+      if (ended.dropped && ended.turnError === null) continue;
+      // A box push is folded away only with the conversation's last open request.
+      const a = need.arrival;
+      const fold = ![...openNeeds.values()].some(
+        (n) =>
+          n.arrival.instance === a.instance &&
+          n.arrival.bot === a.bot &&
+          n.arrival.session === a.session,
+      );
+      inbox.markEventRead(a, { fold });
     }
   };
 

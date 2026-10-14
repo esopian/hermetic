@@ -205,14 +205,18 @@ export class InboxStore {
   /**
    * One event is over (a request answered or closed): mark read every unread
    * entry that is it, by its key or as the other path of the same event
-   * (`sameEvent`: a box push folded with this phone's own entry).
+   * (`sameEvent`: a box push folded with this phone's own entry). `fold:
+   * false` reads the key alone: a box push names its waiting spell, not a
+   * request, so while another request of that conversation is still open the
+   * push may be about that one too, and it stays.
    */
   markEventRead(
     event: Pick<InboxEntry, "dedupe" | "kind" | "instance" | "bot" | "session" | "at">,
+    { fold = true }: { fold?: boolean } = {},
   ): void {
     this.markRead(
       this.state.entries
-        .filter((e) => !e.read_at && (e.dedupe === event.dedupe || sameEvent(e, event)))
+        .filter((e) => !e.read_at && (e.dedupe === event.dedupe || (fold && sameEvent(e, event))))
         .map((e) => e.id),
     );
   }

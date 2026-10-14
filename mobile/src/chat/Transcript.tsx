@@ -24,6 +24,7 @@ import {
   Pressable,
   type ScrollView,
   type ScrollViewProps,
+  StyleSheet,
   View,
 } from "react-native";
 import { KeyboardChatScrollView } from "react-native-keyboard-controller";
@@ -178,6 +179,7 @@ function TranscriptImpl({
   pinSignal?: number;
 }) {
   const t = useTheme();
+  const dark = t.scheme === "dark";
   const list = useRef<FlashListRef<TranscriptItem>>(null);
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(false);
@@ -266,7 +268,7 @@ function TranscriptImpl({
           }}
         >
           <View style={{ flex: 1, height: 1, backgroundColor: t.c.line }} />
-          <Text mono variant="caption" tone="fg3">
+          <Text variant="caption" tone="fg3">
             {item.label}
           </Text>
           <View style={{ flex: 1, height: 1, backgroundColor: t.c.line }} />
@@ -345,13 +347,24 @@ function TranscriptImpl({
               gap: t.space.xs,
               paddingHorizontal: t.space.md,
               paddingVertical: t.space.sm,
-              backgroundColor: pressed ? t.c.acc : unseen ? t.c.acc : t.c.fg,
-              borderWidth: t.border.control,
-              borderColor: unseen ? t.c.acc : t.c.fg,
+              borderRadius: 999,
+              // A quiet round pill over the page: bg3 lifts it a step in dark,
+              // light keeps its card fill; a hairline and a soft shadow give the
+              // edge. Unseen messages tint the label, not the whole pill.
+              backgroundColor: pressed ? t.c.sel : dark ? t.c.bg3 : t.c.card,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: t.c.line2,
+              shadowColor: "#000",
+              shadowOpacity: dark ? 0.4 : 0.12,
+              shadowRadius: 8,
+              shadowOffset: { width: 0, height: 2 },
             })}
           >
-            <Text mono variant="caption" weight={700} style={{ color: unseen ? t.c.accFg : t.c.bg }}>
-              {unseen ? "↓ NEW · LATEST" : "↓ LATEST"}
+            <Text variant="caption" weight={600} tone={unseen ? "acc" : "fg"} style={{ fontSize: 13 }}>
+              {unseen ? "New · Latest" : "Latest"}
+            </Text>
+            <Text variant="caption" weight={600} tone={unseen ? "acc" : "fg2"} style={{ fontSize: 13 }}>
+              ↓
             </Text>
           </Pressable>
         </Animated.View>

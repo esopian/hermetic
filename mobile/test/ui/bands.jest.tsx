@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react-native";
+import { fireEvent, render, screen } from "@testing-library/react-native";
 import { RemoteBand, ThreadBand } from "../../src/chat/Bands.tsx";
 import { remoteTurnView } from "../../src/client/chat-logic.ts";
 import type { Alert } from "../../src/client/client.ts";
@@ -12,8 +12,10 @@ import {
   TailscaleBanner,
 } from "../../src/ui/Banner.tsx";
 import type { ReactElement } from "react";
+import type { PanGesture } from "react-native-gesture-handler";
 import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { ThemeProvider } from "../../src/theme/theme.tsx";
 import { renderUi } from "../helpers/render.tsx";
 
 const METRICS = {
@@ -75,6 +77,37 @@ describe("Banner gestures and VoiceOver", () => {
     expect(onDismiss).not.toHaveBeenCalled();
     fireGestureHandler(pan, [{ translationY: -10 }, { translationY: -40, velocityY: 0 }]);
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test("a pan that started on one alert neither moves nor dismisses the alert that replaced it", async () => {
+    // `fireGestureHandler` runs a whole gesture in one call, so nothing can
+    // re-render between its start and its end; the pan's own callbacks are
+    // called instead, with the new alert rendered in between.
+    const onDismiss = jest.fn();
+    const tree = (a: Alert) => (
+      <ThemeProvider>
+        <SafeAreaProvider initialMetrics={METRICS}>
+          <Banner alert={a} onOpen={jest.fn()} onDismiss={onDismiss} />
+        </SafeAreaProvider>
+      </ThemeProvider>
+    );
+    const first = alert("turn.done");
+    const view = await render(tree(first));
+    const pan = getByGestureTestId("banner-swipe") as PanGesture;
+    const { onStart, onEnd, onFinalize } = pan.handlers;
+    const up = { translationY: -40, velocityY: 0 } as never;
+    // The control: start and end on one alert dismisses it.
+    onStart?.(up);
+    onEnd?.(up, true);
+    onFinalize?.(up, true);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    // Replaced mid-swipe: the rest of that pan is not the new card's.
+    onStart?.(up);
+    await view.rerender(tree({ ...alert("needs_action"), body: "Approve rm -rf build?" }));
+    onEnd?.(up, true);
+    onFinalize?.(up, true);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    view.unmount();
   });
 
   test("the card offers Dismiss as an action and to the escape scrub, and activate opens", async () => {

@@ -393,6 +393,60 @@ describe("createHermeticClient", () => {
     s.client.dispose();
   });
 
+  test("a box push for a waiting spell stays unread until the conversation's last request closes", async () => {
+    const s = await setup([block(1, approval()), block(2, question())], { hold: true });
+    // The box's push came first; the phone's own sightings fold into it.
+    s.inbox.ingest({
+      instance: "atlas",
+      bot: "scribe",
+      session: "s-1",
+      title: "scribe",
+      body: "Needs you",
+      at: NOW,
+      kind: "needs_action",
+      dedupe: "atlas:s-1:4:needs_action",
+    });
+    s.client.chat.send(T, "two things");
+    await settle();
+    const unread = () =>
+      s.inbox
+        .getState()
+        .entries.filter((e) => !e.read_at)
+        .map((e) => e.dedupe);
+    expect(unread()).toEqual(["atlas:s-1:4:needs_action"]);
+    await s.client.chat.respond(T, { request_id: "r1", kind: "approval", choice: "once" });
+    expect(unread()).toEqual(["atlas:s-1:4:needs_action"]);
+    await s.client.chat.respond(T, { request_id: "q1", kind: "question", answer: "main" });
+    expect(unread()).toEqual([]);
+    s.client.dispose();
+  });
+
+  test("a stream gone without a word leaves its needs-you entry unread; a failed turn reads it", async () => {
+    const unread = (s: Awaited<ReturnType<typeof setup>>) =>
+      s.inbox.getState().entries.filter((e) => e.kind === "needs_action" && !e.read_at);
+    // Gone: the box may still be waiting on the approval.
+    const gone = await setup([block(1, approval())], { hold: true });
+    gone.client.chat.send(T, "do it");
+    await settle();
+    expect(unread(gone)).toHaveLength(1);
+    const turnId = gone.client.chat.view(T).turnId;
+    expect(turnId).not.toBeNull();
+    gone.client.chat.onTurnGone(turnId as string);
+    await settle();
+    expect(gone.client.chat.view(T).dropped).toBe(true);
+    expect(unread(gone)).toHaveLength(1);
+    gone.client.dispose();
+    // Failed on its box: the request is over with it.
+    const failed = await setup([block(1, approval())], { hold: true });
+    failed.client.chat.send(T, "do it");
+    await settle();
+    failed.client.chat.onTurnEnd(failed.client.chat.view(T).turnId as string, "error");
+    await settle();
+    expect(failed.client.chat.view(T).dropped).toBe(true);
+    expect(unread(failed)).toHaveLength(0);
+    failed.client.dispose();
+  });
+
   test("a request opening mid-turn is a needs-you alert with its category", async () => {
     const s = await setup([block(1, approval())]);
     s.client.setPhase("background");

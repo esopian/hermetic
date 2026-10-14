@@ -253,9 +253,7 @@ function TurnRowImpl({
         ) : null}
         {broken ? <FailureCard failure={failure} ids={row.ids} at={message.at} /> : null}
         {message.usage && !streaming ? <Meter usage={message.usage} /> : null}
-        {fromBot ? (
-          <Text mono variant="caption" tone="fg3">{`Message from ${fromBot.name} ⇄`}</Text>
-        ) : null}
+        {fromBot ? <Text variant="caption" tone="fg3">{`Message from ${fromBot.name} ⇄`}</Text> : null}
       </View>
     </View>
   );

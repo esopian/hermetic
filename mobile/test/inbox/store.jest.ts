@@ -111,6 +111,20 @@ describe("InboxStore", () => {
     ).toEqual(["s-2"]);
   });
 
+  test("markEventRead with fold off reads the key alone and leaves the box push", () => {
+    const { inbox } = setup();
+    inbox.ingest(arrival({ kind: "needs_action", dedupe: "atlas:s-1:4:needs_action" }));
+    const local = arrival({
+      kind: "needs_action",
+      dedupe: "atlas:s-1:phone-r1:needs_action",
+      at: "2026-10-13T10:00:01.000Z",
+    });
+    inbox.markEventRead(local, { fold: false });
+    expect(inbox.getState().unread).toBe(1);
+    inbox.markEventRead(local);
+    expect(inbox.getState().unread).toBe(0);
+  });
+
   test("a push without a title is titled by the box's rule: the instance only when it differs", () => {
     const data = (bot: string, instance: string): MobilePushData => ({
       fleet_id: "fxtr0001",
