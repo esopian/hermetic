@@ -88,7 +88,7 @@ export function prefixedKv(kv: KvStorage, prefix: string): KvStorage {
   };
 }
 
-/** Where the Bots list keeps its pins and folds, per fleet. */
+/** Where home keeps its pins, folds and primary bot, per fleet. */
 export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
   return {
     async load(fleetId) {
@@ -98,7 +98,11 @@ export function rosterPrefsStorage(kv: KvStorage): RosterPrefsStorage {
         const v = JSON.parse(raw) as Partial<RosterPrefs>;
         const strings = (x: unknown) =>
           Array.isArray(x) ? x.filter((s): s is string => typeof s === "string") : [];
-        return { pinned: strings(v.pinned), folded: strings(v.folded) };
+        return {
+          pinned: strings(v.pinned),
+          folded: strings(v.folded),
+          primary: typeof v.primary === "string" ? v.primary : null,
+        };
       } catch {
         return null;
       }

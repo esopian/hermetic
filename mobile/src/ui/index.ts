@@ -9,3 +9,4 @@ export { Text, type TextProps } from "./Text.tsx";
 export { Banner } from "./Banner.tsx";
 export { Screen } from "./Screen.tsx";
 export { ToggleSwitch } from "./ToggleSwitch.tsx";
+export { Icon, IconButton, type IconButtonProps, type IconName } from "./IconButton.tsx";

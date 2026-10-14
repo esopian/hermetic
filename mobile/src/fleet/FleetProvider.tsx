@@ -110,7 +110,7 @@ export interface FleetContextValue {
   pair(link: PairedLink): Promise<void>;
   /** Unregister push on the listened boxes (best effort), then forget the pairing. */
   signOut(): Promise<void>;
-  /** Fleet view, Tailscale and the Bots list, again. */
+  /** Fleet view, Tailscale and home's bots, again. */
   refresh(): Promise<void>;
   push: PushStatus;
   /** The operator wants push (persisted); `push` says whether it took. */
@@ -276,7 +276,7 @@ export function FleetProvider({
     );
     const offTap = deps.notifier.onTap((content) => {
       ingestPush(inbox, content, nowRef.current(), pushFleet());
-      // A push for another fleet (or an agent this pairing does not name) opens the inbox.
+      // A push for another fleet (or an agent this pairing does not name) opens home.
       open(routeFor(belongingData(content, pushFleet())));
     });
     void (async () => {

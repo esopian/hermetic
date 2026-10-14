@@ -334,7 +334,7 @@ describe("FleetProvider", () => {
     // Before the boot finished: no client yet.
     await act(async () => s.note.tap({ data: { not: "ours" } }));
     await settle();
-    expect(s.opened).toEqual(["/inbox"]);
+    expect(s.opened).toEqual(["/home"]);
   });
 
   test("fixture: switching Tailscale off re-probes, and the status follows", async () => {

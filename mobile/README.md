@@ -67,6 +67,33 @@ deleted.
 The app uses native modules (camera, notifications, secure store, keyboard controller, webview), so
 it needs a development build (`bun run ios`), not Expo Go.
 
+## Screens
+
+There is no tab bar and no inbox screen. Everything lives on one home screen, and the rest opens
+from it on demand:
+
+- **Home**: a bare bar with three round buttons (the gear on the left, search and `+` on the
+  right), then the primary bot as a hero (large avatar with a star, its name, its unread or needs-you
+  state), then every other listened bot as a flat list: avatar, name, time of the last message, a
+  one-line preview, and at the row's edge an accent dot when unread, a gold `!` when the bot needs
+  you, a red mark when its last turn failed. The instance is named after a bot only when more than one
+  instance is listened or two bots share a name. Long-press a row for Make primary, Pin, the agent
+  browser and Mark read. The Tailscale band appears under the bar only when something is wrong.
+- **Settings** (the gear): pairing and sign-out, listened instances, the primary bot, notifications,
+  appearance, Tailscale detail, the agent list (detail and noVNC), and the version.
+- **Search** (the magnifier): an autofocused field over the listened bots, matching name, title,
+  description, instance and the last message's preview, ignoring case and spaces
+  (`src/client/search.ts`). A result opens the bot's chat; Cancel returns home.
+- **New chat** (`+`): a sheet listing the listened bots. A pick opens a new, separate session with
+  that bot (`/chat/<instance>/<bot>?fresh=1`, opened once with `new_session`), leaving its Bot Chat
+  as it was. Its last row, "Add instance…", opens the instance picker.
+- **Conversation**: a slim bar (back, the bot's avatar and name, which opens the session switcher, and
+  one overflow menu for Sessions, the agent browser and Mark read), the transcript and the composer.
+
+The phone-local inbox store (`src/inbox/store.ts`) has no screen of its own: it feeds the unread
+and failure marks on the home rows, the app badge and notification routing. A notification tap opens
+the conversation it is about.
+
 ## Chat: a request raised while the phone was away
 
 A turn the phone stopped following in the background can stop for an approval or a question. On
@@ -131,7 +158,7 @@ pushes turn-finished, turn-error, needs-you and new-message events. While the ap
 screen it draws no local notification of its own for a box that holds its registration: that box's
 push is the one alert. A push and a socket-delivered event for the same thing share a `dedupe` key,
 so you are alerted once. A push whose `data` names another fleet, or an agent the pairing does not
-name, is dropped before it reaches the inbox. Tapping a needs-you push opens the conversation; there
+name, is dropped before it reaches the inbox store. Tapping a needs-you push opens the conversation; there
 is no inline approve or deny.
 
 **Previews are opt-in.** Every registration states `previews`, the Settings "Show message previews"
@@ -140,13 +167,13 @@ push says only "<bot> replied" or "needs you". On, the box puts a redacted excer
 the push body, and that text travels through Apple's and Expo's push services. The same switch decides
 whether this phone's own alerts quote the conversation.
 
-**Quiet hours** silence the alerts this phone raises from its own connections; the inbox still
-fills. They do not reach the boxes: pushes still arrive during quiet hours, so use an iOS Focus (or
+**Quiet hours** silence the alerts this phone raises from its own connections; the inbox store
+still fills, so the home's unread marks stay true. They do not reach the boxes: pushes still arrive during quiet hours, so use an iOS Focus (or
 turn push off) to silence those too.
 
 **Background refresh.** Every wake (iOS decides when, at most every 15 minutes) probes Tailscale,
 refreshes `/fleet` behind the gate, renews the push registration when it is due, and sets the badge
-from the phone's inbox. It reads no conversation: the boxes' pushes cover what happened while the
+from the phone's inbox store. It reads no conversation: the boxes' pushes cover what happened while the
 app was away.
 
 ## Tailscale status
@@ -154,15 +181,16 @@ app was away.
 iOS offers no API to ask the Tailscale app whether it is connected, so `src/gateway/tailscale.ts`
 infers it. It probes `https://<host>/api/health` (public, no token) on up to three listened boxes, 3 s
 each: DNS failure on every probe is `off`, every probe timing out or refused is `unreachable`, any
-success is `ok`, and no listened boxes is `unknown`. The Bots screen shows a banner for `off` and
-`unreachable`, with an Open Tailscale action. It is a heuristic and the UI says so.
+success is `ok`, and no listened boxes is `unknown`. The home screen shows a band under its bar for
+`off` and `unreachable`, with an Open Tailscale action, and Settings has the detail. It is a heuristic and the UI says so.
 
 ## What admin remains
 
 Agent list with status, per-agent detail (status, version, host, health), the listening toggle
 (phone-local), the agent browser (noVNC), Tailscale status, push on or off, and sign out. Fleet
-switching, volumes, runs, create and destroy stay on the laptop. The phone's inbox is its own: the
-last 200 pushes and socket-delivered events, kept on the device (`src/inbox/store.ts`).
+switching, volumes, runs, create and destroy stay on the laptop. All of it sits behind the home's gear
+(Settings). The phone's inbox store is its own: the last 200 pushes and socket-delivered events, kept
+on the device (`src/inbox/store.ts`), with no screen; it drives the home's unread marks.
 
 ## Running it as an agent
 
@@ -193,12 +221,13 @@ file under the repo, and these are Jest suites.
 ## Layout
 
 ```
-app/                 expo-router screens: pair, (tabs)/{index (Bots), inbox, settings},
-                     chat/[instance]/[bot], agent/[name] (detail + noVNC), listening (instance
-                     picker sheet); +native-intent.tsx turns a hermetic://fleet link into /pair
+app/                 expo-router screens: pair, home (hero + bot list), settings, search, new-chat
+                     (sheet), chat/[instance]/[bot], agent/[name] (detail + noVNC), listening
+                     (instance picker sheet); +native-intent.tsx turns a hermetic://fleet link
+                     into /pair
 src/client/          the client layer, no React: createHermeticClient (client.ts), the
-                     conversation and roster stores, turn reducer, chat and inbox logic, errors,
-                     the noVNC URL (vnc.ts)
+                     conversation and roster stores, turn reducer, chat and inbox logic, home rows
+                     and bot search (home-rows.ts, search.ts), errors, the noVNC URL (vnc.ts)
 src/gateway/         transport over @hermetic/core/chat-client: client, socket opener, polyfills
                      (AbortSignal.timeout/any, structuredClone), hermeticd calls (/fleet,
                      /push/devices), tailscale status; no React, React Native or Expo
@@ -208,14 +237,16 @@ src/fleet/           FleetProvider.tsx (client, AppState, alerts, push, Tailscal
                      notifications.ts (expo-notifications), background.ts, deps.ts (real or fixture)
 src/fixture/         fixture mode: fixtureChatClient, canned fleet view and pairing link, canned
                      Tailscale status, memory push registry (the only importer of chat-client-fixture)
-src/inbox/           store.ts, the phone-local inbox (last 200 entries, JSON in the document
-                     directory); InboxRow.tsx
+src/inbox/           store.ts, the phone-local inbox store (last 200 entries, JSON in the document
+                     directory): unread and failure marks, badge, no screen
 src/chat/            the conversation: block renderers (blocks/), markdown → native, turn rows,
-                     transcript list, composer, bands, session and subagent sheets, ChatScope
-src/bots/            Bots list rows and body;  src/pair/  paste form and confirm card
+                     transcript list, composer, bands, session and subagent sheets, the
+                     conversation bar (ChatHeader.tsx), new-chat helpers, ChatScope
+src/bots/            home rows and hero;  src/pair/  paste form and confirm card
 src/prefs/           phone-only preferences (haptics, local alerts, quiet hours)
 src/theme/           desktop tokens (both schemes), fonts, scale, useTheme()
-src/ui/              primitives: Text, Kicker, Button, Avatar (seeded blob), StatusSquare, Skeleton, Badge,
+src/ui/              primitives: Text, Kicker, Button, IconButton (round 44pt chrome button), Avatar
+                     (seeded blob), StatusSquare, Skeleton, Badge,
                      Banner (in-app alert, Tailscale band), haptics (one switch for every tap), useNow
 assets/fonts/        Archivo + JetBrains Mono static TTFs (OFL)
 test/                jest suites (client, gateway, fleet, fixture, inbox, ui) and helpers/
@@ -235,6 +266,9 @@ test/                jest suites (client, gateway, fleet, fixture, inbox, ui) an
 - `src/gateway/` stays free of React, React Native and Expo imports, with every effect injected, so
   `tests/mobile-gateway-e2e.test.ts` can drive the real gateway client under bun against a scripted
   Hermes-wire server.
-- Visual language is the desktop's (`docs/ui-brief.md`): zero radius except avatars, borders carry
-  structure, kicker labels, Archivo + JetBrains Mono, dark by default. Mobile breakpoints are in scope
+- Visual language is the desktop's palette and type (`docs/ui-brief.md`): Archivo + JetBrains Mono,
+  the accent and warn colours, dark by default. The chrome is softer than the desktop's: round 44pt
+  icon buttons with a hairline ring (`IconButton`), round avatars, a rounded search field, list rows
+  with no borders or separators. Content (cards, bands, the composer) keeps the desktop's square
+  edges. Mobile breakpoints are in scope
   here (the desktop app's "mobile is out of scope" rule is about its own window).

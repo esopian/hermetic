@@ -10,7 +10,7 @@
  * accepts gets that far. Replacing an existing pairing asks once more, and a
  * code for a different tailnet says so (`tailnetChange`).
  *
- * After pairing the stack is dismissed before the tabs replace it, so a deep
+ * After pairing the stack is dismissed before home replaces it, so a deep
  * link that opened Pair over another screen leaves nothing to swipe back to.
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -53,10 +53,10 @@ export default function Pair() {
         await pair(link);
         haptic.success();
         setPending(null);
-        // Drop whatever is under Pair (a deep link pushes it over the tabs or a
+        // Drop whatever is under Pair (a deep link pushes it over home or a
         // conversation), so swipe-back cannot return to it.
         if (router.canDismiss()) router.dismissAll();
-        router.replace("/(tabs)");
+        router.replace("/home");
       } catch (e) {
         haptic.error();
         setError({
@@ -95,7 +95,7 @@ export default function Pair() {
     const change = tailnetChange(pending, current.payload.tailnet);
     const body = same
       ? `This phone is paired with ${current.label} already. Pairing again refreshes its agent list.`
-      : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet and its inbox.`;
+      : `This phone is paired with ${current.label}. Pairing with ${pending.label} forgets that fleet.`;
     Alert.alert(
       change ? "Switch tailnet?" : "Replace the current pairing?",
       change

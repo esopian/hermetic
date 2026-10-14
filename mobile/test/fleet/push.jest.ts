@@ -1,7 +1,7 @@
 import type { MobilePushDevice } from "@hermetic/core/schema";
 import { MobilePushDevice as MobilePushDeviceSchema } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
-import { pushLine } from "../../app/(tabs)/settings.tsx";
+import { pushLine } from "../../app/settings.tsx";
 import type { PushBox, PushBoxResult } from "../../src/gateway/push-registry.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
 import {

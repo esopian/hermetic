@@ -12,7 +12,13 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
 - The phone talks to the fleet directly, with no laptop bridge: `src/gateway/` is the transport over
   `@hermetic/core/chat-client` (the same Hermes adapter the desktop uses), `src/fleet/` holds the
   paired fleet and `FleetProvider.tsx`, the `GET /fleet` and push-registration calls to hermeticd,
-  `src/fixture/` is fixture mode, and `src/inbox/store.ts` is the phone-local inbox.
+  `src/fixture/` is fixture mode, and `src/inbox/store.ts` is the phone-local inbox store (unread,
+  failure and alert events; it has no screen).
+- Screens (`mobile/README.md`, "Screens"): one home with no tab bar and no inbox screen (gear →
+  Settings, search → the Search screen, `+` → the New chat sheet, then the primary bot as a hero
+  and the other listened bots as a flat list carrying their unread and needs-you marks), and the
+  conversation with a slim bar (back, avatar and name, one overflow menu). Every icon button goes
+  through `src/ui/IconButton.tsx`, which carries the accessibility label and the 44pt target.
 - `src/gateway/` stays free of `react`, `react-native` and `expo-*` imports, with every effect
   injected, so the root `tests/mobile-gateway-e2e.test.ts` can drive it under bun against a scripted
   Hermes-wire server. Runtime globals Hermes may lack (`AbortSignal.timeout`, `AbortSignal.any`,
@@ -49,7 +55,7 @@ Re-probe on foreground and after a failed request.
 
 ## Admin the phone keeps
 
-Agent list with status, per-agent detail (status, version, host, health from `/fleet` and
+All of it sits in Settings, behind the home's gear. Agent list with status, per-agent detail (status, version, host, health from `/fleet` and
 `/healthz`), the listening toggle (phone-local), noVNC, Tailscale status, push on and off, sign out.
 Nothing else: no fleet switching, volumes, runs, create or destroy, and no laptop inbox. Do not add
 a path that gives the phone an AWS credential or a secret.

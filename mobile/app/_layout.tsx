@@ -77,11 +77,23 @@ function Shell() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
         {/* The title is what VoiceOver reads on the next screen's back button. */}
-        <Stack.Screen name="(tabs)" options={{ headerShown: false, title: "Hermetic" }} />
+        <Stack.Screen name="home" options={{ headerShown: false, title: "Hermetic" }} />
+        <Stack.Screen name="settings" options={{ headerShown: false, title: "Settings" }} />
+        <Stack.Screen name="search" options={{ headerShown: false, animation: "fade" }} />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
         <Stack.Screen name="agent/[name]" options={{ title: "Agent" }} />
         <Stack.Screen
           name="listening"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.6, 1],
+            sheetGrabberVisible: true,
+            contentStyle: { backgroundColor: t.c.bg },
+          }}
+        />
+        <Stack.Screen
+          name="new-chat"
           options={{
             headerShown: false,
             presentation: "formSheet",

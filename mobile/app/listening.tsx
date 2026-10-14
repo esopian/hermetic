@@ -1,5 +1,5 @@
 /**
- * The instance picker (a sheet over Bots and Settings): every agent of the
+ * The instance picker (a sheet over home and Settings): every agent of the
  * paired fleet (the pairing link's, merged with `GET /fleet`) with its status,
  * and a switch per row that listens or stops listening. The choice is this
  * phone's own (`FleetStore.setListening`): only listened instances show bots,
@@ -84,8 +84,8 @@ export default function Listening() {
               </Text>
             ) : null}
             <Text variant="bodySmall" tone="fg3">
-              Listened instances show their bots on the Bots tab, raise alerts, and push to this phone.
-              The choice is kept on this phone only.
+              Listened instances show their bots on home, raise alerts, and push to this phone. The
+              choice is kept on this phone only.
             </Text>
           </View>
         ) : null

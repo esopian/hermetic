@@ -5,10 +5,13 @@
  * is wrong, the composer, the session switcher and the subagent sheet. What
  * the store does not cover — a new thread, compact, an answer into another
  * session, subagent control — goes to the gateway directly (`client.gateway`).
+ *
+ * `?fresh=1` (the home's New chat sheet) opens a new, separate session once,
+ * in place of the Bot Chat, and replaces this route with that session's.
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Alert, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -18,8 +21,10 @@ import {
   ThreadBand,
   TurnErrorBand,
 } from "../../../src/chat/Bands.tsx";
+import { ChatHeader, conversationMenu } from "../../../src/chat/ChatHeader.tsx";
 import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx";
 import { Composer } from "../../../src/chat/Composer.tsx";
+import { isFresh } from "../../../src/chat/new-chat.ts";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
 import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentSheet.tsx";
 import { Transcript, type TranscriptItem, transcriptItems } from "../../../src/chat/Transcript.tsx";
@@ -60,7 +65,12 @@ const chatPath = (instance: string, bot: string, session: string | null) =>
 export default function Conversation() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ instance: string; bot: string; session?: string }>();
+  const params = useLocalSearchParams<{
+    instance: string;
+    bot: string;
+    session?: string;
+    fresh?: string;
+  }>();
   const { client, focusConversation } = useFleetContext();
   const fleetState = useFleetState();
   const agents = useFleetAgents();
@@ -81,13 +91,15 @@ export default function Conversation() {
   const [refreshing, setRefreshing] = useState(false);
   const fleetId = fleetState.link?.payload.fleet_id ?? "";
   const agent = agents.find((a) => a.name === target.instance) ?? null;
+  // A new session still being opened: the Bot Chat is neither read nor watched meanwhile.
+  const [freshPending, setFreshPending] = useState(() => isFresh(params.fresh) && !params.session);
 
   // Open: read what is missing and watch. Leave: stop watching, park the queue.
   useEffect(() => {
-    if (!client) return;
+    if (!client || freshPending) return;
     client.chat.open(target);
     return () => client.chat.leave(target);
-  }, [client, target]);
+  }, [client, target, freshPending]);
 
   // Focused: this is the watched thread (no banners for it), and its unread clears.
   useFocusEffect(
@@ -138,7 +150,10 @@ export default function Conversation() {
     missing: view?.history === "failed" && view.historyCode === "NOT_FOUND",
   });
   const missing = state === "missing";
-  const composer = composerState(state);
+  // While a new session opens, nothing typed may land in the Bot Chat.
+  const composer = freshPending
+    ? { enabled: false, placeholder: "Opening a new session…" }
+    : composerState(state);
   const avatarStatus = AVATAR_STATUS[state];
 
   // Stable props for the memoised transcript: a streaming turn re-renders this
@@ -233,6 +248,20 @@ export default function Conversation() {
     },
     [client, target],
   );
+
+  // `?fresh=1`: open the new session once. Success replaces this route; a
+  // failure says so, drops the param, and leaves the Bot Chat open here.
+  const freshStarted = useRef(false);
+  useEffect(() => {
+    if (!client || !freshPending || freshStarted.current) return;
+    freshStarted.current = true;
+    openNewSession().catch((e: unknown) => {
+      haptic.error();
+      setFreshPending(false);
+      router.setParams({ fresh: undefined });
+      Alert.alert("No new session", e instanceof Error ? e.message : String(e));
+    });
+  }, [client, freshPending, openNewSession]);
 
   const scope = useMemo<ChatScopeValue>(
     () => ({
@@ -329,79 +358,47 @@ export default function Conversation() {
     [client, target, openQuestion, respond, live?.session],
   );
 
-  // The header depends on the turn's activity, not on the whole view: a new
-  // `headerTitle` resets the screen's options, and the view changes per delta.
-  const headerActivity = view?.activity ?? "idle";
-  const headerTitle = useCallback(
-    () => (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${botTitle ?? target.bot}, ${sessionLabel(session)}. Switch session`}
-        onPress={() => {
-          haptic.select();
-          setSessionsOpen(true);
-        }}
-        style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, maxWidth: 240 }}
-      >
-        <Avatar
-          fleet_id={fleetId}
-          instance={target.instance}
-          bot={target.bot}
-          size={28}
-          status={avatarStatus}
-          activity={headerActivity}
-        />
-        <View style={{ flexShrink: 1 }}>
-          <Text weight={800} variant="bodySmall" numberOfLines={1}>
-            {botTitle ?? target.bot}
-          </Text>
-          <Text mono variant="caption" tone={onCanonical ? "fg3" : "acc"} numberOfLines={1}>
-            {`${target.instance} · ${onCanonical ? "Bot Chat" : sessionLabel(session)} ▾`}
-          </Text>
-        </View>
-      </Pressable>
-    ),
-    [t, fleetId, target, botTitle, session, onCanonical, avatarStatus, headerActivity],
+  const title = botTitle ?? target.bot;
+  const onBack = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  }, []);
+  const onSessions = useCallback(() => setSessionsOpen(true), []);
+  const onMore = useCallback(
+    () =>
+      conversationMenu(title, {
+        sessions: () => setSessionsOpen(true),
+        browser: () => router.push(`/agent/${encodeURIComponent(target.instance)}`),
+        markRead: () => {
+          if (!client) return;
+          haptic.success();
+          client.roster.markSeen(target.instance, target.bot);
+          client.inbox.markThreadRead(target.instance, target.bot);
+        },
+      }),
+    [title, client, target],
   );
 
-  // One Stop, in the composer (iMessage-style). The header keeps only the
-  // browser button; the avatar's activity ring and the composer's footer say a
-  // turn is running.
-  const headerRight = useCallback(
-    () => (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Open agent"
-        onPress={() => router.push(`/agent/${encodeURIComponent(target.instance)}`)}
-        style={{
-          minWidth: t.touch.min,
-          minHeight: t.touch.min,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Text mono weight={700}>
-          ◫
-        </Text>
-      </Pressable>
-    ),
-    [t, target],
-  );
-
-  const loading = !view || (view.history === "loading" && messages.length === 0 && !live);
+  const loading =
+    freshPending || !view || (view.history === "loading" && messages.length === 0 && !live);
 
   return (
     <ChatScope.Provider value={scope}>
-      {/* A hairline under the opaque header: the transcript scrolls up to it, not under it. */}
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: t.c.bg,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: t.c.line2,
-        }}
-      >
-        <Stack.Screen options={{ headerTitle, headerRight, title: botTitle ?? target.bot }} />
+      <View style={{ flex: 1, backgroundColor: t.c.bg }}>
+        {/* The title is what VoiceOver reads on a pushed screen's back button. */}
+        <Stack.Screen options={{ headerShown: false, title }} />
+        <ChatHeader
+          fleetId={fleetId}
+          instance={target.instance}
+          bot={target.bot}
+          title={title}
+          session={freshPending ? "New session" : onCanonical ? null : sessionLabel(session)}
+          status={avatarStatus}
+          activity={view?.activity ?? "idle"}
+          onBack={onBack}
+          onSessions={onSessions}
+          onMore={onMore}
+        />
         <ThreadBand
           state={state}
           instance={target.instance}
@@ -410,7 +407,7 @@ export default function Conversation() {
           reconnectAttempt={view?.reconnectAttempt ?? 0}
         />
         {/* The watch on a missing bot only retries; the thread band already says why. */}
-        {view && !missing ? (
+        {view && !missing && !freshPending ? (
           <ObservationBand
             state={view.observe}
             error={view.observeError}

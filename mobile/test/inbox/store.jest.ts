@@ -1,5 +1,4 @@
 import type { MobilePushData } from "@hermetic/core/schema";
-import { groupEntries, groupRow, groupUnread } from "../../src/client/inbox-logic.ts";
 import { memoryFile } from "../../src/fleet/store.ts";
 import {
   alertFor,
@@ -166,20 +165,6 @@ describe("alertFor", () => {
     expect(
       alertFor(event, inbox, "background", { instance: "atlas", bot: "scribe", focused: true }),
     ).toBe("local");
-  });
-});
-
-describe("grouping", () => {
-  test("consecutive entries about one conversation fold; a card is unread if any member is", () => {
-    const rows = [
-      inboxEntry({ id: "1", read_at: NOW }),
-      inboxEntry({ id: "2" }),
-      inboxEntry({ id: "3", bot: "other" }),
-    ];
-    const groups = groupEntries(rows);
-    expect(groups.map((g) => g.count)).toEqual([2, 1]);
-    expect(groupUnread(groups[0]!)).toBe(true);
-    expect(groupRow(groups[0]!).read_at).toBeNull();
   });
 });
 

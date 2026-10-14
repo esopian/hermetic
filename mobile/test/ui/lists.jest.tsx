@@ -1,131 +1,67 @@
 import { fireEvent, screen } from "@testing-library/react-native";
-import { BotRow } from "../../src/bots/BotRow.tsx";
-import { FilterChips } from "../../src/bots/BotsList.tsx";
-import {
-  groupCondition,
-  groupEntries,
-  groupRow,
-  groupUnread,
-  inQuietHours,
-  rowDestination,
-  unackedIds,
-} from "../../src/client/inbox-logic.ts";
-import { botsEmpty, previewLine, rosterRows, rowTime } from "../../src/client/roster-rows.ts";
-import { rosterLayout } from "../../src/client/roster-store.ts";
-import { InboxRow } from "../../src/inbox/InboxRow.tsx";
+import { botMenuItems } from "../../src/bots/botMenu.ts";
+import { HomeBotRow } from "../../src/bots/HomeBotRow.tsx";
+import { HomeHero } from "../../src/bots/HomeHero.tsx";
+import { inQuietHours } from "../../src/client/inbox-logic.ts";
+import { previewLine } from "../../src/client/roster-rows.ts";
 import { palettes } from "../../src/theme/tokens.ts";
-import { bot, inboxEntry, swarm } from "../helpers/fixtures.ts";
+import { bot } from "../helpers/fixtures.ts";
 import { NOW, renderUi } from "../helpers/render.tsx";
 
-describe("bots list rows", () => {
-  const swarms = [
-    swarm("atlas", [
-      bot({ name: "scribe", unread: 2, last_message_at: "2026-10-13T11:00:00.000Z" }),
-      bot({ name: "pilot", needs_action: true }),
-      bot({ name: "quiet" }),
-    ]),
-    swarm("borealis", [bot({ name: "keeper", unread: 1 })]),
-    swarm("cinder", [], { reachable: false, unreachable_reason: "stopped" }),
-  ];
+const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 
-  test("pinned block first, then buckets needs-first; an emptied bucket drops, an unreachable one sinks", () => {
-    const layout = rosterLayout(swarms, { pinned: ["borealis/keeper"] });
-    const rows = rosterRows(layout);
-    expect(rows.map((r) => r.key)).toEqual([
-      "h:pinned",
-      "p:borealis/keeper",
-      "h:atlas",
-      "b:atlas/pilot",
-      "b:atlas/scribe",
-      "b:atlas/quiet",
-      "h:cinder",
-      "u:cinder",
-      "footer",
-    ]);
-  });
-
-  test("badges: ! for needs you, the count when unread, the inbox count when larger", () => {
-    const rows = rosterRows(rosterLayout(swarms), (i, b) => (i === "atlas" && b === "scribe" ? 5 : 0));
-    const badge = (key: string) => rows.find((r) => r.key === key && r.kind === "bot");
-    expect(badge("b:atlas/pilot")).toMatchObject({ badge: "!" });
-    expect(badge("b:atlas/scribe")).toMatchObject({ badge: "5" });
-    expect(badge("b:atlas/quiet")).toMatchObject({ badge: null });
-  });
-
-  test("a folded bucket hides its bots and keeps its signal", () => {
-    const rows = rosterRows(rosterLayout(swarms, { folded: ["atlas"] }));
-    expect(rows.some((r) => r.key === "b:atlas/scribe")).toBe(false);
-    expect(rows.find((r) => r.key === "h:atlas")).toMatchObject({ folded: true, badge: "!" });
-  });
-
-  test("the footer counts instances, bots and who needs you", () => {
-    const rows = rosterRows(rosterLayout(swarms));
-    expect(rows[rows.length - 1]).toMatchObject({
-      kind: "footer",
-      roster: "3 instances · 4 bots",
-      attention: "1 needs you",
-    });
-  });
-
-  test("preview: the operator's own last word reads 'You:'", () => {
+describe("previewLine", () => {
+  test("the operator's own last word reads 'You:'", () => {
     expect(previewLine(bot({ preview: "ship it", preview_role: "user" }))).toBe("You: ship it");
     expect(previewLine(bot({ preview: "done\nnext", preview_role: "bot" }))).toBe("done next");
     expect(previewLine(bot({}))).toBe("No messages yet");
   });
 
-  test("no last message: 'No messages yet' and no time; a last message keeps its time", () => {
+  test("a last message with nothing to quote falls back to description, then name", () => {
     const empty = bot({ name: "fresh" });
     expect(previewLine(empty)).toBe("No messages yet");
-    expect(rowTime(empty, NOW)).toBe("");
-    // A watermark with nothing to quote: there *are* messages, so the row says
-    // what the desktop's bot rail says (`preview || description || name`).
-    const quoted = bot({
-      name: "scribe",
-      title: "Digest writer",
-      last_message_at: new Date(NOW - 5 * 60_000).toISOString(),
-    });
+    const quoted = bot({ name: "scribe", title: "Digest writer", last_message_at: minutesAgo(5) });
     expect(previewLine(quoted)).toBe("scribe");
-    expect(rowTime(quoted, NOW)).toBe("5m");
     expect(previewLine({ ...quoted, description: "Writes the digest." })).toBe("Writes the digest.");
     expect(previewLine({ ...empty, description: "Writes the digest." })).toBe("Writes the digest.");
   });
 
   test("the name fallback is dropped when the row already shows the name", () => {
-    const at = new Date(NOW - 5 * 60_000).toISOString();
-    // Untitled: the row's title is the name.
+    const at = minutesAgo(5);
     expect(previewLine(bot({ name: "scribe", title: "", last_message_at: at }))).toBe("");
-    // A default bot named `default` under its instance's title: the tag says it.
     expect(
       previewLine(bot({ name: "default", title: "ember", is_default: true, last_message_at: at })),
     ).toBe("");
-    // A title that differs from the name only in case shows the name too.
     expect(previewLine(bot({ name: "magpie", title: "Magpie", last_message_at: at }))).toBe("");
-    // A default bot with its own name still names itself.
     expect(
       previewLine(bot({ name: "ops", title: "ember", is_default: true, last_message_at: at })),
     ).toBe("ops");
   });
+});
 
-  test("BotRow: a bot with no messages shows no time", async () => {
-    await renderUi(
-      <BotRow
-        bot={bot({ name: "fresh", title: "Fresh" })}
-        fleetId="fxtr0001"
-        pinned={false}
-        badge={null}
-        reachable
-        now={NOW}
-        onPress={jest.fn()}
-        onLongPress={jest.fn()}
-      />,
-    );
+describe("HomeBotRow", () => {
+  const row = (over: Partial<Parameters<typeof HomeBotRow>[0]> = {}) => (
+    <HomeBotRow
+      bot={bot({ name: "scribe", title: "Scribe" })}
+      fleetId="fxtr0001"
+      now={NOW}
+      badge={null}
+      suffix={null}
+      reachable
+      onPress={jest.fn()}
+      {...over}
+    />
+  );
+
+  test("a bot with no messages shows no time and no marker", async () => {
+    await renderUi(row());
     expect(screen.getByText("No messages yet")).toBeTruthy();
-    expect(
-      screen.queryByText(/^(now|\d+m|\d\d:\d\d|Mon|Tue|Wed|Thu|Fri|Sat|Sun|[A-Z][a-z]{2} \d+)$/),
-    ).toBeNull();
+    expect(screen.queryByTestId("row-unread")).toBeNull();
+    expect(screen.queryByTestId("row-needs")).toBeNull();
+    expect(screen.queryByTestId("row-failed")).toBeNull();
   });
 
-  test("BotRow: title, preview, time, badge; press and long-press", async () => {
+  test("unread: an accent dot, the time, the preview; press and long-press", async () => {
     const onPress = jest.fn();
     const onLongPress = jest.fn();
     const b = bot({
@@ -133,163 +69,93 @@ describe("bots list rows", () => {
       title: "Scribe",
       unread: 3,
       preview: "the draft is ready",
-      last_message_at: new Date(NOW - 5 * 60_000).toISOString(),
+      last_message_at: minutesAgo(5),
     });
-    await renderUi(
-      <BotRow
-        bot={b}
-        fleetId="fxtr0001"
-        pinned
-        badge="3"
-        reachable
-        now={NOW}
-        onPress={onPress}
-        onLongPress={onLongPress}
-      />,
-    );
+    await renderUi(row({ bot: b, badge: "3", onPress, onLongPress }));
     expect(screen.getByText("the draft is ready")).toBeTruthy();
-    expect(screen.getByText("5m")).toBeTruthy();
-    expect(screen.getByLabelText("3 unread")).toBeTruthy();
-    const row = screen.getByLabelText("Scribe on atlas, 3 unread");
-    await fireEvent.press(row);
-    expect(onPress).toHaveBeenCalledWith(b);
-    await fireEvent(row, "longPress");
-    expect(onLongPress).toHaveBeenCalledWith(b, true);
+    expect(screen.getByText(/^\d{1,2}:\d{2} [AP]M$/)).toBeTruthy();
+    const dot = screen.getByTestId("row-unread").props.style.backgroundColor;
+    expect([palettes.dark.acc, palettes.light.acc]).toContain(dot);
+    const pressable = screen.getByLabelText("Scribe, 3 unread");
+    await fireEvent.press(pressable);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    await fireEvent(pressable, "longPress");
+    expect(onLongPress).toHaveBeenCalledTimes(1);
   });
 
-  test("filter chips", async () => {
-    const onChange = jest.fn();
-    await renderUi(<FilterChips value="all" needs={2} onChange={onChange} />);
-    expect(screen.getByRole("tab", { selected: true })).toBeTruthy();
-    await fireEvent.press(screen.getByText("Needs you"));
-    expect(onChange).toHaveBeenCalledWith("needs");
-    expect(screen.getByLabelText("needs you")).toBeTruthy();
+  test("needs you: the gold pill instead of the dot; failed: the red mark; suffix", async () => {
+    await renderUi(row({ badge: "!", failed: true, suffix: "corvid" }));
+    expect(screen.getByTestId("row-needs")).toBeTruthy();
+    expect(screen.queryByTestId("row-unread")).toBeNull();
+    expect(screen.getByTestId("row-failed")).toBeTruthy();
+    expect(screen.getByText(" · corvid")).toBeTruthy();
+    expect(screen.getByLabelText("Scribe on corvid, needs you, last turn failed")).toBeTruthy();
   });
-});
 
-describe("bots list, nothing to show", () => {
-  const base = { loading: false, error: null, banded: false, searching: false };
-
-  test("a socket band covers a read that failed or never finished: one message, not two", () => {
-    expect(botsEmpty({ ...base, banded: true, error: "unknown or revoked device token" })).toBe(
-      "covered",
-    );
-    expect(botsEmpty({ ...base, banded: true, loading: true })).toBe("covered");
-    expect(botsEmpty({ ...base, error: "unknown or revoked device token" })).toBe("error");
-    expect(botsEmpty({ ...base, loading: true })).toBe("loading");
-    // With the band up but nothing failed, an empty roster is still worth saying.
-    expect(botsEmpty({ ...base, banded: true })).toBe("empty");
-    expect(botsEmpty({ ...base, searching: true })).toBe("nomatch");
+  test("the operator's last word drops the You: prefix for the sent glyph", async () => {
+    await renderUi(row({ bot: bot({ preview: "ship it", preview_role: "user" }) }));
+    expect(screen.getByText("ship it")).toBeTruthy();
+    expect(screen.queryByText(/^You:/)).toBeNull();
   });
 });
 
-describe("inbox", () => {
-  const entries = [
-    inboxEntry({ id: "n4", at: "2026-10-13T11:04:00.000Z" }),
-    inboxEntry({ id: "n3", at: "2026-10-13T11:03:00.000Z", read_at: "x" }),
-    inboxEntry({
-      id: "n2",
-      at: "2026-10-13T11:02:00.000Z",
-      kind: "turn.error",
-      bot: "pilot",
-      title: "pilot · atlas",
-      body: "RATE_LIMITED",
-    }),
-    inboxEntry({ id: "n1", at: "2026-10-13T11:01:00.000Z" }),
-  ];
-
-  test("consecutive entries about one conversation and kind fold; another breaks the run", () => {
-    const groups = groupEntries(entries);
-    expect(groups.map((g) => g.count)).toEqual([2, 1, 1]);
-    expect(groups[0]?.latest.id).toBe("n4");
-    expect(groups[0]?.key).toBe("turn.done:atlas/scribe@n3");
-  });
-
-  test("a folded card is unread if any member is", () => {
-    const [first] = groupEntries([
-      inboxEntry({ id: "a", read_at: "x", at: "2026-10-13T11:05:00.000Z" }),
-      inboxEntry({ id: "b", at: "2026-10-13T11:04:00.000Z" }),
-    ]);
-    if (!first) throw new Error("no group");
-    expect(groupRow(first).read_at).toBeNull();
-    expect(groupUnread(first)).toBe(true);
-    expect(unackedIds(first.rows)).toEqual(["b"]);
-  });
-
-  test("InboxRow: unread dot, needs-you tone, the folded count; tap opens", async () => {
-    const onOpen = jest.fn();
-    const group = groupEntries([
-      inboxEntry({
-        id: "x2",
-        kind: "needs_action",
-        body: "Approval needed: rm -rf build",
-        at: "2026-10-13T11:59:00.000Z",
-      }),
-      inboxEntry({ id: "x1", kind: "needs_action", at: "2026-10-13T11:58:00.000Z" }),
-    ])[0];
-    if (!group) throw new Error("no group");
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={onOpen} onAck={jest.fn()} />);
-    expect(screen.getByText("NEEDS YOU")).toBeTruthy();
-    expect(screen.getByText("2 events")).toBeTruthy();
-    expect(screen.getByText("Approval needed: rm -rf build")).toBeTruthy();
-    expect(screen.getByLabelText("unread")).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Needs you: scribe · atlas"));
-    expect(onOpen).toHaveBeenCalledWith(group);
-  });
-
-  test("InboxRow: a read needs-you card still says NEEDS YOU, but the unread marker is not gold", async () => {
-    const group = groupEntries([
-      inboxEntry({ id: "r2", kind: "needs_action", at: "2026-10-13T11:59:00.000Z" }),
-      inboxEntry({
-        id: "r1",
-        kind: "needs_action",
-        at: "2026-10-13T11:58:00.000Z",
-        read_at: "2026-10-13T11:58:30.000Z",
-      }),
-    ])[0];
-    if (!group) throw new Error("no group");
-    expect(groupCondition(group)).toEqual({ needs: true, needsUnread: true });
-    const read = groupEntries([
-      inboxEntry({ id: "d2", at: "2026-10-13T11:59:00.000Z" }),
-      inboxEntry({ id: "d1", kind: "needs_action", at: "2026-10-13T11:58:00.000Z", read_at: "x" }),
-    ]);
-    // Different kinds never fold: the done row and the read needs-you row are two cards.
-    expect(read).toHaveLength(2);
-    expect(groupCondition(read[1] as NonNullable<(typeof read)[1]>)).toEqual({
-      needs: true,
-      needsUnread: false,
-    });
+describe("HomeHero", () => {
+  test("unread and needs-you badges sit on the avatar; a down box says so", async () => {
+    const onPress = jest.fn();
     await renderUi(
-      <InboxRow
-        group={read[0] as NonNullable<(typeof read)[0]>}
-        now={NOW}
-        onOpen={jest.fn()}
-        onAck={jest.fn()}
+      <HomeHero
+        bot={bot({ name: "ops", title: "Ops" })}
+        fleetId="fxtr0001"
+        badge="2"
+        suffix={null}
+        reachable
+        status={null}
+        onPress={onPress}
       />,
     );
-    const marker = screen.getByLabelText("unread").props.style.backgroundColor;
-    expect([palettes.dark.acc, palettes.light.acc]).toContain(marker);
-    expect([palettes.dark.warn, palettes.light.warn]).not.toContain(marker);
-  });
+    expect(screen.getByTestId("hero-unread")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Primary bot: Ops, 2 unread"));
+    expect(onPress).toHaveBeenCalledTimes(1);
 
-  test("InboxRow: a failed turn says FAILED and names the agent", async () => {
-    const group = groupEntries([inboxEntry({ kind: "turn.error", body: "RATE_LIMITED" })])[0];
-    if (!group) throw new Error("no group");
-    await renderUi(<InboxRow group={group} now={NOW} onOpen={jest.fn()} onAck={jest.fn()} />);
-    expect(screen.getByText("FAILED")).toBeTruthy();
-    expect(screen.getByText("atlas")).toBeTruthy();
+    await renderUi(
+      <HomeHero
+        bot={bot({ name: "ops", title: "Ops" })}
+        fleetId="fxtr0001"
+        badge="!"
+        suffix={null}
+        reachable={false}
+        status="corvid is stopped"
+        onPress={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId("hero-needs")).toBeTruthy();
+    expect(screen.queryByTestId("hero-unread")).toBeNull();
+    expect(screen.getByText("corvid is stopped")).toBeTruthy();
   });
+});
 
-  test("tap goes to the conversation and its session", () => {
-    expect(rowDestination(inboxEntry({ session: "s-7" }))).toEqual({
-      kind: "chat",
-      instance: "atlas",
-      bot: "scribe",
-      session: "s-7",
-    });
+describe("botMenuItems", () => {
+  test("make primary, pin or unpin, the browser, and mark read only when there is something", () => {
+    expect(botMenuItems({ primary: false, pinned: false, unread: true }).map((i) => i.label)).toEqual([
+      "Make primary",
+      "Pin",
+      "Open agent browser",
+      "Mark read",
+    ]);
+    expect(botMenuItems({ primary: false, pinned: true, unread: false }).map((i) => i.label)).toEqual([
+      "Make primary",
+      "Unpin",
+      "Open agent browser",
+    ]);
+    expect(botMenuItems({ primary: true, pinned: false, unread: true }).map((i) => i.run)).toEqual([
+      "openBrowser",
+      "markRead",
+    ]);
   });
+});
 
-  test("quiet hours cross midnight and equal ends are off", () => {
+describe("quiet hours", () => {
+  test("they cross midnight, and equal ends are off", () => {
     const at = (h: number, m = 0) => new Date(2026, 9, 13, h, m);
     const q = { enabled: true, start: "22:00", end: "07:00" };
     expect(inQuietHours(at(23), q)).toBe(true);

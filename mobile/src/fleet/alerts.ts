@@ -67,9 +67,9 @@ export function pushDataOf(content: NoteContent | null | undefined): MobilePushD
   return parsed.success ? parsed.data : null;
 }
 
-/** Where a tapped notification goes: its conversation (and session), else the inbox. */
+/** Where a tapped notification goes: its conversation (and session), else home. */
 export function routeFor(data: Pick<MobilePushData, "instance" | "bot" | "session"> | null): string {
-  if (!data) return "/inbox";
+  if (!data) return "/home";
   const session = data.session ? `?session=${encodeURIComponent(data.session)}` : "";
   return `/chat/${encodeURIComponent(data.instance)}/${encodeURIComponent(data.bot)}${session}`;
 }

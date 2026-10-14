@@ -38,12 +38,12 @@ describe("pushDataOf", () => {
 });
 
 describe("routeFor", () => {
-  test("a push opens its conversation and session; anything else the inbox", () => {
+  test("a push opens its conversation and session; anything else home", () => {
     expect(routeFor(pushDataOf(push()))).toBe("/chat/atlas/scribe?session=s-1");
     expect(routeFor({ instance: "atlas", bot: "scribe", session: "a/b" })).toBe(
       "/chat/atlas/scribe?session=a%2Fb",
     );
-    expect(routeFor(null)).toBe("/inbox");
+    expect(routeFor(null)).toBe("/home");
   });
 });
 

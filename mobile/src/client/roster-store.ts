@@ -1,5 +1,5 @@
 /**
- * The Bots list: swarms grouped into a pinned block and per-instance buckets,
+ * The roster: swarms grouped into a pinned block and per-instance buckets,
  * filtered and ordered the way the desktop rail orders them.
  *
  * The ordering and badge rules are mirrors of `packages/ui/src/chat/chat-logic.ts`
@@ -271,9 +271,16 @@ export function withBumps(
 export interface RosterPrefs {
   pinned: string[];
   folded: string[];
+  /**
+   * The operator's primary bot (a `botKey`), drawn as home's hero. `null` is
+   * "not chosen": home then falls back to a default (`resolvePrimary`).
+   */
+  primary: string | null;
 }
 
-/** Where pins and folds live between launches (per fleet). */
+export const EMPTY_ROSTER_PREFS: RosterPrefs = { pinned: [], folded: [], primary: null };
+
+/** Where pins, folds and the primary bot live between launches (per fleet). */
 export interface RosterPrefsStorage {
   load(fleetId: string): Promise<RosterPrefs | null>;
   save(fleetId: string, prefs: RosterPrefs): Promise<void>;
@@ -306,7 +313,7 @@ export class RosterStore {
     readAt: null,
     filter: "all",
     query: "",
-    prefs: { pinned: [], folded: [] },
+    prefs: EMPTY_ROSTER_PREFS,
   };
   private readonly listeners = new Set<() => void>();
   private gen = 0;
@@ -346,7 +353,9 @@ export class RosterStore {
 
   async setFleet(fleetId: string): Promise<void> {
     this.fleetId = fleetId;
-    const prefs = (await this.storage?.load(fleetId)) ?? { pinned: [], folded: [] };
+    const stored = await this.storage?.load(fleetId);
+    // An older save has no `primary`: read it as not chosen.
+    const prefs: RosterPrefs = { ...EMPTY_ROSTER_PREFS, ...stored };
     if (this.fleetId === fleetId) this.set({ prefs });
   }
 
@@ -411,6 +420,13 @@ export class RosterStore {
       ? this.state.prefs.pinned.filter((k) => k !== key)
       : [...this.state.prefs.pinned, key];
     this.savePrefs({ ...this.state.prefs, pinned });
+  }
+
+  /** Make a bot home's hero, or (`null`) go back to the default choice. */
+  setPrimary(instance: string, bot: string | null): void {
+    const primary = bot === null ? null : botKey(instance, bot);
+    if (primary === this.state.prefs.primary) return;
+    this.savePrefs({ ...this.state.prefs, primary });
   }
 
   toggleFolded(instance: string): void {

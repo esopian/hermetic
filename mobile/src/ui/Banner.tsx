@@ -1,6 +1,6 @@
 /**
  * Banners: the in-app alert (a slim bar at the top while the app is in front;
- * tap opens, close dismisses) and the Bots screen's Tailscale band.
+ * tap opens, close dismisses) and home's Tailscale strip.
  */
 import { useEffect } from "react";
 import { Linking, Pressable, View } from "react-native";
@@ -9,9 +9,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Alert } from "../client/client.ts";
 import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import { useTheme } from "../theme/theme.tsx";
-import { Button } from "./Button.tsx";
+import { Icon } from "./IconButton.tsx";
 import { Kicker } from "./Kicker.tsx";
-import { StatusSquare } from "./StatusSquare.tsx";
 import { Text } from "./Text.tsx";
 
 export const BANNER_DWELL_MS = 4000;
@@ -98,22 +97,25 @@ export async function openTailscale(
 }
 
 /**
- * The Bots screen's Tailscale band, for the two probe answers worth a word
+ * Home's Tailscale strip, for the two probe answers worth a word
  * (`src/gateway/tailscale.ts`): `off` — no listened box's name resolved — and
- * `unreachable` — names resolve but no box answered. Both offer "Open
- * Tailscale"; `unreachable` also keeps "Retry". The probe is a heuristic, and
- * the copy says "looks".
+ * `unreachable` — names resolve but no box answered. One slim line under the
+ * top bar with quiet text actions: both offer "Open Tailscale", `unreachable`
+ * also keeps "Retry", and the strip can be dismissed (it comes back when the
+ * status changes). The probe is a heuristic, and the hint says "looks".
  */
 export function TailscaleBanner({
   status,
   busy = false,
   onRetry,
   onOpenTailscale = () => void openTailscale(),
+  onDismiss,
 }: {
   status: TailscaleStatus | null;
   busy?: boolean;
   onRetry(): void;
   onOpenTailscale?: () => void;
+  onDismiss?: () => void;
 }) {
   const t = useTheme();
   if (status !== "off" && status !== "unreachable") return null;
@@ -123,36 +125,80 @@ export function TailscaleBanner({
     <View
       testID="band-tailscale"
       accessibilityRole="alert"
+      accessibilityHint={
+        off
+          ? "The fleet's names did not resolve. It looks like Tailscale is not connected on this phone."
+          : "The boxes you listen to did not answer. They may be stopped, or still starting."
+      }
       style={{
         flexDirection: "row",
         alignItems: "center",
         gap: t.space.sm,
-        paddingHorizontal: t.space.lg,
-        paddingVertical: t.space.sm,
+        marginHorizontal: t.space.lg,
+        marginTop: t.space.xs,
+        paddingLeft: t.space.md,
+        minHeight: t.touch.min,
+        borderRadius: t.touch.min / 2,
         backgroundColor: t.c.bg2,
-        borderBottomWidth: 1,
-        borderBottomColor: color,
       }}
     >
-      <StatusSquare size={8} color={color} />
-      <View style={{ flex: 1 }}>
-        <Text variant="bodySmall" weight={700}>
-          {off ? "Tailscale is off or not signed in" : "On the tailnet, but no box answers"}
-        </Text>
-        <Text variant="caption" tone="fg2">
-          {off
-            ? "The fleet's names did not resolve. It looks like Tailscale is not connected on this phone."
-            : "The boxes you listen to did not answer. They may be stopped, or still starting."}
-        </Text>
-      </View>
-      {/* Unreachable keeps Retry (a box may still be starting) and also offers the
-          Tailscale app, since a stalled tunnel looks the same from here. */}
-      <View style={{ gap: t.space.xs }}>
-        {off ? null : (
-          <Button label="Retry" variant="secondary" compact busy={busy} onPress={onRetry} />
-        )}
-        <Button label="Open Tailscale" variant="secondary" compact onPress={onOpenTailscale} />
-      </View>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+      <Text variant="bodySmall" weight={600} numberOfLines={1} style={{ flex: 1 }}>
+        {off ? "Tailscale is off or not signed in" : "On the tailnet, but no box answers"}
+      </Text>
+      {off ? null : <StripAction label="Retry" busyLabel="Retrying" busy={busy} onPress={onRetry} />}
+      <StripAction label="Open Tailscale" onPress={onOpenTailscale} />
+      {onDismiss ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss"
+          onPress={onDismiss}
+          style={{
+            width: t.touch.min,
+            height: t.touch.min,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Icon name="close" size={16} color={t.c.fg3} />
+        </Pressable>
+      ) : (
+        <View style={{ width: t.space.sm }} />
+      )}
     </View>
+  );
+}
+
+/** A text-only action inside the strip: 44pt tall, accent label. */
+function StripAction({
+  label,
+  busyLabel,
+  busy = false,
+  onPress,
+}: {
+  label: string;
+  busyLabel?: string;
+  busy?: boolean;
+  onPress(): void;
+}) {
+  const t = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ busy, disabled: busy }}
+      disabled={busy}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: t.touch.min,
+        paddingHorizontal: t.space.xs,
+        justifyContent: "center",
+        opacity: pressed || busy ? 0.6 : 1,
+      })}
+    >
+      <Text variant="bodySmall" weight={700} tone="acc">
+        {busy && busyLabel ? `${busyLabel}…` : label}
+      </Text>
+    </Pressable>
   );
 }

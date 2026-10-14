@@ -35,6 +35,15 @@ describe("TailscaleBanner", () => {
     expect(onOpenTailscale).toHaveBeenCalledTimes(1);
   });
 
+  test("the strip can be dismissed when the screen offers it", async () => {
+    const onDismiss = jest.fn();
+    await renderUi(<TailscaleBanner status="off" onRetry={jest.fn()} onDismiss={onDismiss} />);
+    await fireEvent.press(screen.getByLabelText("Dismiss"));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await renderUi(<TailscaleBanner status="off" onRetry={jest.fn()} />);
+    expect(screen.queryByLabelText("Dismiss")).toBeNull();
+  });
+
   test("ok, unknown and not-yet-probed draw nothing", async () => {
     for (const status of ["ok", "unknown", null] as const) {
       await renderUi(<TailscaleBanner status={status} onRetry={jest.fn()} />);
