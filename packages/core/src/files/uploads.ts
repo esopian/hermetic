@@ -41,6 +41,8 @@ interface ChunkEntry {
   parts: Uint8Array[];
   closed: boolean;
   touched: number;
+  /** Set by `registerBytes`: bytes this process already held, never a drop. */
+  held?: "bytes" | "secret_text";
 }
 
 interface PathEntry {
@@ -53,6 +55,14 @@ interface PathEntry {
 
 type Entry = ChunkEntry | PathEntry;
 
+/**
+ * Where an upload came from: a webview drop sent in chunks, a path the native
+ * dialog picked, or bytes this process already held (`registerBytes`) — and,
+ * of those, the CLI's `--secret-stdin` text, which answers a text secret
+ * request and nothing else.
+ */
+export type UploadOrigin = "chunks" | "path" | "held" | "secret_text";
+
 export interface UploadRegistry {
   /** Reserve a chunked upload of `size` bytes. */
   open(input: { name: string; size: number }): { upload_id: string };
@@ -60,10 +70,24 @@ export interface UploadRegistry {
   append(upload_id: string, offset: number, bytes: Uint8Array): { received: number };
   /** Finish a chunked upload; the bytes received must be the size it was opened with. */
   close(upload_id: string): { upload_id: string; name: string; size: number };
+  /**
+   * Hold bytes already in this process (the CLI's `--secret-stdin`) under an
+   * upload id, closed and ready to take, so the value travels to core as an id
+   * and never as an input field. The registry keeps its own copy; the caller
+   * should zero its buffer. `secretText` marks the CLI's `--secret-stdin`
+   * text, which `files.put` takes for a text secret request only.
+   */
+  registerBytes(
+    name: string,
+    bytes: Uint8Array,
+    opts?: { secretText?: boolean },
+  ): { upload_id: string; name: string; size: number };
   /** Register a laptop path (the native dialog's pick) without reading it. */
   registerPath(path: string): Promise<{ upload_id: string; name: string; size: number }>;
-  /** Forget an upload; `false` when there was nothing to forget. */
+  /** Forget an upload, zeroing any bytes it held; `false` when there was nothing to forget. */
   discard(upload_id: string): { discarded: boolean };
+  /** Where an upload came from, or `null` for an unknown id. Does not touch it. */
+  origin(upload_id: string): UploadOrigin | null;
   /** The source a stage reads. Refuses an unknown id and an unclosed upload. */
   take(upload_id: string): UploadSource;
   /** The bytes every chunked upload holds right now. */
@@ -101,10 +125,21 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
     return total;
   };
 
+  /**
+   * Remove one entry, zeroing its chunks first: a dropped secret must not
+   * linger in a buffer the garbage collector has yet to reclaim.
+   */
+  const forget = (id: string): boolean => {
+    const entry = entries.get(id);
+    if (entry === undefined) return false;
+    if (entry.kind === "bytes") for (const p of entry.parts) p.fill(0);
+    return entries.delete(id);
+  };
+
   /** Drop everything idle past `idleMs`. Run on every call: there is no timer to leak. */
   const sweep = (): void => {
     const cutoff = now() - limits.idleMs;
-    for (const [id, e] of entries) if (e.touched < cutoff) entries.delete(id);
+    for (const [id, e] of entries) if (e.touched < cutoff) forget(id);
   };
 
   const get = (upload_id: string): Entry => {
@@ -198,6 +233,35 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
       return { upload_id, name: entry.name, size: entry.size };
     },
 
+    registerBytes(name, bytes, opts = {}) {
+      sweep();
+      const clean = cleanName(name);
+      if (bytes.byteLength > limits.uploadBytes) {
+        throw new HermeticError(
+          "FILE_TOO_LARGE",
+          `held input can be at most ${Math.floor(limits.uploadBytes / MiB)} MB`,
+          { size: bytes.byteLength, limit: limits.uploadBytes },
+        );
+      }
+      if (held() + bytes.byteLength > limits.totalBytes) {
+        throw new HermeticError("CONFLICT", "too many uploads are held in memory; try again shortly", {
+          limit: limits.totalBytes,
+        });
+      }
+      const upload_id = `up_${randomUUID()}`;
+      entries.set(upload_id, {
+        kind: "bytes",
+        name: clean,
+        size: bytes.byteLength,
+        received: bytes.byteLength,
+        parts: [bytes.slice()],
+        closed: true,
+        touched: now(),
+        held: opts.secretText === true ? "secret_text" : "bytes",
+      });
+      return { upload_id, name: clean, size: bytes.byteLength };
+    },
+
     async registerPath(path) {
       sweep();
       let size: number;
@@ -218,7 +282,16 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
 
     discard(upload_id) {
       sweep();
-      return { discarded: entries.delete(upload_id) };
+      return { discarded: forget(upload_id) };
+    },
+
+    origin(upload_id) {
+      sweep();
+      const entry = entries.get(upload_id);
+      if (entry === undefined) return null;
+      if (entry.kind === "path") return "path";
+      if (entry.held === "secret_text") return "secret_text";
+      return entry.held === "bytes" ? "held" : "chunks";
     },
 
     take(upload_id) {

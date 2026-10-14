@@ -45,7 +45,11 @@ export interface BoxOptions {
   peer?: Whois;
   /** Long-poll timer; the default resolves at once, so a wait times out immediately. */
   delay?: (ms: number, signal: AbortSignal) => Promise<void>;
-  materialiseSecret?: (slot: string, expectName: string) => Promise<MaterialisedFileSecret>;
+  materialiseSecret?: (
+    slot: string,
+    expectName: string,
+    check?: (content: Uint8Array) => void,
+  ) => Promise<MaterialisedFileSecret>;
   removeSecret?: (name: string) => Promise<void>;
   host?: FakeHost;
   /** How long an upload may go silent before it is cut off, in ms. */

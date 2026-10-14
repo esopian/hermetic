@@ -16,6 +16,7 @@
 import { HermeticError } from "../errors.ts";
 import type { ErrorCode } from "./error-codes.ts";
 import { HERMES_HOME } from "./hermes.ts";
+import { SECRET_KEY_RE } from "./secret-env.ts";
 
 // --- Capability -----------------------------------------------------------
 
@@ -92,6 +93,25 @@ export type FileRequestState = (typeof FILE_REQUEST_STATES)[number];
 /** `secret_text` is the masked KEY=value form (`request_secret`). */
 export const FILE_REQUEST_KINDS = ["file", "secret_text"] as const;
 export type FileRequestKind = (typeof FILE_REQUEST_KINDS)[number];
+
+/** `request_secret`'s starting input mode; the operator may switch either way. */
+export const SECRET_TEXT_INPUTS = ["auto", "single", "multi"] as const;
+export type SecretTextInput = (typeof SECRET_TEXT_INPUTS)[number];
+/** The operator's "Treat as" override, sent with a text-secret submit. */
+export const SECRET_TEXT_AS = ["auto", "raw", "dotenv"] as const;
+export type SecretTextAs = (typeof SECRET_TEXT_AS)[number];
+/** How a text secret was read: one raw value, or KEY=value lines. */
+export const SECRET_TEXT_FORMATS = ["raw", "dotenv"] as const;
+export type SecretTextFormat = (typeof SECRET_TEXT_FORMATS)[number];
+/** A key name a `request_secret` may ask for: an upper-case env name (the parser's own rule). */
+export const SECRET_TEXT_KEY_RE = SECRET_KEY_RE;
+/** At most this many keys (required plus optional) per `request_secret`. */
+export const SECRET_TEXT_MAX_KEYS = 16;
+
+/** The shell line `request_secret` hands the agent: load the file's keys into one command's env. */
+export function secretTextLoad(path: string): string {
+  return `set -a; . ${path}; set +a`;
+}
 
 // --- Limits and TTLs --------------------------------------------------------
 
@@ -413,6 +433,13 @@ export const FILES_NAME_HEADER = "x-hermetic-filename";
  * instead of on the data volume (D6).
  */
 export const FILES_NOT_SECRET_HEADER = "x-hermetic-not-secret";
+/**
+ * On a text-secret fulfil (`PUT /files/requests/:id` for a `secret_text`
+ * slot): the operator's "Treat as" choice, `auto`, `raw` or `dotenv`
+ * (`SECRET_TEXT_AS`). hermeticd parses the body with it, authoritatively.
+ * Absent means `auto`.
+ */
+export const FILES_SECRET_AS_HEADER = "x-hermetic-secret-as";
 
 const HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -674,6 +701,31 @@ export function acceptMatches(accept: readonly string[], name: string, mime: str
 
 // --- Secret slots -----------------------------------------------------------
 
+/**
+ * The name a request is answered under (`files.put`): the last segment of the
+ * agent's `name_hint` (`~/keys/deploy.pem` → `deploy.pem`), sanitized as the
+ * box would, else the dropped file's own (already sanitized) name. The box
+ * re-runs the accept check and the key sniff (D6) against the name it is
+ * sent, and both read the extension, so the hint is used only when it has the
+ * dropped file's extension and passes the accept list itself: what was checked
+ * on the laptop is then what the box checks. A hint with another extension
+ * (`cert` for a dropped `client.p12`, which only its extension marks as key
+ * material), or none the box would take, gives way to the dropped name. The
+ * request card previews the same rule, so what it says is what `put` sends.
+ */
+export function requestFileName(
+  slot: { name_hint?: string | undefined; accept: readonly string[] },
+  dropped: string,
+  mime: string,
+): string {
+  const hint = slot.name_hint?.split(/[/\\]/).pop() ?? "";
+  if (hint === "") return dropped;
+  const clean = sanitizeFileName(hint);
+  if (!clean.ok) return dropped;
+  if (extensionOf(clean.name) !== extensionOf(dropped)) return dropped;
+  return acceptMatches(slot.accept, clean.name, mime) ? clean.name : dropped;
+}
+
 /** A durable file secret's SSM slot under the agent: `file-<slug>`, slug ≤ 48. */
 export const FILE_SECRET_SLOT_RE = /^file-[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 /** A durable text (KEY=value) secret's SSM slot: `env-<slug>`, slug ≤ 48. */
@@ -700,6 +752,41 @@ export function fileSecretSlot(name: string): string {
 export function envSecretSlot(name: string): string {
   return `env-${slotSlug(name)}`;
 }
+
+/** What a key name's tail says about it rather than what it is for; dropped from a derived slug, longest first. */
+const SECRET_TEXT_SLUG_SUFFIXES = [
+  "-api-token",
+  "-api-key",
+  "-access-token",
+  "-access-key",
+  "-secret-key",
+  "-password",
+  "-passwd",
+  "-secret",
+  "-token",
+  "-key",
+] as const;
+
+/**
+ * The stem a `request_secret` is stored under: `<slug>.env` on tmpfs and, when
+ * durable, the `env-<slug>` SSM slot, which `secretSlotFileName` maps back to
+ * the same file. A given `slug` is slugged like a slot name (a trailing `.env`
+ * dropped first); without one, `keys[0]` is lower-cased with `_` as `-` and one
+ * credential suffix dropped, so `GITHUB_TOKEN` → `github`, `OPENAI_API_KEY` →
+ * `openai`, `DATABASE_URL` → `database-url`. A key that is nothing but a
+ * suffix keeps it (`TOKEN` → `token`). Always a valid slot slug.
+ */
+export function secretTextSlug(keys: readonly string[], slug?: string): string {
+  if (slug !== undefined && slug.trim() !== "") return slotSlug(slug.trim().replace(/\.env$/i, ""));
+  const base = slotSlug(keys[0] ?? "");
+  for (const suffix of SECRET_TEXT_SLUG_SUFFIXES) {
+    if (base.length > suffix.length && base.endsWith(suffix)) {
+      return slotSlug(base.slice(0, -suffix.length));
+    }
+  }
+  return base;
+}
+
 export function isFileSecretSlot(slot: string): boolean {
   return FILE_SECRET_SLOT_RE.test(slot);
 }
@@ -710,7 +797,9 @@ export function isEnvSecretSlot(slot: string): boolean {
 /**
  * The file a durable slot materialises to under `FILES_SECRET_DIR`, or `null`
  * for something that is not a slot. An env slot is `<slug>.env`. A file slot is
- * its bare slug: the slug is lossy (`file-github-app-pem` does not say whether
+ * its bare slug. The env mapping is exact and the box holds it to that: an
+ * `env-<slug>` envelope must name `<slug>.env`, which is the file
+ * `request_secret` reports (`secretTextSlug`). A file slot's slug is lossy (`file-github-app-pem` does not say whether
  * the name was `github-app.pem` or `github_app.pem`), so a file slot's original
  * name travels separately — in hermeticd's index and the SSM parameter's
  * description — and is the name the agent is shown.

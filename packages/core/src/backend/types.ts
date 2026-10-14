@@ -17,6 +17,8 @@ export type {
   FilesApi,
   FilesCallOptions,
   FilesContent,
+  FilesFulfilOptions,
+  FilesFulfilUpload,
   FilesProgress,
   FilesStageUpload,
 } from "./files-port.ts";
@@ -350,7 +352,13 @@ export interface StoreApi {
 export interface SecretsApi {
   /** Create the parameter with a placeholder value if it does not exist. Idempotent. */
   ensureSlot(path: string): Promise<void>;
-  put(path: string, value: string): Promise<void>;
+  /**
+   * Write one slot. `overwrite` defaults to true; `false` refuses a slot that
+   * already exists with `CONFLICT` (`details.already_exists`) and writes
+   * nothing, so a caller that checked first cannot lose a race to a writer
+   * that came between its check and its write.
+   */
+  put(path: string, value: string, opts?: { overwrite?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** True when the slot still holds hermetic's placeholder — `secrets verify` (§8.2). */
   isPlaceholder(path: string): Promise<boolean>;

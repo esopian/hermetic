@@ -35,7 +35,7 @@ import { getRequest, listRequests } from "./requests.ts";
 
 const DAY = 24 * 3600;
 
-function isSecret(entry: FileEntry): boolean {
+export function isSecret(entry: FileEntry): boolean {
   return entry.class === "secret" || entry.dir === "drop" || entry.dir === "secret";
 }
 

@@ -31,6 +31,7 @@ import { FailureCard, failureOf } from "./FailureCard.tsx";
 import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
+import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
@@ -231,6 +232,13 @@ export function Message({
       run = null;
       continue;
     }
+    // A file or secret request is a card the operator answers, never a step
+    // folded into "Tools complete": it stands alone and closes the run.
+    if (isRequestTool(block)) {
+      sections.push({ activity: false, blocks: [block] });
+      run = null;
+      continue;
+    }
     if (isActivity(block) && !attention) {
       if (run) run.blocks.push(block);
       else {
@@ -368,6 +376,12 @@ export function Message({
                     pending={pending}
                     instance={instance}
                     fleetId={fleetId}
+                    agent={author?.instance ?? instance}
+                    at={message.at}
+                    untrusted={
+                      isRequestTool(section.blocks[0]) &&
+                      untrustedBefore(blocks, blocks.indexOf(section.blocks[0]))
+                    }
                   />
                 )}
               </RowBoundary>

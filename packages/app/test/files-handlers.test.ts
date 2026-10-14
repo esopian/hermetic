@@ -232,6 +232,27 @@ test("files.pickNative registers each pick and answers upload ids, never a path"
   expect(log.lines.join("\n")).not.toContain(dir);
 });
 
+test("files.pickNative sniffs each pick for key material (D6), answering a boolean only", async () => {
+  const { ctx } = await harness();
+  const dir = mkdtempSync(join(tmpdir(), "hermetic-pick-key-"));
+  const key = join(dir, "deploy");
+  const body =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTUREFIXTURE\n-----END OPENSSH PRIVATE KEY-----\n";
+  writeFileSync(key, body);
+  const png = join(dir, "pic.png");
+  writeFileSync(png, PNG);
+  ctx.native = nativeWith(async () => [key, png]);
+  const answer = (await dispatch(ctx, "files.pickNative", { instance: "atlas" })) as {
+    files: { name: string; looks_like_key: boolean }[];
+  };
+  expect(answer.files.map((f) => [f.name, f.looks_like_key])).toEqual([
+    ["deploy", true],
+    ["pic.png", false],
+  ]);
+  // The page learns a yes or no, never a byte of the head.
+  expect(JSON.stringify(answer)).not.toContain("FIXTUREFIXTURE");
+});
+
 test("files.pickNative answers no files on a cancelled dialog", async () => {
   const { ctx } = await harness();
   ctx.native = nativeWith(async () => []);
@@ -243,4 +264,72 @@ test("files.pickNative is UNSUPPORTED with no desktop head", async () => {
   await expect(dispatch(ctx, "files.pickNative", { instance: "atlas" })).rejects.toMatchObject({
     code: "UNSUPPORTED",
   });
+});
+
+// --- files.put, files.decline, files.request.get ------------------------------
+// The success lanes need an open request slot, which only the fixture backend
+// can open; `tests/files-put-bridge.test.ts` drives those through this same
+// dispatch. Here: what the bridge refuses, and how a late failure travels.
+
+test("files.put refuses a laptop path before anything reads it", async () => {
+  const { ctx, sink, target } = await harness();
+  await expect(
+    dispatch(
+      ctx,
+      "files.put",
+      {
+        instance: "atlas",
+        request_id: "fr_abcdefabcdef",
+        source: { path: "/etc/FIXTURE-secret.pem" },
+        target,
+      },
+      sink,
+    ),
+  ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+});
+
+test("files.put to a request the box does not have ends on an error `done`, logged by code only", async () => {
+  const { ctx, frames, sink, target, log } = await harness();
+  const upload_id = await dropped(ctx, "FIXTURE-private-name.log", new TextEncoder().encode("x\n"));
+  const answer = (await dispatch(
+    ctx,
+    "files.put",
+    {
+      instance: "atlas",
+      request_id: "fr_abcdefabcdef",
+      source: { chunk_upload_id: upload_id },
+      target,
+    },
+    sink,
+  )) as { stream_id: string };
+  expect(answer.stream_id).toBeTruthy();
+  const done = await until(frames, (f) => f.event === "done");
+  expect(done.data).toMatchObject({ type: "error", code: "FILE_NOT_FOUND" });
+  expect(log.lines.join("\n")).toContain("FILE_NOT_FOUND");
+  expect(log.lines.join("\n")).not.toContain("FIXTURE-private-name");
+});
+
+test("files.put validates its input as a refused request, not a stream", async () => {
+  const { ctx, sink, target } = await harness();
+  await expect(
+    dispatch(
+      ctx,
+      "files.put",
+      { instance: "atlas", request_id: "not-a-request", source: { chunk_upload_id: "up_x" }, target },
+      sink,
+    ),
+  ).rejects.toMatchObject({ code: "VALIDATION" });
+});
+
+test("files.decline and files.request.get answer the box's refusal", async () => {
+  const { ctx, target } = await harness();
+  await expect(
+    dispatch(ctx, "files.decline", { instance: "atlas", request_id: "fr_abcdefabcdef", target }),
+  ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+  await expect(
+    dispatch(ctx, "files.request.get", { instance: "atlas", request_id: "fr_abcdefabcdef" }),
+  ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+  await expect(
+    dispatch(ctx, "files.request.get", { instance: "atlas", request_id: "f_abcdefabcdef" }),
+  ).rejects.toMatchObject({ code: "VALIDATION" });
 });

@@ -94,8 +94,8 @@ export async function startFiles(deps: StartFilesDeps): Promise<StartedFiles> {
       name: deps.name,
       hermeticdVersion: deps.hermeticdVersion,
       log,
-      materialiseSecret: (slot, expectName) =>
-        materialiseFileSecret({ host, aws, paramPrefix, log }, slot, expectName),
+      materialiseSecret: (slot, expectName, check) =>
+        materialiseFileSecret({ host, aws, paramPrefix, log }, slot, expectName, check),
       removeSecret: (name) => removeFileSecret(host, name),
     });
   } catch (e) {

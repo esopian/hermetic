@@ -35,6 +35,7 @@ import {
   parseContentDigest,
   sanitizeFileName,
   secretSlotFileName,
+  secretTextSlug,
   shortId,
   sniffMime,
 } from "../src/shared/index.ts";
@@ -471,6 +472,46 @@ describe("secret slots", () => {
     expect(secretSlotFileName("env-github")).toBe("github.env");
     expect(secretSlotFileName("file-github-app-pem")).toBe("github-app-pem");
     expect(secretSlotFileName("provider-key")).toBeNull();
+  });
+});
+
+describe("secretTextSlug", () => {
+  test("derives from the first key, dropping one credential suffix", () => {
+    expect(secretTextSlug(["GITHUB_TOKEN"])).toBe("github");
+    expect(secretTextSlug(["OPENAI_API_KEY", "OTHER"])).toBe("openai");
+    expect(secretTextSlug(["STRIPE_SECRET_KEY"])).toBe("stripe");
+    expect(secretTextSlug(["DB_PASSWORD"])).toBe("db");
+    expect(secretTextSlug(["SLACK_WEBHOOK_SECRET"])).toBe("slack-webhook");
+    expect(secretTextSlug(["DATABASE_URL"])).toBe("database-url");
+    expect(secretTextSlug(["_PRIVATE"])).toBe("private");
+  });
+
+  test("a key that is only a suffix keeps it", () => {
+    expect(secretTextSlug(["TOKEN"])).toBe("token");
+    expect(secretTextSlug(["API_KEY"])).toBe("api");
+    expect(secretTextSlug(["__"])).toBe("secret");
+  });
+
+  test("a given slug wins, slugged like a slot, a trailing .env dropped", () => {
+    expect(secretTextSlug(["GITHUB_TOKEN"], "Prod GitHub")).toBe("prod-github");
+    expect(secretTextSlug(["GITHUB_TOKEN"], "deploy.env")).toBe("deploy");
+    expect(secretTextSlug(["GITHUB_TOKEN"], "../../etc/passwd")).toBe("etc-passwd");
+    expect(secretTextSlug(["GITHUB_TOKEN"], "  ")).toBe("github");
+  });
+
+  test("always an env slot's slug, which maps back to <slug>.env", () => {
+    for (const [keys, slug] of [
+      [["A"], undefined],
+      [["X".repeat(64)], undefined],
+      [["GITHUB_TOKEN"], "é".repeat(100)],
+      [["K"], "a".repeat(300)],
+    ] as const) {
+      const stem = secretTextSlug(keys, slug);
+      const slot = envSecretSlot(stem);
+      expect(ENV_SECRET_SLOT_RE.test(slot)).toBe(true);
+      expect(slot).toBe(`env-${stem}`);
+      expect(secretSlotFileName(slot)).toBe(`${stem}.env`);
+    }
   });
 });
 

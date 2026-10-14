@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { FILES_LIMITS } from "../shared/files.ts";
-import { FileId, FileName, FilesStageResult } from "./files.ts";
+import {
+  FileId,
+  FileName,
+  FileRequestId,
+  FilesFulfilResult,
+  FilesStageResult,
+  SecretTextAsMode,
+} from "./files.ts";
 import { OpEvent } from "./ops.ts";
 import { AgentName } from "./requests.ts";
 
@@ -135,3 +142,93 @@ export const FilesCapability = z.object({
   hermeticd_version: z.string().nullable(),
 });
 export type FilesCapability = z.infer<typeof FilesCapability>;
+
+// --- Agent file requests: `files.put` and `files.decline` --------------------
+
+/**
+ * `hermetic files put <agent> --request <id> …`: answer a request the agent
+ * opened (`request_file`/`request_secret`) with a file or a text secret.
+ *
+ * No field carries a value. A text secret read from stdin is registered with
+ * the upload registry first and named here by its `chunk_upload_id`, so the
+ * secret never sits in an input that a run log or an op record could keep.
+ */
+export const FilesPutInput = z.object({
+  instance: AgentName,
+  request_id: FileRequestId,
+  source: FilesStageSource,
+  /** Store it as a secret even if the request did not ask for one. */
+  secret: z.boolean().optional(),
+  /** A secret for this once: the box's tmpfs drop, never SSM ("Just this once"). */
+  ephemeral: z.boolean().optional(),
+  /** The operator confirmed a key-looking file is not a secret (D6). */
+  not_secret: z.boolean().optional(),
+  /** A text secret's "Treat as": `raw` one value, or `dotenv` lines. Absent is `auto`. */
+  as: SecretTextAsMode.optional(),
+  /**
+   * The operator confirmed a durable secret may replace the one its SSM slot
+   * already holds. Without it, a put to an occupied slot is refused with
+   * `CONFLICT` and `details.replace_required` before anything is written.
+   */
+  replace: z.boolean().optional(),
+});
+export type FilesPutInput = z.infer<typeof FilesPutInput>;
+
+/** The desktop bridge's view: an upload id, never a path (as `FilesStageApiInput`). */
+export const FilesPutApiInput = FilesPutInput.extend({
+  source: z.object({ chunk_upload_id: ChunkUploadId }).strict(),
+});
+export type FilesPutApiInput = z.infer<typeof FilesPutApiInput>;
+
+/** Progress inside a put: `phase` is `read`, `hash`, `upload` or `ssm`. Never names the file. */
+export const FilesPutProgressEvent = OpEvent.extend({ type: z.literal("progress") });
+export type FilesPutProgressEvent = z.infer<typeof FilesPutProgressEvent>;
+
+/**
+ * The last event of a successful put: what the box answered. `ssm_slot` is
+ * the durable slot the laptop wrote (`file-<slug>`/`env-<slug>`), absent when
+ * the bytes went to the box directly.
+ */
+export const FilesPutFulfilledEvent = z.object({
+  type: z.literal("fulfilled"),
+  result: FilesFulfilResult,
+  ssm_slot: z.string().min(1).max(128).optional(),
+});
+export type FilesPutFulfilledEvent = z.infer<typeof FilesPutFulfilledEvent>;
+
+/** What `files.put` yields. A failure is a thrown `HermeticError`. */
+export const FilesPutEvent = z.discriminatedUnion("type", [
+  FilesPutProgressEvent,
+  FilesPutFulfilledEvent,
+]);
+export type FilesPutEvent = z.infer<typeof FilesPutEvent>;
+
+/**
+ * A put's terminal failure: as `FilesStageErrorEvent`, plus `replace_slot` when
+ * the refusal was a durable secret's occupied slot (`replace_required`), so the
+ * card can ask before it sends again with `replace`. The slot name only.
+ */
+export const FilesPutErrorEvent = FilesStageErrorEvent.extend({
+  replace_slot: z.string().min(1).max(128).optional(),
+});
+export type FilesPutErrorEvent = z.infer<typeof FilesPutErrorEvent>;
+
+/** Every frame a head may push for one put: as `FilesStageFrame`, ending `fulfilled` or `error`. */
+export const FilesPutFrame = z.discriminatedUnion("type", [
+  FilesPutProgressEvent,
+  FilesPutFulfilledEvent,
+  FilesPutErrorEvent,
+]);
+export type FilesPutFrame = z.infer<typeof FilesPutFrame>;
+
+/** `hermetic files decline <agent> <request>`: say no to a request. The agent is told. */
+export const FilesDeclineInput = z.object({
+  instance: AgentName,
+  request_id: FileRequestId,
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+export type FilesDeclineInput = z.infer<typeof FilesDeclineInput>;
+
+/** One request slot on one box: the card's read of the box's own copy (machinery). */
+export const FilesRequestRefInput = z.object({ instance: AgentName, request_id: FileRequestId });
+export type FilesRequestRefInput = z.infer<typeof FilesRequestRefInput>;

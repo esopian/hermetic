@@ -14,6 +14,7 @@ import type {
   ToolRender,
 } from "../../schema/index.ts";
 import { hermesActivity } from "./hermes-chat-activity.ts";
+import { FILE_REQUEST_TOOL_RENDER, toolRequestId } from "./hermes-chat-file-requests.ts";
 import { nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
@@ -40,6 +41,8 @@ const TOOL_RENDER: Record<string, ToolRender> = {
   query: "table",
   // Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`).
   message_agent: "message_agent",
+  // The files plugin asking the operator for a file or a secret.
+  ...FILE_REQUEST_TOOL_RENDER,
 };
 
 /** The spellings upstream has used for a tool's arguments, most specific first. */
@@ -127,6 +130,7 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
     args = asObject ? { ...extra, ...asObject } : { ...extra, args: picked.value };
   }
 
+  const render = TOOL_RENDER[name.toLowerCase()] ?? null;
   return {
     kind: "tool",
     tool_id: str(payload.tool_id) ?? str(payload.call_id) ?? str(payload.id),
@@ -137,7 +141,13 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
     status: force ?? toolStatus(payload, exit),
     exit_code: exit,
     duration_ms: num(payload.duration_ms) ?? scaleSeconds(num(payload.duration_s)),
-    render: TOOL_RENDER[name.toLowerCase()] ?? null,
+    render,
+    // Only a request card carries the key, so every other tool block keeps the
+    // shape it always had. A live card that opened a new slot gets its id from
+    // the box later (`hermes-chat-file-requests.ts`).
+    ...(render === "file_request" || render === "secret_request"
+      ? { request_id: toolRequestId(name, args, result) }
+      : {}),
   };
 }
 

@@ -116,6 +116,9 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "files.content": "reads a staged image's bytes for its thumbnail; it writes nothing",
   "files.pickNative":
     "opens the laptop's file dialog and registers the picks in memory; it touches no box",
+  // Agent requests: the put's cancel, and the card's read of the box's slot.
+  "files.put.abort": "closes a stream this head opened",
+  "files.request.get": "reads a box's request slot; it writes nothing",
 };
 
 /**
@@ -164,6 +167,13 @@ const BODIES: Record<string, object> = {
     source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
   },
   "files.discard": { instance: "ember", id: "f_aaaaaaaaaaaa" },
+  /* Agent requests: answering one or declining it writes to a box. */
+  "files.put": {
+    instance: "ember",
+    request_id: "fr_aaaaaaaaaaaa",
+    source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+  },
+  "files.decline": { instance: "ember", request_id: "fr_aaaaaaaaaaaa" },
   /* Bot Mode (§9.2): every one of these writes to a box. */
   "chat.open": { instance: "ember", bot: "default" },
   "chat.compact": { instance: "ember", bot: "default" },

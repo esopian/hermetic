@@ -7,6 +7,7 @@
  * Split out of `fixture-chat.ts` (AGENTS.md rule 5); the roster the sessions
  * hang off lives in `fixture-chat-roster.ts`.
  */
+import { HERMES_HOME } from "../../shared/hermes.ts";
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
 import { FIXTURE_CHAT_FILES, fixtureAttachmentBlock } from "./fixture-chat-files.ts";
@@ -1045,6 +1046,91 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         },
       ],
       usage: usage(4400, 96, 0.0037, "claude-sonnet-5"),
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-kestrel-portal-3",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("09:02:10"),
+      blocks: [{ kind: "text", markdown: "Check last night's 502s, then open the fix as a PR." }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    // Two settled request cards (`request_file`, `request_secret`). Their slots
+    // are long gone from the box, as an old request's are: a head draws them
+    // from the plugin's result. The secret's result names keys, never values.
+    {
+      id: "mx-kestrel-portal-4",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("09:06:52"),
+      blocks: [
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0014",
+          name: "request_file",
+          server: null,
+          args: {
+            purpose: "Raw nginx access log for 01:30–02:30, to line the 502s up against the queue.",
+            accept: [".log", ".txt", ".gz"],
+            name_hint: "access.log",
+          },
+          result: {
+            status: "fulfilled",
+            request_id: "fr_kestrellog01",
+            path: `${HERMES_HOME}/inbox/2026-09-17/f_kestrelacc01/access.log`,
+            sha256: "3f9a6c1e0b7d4a2f8e5c9b1d7a3f6e2c4b8d0a9f1e7c3b5d2a6f8e0c4b9d1a7f",
+            bytes: 18_432_011,
+            by: "evan@fixture.invalid",
+            class: "file",
+            deliver_with: [],
+            expires_at: "2026-09-17T11:02:31Z",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 41_200,
+          render: "file_request",
+          request_id: "fr_kestrellog01",
+        },
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0015",
+          name: "request_secret",
+          server: null,
+          args: {
+            kind: "secret_text",
+            purpose: "A GitHub token with repo scope, to open the fix as a pull request.",
+            keys: ["GITHUB_TOKEN"],
+          },
+          result: {
+            status: "fulfilled",
+            request_id: "fr_kestrelkey02",
+            path: "/run/hermetic/files/github-token.env",
+            by: "evan@fixture.invalid",
+            class: "secret",
+            keys: ["GITHUB_TOKEN"],
+            format: "dotenv",
+            load: "set -a; . /run/hermetic/files/github-token.env; set +a",
+            deliver_with: [],
+            expires_at: "2026-09-17T11:04:02Z",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 22_870,
+          render: "secret_request",
+          request_id: "fr_kestrelkey02",
+        },
+        {
+          kind: "text",
+          markdown: "The 502s start at 01:52, when the upstream queue fills. PR is up.",
+        },
+      ],
+      usage: usage(9100, 212, 0.0081, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },

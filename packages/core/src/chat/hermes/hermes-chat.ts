@@ -87,6 +87,7 @@ import { createChatSessions } from "./hermes-chat-sessions.ts";
 import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
 import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
+import { fileRequestLookup } from "./hermes-chat-file-requests.ts";
 
 export { CHAT_ERROR_CODES, SLOT_WAIT_MS, WARM_SLOTS_PER_GATEWAY } from "./hermes-chat-types.ts";
 export type {
@@ -173,6 +174,9 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     conversation: canonical.conversation,
     subagents,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
+    ...(deps.listFileRequests !== undefined
+      ? { fileRequests: fileRequestLookup(deps.listFileRequests, deps.now) }
+      : {}),
   });
   const children = createSubagentControl({
     connect: connection.connect,

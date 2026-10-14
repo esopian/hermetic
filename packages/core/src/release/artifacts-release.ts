@@ -62,7 +62,14 @@ export const AGENTD_STAGES = "packages/agentd/stages";
  * and it is the right trade: the alternative is two fingerprints that mean
  * almost the same thing, and a later reader picking the wrong one.
  */
-const FINGERPRINT_DIRS = ["packages/agentd/src", "packages/core/src/schema", "packages/agentd/stages"];
+const FINGERPRINT_DIRS = [
+  "packages/agentd/src",
+  "packages/core/src/schema",
+  "packages/agentd/stages",
+  // The Hermes plugin hermeticd embeds as text (agentd's `apply/plugins.ts`):
+  // compiled into the binary, so an edit to it is a new release.
+  "packages/agentd/plugins",
+];
 
 /**
  * Single files that change what `bun build --compile` emits without appearing
@@ -130,12 +137,16 @@ export function findRepoRoot(from: string = import.meta.dir): string | null {
 
 function walk(dir: string): string[] {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .sort()
-    .flatMap((entry) => {
-      const path = join(dir, entry);
-      return statSync(path).isDirectory() ? walk(path) : [path];
-    });
+  return (
+    readdirSync(dir)
+      .sort()
+      // Python's bytecode cache: written by running the plugin's tests, never shipped.
+      .filter((entry) => entry !== "__pycache__")
+      .flatMap((entry) => {
+        const path = join(dir, entry);
+        return statSync(path).isDirectory() ? walk(path) : [path];
+      })
+  );
 }
 
 /** Changes when anything the release is built from changes, or the version does. */

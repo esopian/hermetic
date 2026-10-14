@@ -23,6 +23,11 @@ import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-ch
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
 import { attachToTurn, detachQueued } from "./hermes-chat-attach.ts";
+import {
+  turnFileRequests,
+  type FileRequestLookupDeps,
+  type TurnFileRequests,
+} from "./hermes-chat-file-requests.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
 import {
   createSubagentLedgers,
@@ -83,6 +88,12 @@ export interface ChatTurnDeps {
    * Absent gives this turn factory a private set.
    */
   subagents?: SubagentLedgers | undefined;
+  /**
+   * The box's files request slots, read to give a running `request_file` /
+   * `request_secret` card the slot it opened. Absent, such a card waits for
+   * the result to name its slot.
+   */
+  fileRequests?: FileRequestLookupDeps | undefined;
 }
 
 /** What a caller may tune about a turn's reconnect. */
@@ -185,6 +196,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     let accepted = false;
     let pump: TurnPump | null = null;
     let delegation: ReturnType<typeof subagentTurn> | null = null;
+    let requests: TurnFileRequests | null = null;
     const key = turnKey(box, bot);
     try {
       // Before the session exists, so the gateway already counts this socket
@@ -264,6 +276,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // which of the three happened rather than a flat "queued" that is wrong
       // two times in three.
       yield status(message, submitState(str(submitted?.status)));
+      requests = turnFileRequests(deps.fileRequests, {
+        box,
+        sessions: [session, stored],
+        signal: opts.signal,
+      });
       yield* stream(
         rpc,
         pump,
@@ -274,6 +291,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         arrivedAtSubmit,
         baseline,
         delegation,
+        requests,
       );
     } catch (e) {
       yield errorFrame(e);
@@ -292,6 +310,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         });
       }
       delegation?.close();
+      requests?.close();
       if (active) {
         const entries = activeTurns.get(key);
         entries?.delete(active);
@@ -328,6 +347,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     arrivedAtSubmit: number,
     baseline: number,
     delegation: ReturnType<typeof subagentTurn>,
+    requests: TurnFileRequests,
   ): AsyncIterable<ChatFrame> {
     let reasoning = "";
     let reasoningTokens: number | null = null;
@@ -432,10 +452,22 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await pump.interrupt().catch(() => null);
     }
 
+    let next: ReturnType<TurnPump["next"]> | null = null;
     for (;;) {
       // The deadline only guards the wait for the *first* content frame. After
       // that a silence is a tool thinking, and thirty seconds is nothing.
-      const step = await pump.next(signal, seenContent ? null : deadlineMs);
+      next ??= pump.next(signal, seenContent ? null : deadlineMs);
+      // A request card's slot, found on the box while its tool still runs, is
+      // the same card again with its id — sent as it is found, not when the
+      // next event happens to arrive. Not through `emit`: it updates a card
+      // already drawn, so it must not close the open paragraph.
+      const raced = await requests.race(next);
+      if ("block" in raced) {
+        yield { type: "block", seq: lastSeq, message, block: raced.block };
+        continue;
+      }
+      next = null;
+      const step = raced.step;
 
       if (step.kind === "reconnecting" || step.kind === "reconnected" || step.kind === "lost") {
         // The reconnect, made visible. `lost` is said before the `done` that
@@ -718,7 +750,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
         case "tool.complete": {
           seenContent = true;
           yield* flushReasoning(seq);
-          const tool = toolBlock(payload, type === "tool.start" ? "running" : null);
+          const mapped = toolBlock(payload, type === "tool.start" ? "running" : null);
+          const tool = mapped.kind === "tool" ? requests.tool(mapped) : mapped;
           // A `delegate_task` call is what its children are matched against.
           delegation.tool(tool);
           yield* emit(seq, tool);

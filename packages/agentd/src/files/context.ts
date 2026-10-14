@@ -3,8 +3,8 @@
  * agent's own name and the two secret hooks. Built once by `makeFilesService`
  * (`service.ts`).
  */
-import type { FileClass, FileRequest, FileWaitResult } from "@hermetic/core/schema";
-import { FILES_ROUTES, HERMETICD_RPC_PORT } from "@hermetic/core/shared";
+import type { FileClass, FileRequest, FileRequestKind, FileWaitResult } from "@hermetic/core/schema";
+import { FILES_ROUTES, HERMETICD_RPC_PORT, secretTextLoad } from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import type { FilesStore } from "./store.ts";
 
@@ -25,11 +25,16 @@ export interface FilesDeps {
   /** The redacting journal writer. Never handed a file name or a purpose. */
   readonly log?: (message: string) => void;
   /**
-   * Read an SSM `file-<slug>` slot and write it to tmpfs (`secrets.ts`),
-   * refusing with a `VALIDATION` `FilesError` — before writing — when the
-   * envelope does not name `expectName`.
+   * Read an SSM `file-<slug>`/`env-<slug>` slot and write it to tmpfs
+   * (`secrets.ts`), refusing with a `VALIDATION` `FilesError` — before
+   * writing — when the envelope does not name `expectName`, or when `check`
+   * throws on the decoded bytes (a text secret's authoritative re-parse).
    */
-  readonly materialiseSecret?: (slot: string, expectName: string) => Promise<MaterialisedFileSecret>;
+  readonly materialiseSecret?: (
+    slot: string,
+    expectName: string,
+    check?: (content: Uint8Array) => void,
+  ) => Promise<MaterialisedFileSecret>;
   /** Remove a durable secret's tmpfs copy (`secrets.ts`); SSM is the laptop's job. */
   readonly removeSecret?: (name: string) => Promise<void>;
   /**
@@ -83,15 +88,50 @@ export function realDelay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * The two ways to deliver a file to a request with no card to drop it on
- * (scenario D): the CLI, and plain `curl -T`, which needs no token because the
- * caller's tailnet identity is the credential. `<path>` is the operator's own.
+ * The ways to answer a request with no card to drop it on (scenario D). A
+ * file: the CLI, and plain `curl -T`, which needs no token because the
+ * caller's tailnet identity is the credential; `<path>` is the operator's own.
+ * A text secret: the CLI reading stdin only, never a flag value — runs and
+ * shell history record flag values (§8.1).
  */
-export function deliverWith(name: string, requestId: string): string[] {
+export function deliverWith(name: string, requestId: string, kind: FileRequestKind = "file"): string[] {
+  if (kind === "secret_text")
+    return [`hermetic files put ${name} --request ${requestId} --secret-stdin`];
   return [
     `hermetic files put ${name} --request ${requestId} <path>`,
     `curl -T <path> http://${name}:${HERMETICD_RPC_PORT}${FILES_ROUTES.request(requestId)}`,
   ];
+}
+
+/** What a fulfilled slot tells the agent: where the file is, and for a text secret how to load it. */
+function fulfilledFields(request: FileRequest): Partial<FileWaitResult> {
+  const fulfilled = request.fulfilled;
+  if (!fulfilled) return {};
+  if (request.kind === "secret_text") {
+    // Key names and the load line, never a value — nor the digest or size:
+    // a short secret's SHA-256 is a dictionary lookup away from its value,
+    // and the result lands in the transcript.
+    return {
+      path: fulfilled.path,
+      by: fulfilled.by,
+      class: fulfilled.class,
+      keys: fulfilled.keys ?? [],
+      format: fulfilled.format ?? "dotenv",
+      load: secretTextLoad(fulfilled.path),
+    };
+  }
+  // A secret-class file (a `sensitivity: "secret"` slot, or an upload the box
+  // judged to be key material) loses its digest and size for the same reason.
+  if (fulfilled.class === "secret") {
+    return { path: fulfilled.path, by: fulfilled.by, class: fulfilled.class };
+  }
+  return {
+    path: fulfilled.path,
+    sha256: fulfilled.sha256,
+    bytes: fulfilled.bytes,
+    by: fulfilled.by,
+    class: fulfilled.class,
+  };
 }
 
 /**
@@ -100,20 +140,11 @@ export function deliverWith(name: string, requestId: string): string[] {
  */
 export function waitResult(name: string, request: FileRequest): FileWaitResult {
   const status = request.state === "receiving" ? "open" : request.state;
-  const fulfilled = request.fulfilled;
   return {
     status,
     request_id: request.request_id,
-    ...(fulfilled && (status === "fulfilled" || status === "consumed")
-      ? {
-          path: fulfilled.path,
-          sha256: fulfilled.sha256,
-          bytes: fulfilled.bytes,
-          by: fulfilled.by,
-          class: fulfilled.class,
-        }
-      : {}),
-    deliver_with: deliverWith(name, request.request_id),
+    ...(status === "fulfilled" || status === "consumed" ? fulfilledFields(request) : {}),
+    deliver_with: deliverWith(name, request.request_id, request.kind),
     expires_at: request.expires_at,
   };
 }

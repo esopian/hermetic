@@ -21,7 +21,7 @@ import { KEEPALIVE_EVENT } from "../handlers/streams.ts";
 import type { StreamFrame, StreamSink } from "../handlers/streams.ts";
 import { terminalMessageHandlers } from "../handlers/terminal.ts";
 import type { TerminalFrame } from "../terminal/channel.ts";
-import type { FilesStageFrame } from "@hermetic/core";
+import type { FilesPutFrame, FilesStageFrame } from "@hermetic/core";
 import { InitInFlightError } from "../init-op.ts";
 import type { AppLog } from "../log.ts";
 import { RequestValidationError } from "../validation.ts";
@@ -240,6 +240,7 @@ const FINITE_MESSAGES: readonly StreamMessageName[] = [
   "chat.frame",
   "logs.line",
   "files.frame",
+  "files.put.frame",
 ];
 
 function stringField(value: unknown, field: string): string | undefined {
@@ -283,13 +284,22 @@ function push(
       );
       return;
     case "files.frame":
-      // `handlers/files.ts` sends only `FilesStageFrame`s, and its last word
-      // as `done`.
+      // `handlers/files.ts` sends only `FilesStageFrame`s on a stage stream,
+      // and its last word as `done`.
       send(
         "files.frame",
         frame.event === "done"
           ? { stream_id: id, done: frame.data as FilesStageFrame }
           : { stream_id: id, frame: frame.data as FilesStageFrame },
+      );
+      return;
+    case "files.put.frame":
+      // …and only `FilesPutFrame`s on a put stream.
+      send(
+        "files.put.frame",
+        frame.event === "done"
+          ? { stream_id: id, done: frame.data as FilesPutFrame }
+          : { stream_id: id, frame: frame.data as FilesPutFrame },
       );
       return;
     case "terminal.frame":

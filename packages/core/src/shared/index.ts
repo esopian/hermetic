@@ -204,7 +204,13 @@ export {
   FILE_REQUEST_STATES,
   FILE_SECRET_SLOT_RE,
   FILE_SENSITIVITIES,
+  FILES_SECRET_AS_HEADER,
   SECRET_ENVELOPE_MAX_CHARS,
+  SECRET_TEXT_AS,
+  SECRET_TEXT_FORMATS,
+  SECRET_TEXT_INPUTS,
+  SECRET_TEXT_KEY_RE,
+  SECRET_TEXT_MAX_KEYS,
   acceptMatches,
   decodeSecretEnvelope,
   encodeSecretEnvelope,
@@ -226,9 +232,12 @@ export {
   newRequestId,
   newShareId,
   parseContentDigest,
+  requestFileName,
   sanitizeFileName,
   secretEnvelopeFits,
   secretSlotFileName,
+  secretTextLoad,
+  secretTextSlug,
   shortId,
   sniffMime,
 } from "./files.ts";
@@ -244,4 +253,32 @@ export type {
   FilesSocketRoute,
   SanitizedFileName,
   SecretEnvelope,
+  SecretTextAs,
+  SecretTextFormat,
+  SecretTextInput,
 } from "./files.ts";
+
+// --- Text secrets (plan §06b) ----------------------------------------------
+// The paste/drop parser the request card previews with and the box re-reads
+// the canonical form with; both must accept and refuse the same text.
+export {
+  SECRET_ENV_ERROR_CODES,
+  SECRET_ENV_WARNING_CODES,
+  SECRET_KEY_RE,
+  SECRET_TEXT_MAX_BYTES,
+  canonicalSecretEnv,
+  detectSecretFormat,
+  parseSecretEnv,
+  readCanonicalSecretEnv,
+} from "./secret-env.ts";
+export type {
+  SecretEnvChip,
+  SecretEnvEntry,
+  SecretEnvErrorCode,
+  SecretEnvIssue,
+  SecretEnvResult,
+  SecretEnvSpec,
+  SecretEnvWarningCode,
+  SecretFormat,
+  SecretInputMode,
+} from "./secret-env.ts";

@@ -379,6 +379,20 @@ export class FakeHost implements Host {
       this.files.delete(from);
       return ok();
     }
+    // `mv -f -T`: a rename over whatever file or symlink is at the target
+    // (`apply/plugins.ts`); a directory there is refused, as `-T` does.
+    if (bin === "mv" && args[0] === "-f" && args[1] === "-T") {
+      const [from, to] = args.slice(2).filter((a) => a !== "--");
+      if (from === undefined || to === undefined) return fail(1, "mv: missing operand");
+      const file = this.files.get(from);
+      if (!file) return fail(1, `mv: cannot stat '${from}': No such file or directory`);
+      if (this.dirs.has(to)) return fail(1, `mv: cannot overwrite directory '${to}'`);
+      this.fsOps.push(`rename ${from} -> ${to}`);
+      this.symlinks.delete(to);
+      this.files.set(to, file);
+      this.files.delete(from);
+      return ok();
+    }
     if (bin === "rm" && (args[0] === "-f" || args[0] === "-rf") && args[1] === "--") {
       for (const path of args.slice(2)) {
         this.fsOps.push(`remove ${path}`);

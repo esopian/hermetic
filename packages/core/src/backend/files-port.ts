@@ -1,4 +1,12 @@
-import type { FilesCommitResult, FilesStageResult } from "../schema/index.ts";
+import type {
+  FileRequest,
+  FilesCommitResult,
+  FilesFulfilResult,
+  FilesListResult,
+  FilesSecretBody,
+  FilesStageResult,
+} from "../schema/index.ts";
+import type { SecretTextAs } from "../shared/files.ts";
 
 /**
  * The laptop half of hermeticd's files service (`/files` on port 7434): the
@@ -42,6 +50,55 @@ export interface FilesApi {
   ): Promise<FilesContent>;
   /** `DELETE /files/:id`. */
   remove(name: string, id: string, opts: FilesCallOptions): Promise<void>;
+  /** `GET /files/requests/:id`: one request slot, as the box holds it. */
+  request(name: string, id: string, opts: FilesCallOptions): Promise<FileRequest>;
+  /** `GET /files`: every entry and request slot on the box, metadata only. */
+  list(name: string, opts: FilesCallOptions): Promise<FilesListResult>;
+  /**
+   * `PUT /files/requests/:id`: answer a request with bytes. The name travels in
+   * `FILES_NAME_HEADER`; the box decides where the bytes land (inbox, or the
+   * tmpfs drop for a secret) from its own copy of the slot.
+   */
+  fulfil(
+    name: string,
+    id: string,
+    upload: FilesFulfilUpload,
+    opts: FilesCallOptions & FilesProgress & FilesFulfilOptions,
+  ): Promise<FilesFulfilResult>;
+  /**
+   * `POST /files/requests/:id/secret`: the laptop already wrote the bytes to the
+   * agent's SSM slot; the box reads them with its instance role.
+   */
+  secret(
+    name: string,
+    id: string,
+    body: FilesSecretBody,
+    opts: FilesCallOptions,
+  ): Promise<FilesFulfilResult>;
+  /** `POST /files/requests/:id/decline`. */
+  decline(
+    name: string,
+    id: string,
+    reason: string | undefined,
+    opts: FilesCallOptions,
+  ): Promise<FileRequest>;
+}
+
+/** The bytes of a request fulfil. Like `FilesStageUpload`, without the stage-only fields. */
+export interface FilesFulfilUpload {
+  /** Already through `sanitizeFileName`. */
+  fileName: string;
+  size: number;
+  body: AsyncIterable<Uint8Array> | Uint8Array;
+  /** Lowercase hex SHA-256 of the whole body. */
+  sha256: string;
+}
+
+export interface FilesFulfilOptions {
+  /** The operator confirmed a key-looking file is not a secret (D6). */
+  notSecret?: boolean;
+  /** A text secret's "Treat as" override; absent means `auto`. */
+  secretAs?: SecretTextAs;
 }
 
 export interface FilesCallOptions {

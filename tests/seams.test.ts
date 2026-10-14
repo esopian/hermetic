@@ -1054,3 +1054,30 @@ describe("seam: the browser stack: what the laptop renders is what the box watch
     }
   });
 });
+
+describe("seam: the hermetic-files plugin the config enables is the one hermeticd installs", () => {
+  test("managed plugins.enabled, the install directory and plugin.yaml's name agree", async () => {
+    const { HERMES_FILES_PLUGIN } = await import("../packages/core/src/render/render-hermes.ts");
+    const { HERMES_PLUGIN_DIR, HERMES_PLUGIN_FILES, HERMES_PLUGIN_NAME } = await import(
+      "../packages/agentd/src/apply/plugins.ts"
+    );
+    expect(HERMES_PLUGIN_NAME).toBe(HERMES_FILES_PLUGIN);
+    expect(HERMES_PLUGIN_DIR.endsWith(`/plugins/${HERMES_FILES_PLUGIN}`)).toBe(true);
+    const manifest = HERMES_PLUGIN_FILES.find((f) => f.name === "plugin.yaml")?.content ?? "";
+    expect(manifest).toMatch(new RegExp(`^name: ${HERMES_FILES_PLUGIN}$`, "m"));
+    const rendered = renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider: "anthropic",
+      secrets_mode: "none",
+      hermes_version: "0.21.1",
+      hermes_ref: "v2026.8.31",
+      chrome_ref: CHROME_REF,
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      hermes: {},
+    } as unknown as RenderInput);
+    const managed = rendered.files.find((f) => f.path === "/etc/hermes/config.yaml");
+    expect(managed?.content).toContain(`plugins:\n  enabled:\n    - "${HERMES_FILES_PLUGIN}"\n`);
+  });
+});

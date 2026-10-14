@@ -51,7 +51,9 @@ import {
   decodeSecretEnvelope,
   isEnvSecretSlot,
   isFileSecretSlot,
+  readCanonicalSecretEnv,
   sanitizeFileName,
+  secretSlotFileName,
 } from "@hermetic/core/shared";
 import { SECRETS_ENV_DIR, SECRETS_ENV_DIR_MODE } from "../apply/secrets.ts";
 import type { Aws } from "../aws.ts";
@@ -163,9 +165,27 @@ function secretPath(name: string): string {
 }
 
 /**
+ * Whether `content` is a text secret in the one form the box stores
+ * (`canonicalSecretEnv`): valid UTF-8, exactly `KEY="escaped"` lines.
+ */
+function isCanonicalTextSecret(content: Uint8Array): boolean {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  } catch {
+    return false;
+  }
+  return readCanonicalSecretEnv(text) !== null;
+}
+
+/**
  * Decode, check and place one slot's value. Throws, naming the slot only, on an
  * envelope that does not decode, a digest that does not match its bytes, or an
- * `env-*` slot whose file is not a `.env`.
+ * `env-*` slot that is not `<slug>.env` (`secretSlotFileName`: the slot and the
+ * file the agent was told about are one name) or whose bytes are not the
+ * canonical `KEY="…"` form — a text secret is sourced by the agent's shell
+ * (`secretTextLoad`), so anything else stays off the box. The last is a
+ * `FilesError` (`VALIDATION`, 422), so a route placing it can say why.
  */
 function prepare(slot: string, value: string): Prepared {
   requireSecretSlot(slot);
@@ -183,10 +203,10 @@ function prepare(slot: string, value: string): Prepared {
   }
   // A text secret is read as `KEY=value` lines; a file not named for that is a
   // laptop writing the wrong shape into the slot, not something to guess at.
-  if (isEnvSecretSlot(slot) && !envelope.name.endsWith(".env")) {
+  if (isEnvSecretSlot(slot) && envelope.name !== secretSlotFileName(slot)) {
     throw new AgentdError(
       "INTERNAL",
-      `SSM slot ${slot} is a text secret but does not name a .env file`,
+      `SSM slot ${slot} is a text secret but does not name its own .env file`,
       {
         slot,
       },
@@ -197,6 +217,13 @@ function prepare(slot: string, value: string): Prepared {
     throw new AgentdError("CHECKSUM_MISMATCH", `SSM slot ${slot} does not match its recorded SHA-256`, {
       slot,
     });
+  }
+  if (isEnvSecretSlot(slot) && !isCanonicalTextSecret(envelope.bytes)) {
+    throw new FilesError(
+      "VALIDATION",
+      `SSM slot ${slot} does not hold a text secret in canonical KEY="value" form`,
+      422,
+    );
   }
   return {
     slot,
@@ -239,26 +266,33 @@ async function place(host: Host, prepared: Prepared): Promise<MaterialisedSecret
   return describeSecret(prepared);
 }
 
+/** Checks a slot's decoded bytes before they are written; throws to refuse them. */
+export type SecretContentCheck = (content: Uint8Array) => void;
+
 /**
  * Read one `file-*`/`env-*` slot from SSM and write it to tmpfs. With
  * `expectName`, an envelope naming any other file is refused (`VALIDATION`)
  * before anything is written: the route that asks knows which name it was
- * promised, and a different one could land on another slot's file.
+ * promised, and a different one could land on another slot's file. `check`,
+ * when given, sees the decoded bytes before the write too: the route a text
+ * secret arrives by re-parses them against the request's keys there.
  */
 export async function materialiseFileSecret(
   deps: FileSecretDeps,
   slot: string,
   expectName?: string,
+  check?: SecretContentCheck,
 ): Promise<MaterialisedSecret> {
-  const first = await materialiseOnce(deps, slot, expectName);
+  const first = await materialiseOnce(deps, slot, expectName, check);
   if (first !== null) return first;
   // A read that began after this one placed the file while this one waited on
   // SSM: its value is newer, so writing ours would put a stale secret back.
   // Read again, once, and let a second loss stand as written by the newer read.
-  return (
-    (await materialiseOnce(deps, slot, expectName)) ??
-    describeSecret(prepare(slot, await readSlot(deps, slot)))
-  );
+  const again = await materialiseOnce(deps, slot, expectName, check);
+  if (again !== null) return again;
+  const prepared = prepare(slot, await readSlot(deps, slot));
+  check?.(prepared.content);
+  return describeSecret(prepared);
 }
 
 function readSlot(deps: FileSecretDeps, slot: string): Promise<string> {
@@ -274,6 +308,7 @@ async function materialiseOnce(
   deps: FileSecretDeps,
   slot: string,
   expectName?: string,
+  check?: SecretContentCheck,
 ): Promise<MaterialisedSecret | null> {
   requireSecretSlot(slot);
   const ticket = nextTicket++;
@@ -281,6 +316,7 @@ async function materialiseOnce(
   if (expectName !== undefined && prepared.name !== expectName) {
     throw new FilesError("VALIDATION", "the secret slot names a different file than the request said");
   }
+  check?.(prepared.content);
   return exclusive(async () => {
     if (placedSince(prepared.name, ticket)) return null;
     const placed = await place(deps.host, prepared);
@@ -345,7 +381,8 @@ async function materialiseAll(
     try {
       prepared = prepare(slot, value);
     } catch (e) {
-      log(`file secret ${slot}: ${e instanceof AgentdError ? e.code : "INTERNAL"}; skipped`);
+      const code = e instanceof AgentdError || e instanceof FilesError ? e.code : "INTERNAL";
+      log(`file secret ${slot}: ${code}; skipped`);
       continue;
     }
     const owner = claimed.get(prepared.name);

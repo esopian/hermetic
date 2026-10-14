@@ -15,7 +15,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   CONTENT_DIGEST_HEADER,
+  FILES_DROP_DIR,
+  FILES_INBOX_DIR,
   FILES_ROUTES,
+  FILES_SECRET_DIR,
   FILES_SESSION_HEADER,
   FILES_SOCKET_ROUTES,
   SECRET_ENVELOPE_MAX_CHARS,
@@ -24,8 +27,10 @@ import {
   formatContentDigest,
   matchFilesRoute,
   matchSocketRoute,
+  FILES_SECRET_AS_HEADER,
   parseContentDigest,
   sanitizeFileName,
+  secretTextLoad,
   secretEnvelopeFits,
   sniffMime,
 } from "../packages/core/src/shared/index.ts";
@@ -43,12 +48,13 @@ import {
   FilesSecretBody,
   FilesStageResult,
   OpenFileRequestBody,
+  OpenSecretRequestBody,
   RpcHealth,
   ShareFileBody,
   ShareFileResult,
 } from "../packages/core/src/schema/index.ts";
 
-import { PDF, filesBox, post, put } from "../packages/agentd/test/files-fixture.ts";
+import { PDF, filesBox, openSlot, post, put } from "../packages/agentd/test/files-fixture.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures/files");
 const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
@@ -327,6 +333,9 @@ describe("socket fixtures the plugin reads", () => {
     "wait-declined.json": FileWaitResult,
     "share-result.json": ShareFileResult,
     "open-request.json": OpenFileRequestBody,
+    "open-secret-request.json": OpenSecretRequestBody,
+    "wait-secret-fulfilled.json": FileWaitResult,
+    "wait-secret-file-fulfilled.json": FileWaitResult,
     "error.json": FilesErrorBody,
   };
 
@@ -349,7 +358,12 @@ describe("socket fixtures the plugin reads", () => {
     const fulfilled = FileWaitResult.parse(read("wait-fulfilled.json"));
     expect(fulfilled.status).toBe("fulfilled");
     expect(fulfilled.path).toBeDefined();
+    expect(fulfilled.class).toBe("file");
+    expect(fulfilled.path).toMatch(
+      new RegExp(`^${FILES_INBOX_DIR}/\\d{4}-\\d{2}-\\d{2}/f_[a-z0-9]{12}/[^/]+$`),
+    );
     expect(fulfilled.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(fulfilled.bytes).toBeGreaterThan(0);
     const declined = FileWaitResult.parse(read("wait-declined.json"));
     expect(declined.status).toBe("declined");
     expect(declined.path).toBeUndefined();
@@ -358,6 +372,91 @@ describe("socket fixtures the plugin reads", () => {
   test("the open-request fixture's extra field is dropped, not refused", () => {
     const body = OpenFileRequestBody.parse(read("open-request.json"));
     expect("model_extra" in body).toBe(false);
+  });
+
+  test("hermeticd opens a text-secret slot from the plugin's request_secret body", async () => {
+    const { socket, index } = await filesBox();
+    const fixture = read("open-secret-request.json");
+    expect("model_extra" in OpenSecretRequestBody.parse(fixture)).toBe(false);
+    const text = JSON.stringify({ ...fixture, wait_s: 0 });
+    const res = await socket("/requests", {
+      method: "POST",
+      body: text,
+      headers: { "content-type": "application/json", "content-length": String(text.length) },
+    });
+    expect(res.status).toBe(201);
+    const opened = FileWaitResult.parse(await res.json());
+    expect(opened.deliver_with).toEqual([
+      `hermetic files put research-1 --request ${opened.request_id} --secret-stdin`,
+    ]);
+    expect(index().requests[0]).toMatchObject({
+      kind: "secret_text",
+      keys: fixture.keys,
+      optional_keys: fixture.optional_keys,
+      slug: "github",
+    });
+  });
+
+  test("hermeticd's text-secret wait result has the fixture's shape: names and a load line, no value", async () => {
+    const { socket, fetch } = await filesBox();
+    const opened = await socket(
+      "/requests",
+      post({ kind: "secret_text", purpose: "a token", keys: ["GITHUB_TOKEN"] }),
+    );
+    const { request_id } = FileWaitResult.parse(await opened.json());
+    const value = new TextEncoder().encode("GITHUB_TOKEN=FIXTURE-seam\n");
+    const filled = await fetch(
+      `/files/requests/${request_id}`,
+      put(value, { [FILES_SECRET_AS_HEADER]: "auto" }),
+    );
+    expect(filled.status).toBe(200);
+    const raw = await (await socket(`/requests/${request_id}/wait?s=0`)).text();
+    expect(raw).not.toContain("FIXTURE");
+    const live = FileWaitResult.parse(JSON.parse(raw));
+    const fixture = FileWaitResult.parse(read("wait-secret-fulfilled.json"));
+    expect(Object.keys(live).sort()).toEqual(Object.keys(fixture).sort());
+    expect(live.load).toBe(secretTextLoad(live.path as string));
+    expect(fixture.load).toBe(secretTextLoad(fixture.path as string));
+    expect(live.keys).toEqual(fixture.keys);
+    expect(live.format).toBe(fixture.format);
+  });
+});
+
+describe("the box's file wait results have the fixtures' shape", () => {
+  const read = (name: string) =>
+    FileWaitResult.parse(JSON.parse(readFileSync(join(FIXTURES, name), "utf8")));
+  const keys = (v: object) => Object.keys(v).sort();
+
+  test("a normal file: path under the inbox, digest and size", async () => {
+    const { socket, fetch } = await filesBox();
+    const { request_id } = await openSlot(socket);
+    expect((await fetch(`/files/requests/${request_id}`, put(PDF))).status).toBe(200);
+    const live = FileWaitResult.parse(await (await socket(`/requests/${request_id}/wait?s=0`)).json());
+    const fixture = read("wait-fulfilled.json");
+    expect(keys(live)).toEqual(keys(fixture));
+    expect(live.class).toBe(fixture.class);
+    expect(live.path?.startsWith(`${FILES_INBOX_DIR}/`)).toBe(true);
+    expect(live.sha256).toBe(sha(PDF));
+    expect(live.bytes).toBe(PDF.byteLength);
+  });
+
+  test("a secret file: a path under the drop or secret dir, no digest, no size", async () => {
+    const { socket, fetch } = await filesBox();
+    const { request_id } = await openSlot(socket, { sensitivity: "secret" });
+    expect((await fetch(`/files/requests/${request_id}`, put(PDF))).status).toBe(200);
+    const raw = await (await socket(`/requests/${request_id}/wait?s=0`)).text();
+    expect(raw).not.toContain(sha(PDF));
+    const live = FileWaitResult.parse(JSON.parse(raw));
+    const fixture = read("wait-secret-file-fulfilled.json");
+    expect(keys(live)).toEqual(keys(fixture));
+    expect(live.class).toBe("secret");
+    // A laptop upload lands under the drop dir; a durable (SSM) one under the secret dir.
+    expect(
+      live.path?.startsWith(`${FILES_DROP_DIR}/`) || live.path?.startsWith(`${FILES_SECRET_DIR}/`),
+    ).toBe(true);
+    expect(fixture.path?.startsWith(`${FILES_SECRET_DIR}/`)).toBe(true);
+    expect(fixture.sha256).toBeUndefined();
+    expect(fixture.bytes).toBeUndefined();
   });
 });
 

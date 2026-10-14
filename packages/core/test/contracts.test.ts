@@ -8,6 +8,8 @@ import {
 } from "../src/hermetic.ts";
 import {
   ArtifactsPushApiInput,
+  FilesPutApiInput,
+  FilesPutInput,
   FilesStageApiInput,
   FilesStageInput,
   ArtifactsPushInput,
@@ -69,9 +71,21 @@ describe("REQUEST_SCHEMAS", () => {
     expect(REQUEST_SCHEMAS["files.stage"].safeParse(upload).success).toBe(true);
   });
 
-  test("the two tables differ in exactly those two places", () => {
+  /** Answering an agent's request: the same split as `files.stage`. */
+  test("the bridge's files.put rejects a local path; the CLI's accepts it", () => {
+    expect(REQUEST_SCHEMAS["files.put"]).toBe(FilesPutApiInput);
+    expect(CLI_REQUEST_SCHEMAS["files.put"]).toBe(FilesPutInput);
+    const base = { instance: "atlas", request_id: "fr_aaaaaaaaaaaa" };
+    const path = { ...base, source: { path: "/etc/passwd" } };
+    expect(REQUEST_SCHEMAS["files.put"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.put"].safeParse(path).success).toBe(true);
+    const upload = { ...base, source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" } };
+    expect(REQUEST_SCHEMAS["files.put"].safeParse(upload).success).toBe(true);
+  });
+
+  test("the two tables differ in exactly those three places", () => {
     const differing = PUBLIC_METHODS.filter((m) => REQUEST_SCHEMAS[m] !== CLI_REQUEST_SCHEMAS[m]);
-    expect(differing.sort()).toEqual(["artifacts.push", "files.stage"]);
+    expect(differing.sort()).toEqual(["artifacts.push", "files.put", "files.stage"]);
   });
 });
 

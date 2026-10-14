@@ -443,7 +443,13 @@ export class MemoryBackend implements Backend {
       this.record("secrets.ensureSlot");
       this.params.set(path, SECRET_PLACEHOLDER);
     },
-    put: async (path: string, value: string): Promise<void> => {
+    put: async (path: string, value: string, opts?: { overwrite?: boolean }): Promise<void> => {
+      if (opts?.overwrite === false && this.params.has(path)) {
+        throw new HermeticError("CONFLICT", `the SSM slot ${path} already exists`, {
+          path,
+          already_exists: true,
+        });
+      }
       this.record("secrets.put");
       this.params.set(path, value);
     },
@@ -840,6 +846,9 @@ export class MemoryBackend implements Backend {
   readonly files = new MemoryFiles({
     hasAgent: (name) => this.agents.has(name),
     now: () => this.now(),
+    // A durable secret's slot, read the way the instance role reads it.
+    readParam: (path) => this.params.get(path),
+    fleetId: () => this.boundFleetId(),
   });
 
   readonly rpc = {

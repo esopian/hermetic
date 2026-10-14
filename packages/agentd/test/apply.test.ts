@@ -24,6 +24,7 @@ import type { FleetManifest } from "@hermetic/core/schema";
 import { FILES_INBOX_DIR, FILES_OUTBOX_DIR, FILES_STAGE_DIR } from "@hermetic/core/shared";
 import { collector } from "../src/events.ts";
 import { ensureLoginShell } from "../src/apply/accounts.ts";
+import { HERMES_PLUGIN_FILES, ensureHermesPlugin } from "../src/apply/plugins.ts";
 import { AgentdError } from "../src/errors.ts";
 import { APPLY_PENDING_PATH, LEGACY_STOP_MARKER_PATH } from "../src/apply-pending.ts";
 import { APPLIED_CONFIG_PATH } from "../src/manifest.ts";
@@ -3125,5 +3126,95 @@ describe("the agent's own install trees", () => {
     const chowns = host.commandsMatching(/^chown -R -h hermes:hermes /);
     expect(chowns).toContain("chown -R -h hermes:hermes /data/hermes/.local");
     expect(chowns).toContain("chown -R -h hermes:hermes /data/hermes/.hermes");
+  });
+});
+
+describe("the hermetic-files Hermes plugin", () => {
+  let host: FakeHost;
+  const DIR = "/data/hermes/.hermes/plugins/hermetic-files";
+
+  beforeEach(() => {
+    host = new FakeHost();
+    resetAptIndexState();
+  });
+
+  test("installs the embedded files, as the account, and only once", async () => {
+    const result = await apply(makeManifest(), { host });
+
+    for (const { name, content } of HERMES_PLUGIN_FILES) {
+      const file = host.files.get(`${DIR}/${name}`);
+      expect(file?.content).toBe(content);
+      expect(file?.ownership).toBe("hermes:hermes");
+      expect(file?.mode).toBe("0644");
+    }
+    expect(result.changed).toContain(DIR);
+    // Both directories by the account, never root.
+    for (const dir of ["/data/hermes/.hermes/plugins", DIR]) {
+      expect(host.commands).toContain(`runuser -u hermes -- install -d -m 0700 ${dir}`);
+    }
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${DIR}/`)).map((w) => w.user)).toEqual([
+      "hermes",
+      "hermes",
+    ]);
+    expect(
+      host.commandsMatching(/ mv -f -T -- /).every((c) => c.startsWith("runuser -u hermes -- ")),
+    ).toBe(true);
+    // Root only looks (the symlink check); it never writes there.
+    expect(host.rootFsCalls.filter((c) => c.includes("/plugins") && !c.startsWith("lstat "))).toEqual(
+      [],
+    );
+
+    host.commands.length = 0;
+    host.streamWrites.length = 0;
+    const again = await apply(makeManifest(), { host });
+    expect(again.changed).not.toContain(DIR);
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${DIR}/`))).toEqual([]);
+    expect(host.commandsMatching(/ mv -f -T -- /)).toEqual([]);
+  });
+
+  test("rewrites only the file that drifted", async () => {
+    await apply(makeManifest(), { host });
+    const init = host.files.get(`${DIR}/__init__.py`);
+    if (init)
+      host.files.set(`${DIR}/__init__.py`, { mode: init.mode, content: "# edited on the box\n" });
+    host.streamWrites.length = 0;
+
+    await apply(makeManifest(), { host });
+
+    expect(host.streamWrites.map((w) => w.path).filter((p) => p.startsWith(`${DIR}/`))).toEqual([
+      expect.stringMatching(/\/\.__init__\.py\.tmp\.[0-9a-f]+$/),
+    ]);
+    expect(host.files.get(`${DIR}/__init__.py`)?.content).toBe(
+      HERMES_PLUGIN_FILES.find((f) => f.name === "__init__.py")?.content,
+    );
+  });
+
+  test("a dry run reports the install and touches nothing", async () => {
+    const { emit, events } = collector();
+    expect(await ensureHermesPlugin(host, emit, true)).toBe(true);
+    expect(events.some((e) => e.message.includes("would install the hermetic-files"))).toBe(true);
+    expect(host.commands.filter((c) => c.includes("/plugins"))).toEqual([]);
+    expect(host.streamWrites).toEqual([]);
+  });
+
+  test("a symlinked plugin directory is refused with a warning, not followed", async () => {
+    host.dirs.add(DIR);
+    host.symlinks.add(DIR);
+    const { emit, events } = collector();
+
+    await apply(makeManifest(), { host, emit });
+
+    const warn = events.find((e) => e.level === "warn" && e.message.includes("hermetic-files"));
+    expect(warn?.message).toContain("is a symlink");
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${DIR}/`))).toEqual([]);
+    expect(host.commands.some((c) => c.includes(`install -d -m 0700 ${DIR}`))).toBe(false);
+  });
+
+  test("the embedded plugin is the one in the source tree", async () => {
+    const dir = new URL("../plugins/hermetic-files/", import.meta.url);
+    for (const { name, content } of HERMES_PLUGIN_FILES) {
+      expect(content).toBe(await Bun.file(new URL(name, dir)).text());
+    }
+    expect(HERMES_PLUGIN_FILES.map((f) => f.name).sort()).toEqual(["__init__.py", "plugin.yaml"]);
   });
 });

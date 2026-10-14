@@ -57,6 +57,7 @@ import type {
   ChatFailure,
   ChatFrame,
   ChatMessage,
+  FileRequest,
   FilesCommitResult,
   Session,
   Swarm,
@@ -78,6 +79,12 @@ import {
   type FixtureChatRequests,
 } from "./fixture-chat-requests.ts";
 import { fixtureApprovalScript } from "./fixture-chat-approval.ts";
+import {
+  FIXTURE_FILE_REQUEST_PENDING_MS,
+  FIXTURE_FILE_REQUEST_WAIT_MS,
+  fixtureFileRequestScript,
+  type FixtureRequestFiles,
+} from "./fixture-chat-file-request.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
@@ -138,6 +145,14 @@ export interface FixtureChatOptions {
    * Absent means a registry of this client's own, which `respond` answers from.
    */
   requests?: FixtureChatRequests | undefined;
+  /**
+   * The fixture boxes' files service, where the `E2E_FILE_REQUEST*` and
+   * `E2E_*SECRET*` turns open their slots (`fixture-chat-file-request.ts`).
+   * Absent, those prompts are ordinary turns.
+   */
+  files?: FixtureRequestFiles | undefined;
+  /** How long a request turn waits for the operator; the timeout trigger's wait. */
+  fileRequestWaitMs?: { open?: number | undefined; pending?: number | undefined } | undefined;
 }
 
 /**
@@ -313,6 +328,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   const activity = opts.activity;
   const cutAfter = opts.cutAfter ?? 0;
   const requests = opts.requests ?? createFixtureChatRequests();
+  /** The fixture boxes' files service, for the request turns. */
+  const files = opts.files;
+  const fileWaits = opts.fileRequestWaitMs ?? {};
   /** Delegated children: the `E2E_SUBAGENT*` triggers and child control. */
   const subagents = createFixtureSubagents({
     delayMs,
@@ -563,8 +581,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const clarify = fixtureClarifyScript(text);
         const approval = fixtureApprovalScript(text);
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
+        const asking = files ? fixtureFileRequestScript(text) : null;
         const log =
-          clarify || approval || failing
+          clarify || approval || failing || asking
             ? []
             : attached.length > 0
               ? [...attachmentTurn(id, attached)]
@@ -671,6 +690,34 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             const outcome = await parked.settled;
             if (outcome.kind !== "aborted")
               yield* deliver(approval.resume(id, outcome, cursor, parked.request_id));
+            return;
+          }
+          /**
+           * A request turn (`fixture-chat-file-request.ts`): the slot opened on
+           * the fixture box for this turn's session, the running card naming
+           * it, then a park on the slot until it is answered, declined or
+           * expires — or, past the wait, a `pending` result with the slot left
+           * open for a late delivery.
+           */
+          if (asking && files) {
+            let slot: FileRequest;
+            try {
+              slot = files.openRequest(instance, asking.body, {
+                ...(session !== null ? { session_id: session } : {}),
+              });
+            } catch (e) {
+              yield* deliver(asking.refused(id, e instanceof Error ? e.message : String(e)));
+              return;
+            }
+            yield* deliver(asking.ask(id, slot.request_id));
+            const settled = await files.waitFor(instance, slot.request_id, {
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              timeoutMs: asking.timeout
+                ? (fileWaits.pending ?? Math.max(FIXTURE_FILE_REQUEST_PENDING_MS, delayMs * 20))
+                : (fileWaits.open ?? FIXTURE_FILE_REQUEST_WAIT_MS),
+            });
+            if (opts.signal?.aborted) return;
+            yield* deliver(asking.resume(id, settled, cursor, instance));
             return;
           }
           /**

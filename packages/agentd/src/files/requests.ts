@@ -19,12 +19,18 @@
  * hold a slot, however slowly it sends.
  */
 import type {
-  FileClass,
   FileRequest,
   FileWaitResult,
   OpenFileRequestBody,
+  OpenSecretRequestBody,
 } from "@hermetic/core/schema";
-import { FILES_LIMITS, FILES_TTL, newRequestId } from "@hermetic/core/shared";
+import {
+  FILES_LIMITS,
+  FILES_TTL,
+  SECRET_TEXT_MAX_KEYS,
+  newRequestId,
+  secretTextSlug,
+} from "@hermetic/core/shared";
 import { FilesError } from "./errors.ts";
 import { type FilesCtx, isDue, isoAfter, nowIso, waitResult } from "./context.ts";
 import type { Claim, FilesIndex } from "./store.ts";
@@ -77,16 +83,13 @@ function isLive(request: FileRequest): boolean {
   return request.state === "open" || request.state === "receiving";
 }
 
-/**
- * Open a slot (socket `POST /requests`). Refused with `CONFLICT` once
- * `FILES_LIMITS.openRequests` slots are live: the socket is the agent's, and
- * an agent in a loop must not be able to grow the index without bound.
- */
-export async function openRequest(ctx: FilesCtx, body: OpenFileRequestBody): Promise<FileRequest> {
+/** What a slot's own fields are, before the state machine takes over. */
+type SlotFields = Omit<FileRequest, "request_id" | "state" | "created_at" | "expires_at">;
+
+function fileSlot(body: OpenFileRequestBody): SlotFields {
   const sensitivity = body.sensitivity ?? "normal";
   const cap = classCap(sensitivity);
-  const request: FileRequest = {
-    request_id: newRequestId(),
+  return {
     kind: "file",
     purpose: body.purpose,
     ...(body.name_hint ? { name_hint: body.name_hint } : {}),
@@ -94,10 +97,127 @@ export async function openRequest(ctx: FilesCtx, body: OpenFileRequestBody): Pro
     max_bytes: Math.min(body.max_bytes ?? cap, cap),
     sensitivity,
     durable: body.durable ?? sensitivity === "secret",
+    ...(body.session_id ? { session_id: body.session_id } : {}),
+  };
+}
+
+/**
+ * A `request_secret` slot: key names only, always the secret class, durable
+ * unless the agent said otherwise, and capped at `secretTextBytes`. The names
+ * are the contract the box parses the operator's text against (D10), so a
+ * name given twice, or as both required and optional, or more than
+ * `SECRET_TEXT_MAX_KEYS` in all, is refused here rather than at fulfil time.
+ */
+function secretTextSlot(body: OpenSecretRequestBody): SlotFields {
+  const optional = body.optional_keys ?? [];
+  const all = [...body.keys, ...optional];
+  if (all.length > SECRET_TEXT_MAX_KEYS) {
+    throw new FilesError(
+      "VALIDATION",
+      `a secret request names at most ${SECRET_TEXT_MAX_KEYS} keys, required and optional together`,
+    );
+  }
+  const twice = all.find((key, i) => all.indexOf(key) !== i);
+  if (twice !== undefined) throw new FilesError("VALIDATION", `${twice} is named twice`);
+  return {
+    kind: "secret_text",
+    purpose: body.purpose,
+    accept: [],
+    max_bytes: FILES_LIMITS.secretTextBytes,
+    sensitivity: "secret",
+    durable: body.durable ?? true,
+    keys: [...body.keys],
+    ...(optional.length > 0 ? { optional_keys: [...optional] } : {}),
+    slug: secretTextSlug(body.keys, body.slug),
+    input: body.input ?? "auto",
+    ...(body.session_id ? { session_id: body.session_id } : {}),
+  };
+}
+
+/** The longest slug a slot takes (`ENV_SECRET_SLOT_RE`). */
+const SLUG_MAX = 48;
+
+/** A text secret's key names, required and optional, order-insensitive. */
+function keySet(request: FileRequest): string {
+  return [...(request.keys ?? []), ...(request.optional_keys ?? [])].sort().join(",");
+}
+
+/**
+ * Whether a stored text secret is the one `slot` asks for: every required key
+ * stored, and every stored key a required one. An optional key does not
+ * count: a fulfil that leaves it out would write over the stored value of a
+ * key this request does not insist on, and lose it.
+ */
+function storedKeysFit(stored: readonly string[], slot: FileRequest): boolean {
+  const required = slot.keys ?? [];
+  return required.every((k) => stored.includes(k)) && stored.every((k) => required.includes(k));
+}
+
+/**
+ * The slug a new text-secret slot is stored under. Two different requests can
+ * land on one slug (`GITHUB_TOKEN` and `GITHUB_API_KEY` both derive `github`,
+ * and the agent may give any slug), and a durable fulfil writes `env-<slug>`
+ * and `<slug>.env` over whatever was there. So a slug already held for another
+ * secret moves on to `<slug>-2`, `-3`, …: by a live text-secret slot with a
+ * different key set, or by a durable secret entry named `<slug>.env` whose
+ * stored keys (`FileEntry.keys`, recorded when it was placed) are not exactly
+ * this request's required keys (`storedKeysFit`). The same secret keeps its
+ * slug — that is how it is rotated, however long ago the sweeper pruned the
+ * request that stored it. An
+ * entry with no keys recorded falls back to its request's key set, and when
+ * that is gone too (or it is a file secret) counts as another secret.
+ */
+function freeSlug(index: FilesIndex, slot: FileRequest): string {
+  const base = slot.slug ?? secretTextSlug(slot.keys ?? []);
+  const mine = keySet(slot);
+  /** Per slug: whether each holder is this same secret. */
+  const held = new Map<string, boolean[]>();
+  const hold = (slug: string, same: boolean): void => {
+    held.set(slug, [...(held.get(slug) ?? []), same]);
+  };
+  for (const r of index.requests) {
+    if (r.kind === "secret_text" && isLive(r)) {
+      hold(r.slug ?? secretTextSlug(r.keys ?? []), keySet(r) === mine);
+    }
+  }
+  for (const e of index.entries) {
+    if (e.dir !== "secret" || !e.name.endsWith(".env")) continue;
+    let same: boolean;
+    if (e.keys) same = storedKeysFit(e.keys, slot);
+    else {
+      const from = index.requests.find((r) => r.request_id === e.request_id);
+      same = from?.kind === "secret_text" && keySet(from) === mine;
+    }
+    hold(e.name.slice(0, -".env".length), same);
+  }
+  const clashes = (slug: string): boolean => (held.get(slug) ?? []).some((same) => !same);
+  if (!clashes(base)) return base;
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}`;
+    const candidate = `${base.slice(0, SLUG_MAX - suffix.length).replace(/-+$/, "")}${suffix}`;
+    if (!clashes(candidate)) return candidate;
+  }
+}
+
+/**
+ * Open a slot (socket `POST /requests`): a file (`request_file`) or, with
+ * `kind: "secret_text"`, a text secret (`request_secret`), its slug moved off
+ * one another secret holds (`freeSlug`). Refused with
+ * `CONFLICT` once `FILES_LIMITS.openRequests` slots are live, of either kind:
+ * the socket is the agent's, and an agent in a loop must not be able to grow
+ * the index without bound.
+ */
+export async function openRequest(
+  ctx: FilesCtx,
+  body: OpenFileRequestBody | OpenSecretRequestBody,
+): Promise<FileRequest> {
+  const fields = "kind" in body && body.kind === "secret_text" ? secretTextSlot(body) : fileSlot(body);
+  const request: FileRequest = {
+    request_id: newRequestId(),
+    ...fields,
     state: "open",
     created_at: nowIso(ctx.host),
     expires_at: isoAfter(ctx.host, FILES_TTL.request),
-    ...(body.session_id ? { session_id: body.session_id } : {}),
   };
   const woken: string[] = [];
   await ctx.store.mutate((index) => {
@@ -109,6 +229,7 @@ export async function openRequest(ctx: FilesCtx, body: OpenFileRequestBody): Pro
           "wait for one to be answered, declined or expire before asking again",
       );
     }
+    if (request.kind === "secret_text") request.slug = freeSlug(index, request);
     index.requests.push(request);
   });
   for (const id of woken) ctx.store.wake(id);
@@ -265,7 +386,7 @@ export function markFulfilled(
   index: FilesIndex,
   id: string,
   claim: Claim,
-  fulfilled: { path: string; sha256: string; bytes: number; by: string; class: FileClass },
+  fulfilled: Omit<NonNullable<FileRequest["fulfilled"]>, "at">,
 ): void {
   const request = find(index, id);
   if (request.state !== "receiving" || ctx.store.claimed(id) !== claim) {

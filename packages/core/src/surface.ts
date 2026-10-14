@@ -48,6 +48,9 @@ import {
   ChatHistoryInput as ChatHistoryInputSchema,
   ChatObserveInput as ChatObserveInputSchema,
   ChatSendInput as ChatSendInputSchema,
+  FilesDeclineInput as FilesDeclineInputSchema,
+  FilesPutApiInput as FilesPutApiInputSchema,
+  FilesPutInput as FilesPutInputSchema,
   FilesStageApiInput as FilesStageApiInputSchema,
   FilesStageInput as FilesStageInputSchema,
   ChatSessionsInput as ChatSessionsInputSchema,
@@ -109,6 +112,7 @@ import {
 } from "./schema/index.ts";
 import type {
   CreateAgentInput,
+  FilesPutInput,
   InitInput,
   LocalConfig,
   ProvidersCreateInput,
@@ -186,6 +190,9 @@ export const PUBLIC_METHODS = [
   "chat.observe",
   // Composer attachments: one file to an agent's stage area, for a chat turn to attach.
   "files.stage",
+  // Agent file requests: answer one with a file or a text secret, or say no.
+  "files.put",
+  "files.decline",
   "artifacts.push",
   "teardown",
   "doctor",
@@ -252,6 +259,8 @@ export const STREAMING_METHODS: readonly PublicMethod[] = [
   "agents.recreate",
   "agents.stop",
   "agents.start",
+  // Answering an agent's file request: one row on failure, never the bytes.
+  "files.put",
 ] as const;
 /**
  * The schema each public method validates its input against (§3.3, §11.4). The
@@ -343,6 +352,14 @@ export const REQUEST_SCHEMAS = {
    * an upload id only; a path is the CLI's (`CLI_REQUEST_SCHEMAS`).
    */
   "files.stage": FilesStageApiInputSchema,
+  /**
+   * Answering an agent's request. Like `files.stage`, the bridge names an
+   * upload id only; a path is the CLI's. A text secret is never a field: the
+   * CLI registers stdin as an upload, and the page's card has its own
+   * machinery request.
+   */
+  "files.put": FilesPutApiInputSchema,
+  "files.decline": FilesDeclineInputSchema,
   // The HTTP surface may name a version and nothing else: a browser must not be
   // able to name a path on the server's filesystem.
   "artifacts.push": ArtifactsPushApiInputSchema,
@@ -408,15 +425,16 @@ export const REQUEST_SCHEMAS = {
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**
- * The CLI's view of the same table. It differs in exactly two places, both for
- * the same reason: `artifacts push` and `files stage` may name a local path,
- * because the CLI runs on the laptop that holds the file.
+ * The CLI's view of the same table. It differs in exactly three places, all for
+ * the same reason: `artifacts push`, `files stage` and `files put` may name a
+ * local path, because the CLI runs on the laptop that holds the file.
  */
 export const CLI_REQUEST_SCHEMAS = {
   ...REQUEST_SCHEMAS,
   "artifacts.push": ArtifactsPushInputSchema,
   // The CLI runs on the laptop that holds the file, so it may name its path.
   "files.stage": FilesStageInputSchema,
+  "files.put": FilesPutInputSchema,
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**
@@ -518,4 +536,17 @@ export function redactProvidersModelsInput(
 ): Omit<ProvidersModelsInput, "api_key"> & { api_key?: "(redacted)" } {
   const { api_key, ...rest } = input;
   return api_key === undefined ? rest : { ...rest, api_key: "(redacted)" };
+}
+
+/**
+ * The fields of `FilesPutInput` that are safe to record or display. A path
+ * source names a file on this laptop, and a file's name can be as sensitive as
+ * its contents, so it is replaced; an upload id is opaque and kept. There is
+ * no value field to redact: a text secret only ever travels as an upload id.
+ */
+export function redactFilesPutInput(
+  input: FilesPutInput,
+): Omit<FilesPutInput, "source"> & { source: FilesPutInput["source"] | { path: "(redacted)" } } {
+  if ("path" in input.source) return { ...input, source: { path: "(redacted)" } };
+  return input;
 }

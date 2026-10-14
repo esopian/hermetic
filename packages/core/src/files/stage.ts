@@ -66,11 +66,11 @@ function parseInput(input: unknown): FilesStageInput {
   });
 }
 
-function aborted(signal: AbortSignal): void {
+export function aborted(signal: AbortSignal): void {
   if (signal.aborted) throw new HermeticError("ABORTED", "the file transfer was stopped");
 }
 
-function nameFor(raw: string): string {
+export function nameFor(raw: string): string {
   const clean = sanitizeFileName(raw);
   if (!clean.ok) {
     throw new HermeticError("FILE_NAME_INVALID", `that file name is not allowed (${clean.reason})`, {
@@ -85,7 +85,7 @@ function nameFor(raw: string): string {
  * messages (`EACCES: permission denied, open '<path>'`) carry the file's name.
  * Only the errno's code survives, in `details`.
  */
-function readError(e: unknown): HermeticError {
+export function readError(e: unknown): HermeticError {
   if (e instanceof HermeticError) return e;
   const errno = typeof e === "object" && e !== null ? (e as { code?: unknown }).code : undefined;
   const code = typeof errno === "string" ? errno : null;
@@ -97,7 +97,7 @@ function readError(e: unknown): HermeticError {
   return new HermeticError("NOT_FOUND", "the file cannot be read", code ? { errno: code } : undefined);
 }
 
-async function statFile(path: string): Promise<number> {
+export async function statFile(path: string): Promise<number> {
   try {
     const info = await stat(path);
     if (!info.isFile()) throw new HermeticError("VALIDATION", "only a regular file can be attached");
@@ -107,7 +107,7 @@ async function statFile(path: string): Promise<number> {
   }
 }
 
-async function readHead(path: string): Promise<Uint8Array> {
+export async function readHead(path: string): Promise<Uint8Array> {
   try {
     const handle = await open(path, "r");
     try {
@@ -127,7 +127,11 @@ async function readHead(path: string): Promise<Uint8Array> {
  * that grew or shrank since it was measured is refused: a short body would
  * leave the upload waiting for bytes its `Content-Length` promised.
  */
-async function* fileChunks(path: string, size: number, signal: AbortSignal): AsyncIterable<Uint8Array> {
+export async function* fileChunks(
+  path: string,
+  size: number,
+  signal: AbortSignal,
+): AsyncIterable<Uint8Array> {
   const stream = createReadStream(path, { highWaterMark: READ_CHUNK });
   let seen = 0;
   try {
@@ -157,7 +161,7 @@ const FILE_CHANGED = "the file changed since it was attached; attach it again";
  * Run `work`, yielding the progress events it emits as they happen and then its
  * result. Leaving the loop early aborts the work through `controller`.
  */
-async function* pump<T>(
+export async function* pump<T>(
   controller: AbortController,
   work: (emit: (e: FilesStageProgressEvent) => void) => Promise<T>,
 ): AsyncGenerator<FilesStageProgressEvent, T> {
@@ -204,7 +208,7 @@ async function* pump<T>(
 }
 
 /** Calls `emit` once per whole percent, and at the end. */
-function throttled(
+export function throttled(
   emit: (e: FilesStageProgressEvent) => void,
   phase: string,
   from: number,

@@ -167,6 +167,97 @@ describe.concurrent("the session list", () => {
 });
 
 describe.concurrent("the transcript", () => {
+  test("a request card is one line saying how to answer it", () => {
+    const card = (over: Record<string, unknown>) =>
+      ({
+        kind: "tool",
+        tool_id: "call-1",
+        name: "request_file",
+        server: null,
+        args: { purpose: "Raw nginx\naccess log", accept: [".log"] },
+        result: null,
+        status: "running",
+        exit_code: null,
+        duration_ms: null,
+        render: "file_request",
+        request_id: null,
+        ...over,
+      }) as Parameters<typeof blockLines>[0];
+    expect(blockLines(card({}), "sindri")).toEqual([
+      '▣ sindri requested a file: "Raw nginx access log" — waiting for the box',
+    ]);
+    expect(blockLines(card({ request_id: "fr_abcdefabcdef" }), "sindri")).toEqual([
+      '▣ sindri requested a file: "Raw nginx access log" — deliver: hermetic files put sindri --request fr_abcdefabcdef <path>',
+    ]);
+    expect(
+      blockLines(
+        card({ request_id: "fr_abcdefabcdef", args: { purpose: "key", sensitivity: "secret" } }),
+        "sindri",
+      ),
+    ).toEqual([
+      '▣ sindri requested a secret file: "key" — deliver: hermetic files put sindri --request fr_abcdefabcdef --secret <path>',
+    ]);
+    expect(
+      blockLines(
+        card({
+          name: "request_secret",
+          render: "secret_request",
+          request_id: "fr_abcdefabcdef",
+          args: { purpose: "token", keys: ["GITHUB_TOKEN"] },
+        }),
+        "sindri",
+      ),
+    ).toEqual([
+      '▣ sindri requested a secret: "token" — deliver: hermetic files put sindri --request fr_abcdefabcdef --secret-stdin',
+    ]);
+    // Settled: the outcome, and the deliver hint only while the slot is still open.
+    expect(
+      blockLines(
+        card({
+          status: "ok",
+          request_id: "fr_abcdefabcdef",
+          result: '{"status":"declined","request_id":"fr_abcdefabcdef"}',
+        }),
+        "sindri",
+      ),
+    ).toEqual(['▣ sindri requested a file: "Raw nginx access log" -> declined']);
+    expect(
+      blockLines(card({ status: "ok", request_id: "fr_abcdefabcdef", result: { status: "pending" } })),
+    ).toEqual([
+      '▣ the agent requested a file: "Raw nginx access log" -> pending — deliver: hermetic files put <agent> --request fr_abcdefabcdef <path>',
+    ]);
+    const long = "x".repeat(200);
+    expect(blockLines(card({ args: { purpose: long } }), "sindri")[0]).toContain(
+      `"${"x".repeat(79)}…"`,
+    );
+  });
+
+  test("a request's purpose cannot drive the terminal: controls, ESC and bidi are dropped", () => {
+    const purpose =
+      "the \u001b[2J\u001b[31mlog\u0007\u0000 \u009b1m\u007fplease\u202e gol\u202c \u2066x\u2069\u200f\u061c";
+    const [line] = blockLines(
+      {
+        kind: "tool",
+        tool_id: "call-1",
+        name: "request_file",
+        server: null,
+        args: { purpose },
+        result: { status: "declined\u001b[0m" },
+        status: "ok",
+        exit_code: null,
+        duration_ms: null,
+        render: "file_request",
+        request_id: null,
+      } as Parameters<typeof blockLines>[0],
+      "sindri",
+    );
+    expect(line).toBe('▣ sindri requested a file: "the [2J[31mlog 1mplease gol x" -> declined[0m');
+    expect(line).not.toMatch(
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
+      /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/,
+    );
+  });
+
   test("every block kind renders as something", () => {
     // The `unknown` case is the contract, not a fallback: upstream emits tools
     // this repo has never heard of, and a version bump must never blank a

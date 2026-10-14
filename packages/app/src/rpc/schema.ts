@@ -27,6 +27,8 @@ import type {
   FilesChunkOpenInput,
   FilesChunkRefInput,
   FilesEntryRefInput,
+  FilesPutFrame,
+  FilesRequestRefInput,
   FilesStageFrame,
   FleetTarget,
   PublicMethod,
@@ -193,6 +195,9 @@ export type MachineryRequests = {
   "files.discard": RpcRequest<Input<typeof files.filesDiscardBody>, Answer<typeof files.discard>>;
   "files.content": RpcRequest<Input<typeof FilesEntryRefInput>, Answer<typeof files.content>>;
   "files.pickNative": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.pickNative>>;
+  /** `files.put`'s cancel, and the request card's read of the box's slot. */
+  "files.put.abort": RpcRequest<StreamRef, StreamClosed>;
+  "files.request.get": RpcRequest<Input<typeof FilesRequestRefInput>, Answer<typeof files.requestGet>>;
 
   /**
    * Fixture-only staging. Core validates inside the fixture control surface —
@@ -280,6 +285,8 @@ export const MACHINERY_REQUEST_NAMES = [
   "files.discard",
   "files.content",
   "files.pickNative",
+  "files.put.abort",
+  "files.request.get",
   "fixture.chat.inject",
   "fixture.chat.hint",
   "app.info",
@@ -340,6 +347,11 @@ export type WebviewMessages = {
    * — `staged` with the box's answer, or `error` (`FilesStageFrame`).
    */
   "files.frame": { stream_id: string; frame?: FilesStageFrame; done?: FilesStageFrame };
+  /**
+   * One `files.put` frame: `frame` is a progress event, `done` the last word
+   * — `fulfilled` with the box's answer, or `error` (`FilesPutFrame`).
+   */
+  "files.put.frame": { stream_id: string; frame?: FilesPutFrame; done?: FilesPutFrame };
   /** The updater's state, for the footer. */
   "app.update": { status: string; version?: string };
   /**
@@ -420,6 +432,7 @@ export const MESSAGE_FOR_REQUEST = {
   logs: "logs.line",
   "logs.open": "logs.line",
   "files.stage": "files.frame",
+  "files.put": "files.put.frame",
   "terminal.attach": "terminal.frame",
 } as const satisfies Record<string, WebviewMessageName>;
 

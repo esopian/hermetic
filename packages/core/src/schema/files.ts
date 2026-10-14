@@ -6,6 +6,11 @@ import {
   FILE_REQUEST_STATES,
   FILE_SENSITIVITIES,
   FILES_TTL,
+  SECRET_TEXT_AS,
+  SECRET_TEXT_FORMATS,
+  SECRET_TEXT_INPUTS,
+  SECRET_TEXT_KEY_RE,
+  SECRET_TEXT_MAX_KEYS,
   isFileId,
   isRequestId,
   isShareId,
@@ -36,6 +41,7 @@ export {
   FILES_LIMITS,
   FILES_OUTBOX_DIR,
   FILES_ROUTES,
+  FILES_SECRET_AS_HEADER,
   FILES_SECRET_DIR,
   FILES_SESSION_HEADER,
   FILES_SOCKET_PATH,
@@ -49,6 +55,11 @@ export {
   FILE_SECRET_SLOT_RE,
   FILE_SENSITIVITIES,
   SECRET_ENVELOPE_MAX_CHARS,
+  SECRET_TEXT_AS,
+  SECRET_TEXT_FORMATS,
+  SECRET_TEXT_INPUTS,
+  SECRET_TEXT_KEY_RE,
+  SECRET_TEXT_MAX_KEYS,
   acceptMatches,
   decodeSecretEnvelope,
   encodeSecretEnvelope,
@@ -73,6 +84,8 @@ export {
   sanitizeFileName,
   secretEnvelopeFits,
   secretSlotFileName,
+  secretTextLoad,
+  secretTextSlug,
   shortId,
   sniffMime,
 } from "../shared/files.ts";
@@ -83,7 +96,34 @@ export type {
   FilesSocketRoute,
   SanitizedFileName,
   SecretEnvelope,
+  SecretTextAs,
+  SecretTextFormat,
+  SecretTextInput,
 } from "../shared/files.ts";
+
+// The text-secret parser (plan §06b) through the schema door too, so hermeticd
+// re-parses with exactly the code the card previewed with.
+export {
+  SECRET_ENV_ERROR_CODES,
+  SECRET_ENV_WARNING_CODES,
+  SECRET_KEY_RE,
+  SECRET_TEXT_MAX_BYTES,
+  canonicalSecretEnv,
+  detectSecretFormat,
+  parseSecretEnv,
+  readCanonicalSecretEnv,
+} from "../shared/secret-env.ts";
+export type {
+  SecretEnvChip,
+  SecretEnvEntry,
+  SecretEnvErrorCode,
+  SecretEnvIssue,
+  SecretEnvResult,
+  SecretEnvSpec,
+  SecretEnvWarningCode,
+  SecretFormat,
+  SecretInputMode,
+} from "../shared/secret-env.ts";
 
 // --- Primitives -------------------------------------------------------------
 
@@ -97,6 +137,11 @@ export const FileRequestState = z.enum(FILE_REQUEST_STATES);
 export type FileRequestState = z.infer<typeof FileRequestState>;
 export const FileRequestKind = z.enum(FILE_REQUEST_KINDS);
 export type FileRequestKind = z.infer<typeof FileRequestKind>;
+export const SecretTextInputMode = z.enum(SECRET_TEXT_INPUTS);
+export const SecretTextAsMode = z.enum(SECRET_TEXT_AS);
+export const SecretTextFormatName = z.enum(SECRET_TEXT_FORMATS);
+/** A key name a `request_secret` may ask for (`SECRET_TEXT_KEY_RE`). */
+export const SecretTextKey = z.string().regex(SECRET_TEXT_KEY_RE, "not an upper-case env name");
 
 /** An inbox, secret or staged file (`f_…`) or an outbox share (`sh_…`). */
 export const FileEntryId = z
@@ -147,6 +192,12 @@ export const FileEntry = z.object({
   request_id: FileRequestId.optional(),
   /** A durable secret's SSM slot (`file-<slug>` or `env-<slug>`). */
   slot: z.string().min(1).optional(),
+  /**
+   * A durable text secret: the key names stored, never values. What tells a
+   * later request for the same secret (a rotation) from another one on the
+   * same slug once the request that stored it is gone.
+   */
+  keys: z.array(z.string().min(1).max(128)).optional(),
   /** The agent's note on a share. */
   note: z.string().max(2000).optional(),
 });
@@ -172,9 +223,13 @@ export const FileRequest = z.object({
   created_at: Iso,
   expires_at: Iso,
   session_id: OpaqueId.optional(),
-  /** `secret_text` requests (Phase 3): key names required, never values. */
+  /** `secret_text` requests: key names required, never values. */
   keys: z.array(z.string().min(1).max(128)).optional(),
   optional_keys: z.array(z.string().min(1).max(128)).optional(),
+  /** `secret_text`: the file stem under the secret dir (`<slug>.env`) and the `env-<slug>` slot. */
+  slug: z.string().min(1).max(48).optional(),
+  /** `secret_text`: the card's starting input mode. */
+  input: SecretTextInputMode.optional(),
   fulfilled: z
     .object({
       path: z.string().min(1),
@@ -184,6 +239,11 @@ export const FileRequest = z.object({
       by: z.string().min(1),
       at: Iso,
       class: FileClass,
+      /** `secret_text`: the key names stored (never values) and how the text was read. */
+      keys: z.array(z.string().min(1).max(128)).optional(),
+      format: SecretTextFormatName.optional(),
+      /** The durable SSM slot (`file-<slug>`/`env-<slug>`), absent for an ephemeral secret. */
+      ssm_slot: z.string().min(1).max(128).optional(),
     })
     .optional(),
   declined: z.object({ reason: z.string().max(500).optional(), at: Iso }).optional(),
@@ -236,6 +296,9 @@ export const FilesFulfilResult = z.object({
   sha256: Sha256,
   bytes: Bytes,
   class: FileClass,
+  /** `secret_text` only: key names stored and the format the box read. */
+  keys: z.array(z.string().min(1).max(128)).optional(),
+  format: SecretTextFormatName.optional(),
 });
 export type FilesFulfilResult = z.infer<typeof FilesFulfilResult>;
 
@@ -243,6 +306,12 @@ export type FilesFulfilResult = z.infer<typeof FilesFulfilResult>;
 export const FilesSecretBody = z.object({
   ssm_slot: z.string().min(1).max(128),
   name: FileName,
+  /**
+   * `secret_text` only: how the laptop read the operator's text. The slot holds
+   * the canonical `KEY="…"` form either way, which the box re-parses against
+   * the request's keys; this is recorded so the agent is told the format.
+   */
+  format: SecretTextFormatName.optional(),
 });
 export type FilesSecretBody = z.infer<typeof FilesSecretBody>;
 
@@ -312,6 +381,33 @@ export const OpenFileRequestBody = z.object({
 export type OpenFileRequestBody = z.infer<typeof OpenFileRequestBody>;
 
 /**
+ * `POST /requests` with `kind: "secret_text"`: what the plugin forwards from
+ * `request_secret`. Key names only, never values. Like `OpenFileRequestBody`,
+ * extra model fields are dropped and `wait_s` is clamped; unlike it, a bad key
+ * name is refused, because the card and the box check pasted keys against
+ * these names (D10).
+ */
+export const OpenSecretRequestBody = z.object({
+  kind: z.literal("secret_text"),
+  purpose: z.string().trim().min(1).max(2000),
+  keys: z.array(SecretTextKey).min(1).max(SECRET_TEXT_MAX_KEYS),
+  optional_keys: z.array(SecretTextKey).max(SECRET_TEXT_MAX_KEYS).optional(),
+  /** File stem; default derived from `keys[0]` by hermeticd. Slugged like a slot. */
+  slug: z.string().min(1).max(64).optional(),
+  durable: z.boolean().optional(),
+  input: SecretTextInputMode.optional(),
+  wait_s: z
+    .number()
+    .int()
+    .nonnegative()
+    .transform((s) => Math.min(s, FILES_TTL.waitMax))
+    .optional(),
+  session_id: OpaqueId.optional(),
+  task_id: OpaqueId.optional(),
+});
+export type OpenSecretRequestBody = z.infer<typeof OpenSecretRequestBody>;
+
+/**
  * What `request_file`/`await_file` hand back to the model. `pending` means the
  * wait ran out with the slot still open; `deliver_with` then lists ways an
  * operator without a card can fulfil it (`hermetic files put …`, `curl -T …`).
@@ -325,6 +421,10 @@ export const FileWaitResult = z.object({
   bytes: Bytes.optional(),
   by: z.string().min(1).optional(),
   class: FileClass.optional(),
+  /** `secret_text` only: key names stored, the format read, and the shell line that loads them. */
+  keys: z.array(z.string().min(1).max(128)).optional(),
+  format: SecretTextFormatName.optional(),
+  load: z.string().min(1).optional(),
   deliver_with: z.array(z.string()),
   expires_at: Iso,
 });

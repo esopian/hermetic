@@ -51,6 +51,7 @@ import {
   requireKnownUnit,
 } from "./accounts.ts";
 import { ensureAgentVenv } from "./agent-python.ts";
+import { HERMES_PLUGIN_DIR, ensureHermesPlugin } from "./plugins.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
@@ -255,6 +256,12 @@ export async function apply(
   // After the account exists and after `ensureHermes`, which is what puts `uv`
   // on the box.
   await ensureAgentVenv(host, emit, dry);
+  // The hermetic-files plugin (`apply/plugins.ts`). Deliberately no restart
+  // when it changes: Hermes reads plugins at start, and a restart ends every
+  // live turn on the box. The first install arrives with the managed config
+  // that enables it, which restarts Hermes anyway; a later plugin edit is
+  // picked up at the next restart.
+  if (await ensureHermesPlugin(host, emit, dry)) result.changed.push(HERMES_PLUGIN_DIR);
 
   // ─── 3. files ──────────────────────────────────────────────────────────────
   emit(opEvent("files", 0.4, `checking ${manifest.files.length} rendered file(s)`, at()));

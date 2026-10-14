@@ -13,21 +13,68 @@
  * group — there is no window in which anyone else can connect, whatever umask
  * the process was started with.
  */
-import type { FilesHello } from "@hermetic/core/schema";
-import { OpenFileRequestBody } from "@hermetic/core/schema";
+import type { FileEntry, FileRequest, FilesHello } from "@hermetic/core/schema";
+import { OpenFileRequestBody, OpenSecretRequestBody } from "@hermetic/core/schema";
 import { FILES_SOCKET_PATH, HERMES_ACCOUNT, matchSocketRoute } from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { type FilesCtx, waitResult } from "./context.ts";
-import { consumeRequest, listFiles } from "./entries.ts";
+import { consumeRequest, isSecret, listFiles } from "./entries.ts";
 import { FilesError, filesErrorResponse, jsonResponse, toFilesResponse } from "./errors.ts";
 import { getRequest, openRequest, waitForRequest } from "./requests.ts";
-import { jsonBody } from "./routes.ts";
+import { type BodySchema, jsonBody } from "./routes.ts";
 
 /** The socket protocol the plugin handshakes against in `GET /hello`. */
 export const FILES_SOCKET_PROTOCOL = 1;
 
 export type FilesSocketHandler = (request: Request) => Promise<Response>;
+
+/**
+ * `POST /requests`'s body: `request_secret`'s when it says `kind:
+ * "secret_text"`, `request_file`'s otherwise — a body without `kind` is the
+ * Phase 1 plugin's, and stays a file request.
+ */
+const OpenRequestBody: BodySchema<OpenFileRequestBody | OpenSecretRequestBody> = {
+  safeParse(value) {
+    const kind =
+      typeof value === "object" && value !== null ? (value as { kind?: unknown }).kind : undefined;
+    return kind === "secret_text"
+      ? OpenSecretRequestBody.safeParse(value)
+      : OpenFileRequestBody.safeParse(value);
+  },
+};
+
+/** A slot whose answer is a secret: a text secret, a secret-sensitivity slot, or a file the box filed as one. */
+function isSecretRequest(request: FileRequest): boolean {
+  return (
+    request.kind === "secret_text" ||
+    request.sensitivity === "secret" ||
+    request.fulfilled?.class === "secret"
+  );
+}
+
+/**
+ * A slot as the socket shows it to the agent. A secret slot (text or file)
+ * loses its fulfilled `sha256` and `bytes`, as its wait result does
+ * (`waitResult`): a short secret's SHA-256 is a dictionary lookup away from
+ * its value, and whatever the agent reads can land in the transcript. The
+ * tailnet routes, which only the operator reaches, keep both.
+ *
+ * The socket's shape is intentionally narrower than core's `FileRequest` and
+ * `FileEntry` (which require both fields); only the plugin reads it, as plain JSON.
+ */
+function forAgent(request: FileRequest): FileRequest {
+  if (!request.fulfilled || !isSecretRequest(request)) return request;
+  const { sha256: _sha256, bytes: _bytes, ...fulfilled } = request.fulfilled;
+  return { ...request, fulfilled: fulfilled as FileRequest["fulfilled"] };
+}
+
+/** A listed entry as the agent sees it: a secret-class one without its digest and size (`forAgent`). */
+function entryForAgent(entry: FileEntry): FileEntry {
+  if (!isSecret(entry)) return entry;
+  const { sha256: _sha256, bytes: _bytes, ...rest } = entry;
+  return rest as FileEntry;
+}
 
 /** The socket's `(Request) → Response`, pure so a test can drive it without a socket. */
 export function makeFilesSocketHandler(ctx: FilesCtx): FilesSocketHandler {
@@ -49,7 +96,7 @@ export function makeFilesSocketHandler(ctx: FilesCtx): FilesSocketHandler {
           return jsonResponse(hello);
         }
         case "openRequest": {
-          const body = await jsonBody(request, OpenFileRequestBody, false, ctx.uploadIdleMs);
+          const body = await jsonBody(request, OpenRequestBody, false, ctx.uploadIdleMs);
           const opened = await openRequest(ctx, body);
           const result =
             body.wait_s && body.wait_s > 0
@@ -58,7 +105,7 @@ export function makeFilesSocketHandler(ctx: FilesCtx): FilesSocketHandler {
           return jsonResponse(result, 201);
         }
         case "request":
-          return jsonResponse(await getRequest(ctx, route.id));
+          return jsonResponse(forAgent(await getRequest(ctx, route.id)));
         case "wait":
           return jsonResponse(await waitForRequest(ctx, route.id, route.s, request.signal));
         case "consume":
@@ -66,8 +113,16 @@ export function makeFilesSocketHandler(ctx: FilesCtx): FilesSocketHandler {
         case "outbox":
           // share_file lands in a later change.
           throw new FilesError("UNSUPPORTED", "sharing files from the agent is not available yet", 501);
-        case "files":
-          return jsonResponse(await listFiles(ctx));
+        case "files": {
+          const listed = await listFiles(ctx);
+          return jsonResponse({
+            ...listed,
+            inbox: listed.inbox.map(entryForAgent),
+            outbox: listed.outbox.map(entryForAgent),
+            secrets: listed.secrets.map(entryForAgent),
+            requests: listed.requests.map(forAgent),
+          });
+        }
       }
     } catch (e) {
       return toFilesResponse(e, ctx.log, `socket ${route.route}`);

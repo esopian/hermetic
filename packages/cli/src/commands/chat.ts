@@ -231,7 +231,7 @@ function processEventLines(block: ProcessEventBlock, self: string): { head: stri
  * has never heard of, and it does so on a `hermes_ref` bump that changes
  * nothing else, so a version bump must never blank a transcript.
  */
-export function blockLines(block: ChatBlock): string[] {
+export function blockLines(block: ChatBlock, agent: string | null = null): string[] {
   switch (block.kind) {
     case "text":
       return block.markdown.split("\n");
@@ -243,6 +243,8 @@ export function blockLines(block: ChatBlock): string[] {
       return [ms == null ? "(thinking)" : `(thought for ${formatAge(ms)})`];
     }
     case "tool": {
+      if (block.render === "file_request" || block.render === "secret_request")
+        return [requestLine(block, agent)];
       const took = block.duration_ms == null ? "" : ` in ${formatAge(block.duration_ms)}`;
       const exit = block.exit_code == null ? "" : ` (exit ${block.exit_code})`;
       return [`$ ${block.name} -> ${block.status}${exit}${took}`];
@@ -286,6 +288,69 @@ export function blockLines(block: ChatBlock): string[] {
   }
 }
 
+/** The longest stretch of an agent's purpose text a request line quotes. */
+const PURPOSE_CHARS = 80;
+
+/**
+ * C0 and C1 controls (ESC among them), DEL, and the bidi marks, embeddings,
+ * overrides and isolates (U+061C, U+200E/F, U+202A–202E, U+2066–2069): what
+ * could move the cursor, recolour the terminal or reorder the line around an
+ * agent's words.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const TERMINAL_UNSAFE_RE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** Agent-supplied text as one inert terminal line: whitespace folded, controls and bidi dropped. */
+function terminalText(text: string): string {
+  return text.replace(/\s+/g, " ").replace(TERMINAL_UNSAFE_RE, "").trim();
+}
+
+/**
+ * An agent asking for a file or a secret (`request_file`, `await_file`,
+ * `request_secret`), as one line that says how to answer it from here.
+ *
+ * The purpose is the agent's own words, quoted as written but inert
+ * (`terminalText`: whitespace folded so it stays one line, control and bidi
+ * characters dropped so it cannot drive the terminal). The flag the deliver hint suggests is read from the
+ * same arguments and is only a hint: the box decides what the slot accepts.
+ */
+function requestLine(block: Extract<ChatBlock, { kind: "tool" }>, agent: string | null): string {
+  const args = record(block.args);
+  const result = record(typeof block.result === "string" ? safeJson(block.result) : block.result);
+  const text = block.render === "secret_request";
+  const secret = text || args?.["sensitivity"] === "secret";
+  const what = text ? "a secret" : secret ? "a secret file" : "a file";
+  const raw = typeof args?.["purpose"] === "string" ? terminalText(args["purpose"]) : "";
+  const purpose =
+    raw === "" ? "" : `: "${raw.length > PURPOSE_CHARS ? `${raw.slice(0, PURPOSE_CHARS - 1)}…` : raw}"`;
+  const outcome =
+    typeof result?.["status"] === "string" ? terminalText(result["status"]) || null : null;
+  const open = block.status === "running" || outcome === "pending";
+  const source = text ? "--secret-stdin" : secret ? "--secret <path>" : "<path>";
+  const deliver =
+    block.request_id && open
+      ? ` — deliver: hermetic files put ${agent ?? "<agent>"} --request ${block.request_id} ${source}`
+      : block.status === "running"
+        ? " — waiting for the box"
+        : "";
+  const settled = block.status === "running" ? "" : ` -> ${outcome ?? block.status}`;
+  return `▣ ${agent ?? "the agent"} requested ${what}${purpose}${settled}${deliver}`;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 /** A failed turn: hermetic's code and message, and upstream's classification when it sent one. */
 function failureLine(failure: NonNullable<ChatMessage["failure"]>): string {
   const surface = failure.surface
@@ -305,7 +370,12 @@ function failureLine(failure: NonNullable<ChatMessage["failure"]>): string {
  * speech, so its role prints as `event` and the block's summary rides on the
  * head line, its detail indented under it.
  */
-export function messageLines(message: ChatMessage, now: number, self = "this bot"): string[] {
+export function messageLines(
+  message: ChatMessage,
+  now: number,
+  self = "this bot",
+  agent: string | null = message.author?.instance ?? null,
+): string[] {
   const events = message.blocks.filter((b): b is ProcessEventBlock => b.kind === "process_event");
   const who =
     events.length > 0
@@ -316,7 +386,9 @@ export function messageLines(message: ChatMessage, now: number, self = "this bot
   const parsed = events.map((block) => processEventLines(block, self));
   const summary = parsed[0] === undefined ? "" : ` ${parsed[0].head}`;
   const head = `${ago(message.at, now)} ago  ${who}${summary}${message.incomplete === true ? "  (incomplete)" : ""}`;
-  const rest = message.blocks.filter((b) => b.kind !== "process_event").flatMap(blockLines);
+  const rest = message.blocks
+    .filter((b) => b.kind !== "process_event")
+    .flatMap((b) => blockLines(b, agent));
   const body = [
     ...(parsed[0]?.detail ?? []),
     ...parsed.slice(1).flatMap((p) => [p.head, ...p.detail]),
@@ -345,12 +417,12 @@ export function messageLines(message: ChatMessage, now: number, self = "this bot
  * written, so the later snapshots on the same key print under it — "Reconnecting…"
  * then "Reconnected", one line each, which is what a log should say.
  */
-export function frameText(frame: ChatFrame, midLine = false): string {
+export function frameText(frame: ChatFrame, midLine = false, agent: string | null = null): string {
   switch (frame.type) {
     case "delta":
       return frame.text;
     case "block":
-      return `${midLine ? "\n" : ""}${blockLines(frame.block).join("\n")}\n`;
+      return `${midLine ? "\n" : ""}${blockLines(frame.block, agent).join("\n")}\n`;
     case "done":
       return "\n";
     case "error":
@@ -405,7 +477,9 @@ export function observeText(event: ChatObserveEvent, now: number, opening: boole
         ` — ${event.messages.length} messages${capped ? `, last ${shown.length} shown` : ""}\n`;
       if (shown.length === 0) return header;
       const self = botAddress(event.instance, event.bot);
-      const rows = shown.map((message) => `${messageLines(message, now, self).join("\n")}\n`);
+      const rows = shown.map(
+        (message) => `${messageLines(message, now, self, event.instance).join("\n")}\n`,
+      );
       return `${header}${rows.join("")}`;
     }
     case "message":
@@ -576,7 +650,7 @@ export function register(program: Command): void {
           if (ctx.flags.json) {
             await out(`${JSON.stringify(frame)}\n`);
           } else {
-            const text = frameText(frame, midLine);
+            const text = frameText(frame, midLine, ref.instance);
             if (text !== "") {
               midLine = !text.endsWith("\n");
               await out(text);
@@ -653,7 +727,7 @@ export function register(program: Command): void {
         const now = Date.now();
         for (const message of result.messages) {
           await out(
-            `${messageLines(message, now, botAddress(result.instance, result.bot)).join("\n")}\n`,
+            `${messageLines(message, now, botAddress(result.instance, result.bot), result.instance).join("\n")}\n`,
           );
         }
       }),

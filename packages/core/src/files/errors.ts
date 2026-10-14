@@ -34,3 +34,37 @@ export function filesRefusal(
   const readable = FILES_READABLE[code] ?? fallback ?? code;
   return new HermeticError(code, `${agent}: ${readable}`, { name: agent, ...details });
 }
+
+/**
+ * A text secret the parser refused: its issues' own messages, which name keys
+ * and line numbers and never a value (`shared/secret-env.ts`). The codes ride
+ * in `details.issues` for a head that wants to branch on them.
+ */
+export function secretTextRefusal(
+  agent: string,
+  errors: readonly { code: string; message: string }[],
+): HermeticError {
+  const why =
+    errors.length === 0 ? "the secret text is not readable" : errors.map((e) => e.message).join(" ");
+  return new HermeticError("VALIDATION", `${agent}: ${why}`, {
+    name: agent,
+    issues: errors.map((e) => e.code),
+  });
+}
+
+/**
+ * A request slot that is not `open`, refused with the code the box answers
+ * (`takeSlot` in hermeticd): expired, already answered (or mid-upload), or
+ * otherwise closed.
+ */
+export function requestStateRefusal(state: string, agent: string): HermeticError {
+  switch (state) {
+    case "expired":
+      return filesRefusal("FILE_REQUEST_EXPIRED", agent, undefined, { state });
+    case "receiving":
+    case "fulfilled":
+      return filesRefusal("FILE_REQUEST_FULFILLED", agent, undefined, { state });
+    default:
+      return filesRefusal("FILE_REQUEST_CLOSED", agent, undefined, { state });
+  }
+}

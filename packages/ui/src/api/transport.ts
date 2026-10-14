@@ -157,7 +157,11 @@ export type RequestName =
   | "files.capability"
   | "files.discard"
   | "files.content"
-  | "files.pickNative";
+  | "files.pickNative"
+  // An agent's file request (§8.3): the box's slot (machinery) and the answer
+  // that says no. `files.put` is the stream that says yes.
+  | "files.request.get"
+  | "files.decline";
 
 /** The name of a finite stream. Disjoint from `RequestName` on purpose: a stream is not an answer. */
 export type StreamName =
@@ -165,7 +169,8 @@ export type StreamName =
   | "logs.open"
   | "chat.turn"
   | "terminal.attach"
-  | "files.stage";
+  | "files.stage"
+  | "files.put";
 
 /** Which long-lived feed a `subscribe` means. One socket each, today and under RPC. */
 export type SubscriptionKind = "fleet" | "chat";

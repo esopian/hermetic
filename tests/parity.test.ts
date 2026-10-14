@@ -173,6 +173,9 @@ const SURFACE: Record<PublicMethod, string> = {
   "chat.observe": "chat watch",
   // Composer attachments: one file to an agent's stage area. A stream like `chat`, not an op.
   "files.stage": "files stage",
+  // Answering an agent's file or secret request, and saying no to one.
+  "files.put": "files put",
+  "files.decline": "files decline",
   "artifacts.push": "artifacts push",
   teardown: "teardown",
   doctor: "doctor",
@@ -276,12 +279,13 @@ describe("parity: core ↔ CLI ↔ RPC", () => {
   });
 
   test("the two tables differ only where the heads genuinely differ", () => {
-    // `artifacts push` and `files stage` may name a local file from the CLI and
-    // never from the app; anything else diverging is a bug in one of the heads.
+    // `artifacts push`, `files stage` and `files put` may name a local file from
+    // the CLI and never from the app; anything else diverging is a bug in one of
+    // the heads.
     const different = [...PUBLIC_METHODS].filter(
       (p) => (REQUEST_SCHEMAS[p] as unknown) !== (CLI_REQUEST_SCHEMAS[p] as unknown),
     );
-    expect(different.sort()).toEqual(["artifacts.push", "files.stage"]);
+    expect(different.sort()).toEqual(["artifacts.push", "files.put", "files.stage"]);
   });
 
   test("no command wraps anything that is not a public method", () => {

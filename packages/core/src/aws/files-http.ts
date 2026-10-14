@@ -5,6 +5,8 @@ import type {
   FilesApi,
   FilesCallOptions,
   FilesContent,
+  FilesFulfilOptions,
+  FilesFulfilUpload,
   FilesProgress,
   FilesStageUpload,
 } from "../backend/types.ts";
@@ -13,8 +15,12 @@ import {
   CONTENT_DIGEST_HEADER,
   FILES_ROUTES,
   FILES_SESSION_HEADER,
+  FileRequest,
   FilesCommitResult,
   FilesErrorBody,
+  FilesFulfilResult,
+  FilesListResult,
+  type FilesSecretBody,
   FilesStageResult,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
@@ -22,7 +28,12 @@ import {
   parseContentDigest,
 } from "../schema/index.ts";
 import { ERROR_CODES, type ErrorCode } from "../shared/error-codes.ts";
-import { FILES_NOT_SECRET_HEADER, isImageMime } from "../shared/files.ts";
+import {
+  FILES_NAME_HEADER,
+  FILES_NOT_SECRET_HEADER,
+  FILES_SECRET_AS_HEADER,
+  isImageMime,
+} from "../shared/files.ts";
 import { filesRefusal } from "../files/errors.ts";
 import { hermeticdBase, type HermeticdRpcOptions } from "./rpc.ts";
 import type { FetchLike } from "./tailscale.ts";
@@ -303,6 +314,113 @@ export class HermeticdFiles implements FilesApi {
       { method: "DELETE" },
       opts.signal,
       undefined,
+      this.headersTimeoutMs,
+    );
+  }
+
+  async request(agent: string, id: string, opts: FilesCallOptions): Promise<FileRequest> {
+    const res = await this.call(
+      agent,
+      FILES_ROUTES.request(id),
+      { method: "GET" },
+      opts.signal,
+      undefined,
+      this.headersTimeoutMs,
+    );
+    return await parseReply(res, agent, FileRequest);
+  }
+
+  async list(agent: string, opts: FilesCallOptions): Promise<FilesListResult> {
+    const res = await this.call(
+      agent,
+      FILES_ROUTES.list,
+      { method: "GET" },
+      opts.signal,
+      undefined,
+      this.headersTimeoutMs,
+    );
+    return await parseReply(res, agent, FilesListResult);
+  }
+
+  /**
+   * Like `stage`, without a header timeout: the upload is bounded by the
+   * caller's signal and hermeticd's idle cut-off, never a fixed wait.
+   */
+  async fulfil(
+    agent: string,
+    id: string,
+    upload: FilesFulfilUpload,
+    opts: FilesCallOptions & FilesProgress & FilesFulfilOptions,
+  ): Promise<FilesFulfilResult> {
+    const headers: Record<string, string> = {
+      "content-type": "application/octet-stream",
+      "content-length": String(upload.size),
+      [CONTENT_DIGEST_HEADER]: formatContentDigest(upload.sha256),
+      [FILES_NAME_HEADER]: encodeURIComponent(upload.fileName),
+    };
+    if (opts.notSecret) headers[FILES_NOT_SECRET_HEADER] = "1";
+    if (opts.secretAs) headers[FILES_SECRET_AS_HEADER] = opts.secretAs;
+    const body: BodyInit =
+      upload.body instanceof Uint8Array
+        ? (upload.body as Uint8Array<ArrayBuffer>)
+        : countedStream(upload.body, opts.onProgress);
+    const init: RequestInit & { duplex?: "half" } = {
+      method: "PUT",
+      headers,
+      body,
+      ...(upload.body instanceof Uint8Array ? {} : { duplex: "half" as const }),
+    };
+    const res = await this.call(agent, FILES_ROUTES.request(id), init, opts.signal, upload.fileName);
+    if (upload.body instanceof Uint8Array) opts.onProgress?.(upload.size);
+    return await parseReply(res, agent, FilesFulfilResult);
+  }
+
+  async secret(
+    agent: string,
+    id: string,
+    body: FilesSecretBody,
+    opts: FilesCallOptions,
+  ): Promise<FilesFulfilResult> {
+    const res = await this.postJson(agent, FILES_ROUTES.requestSecret(id), body, opts, body.name);
+    return await parseReply(res, agent, FilesFulfilResult);
+  }
+
+  async decline(
+    agent: string,
+    id: string,
+    reason: string | undefined,
+    opts: FilesCallOptions,
+  ): Promise<FileRequest> {
+    const res = await this.postJson(
+      agent,
+      FILES_ROUTES.requestDecline(id),
+      reason === undefined ? {} : { reason },
+      opts,
+    );
+    return await parseReply(res, agent, FileRequest);
+  }
+
+  private async postJson(
+    agent: string,
+    path: string,
+    body: unknown,
+    opts: FilesCallOptions,
+    fileName?: string,
+  ): Promise<Response> {
+    const text = JSON.stringify(body);
+    return await this.call(
+      agent,
+      path,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(new TextEncoder().encode(text).byteLength),
+        },
+        body: text,
+      },
+      opts.signal,
+      fileName,
       this.headersTimeoutMs,
     );
   }

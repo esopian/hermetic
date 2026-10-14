@@ -40,6 +40,7 @@ import {
   HERMES_ACCOUNT,
   HERMES_HOME,
   acceptMatches,
+  envSecretSlot,
   inboxRelPath,
   isFileSecretSlot,
   isImageMime,
@@ -56,7 +57,13 @@ import {
   removeTreeAsHermes,
   writeDropSecret,
 } from "./fs-ops.ts";
-import { beginReceiving, classCap, markFulfilled, rejectReceiving } from "./requests.ts";
+import { beginReceiving, classCap, getRequest, markFulfilled, rejectReceiving } from "./requests.ts";
+import {
+  durableTextCheck,
+  receiveSecretText,
+  secretTextFileName,
+  secretTextStem,
+} from "./secret-text.ts";
 import type { Claim } from "./store.ts";
 import { MeteredBody, type UploadHeaders, checkDiskFloor, cleanName, uploadHeaders } from "./upload.ts";
 
@@ -357,6 +364,7 @@ async function receiveForRequest(
   claim: Claim,
   caller: Caller,
 ): Promise<FilesFulfilResult> {
+  if (slot.kind === "secret_text") return receiveSecretText(ctx, request, slot, claim, caller);
   const name = requestFileName(request, slot);
   const headers = uploadHeaders(request, Math.min(slot.max_bytes, classCap(slot.sensitivity)));
   const secretSlot = slot.sensitivity === "secret";
@@ -461,6 +469,50 @@ async function receiveForRequest(
   };
 }
 
+/** What a durable secret's request expects of its slot, and the check its bytes must pass. */
+interface SecretExpectation {
+  readonly name: string;
+  readonly check?: (content: Uint8Array) => void;
+  /** `secret_text` only: filled by `check` with the key names stored, and the format to record. */
+  readonly text?: { keys: string[]; format: NonNullable<FilesSecretBody["format"]> };
+}
+
+/**
+ * Which slot a request may be fulfilled from. A file request: any
+ * `file-<slug>` slot, named by the body. A text secret: only its own
+ * `env-<slug>`, holding `<slug>.env` — the name the agent will be told — and
+ * bytes that re-parse against its keys (`durableTextCheck`). Neither when the
+ * agent opened a secret slot with `durable: false`.
+ */
+function expectSecret(slot: FileRequest, body: FilesSecretBody): SecretExpectation {
+  // The agent asked for this secret not to outlive the request: no SSM slot.
+  // Only a secret slot's `durable: false` is a choice (its default is true);
+  // a normal file slot is never durable, and the operator may still keep what
+  // they send to it as a durable secret (`files put --secret`).
+  if (slot.sensitivity === "secret" && !slot.durable) {
+    throw new FilesError(
+      "VALIDATION",
+      "this request is for a one-time secret; send it just this once, not as a durable secret",
+    );
+  }
+  if (slot.kind !== "secret_text") {
+    if (!isFileSecretSlot(body.ssm_slot)) {
+      throw new FilesError("VALIDATION", "ssm_slot must be a file-<slug> slot");
+    }
+    return { name: cleanName(body.name) };
+  }
+  const own = envSecretSlot(secretTextStem(slot));
+  if (body.ssm_slot !== own) {
+    throw new FilesError("VALIDATION", `ssm_slot must be this request's own slot, ${own}`);
+  }
+  const name = secretTextFileName(slot);
+  if (cleanName(body.name) !== name) {
+    throw new FilesError("VALIDATION", `a text secret for this request is named ${name}`);
+  }
+  const text = { keys: [] as string[], format: body.format ?? "dotenv" };
+  return { name, check: durableTextCheck(slot, text), text };
+}
+
 /**
  * `POST /files/requests/:id/secret` — the bytes went from the laptop to SSM
  * with the operator's credentials; hermeticd reads the slot with the instance
@@ -472,12 +524,10 @@ export async function fulfilFromSecret(
   body: FilesSecretBody,
   caller: Caller,
 ): Promise<FilesFulfilResult> {
-  if (!isFileSecretSlot(body.ssm_slot)) {
-    throw new FilesError("VALIDATION", "ssm_slot must be a file-<slug> slot");
-  }
+  const expected = expectSecret(await getRequest(ctx, requestId), body);
   const materialise = ctx.materialiseSecret;
   if (!materialise) throw new FilesError("UNSUPPORTED", "this hermeticd cannot read file secrets", 501);
-  const name = cleanName(body.name);
+  const name = expected.name;
   // One tmpfs file per name: another slot's secret is never overwritten.
   const holder = ctx.store
     .read()
@@ -493,7 +543,7 @@ export async function fulfilFromSecret(
   try {
     const { claim } = await beginReceiving(ctx, requestId);
     try {
-      const result = await placeSecret(ctx, requestId, body.ssm_slot, name, claim, caller);
+      const result = await placeSecret(ctx, requestId, body.ssm_slot, expected, claim, caller);
       ctx.store.wake(requestId);
       return result;
     } catch (e) {
@@ -511,7 +561,7 @@ async function placeSecret(
   ctx: FilesCtx,
   requestId: string,
   slot: string,
-  name: string,
+  expected: SecretExpectation,
   claim: Claim,
   caller: Caller,
 ): Promise<FilesFulfilResult> {
@@ -519,20 +569,22 @@ async function placeSecret(
   let got: Awaited<ReturnType<typeof materialise>>;
   try {
     // The envelope must name `name`, checked before the write: an envelope
-    // naming another file would otherwise land on top of it.
-    got = await materialise(slot, name);
+    // naming another file would otherwise land on top of it. A text secret's
+    // bytes are re-parsed there too, before the write.
+    got = await materialise(slot, expected.name, expected.check);
   } catch (e) {
     if (e instanceof FilesError) throw e;
     ctx.log(`files secret: could not materialise ${slot}: ${errorText(e)}`);
     throw new FilesError("FILE_NOT_FOUND", "the secret slot could not be read from SSM");
   }
+  const text = expected.text;
   const stored = entry({
     id: newFileId(),
     dir: "secret",
     class: "secret",
     name: got.name,
     bytes: got.bytes,
-    mime: "application/octet-stream",
+    mime: text ? "text/plain" : "application/octet-stream",
     sha256: got.sha256,
     created_at: nowIso(ctx.host),
     expires_at: null,
@@ -540,6 +592,8 @@ async function placeSecret(
     from: { kind: "operator", login: caller.login, node: caller.node },
     request_id: requestId,
     slot: got.slot,
+    // Names only: how `freeSlug` knows a rotation of this secret once its request is swept.
+    ...(text ? { keys: [...text.keys] } : {}),
   });
   await ctx.store.mutate((index) => {
     markFulfilled(ctx, index, requestId, claim, {
@@ -548,6 +602,8 @@ async function placeSecret(
       bytes: got.bytes,
       by: caller.login,
       class: "secret",
+      ssm_slot: got.slot,
+      ...(text ? { keys: text.keys, format: text.format } : {}),
     });
     // One entry per slot: a re-sent secret replaces the old entry, not the file's history.
     index.entries = index.entries.filter((e) => !(e.dir === "secret" && e.slot === got.slot));
@@ -566,5 +622,6 @@ async function placeSecret(
     sha256: got.sha256,
     bytes: got.bytes,
     class: "secret",
+    ...(text ? { keys: text.keys, format: text.format } : {}),
   };
 }

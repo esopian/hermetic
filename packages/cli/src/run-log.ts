@@ -73,7 +73,7 @@ export interface StartRunInput {
  * name can be as sensitive as its contents, so the row keeps the agent (the
  * first argument) and nothing else, and the output is not kept at all.
  */
-const FILE_COMMANDS: ReadonlySet<string> = new Set(["files stage"]);
+const FILE_COMMANDS: ReadonlySet<string> = new Set(["files stage", "files put"]);
 
 /** Set by a command that printed a file's name mid-run (`chat --attach`). */
 let outputRedacted = false;

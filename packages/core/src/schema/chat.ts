@@ -21,6 +21,7 @@
  */
 import { z } from "zod";
 import { Iso } from "./common.ts";
+import { FileRequestId } from "./files.ts";
 import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
 
 export {
@@ -243,8 +244,23 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * `message_agent` is Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`): a head
  * draws it as a "Messaged <bot>" marker rather than a tool step, and falls back
  * to the tool row when its arguments are not the `{target, message}` it knows.
+ *
+ * `file_request` (`request_file`, `await_file`) and `secret_request`
+ * (`request_secret`) are the files plugin asking the operator for something. A
+ * head draws a request card from hermeticd's copy of the slot named by the
+ * block's `request_id` — never from the tool's arguments, which are the
+ * model's words — and falls back to the tool row while that id is unknown.
  */
-export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot", "message_agent"]);
+export const ToolRender = z.enum([
+  "diff",
+  "terminal",
+  "table",
+  "image",
+  "screenshot",
+  "message_agent",
+  "file_request",
+  "secret_request",
+]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
 export const ToolStatus = z.enum(["running", "ok", "warn", "bad"]);
@@ -353,6 +369,15 @@ const ToolBlock = z.object({
   exit_code: z.number().int().nullish(),
   duration_ms: z.number().int().nonnegative().nullish(),
   render: ToolRender.nullish(),
+  /**
+   * The files request slot (`fr_…`) a `file_request`/`secret_request` block is
+   * about, and the only thing core takes from such a call. Read from
+   * `await_file`'s arguments, from the plugin's result, or — for a request
+   * opened inside the running tool — looked up from the box's slot list and
+   * sent again on the same `tool_id` (`hermes-chat-file-requests.ts`). Null
+   * while unknown; a head then shows the card as waiting for the box.
+   */
+  request_id: FileRequestId.nullish(),
 });
 
 /**

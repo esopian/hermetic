@@ -63,6 +63,7 @@ import { createProbe } from "./agents/probe.ts";
 import { createFiles } from "./files/files.ts";
 import { createFoundation } from "./fleet/foundation/index.ts";
 import { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
+import { MemoryFiles } from "./backend/fixture/memory-files.ts";
 import { FOUNDATION_VERSION } from "./version.ts";
 import { foundationTemplateSha256 } from "./aws/cfn-template.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
@@ -452,8 +453,16 @@ export function createHermetic(deps: HermeticDeps) {
 
   // ─── chat, Bot Mode and Desktop share one adapter; fixture's is a stack (0014 §7) ──
 
-  const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
-  const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
+  const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {}, {
+    // The `E2E_FILE_REQUEST*` turns open their slots on the fixture boxes' files service.
+    ...(backend.files instanceof MemoryFiles ? { files: backend.files } : {}),
+  });
+  const hermesChat =
+    fixtureChat.hermes ??
+    defaultHermesChat(nowIso, {
+      // A running request card's slot (`hermes-chat-file-requests.ts`).
+      listFileRequests: async (name, signal) => (await backend.files.list(name, { signal })).requests,
+    });
   // §9.2: whether transcript content is masked, read by every chat read as it starts.
   const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
   const botMode = createBotMode({
@@ -599,11 +608,18 @@ export function createHermetic(deps: HermeticDeps) {
      */
     chat,
     /**
-     * Composer attachments (§9): files to and from an agent's box. `files.stage` is the
-     * public method; `files.internal` is the desktop head's upload machinery
-     * and the chat turn's commit, none of it a §9 command.
+     * Composer attachments and agent requests (§9): files to and from an
+     * agent's box. `files.stage`, `files.put` and `files.decline` are the
+     * public methods; `files.internal` is the desktop head's upload machinery,
+     * the request card's slot read and the chat turn's commit, none of it a
+     * §9 command.
      */
-    files: { stage: files.stage, internal: files.internal },
+    files: {
+      stage: files.stage,
+      put: files.put,
+      decline: files.decline,
+      internal: files.internal,
+    },
     ssh: agentLogs.ssh,
     logs: agentLogs.logs,
     upgrade,

@@ -134,6 +134,15 @@ export const DRAG_IDLE_MS = 1_000;
  * `canDrop` is the composer's own `enabled`: a pane that cannot send cannot
  * take files either.
  */
+/**
+ * Whether a drag is over an agent's request card (`FileRequest.tsx`). Its drop
+ * zone stops the event itself; the rest of the card must not read as the
+ * composer's target, since a file meant for the request would go to the inbox.
+ */
+function onRequestCard(e: DragEvent): boolean {
+  return e.target instanceof Element && e.target.closest(".ch-freq") !== null;
+}
+
 export function useFileDrop(files: AttachmentsControl | null, agent: string, canDrop = true) {
   const [over, setOver] = useState(false);
   const depth = useRef(0);
@@ -185,15 +194,18 @@ export function useFileDrop(files: AttachmentsControl | null, agent: string, can
             if (!carriesFiles(e)) return;
             e.preventDefault();
             depth.current += 1;
-            setOver(true);
+            setOver(!onRequestCard(e));
             armIdle();
           },
           onDragOver: (e: DragEvent) => {
             if (!carriesFiles(e)) return;
             e.preventDefault();
             armIdle();
-            if (!over) setOver(true);
-            if (e.dataTransfer) e.dataTransfer.dropEffect = enabled ? "copy" : "none";
+            // Over a request card the pane is not the target: the card's own
+            // zone takes a drop, and the rest of the card takes none.
+            const card = onRequestCard(e);
+            if (over === card) setOver(!card);
+            if (e.dataTransfer) e.dataTransfer.dropEffect = enabled && !card ? "copy" : "none";
           },
           onDragLeave: (e: DragEvent) => {
             if (!carriesFiles(e)) return;
@@ -204,6 +216,8 @@ export function useFileDrop(files: AttachmentsControl | null, agent: string, can
             if (!carriesFiles(e)) return;
             e.preventDefault();
             reset();
+            // A drop on a request card outside its zone is nobody's: never the composer's.
+            if (onRequestCard(e)) return;
             const list = Array.from(e.dataTransfer?.files ?? []);
             if (enabled && list.length > 0) files.addFiles(list);
           },

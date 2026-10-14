@@ -125,6 +125,12 @@ export interface FixtureOptions {
   chatCutAfter?: number | undefined;
   /** Make the fixture's change set replace the agents table, so `FOUNDATION_UNSAFE` fires. */
   foundationUnsafe?: boolean | undefined;
+  /**
+   * Test seam: handed the in-memory backend once it is built, so a flow
+   * harness can play the box's part (a request slot timing out). Never set by
+   * a head.
+   */
+  onBackend?: ((backend: MemoryBackend) => void) | undefined;
 }
 
 export interface OpenOptions {
@@ -329,6 +335,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     if (knobs.foundationUnsafe === true) backend.changeSetChanges = [...FIXTURE_UNSAFE_CHANGES];
     // §6.5: a box that answers `plan rollout` and `upgrade --now`; see `fixtureConverge`.
     backend.simulateConverge = true;
+    knobs.onBackend?.(backend);
     const { runs } = openRunStore(opts.home, { fixture: true });
     const { teardowns } = openTeardownStore(opts.home, { fixture: true });
     /**
@@ -758,7 +765,17 @@ function notInitializedBackend(): Backend {
       "setPolicy",
     ]),
     rpc: group("rpc", ["logs", "health"]),
-    files: group("files", ["stage", "commit", "content", "remove"]),
+    files: group("files", [
+      "stage",
+      "commit",
+      "content",
+      "remove",
+      "request",
+      "list",
+      "fulfil",
+      "secret",
+      "decline",
+    ]),
     /**
      * §4.8. The directory is account-global rather than fleet-scoped, but it is
      * still an AWS table in an account nobody has chosen yet, so it refuses

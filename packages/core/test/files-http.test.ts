@@ -15,7 +15,11 @@ import {
   HERMETICD_RPC_PORT,
   formatContentDigest,
 } from "../src/schema/index.ts";
-import { FILES_NOT_SECRET_HEADER } from "../src/shared/files.ts";
+import {
+  FILES_NAME_HEADER,
+  FILES_NOT_SECRET_HEADER,
+  FILES_SECRET_AS_HEADER,
+} from "../src/shared/files.ts";
 
 /**
  * The laptop's hermeticd files client (`aws/files-http.ts`) against an injected
@@ -394,6 +398,177 @@ describe("HermeticdFiles.commit and remove", () => {
     });
     const e = await refusal(files.remove("atlas", "f_abcdefabcdef", {}));
     expect(e.code).toBe("FILE_NOT_FOUND");
+  });
+});
+
+describe("HermeticdFiles request routes", () => {
+  const REQ = "fr_abcdefabcdef";
+  function slot(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      request_id: REQ,
+      kind: "file",
+      purpose: "FIXTURE purpose",
+      accept: [],
+      max_bytes: 1024,
+      sensitivity: "normal",
+      durable: false,
+      state: "open",
+      created_at: AT,
+      expires_at: AT,
+      ...over,
+    };
+  }
+  const fulfilResult = {
+    request_id: REQ,
+    path: "/run/hermetic/files/github-token.env",
+    sha256: SHA,
+    bytes: BYTES.byteLength,
+    class: "secret",
+    keys: ["GITHUB_TOKEN"],
+    format: "dotenv",
+  };
+
+  test("request GETs one slot and list GETs the whole box", async () => {
+    const seen: { url: string; method: string | undefined }[] = [];
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async (url, init) => {
+        seen.push({ url, method: init?.method });
+        if (url.endsWith(`/files/requests/${REQ}`)) return new Response(JSON.stringify(slot()));
+        return new Response(
+          JSON.stringify({
+            inbox: [],
+            outbox: [],
+            secrets: [],
+            requests: [slot()],
+            usage: { inbox_bytes: 0, outbox_bytes: 0, retention_days: 7 },
+          }),
+        );
+      },
+    });
+    expect((await files.request("atlas", REQ, {})).state).toBe("open");
+    expect((await files.list("atlas", {})).requests).toHaveLength(1);
+    expect(seen.map((s) => [new URL(s.url).pathname, s.method])).toEqual([
+      [`/files/requests/${REQ}`, "GET"],
+      ["/files", "GET"],
+    ]);
+  });
+
+  test("fulfil PUTs the bytes with length, digest, the encoded name and the operator's flags", async () => {
+    let seen: { url: string; headers: Record<string, string>; method?: string } | null = null;
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async (url, init) => {
+        seen = { url, headers: init?.headers as Record<string, string>, method: init?.method };
+        return new Response(JSON.stringify(fulfilResult));
+      },
+    });
+    let progress = 0;
+    const got = await files.fulfil(
+      "atlas",
+      REQ,
+      { fileName: SECRET_NAME, size: BYTES.byteLength, body: BYTES, sha256: SHA },
+      { notSecret: true, secretAs: "raw", onProgress: (n) => (progress = n) },
+    );
+    expect(got.keys).toEqual(["GITHUB_TOKEN"]);
+    expect(progress).toBe(BYTES.byteLength);
+    const req = seen as unknown as { url: string; headers: Record<string, string>; method?: string };
+    expect(new URL(req.url).pathname).toBe(`/files/requests/${REQ}`);
+    expect(req.method).toBe("PUT");
+    expect(req.headers["content-length"]).toBe(String(BYTES.byteLength));
+    expect(req.headers[CONTENT_DIGEST_HEADER]).toBe(formatContentDigest(SHA));
+    expect(req.headers[FILES_NAME_HEADER]).toBe(encodeURIComponent(SECRET_NAME));
+    expect(req.headers[FILES_NOT_SECRET_HEADER]).toBe("1");
+    expect(req.headers[FILES_SECRET_AS_HEADER]).toBe("raw");
+  });
+
+  test("fulfil sends neither flag header unless asked", async () => {
+    let headers: Record<string, string> = {};
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async (_url, init) => {
+        headers = init?.headers as Record<string, string>;
+        return new Response(JSON.stringify(fulfilResult));
+      },
+    });
+    await files.fulfil(
+      "atlas",
+      REQ,
+      { fileName: "a.env", size: BYTES.byteLength, body: chunks(BYTES), sha256: SHA },
+      {},
+    );
+    expect(headers[FILES_NOT_SECRET_HEADER]).toBeUndefined();
+    expect(headers[FILES_SECRET_AS_HEADER]).toBeUndefined();
+  });
+
+  test("a refused fulfil keeps the file's name out of the message", async () => {
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async () => errorResponse(415, "SOMETHING_NEW", `${SECRET_NAME} is not accepted`),
+    });
+    const e = await refusal(
+      files.fulfil(
+        "atlas",
+        REQ,
+        { fileName: SECRET_NAME, size: BYTES.byteLength, body: BYTES, sha256: SHA },
+        {},
+      ),
+    );
+    expect(e.message).not.toContain(SECRET_NAME);
+  });
+
+  test("secret POSTs the slot, name and format; decline POSTs the reason", async () => {
+    const bodies: { path: string; body: unknown }[] = [];
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async (url, init) => {
+        const path = new URL(url).pathname;
+        bodies.push({ path, body: JSON.parse(String(init?.body)) });
+        if (path.endsWith("/decline")) {
+          return new Response(
+            JSON.stringify(slot({ state: "declined", declined: { reason: "no", at: AT } })),
+          );
+        }
+        return new Response(JSON.stringify(fulfilResult));
+      },
+    });
+    await files.secret(
+      "atlas",
+      REQ,
+      { ssm_slot: "env-github-token", name: "github-token.env", format: "dotenv" },
+      {},
+    );
+    const declined = await files.decline("atlas", REQ, "no", {});
+    await files.decline("atlas", REQ, undefined, {});
+    expect(declined.state).toBe("declined");
+    expect(bodies).toEqual([
+      {
+        path: `/files/requests/${REQ}/secret`,
+        body: { ssm_slot: "env-github-token", name: "github-token.env", format: "dotenv" },
+      },
+      { path: `/files/requests/${REQ}/decline`, body: { reason: "no" } },
+      { path: `/files/requests/${REQ}/decline`, body: {} },
+    ]);
+  });
+
+  test("request, list, secret and decline give up on a box that never sends its headers", async () => {
+    const hung: FetchHang = async (_url, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    const files = new HermeticdFiles(agentStore(), { fetch: hung, headersTimeoutMs: 20 });
+    for (const run of [
+      files.request("atlas", REQ, {}),
+      files.list("atlas", {}),
+      files.secret("atlas", REQ, { ssm_slot: "file-a", name: "a" }, {}),
+      files.decline("atlas", REQ, undefined, {}),
+    ]) {
+      const e = await refusal(run);
+      expect(e.code).toBe("INTERNAL");
+      expect(e.message).toContain("did not answer within");
+    }
+  });
+
+  test("a slot answer in a shape this build does not read is UNSUPPORTED", async () => {
+    const files = new HermeticdFiles(agentStore(), {
+      fetch: async () => new Response(JSON.stringify({ request_id: REQ })),
+    });
+    expect((await refusal(files.request("atlas", REQ, {}))).code).toBe("UNSUPPORTED");
   });
 });
 

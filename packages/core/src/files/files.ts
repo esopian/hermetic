@@ -1,21 +1,29 @@
 import type { CoreContext } from "../context.ts";
 import { HermeticError } from "../errors.ts";
-import type { FilesCapability, FilesCommitResult } from "../schema/index.ts";
-import { FILES_CAPABILITY, isFileId } from "../shared/files.ts";
+import {
+  type FileRequest,
+  type FilesCapability,
+  type FilesCommitResult,
+  FilesDeclineInput,
+} from "../schema/index.ts";
+import { FILES_CAPABILITY, isFileId, isRequestId } from "../shared/files.ts";
 import { validateName } from "../shared/naming.ts";
 import type { FilesContent } from "../backend/files-port.ts";
+import { requestStateRefusal } from "./errors.ts";
+import { createFilesPut } from "./put.ts";
 import { createFilesStage } from "./stage.ts";
 import { createUploadRegistry, type UploadRegistry } from "./uploads.ts";
 
 /**
  * The files module (§9), mounted on the SDK as `hermetic.files`.
  *
- * `stage` is the one public method (`files.stage`). Everything under
- * `internal` is machinery the desktop head wraps in its own requests
- * (`files.chunk.*`, `files.capability`, `files.discard`, `files.content`) and
- * the chat turn calls directly (`commit`): none of it is a §9 command, so none
- * of it is in `PUBLIC_METHODS`, and `tests/parity.test.ts` skips this one
- * sub-object by name.
+ * `stage`, `put` and `decline` are the public methods (`files.stage`,
+ * `files.put`, `files.decline`). Everything under `internal` is machinery the
+ * desktop head wraps in its own requests (`files.chunk.*`, `files.capability`,
+ * `files.discard`, `files.content`, `files.request.get`) and the chat turn
+ * calls directly (`commit`): none of it is a §9 command, so none of it is in
+ * `PUBLIC_METHODS`, and `tests/parity.test.ts` skips this one sub-object by
+ * name.
  */
 
 export interface FilesDeps {
@@ -39,6 +47,10 @@ function requireFileId(id: string): void {
   if (!isFileId(id)) throw new HermeticError("VALIDATION", "not a file id (f_…)");
 }
 
+function requireRequestId(id: string): void {
+  if (!isRequestId(id)) throw new HermeticError("VALIDATION", "not a file request id (fr_…)");
+}
+
 /**
  * Every method that reaches a box first runs `ctx.guardFleet` (which runs
  * `guardAccount`): the account and fleet this SDK was opened for (§4.6), the
@@ -53,6 +65,43 @@ export function createFiles(deps: FilesDeps) {
   const capabilityCache = new Map<string, { at: number; ttl: number; value: FilesCapability }>();
 
   const { stage } = createFilesStage({ ctx, uploads });
+  const { put } = createFilesPut({ ctx, uploads });
+
+  /**
+   * One request slot, as the box holds it: what a request card renders from,
+   * so a model's tool arguments cannot widen what the card says the box takes.
+   */
+  async function request(
+    instance: string,
+    requestId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<FileRequest> {
+    validateName(instance);
+    requireRequestId(requestId);
+    await ctx.guardFleet();
+    return await ctx.backend.files.request(instance, requestId, opts);
+  }
+
+  /**
+   * `files.decline`: say no to an open request. The agent's wait ends with
+   * `declined` and the reason, if one was given. A request that is no longer
+   * open is refused with the box's code before anything is sent.
+   */
+  async function decline(input: unknown, opts: { signal?: AbortSignal } = {}): Promise<FileRequest> {
+    const parsed = FilesDeclineInput.safeParse(input);
+    if (!parsed.success) {
+      throw new HermeticError("VALIDATION", "files decline input does not validate", {
+        issues: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
+      });
+    }
+    const { instance, request_id, reason } = parsed.data;
+    validateName(instance);
+    await ctx.guardFleet();
+    await ctx.getAgent(instance);
+    const slot = await ctx.backend.files.request(instance, request_id, opts);
+    if (slot.state !== "open") throw requestStateRefusal(slot.state, instance);
+    return await ctx.backend.files.decline(instance, request_id, reason, opts);
+  }
 
   /**
    * Whether `instance`'s hermeticd serves the files routes, from its
@@ -140,18 +189,22 @@ export function createFiles(deps: FilesDeps) {
 
   return {
     stage,
+    put,
+    decline,
     internal: {
       uploads: {
         open: uploads.open,
         append: uploads.append,
         close: uploads.close,
         registerPath: uploads.registerPath,
+        registerBytes: uploads.registerBytes,
         discard: uploads.discard,
       },
       capability,
       discard,
       content,
       commit,
+      request,
     },
   };
 }

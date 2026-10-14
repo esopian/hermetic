@@ -28,6 +28,7 @@ import type { Conversation } from "./chat-conversation-record.ts";
 import { key } from "./chat-conversation-record.ts";
 import { fmtBytes } from "./chat-logic.ts";
 import type { ChatSelection } from "./chat-types.ts";
+import { sendChunks } from "./chunk-upload.ts";
 
 /** One chip in the composer's tray. Replaced, never mutated, so a render sees it move. */
 export interface DraftAttachment {
@@ -120,23 +121,7 @@ export const NO_ATTACHMENTS: AttachmentsControl = {
   discard: () => undefined,
 };
 
-/** Base64 of one chunk, in slices small enough for `String.fromCharCode`'s arguments. */
-export function toBase64(bytes: Uint8Array): string {
-  let bin = "";
-  const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + step));
-  }
-  return btoa(bin);
-}
-
-/** The offsets a file of `size` bytes is sent at. An empty file is one empty chunk. */
-export function chunkOffsets(size: number, chunk = FILES_LIMITS.chunkBytes): number[] {
-  if (size <= 0) return [0];
-  const out: number[] = [];
-  for (let at = 0; at < size; at += chunk) out.push(at);
-  return out;
-}
+export { chunkOffsets, toBase64 } from "./chunk-upload.ts";
 
 const MB = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
@@ -347,25 +332,21 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
       if (!job) return;
       const calls = apiRef.current;
       try {
-        const { upload_id } = await calls.chunkOpen(file.name, file.size);
-        job.upload = upload_id;
-        if (job.cancelled) {
+        const upload_id = await sendChunks(calls, file, file.name, {
+          onOpen: (id) => {
+            job.upload = id;
+          },
+          onChunk: (sent, size) =>
+            patch(target, local_id, {
+              phase: "send",
+              progress: size === 0 ? 0.5 : (sent / size) * 0.5,
+            }),
+          cancelled: () => job.cancelled,
+        });
+        if (upload_id === null) {
           release(job);
           return;
         }
-        for (const offset of chunkOffsets(file.size)) {
-          const end = Math.min(file.size, offset + FILES_LIMITS.chunkBytes);
-          const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
-          if (job.cancelled) return;
-          await calls.chunkAppend(upload_id, offset, toBase64(bytes));
-          if (job.cancelled) return;
-          patch(target, local_id, {
-            phase: "send",
-            progress: file.size === 0 ? 0.5 : (end / file.size) * 0.5,
-          });
-        }
-        await calls.chunkClose(upload_id);
-        if (job.cancelled) return;
         stage(target, local_id, upload_id, 0.5, not_secret);
       } catch (e) {
         if (job.cancelled) {

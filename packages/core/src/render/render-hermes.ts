@@ -160,6 +160,14 @@ export const HERMETIC_PLATFORM_HINT =
   "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's `deliver` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session.";
 
 /**
+ * The Hermes plugin hermeticd installs and the managed config enables: its
+ * directory under `$HERMES_HOME/plugins` and its `plugin.yaml` name
+ * (`HERMES_PLUGIN_NAME` in agentd's `apply/plugins.ts`; `tests/seams.test.ts`
+ * holds the three together).
+ */
+export const HERMES_FILES_PLUGIN = "hermetic-files";
+
+/**
  * The managed half: the provider wiring, and whichever settings the operator
  * explicitly asked hermetic to hold (`splitHermesSettings`).
  *
@@ -274,6 +282,22 @@ export function hermesManagedConfig(input: RenderInput): string {
   if (managed.terminal_backend !== undefined) {
     lines.push("terminal:", "  backend: " + yamlString(managed.terminal_backend));
   }
+
+  /**
+   * The `hermetic-files` plugin hermeticd installs into `$HERMES_HOME/plugins`
+   * (`apply/plugins.ts` in agentd): the file and secret request tools, and the
+   * hook that scrubs secret values out of tool results. Managed so a config
+   * edit does not switch the plugin off; the scrub is still best effort, since
+   * the plugin's files are the agent account's own and it can modify them.
+   *
+   * Only `plugins.enabled`. A plugin's toolset is on for the cli platform by
+   * default, and `platform_toolsets.cli` is deliberately not rendered: an
+   * explicit list there replaces Hermes's default toolsets rather than adding
+   * to them. The cost of managing this key is that a managed list replaces the
+   * agent's own `plugins.enabled` — Hermes does not merge the two — so a plugin
+   * the agent enabled for itself is off while this list is managed.
+   */
+  lines.push("plugins:", "  enabled:", "    - " + yamlString(HERMES_FILES_PLUGIN));
 
   // Managed, not seeded: the hint describes the surface hermetic drives, so an
   // agent's own config must not be able to shadow it.

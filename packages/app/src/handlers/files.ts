@@ -1,11 +1,14 @@
 /**
- * `files.stage` and the desktop head's upload machinery (§9).
+ * `files.stage`, `files.put`, `files.decline` and the desktop head's upload
+ * machinery (§9).
  *
- * ## The one public method
+ * ## The public methods
  *
  * `files.stage` streams like `chat.send`: the request answers with a
  * `stream_id`, frames follow on `files.frame`, and `files.stage.abort` stops
- * it. A failure after the stream opened is a `done` frame carrying
+ * it. `files.put` (answering an agent's request) is the same shape, its frames
+ * on `files.put.frame` and ending `fulfilled` or `error`, stopped by
+ * `files.put.abort`. `files.decline` answers once. A failure after the stream opened is a `done` frame carrying
  * `{ type: "error", code, message }` (`FilesStageFrame`), because by then the
  * request has already been answered; anything refused before that — the
  * schema, the fleet guard, a path — is a refused request like any other.
@@ -25,22 +28,29 @@
  * request's code and core's message only (`rpc/bind.ts`), and core's files
  * messages never repeat a name or a path.
  */
+import { open } from "node:fs/promises";
 import {
   FilesCapabilityInput,
   FilesChunkAppendInput,
   FilesChunkOpenInput,
   FilesChunkRefInput,
+  FilesDeclineInput,
   FilesEntryRefInput,
+  FilesPutApiInput,
+  FilesRequestRefInput,
   FilesStageApiInput,
   FILES_LIMITS,
   HermeticError,
   isImageMime,
 } from "@hermetic/core";
 import type {
+  FilesPutApiInput as FilesPutApiInputType,
+  FilesPutFrame,
   FilesStageApiInput as FilesStageApiInputType,
   FilesStageFrame,
   Hermetic,
 } from "@hermetic/core";
+import { looksLikeKeyMaterial } from "@hermetic/core/shared";
 import { declareMachineryRpc, declareRpc } from "../declare.ts";
 import { requireTarget, withTarget } from "../target.ts";
 import { parseInput } from "../validation.ts";
@@ -51,6 +61,10 @@ import type { StreamSink } from "./streams.ts";
 
 export const filesStageSchema = declareRpc("files.stage", FilesStageApiInput);
 export const filesStageBody = withTarget(filesStageSchema);
+export const filesPutSchema = declareRpc("files.put", FilesPutApiInput);
+export const filesPutBody = withTarget(filesPutSchema);
+export const filesDeclineSchema = declareRpc("files.decline", FilesDeclineInput);
+export const filesDeclineBody = withTarget(filesDeclineSchema);
 
 /** Closes a `files.stage` stream: the chip's cancel while it uploads. */
 export const FILES_STAGE_ABORT = declareMachineryRpc("files.stage.abort");
@@ -68,6 +82,13 @@ export const FILES_CONTENT = declareMachineryRpc("files.content");
  * the `{ upload_id, name, size }` it stages by — never the path.
  */
 export const FILES_PICK_NATIVE = declareMachineryRpc("files.pickNative");
+/** Closes a `files.put` stream: the request card's cancel while it uploads. */
+export const FILES_PUT_ABORT = declareMachineryRpc("files.put.abort");
+/**
+ * One request slot, read from the box: the card renders destination, accept
+ * list, cap and expiry from hermeticd's copy, never from the agent's tool args.
+ */
+export const FILES_REQUEST_GET = declareMachineryRpc("files.request.get");
 
 /** Deleting a staged entry writes to the box, so it carries the fleet guard. */
 export const filesDiscardBody = withTarget(FilesEntryRefInput);
@@ -84,28 +105,45 @@ function frameFor(e: unknown): Extract<FilesStageFrame, { type: "error" }> {
   return { type: "error", code: "INTERNAL", message: "the file transfer failed" };
 }
 
-function startStage(
+/**
+ * A put's failure: `frameFor`, plus the occupied slot when core refused to
+ * replace a stored secret unasked (`replace_required`), so the card can ask.
+ */
+function putFrameFor(e: unknown): Extract<FilesPutFrame, { type: "error" }> {
+  const frame = frameFor(e);
+  const details = e instanceof HermeticError ? e.details : undefined;
+  const slot = details?.["ssm_slot"];
+  if (details?.["replace_required"] === true && typeof slot === "string" && slot !== "") {
+    return { ...frame, replace_slot: slot };
+  }
+  return frame;
+}
+
+/**
+ * Pump one files stream to its sink: progress as `progress`, the terminal
+ * event (`isLast`) or a failure as `done`. A failure is logged by code only:
+ * a message from outside core could carry a path.
+ */
+function pumpFiles<E extends { type: string }>(
   ctx: HandlerContext,
-  h: Hermetic,
-  input: FilesStageApiInputType,
+  method: string,
+  controller: AbortController,
+  events: AsyncIterable<E>,
   sink: StreamSink,
+  isLast: (e: E) => boolean,
+  failure: (e: unknown) => { type: "error"; code: string } = frameFor,
 ): { stream_id: string } {
-  const controller = new AbortController();
-  // Called here, not inside the pump: core checks its input before it returns
-  // the stream, and that refusal belongs to the request.
-  const events = h.files.stage(input, { signal: controller.signal });
   const done = (async () => {
     try {
       for await (const e of events) {
-        if (e.type === "staged") await sink({ event: "done", data: e satisfies FilesStageFrame });
-        else await sink({ event: "progress", data: e satisfies FilesStageFrame });
+        if (isLast(e)) await sink({ event: "done", data: e });
+        else await sink({ event: "progress", data: e });
       }
     } catch (e) {
       if (controller.signal.aborted) return;
       // The request was answered long ago; the failure travels as the last frame.
-      const frame = frameFor(e);
-      // The code only: a message from outside core could carry a path.
-      ctx.log?.line("warn", "files.stage", "stage failed", { code: frame.code });
+      const frame = failure(e);
+      ctx.log?.line("warn", method, "file transfer failed", { code: frame.code });
       try {
         await sink({ event: "done", data: frame });
       } catch {
@@ -121,6 +159,45 @@ function startStage(
   return { stream_id };
 }
 
+function startStage(
+  ctx: HandlerContext,
+  h: Hermetic,
+  input: FilesStageApiInputType,
+  sink: StreamSink,
+): { stream_id: string } {
+  const controller = new AbortController();
+  // Called here, not inside the pump: core checks its input before it returns
+  // the stream, and that refusal belongs to the request.
+  const events = h.files.stage(input, { signal: controller.signal });
+  return pumpFiles(
+    ctx,
+    "files.stage",
+    controller,
+    events,
+    sink,
+    (e) => (e satisfies FilesStageFrame).type === "staged",
+  );
+}
+
+function startPut(
+  ctx: HandlerContext,
+  h: Hermetic,
+  input: FilesPutApiInputType,
+  sink: StreamSink,
+): { stream_id: string } {
+  const controller = new AbortController();
+  const events = h.files.put(input, { signal: controller.signal });
+  return pumpFiles(
+    ctx,
+    "files.put",
+    controller,
+    events,
+    sink,
+    (e) => (e satisfies FilesPutFrame).type === "fulfilled",
+    putFrameFor,
+  );
+}
+
 export async function stage(
   ctx: HandlerContext,
   params: unknown,
@@ -134,6 +211,36 @@ export async function stage(
   }
   const { hermetic: h, input } = requireTarget(ctx.state, parseInput(filesStageBody, params));
   return startStage(ctx, h, input, sink);
+}
+
+/**
+ * `files.put`: answer an agent's request from an upload the registry holds.
+ * Like `files.stage`, a request naming a laptop path is refused before
+ * anything reads it.
+ */
+export async function put(
+  ctx: HandlerContext,
+  params: unknown,
+  sink: StreamSink,
+): Promise<{ stream_id: string }> {
+  if (namesPath(params)) {
+    throw new HermeticError(
+      "UNSUPPORTED",
+      "the app never sends a file path; answer through the file dialog, a drop or a paste",
+    );
+  }
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(filesPutBody, params));
+  return startPut(ctx, h, input, sink);
+}
+
+export async function decline(ctx: HandlerContext, params: unknown) {
+  const { hermetic: h, input } = requireTarget(ctx.state, parseInput(filesDeclineBody, params));
+  return await h.files.decline(input, { signal: ctx.signal });
+}
+
+export async function requestGet(ctx: HandlerContext, params: unknown) {
+  const { instance, request_id } = parseInput(FilesRequestRefInput, params);
+  return await ctx.hermetic().files.internal.request(instance, request_id, { signal: ctx.signal });
 }
 
 export async function stageAbort(ctx: HandlerContext, params: unknown): Promise<{ closed: boolean }> {
@@ -217,10 +324,40 @@ export async function content(
   return { mime: file.mime, data_b64: encodeBase64(file.bytes) };
 }
 
+/** One native pick as the page sees it: never its path. */
+export interface PickedFile {
+  upload_id: string;
+  name: string;
+  size: number;
+  /**
+   * D6, read here because the page never holds a picked file's bytes: whether
+   * its first `FILES_LIMITS.sniffBytes` look like a private key, so a request
+   * card can ask "store as secret?" before the put, as it does for a drop.
+   */
+  looks_like_key: boolean;
+}
+
+/** The head of a picked file, sniffed for key material and zeroed. Unreadable reads as no. */
+async function pickLooksLikeKey(path: string, name: string): Promise<boolean> {
+  const head = new Uint8Array(FILES_LIMITS.sniffBytes);
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(path, "r");
+    const { bytesRead } = await handle.read(head, 0, head.byteLength, 0);
+    return looksLikeKeyMaterial(head.subarray(0, bytesRead), name);
+  } catch {
+    // Core sniffs again on the put, so a miss here only skips the question.
+    return false;
+  } finally {
+    head.fill(0);
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 export async function pickNative(
   ctx: HandlerContext,
   params: unknown,
-): Promise<{ files: { upload_id: string; name: string; size: number }[] }> {
+): Promise<{ files: PickedFile[] }> {
   // Validated for shape only: the instance names whose composer asked, so a
   // later version can start the dialog somewhere useful for it.
   parseInput(FilesCapabilityInput, params);
@@ -229,9 +366,12 @@ export async function pickNative(
   }
   const paths = (await ctx.native.pickFiles()).filter((p) => p.length > 0);
   const uploads = ctx.hermetic().files.internal.uploads;
-  const files: { upload_id: string; name: string; size: number }[] = [];
+  const files: PickedFile[] = [];
   try {
-    for (const path of paths) files.push(await uploads.registerPath(path));
+    for (const path of paths) {
+      const picked = await uploads.registerPath(path);
+      files.push({ ...picked, looks_like_key: await pickLooksLikeKey(path, picked.name) });
+    }
   } catch (e) {
     // One unreadable pick fails the dialog; nothing it registered is kept.
     for (const f of files) uploads.discard(f.upload_id);
@@ -253,4 +393,9 @@ export const filesHandlers = {
   [FILES_DISCARD]: discard,
   [FILES_CONTENT]: content,
   [FILES_PICK_NATIVE]: pickNative,
+  "files.put": (ctx: HandlerContext, params: unknown, sink?: StreamSink) =>
+    put(ctx, params, requireSink(sink)),
+  "files.decline": decline,
+  [FILES_PUT_ABORT]: stageAbort,
+  [FILES_REQUEST_GET]: requestGet,
 } satisfies Record<string, Handler>;
