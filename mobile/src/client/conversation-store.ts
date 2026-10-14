@@ -143,6 +143,8 @@ export interface ConversationView {
   /** The error code of a failed read (`NOT_FOUND`: no such bot or session; `CHAT_UNREACHABLE`). */
   readonly historyCode: string | null;
   readonly sessions: readonly Session[];
+  /** When `sessions` was last asked for (ISO-8601, the read's start); `null` until a read landed. */
+  readonly sessionsAt: string | null;
   readonly sending: boolean;
   readonly aborting: boolean;
   readonly activity: TurnActivity;
@@ -302,6 +304,7 @@ interface Rec {
   historyGen: number;
   historyRead: boolean;
   sessions: Session[];
+  sessionsAt: string | null;
   sending: boolean;
   aborting: boolean;
   activity: TurnActivity;
@@ -414,7 +417,8 @@ export class ConversationStore {
     if (record.history === "idle" || record.history === "failed") {
       if (!record.sending && !record.aborting) void this.readHistory(record);
     }
-    if (record.sessions.length === 0) void this.readSessions(record);
+    // A fresh open asks again: a separate session made since must not read as the Bot Chat's.
+    if (record.sessions.length === 0 || !record.closeObserve) void this.readSessions(record);
     if (!record.closeObserve && this.transport.observe) {
       record.observe = "live";
       record.observeError = null;
@@ -1041,6 +1045,7 @@ export class ConversationStore {
         historyGen: 0,
         historyRead: false,
         sessions: [],
+        sessionsAt: null,
         sending: false,
         aborting: false,
         activity: "idle",
@@ -1085,6 +1090,7 @@ export class ConversationStore {
       historyError: r.historyError,
       historyCode: r.historyCode,
       sessions: r.sessions,
+      sessionsAt: r.sessionsAt,
       sending: r.sending,
       aborting: r.aborting,
       activity: r.activity,
@@ -1410,12 +1416,14 @@ export class ConversationStore {
   }
 
   private async readSessions(record: Rec): Promise<void> {
+    const at = new Date(this.timers.now()).toISOString();
     try {
       const result = await this.transport.sessions({
         instance: record.target.instance,
         bot: record.target.bot,
       });
       record.sessions = result.sessions;
+      record.sessionsAt = at;
       this.changed(record);
     } catch {
       // The switcher keeps what it had; a failed read is not worth a band.

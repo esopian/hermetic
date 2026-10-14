@@ -90,13 +90,15 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
-        <Text mono weight={700} style={{ color: toneColor(t, state.tone), width: 14 }}>
-          {state.glyph}
-        </Text>
+        {/* A small round mark in the step's tone, centred in the same 14pt
+            column the head's marker sits over; the name is sans, and only the
+            command or argument text beside it is mono. */}
+        <View style={{ width: 14, alignItems: "center" }}>
+          <StatusSquare size={6} round color={toneColor(t, state.tone)} pulse={state.tone === "run"} />
+        </View>
         <Text
-          mono
           variant="caption"
-          weight={700}
+          weight={500}
           numberOfLines={1}
           style={{ flexShrink: 0, maxWidth: "45%" }}
         >
@@ -105,7 +107,7 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
         <Text mono variant="caption" tone="fg3" numberOfLines={1} style={{ flex: 1 }}>
           {target}
         </Text>
-        <Text mono variant="caption" tone="fg3">
+        <Text variant="caption" tone="fg3">
           {[state.word, duration].filter(Boolean).join(" · ")}
         </Text>
       </Pressable>

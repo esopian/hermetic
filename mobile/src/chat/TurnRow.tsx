@@ -8,7 +8,7 @@
 import { memo } from "react";
 import { StyleSheet, View } from "react-native";
 import { activeGroup, sections } from "../client/chat-activity.ts";
-import { fmtCount, threadTime } from "../client/chat-logic.ts";
+import { fmtCount } from "../client/chat-logic.ts";
 import { failureOf } from "../client/chat-recovery.ts";
 import { closedRequests, keepsCard, openRequests } from "../client/chat-requests.ts";
 import type { TurnRow as TurnRowType } from "../client/chat-turns.ts";
@@ -23,6 +23,7 @@ import { ActivityGroup } from "./blocks/Activity.tsx";
 import { Block } from "./blocks/Block.tsx";
 import { FailureCard } from "./blocks/Failure.tsx";
 import { PlainText } from "./PlainText.tsx";
+import { chatTime } from "./time.ts";
 
 const GUTTER = 36;
 const BUBBLE_RADIUS = 18;
@@ -85,8 +86,8 @@ function OperatorBubble({
       >
         <PlainText text={text} />
       </View>
-      <Text mono variant="caption" tone="fg3" style={{ marginTop: 2 }}>
-        {[steer ? "steered" : null, pending ? "sending…" : threadTime(message.at, now)]
+      <Text variant="caption" tone="fg3" style={{ marginTop: 2 }}>
+        {[steer ? "steered" : null, pending ? "sending…" : chatTime(message.at, now)]
           .filter(Boolean)
           .join(" · ")}
       </Text>
@@ -150,7 +151,7 @@ function TurnRowImpl({
           gap: t.space.xs,
         }}
       >
-        <Text mono variant="caption" tone="fg3">{`system · ${threadTime(message.at, now)}`}</Text>
+        <Text variant="caption" tone="fg3">{`system · ${chatTime(message.at, now)}`}</Text>
         {message.blocks.map((block, i) => (
           <Block key={i} block={block} now={now} />
         ))}
@@ -181,7 +182,7 @@ function TurnRowImpl({
   const list = sections(blocks);
   const live = activeGroup(list, streaming, activity, waiting);
   const meta = [
-    threadTime(message.at, now),
+    chatTime(message.at, now),
     message.incomplete && !message.error ? "incomplete" : null,
     streaming ? (waiting ? "waiting" : activity === "idle" ? null : activity) : null,
     author && author.instance !== instance ? `@ ${author.instance}` : null,
@@ -211,7 +212,7 @@ function TurnRowImpl({
             <Text weight={800} variant="bodySmall" numberOfLines={1} style={{ flexShrink: 1 }}>
               {who}
             </Text>
-            <Text mono variant="caption" tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
+            <Text variant="caption" tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
               {meta}
             </Text>
           </View>

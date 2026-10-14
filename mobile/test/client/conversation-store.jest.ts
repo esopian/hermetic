@@ -9,7 +9,7 @@ import {
   stillPending,
 } from "../../src/client/conversation-store.ts";
 import { HermeticError } from "@hermetic/core/chat-client";
-import type { ChatMessage, ChatObserveEvent } from "@hermetic/core/chat-client";
+import type { ChatMessage, ChatObserveEvent, Session } from "@hermetic/core/chat-client";
 import type { HistoryResult, SteerStatus, TurnRequest } from "../../src/client/chat-types.ts";
 import { FakeTimers, flush } from "../helpers/fakes.ts";
 import { approval, block, delta, done, errorFrame, msg, subagent, tool } from "../helpers/fixtures.ts";
@@ -45,6 +45,7 @@ function setup() {
   let opens = 0;
   let historyFailCode = "CHAT_UNREACHABLE";
   let abortTurnAnswer: unknown = {};
+  let sessionList: Session[] = [];
   const transport: ConversationTransport = {
     history: async (input) => {
       calls.push({ method: "chat.history", input });
@@ -59,7 +60,7 @@ function setup() {
     },
     sessions: async (input) => {
       calls.push({ method: "chat.sessions", input });
-      return { instance: "atlas", bot: "scribe", sessions: [] };
+      return { instance: "atlas", bot: "scribe", sessions: sessionList };
     },
     startTurn: (turn) => {
       calls.push({ method: "turn.start", input: turn });
@@ -116,6 +117,9 @@ function setup() {
     view: () => store.view(T),
     setSteer: (s: SteerStatus) => {
       steerStatus = s;
+    },
+    setSessions: (list: Session[]) => {
+      sessionList = list;
     },
     setAbortTurn: (answer: unknown) => {
       abortTurnAnswer = answer;
@@ -579,6 +583,35 @@ describe("observation", () => {
     s.failHistory(1);
     await s.store.stop(T);
     expect(s.view().messages.some((m) => m.id === "cron")).toBe(true);
+  });
+
+  test("every fresh open asks for the session list again, stamped with when it was asked", async () => {
+    const s = setup();
+    const listed = (id: string, kind: Session["kind"]): Session => ({
+      id,
+      instance: "atlas",
+      bot: "scribe",
+      kind,
+      origin: "portal",
+      title: id,
+      unread: 0,
+      turn_count: 1,
+    });
+    s.setSessions([listed("s-1", "canonical")]);
+    expect(s.view().sessionsAt).toBeNull();
+    const first = new Date(s.timers.now()).toISOString();
+    s.store.open(T);
+    await flush();
+    expect(s.view().sessionsAt).toBe(first);
+    s.store.leave(T);
+    // A separate session made while the conversation was off screen.
+    s.setSessions([listed("s-1", "canonical"), listed("s-2", "thread")]);
+    s.timers.advance(60_000);
+    s.store.open(T);
+    await flush();
+    expect(s.method("chat.sessions")).toHaveLength(2);
+    expect(s.view().sessions.map((x) => x.id)).toEqual(["s-1", "s-2"]);
+    expect(s.view().sessionsAt).toBe(new Date(s.timers.now()).toISOString());
   });
 
   test("a failed read keeps its code, and a good read clears it", async () => {

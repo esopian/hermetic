@@ -81,7 +81,9 @@ export function requestAlertBody(block: ApprovalBlock | QuestionBlock): string {
  * The title of an alert (and its inbox entry) about one bot: the bot's display
  * title as the roster lists it, else its name; then, after " · ", its instance
  * when the phone listens to more than one. Two bots of one instance with one
- * title are told apart by name, as home's suffix does.
+ * title are told apart by name, as home's suffix does. A bot named after its
+ * instance (the box's own rule, `pushTitle`), or shown under the instance's
+ * name, never repeats it.
  */
 export function alertTitle(
   roster: { swarms: readonly Pick<Swarm, "instance" | "bots">[]; listening: readonly string[] },
@@ -98,7 +100,9 @@ export function alertTitle(
     ?.bots.some((b) => b.name !== t.bot && same(shown(b), title));
   const named = twin ? `${title} (${t.bot})` : title;
   // With one instance listened, every bot alerting is one of its own.
-  return new Set(roster.listening).size > 1 ? `${named} · ${t.instance}` : named;
+  if (new Set(roster.listening).size < 2 || t.bot === t.instance || same(title, t.instance))
+    return named;
+  return `${named} · ${t.instance}`;
 }
 
 /**
@@ -329,6 +333,37 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     });
   };
 
+  /**
+   * The needs-you entries filed for requests open in followed turns
+   * (`onRequestOpened`), by key, until the request closes: answered here or
+   * elsewhere (the box says the turn moved on), cancelled, timed out, or its
+   * turn over. Then the entry is marked read, with a box push folded into it
+   * (`markEventRead`), so home's needs-you mark from the inbox (`needsBots`)
+   * clears with the live one (`chat.waiting()`). A turn running on its box
+   * unfollowed and still `waiting` keeps every request it had open: which one
+   * it waits on is not known.
+   */
+  const openNeeds = new Map<
+    string,
+    { target: ConversationTarget; request_id: string; arrival: InboxArrival }
+  >();
+  const closeNeeds = () => {
+    if (openNeeds.size === 0) return;
+    const waiting = chat.waiting();
+    for (const [key, need] of openNeeds) {
+      const t = need.target;
+      const open = waiting.find(
+        (w) => w.instance === t.instance && w.bot === t.bot && w.session === t.session,
+      );
+      if (open) {
+        const view = chat.view(open);
+        if (view.remote || view.openRequests.includes(need.request_id)) continue;
+      }
+      openNeeds.delete(key);
+      inbox.markEventRead(need.arrival);
+    }
+  };
+
   const title = (t: { instance: string; bot: string }) => alertTitle(roster.getState(), t);
   const sessionOf = (where: ConversationTarget) =>
     chat.view(where).resolvedSession ?? where.session ?? "";
@@ -386,19 +421,18 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       const request_id = block.request_id;
       if (!request_id) return;
       const session = sessionOf(where);
-      raise(
-        {
-          instance: where.instance,
-          bot: where.bot,
-          session,
-          title: title(where),
-          at: now(),
-          kind: "needs_action",
-          body: previews() ? requestAlertBody(block) : "Needs you",
-          dedupe: localDedupe({ instance: where.instance, session }, "needs_action", request_id),
-        },
-        NEEDS_ACTION_CATEGORY,
-      );
+      const arrival: InboxArrival = {
+        instance: where.instance,
+        bot: where.bot,
+        session,
+        title: title(where),
+        at: now(),
+        kind: "needs_action",
+        body: previews() ? requestAlertBody(block) : "Needs you",
+        dedupe: localDedupe({ instance: where.instance, session }, "needs_action", request_id),
+      };
+      openNeeds.set(arrival.dedupe, { target: where, request_id, arrival });
+      raise(arrival, NEEDS_ACTION_CATEGORY);
     },
     onRemoteShown: (turnId, on) => {
       if (on) {
@@ -419,6 +453,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   // is answered or its turn ends, whether or not its thread has been read.
   const offWaiting = chat.subscribe(() => {
     roster.setWaiting(chat.waiting().map((t) => botKey(t.instance, t.bot)));
+    closeNeeds();
   });
   const pairedFleet = fleetId();
   if (pairedFleet) void roster.setFleet(pairedFleet);
@@ -619,6 +654,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     dispose: () => {
       for (const turnId of [...following.keys()]) stopFollowing(turnId);
       turnStarts.clear();
+      openNeeds.clear();
       offFleet();
       offWaiting();
       transport.dispose();

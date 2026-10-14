@@ -1,8 +1,9 @@
 /**
  * Banners: the in-app alert (a soft card at the top while the app is in front;
- * tap opens, close or a swipe up dismisses) and home's Tailscale strip.
+ * tap opens, close or a swipe up dismisses; under VoiceOver a Dismiss action
+ * and the escape scrub) and home's Tailscale strip.
  */
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -55,6 +56,40 @@ export function Banner({
   const insets = useSafeAreaInsets();
   const sticky = alert?.data.kind === "needs_action" || alert?.data.kind === "turn.error";
   const lift = useSharedValue(0);
+  // The gesture is built once and reads the live alert and `onDismiss`
+  // through refs. A pan belongs to the alert that was up when it started
+  // (`grabbed`): if a new alert replaces the card mid-swipe, the rest of that
+  // pan neither moves nor dismisses the new one.
+  const current = useRef(alert);
+  current.current = alert;
+  const dismiss = useRef(onDismiss);
+  dismiss.current = onDismiss;
+  const grabbed = useRef<Alert | null>(null);
+  // Upward only: the card follows the finger up, resists a pull down, and
+  // either leaves or springs back. A tap still reaches the Pressable, since
+  // the pan only activates after a few points of vertical travel.
+  const swipe = useMemo(() => {
+    const mine = () => grabbed.current !== null && grabbed.current === current.current;
+    return Gesture.Pan()
+      .withTestId("banner-swipe")
+      .runOnJS(true)
+      .activeOffsetY([-8, 8])
+      .onStart(() => {
+        grabbed.current = current.current;
+      })
+      .onUpdate((e) => {
+        if (!mine()) return;
+        lift.value = e.translationY < 0 ? e.translationY : e.translationY / 6;
+      })
+      .onEnd((e) => {
+        if (!mine()) return;
+        if (e.translationY < -BANNER_SWIPE_PT || e.velocityY < -SWIPE_VELOCITY) dismiss.current();
+        else lift.value = withSpring(0);
+      })
+      .onFinalize(() => {
+        grabbed.current = null;
+      });
+  }, [lift]);
   useEffect(() => {
     if (!alert) return;
     lift.value = 0;
@@ -63,19 +98,6 @@ export function Banner({
   }, [alert, sticky, onDismiss, lift]);
   const dragged = useAnimatedStyle(() => ({ transform: [{ translateY: lift.value }] }));
   if (!alert) return null;
-  // Upward only: the card follows the finger up, resists a pull down, and
-  // either leaves or springs back. A tap still reaches the Pressable, since
-  // the pan only activates after a few points of vertical travel.
-  const swipe = Gesture.Pan()
-    .runOnJS(true)
-    .activeOffsetY([-8, 8])
-    .onUpdate((e) => {
-      lift.value = e.translationY < 0 ? e.translationY : e.translationY / 6;
-    })
-    .onEnd((e) => {
-      if (e.translationY < -BANNER_SWIPE_PT || e.velocityY < -SWIPE_VELOCITY) onDismiss();
-      else lift.value = withSpring(0);
-    });
   const tag = alertTag(alert.data.kind);
   const dark = t.scheme === "dark";
   return (
@@ -112,9 +134,18 @@ export function Banner({
             dragged,
           ]}
         >
+          {/* VoiceOver reads the card as one button, so it cannot reach the
+              close button inside it, nor swipe: dismissing is a custom action
+              (the actions rotor) and the two-finger scrub (escape). */}
           <Pressable
             accessibilityRole="button"
-            accessibilityHint="Opens the conversation. Swipe up to dismiss."
+            accessibilityHint="Opens the conversation."
+            accessibilityActions={[{ name: "activate" }, { name: "dismiss", label: "Dismiss" }]}
+            onAccessibilityAction={(e) => {
+              if (e.nativeEvent.actionName === "dismiss") onDismiss();
+              else if (e.nativeEvent.actionName === "activate") onOpen(alert);
+            }}
+            onAccessibilityEscape={onDismiss}
             onPress={() => onOpen(alert)}
             style={({ pressed }) => ({
               flexDirection: "row",

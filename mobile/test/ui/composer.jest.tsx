@@ -6,6 +6,7 @@ import {
   composerMode,
   ECHO_MS,
   isAutocorrectEcho,
+  questionHint,
 } from "../../src/chat/Composer.tsx";
 import { composerState, threadState } from "../../src/client/chat-logic.ts";
 import { renderUi } from "../helpers/render.tsx";
@@ -153,7 +154,7 @@ describe("Composer", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/Queue paused · 2 waiting/)).toBeTruthy();
+    expect(screen.getByText(/Queue paused · 2\swaiting/)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText("Send now: next thing"));
     expect(h.onSendNow).toHaveBeenCalledWith("next thing", "q1");
     await fireEvent.press(screen.getByLabelText("Remove queued: after that"));
@@ -162,10 +163,10 @@ describe("Composer", () => {
 
   test("an open question is called out", async () => {
     await renderUi(<Harness {...base} {...handlers()} sending questionOpen />);
-    expect(screen.getByText(/A question is waiting above — Send now skips it/)).toBeTruthy();
+    expect(screen.getByText("A question is waiting above · Send now skips it")).toBeTruthy();
   });
 
-  test("an open question over a paused queue is one line, carrying the count", async () => {
+  test("an open question over a paused queue is one line, saying paused", async () => {
     await renderUi(
       <Harness
         {...base}
@@ -176,8 +177,16 @@ describe("Composer", () => {
         queue={[{ id: "q1", text: "next thing", at: "2026-10-13T10:00:00.000Z" }]}
       />,
     );
-    expect(screen.getByText(/A question is waiting above — .* · 1 queued$/)).toBeTruthy();
+    expect(screen.getByText("A question is waiting above · queue paused, 1\u00a0waiting")).toBeTruthy();
     expect(screen.queryByText(/Queue paused/)).toBeNull();
+  });
+});
+
+describe("questionHint", () => {
+  test("a parked queue says paused; a running one says queued; the count never wraps alone", () => {
+    expect(questionHint(0, false)).toBe("A question is waiting above · Send now skips it");
+    expect(questionHint(1, true)).toBe("A question is waiting above · queue paused, 1\u00a0waiting");
+    expect(questionHint(2, false)).toBe("A question is waiting above · 2\u00a0queued behind it");
   });
 });
 

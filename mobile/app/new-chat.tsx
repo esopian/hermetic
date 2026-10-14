@@ -81,9 +81,6 @@ export default function NewChat() {
   // sizes its first scroll view, and a header laid out beside it overlaps.
   return (
     <FlatList
-      // VoiceOver stays inside the sheet: the home under it is not reachable
-      // while the sheet is up.
-      accessibilityViewIsModal
       // The sheet's raised surface (`contentStyle` in `_layout.tsx`), not the page colour.
       style={{ flex: 1, backgroundColor: t.c.bg2 }}
       data={

@@ -86,6 +86,12 @@ function Shell() {
         <Stack.Screen name="search" options={{ headerShown: false, animation: "fade" }} />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
         <Stack.Screen name="agent/[name]" options={{ title: "Agent" }} />
+        {/* A form sheet is a real UIKit modal (react-native-screens presents it
+            with presentViewController, dimmed at every detent by default), so
+            VoiceOver already stays inside it. Accessibility-tree dumps such as
+            AXe's list every window and still show home under it; that is not
+            what VoiceOver reaches, and `accessibilityViewIsModal` on the
+            sheet's content would change nothing. */}
         <Stack.Screen
           name="listening"
           options={{

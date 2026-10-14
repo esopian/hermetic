@@ -20,7 +20,6 @@ import {
   timeText,
   UNOBSERVED_TEXT,
 } from "../client/chat-activity.ts";
-import { threadTime } from "../client/chat-logic.ts";
 import type { SubagentBlock } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -29,6 +28,7 @@ import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
 import { multilineTint } from "../ui/tint.ts";
 import { glyphColor, useTicker } from "./blocks/Subagent.tsx";
+import { chatTime } from "./time.ts";
 
 export interface SubagentControl {
   steer(text: string): Promise<"queued" | "rejected" | string>;
@@ -131,7 +131,7 @@ export function SubagentSheet({
           <Text variant="title">{block.goal || "Subagent"}</Text>
           <Text mono variant="caption" tone="fg3">
             {[
-              block.started_at ? `started ${threadTime(block.started_at, now)}` : null,
+              block.started_at ? `started ${chatTime(block.started_at, now)}` : null,
               block.model,
               `depth ${block.depth + 1}`,
             ]

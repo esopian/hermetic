@@ -51,16 +51,6 @@ export function railTime(iso: string | null | undefined, now: number): string {
   return `${MONTHS[then.getMonth()]} ${then.getDate()}`;
 }
 
-/** The stamp beside a message: the clock time today, `railTime`'s older forms before. */
-export function threadTime(iso: string | null | undefined, now: number): string {
-  if (!iso) return "—";
-  const then = new Date(iso);
-  if (Number.isNaN(then.getTime())) return "—";
-  return sameDay(then, new Date(now))
-    ? `${pad2(then.getHours())}:${pad2(then.getMinutes())}`
-    : railTime(iso, now);
-}
-
 /** `Today · Sep 16`, the divider between two calendar days in the transcript. */
 export function dayDivider(iso: string, now: number): string {
   const then = new Date(iso);

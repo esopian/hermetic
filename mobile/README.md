@@ -86,6 +86,8 @@ from it on demand:
   The needs-you mark comes from the roster, from this phone's unread `needs_action` inbox entries
   (a box's push; reading the thread clears it), and from a request still open in a turn this phone
   follows, which stays until it is answered, expires or its turn ends, however the thread was read.
+  When such a request closes, its own `needs_action` entry (and a box push folded into it) is
+  marked read too, so neither source holds the mark up alone.
   A followed turn the phone let go in the background and found `waiting` on its box keeps the mark
   only while the box says so: off screen the phone asks again every 30 s
   (`REMOTE_WAITING_POLL_MS`), so a request answered on the desktop clears it within one ask. A row's
@@ -105,7 +107,9 @@ from it on demand:
   session switcher, and one round overflow button for Sessions, the agent browser and Mark read), the
   transcript with the operator's words in soft rounded bubbles, and a pill-shaped composer with a
   round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread and its inbox
-  entries, except those naming one of its listed separate sessions; opening a separate session
+  entries, except those naming one of its listed separate sessions (the list is asked for again on
+  every open, and an entry naming a session it does not have, filed after it was asked for, waits
+  for the next list); opening a separate session
   clears only that session's inbox entries (by the id it was opened with or the one a compaction
   rotated it to). So a bot's row keeps a count after its Bot Chat is read while a separate session
   is unread; the row's Mark read clears both. The Bot Chat and a separate session are two
@@ -116,7 +120,9 @@ and failure marks on the home rows, the app badge and notification routing. The 
 the instances this phone listens to; an unlistened instance's entries stay unread, so listening again
 brings its marks back, and it is not set until the pairing has loaded on launch. A notification tap
 opens the conversation it is about. An alert this phone raises is titled with the bot's display
-title, followed by its instance only when the phone listens to more than one.
+title, followed by its instance only when the phone listens to more than one and the bot is not
+named, or shown, as its instance (the box's push title has the same rule: `corvid`, not
+`corvid · corvid`).
 
 ## Chat: a request raised while the phone was away
 

@@ -477,6 +477,10 @@ export function FleetProvider({
     [deps, pushSync],
   );
 
+  // One identity for the provider's life: the banner's dwell timer and drag
+  // must not restart each time some other part of the context changes.
+  const dismissBanner = useCallback(() => setBanner(null), []);
+
   const focusConversation = useCallback((target: ConversationTarget | null) => {
     focused.current = target;
   }, []);
@@ -502,7 +506,7 @@ export function FleetProvider({
       probing,
       probeTailscale: probe,
       banner,
-      dismissBanner: () => setBanner(null),
+      dismissBanner,
       pair,
       signOut,
       refresh,
@@ -523,6 +527,7 @@ export function FleetProvider({
       probing,
       probe,
       banner,
+      dismissBanner,
       pair,
       signOut,
       refresh,

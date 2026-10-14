@@ -186,6 +186,19 @@ function Hint({ warn = false, children }: { warn?: boolean; children: string }) 
   );
 }
 
+/**
+ * The warning line while a question is open, short enough for one line on a
+ * 393pt phone. A parked queue never drains on its own (the store's `drain`
+ * returns while `parked`), so it says paused rather than queued. The count and
+ * its word are joined by a no-break space so a wrap never strands the number.
+ */
+export function questionHint(queued: number, parked: boolean): string {
+  if (queued === 0) return "A question is waiting above · Send now skips it";
+  return parked
+    ? `A question is waiting above · queue paused, ${queued}\u00a0waiting`
+    : `A question is waiting above · ${queued}\u00a0queued behind it`;
+}
+
 const LINE = 21;
 const MAX_LINES = 6;
 /** Vertical padding inside the input, top plus bottom. */
@@ -304,7 +317,7 @@ function ComposerImpl(props: ComposerProps) {
         <View style={{ gap: t.space.xs }}>
           {parked && !props.questionOpen ? (
             <Hint warn>
-              {`Queue paused · ${queue.length} waiting — send one now, or send a new message to resume`}
+              {`Queue paused · ${queue.length}\u00a0waiting — send one now, or send a new message to resume`}
             </Hint>
           ) : null}
           {queue.map((row) => (
@@ -320,11 +333,7 @@ function ComposerImpl(props: ComposerProps) {
       {/* One warning line at most: an open question is why the queue waits, so
           it wins over the paused-queue line and carries the queue's count. */}
       {props.questionOpen ? (
-        <Hint warn>
-          {`A question is waiting above — Send now skips it, Queue waits behind it${
-            queue.length > 0 ? ` · ${queue.length} queued` : ""
-          }`}
-        </Hint>
+        <Hint warn>{questionHint(queue.length, parked)}</Hint>
       ) : mode === "queue" ? (
         <Hint>Queue waits for the turn · Send now steers it</Hint>
       ) : null}

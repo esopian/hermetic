@@ -94,6 +94,36 @@ describe("InboxStore", () => {
     ).toBe(true);
   });
 
+  test("markEventRead reads the event by its key and the box push folded with it, nothing else", () => {
+    const { inbox } = setup();
+    const local = arrival({ kind: "needs_action", dedupe: "atlas:s-1:phone-r1:needs_action" });
+    // The box's push came first: the phone's own sighting folds into it.
+    inbox.ingest(arrival({ kind: "needs_action", dedupe: "atlas:s-1:4:needs_action" }));
+    expect(inbox.ingest(local)).toBe(false);
+    // Another conversation's request, same moment: a different event.
+    inbox.ingest(arrival({ kind: "needs_action", session: "s-2", dedupe: "atlas:s-2:2:needs_action" }));
+    inbox.markEventRead(local);
+    expect(
+      inbox
+        .getState()
+        .entries.filter((e) => !e.read_at)
+        .map((e) => e.session),
+    ).toEqual(["s-2"]);
+  });
+
+  test("a push without a title is titled by the box's rule: the instance only when it differs", () => {
+    const data = (bot: string, instance: string): MobilePushData => ({
+      fleet_id: "fxtr0001",
+      instance,
+      bot,
+      session: "s-1",
+      kind: "turn.done",
+      dedupe: `${instance}:s-1:1:turn.done`,
+    });
+    expect(arrivalFromPush(data("corvid", "corvid"), {}, NOW).title).toBe("corvid");
+    expect(arrivalFromPush(data("scribe", "atlas"), { title: " " }, NOW).title).toBe("scribe · atlas");
+  });
+
   test("the last 200 are kept", () => {
     const { inbox } = setup();
     for (let i = 0; i < INBOX_LIMIT + 5; i++)

@@ -196,11 +196,15 @@ export function ApprovalCard({
         ) : null}
       </View>
       <View style={{ gap: t.space.sm }}>
-        <Text weight={700}>{block.tool}</Text>
-        <Text mono variant="bodySmall" selectable>
-          {block.summary}
-        </Text>
-        {block.detail ? <CodePane text={block.detail} copy={false} /> : null}
+        {/* What it is, then what it runs: the description is quiet prose and
+            the command sits boxed in mono, the thing being approved. */}
+        <Text weight={600}>{block.tool}</Text>
+        {block.detail ? (
+          <Text variant="bodySmall" tone="fg2" selectable>
+            {block.detail}
+          </Text>
+        ) : null}
+        <CodePane text={block.summary} copy={false} />
         {block.smart_denied ? (
           <Text variant="caption" tone="warn">
             Hermes' own check flagged this command.

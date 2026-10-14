@@ -190,7 +190,9 @@ export default function Conversation() {
   const onCanonical = target.session === null || session?.kind === "canonical";
   // What this screen shows as read (`markConversationRead`): the Bot Chat
   // clears the bot but leaves its separate sessions' entries unread (until the
-  // session list is known, it reads only its own); a separate session clears
+  // session list is known, it reads only its own; an entry naming a session
+  // the list lacks, filed after the list was asked for, waits for the next
+  // list, which opening this screen asks for); a separate session clears
   // only its own entries, by its opened or its resolved id. A `?session=` that
   // turns out to be the canonical one (a notification tap) counts as the Bot Chat.
   const separateKey =
@@ -201,15 +203,18 @@ export default function Conversation() {
           .join("\n")
       : null;
   const shownSession = view?.resolvedSession ?? target.session;
+  const listedAt = view?.sessionsAt ?? null;
   const readTarget = useMemo(
     () => ({
       instance: target.instance,
       bot: target.bot,
       session: onCanonical ? null : target.session,
       resolved: shownSession,
-      ...(separateKey !== null ? { separate: separateKey ? separateKey.split("\n") : [] } : {}),
+      ...(separateKey !== null
+        ? { separate: separateKey ? separateKey.split("\n") : [], listedAt }
+        : {}),
     }),
-    [target, onCanonical, shownSession, separateKey],
+    [target, onCanonical, shownSession, separateKey, listedAt],
   );
 
   // Focused: this is the watched conversation, read at once (`setWatched`

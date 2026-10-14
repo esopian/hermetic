@@ -67,12 +67,15 @@ const session = (id: string, kind: Session["kind"]): Session => ({
   turn_count: 1,
 });
 
+/** Separate sessions made on the box after the test started. */
+let madeSince: Session[] = [];
+
 /** A box with one bot whose Bot Chat is `s-1`, beside a separate session `s-2`. */
 function adapter(): HermesChatClient {
   return {
     token: async () => "FIXTURE",
     swarm: async (box) => swarm(box.instance, [bot({ unread: 2 })]),
-    sessions: async () => [session("s-1", "canonical"), session("s-2", "thread")],
+    sessions: async () => [session("s-1", "canonical"), session("s-2", "thread"), ...madeSince],
     history: async () => [],
     conversation: async (box, b, o) =>
       ({
@@ -144,21 +147,26 @@ async function setup(params: Record<string, string>) {
   const chatOpen = jest.spyOn(client.chat, "open");
   const setWatched = jest.spyOn(client, "setWatched");
   const ctx = { client, focusConversation: jest.fn(), fleet } as unknown as FleetContextValue;
-  const view = await renderUi(
-    <SafeAreaProvider initialMetrics={METRICS}>
-      <FleetContext.Provider value={ctx}>
-        <Conversation />
-      </FleetContext.Provider>
-    </SafeAreaProvider>,
-  );
-  for (let i = 0; i < 5; i++) await act(flush);
-  return { client, inbox, open, chatOpen, setWatched, opened, view };
+  const mount = async () => {
+    const mounted = await renderUi(
+      <SafeAreaProvider initialMetrics={METRICS}>
+        <FleetContext.Provider value={ctx}>
+          <Conversation />
+        </FleetContext.Provider>
+      </SafeAreaProvider>,
+    );
+    for (let i = 0; i < 5; i++) await act(flush);
+    return mounted;
+  };
+  const view = await mount();
+  return { client, inbox, open, chatOpen, setWatched, opened, view, mount };
 }
 
 const rosterUnread = (client: ReturnType<typeof createHermeticClient>) =>
   client.roster.getState().swarms[0]?.bots[0]?.unread;
 
 beforeEach(() => {
+  madeSince = [];
   for (const fn of [mockRouter.replace, mockRouter.back, mockRouter.push, mockRouter.setParams])
     fn.mockClear();
 });
@@ -211,10 +219,28 @@ describe("conversation: what focus marks read (the client's own setWatched)", ()
       session: null,
       resolved: "s-1",
       separate: ["s-2"],
+      listedAt: expect.any(String),
       focused: true,
     });
     expect(rosterUnread(client)).toBe(0);
     expect(unread(inbox)).toEqual(["s-2"]);
+  });
+
+  test("reopened, the Bot Chat leaves a separate session made since it last listed them", async () => {
+    const { inbox, view, mount } = await setup({ instance: "atlas", bot: "scribe" });
+    expect(unread(inbox)).toEqual(["s-2"]);
+    await view.unmount();
+    // Off screen: a new separate session s-3 is made on the box, and its reply filed.
+    madeSince = [session("s-3", "thread")];
+    const {
+      id: _id,
+      read_at: _read,
+      ...arrival
+    } = inboxEntry({ session: "s-3", at: new Date().toISOString(), dedupe: "atlas:s-3:1:turn.done" });
+    inbox.ingest(arrival);
+    const again = await mount();
+    expect(unread(inbox)).toEqual(["s-2", "s-3"]);
+    await again.unmount();
   });
 
   test("a separate session clears only its own entries and leaves the Bot Chat's unread", async () => {

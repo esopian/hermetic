@@ -12,6 +12,7 @@ import {
   TailscaleBanner,
 } from "../../src/ui/Banner.tsx";
 import type { ReactElement } from "react";
+import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { renderUi } from "../helpers/render.tsx";
 
@@ -62,6 +63,36 @@ describe("Banner", () => {
     expect(sticky).not.toHaveBeenCalled();
     jest.advanceTimersByTime(BANNER_STICKY_DWELL_MS - BANNER_DWELL_MS);
     expect(sticky).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Banner gestures and VoiceOver", () => {
+  test("a swipe up dismisses; a short pull springs back", async () => {
+    const onDismiss = jest.fn();
+    await renderTop(<Banner alert={alert("turn.done")} onOpen={jest.fn()} onDismiss={onDismiss} />);
+    const pan = getByGestureTestId("banner-swipe");
+    fireGestureHandler(pan, [{ translationY: -4 }, { translationY: -10, velocityY: 0 }]);
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireGestureHandler(pan, [{ translationY: -10 }, { translationY: -40, velocityY: 0 }]);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test("the card offers Dismiss as an action and to the escape scrub, and activate opens", async () => {
+    const onOpen = jest.fn();
+    const onDismiss = jest.fn();
+    const a = alert("needs_action");
+    await renderTop(<Banner alert={a} onOpen={onOpen} onDismiss={onDismiss} />);
+    const card = screen.getByHintText("Opens the conversation.");
+    expect(card.props.accessibilityActions).toEqual([
+      { name: "activate" },
+      { name: "dismiss", label: "Dismiss" },
+    ]);
+    await fireEvent(card, "accessibilityAction", { nativeEvent: { actionName: "dismiss" } });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await fireEvent(card, "accessibilityEscape");
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    await fireEvent(card, "accessibilityAction", { nativeEvent: { actionName: "activate" } });
+    expect(onOpen).toHaveBeenCalledWith(a);
   });
 });
 

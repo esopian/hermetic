@@ -72,7 +72,10 @@ export function arrivalFromPush(
     instance: data.instance,
     bot: data.bot,
     session: data.session,
-    title: content.title?.trim() || `${data.bot} · ${data.instance}`,
+    // The box's own title rule (`pushTitle`): the instance only when it differs from the bot.
+    title:
+      content.title?.trim() ||
+      (data.bot === data.instance ? data.bot : `${data.bot} · ${data.instance}`),
     body: content.body?.trim() ?? "",
     at,
     dedupe: data.dedupe,
@@ -199,6 +202,21 @@ export class InboxStore {
     if (touched) this.set(entries);
   }
 
+  /**
+   * One event is over (a request answered or closed): mark read every unread
+   * entry that is it, by its key or as the other path of the same event
+   * (`sameEvent`: a box push folded with this phone's own entry).
+   */
+  markEventRead(
+    event: Pick<InboxEntry, "dedupe" | "kind" | "instance" | "bot" | "session" | "at">,
+  ): void {
+    this.markRead(
+      this.state.entries
+        .filter((e) => !e.read_at && (e.dedupe === event.dedupe || sameEvent(e, event)))
+        .map((e) => e.id),
+    );
+  }
+
   /** The conversation was opened: everything about it is read. */
   markThreadRead(instance: string, bot: string): void {
     this.markRead(
@@ -316,6 +334,12 @@ export interface WatchedThread {
    * alert decision does not use it.
    */
   separate?: readonly string[];
+  /**
+   * Bot Chat only: when that list was asked for (ISO-8601). An entry naming a
+   * session the list does not, filed after it, may be a session made since,
+   * and reading the Bot Chat leaves it (`read.ts`).
+   */
+  listedAt?: string | null;
   /** The app is in the foreground and this conversation is the visible screen. */
   focused: boolean;
 }

@@ -15,13 +15,13 @@ import {
   isLatestFailure,
   recoveryPlan,
 } from "../../client/chat-recovery.ts";
-import { threadTime } from "../../client/chat-logic.ts";
 import type { ChatFailure } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { useChatScope } from "../ChatScope.tsx";
+import { chatTime } from "../time.ts";
 import { NeedsDot, SoftCard } from "./SoftCard.tsx";
 
 function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly string[]; at: string }) {
@@ -97,7 +97,7 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
     <View style={{ gap: t.space.sm }}>
       {plan.retry && resend && waiting !== null ? (
         <Text variant="caption" tone="fg2">
-          {`Retry available at ${threadTime(new Date(waiting).toISOString(), Date.now())}`}
+          {`Retry available at ${chatTime(new Date(waiting).toISOString(), Date.now())}`}
         </Text>
       ) : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>

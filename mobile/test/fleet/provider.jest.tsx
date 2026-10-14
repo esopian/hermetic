@@ -219,6 +219,16 @@ describe("FleetProvider", () => {
     expect(client.inbox.getState().unread).toBe(1);
   });
 
+  test("dismissBanner keeps one identity while the rest of the context changes", async () => {
+    const s = await setup();
+    await settle();
+    const before = s.value().dismissBanner;
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    expect(s.value().status).toBe("paired");
+    expect(s.value().dismissBanner).toBe(before);
+  });
+
   test("a stored pairing is restored on boot", async () => {
     const first = await setup();
     await settle();

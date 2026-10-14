@@ -378,6 +378,21 @@ describe("createHermeticClient", () => {
     s.client.dispose();
   });
 
+  test("each request's needs-you entry is read when that request closes, not before", async () => {
+    const s = await setup([block(1, approval()), block(2, question())], { hold: true });
+    s.client.chat.send(T, "two things");
+    await settle();
+    const unread = () =>
+      s.inbox
+        .getState()
+        .entries.filter((e) => e.kind === "needs_action" && !e.read_at)
+        .map((e) => e.dedupe.split(":").at(-2));
+    expect(unread().sort()).toEqual(["phone-q1", "phone-r1"]);
+    await s.client.chat.respond(T, { request_id: "r1", kind: "approval", choice: "once" });
+    expect(unread()).toEqual(["phone-q1"]);
+    s.client.dispose();
+  });
+
   test("a request opening mid-turn is a needs-you alert with its category", async () => {
     const s = await setup([block(1, approval())]);
     s.client.setPhase("background");
@@ -594,6 +609,8 @@ describe("a turn still running on its box after the phone was away", () => {
       queued?: string;
       history?: () => ChatMessage[];
       aborted?: () => boolean;
+      /** Run on the inbox before the turn is sent. */
+      before?: (inbox: InboxStore) => void;
     } = {},
   ) {
     const timers = new FakeTimers();
@@ -607,6 +624,7 @@ describe("a turn still running on its box after the phone was away", () => {
         return answer();
       },
     });
+    opts.before?.(s.inbox);
     s.client.chat.open(T);
     expect(s.client.chat.send(T, "long job")).toBe(true);
     await settle();
@@ -954,6 +972,56 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.dispose();
   });
 
+  test("a request that opened off screen is read once the box says it was answered elsewhere", async () => {
+    let status = "waiting";
+    const s = await away(() => row(status), { frames: [block(1, approval())] });
+    await s.client.roster.refresh();
+    s.client.chat.leave(T);
+    // Never read: the needs-you entry is unread, and home says so.
+    const needs = () =>
+      s.inbox.getState().entries.filter((e) => e.kind === "needs_action" && !e.read_at);
+    expect(needs()).toHaveLength(1);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(REMOTE_WAITING_POLL_MS);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // Answered on the desktop: the box moved on, so the entry is read and the mark goes.
+    status = "working";
+    await s.tick(REMOTE_WAITING_POLL_MS);
+    expect(needs()).toEqual([]);
+    expect(needsBots(s.inbox.getState().entries).size).toBe(0);
+    expect(badgeOf(s, "atlas/scribe")).toBeNull();
+    s.client.dispose();
+  });
+
+  test("a box push folded with the phone's own needs-you entry is read with it", async () => {
+    let status = "waiting";
+    const s = await away(() => row(status), {
+      frames: [block(1, approval())],
+      before: (inbox) =>
+        inbox.ingest({
+          kind: "needs_action",
+          instance: "atlas",
+          bot: "scribe",
+          session: "s-1",
+          title: "scribe · atlas",
+          body: "scribe is waiting on you",
+          at: NOW,
+          dedupe: "atlas:s-1:3:needs_action",
+        }),
+    });
+    s.client.chat.leave(T);
+    // The push came first; the phone's own sighting folded into it.
+    expect(s.inbox.getState().entries.map((e) => e.dedupe)).toEqual(["atlas:s-1:3:needs_action"]);
+    expect(s.inbox.getState().unread).toBe(1);
+    status = "idle";
+    await s.tick(REMOTE_POLL_MS);
+    await s.tick(REMOTE_WAITING_POLL_MS);
+    await s.tick(0);
+    expect(s.inbox.getState().unread).toBe(0);
+    s.client.dispose();
+  });
+
   test("a waiting turn's conversation shown again is asked at once and at the on-screen pace", async () => {
     const s = await away(() => row("waiting"), { frames: [block(1, approval())] });
     s.client.chat.leave(T);
@@ -1027,6 +1095,17 @@ describe("alertTitle", () => {
   test("more than one instance listened: the instance follows", () => {
     const r = roster(["atlas", "corvid"], [b("atlas", "clio", "Clio"), b("corvid", "wren", "Wren")]);
     expect(alertTitle(r, { instance: "atlas", bot: "clio" })).toBe("Clio · atlas");
+  });
+
+  test("a bot named or shown as its instance never repeats it (the box's push title rule)", () => {
+    const r = roster(
+      ["atlas", "corvid"],
+      [b("corvid", "corvid", ""), b("atlas", "main", "Atlas"), b("atlas", "clio", "Clio")],
+    );
+    expect(alertTitle(r, { instance: "corvid", bot: "corvid" })).toBe("corvid");
+    expect(alertTitle(r, { instance: "atlas", bot: "main" })).toBe("Atlas");
+    // Not listed yet: the name alone decides, as on the box.
+    expect(alertTitle(r, { instance: "corvid", bot: "corvid-2" })).toBe("corvid-2 · corvid");
   });
 });
 
