@@ -72,7 +72,7 @@ function rail(
     fleetId?: string;
   } = {},
 ) {
-  return render(
+  const view = render(
     <BotRail
       swarms={props.swarms ?? FLEET_SWARMS}
       sessions={[]}
@@ -91,6 +91,9 @@ function rail(
       activities={[]}
     />,
   );
+  // The rail opens on Unread; these tests are about the whole roster, so press All.
+  fireEvent.click(screen.getByRole("button", { name: "All" }));
+  return view;
 }
 
 const rowTitles = (scope: ParentNode = document) =>

@@ -12,7 +12,7 @@
  * must never do is claim to be the operator: the "You" label belongs to the
  * prompt at the top of the transcript and to nothing the box wrote.
  */
-import { cleanup, screen, waitFor } from "../dom.ts";
+import { cleanup, screen, userEvent, waitFor } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { FIXTURE, type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
@@ -149,6 +149,8 @@ test("the burst line names three process ids and counts the rest", async () => {
 
 test("the rail previews a bot whose newest row is an event as its sentence", async () => {
   await openKestrel();
+  // The rail opens on Unread, which hides a bot with nothing new in it.
+  await userEvent.click(screen.getByRole("button", { name: "All" }));
   const rows = [...document.querySelectorAll<HTMLElement>(".ch-conv-main")];
   const kestrel = rows.find(
     (row) => row.querySelector(".ch-conv-name")?.textContent === FIXTURE.sseAgent,
