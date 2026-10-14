@@ -32,6 +32,7 @@ import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silen
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
 import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
+import { isShareTool, shareIdOf } from "./blocks/ShareCard.tsx";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
@@ -223,7 +224,15 @@ export function Message({
   // order instead is what split the turn in two.
   const sections: { activity: boolean; blocks: typeof blocks }[] = [];
   let run: { activity: boolean; blocks: typeof blocks } | null = null;
+  // A file shared once is one card, whether the turn named it by `share_file`
+  // or again on a `MEDIA:` line: the first block to draw it keeps it.
+  const shared = new Set<string>();
   for (const block of blocks) {
+    const shareId = shareIdOf(block);
+    if (shareId !== null) {
+      if (shared.has(shareId)) continue;
+      shared.add(shareId);
+    }
     const attention = needsAttention(block);
     // A DM to another bot is a line between the prose, not a step in the
     // group: it closes the run, so the turn reads in the order it happened.
@@ -234,7 +243,8 @@ export function Message({
     }
     // A file or secret request is a card the operator answers, never a step
     // folded into "Tools complete": it stands alone and closes the run.
-    if (isRequestTool(block)) {
+    // So is a file the agent shared, or the box's refusal to share it.
+    if (isRequestTool(block) || isShareTool(block)) {
       sections.push({ activity: false, blocks: [block] });
       run = null;
       continue;

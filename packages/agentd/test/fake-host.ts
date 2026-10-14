@@ -21,7 +21,7 @@ import type {
   Host,
   MemorySample,
 } from "../src/host.ts";
-import { PATH_KIND_SCRIPT } from "../src/files/fs-ops.ts";
+import { PATH_KIND_SCRIPT, RESOLVE_SCRIPT } from "../src/files/fs-ops.ts";
 import { stagingPathFor } from "../src/host.ts";
 
 export interface FakeFile {
@@ -187,6 +187,12 @@ export class FakeHost implements Host {
   readonly livePids = new Set<number>();
   /** Paths this box treats as symlinks. `lstat` is the only thing that sees them. */
   readonly symlinks = new Set<string>();
+  /**
+   * Where a symlink points, for the ones a test gave a target (`symlink`).
+   * Only `RESOLVE_SCRIPT` (`realpath -e`) follows them; a link in `symlinks`
+   * with no target here is dangling.
+   */
+  readonly linkTargets = new Map<string, string>();
   /** The fleet bucket: key → bytes. `getObject` is the `ObjectFetch` a test hands to `apply`. */
   readonly s3Objects = new Map<string, Uint8Array>();
   getObject = async (bucket: string, key: string): Promise<Uint8Array> => {
@@ -272,6 +278,46 @@ export class FakeHost implements Host {
     this.files.set(path, { content: new TextDecoder().decode(content), bytes: content, mode });
   }
 
+  /** A symlink at `path` pointing at `target` (absolute, or relative to the link's directory). */
+  symlink(path: string, target: string): void {
+    this.markDirs(path);
+    this.files.delete(path);
+    this.symlinks.add(path);
+    this.linkTargets.set(path, target);
+  }
+
+  /**
+   * `realpath -e`: every component followed, `.`/`..` folded, each one
+   * required to exist. `null` for a dangling link, a loop or a missing
+   * component.
+   */
+  realpath(path: string): string | null {
+    let pending = path.split("/").filter((p) => p !== "");
+    let out = "";
+    let hops = 0;
+    while (pending.length > 0) {
+      const seg = pending.shift() as string;
+      if (seg === ".") continue;
+      if (seg === "..") {
+        out = out.slice(0, Math.max(0, out.lastIndexOf("/")));
+        continue;
+      }
+      const next = `${out}/${seg}`;
+      const target = this.linkTargets.get(next);
+      if (target !== undefined) {
+        if (++hops > 40) return null;
+        if (target.startsWith("/")) out = "";
+        pending = [...target.split("/").filter((p) => p !== ""), ...pending];
+        continue;
+      }
+      if (this.symlinks.has(next)) return null;
+      const last = pending.length === 0;
+      if (!this.dirs.has(next) && !(last && this.files.has(next))) return null;
+      out = next;
+    }
+    return out === "" ? "/" : out;
+  }
+
   /** Register a file's parent, and its parents, as directories that exist. */
   private markDirs(path: string): void {
     for (let slash = path.indexOf("/", 1); slash !== -1; slash = path.indexOf("/", slash + 1)) {
@@ -332,6 +378,15 @@ export class FakeHost implements Host {
     // `test -L|-f|-d|-e <path>`: what the account sees. `-f`, `-d` and `-e`
     // follow a link, so a symlink with no seeded target answers no to them.
     // `PATH_KIND_SCRIPT` (`files/fs-ops.ts`): the same three answers, on stdout.
+    // `RESOLVE_SCRIPT` (`files/fs-ops.ts`): `realpath -e` through `linkTargets`.
+    if (bin === "sh" && args[0] === "-c" && args[1] === RESOLVE_SCRIPT) {
+      const real = this.realpath(args[3] ?? "");
+      if (real === null) return ok("missing\n");
+      const file = this.files.get(real);
+      if (!file) return ok("other\n");
+      const size = file.bytes?.byteLength ?? new TextEncoder().encode(file.content).byteLength;
+      return ok(`regular ${size}\n${real}\n`);
+    }
     if (bin === "sh" && args[0] === "-c" && args[1] === PATH_KIND_SCRIPT) {
       const path = args[3] ?? "";
       if (this.symlinks.has(path)) return ok("other\n");

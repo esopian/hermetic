@@ -5,10 +5,17 @@
  * frame; a thumbnail; and the app log never holding a file's name.
  */
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fleetTargetOf, openHermetic, type FilesStageFrame, type Hermetic } from "@hermetic/core";
+import {
+  fleetTargetOf,
+  openHermetic,
+  type FilesGetFrame,
+  type FilesStageFrame,
+  type Hermetic,
+  type Plan,
+} from "@hermetic/core";
 import { createChatOwner } from "../src/chat-owner.ts";
 import type { HandlerContext } from "../src/handlers/ctx.ts";
 import { dispatch } from "../src/handlers/dispatch.ts";
@@ -165,6 +172,22 @@ test("files.content refuses a file that is not an image", async () => {
   expect((e as { code?: string }).code).toBe("FILE_TYPE_REJECTED");
 });
 
+test("files.content takes a share id (sh_…); files.discard still takes files only", async () => {
+  const { ctx, target } = await harness();
+  // The seeded share is a CSV: past the id check, refused as not an image.
+  const share = await dispatch(ctx, "files.content", {
+    instance: "atlas",
+    id: "sh_fxatlascsv01",
+  }).catch((e: unknown) => e as { code?: string });
+  expect((share as { code?: string }).code).toBe("FILE_TYPE_REJECTED");
+  const discard = await dispatch(ctx, "files.discard", {
+    instance: "atlas",
+    id: "sh_fxatlascsv01",
+    target,
+  }).catch((e: unknown) => e as { code?: string });
+  expect((discard as { code?: string }).code).toBe("VALIDATION");
+});
+
 test("the bridge sends stage frames on `files.frame`, the last as `done`", async () => {
   const { ctx, target } = await harness();
   const sent: Array<{ name: string; payload: unknown }> = [];
@@ -197,7 +220,10 @@ test("the bridge sends stage frames on `files.frame`, the last as `done`", async
   expect(last.done?.type).toBe("staged");
 });
 
-function nativeWith(pickFiles: () => Promise<string[]>): NonNullable<HandlerContext["native"]> {
+function nativeWith(
+  pickFiles: () => Promise<string[]>,
+  pickFolder: () => Promise<string | null> = async () => null,
+): NonNullable<HandlerContext["native"]> {
   return {
     info: () => ({ version: "0.0.0", channel: "dev", home: ":memory:", logPath: null }),
     openExternal: () => undefined,
@@ -205,6 +231,7 @@ function nativeWith(pickFiles: () => Promise<string[]>): NonNullable<HandlerCont
     installCli: async () => ({ path: "/x", elevated: false }),
     notify: () => ({ delivered: true, permission: "granted" }),
     pickFiles,
+    pickFolder,
   };
 }
 
@@ -332,4 +359,98 @@ test("files.decline and files.request.get answer the box's refusal", async () =>
   await expect(
     dispatch(ctx, "files.request.get", { instance: "atlas", request_id: "f_abcdefabcdef" }),
   ).rejects.toMatchObject({ code: "VALIDATION" });
+});
+
+// --- The Files tab: list, the save dialog, a download, a removal plan --------
+
+test("files.saveNative answers an opaque dest_id and files.get saves into that folder", async () => {
+  const { ctx, frames, sink, log } = await harness();
+  const folder = mkdtempSync(join(tmpdir(), "hermetic-save-private-folder-"));
+  const quarantined: { path: string; existed: boolean }[] = [];
+  ctx.native = {
+    ...nativeWith(
+      async () => [],
+      async () => folder,
+    ),
+    quarantine: async (path) => {
+      quarantined.push({ path, existed: existsSync(path) });
+    },
+  };
+  const answer = (await dispatch(ctx, "files.saveNative", { instance: "atlas" })) as {
+    dest_id: string | null;
+  };
+  expect(answer.dest_id).toMatch(/^sv_/);
+  expect(JSON.stringify(answer)).not.toContain(folder);
+  const listed = (await dispatch(ctx, "files.list", { name: "atlas" })) as {
+    inbox: { id: string; name: string }[];
+  };
+  const pdf = listed.inbox.find((e) => e.name.endsWith(".pdf"));
+  if (pdf === undefined) throw new Error("the fixture's seeded PDF is missing");
+  const opened = (await dispatch(
+    ctx,
+    "files.get",
+    { name: "atlas", id: pdf.id, dest: { dest_id: answer.dest_id } },
+    sink,
+  )) as { stream_id: string };
+  expect(opened.stream_id).toBeString();
+  const done = await until(frames, (f) => f.event === "done");
+  const frame = done.data as FilesGetFrame;
+  expect(frame.type).toBe("saved");
+  expect(readdirSync(folder)).toEqual([pdf.name]);
+  // Marked once, on the file just written, before the stream said saved.
+  expect(quarantined).toEqual([{ path: join(folder, pdf.name), existed: true }]);
+  expect(JSON.stringify(frames)).not.toContain(folder);
+  expect(log.lines.join("\n")).not.toContain(folder);
+  expect(log.lines.join("\n")).not.toContain(pdf.name);
+});
+
+test("files.saveNative answers a null dest_id on a cancelled dialog", async () => {
+  const { ctx } = await harness();
+  ctx.native = nativeWith(
+    async () => [],
+    async () => null,
+  );
+  expect(await dispatch(ctx, "files.saveNative", { instance: "atlas" })).toEqual({ dest_id: null });
+});
+
+test("files.get from the page never names a path", async () => {
+  const { ctx, sink } = await harness();
+  const path = join(mkdtempSync(join(tmpdir(), "hermetic-get-path-")), "x.pdf");
+  const refused = await dispatch(
+    ctx,
+    "files.get",
+    { name: "atlas", id: "f_fxatlaspdf01", dest: { path } },
+    sink,
+  ).catch((e: unknown) => e as { code?: string });
+  expect((refused as { code?: string }).code).toBe("UNSUPPORTED");
+  expect(existsSync(path)).toBe(false);
+});
+
+test("files.get of a secret ends on an error frame and writes nothing", async () => {
+  const { ctx, frames, sink } = await harness();
+  const folder = mkdtempSync(join(tmpdir(), "hermetic-save-secret-"));
+  ctx.native = nativeWith(
+    async () => [],
+    async () => folder,
+  );
+  const { dest_id } = (await dispatch(ctx, "files.saveNative", { instance: "atlas" })) as {
+    dest_id: string;
+  };
+  await dispatch(ctx, "files.get", { name: "atlas", id: "f_fxatlaspem01", dest: { dest_id } }, sink);
+  const done = await until(frames, (f) => f.event === "done");
+  expect(done.data).toMatchObject({ type: "error", code: "FILE_SECRET_FORBIDDEN" });
+  expect(readdirSync(folder)).toEqual([]);
+});
+
+test("files.rm answers a plan naming the SSM slot, which apply then removes", async () => {
+  const { ctx, target } = await harness();
+  const plan = (await dispatch(ctx, "files.rm", { name: "atlas", id: "f_fxatlasenv01" })) as Plan;
+  expect(plan.kind).toBe("files-rm");
+  expect(plan.steps.map((s) => s.id)).toEqual(["box", "ssm"]);
+  const accepted = (await dispatch(ctx, "apply", { plan, yes: true, target })) as { op_id: string };
+  await ctx.ops.wait(accepted.op_id);
+  const listed = (await dispatch(ctx, "files.list", { name: "atlas" })) as {
+    secrets: { id: string }[];
+  };
+  expect(listed.secrets.map((e) => e.id)).not.toContain("f_fxatlasenv01");
 });

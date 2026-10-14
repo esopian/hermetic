@@ -35,11 +35,14 @@ import { MemoryBackend } from "../packages/core/src/backend/memory.ts";
 import type { FleetManifestInput } from "../packages/core/src/release/artifacts.ts";
 import type { FleetItem } from "../packages/core/src/schema/fleet.ts";
 import {
+  FILES_RETENTION_DAYS,
   autoUpdateHermeticd,
   defaultFleetSettings,
   hermesBundleKey,
   isReleaseObjectKey,
+  resolveFilesSettings,
 } from "../packages/core/src/schema/fleet.ts";
+import { FILES_LIMITS } from "../packages/core/src/shared/files.ts";
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
 import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
@@ -272,6 +275,59 @@ describe("seam: the fleet manifest core writes is the one hermeticd reads", () =
     const read = parseFleetManifest(JSON.stringify(older));
     expect(read.auto_update_hermeticd).toBeUndefined();
     expect(autoUpdateHermeticd(read)).toBe(true);
+  });
+
+  /**
+   * The files settings take the same road as the switch above: stored on
+   * `_fleet`, copied into the manifest by every write, and resolved on the box
+   * by the one `resolveFilesSettings` the laptop also draws them with. Absence
+   * means the defaults on both sides, and a value out of range is clamped
+   * rather than failing the manifest the box boots its release from.
+   */
+  test("the files settings reach the box, absent, set and out of range", () => {
+    const base = INPUT.fleet;
+    const settings = defaultFleetSettings(base.defaults, base.created_by, base.created_at);
+    const defaults = { require_cap: false, max_bytes: FILES_LIMITS.fileBytes, retention_days: 7 };
+    const cases: Array<[FleetItem, typeof defaults]> = [
+      [{ ...base, settings }, defaults],
+      [{ ...base, settings: undefined }, defaults],
+      [{ ...base, settings: { ...settings, files: {} } }, defaults],
+      [
+        { ...base, settings: { ...settings, files: { require_cap: true } } },
+        { ...defaults, require_cap: true },
+      ],
+      [
+        { ...base, settings: { ...settings, files: { max_bytes: 1024 * 1024 } } },
+        { ...defaults, max_bytes: 1024 * 1024 },
+      ],
+      [
+        { ...base, settings: { ...settings, files: { retention_days: 30 } } },
+        { ...defaults, retention_days: 30 },
+      ],
+      // Out of range, as an older or a hand-edited row might hold: clamped.
+      [
+        {
+          ...base,
+          settings: {
+            ...settings,
+            files: { max_bytes: FILES_LIMITS.fileBytes * 4, retention_days: 365 },
+          },
+        },
+        { ...defaults, retention_days: FILES_RETENTION_DAYS.max },
+      ],
+      [
+        { ...base, settings: { ...settings, files: { max_bytes: -1, retention_days: 0 } } },
+        { ...defaults, retention_days: FILES_RETENTION_DAYS.min },
+      ],
+    ];
+    for (const [fleet, expected] of cases) {
+      const written = fleetManifestFrom({ ...INPUT, fleet });
+      const read = parseFleetManifest(JSON.stringify(written));
+      expect(read.files).toEqual(fleet.settings?.files);
+      expect(resolveFilesSettings(read)).toEqual(expected);
+      // The laptop reads the row it wrote from the same way.
+      expect(resolveFilesSettings(fleet.settings)).toEqual(expected);
+    }
   });
 
   test("the resources block the box boots from is complete", () => {

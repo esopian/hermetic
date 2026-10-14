@@ -24,6 +24,7 @@ import { isRequestTool } from "../../file-request-logic.ts";
 import { ProcessEventBlock } from "./ProcessEvent.tsx";
 import { QuestionBlock } from "./Question.tsx";
 import { ReasoningBlock } from "./Reasoning.tsx";
+import { ShareToolBlock, isShareTool } from "./ShareCard.tsx";
 import { SourcesBlock } from "./Sources.tsx";
 import { TextBlock } from "./Text.tsx";
 import { ToolBlock } from "./Tool.tsx";
@@ -83,6 +84,12 @@ export function Block({
         <ActivityGroup blocks={[block]} streaming={streaming} />
       );
     case "tool":
+      // A file the agent shared is a card with Save…, or the box's refusal.
+      if (isShareTool(block)) {
+        return (
+          <ShareToolBlock block={block as ChatBlockOf<"tool">} {...(instance ? { instance } : {})} />
+        );
+      }
       // A file or secret request draws from the box's slot, so it needs the box.
       return isRequestTool(block) && instance ? (
         <FileRequestBlock

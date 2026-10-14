@@ -1125,6 +1125,33 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           render: "secret_request",
           request_id: "fr_kestrelkey02",
         },
+        // A settled share card (`share_file`): drawn from the plugin's result,
+        // whose outbox copy has long expired, as an old share's has.
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0016",
+          name: "share_file",
+          server: null,
+          args: { path: "/data/hermes/work/502-timeline.csv", note: "502s against queue depth" },
+          result: {
+            share_id: "sh_kestreltime1",
+            name: "502-timeline.csv",
+            bytes: 4_812,
+            mime: "text/csv",
+            sha256: "9c1e5a7f3b2d8e4c6a0f1b9d7e3c5a2f8b4d6e0c1a9f7b3d5e2c8a4f6b0d1e9c",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 310,
+          render: "file_share",
+          share: {
+            share_id: "sh_kestreltime1",
+            name: "502-timeline.csv",
+            bytes: 4_812,
+            mime: "text/csv",
+            sha256: "9c1e5a7f3b2d8e4c6a0f1b9d7e3c5a2f8b4d6e0c1a9f7b3d5e2c8a4f6b0d1e9c",
+          },
+        },
         {
           kind: "text",
           markdown: "The 502s start at 01:52, when the upstream queue fills. PR is up.",

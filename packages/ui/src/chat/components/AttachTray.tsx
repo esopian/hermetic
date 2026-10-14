@@ -15,7 +15,7 @@ import type { AttachmentsControl, DraftAttachment } from "../chat-attachments.ts
 import { summarize } from "../chat-attachments.ts";
 import { fmtBytes } from "../chat-logic.ts";
 import { RedactedText, plainText } from "./RedactedText.tsx";
-import { typeTag } from "./blocks/Attachment.tsx";
+import { typeTag } from "../file-type-tag.ts";
 
 /** The words for a box without the files service, on every surface that refuses. */
 export const NO_FILES_COPY = "Update hermeticd to attach files";

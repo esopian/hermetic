@@ -14,10 +14,18 @@ Tools (toolset `hermetic_files`):
                    result names the keys and a `load` line, never a value.
 - `await_file`     re-enter the long-poll for an earlier request.
 - `list_files`     inbox, open requests, outbox and secrets: metadata only.
+- `share_file`     hand the operator a copy of a file on this box; hermeticd
+                   checks the path (no credentials, no secrets, nothing
+                   outside `/data/hermes`) and copies it into the outbox.
 
-Hook: `transform_tool_result` replaces every value of a materialised secret in
+Hooks: `transform_tool_result` replaces every value of a materialised secret in
 any tool result with `‹secret:KEY›` before the model sees it. Best effort: it
 catches literal values, not encoded or transformed ones.
+`transform_llm_output` turns each `MEDIA:/abs/path` line of a reply shown in a
+hermetic surface (the desktop app, the box's terminal UIs) into a share,
+rewriting it to `MEDIA:<outbox>/<share_id>/<name>` so the operator's app shows
+it as an attachment; a refused share leaves the line as the model wrote it,
+and a messaging gateway's replies are never touched.
 
 Standard library only, Python 3.10 or later. Never raises into Hermes: every
 failure becomes a JSON error result (tools) or `None` (the hook).
@@ -38,6 +46,9 @@ import socket
 import threading
 import time
 from typing import Any
+
+# The hook's clock; a test may replace it.
+_monotonic = time.monotonic
 from urllib.parse import quote
 
 PLUGIN_VERSION = "1.0.0"
@@ -81,6 +92,51 @@ SCRUB_LINE_NEEDLES_MAX = 512
 SCRUB_LINE_BUDGET = 2048
 
 _OPEN_STATES = ("open", "receiving")
+
+# `FILES_OUTBOX_DIR` in `@hermetic/core/shared`: where shares live. A MEDIA
+# line already pointing here is a share, and is left alone.
+OUTBOX_DIR = "/data/hermes/.hermes/outbox"
+# `FILES_LIMITS.attachmentsPerTurn`: the most MEDIA lines one reply may share.
+MEDIA_PER_TURN = 10
+# A share copies up to the fleet's cap (256 MiB by default) before it answers.
+SHARE_TIMEOUT = 180
+# One `MEDIA:<path>` line: the tag alone on its line (any case), the path
+# absolute or under `~`, optionally quoted or in backticks, optionally wrapped
+# in up to three `*`/`_` of Markdown emphasis — the same on both sides, so a
+# path that merely ends in `_` keeps it. Matched with `_match_media_line`, which
+# strips the line's trailing `\r` and blanks first: a lazy path followed by a
+# blank-run in the pattern rescans the run and backtracks quadratically.
+_MEDIA_LINE_RE = re.compile(
+    r"""^[ \t]*(?P<e>[*_]{0,3})media:[ \t]*(?P<q>[`"']?)(?P<path>(?:/|~/)[^\r\n]*?)(?P=q)(?P=e)$""",
+    re.IGNORECASE,
+)
+# A longer line is never a MEDIA line: left as the model wrote it.
+MEDIA_LINE_MAX = 4096
+# A fenced code block's opening or closing line (CommonMark: up to three
+# spaces of indent, three or more backticks or tildes). A MEDIA line inside one
+# is an example, not a file to send — upstream's `_mask_protected_spans`.
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(?P<f>`{3,}|~{3,})(?P<rest>.*)$")
+# Where the reply is shown in a hermetic surface — the desktop app's sessions
+# (`HERMETIC_SESSION_SOURCE`, "hermetic") and the box's own terminal UIs —
+# the only places a MEDIA line becomes a share. A messaging gateway
+# (Telegram, Slack, …) keeps upstream's own MEDIA handling, `gateway.strict`
+# included: a fresh outbox copy must not launder a path past it.
+SHARE_PLATFORMS = frozenset({"hermetic", "tui", "cli"})
+# Hermes abandons a hook after 30 s (`_HOOK_CALLBACK_TIMEOUT_SECS`); every share
+# one reply makes must fit well inside it.
+HOOK_DEADLINE = 20.0
+# Below this much time left, no new share is started.
+HOOK_MIN_SHARE = 0.5
+
+
+def _match_media_line(line: str) -> tuple["re.Match[str]", str] | None:
+    """The `_MEDIA_LINE_RE` match of one line and its trailing `\\r` (`""` if none), else `None`."""
+    if len(line) > MEDIA_LINE_MAX:
+        return None
+    cr = "\r" if line.endswith("\r") else ""
+    body = (line[:-1] if cr else line).rstrip(" \t")
+    match = _MEDIA_LINE_RE.match(body)
+    return (match, cr) if match else None
 
 
 def _sock_path() -> str:
@@ -444,7 +500,110 @@ def list_files(args: dict | None = None, **_: Any) -> str:
         return _error("INTERNAL", "list_files failed unexpectedly")
 
 
-# PHASE4(evan): share_file (POST /outbox) once hermeticd serves it.
+def _share(path: str, note: Any = None, name: Any = None, timeout: float = SHARE_TIMEOUT) -> dict:
+    """`POST /outbox`: the share as the box answered it, or `BoxError`.
+
+    A timeout closes the connection, and hermeticd stops a copy whose caller
+    went away and removes it: no share is left behind that nobody named.
+    """
+    full = os.path.abspath(os.path.expanduser(path))
+    body: dict[str, Any] = {"path": full}
+    if isinstance(note, str) and note.strip():
+        body["note"] = note
+    if isinstance(name, str) and name.strip():
+        body["name"] = name
+    return _call("POST", "/outbox", body, timeout=timeout)
+
+
+def share_file(args: dict, **_: Any) -> str:
+    try:
+        path = args.get("path") if isinstance(args, dict) else None
+        if not isinstance(path, str) or not path.strip():
+            return _error("VALIDATION", "share_file needs the path of a file on this box")
+        return _result(_share(path, args.get("note"), args.get("name")))
+    except BoxError as e:
+        return _error(e.code, e.message)
+    except Exception:
+        return _error("INTERNAL", "share_file failed unexpectedly")
+
+
+def _in_outbox(path: str) -> bool:
+    return os.path.normpath(path).startswith(OUTBOX_DIR + "/")
+
+
+def _share_media_line(path: str, shared: dict[str, str | None], timeout: float) -> str | None:
+    """The outbox path for one MEDIA path, sharing it once per turn; `None` when refused or failed."""
+    if path not in shared:
+        try:
+            res = _share(path, timeout=timeout)
+            share_id, name = res.get("share_id"), res.get("name")
+            ok = isinstance(share_id, str) and isinstance(name, str) and share_id and name
+            shared[path] = f"{OUTBOX_DIR}/{share_id}/{name}" if ok else None
+        except Exception:
+            shared[path] = None
+    return shared[path]
+
+
+def _fence_step(line: str, fence: tuple[str, int] | None) -> tuple[tuple[str, int] | None, bool]:
+    """The fence state after `line`, and whether `line` is itself a fence line."""
+    match = _FENCE_RE.match(line)
+    if not match:
+        return fence, False
+    marks = match.group("f")
+    if fence is None:
+        return (marks[0], len(marks)), True
+    closes = marks[0] == fence[0] and len(marks) >= fence[1] and not match.group("rest").strip()
+    return (None if closes else fence), True
+
+
+def transform_llm_output(*args: Any, **kwargs: Any) -> str | None:
+    """
+    `transform_llm_output`: each `MEDIA:/abs/path` line of the reply shared and
+    rewritten to its outbox copy, or `None` when nothing changed.
+
+    Only on a hermetic surface (`SHARE_PLATFORMS`); anywhere else `None`, and
+    the gateway handles MEDIA lines its own way. Not inside a fenced code
+    block. At most `MEDIA_PER_TURN` paths per turn, all within `HOOK_DEADLINE`:
+    a refused or failed share, a line already in the outbox, a line past the
+    limit and a line the deadline did not reach all stay as written. Never
+    raises.
+    """
+    try:
+        if kwargs.get("platform") not in SHARE_PLATFORMS:
+            return None
+        text = kwargs.get("response_text", args[0] if args else None)
+        if not isinstance(text, str) or "media:" not in text.lower():
+            return None
+        deadline = _monotonic() + HOOK_DEADLINE
+        lines = text.split("\n")
+        shared: dict[str, str | None] = {}
+        attempts = 0
+        changed = False
+        fence: tuple[str, int] | None = None
+        for i, line in enumerate(lines):
+            fence, is_fence = _fence_step(line, fence)
+            if is_fence or fence is not None:
+                continue
+            found = _match_media_line(line)
+            if found is None:
+                continue
+            match, cr = found
+            path = match.group("path").strip()
+            if _in_outbox(os.path.expanduser(path)):
+                continue
+            if path not in shared:
+                left = deadline - _monotonic()
+                if attempts >= MEDIA_PER_TURN or left < HOOK_MIN_SHARE:
+                    continue
+                attempts += 1
+                _share_media_line(path, shared, left)
+            target = shared.get(path)
+            if target:
+                lines[i] = f"MEDIA:{target}{cr}"
+                changed = True
+        return "\n".join(lines) if changed else None
+    except Exception:
+        return None  # fail open: Hermes keeps the reply as the model wrote it
 
 
 # --- Canonical secret files ---------------------------------------------------
@@ -838,10 +997,27 @@ AWAIT_FILE_SCHEMA = _schema(
 
 LIST_FILES_SCHEMA = _schema(
     "list_files",
-    "List this box's files from the operator: the inbox (attachments from earlier turns), "
-    "open requests, shared files and secrets. Metadata only: names, sizes, ages, paths.",
+    "List this box's files: the inbox (attachments from the operator in earlier turns), "
+    "open requests, the outbox (files you shared with share_file or a MEDIA: line, kept "
+    "24 hours) and secrets. Metadata only: names, sizes, ages, paths.",
     {},
     [],
+)
+
+SHARE_FILE_SCHEMA = _schema(
+    "share_file",
+    "Give the human operator a copy of a file on this box: a report, a chart, an export. "
+    "hermeticd copies it into the outbox, and it appears in their app as an attachment they "
+    "can preview or save, for 24 hours; later edits to your file do not change the copy. "
+    "Only regular files under /data/hermes can be shared: credentials (.env, .ssh, keys, "
+    "tokens) and secrets are refused, and a refusal says why. Writing MEDIA:/absolute/path "
+    "on its own line in your reply shares the same way.",
+    {
+        "path": {"type": "string", "description": "Absolute path of the file, e.g. /data/hermes/work/report.pdf."},
+        "note": {"type": "string", "description": "A short note shown with the file."},
+        "name": {"type": "string", "description": "The name to give the copy; the file's own by default."},
+    },
+    ["path"],
 )
 
 TOOLS = (
@@ -849,6 +1025,7 @@ TOOLS = (
     ("request_secret", REQUEST_SECRET_SCHEMA, request_secret),
     ("await_file", AWAIT_FILE_SCHEMA, await_file),
     ("list_files", LIST_FILES_SCHEMA, list_files),
+    ("share_file", SHARE_FILE_SCHEMA, share_file),
 )
 
 
@@ -863,3 +1040,4 @@ def register(ctx: Any) -> None:
             emoji=EMOJI,
         )
     ctx.register_hook("transform_tool_result", transform_tool_result)
+    ctx.register_hook("transform_llm_output", transform_llm_output)

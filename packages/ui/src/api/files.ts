@@ -222,3 +222,116 @@ export function putUpload(
     close();
   };
 }
+
+// ─── saving a file the agent shared (attachments plan §8.5) ──────────────────
+
+/** One frame of a download, as the app pushes it (`FilesGetFrame`). */
+export type FilesGetFrame = NonNullable<HermeticRPC["webview"]["messages"]["files.get.frame"]["done"]>;
+export type FilesGetProgress = Extract<FilesGetFrame, { type: "progress" }>;
+/** The saved file a `saved` frame carries: name, size and digest, never where it went. */
+export type SavedFile = Extract<FilesGetFrame, { type: "saved" }>["file"];
+
+/**
+ * The native folder dialog for a download. `dest_id: null` when the operator
+ * cancelled; otherwise an opaque handle for `files.get` — never the path.
+ */
+export function saveNative(instance: string): Promise<Answer<"files.saveNative">> {
+  return transport().request("files.saveNative", { instance });
+}
+
+export interface SaveHandlers {
+  /** The operator closed the folder dialog without choosing: nothing happens. */
+  onCancelled: () => void;
+  /** A folder was chosen and the download is under way. */
+  onStarted?: () => void;
+  onProgress?: (frame: FilesGetProgress) => void;
+  /** The save's last word: `saved`, or `error` with the refusal's code. */
+  onDone: (frame: Exclude<FilesGetFrame, FilesGetProgress>) => void;
+}
+
+/**
+ * "Save…" on an inbox file (`f_…`) or an outbox share (`sh_…`) of `name`'s box:
+ * the folder dialog, then `files.get` into the folder it chose, under the
+ * file's own sanitized name, never over an existing file. The same contract as
+ * `putUpload`: a canceller, and exactly one `onDone` (or `onCancelled`) unless
+ * cancelled. Shared by the chat's share cards and the agent's Files tab.
+ */
+export function saveFile(name: string, id: string, handlers: SaveHandlers): () => void {
+  let settled = false;
+  let close: (() => void) | null = null;
+  const finish = (frame: Exclude<FilesGetFrame, FilesGetProgress>): void => {
+    if (settled) return;
+    settled = true;
+    handlers.onDone(frame);
+  };
+  const fail = (e: unknown): void => {
+    const code = typeof e === "object" && e !== null && "code" in e ? String(e.code) : "INTERNAL";
+    finish({ type: "error", code, message: e instanceof Error ? e.message : String(e) });
+  };
+  saveNative(name).then(({ dest_id }) => {
+    if (settled) return;
+    if (dest_id === null) {
+      settled = true;
+      handlers.onCancelled();
+      return;
+    }
+    handlers.onStarted?.();
+    close = transport().openStream(
+      "files.get",
+      { name, id, dest: { dest_id } },
+      {
+        onFrame: (frame) => {
+          const data = frame.data as FilesGetFrame | undefined;
+          if (data === undefined || typeof data !== "object") return;
+          if (data.type === "progress") handlers.onProgress?.(data);
+          else finish(data);
+        },
+        onEnd: (_ok, failure) => {
+          finish({
+            type: "error",
+            code: failure?.code ?? "STREAM_CLOSED",
+            message: failure?.message ?? "the download stopped before the box answered",
+          });
+        },
+      },
+    );
+  }, fail);
+  return () => {
+    settled = true;
+    close?.();
+  };
+}
+
+// ─── the agent's Files tab (attachments plan §8.6) ───────────────────────────
+
+/** `files.list`: what is on one box, metadata only — never a byte of content. */
+export type FilesList = Answer<"files.list">;
+/** One stored entry: an inbox file, an outbox share or a secret's metadata. */
+export type FileEntryView = FilesList["inbox"][number];
+/** One request slot as the box lists it. */
+export type FileRequestView = FilesList["requests"][number];
+/** `files.rm`'s plan, applied by the same `apply` every other plan goes through. */
+export type FilesRmPlan = Answer<"files.rm">;
+
+/**
+ * Everything on `name`'s box, or with `requests: true` only its open request
+ * slots (the entry arrays then come back empty) — what the bell and the fleet
+ * badge poll.
+ */
+export function filesList(
+  name: string,
+  opts: { requests?: boolean; signal?: AbortSignal } = {},
+): Promise<FilesList> {
+  const params: Record<string, unknown> = { name };
+  if (opts.requests === true) params["requests"] = true;
+  return transport().request(
+    "files.list",
+    params,
+    opts.signal === undefined ? undefined : { signal: opts.signal },
+  );
+}
+
+/** The plan for deleting one entry; a durable secret's plan deletes its SSM slot too. */
+export function filesRm(name: string, id: string): Promise<FilesRmPlan> {
+  return transport().request("files.rm", { name, id });
+}

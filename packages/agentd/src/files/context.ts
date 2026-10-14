@@ -4,7 +4,12 @@
  * (`service.ts`).
  */
 import type { FileClass, FileRequest, FileRequestKind, FileWaitResult } from "@hermetic/core/schema";
-import { FILES_ROUTES, HERMETICD_RPC_PORT, secretTextLoad } from "@hermetic/core/shared";
+import {
+  FILES_ROUTES,
+  HERMETICD_RPC_PORT,
+  type FilesSettings,
+  secretTextLoad,
+} from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import type { FilesStore } from "./store.ts";
 
@@ -44,18 +49,36 @@ export interface FilesDeps {
   readonly delay?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** How long an upload may go silent, in ms; `FILES_TTL.uploadIdle` unless a test says otherwise. */
   readonly uploadIdleMs?: number;
+  /**
+   * The fleet's files settings now in force (`settings.ts`): read per use, so
+   * a manifest read reaches the next request. The defaults when absent.
+   */
+  readonly settings?: () => FilesSettings;
 }
 
 export interface FilesCtx extends FilesDeps {
   readonly store: FilesStore;
   readonly log: (message: string) => void;
   readonly delay: (ms: number, signal: AbortSignal) => Promise<void>;
+  readonly settings: () => FilesSettings;
 }
 
 /** Who is on the other end of a tailnet route: `whois` already said it is a member. */
 export interface Caller {
   readonly login: string;
   readonly node: string;
+  /**
+   * The app capabilities `whois` granted the caller on this node (the keys of
+   * its `CapMap`). Read only when the fleet's `files.require_cap` is on.
+   */
+  readonly caps?: readonly string[];
+}
+
+const DAY = 24 * 3600;
+
+/** The inbox lifetime in seconds: the fleet's `retention_days`. */
+export function inboxTtl(ctx: FilesCtx): number {
+  return ctx.settings().retention_days * DAY;
 }
 
 export function nowIso(host: Host): string {

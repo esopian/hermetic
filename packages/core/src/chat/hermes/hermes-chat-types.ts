@@ -8,7 +8,7 @@
  * behind that facade — connection, roster, sessions, history, turn, peer — can
  * share them without importing each other.
  */
-import type { FileRequest } from "../../schema/files.ts";
+import type { FileEntry, FileRequest } from "../../schema/files.ts";
 import type { ChatObserveHint } from "../chat-observe.ts";
 import type { createCanonicalSessions, ConversationOptions } from "../../render/hermes-canonical.ts";
 import { HermeticError } from "../../errors.ts";
@@ -137,6 +137,13 @@ export interface HermesChatDeps {
   listFileRequests?:
     | ((instance: string, signal: AbortSignal) => Promise<readonly FileRequest[]>)
     | undefined;
+  /**
+   * The box's outbox entries (`GET /files`, outbox only), by agent name. Read
+   * at most once per turn or transcript read to describe the chip a `MEDIA:`
+   * outbox line becomes (`hermes-chat-media.ts`); absent, the chip carries
+   * `bytes: 0` and no digest.
+   */
+  listOutbox?: ((instance: string, signal: AbortSignal) => Promise<readonly FileEntry[]>) | undefined;
 }
 
 export interface HermesChatOptions {

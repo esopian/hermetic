@@ -176,6 +176,10 @@ const SURFACE: Record<PublicMethod, string> = {
   // Answering an agent's file or secret request, and saying no to one.
   "files.put": "files put",
   "files.decline": "files decline",
+  // The Files tab: what is on a box, one file off it, and one entry removed.
+  "files.list": "files ls",
+  "files.get": "files get",
+  "files.rm": "files rm",
   "artifacts.push": "artifacts push",
   teardown: "teardown",
   doctor: "doctor",
@@ -279,13 +283,13 @@ describe("parity: core ↔ CLI ↔ RPC", () => {
   });
 
   test("the two tables differ only where the heads genuinely differ", () => {
-    // `artifacts push`, `files stage` and `files put` may name a local file from
+    // `artifacts push`, `files stage`, `files put` and `files get` may name a local file from
     // the CLI and never from the app; anything else diverging is a bug in one of
     // the heads.
     const different = [...PUBLIC_METHODS].filter(
       (p) => (REQUEST_SCHEMAS[p] as unknown) !== (CLI_REQUEST_SCHEMAS[p] as unknown),
     );
-    expect(different.sort()).toEqual(["artifacts.push", "files.put", "files.stage"]);
+    expect(different.sort()).toEqual(["artifacts.push", "files.get", "files.put", "files.stage"]);
   });
 
   test("no command wraps anything that is not a public method", () => {

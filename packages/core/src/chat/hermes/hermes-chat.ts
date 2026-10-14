@@ -163,6 +163,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const history = createChatHistory({
     connection,
     conversation: canonical.conversation,
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const subagents = createSubagentLedgers({ now: deps.now });
   const observation = createChatObserve({ connect: connection.connect, subagents });
@@ -177,6 +178,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     ...(deps.listFileRequests !== undefined
       ? { fileRequests: fileRequestLookup(deps.listFileRequests, deps.now) }
       : {}),
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const children = createSubagentControl({
     connect: connection.connect,

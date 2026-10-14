@@ -85,6 +85,7 @@ import {
   fixtureFileRequestScript,
   type FixtureRequestFiles,
 } from "./fixture-chat-file-request.ts";
+import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
@@ -147,10 +148,11 @@ export interface FixtureChatOptions {
   requests?: FixtureChatRequests | undefined;
   /**
    * The fixture boxes' files service, where the `E2E_FILE_REQUEST*` and
-   * `E2E_*SECRET*` turns open their slots (`fixture-chat-file-request.ts`).
-   * Absent, those prompts are ordinary turns.
+   * `E2E_*SECRET*` turns open their slots (`fixture-chat-file-request.ts`),
+   * and, when it can share, where the `E2E_FILE_SHARE` turn puts its files
+   * (`fixture-chat-file-share.ts`). Absent, those prompts are ordinary turns.
    */
-  files?: FixtureRequestFiles | undefined;
+  files?: (FixtureRequestFiles & Partial<FixtureShareFiles>) | undefined;
   /** How long a request turn waits for the operator; the timeout trigger's wait. */
   fileRequestWaitMs?: { open?: number | undefined; pending?: number | undefined } | undefined;
 }
@@ -582,8 +584,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const approval = fixtureApprovalScript(text);
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
         const asking = files ? fixtureFileRequestScript(text) : null;
+        const sharing = files?.share ? fixtureFileShareScript(text) : null;
         const log =
-          clarify || approval || failing || asking
+          clarify || approval || failing || asking || sharing
             ? []
             : attached.length > 0
               ? [...attachmentTurn(id, attached)]
@@ -718,6 +721,16 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             });
             if (opts.signal?.aborted) return;
             yield* deliver(asking.resume(id, settled, cursor, instance));
+            return;
+          }
+          /**
+           * A share turn (`fixture-chat-file-share.ts`): two `share_file` cards
+           * whose files are put into the fixture box's outbox, and a reply whose
+           * `MEDIA:` outbox line becomes an attachment chip.
+           */
+          if (sharing && files?.share) {
+            const share = files.share.bind(files);
+            yield* deliver(sharing.frames(id, { share }, instance, session));
             return;
           }
           /**

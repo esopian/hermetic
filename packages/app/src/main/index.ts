@@ -25,6 +25,7 @@ import Electrobun, {
 } from "electrobun/bun";
 import { chmodSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   HERMETICD_ENV,
@@ -52,6 +53,7 @@ import { installCloseGuard } from "./close-guard.ts";
 import { installDevProbe } from "./dev-probe.ts";
 import { installMenu, type MenuItemModel } from "./menu.ts";
 import { createNotifier } from "./notify.ts";
+import { markQuarantined } from "./quarantine.ts";
 import { bundlePaths } from "./paths.ts";
 import { createUpdater } from "./updates.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
@@ -400,6 +402,17 @@ const windows = createWindows({
             canChooseDirectory: false,
             allowsMultipleSelection: true,
           }),
+        pickFolder: async () => {
+          const picked = await Utils.openFileDialog({
+            startingFolder: join(homedir(), "Downloads"),
+            allowedFileTypes: "*",
+            canChooseFiles: false,
+            canChooseDirectory: true,
+            allowsMultipleSelection: false,
+          });
+          return picked.find((p) => p.length > 0) ?? null;
+        },
+        quarantine: (path) => markQuarantined(path),
       },
     };
     firstCtx ??= ctx;

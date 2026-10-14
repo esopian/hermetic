@@ -4,7 +4,10 @@
  * `files stage` uploads one file to the box's stage area, where a chat turn
  * can attach it by id. `files put` answers a request the agent opened
  * (`request_file`/`request_secret`) with a file or a text secret, and
- * `files decline` says no to one. `ls`/`get`/`rm` follow with the Files tab.
+ * `files decline` says no to one. `files ls` lists what is on a box,
+ * `files get` downloads one file (never a secret) and `files rm` removes one
+ * entry — planned and confirmed first, because a durable secret's SSM slot
+ * goes with it.
  *
  * The file's path and name are positional arguments, and the run log records
  * a command's arguments and output — so `run-log.ts` redacts both for the
@@ -15,20 +18,41 @@
 import { basename, resolve } from "node:path";
 import type { Command } from "commander";
 import { Command as Cmd, Option } from "commander";
-import { FilesDeclineInput, FilesPutInput, FilesStageInput, HermeticError } from "@hermetic/core";
-import type { FileRequest, FilesPutEvent, FilesStageResult } from "@hermetic/core";
+import {
+  FilesDeclineInput,
+  FilesGetInput,
+  FilesListInput,
+  FilesPutInput,
+  FilesRmInput,
+  FilesStageInput,
+  HermeticError,
+} from "@hermetic/core";
+import type {
+  FileEntry,
+  FileRequest,
+  FilesGetEvent,
+  FilesListResult,
+  FilesPutEvent,
+  FilesStageResult,
+} from "@hermetic/core";
+import { assertConfirmable, confirmPlan } from "../confirm.ts";
+import { renderOp } from "../stream.ts";
+import { renderTable } from "../table.ts";
 import { openCtx } from "../context.ts";
 import type { Ctx } from "../context.ts";
 import { redactRunOutput } from "../run-log.ts";
 import { declare } from "../declare.ts";
 import { err, isInteractive, out } from "../io.ts";
-import { globals } from "../options.ts";
+import { destructive, globals } from "../options.ts";
 import { readSecretText } from "../secret.ts";
 import { ValidationFailure, defined, validate } from "../validate.ts";
 
 const stageSchema = declare("files.stage", "files stage", FilesStageInput);
 const putSchema = declare("files.put", "files put", FilesPutInput);
 const declineSchema = declare("files.decline", "files decline", FilesDeclineInput);
+const listSchema = declare("files.list", "files ls", FilesListInput);
+const getSchema = declare("files.get", "files get", FilesGetInput);
+const rmSchema = declare("files.rm", "files rm", FilesRmInput);
 
 /** The part of core's upload registry `--secret-stdin` uses. */
 interface HeldUploads {
@@ -116,6 +140,65 @@ function size(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** How long until `iso`, from `now`: `23h`, `6d`, `expired`, or `-` for never. */
+export function expiresIn(iso: string | null, now: number): string {
+  if (iso === null) return "-";
+  const ms = Date.parse(iso) - now;
+  if (!Number.isFinite(ms)) return "?";
+  if (ms <= 0) return "expired";
+  const m = Math.round(ms / 60_000);
+  if (m < 90) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/** At most `n` characters on one line: the agent's text, quoted as data. */
+function clip(text: string, n: number): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length <= n ? line : `${line.slice(0, n - 1)}…`;
+}
+
+function entryRow(e: FileEntry, now: number): string[] {
+  const kind = e.dir === "secret" ? (e.slot ?? "secret") : e.class;
+  return [e.id, e.dir, kind, size(e.bytes), expiresIn(e.expires_at, now), e.name];
+}
+
+/** The open request slots: what the agent is waiting for, and how long it will wait. */
+export function renderFileRequests(requests: readonly FileRequest[], now: number): string {
+  if (requests.length === 0) return "no open requests";
+  return renderTable(
+    requests.map((r) => [
+      r.request_id,
+      r.kind === "secret_text" ? "secret text" : `file/${r.sensitivity}`,
+      expiresIn(r.expires_at, now),
+      clip(r.purpose, 60),
+    ]),
+    ["REQUEST", "KIND", "EXPIRES", "PURPOSE"],
+  );
+}
+
+/** `files ls`: the entries, then the open requests, then the box's usage. */
+export function renderFilesList(result: FilesListResult, now: number): string {
+  const entries = [...result.inbox, ...result.outbox, ...result.secrets];
+  const open = result.requests.filter((r) => r.state === "open");
+  const parts = [
+    entries.length === 0
+      ? "no files"
+      : renderTable(
+          entries.map((e) => entryRow(e, now)),
+          ["ID", "WHERE", "KIND", "SIZE", "EXPIRES", "NAME"],
+        ),
+  ];
+  if (open.length > 0) parts.push(`\nopen requests:\n${renderFileRequests(open, now)}`);
+  const u = result.usage;
+  parts.push(
+    `\ninbox ${size(u.inbox_bytes)} · outbox ${size(u.outbox_bytes)} · inbox kept ${u.retention_days}d` +
+      (u.disk_used_pct === undefined ? "" : ` · disk ${Math.round(u.disk_used_pct)}% used`),
+  );
+  return parts.join("\n");
 }
 
 function pct(progress: number): string {
@@ -328,6 +411,91 @@ export function register(program: Command): void {
           return;
         }
         await out(`${declineLine(agent, declined)}\n`);
+      }),
+  );
+
+  files.addCommand(
+    globals(new Cmd("ls"))
+      .description("what is on an agent's box: inbox, shared files, stored secrets, open requests")
+      .argument("<agent>", "the agent whose box to list")
+      .option("--requests", "only the requests still waiting for a file or a secret")
+      .action(async (agent: string, opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        // The table names files; the run log keeps none of it.
+        redactRunOutput();
+        const requestsOnly = opts["requests"] === true;
+        const input = validate(listSchema, {
+          name: agent,
+          ...defined({ requests: requestsOnly ? true : undefined }),
+        });
+        const result = await ctx.hermetic.files.list(input, { signal: ctx.signal });
+        if (ctx.flags.json) {
+          await out(`${JSON.stringify(requestsOnly ? result.requests : result)}\n`);
+          return;
+        }
+        const now = Date.now();
+        await out(
+          `${requestsOnly ? renderFileRequests(result.requests, now) : renderFilesList(result, now)}\n`,
+        );
+      }),
+  );
+
+  files.addCommand(
+    globals(new Cmd("get"))
+      .description("download one file the agent received or shared; secrets never leave the box")
+      .argument("<agent>", "the agent whose box holds the file")
+      .argument("<id>", "the file (f_…) or share (sh_…) to download")
+      .requiredOption("-o, --output <path>", "where to write it; an existing file is never overwritten")
+      .action(async (agent: string, id: string, opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const output = opts["output"];
+        if (typeof output !== "string" || output === "") {
+          throw new ValidationFailure([{ path: "dest", message: "give -o <path>" }]);
+        }
+        const input = validate(getSchema, { name: agent, id, dest: { path: resolve(output) } });
+        const interactive = !ctx.flags.json && isInteractive();
+        let saved: Extract<FilesGetEvent, { type: "saved" }> | null = null;
+        for await (const e of ctx.hermetic.files.get(input, { signal: ctx.signal })) {
+          if (e.type === "saved") saved = e;
+          if (ctx.flags.json) {
+            await out(`${JSON.stringify(e)}\n`);
+            continue;
+          }
+          if (e.type === "saved") continue;
+          const text = `${pct(e.progress)} ${e.phase.padEnd(7, " ")} ${e.message}`;
+          await err(interactive ? `\r${text}\u001b[K` : `${text}\n`);
+        }
+        if (interactive) await err("\n");
+        if (saved === null) throw new HermeticError("INTERNAL", "the get ended without the file");
+        if (ctx.flags.json) return;
+        const f = saved.file;
+        await out(`saved ${f.name} ${size(f.bytes)} sha256 ${f.sha256.slice(0, 12)} to ${output}\n`);
+      }),
+  );
+
+  files.addCommand(
+    destructive(new Cmd("rm"))
+      .description("remove one file, share or stored secret from an agent's box")
+      .argument("<agent>", "the agent whose box holds it")
+      .argument("<id>", "the file (f_…) or share (sh_…) to remove")
+      .addHelpText(
+        "after",
+        "\nA stored secret's SSM slot (file-<slug>/env-<slug>) is deleted with it; the agent\n" +
+          "has to ask for the secret again. The plan names the slot before you confirm.\n",
+      )
+      .action(async (agent: string, id: string, _opts: unknown, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        // The plan names the file; the run log keeps none of it.
+        redactRunOutput();
+        assertConfirmable(ctx, `remove ${id} from ${agent}?`);
+        const plan = await ctx.hermetic.files.rm(validate(rmSchema, { name: agent, id }), {
+          signal: ctx.signal,
+        });
+        await confirmPlan(ctx, plan, `remove ${id} from ${agent}?`);
+        await renderOp(ctx.hermetic.apply({ plan, yes: true }, { signal: ctx.signal }), {
+          flags: ctx.flags,
+          label: `files rm ${agent} ${id}`,
+        });
       }),
   );
 

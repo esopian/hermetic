@@ -6,6 +6,7 @@
  * listener, binds `socket` with `serveFilesSocket`, and runs `sweepLoop`
  * beside the heartbeat.
  */
+import { type FilesSettings, resolveFilesSettings } from "@hermetic/core/shared";
 import type { Aws } from "../aws.ts";
 import type { Host } from "../host.ts";
 import { type FilesCtx, type FilesDeps, realDelay } from "./context.ts";
@@ -30,6 +31,9 @@ export interface FilesService {
   sweepLoop(signal: AbortSignal): Promise<void>;
 }
 
+const DEFAULT_SETTINGS = resolveFilesSettings(null);
+const defaultSettings = (): FilesSettings => DEFAULT_SETTINGS;
+
 export async function makeFilesService(deps: FilesDeps): Promise<FilesService> {
   const log = deps.log ?? (() => {});
   const index = await loadFilesIndex(deps.host, log);
@@ -37,6 +41,7 @@ export async function makeFilesService(deps: FilesDeps): Promise<FilesService> {
     ...deps,
     log,
     delay: deps.delay ?? realDelay,
+    settings: deps.settings ?? defaultSettings,
     store: makeFilesStore(deps.host, index),
   };
   return {
@@ -58,6 +63,8 @@ export interface StartFilesDeps {
   readonly log: (message: string) => void;
   /** The socket binder; `Bun.serve({ unix })` unless a test says otherwise. */
   readonly listen?: UnixListen;
+  /** The fleet's files settings now in force (`settings.ts`); the defaults when absent. */
+  readonly settings?: () => FilesSettings;
 }
 
 export interface StartedFiles {
@@ -97,6 +104,7 @@ export async function startFiles(deps: StartFilesDeps): Promise<StartedFiles> {
       materialiseSecret: (slot, expectName, check) =>
         materialiseFileSecret({ host, aws, paramPrefix, log }, slot, expectName, check),
       removeSecret: (name) => removeFileSecret(host, name),
+      ...(deps.settings ? { settings: deps.settings } : {}),
     });
   } catch (e) {
     log(`files: the service did not start: ${errorText(e)}`);

@@ -10,6 +10,7 @@ import { HERMETICD_PATH } from "./stages.ts";
 import { reportBrowsers } from "./browser-health.ts";
 import { serveRpc, tailscaleWhois } from "./rpc.ts";
 import { startFiles } from "./files/service.ts";
+import { makeFilesSettings, type FilesSettingsHolder } from "./files/settings.ts";
 import {
   SWAP_SETTLE_MS,
   autoUpdate,
@@ -140,6 +141,11 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     onFirstWrite: settled,
   });
 
+  // The fleet's files settings: the cached manifest's now, then every manifest
+  // the update loop fetches (`updateLoop`'s `onManifest`). A change on the
+  // laptop takes effect at this box's next manifest read (`files/settings.ts`).
+  const filesSettings = makeFilesSettings(ctx.fleet, log);
+
   // The files service (attachments, request slots, the plugin socket). Best
   // effort throughout: without it the box is an older hermeticd to the laptop.
   const files = await startFiles({
@@ -149,6 +155,7 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     name: ctx.userData.name,
     hermeticdVersion: HERMETICD_VERSION,
     log,
+    settings: filesSettings.current,
   });
 
   const listener = await serveRpc(
@@ -175,7 +182,7 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
   // Four loops, never awaiting each other. The files sweeper never resolves
   // on its own; it is in the race so it stops with the rest.
   const beats = heartbeat.run(forever.signal);
-  const updates = updateLoop(host, ctx, gate, forever.signal);
+  const updates = updateLoop(host, ctx, gate, forever.signal, filesSettings);
   const converges = convergeLoop(host, ctx, converge, forever.signal);
   const sweeps = files.run(forever.signal);
   await Promise.race([beats, updates, converges, sweeps]);
@@ -285,7 +292,13 @@ export async function runConvergeLoop(deps: ConvergeLoopDeps): Promise<void> {
 export const CONVERGE_POLL_MS = 15_000;
 
 /** `serve`'s wiring of the update loop; the loop itself is `runUpdateLoop`. */
-function updateLoop(host: Host, ctx: Context, gate: UpdateGate, signal: AbortSignal): Promise<void> {
+function updateLoop(
+  host: Host,
+  ctx: Context,
+  gate: UpdateGate,
+  signal: AbortSignal,
+  filesSettings: FilesSettingsHolder,
+): Promise<void> {
   const deps = {
     host,
     aws: ctx.aws,
@@ -296,6 +309,8 @@ function updateLoop(host: Host, ctx: Context, gate: UpdateGate, signal: AbortSig
     log,
     // This loop *is* the service, so its restarts are the ones that count.
     asService: true,
+    // Every manifest this loop reads carries the fleet's files settings.
+    onManifest: filesSettings.update,
   };
   return runUpdateLoop({
     host,

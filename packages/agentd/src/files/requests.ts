@@ -35,9 +35,16 @@ import { FilesError } from "./errors.ts";
 import { type FilesCtx, isDue, isoAfter, nowIso, waitResult } from "./context.ts";
 import type { Claim, FilesIndex } from "./store.ts";
 
-/** The byte cap a slot's class allows: 1 MiB for an ephemeral secret, the file cap otherwise. */
-export function classCap(sensitivity: FileRequest["sensitivity"]): number {
-  return sensitivity === "secret" ? FILES_LIMITS.secretEphemeralBytes : FILES_LIMITS.fileBytes;
+/**
+ * The byte cap a slot's class allows: 1 MiB for an ephemeral secret, the
+ * fleet's `files.max_bytes` (`fileCap`, the 256 MiB default unless a fleet
+ * lowered it) otherwise.
+ */
+export function classCap(
+  sensitivity: FileRequest["sensitivity"],
+  fileCap: number = FILES_LIMITS.fileBytes,
+): number {
+  return sensitivity === "secret" ? FILES_LIMITS.secretEphemeralBytes : fileCap;
 }
 
 function find(index: FilesIndex, id: string): FileRequest {
@@ -86,9 +93,9 @@ function isLive(request: FileRequest): boolean {
 /** What a slot's own fields are, before the state machine takes over. */
 type SlotFields = Omit<FileRequest, "request_id" | "state" | "created_at" | "expires_at">;
 
-function fileSlot(body: OpenFileRequestBody): SlotFields {
+function fileSlot(body: OpenFileRequestBody, fileCap: number): SlotFields {
   const sensitivity = body.sensitivity ?? "normal";
-  const cap = classCap(sensitivity);
+  const cap = classCap(sensitivity, fileCap);
   return {
     kind: "file",
     purpose: body.purpose,
@@ -211,7 +218,10 @@ export async function openRequest(
   ctx: FilesCtx,
   body: OpenFileRequestBody | OpenSecretRequestBody,
 ): Promise<FileRequest> {
-  const fields = "kind" in body && body.kind === "secret_text" ? secretTextSlot(body) : fileSlot(body);
+  const fields =
+    "kind" in body && body.kind === "secret_text"
+      ? secretTextSlot(body)
+      : fileSlot(body, ctx.settings().max_bytes);
   const request: FileRequest = {
     request_id: newRequestId(),
     ...fields,

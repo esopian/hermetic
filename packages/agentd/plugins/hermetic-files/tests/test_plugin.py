@@ -70,10 +70,11 @@ class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 class FakeBox:
-    """A scripted hermeticd socket. `routes[(method, path-without-query)]` → `(status, body)`."""
+    """A scripted hermeticd socket. `routes[(method, path-without-query)]` → `(status, body)`,
+    or a function of the request body returning one."""
 
     def __init__(self, sock: str) -> None:
-        self.routes: dict[tuple[str, str], tuple[int, dict]] = {}
+        self.routes: dict[tuple[str, str], object] = {}
         self.calls: list[tuple[str, str, dict | None]] = []
         box = self
 
@@ -84,6 +85,8 @@ class FakeBox:
                 body = json.loads(raw) if raw else None
                 box.calls.append((self.command, self.path, body))
                 route = box.routes.get((self.command, self.path.split("?")[0]))
+                if callable(route):
+                    route = route(body)
                 status, payload = route if route else (404, {"error": {"code": "NOT_FOUND", "message": "no route"}})
                 data = json.dumps(payload).encode()
                 self.send_response(status)
@@ -598,6 +601,196 @@ class ScrubTest(PluginTestCase):
             plugin.scrub = original
 
 
+OUTBOX = "/data/hermes/.hermes/outbox"
+
+
+class ShareFileTest(PluginTestCase):
+    def test_shares_and_returns_the_box_result(self) -> None:
+        self.box.routes[("POST", "/outbox")] = (201, fixture("share-result.json"))
+        out = json.loads(plugin.share_file({"path": "/data/hermes/work/chart.png", "note": "Q3", "name": "chart.png"}))
+        self.assertEqual(out, fixture("share-result.json"))
+        bodies = [b for m, p, b in self.box.calls if (m, p) == ("POST", "/outbox")]
+        self.assertEqual(bodies, [{"path": "/data/hermes/work/chart.png", "note": "Q3", "name": "chart.png"}])
+
+    def test_a_relative_or_home_path_is_made_absolute_here_and_checked_by_the_box(self) -> None:
+        self.box.routes[("POST", "/outbox")] = (201, fixture("share-result.json"))
+        plugin.share_file({"path": "~/work/chart.png"})
+        plugin.share_file({"path": "out/chart.png"})
+        sent = [b["path"] for m, p, b in self.box.calls if (m, p) == ("POST", "/outbox")]
+        self.assertEqual(sent, [os.path.expanduser("~/work/chart.png"), os.path.abspath("out/chart.png")])
+
+    def test_a_refusal_is_the_error_shape(self) -> None:
+        self.box.routes[("POST", "/outbox")] = (
+            403,
+            {"error": {"code": "FORBIDDEN", "message": "share refused: credential path"}},
+        )
+        out = json.loads(plugin.share_file({"path": "/data/hermes/.hermes/.env"}))
+        self.assertEqual(
+            out, {"status": "error", "error": {"code": "FORBIDDEN", "message": "share refused: credential path"}}
+        )
+
+    def test_a_path_is_required(self) -> None:
+        out = json.loads(plugin.share_file({}))
+        self.assertEqual(out["error"]["code"], "VALIDATION")
+        self.assertEqual(self.box.calls, [])
+
+
+class MediaHookTest(PluginTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.ids = iter(f"sh_{n:012d}" for n in range(1, 100))
+
+        def answer(body: dict) -> tuple[int, dict]:
+            path = body["path"]
+            if ".env" in path or path.endswith("missing.pdf"):
+                return (403, {"error": {"code": "FORBIDDEN", "message": "share refused: credential path"}})
+            name = os.path.basename(path)
+            return (201, {"share_id": next(self.ids), "name": name, "bytes": 1, "mime": "x/y", "sha256": "0" * 64})
+
+        self.box.routes[("POST", "/outbox")] = answer
+
+    def hook(self, text: str, platform: object = "hermetic") -> str | None:
+        return plugin.transform_llm_output(
+            response_text=text, session_id="s1", model="m", platform=platform, turn_id="t1"
+        )
+
+    def shared(self) -> list[str]:
+        return [b["path"] for m, p, b in self.box.calls if (m, p) == ("POST", "/outbox")]
+
+    def test_a_media_line_is_shared_and_rewritten_to_its_outbox_copy(self) -> None:
+        text = "Here is the chart:\nMEDIA:/data/hermes/work/chart.png\nAnything else?"
+        self.assertEqual(
+            self.hook(text),
+            f"Here is the chart:\nMEDIA:{OUTBOX}/sh_000000000001/chart.png\nAnything else?",
+        )
+        self.assertEqual(self.shared(), ["/data/hermes/work/chart.png"])
+
+    def test_a_refused_share_leaves_its_line_and_the_rest_still_rewrite(self) -> None:
+        text = "MEDIA:/data/hermes/.hermes/.env\n  MEDIA: `/data/hermes/work/a b.pdf`  "
+        self.assertEqual(self.hook(text), f"MEDIA:/data/hermes/.hermes/.env\nMEDIA:{OUTBOX}/sh_000000000001/a b.pdf")
+
+    def test_only_refusals_is_none(self) -> None:
+        self.assertIsNone(self.hook("MEDIA:/data/hermes/.hermes/.env\nMEDIA:/data/hermes/missing.pdf"))
+
+    def test_no_media_line_is_none_and_asks_nothing(self) -> None:
+        self.assertIsNone(self.hook("All done. The MEDIA: tag goes on its own line."))
+        self.assertIsNone(self.hook(""))
+        self.assertEqual(self.shared(), [])
+
+    def test_a_line_already_in_the_outbox_is_left_alone(self) -> None:
+        line = f"MEDIA:{OUTBOX}/sh_aaaaaaaaaaaa/chart.png"
+        self.assertIsNone(self.hook(line))
+        self.assertEqual(self.shared(), [])
+
+    def test_the_same_path_twice_is_one_share(self) -> None:
+        out = self.hook("MEDIA:/data/hermes/a.pdf\ntext\nMEDIA:/data/hermes/a.pdf")
+        self.assertEqual(out, f"MEDIA:{OUTBOX}/sh_000000000001/a.pdf\ntext\nMEDIA:{OUTBOX}/sh_000000000001/a.pdf")
+        self.assertEqual(self.shared(), ["/data/hermes/a.pdf"])
+
+    def test_at_most_ten_shares_per_turn(self) -> None:
+        text = "\n".join(f"MEDIA:/data/hermes/f{i}.pdf" for i in range(12))
+        out = (self.hook(text) or "").split("\n")
+        self.assertEqual(len(self.shared()), 10)
+        self.assertTrue(all(line.startswith(f"MEDIA:{OUTBOX}/") for line in out[:10]))
+        self.assertEqual(out[10:], ["MEDIA:/data/hermes/f10.pdf", "MEDIA:/data/hermes/f11.pdf"])
+
+    def test_an_unreachable_box_leaves_the_reply_alone(self) -> None:
+        os.environ["HERMETIC_FILES_SOCK"] = os.path.join(self.tmp, "nope")
+        self.assertIsNone(self.hook("MEDIA:/data/hermes/work/chart.png"))
+
+    def test_only_on_a_hermetic_surface(self) -> None:
+        text = "MEDIA:/data/hermes/work/chart.png"
+        for platform in ("hermetic", "tui", "cli"):
+            self.assertIsNotNone(self.hook(text, platform), platform)
+        for platform in ("telegram", "slack", "api_server", "", None):
+            self.assertIsNone(self.hook(text, platform), platform)
+        self.assertIsNone(plugin.transform_llm_output(response_text=text))
+        # One share per hermetic surface above; none for any other platform.
+        self.assertEqual(len(self.shared()), 3)
+
+    def test_a_media_line_in_a_fenced_block_is_an_example(self) -> None:
+        text = (
+            "Write it like this:\n```\nMEDIA:/data/hermes/a.pdf\n```\n"
+            "~~~~md\nMEDIA:/data/hermes/b.pdf\n~~~\nstill inside\nMEDIA:/data/hermes/c.pdf\n~~~~\n"
+            "MEDIA:/data/hermes/d.pdf"
+        )
+        out = self.hook(text)
+        self.assertEqual(self.shared(), ["/data/hermes/d.pdf"])
+        self.assertEqual(out, text.replace("MEDIA:/data/hermes/d.pdf", f"MEDIA:{OUTBOX}/sh_000000000001/d.pdf"))
+
+    def test_case_and_emphasis_are_accepted_and_the_line_comes_out_canonical(self) -> None:
+        text = "media:/data/hermes/a.pdf\n**MEDIA:/data/hermes/b.pdf**\n_Media: `/data/hermes/c.pdf`_\nMEDIA:/data/hermes/d_"
+        out = (self.hook(text) or "").split("\n")
+        self.assertEqual(self.shared(), ["/data/hermes/a.pdf", "/data/hermes/b.pdf", "/data/hermes/c.pdf", "/data/hermes/d_"])
+        self.assertEqual(
+            out,
+            [
+                f"MEDIA:{OUTBOX}/sh_000000000001/a.pdf",
+                f"MEDIA:{OUTBOX}/sh_000000000002/b.pdf",
+                f"MEDIA:{OUTBOX}/sh_000000000003/c.pdf",
+                f"MEDIA:{OUTBOX}/sh_000000000004/d_",
+            ],
+        )
+        # Unbalanced emphasis is not a MEDIA line.
+        self.assertIsNone(self.hook("**MEDIA:/data/hermes/e.pdf*"))
+
+    def test_crlf_and_trailing_blanks_are_kept_or_trimmed(self) -> None:
+        out = self.hook("MEDIA:/data/hermes/a.pdf \t \r\nMEDIA:`/data/hermes/b c.pdf`  ")
+        self.assertEqual(self.shared(), ["/data/hermes/a.pdf", "/data/hermes/b c.pdf"])
+        self.assertEqual(out, f"MEDIA:{OUTBOX}/sh_000000000001/a.pdf\r\nMEDIA:{OUTBOX}/sh_000000000002/b c.pdf")
+
+    def test_an_adversarial_line_is_matched_in_linear_time(self) -> None:
+        for line in ("MEDIA:/a" + " " * 50000 + "x", "MEDIA:/a" + " \t" * 25000 + "x", "MEDIA:" + " " * 50000):
+            started = time.monotonic()
+            self.assertIsNone(self.hook(line))
+            self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(self.shared(), [])
+
+    def test_a_line_over_the_length_cap_is_left_alone(self) -> None:
+        long_line = "MEDIA:/data/hermes/" + "a" * plugin.MEDIA_LINE_MAX + ".pdf"
+        self.assertIsNone(self.hook(long_line))
+        self.assertEqual(self.shared(), [])
+
+    def test_one_deadline_for_the_whole_hook(self) -> None:
+        def slow(body: dict) -> tuple[int, dict]:
+            time.sleep(3)
+            return (201, {"share_id": "sh_999999999999", "name": "x", "bytes": 1, "mime": "x/y", "sha256": "0" * 64})
+
+        self.box.routes[("POST", "/outbox")] = slow
+        saved = plugin.HOOK_DEADLINE
+        plugin.HOOK_DEADLINE = 1.0
+        try:
+            started = time.monotonic()
+            out = self.hook("MEDIA:/data/hermes/a.pdf\nMEDIA:/data/hermes/b.pdf\nMEDIA:/data/hermes/c.pdf")
+            took = time.monotonic() - started
+        finally:
+            plugin.HOOK_DEADLINE = saved
+        self.assertIsNone(out)
+        self.assertLess(took, 2.5)
+        # The first share used up the deadline; the lines after it were never started.
+        self.assertEqual(self.shared(), ["/data/hermes/a.pdf"])
+
+    def test_no_share_starts_once_the_deadline_is_spent(self) -> None:
+        ticks = iter([0.0, 0.0, plugin.HOOK_DEADLINE])
+        saved = plugin._monotonic
+        plugin._monotonic = lambda: next(ticks, plugin.HOOK_DEADLINE)
+        try:
+            out = self.hook("MEDIA:/data/hermes/a.pdf\nMEDIA:/data/hermes/b.pdf")
+        finally:
+            plugin._monotonic = saved
+        self.assertEqual(self.shared(), ["/data/hermes/a.pdf"])
+        self.assertEqual(out, f"MEDIA:{OUTBOX}/sh_000000000001/a.pdf\nMEDIA:/data/hermes/b.pdf")
+
+    def test_the_hook_never_raises(self) -> None:
+        original = plugin._share
+        plugin._share = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            self.assertIsNone(self.hook("MEDIA:/data/hermes/work/chart.png"))
+            self.assertIsNone(plugin.transform_llm_output(response_text=None))
+        finally:
+            plugin._share = original
+
+
 class CanonicalReaderTest(unittest.TestCase):
     def test_round_trip(self) -> None:
         # sh's double-quote escapes, and a real newline inside the quotes.
@@ -625,7 +818,7 @@ class CanonicalReaderTest(unittest.TestCase):
 
 
 class RegisterTest(unittest.TestCase):
-    def test_registers_four_tools_and_the_hook(self) -> None:
+    def test_registers_five_tools_and_the_hooks(self) -> None:
         tools: list[dict] = []
         hooks: list[str] = []
 
@@ -637,10 +830,12 @@ class RegisterTest(unittest.TestCase):
                 hooks.append(name)
 
         plugin.register(Ctx())
-        self.assertEqual([t["name"] for t in tools], ["request_file", "request_secret", "await_file", "list_files"])
+        self.assertEqual(
+            [t["name"] for t in tools], ["request_file", "request_secret", "await_file", "list_files", "share_file"]
+        )
         self.assertTrue(all(t["toolset"] == "hermetic_files" for t in tools))
         self.assertTrue(all(t["schema"]["parameters"]["type"] == "object" for t in tools))
-        self.assertEqual(hooks, ["transform_tool_result"])
+        self.assertEqual(hooks, ["transform_tool_result", "transform_llm_output"])
 
 
 if __name__ == "__main__":

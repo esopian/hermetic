@@ -22,6 +22,13 @@ import { subagentVerdict } from "./hermes-chat-subagent.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
 import { stripBotDelivery } from "./bot-delivery.ts";
 import { readAttachments } from "./hermes-chat-framing.ts";
+import {
+  describeShares,
+  hasShares,
+  outboxOnce,
+  readMediaShares,
+  type ListOutbox,
+} from "./hermes-chat-media.ts";
 import { parseProcessNotice } from "./process-notice.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
@@ -40,6 +47,11 @@ export interface ChatHistoryDeps {
   connection: ChatConnection;
   /** The canonical Bot Chat session, when the caller named none. */
   conversation: ReturnType<typeof createCanonicalSessions>["conversation"];
+  /**
+   * The box's outbox, read once per transcript that holds a share chip, to
+   * describe it (`hermes-chat-media.ts`). Absent, chips stay undescribed.
+   */
+  listOutbox?: ListOutbox | undefined;
 }
 
 export function createChatHistory(deps: ChatHistoryDeps) {
@@ -117,9 +129,20 @@ export function createChatHistory(deps: ChatHistoryDeps) {
       seenPages.add(fingerprint);
       transcript.push(...rows);
       if (opts.limit !== undefined || rows.length < pageSize)
-        return mapHistory(box, session, transcript);
+        return describeHistory(box, mapHistory(box, session, transcript), opts.signal);
       offset += rows.length;
     }
+  }
+
+  /** Share chips described from one outbox read, when there are any and it answers. */
+  async function describeHistory(
+    box: BoxAddress,
+    messages: ChatMessage[],
+    signal: AbortSignal | undefined,
+  ): Promise<ChatMessage[]> {
+    if (!deps.listOutbox || !hasShares(messages)) return messages;
+    const outbox = await outboxOnce(deps.listOutbox, box.instance, signal)();
+    return describeShares(messages, outbox);
   }
   return { history };
 }
@@ -188,7 +211,13 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
       role: notice ? "system" : role,
       author: authorRef(box, row.author ?? row.from),
       at,
-      blocks: operator ? readAttachments(shown) : shown,
+      // The operator's attachments out of a user row; the agent's outbox
+      // shares (`MEDIA:` outbox lines) out of a bot row.
+      blocks: operator
+        ? readAttachments(shown)
+        : role === "bot" && !notice
+          ? readMediaShares(shown)
+          : shown,
       usage: mapUsage(rec(row.usage)),
       error: str(row.error),
       ...failureOf(row),

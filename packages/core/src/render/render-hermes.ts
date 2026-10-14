@@ -157,7 +157,7 @@ export function imageProvenance(input: RenderInput): string {
  * one fact that differs: this surface renders markdown.
  */
 export const HERMETIC_PLATFORM_HINT =
-  "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's `deliver` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session.";
+  "You are chatting through hermetic, the fleet operator's web portal to this box, over the gateway websocket. Markdown renders with GitHub flavor (tables, fenced code, lists). Files: the operator's attachments arrive as files on this box, named in the prompt. To hand the operator a file, call share_file with its absolute path, or write a line containing only MEDIA:/absolute/path — either way hermetic copies it to an outbox and the operator gets an inline image or a Save button. Only files under /data/hermes can be shared; credential and secret files are refused. To ask the operator for a file, call request_file. Cron jobs scheduled from this session are LOCAL-ONLY: their output is saved (viewable via cronjob action='list') but is NOT delivered back into this session — there is no live-delivery channel here. If the user wants to be notified when a job runs, the job's `deliver` must target a gateway-connected messaging platform (e.g. deliver='telegram' or 'all'). Do not promise that a deliver='origin' or default-deliver cron job will message them in this session.";
 
 /**
  * The Hermes plugin hermeticd installs and the managed config enables: its
@@ -298,6 +298,21 @@ export function hermesManagedConfig(input: RenderInput): string {
    * the agent enabled for itself is off while this list is managed.
    */
   lines.push("plugins:", "  enabled:", "    - " + yamlString(HERMES_FILES_PLUGIN));
+
+  /**
+   * Outbound media (`gateway/media_policy.py`). `strict` narrows which files a
+   * `MEDIA:` tag or `send_message` may deliver to a messaging platform to the
+   * Hermes cache and freshly written files, with the credential denylist still
+   * applied — so a prompt-injected agent cannot post `.env` out through a tag.
+   *
+   * No `media_delivery_allow_dirs`: the files plugin rewrites `MEDIA:` lines
+   * into the outbox only on hermetic's own surfaces, where core renders them
+   * itself, so listing the outbox here would only make every past share
+   * deliverable on a messaging platform past strict's recency window.
+   *
+   * Managed so a config edit cannot loosen it.
+   */
+  lines.push("gateway:", "  strict: true");
 
   // Managed, not seeded: the hint describes the surface hermetic drives, so an
   // agent's own config must not be able to shadow it.

@@ -275,6 +275,35 @@ test("a key picked with Choose file… asks first, and Cancel lets the upload go
   expect((put.params as { secret?: boolean }).secret).toBe(true);
 }, 20_000);
 
+test("a key-looking pick held for D6 is let go when the slot closes under the question", async () => {
+  const { card } = await ask("E2E_FILE_REQUEST");
+  const id = requestId();
+  const key = join(picks, "held-key.txt");
+  writeFileSync(key, PEM);
+  stubPicker([key]);
+  await userEvent.click(button(card()!, "Choose file…")!);
+  await waitFor(
+    () =>
+      expect(card()?.textContent ?? "").toContain(
+        "Looks like a private key — it will be stored as a secret.",
+      ),
+    WAIT,
+  );
+  expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(false);
+  // The slot times out on the box while the operator has not answered.
+  harness!.backend().files.expire("atlas", id);
+  await waitFor(
+    () => expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(true),
+    WAIT,
+  );
+  await waitFor(() => expect(card()?.textContent ?? "").toContain("expired"), WAIT);
+  expect(card()!.textContent).not.toContain("Looks like a private key");
+  expect(button(card()!, "Store as secret") === undefined).toBe(true);
+  // Nothing was sent, and the one held pick was let go once.
+  expect(harness!.calls.some((c) => c.name === "files.put")).toBe(false);
+  expect(harness!.calls.filter((c) => c.name === "files.chunk.discard").length).toBe(1);
+}, 20_000);
+
 test("a plain picked file is sent with no question", async () => {
   const { card } = await ask("E2E_FILE_REQUEST");
   const id = requestId();

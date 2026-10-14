@@ -55,12 +55,13 @@ describe("opening a slot", () => {
     expect(got.max_bytes).toBe(FILES_LIMITS.secretEphemeralBytes);
   });
 
-  test("the socket's hello and outbox", async () => {
+  test("the socket's hello, and an outbox share of nothing", async () => {
     const { socket } = await filesBox();
     expect(await (await socket("/hello")).json()).toEqual({ hermeticd_version: "0.1.0", protocol: 1 });
+    // The outbox itself is `files-outbox.test.ts`'s: here, only that the socket serves it.
     const outbox = await socket("/outbox", post({ path: "/data/hermes/x" }));
-    expect(outbox.status).toBe(501);
-    expect(await errorCode(outbox)).toBe("UNSUPPORTED");
+    expect(outbox.status).toBe(404);
+    expect(await errorCode(outbox)).toBe("FILE_NOT_FOUND");
   });
 });
 

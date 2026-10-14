@@ -52,6 +52,12 @@ export interface Whois {
   readonly login: string;
   readonly node: string;
   readonly tags: readonly string[];
+  /**
+   * The app capabilities the tailnet policy grants the caller on this node:
+   * the keys of `whois`'s `CapMap`. Read by the files routes when the fleet
+   * requires `FILES_APP_CAP`; absent reads as none.
+   */
+  readonly caps?: readonly string[];
 }
 
 export type WhoisResolver = (peerIp: string) => Promise<Whois | null>;
@@ -264,11 +270,14 @@ export function tailscaleWhois(host: Host): WhoisResolver {
       const parsed = JSON.parse(res.stdout) as {
         UserProfile?: { LoginName?: string };
         Node?: { Name?: string; Tags?: string[] };
+        CapMap?: Record<string, unknown> | null;
       };
       const node = parsed.Node?.Name;
       const login = parsed.UserProfile?.LoginName;
       if (!node && !login) return null;
-      return { login: login ?? "", node: node ?? "", tags: parsed.Node?.Tags ?? [] };
+      const capMap = parsed.CapMap;
+      const caps = capMap && typeof capMap === "object" ? Object.keys(capMap) : [];
+      return { login: login ?? "", node: node ?? "", tags: parsed.Node?.Tags ?? [], caps };
     } catch {
       return null;
     }
@@ -441,7 +450,11 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
       // `who` is non-null here: `rpcAccess` refuses a peer `whois` cannot name.
       const route = deps.files ? matchFilesRoute(request.method, url.pathname) : null;
       if (deps.files && route && who) {
-        return deps.files(request, route, { login: who.login, node: who.node });
+        return deps.files(request, route, {
+          login: who.login,
+          node: who.node,
+          caps: who.caps ?? [],
+        });
       }
       return filesErrorResponse(
         new FilesError("NOT_FOUND", `no such route: ${request.method} ${auditPath(url.pathname)}`),
@@ -630,6 +643,13 @@ export async function serveRpc(
      * is below the files cap. The cap itself is enforced per upload against
      * `Content-Length` before a byte is read; this is the backstop, with a
      * MiB of headroom so the route's own 413 is the answer a client sees.
+     *
+     * The ceiling every fleet's `files.max_bytes` is clamped to, not the
+     * fleet's value: the listener is bound once, and the setting moves at
+     * each manifest read. Bound to a lowered value, a later raise would be
+     * refused here with Bun's bare 413 until a restart; the per-route check
+     * (`uploadHeaders` against `FilesCtx.settings`) is what applies the
+     * fleet's cap, at once.
      */
     maxRequestBodySize: FILES_LIMITS.fileBytes + 1024 * 1024,
     fetch(request, srv) {

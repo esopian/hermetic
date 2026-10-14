@@ -175,6 +175,66 @@ export const FILES_TTL = {
   receivingMax: 2 * HOUR,
 } as const;
 
+// --- Fleet settings ----------------------------------------------------------
+
+/**
+ * The Tailscale app capability hermeticd checks on a caller's whois when the
+ * fleet's `files.require_cap` is on. A domain hermetic owns: `tailscale.com`
+ * capability names are reserved.
+ */
+export const FILES_APP_CAP = "hermetic.dev/cap/files";
+
+/** Bounds on `files.retention_days`, the inbox lifetime. */
+export const FILES_RETENTION_DAYS = { min: 1, max: 90, default: 7 } as const;
+
+/**
+ * The fleet's files settings as written: `FleetSettings.files`, and the fleet
+ * manifest's copy of it (`FleetManifest.files`), which is how they reach the
+ * box. Every field is optional; absent means the default.
+ */
+export interface FilesSettingsSource {
+  readonly require_cap?: boolean | undefined;
+  readonly max_bytes?: number | undefined;
+  readonly retention_days?: number | undefined;
+}
+
+/** The fleet's files settings with every default applied. */
+export interface FilesSettings {
+  /** hermeticd refuses a tailnet caller whose whois lacks `FILES_APP_CAP`. */
+  readonly require_cap: boolean;
+  /** The per-file cap for ordinary files, at most `FILES_LIMITS.fileBytes`. */
+  readonly max_bytes: number;
+  /** How long an inbox file is kept, in days. */
+  readonly retention_days: number;
+}
+
+/**
+ * Resolve the files settings from either place they are written. Here, rather
+ * than restated at each reader, because core (writing the manifest and drawing
+ * settings), hermeticd (enforcing them) and the UI must agree on what absent
+ * means: `require_cap` off, `max_bytes` the 256 MiB default, retention 7 days.
+ * Out-of-range values are clamped rather than trusted, since the box reads them
+ * from a document the laptop wrote.
+ */
+export function resolveFilesSettings(
+  source: { readonly files?: FilesSettingsSource | null | undefined } | null | undefined,
+): FilesSettings {
+  const files = source?.files ?? undefined;
+  const maxBytes = files?.max_bytes;
+  const days = files?.retention_days;
+  return {
+    require_cap: files?.require_cap === true,
+    max_bytes:
+      typeof maxBytes === "number" && Number.isInteger(maxBytes) && maxBytes > 0
+        ? Math.min(maxBytes, FILES_LIMITS.fileBytes)
+        : FILES_LIMITS.fileBytes,
+    retention_days:
+      typeof days === "number" && Number.isInteger(days)
+        ? Math.min(Math.max(days, FILES_RETENTION_DAYS.min), FILES_RETENTION_DAYS.max)
+        : FILES_RETENTION_DAYS.default,
+  };
+}
+
 // --- Ids --------------------------------------------------------------------
 
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -933,4 +993,44 @@ export const FILES_HTTP_STATUS: Readonly<Record<FilesErrorCode, number>> = {
 /** `FILES_HTTP_STATUS[code]`, or 500 for a code the files routes do not use. */
 export function filesHttpStatus(code: string): number {
   return (FILES_HTTP_STATUS as Readonly<Record<string, number>>)[code] ?? 500;
+}
+
+// --- Outbox MEDIA lines ------------------------------------------------------
+
+/** The tag Hermes reads a delivered file from: one `MEDIA:<abs path>` per line. */
+export const MEDIA_TAG = "MEDIA:";
+
+/** An outbox share named by a `MEDIA:` line. */
+export interface OutboxMediaRef {
+  readonly share_id: string;
+  readonly name: string;
+}
+
+/**
+ * The share a line names, when the line is exactly
+ * `MEDIA:${FILES_OUTBOX_DIR}/<sh_…>/<name>` — the form the files plugin
+ * rewrites a shared `MEDIA:` line into — or `null` for anything else, which
+ * stays plain text. Surrounding whitespace is ignored; nothing else is: a
+ * second path segment, a name `sanitizeFileName` would change, or a share id
+ * of the wrong shape is not an outbox line. One parser, so core (mapping a
+ * reply to attachment chips) and the UI agree on which lines those are.
+ */
+export function parseOutboxMediaLine(line: string): OutboxMediaRef | null {
+  const text = line.trim();
+  const prefix = `${MEDIA_TAG}${FILES_OUTBOX_DIR}/`;
+  if (!text.startsWith(prefix)) return null;
+  const rest = text.slice(prefix.length);
+  const cut = rest.indexOf("/");
+  if (cut < 0) return null;
+  const share_id = rest.slice(0, cut);
+  const name = rest.slice(cut + 1);
+  if (!isShareId(share_id) || name.includes("/")) return null;
+  const clean = sanitizeFileName(name);
+  if (!clean.ok || clean.name !== name) return null;
+  return { share_id, name };
+}
+
+/** An outbox entry's path relative to `HERMES_HOME`: `outbox/<sh_…>/<name>`. */
+export function outboxRelPath(share_id: string, name: string): string {
+  return `outbox/${share_id}/${name}`;
 }

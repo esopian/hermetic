@@ -48,7 +48,7 @@ import {
   newFileId,
   sniffMime,
 } from "@hermetic/core/shared";
-import { type Caller, type FilesCtx, auditFiles, isoAfter, nowIso } from "./context.ts";
+import { type Caller, type FilesCtx, auditFiles, inboxTtl, isoAfter, nowIso } from "./context.ts";
 import { FilesError, errorText } from "./errors.ts";
 import {
   mkdirAsHermes,
@@ -68,7 +68,7 @@ import type { Claim } from "./store.ts";
 import { MeteredBody, type UploadHeaders, checkDiskFloor, cleanName, uploadHeaders } from "./upload.ts";
 
 /** Previewable when it sniffs as an image and fits Hermes's own image cap; a chip otherwise. */
-function classFor(mime: string, bytes: number): FileClass {
+export function classFor(mime: string, bytes: number): FileClass {
   return isImageMime(mime) && bytes <= FILES_LIMITS.imageBytes ? "image" : "file";
 }
 
@@ -126,7 +126,7 @@ function looksSecretError(): FilesError {
  * to `finalPath`. `parents` are created first, as hermes, in order. Any
  * failure removes `idDir` — fresh and unique to this upload — with the part.
  */
-async function writeIntoPlace(
+export async function writeIntoPlace(
   ctx: FilesCtx,
   body: MeteredBody,
   headers: UploadHeaders,
@@ -162,7 +162,7 @@ export async function stageUpload(
   caller: Caller,
 ): Promise<FilesStageResult> {
   const name = cleanName(rawName);
-  const headers = uploadHeaders(request, FILES_LIMITS.fileBytes);
+  const headers = uploadHeaders(request, ctx.settings().max_bytes);
   await checkDiskFloor(ctx.host, headers.declared);
   const body = meter(ctx, request, headers.declared);
   const head = await body.head();
@@ -288,7 +288,7 @@ export async function commitStaged(
         live.dir = "inbox";
         live.rel = rel;
         live.path = path;
-        live.expires_at = isoAfter(ctx.host, FILES_TTL.inbox);
+        live.expires_at = isoAfter(ctx.host, inboxTtl(ctx));
         if (body.session_id) live.session_id = body.session_id;
       });
     } catch (e) {
@@ -366,7 +366,10 @@ async function receiveForRequest(
 ): Promise<FilesFulfilResult> {
   if (slot.kind === "secret_text") return receiveSecretText(ctx, request, slot, claim, caller);
   const name = requestFileName(request, slot);
-  const headers = uploadHeaders(request, Math.min(slot.max_bytes, classCap(slot.sensitivity)));
+  const headers = uploadHeaders(
+    request,
+    Math.min(slot.max_bytes, classCap(slot.sensitivity, ctx.settings().max_bytes)),
+  );
   const secretSlot = slot.sensitivity === "secret";
   if (!secretSlot) await checkDiskFloor(ctx.host, headers.declared);
   const body = meter(ctx, request, headers.declared, claim.signal);
@@ -427,7 +430,7 @@ async function receiveForRequest(
       mime,
       sha256,
       created_at: nowIso(ctx.host),
-      expires_at: isoAfter(ctx.host, FILES_TTL.inbox),
+      expires_at: isoAfter(ctx.host, inboxTtl(ctx)),
       rel,
       path,
       from: { kind: "operator", login: caller.login, node: caller.node },

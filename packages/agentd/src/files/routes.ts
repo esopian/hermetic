@@ -1,16 +1,17 @@
 /**
  * The files routes on the tailnet listener (port 7434), behind the same
  * `whois` gate as every other RPC (`rpc.ts`): only an untagged tailnet member
- * reaches this function, and it arrives with that member's identity.
+ * reaches this function, and it arrives with that member's identity — and,
+ * when the fleet requires it, must carry the files capability (`lacksFilesCap`).
  *
  * Each route answers JSON — a result, or a `FilesErrorBody` at the status its
  * code names (`errors.ts`) — except `content`, which streams the file.
  */
 import { FilesCommitBody, FilesDeclineBody, FilesSecretBody } from "@hermetic/core/schema";
-import type { FilesRoute } from "@hermetic/core/shared";
+import { FILES_APP_CAP, type FilesRoute } from "@hermetic/core/shared";
 import { type Caller, type FilesCtx, auditFiles } from "./context.ts";
 import { deleteEntry, entryContent, getEntry, listFiles } from "./entries.ts";
-import { FilesError, jsonResponse, toFilesResponse } from "./errors.ts";
+import { FilesError, filesErrorResponse, jsonResponse, toFilesResponse } from "./errors.ts";
 import { commitStaged, fulfilFromSecret, fulfilRequest, stageUpload } from "./receive.ts";
 import { declineRequest, getRequest, listRequests } from "./requests.ts";
 import { MeteredBody } from "./upload.ts";
@@ -104,8 +105,27 @@ export type FilesTailnetHandler = (
   caller: Caller,
 ) => Promise<Response>;
 
+/**
+ * The fleet's `files.require_cap` (`settings.ts`): with it on, an untagged
+ * member reaches the files routes only if the tailnet policy grants it
+ * `FILES_APP_CAP` on this node, as `whois` reports it. Off, any untagged
+ * member does. A tagged caller never gets this far (`rpc.ts`).
+ */
+function lacksFilesCap(ctx: FilesCtx, caller: Caller): boolean {
+  return ctx.settings().require_cap && !(caller.caps ?? []).includes(FILES_APP_CAP);
+}
+
 export function makeFilesTailnetHandler(ctx: FilesCtx): FilesTailnetHandler {
   return async (request, route, caller) => {
+    if (lacksFilesCap(ctx, caller)) {
+      ctx.log(`files ${route.route} refused: login=${caller.login || "-"} lacks ${FILES_APP_CAP}`);
+      return filesErrorResponse(
+        new FilesError(
+          "FORBIDDEN",
+          `this fleet requires the ${FILES_APP_CAP} capability in the tailnet policy for the files routes`,
+        ),
+      );
+    }
     try {
       switch (route.route) {
         case "stage":

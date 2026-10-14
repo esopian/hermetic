@@ -16,6 +16,7 @@
  */
 import { createHash } from "node:crypto";
 import { seedFixtureChatFiles } from "./fixture-chat-files.ts";
+import { seedFixtureAgentFiles } from "./fixture-files-seed.ts";
 import type {
   Agent,
   DirectoryEntry,
@@ -1413,5 +1414,7 @@ export function fixtureBackend(opts: FixtureSeed & { account?: FixtureAccount | 
   if (fleet === "main") seedFixtureVolumes(backend);
   // The bytes behind the canned transcripts' attachment chips.
   seedFixtureChatFiles(backend);
+  // The Files tab: inbox, outbox, stored secrets and one open request (`fixture-files-seed.ts`).
+  if (fleet === "main") seedFixtureAgentFiles(backend);
   return { backend, config: fixtureConfigFor(fleet) };
 }

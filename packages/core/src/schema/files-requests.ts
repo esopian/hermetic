@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FILES_LIMITS } from "../shared/files.ts";
 import {
+  FileEntryId,
   FileId,
   FileName,
   FileRequestId,
@@ -8,6 +9,7 @@ import {
   FilesStageResult,
   SecretTextAsMode,
 } from "./files.ts";
+import { Sha256 } from "./common.ts";
 import { OpEvent } from "./ops.ts";
 import { AgentName } from "./requests.ts";
 
@@ -132,9 +134,17 @@ export type FilesChunkRefInput = z.infer<typeof FilesChunkRefInput>;
 export const FilesCapabilityInput = z.object({ instance: AgentName });
 export type FilesCapabilityInput = z.infer<typeof FilesCapabilityInput>;
 
-/** A staged entry on one box: the chip's remove, and its thumbnail. */
+/** A staged entry on one box: the chip's remove (`files.discard`). Files only, never a share. */
 export const FilesEntryRefInput = z.object({ instance: AgentName, id: FileId });
 export type FilesEntryRefInput = z.infer<typeof FilesEntryRefInput>;
+
+/**
+ * An entry whose bytes a preview reads (`files.content`): a staged or inbox
+ * file's thumbnail (`f_…`), or a share card's image (`sh_…`), which the box's
+ * content route serves alike.
+ */
+export const FilesContentInput = z.object({ instance: AgentName, id: FileEntryId });
+export type FilesContentInput = z.infer<typeof FilesContentInput>;
 
 /** Whether a box serves the files routes, from its `/healthz`. */
 export const FilesCapability = z.object({
@@ -232,3 +242,96 @@ export type FilesDeclineInput = z.infer<typeof FilesDeclineInput>;
 /** One request slot on one box: the card's read of the box's own copy (machinery). */
 export const FilesRequestRefInput = z.object({ instance: AgentName, request_id: FileRequestId });
 export type FilesRequestRefInput = z.infer<typeof FilesRequestRefInput>;
+
+// --- The Files tab: `files.list`, `files.get` and `files.rm` -----------------
+
+/**
+ * `hermetic files ls <agent> [--requests]`: every entry and request slot on one
+ * box, metadata only (`FilesListResult`). `requests` narrows the answer to the
+ * slots still waiting for a file (`open`); the entries are then empty.
+ */
+export const FilesListInput = z.object({
+  name: AgentName,
+  requests: z.boolean().optional(),
+});
+export type FilesListInput = z.infer<typeof FilesListInput>;
+
+/**
+ * A folder the desktop head's save dialog chose (`files.saveNative`), held in
+ * main-process memory: `sv_` plus a random UUID. Opaque to the page, which
+ * never sees the folder's path.
+ */
+export const SAVE_DEST_ID_RE = /^sv_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const SaveDestId = z.string().regex(SAVE_DEST_ID_RE, "not a save destination id (sv_…)");
+export type SaveDestId = z.infer<typeof SaveDestId>;
+
+/**
+ * Where a download lands: a file path on this laptop (the CLI's `-o`), or a
+ * folder the save dialog registered, in which the file is created under its
+ * own sanitized name. Either way the file is created exclusively — an existing
+ * path is refused, never overwritten.
+ */
+export const FilesGetDest = z.union([
+  z.object({ path: z.string().min(1).max(4096) }).strict(),
+  z.object({ dest_id: SaveDestId }).strict(),
+]);
+export type FilesGetDest = z.infer<typeof FilesGetDest>;
+
+/**
+ * `hermetic files get <agent> <id> -o <path>`: download one inbox file
+ * (`f_…`) or outbox share (`sh_…`). Secret entries are refused.
+ */
+export const FilesGetInput = z.object({
+  name: AgentName,
+  id: FileEntryId,
+  dest: FilesGetDest,
+});
+export type FilesGetInput = z.infer<typeof FilesGetInput>;
+
+/** The desktop bridge's view: a save-dialog handle, never a path (as `FilesPutApiInput`). */
+export const FilesGetApiInput = FilesGetInput.extend({
+  dest: z.object({ dest_id: SaveDestId }).strict(),
+});
+export type FilesGetApiInput = z.infer<typeof FilesGetApiInput>;
+
+/** Progress inside a get: `phase` is `list`, `fetch`, `verify` or `write`. Never names the file. */
+export const FilesGetProgressEvent = OpEvent.extend({ type: z.literal("progress") });
+export type FilesGetProgressEvent = z.infer<typeof FilesGetProgressEvent>;
+
+/**
+ * The last event of a successful get: what was saved, by the name it was saved
+ * under. Never the path it was written to: the head that chose it knows it,
+ * and a page that asked through the save dialog must not learn it.
+ */
+export const FilesSavedEvent = z.object({
+  type: z.literal("saved"),
+  file: z.object({
+    id: FileEntryId,
+    name: FileName,
+    bytes: z.number().int().nonnegative(),
+    mime: z.string().min(1),
+    sha256: Sha256,
+  }),
+});
+export type FilesSavedEvent = z.infer<typeof FilesSavedEvent>;
+
+/** What `files.get` yields. A failure is a thrown `HermeticError`. */
+export const FilesGetEvent = z.discriminatedUnion("type", [FilesGetProgressEvent, FilesSavedEvent]);
+export type FilesGetEvent = z.infer<typeof FilesGetEvent>;
+
+/** Every frame a head may push for one get: ending `saved` or `error`. */
+export const FilesGetFrame = z.discriminatedUnion("type", [
+  FilesGetProgressEvent,
+  FilesSavedEvent,
+  FilesStageErrorEvent,
+]);
+export type FilesGetFrame = z.infer<typeof FilesGetFrame>;
+
+/**
+ * `hermetic files rm <agent> <id>`: plan the removal of one inbox file, outbox
+ * share or stored secret. The answer is a `Plan` (`kind: "files-rm"`) the head
+ * shows and `apply` executes (§3.2 rule 3): a durable secret's removal also
+ * deletes its SSM slot, which nothing can put back.
+ */
+export const FilesRmInput = z.object({ name: AgentName, id: FileEntryId });
+export type FilesRmInput = z.infer<typeof FilesRmInput>;

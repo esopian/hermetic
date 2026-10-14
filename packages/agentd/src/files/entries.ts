@@ -33,8 +33,6 @@ import { FilesError } from "./errors.ts";
 import { dropDirFor, mustRemoveTreeAsHermes, pathKindAsHermes, removeTreeAsHermes } from "./fs-ops.ts";
 import { getRequest, listRequests } from "./requests.ts";
 
-const DAY = 24 * 3600;
-
 export function isSecret(entry: FileEntry): boolean {
   return entry.class === "secret" || entry.dir === "drop" || entry.dir === "secret";
 }
@@ -57,7 +55,7 @@ export async function listFiles(ctx: FilesCtx): Promise<FilesListResult> {
       inbox_bytes: sum(inbox),
       outbox_bytes: sum(outbox),
       ...(fs ? { disk_used_pct: Math.min(100, Math.max(0, fs.usePct)) } : {}),
-      retention_days: Math.max(1, Math.round(FILES_TTL.inbox / DAY)),
+      retention_days: ctx.settings().retention_days,
     },
   };
 }

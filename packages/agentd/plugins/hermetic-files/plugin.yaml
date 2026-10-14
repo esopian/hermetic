@@ -11,5 +11,7 @@ provides_tools:
   - request_secret
   - await_file
   - list_files
+  - share_file
 provides_hooks:
   - transform_tool_result
+  - transform_llm_output

@@ -26,7 +26,8 @@ import type {
   FilesChunkAppendInput,
   FilesChunkOpenInput,
   FilesChunkRefInput,
-  FilesEntryRefInput,
+  FilesContentInput,
+  FilesGetFrame,
   FilesPutFrame,
   FilesRequestRefInput,
   FilesStageFrame,
@@ -193,11 +194,17 @@ export type MachineryRequests = {
   >;
   "files.capability": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.capability>>;
   "files.discard": RpcRequest<Input<typeof files.filesDiscardBody>, Answer<typeof files.discard>>;
-  "files.content": RpcRequest<Input<typeof FilesEntryRefInput>, Answer<typeof files.content>>;
+  "files.content": RpcRequest<Input<typeof FilesContentInput>, Answer<typeof files.content>>;
   "files.pickNative": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.pickNative>>;
   /** `files.put`'s cancel, and the request card's read of the box's slot. */
   "files.put.abort": RpcRequest<StreamRef, StreamClosed>;
   "files.request.get": RpcRequest<Input<typeof FilesRequestRefInput>, Answer<typeof files.requestGet>>;
+  /**
+   * `files.get`'s cancel, and the save dialog: an opaque `dest_id` for the
+   * folder the operator chose, `null` when they cancelled — never the path.
+   */
+  "files.get.abort": RpcRequest<StreamRef, StreamClosed>;
+  "files.saveNative": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.saveNative>>;
 
   /**
    * Fixture-only staging. Core validates inside the fixture control surface —
@@ -287,6 +294,8 @@ export const MACHINERY_REQUEST_NAMES = [
   "files.pickNative",
   "files.put.abort",
   "files.request.get",
+  "files.get.abort",
+  "files.saveNative",
   "fixture.chat.inject",
   "fixture.chat.hint",
   "app.info",
@@ -352,6 +361,11 @@ export type WebviewMessages = {
    * — `fulfilled` with the box's answer, or `error` (`FilesPutFrame`).
    */
   "files.put.frame": { stream_id: string; frame?: FilesPutFrame; done?: FilesPutFrame };
+  /**
+   * One `files.get` frame: `frame` is a progress event, `done` the last word
+   * — `saved` with the name it was saved under, or `error` (`FilesGetFrame`).
+   */
+  "files.get.frame": { stream_id: string; frame?: FilesGetFrame; done?: FilesGetFrame };
   /** The updater's state, for the footer. */
   "app.update": { status: string; version?: string };
   /**
@@ -433,6 +447,7 @@ export const MESSAGE_FOR_REQUEST = {
   "logs.open": "logs.line",
   "files.stage": "files.frame",
   "files.put": "files.put.frame",
+  "files.get": "files.get.frame",
   "terminal.attach": "terminal.frame",
 } as const satisfies Record<string, WebviewMessageName>;
 

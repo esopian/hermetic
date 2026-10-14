@@ -5,23 +5,29 @@ import {
   type FilesCapability,
   type FilesCommitResult,
   FilesDeclineInput,
+  FilesListInput,
+  type FilesListResult,
 } from "../schema/index.ts";
-import { FILES_CAPABILITY, isFileId, isRequestId } from "../shared/files.ts";
+import { FILES_CAPABILITY, isFileId, isRequestId, isShareId } from "../shared/files.ts";
 import { validateName } from "../shared/naming.ts";
 import type { FilesContent } from "../backend/files-port.ts";
 import { requestStateRefusal } from "./errors.ts";
+import { createFilesGet, createSaveDestinations, type SaveDestinations } from "./get.ts";
 import { createFilesPut } from "./put.ts";
+import { createFilesRm } from "./rm.ts";
 import { createFilesStage } from "./stage.ts";
 import { createUploadRegistry, type UploadRegistry } from "./uploads.ts";
 
 /**
  * The files module (§9), mounted on the SDK as `hermetic.files`.
  *
- * `stage`, `put` and `decline` are the public methods (`files.stage`,
- * `files.put`, `files.decline`). Everything under `internal` is machinery the
- * desktop head wraps in its own requests (`files.chunk.*`, `files.capability`,
- * `files.discard`, `files.content`, `files.request.get`) and the chat turn
- * calls directly (`commit`): none of it is a §9 command, so none of it is in
+ * `stage`, `put`, `decline`, `list`, `get` and `rm` are the public methods
+ * (`files.stage`, `files.put`, `files.decline`, `files.list`, `files.get`,
+ * `files.rm`). Everything under `internal` is machinery the desktop head wraps
+ * in its own requests (`files.chunk.*`, `files.capability`, `files.discard`,
+ * `files.content`, `files.request.get`, `files.saveNative`) and the chat turn
+ * and `apply` call directly (`commit`, `applyRm`): none of it is a §9 command,
+ * so none of it is in
  * `PUBLIC_METHODS`, and `tests/parity.test.ts` skips this one sub-object by
  * name.
  */
@@ -30,6 +36,8 @@ export interface FilesDeps {
   ctx: CoreContext;
   /** Defaults to a fresh in-memory registry. */
   uploads?: UploadRegistry;
+  /** The save dialog's folders (`files.saveNative`); defaults to a fresh registry. */
+  destinations?: SaveDestinations;
   /** Milliseconds since the epoch, for the capability cache. */
   now?: () => number;
   /** How long a capability answer is reused. */
@@ -45,6 +53,13 @@ export const FILES_CAPABILITY_TIMEOUT_MS = 3_000;
 
 function requireFileId(id: string): void {
   if (!isFileId(id)) throw new HermeticError("VALIDATION", "not a file id (f_…)");
+}
+
+/** A file or a share: what the box's content route serves. */
+function requireEntryId(id: string): void {
+  if (!isFileId(id) && !isShareId(id)) {
+    throw new HermeticError("VALIDATION", "not a file (f_…) or share (sh_…) id");
+  }
 }
 
 function requireRequestId(id: string): void {
@@ -64,8 +79,39 @@ export function createFiles(deps: FilesDeps) {
   const timeoutMs = deps.capabilityTimeoutMs ?? FILES_CAPABILITY_TIMEOUT_MS;
   const capabilityCache = new Map<string, { at: number; ttl: number; value: FilesCapability }>();
 
+  const destinations = deps.destinations ?? createSaveDestinations();
+
   const { stage } = createFilesStage({ ctx, uploads });
   const { put } = createFilesPut({ ctx, uploads });
+  const { get } = createFilesGet({ ctx, destinations });
+  const { rm, applyRm } = createFilesRm({ ctx });
+
+  /**
+   * `files.list`: every entry and request slot on one box, metadata only —
+   * never a byte of content. With `requests`, only the slots still waiting
+   * for a file, and no entries.
+   */
+  async function list(input: unknown, opts: { signal?: AbortSignal } = {}): Promise<FilesListResult> {
+    const parsed = FilesListInput.safeParse(input);
+    if (!parsed.success) {
+      throw new HermeticError("VALIDATION", "files ls input does not validate", {
+        issues: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
+      });
+    }
+    const { name, requests } = parsed.data;
+    validateName(name);
+    await ctx.guardFleet();
+    await ctx.getAgent(name);
+    const listing = await ctx.backend.files.list(name, opts);
+    if (!requests) return listing;
+    return {
+      inbox: [],
+      outbox: [],
+      secrets: [],
+      requests: listing.requests.filter((r) => r.state === "open"),
+      usage: listing.usage,
+    };
+  }
 
   /**
    * One request slot, as the box holds it: what a request card renders from,
@@ -154,8 +200,9 @@ export function createFiles(deps: FilesDeps) {
   }
 
   /**
-   * An entry's bytes, verified, refused over `maxBytes` — and, with
-   * `imagesOnly`, refused when it is not an image — before they are read.
+   * An entry's bytes — a file (`f_…`) or a share (`sh_…`) — verified, refused
+   * over `maxBytes` and, with `imagesOnly`, refused when it is not an image,
+   * before they are read. The box refuses a secret's content on its own.
    */
   async function content(
     instance: string,
@@ -164,7 +211,7 @@ export function createFiles(deps: FilesDeps) {
     opts: { signal?: AbortSignal; imagesOnly?: boolean } = {},
   ): Promise<FilesContent> {
     validateName(instance);
-    requireFileId(id);
+    requireEntryId(id);
     await ctx.guardFleet();
     return await ctx.backend.files.content(instance, id, { ...opts, maxBytes });
   }
@@ -191,6 +238,9 @@ export function createFiles(deps: FilesDeps) {
     stage,
     put,
     decline,
+    list,
+    get,
+    rm,
     internal: {
       uploads: {
         open: uploads.open,
@@ -205,6 +255,10 @@ export function createFiles(deps: FilesDeps) {
       content,
       commit,
       request,
+      /** The save dialog's folder, registered for `files.get` by an opaque id. */
+      registerDestination: destinations.register,
+      /** Execute a `files-rm` plan; `apply` is the only caller. */
+      applyRm,
     },
   };
 }

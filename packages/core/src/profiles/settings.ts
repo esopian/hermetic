@@ -30,8 +30,10 @@ import {
   SettingsSetInput as SettingsSetInputSchema,
   autoUpdateHermeticd,
   defaultFleetSettings,
+  resolveFilesSettings,
 } from "../schema/index.ts";
 import type {
+  FilesSettings,
   FleetItem,
   FleetSettings,
   HermesSettings,
@@ -196,7 +198,7 @@ export interface SettingsResult {
   /**
    * Set only when the settings were written but something that follows from
    * them was not — today, only the fleet manifest republish that tells the
-   * boxes `auto_update_hermeticd` changed (§6.5). The write itself landed, so
+   * boxes `auto_update_hermeticd` or the `files` settings changed (§6.5). The write itself landed, so
    * the call does not fail; this names what did not happen and the command
    * that finishes it. Heads print it; nothing depends on it.
    */
@@ -332,6 +334,10 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       ...(parsed.auto_update_hermeticd === undefined
         ? {}
         : { auto_update_hermeticd: parsed.auto_update_hermeticd }),
+      // Key by key onto what is stored, like every other patch here.
+      ...(parsed.files === undefined
+        ? {}
+        : { files: { ...settings.files, ...definedKeys(parsed.files) } }),
       updated_at: now,
       updated_by: who,
     };
@@ -352,6 +358,7 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       ...(parsed.auto_update_hermeticd === undefined
         ? []
         : [`auto_update_hermeticd ${parsed.auto_update_hermeticd ? "on" : "off"}`]),
+      ...Object.keys(definedKeys(parsed.files ?? {})).map((k) => `files.${k}`),
     ];
     const result = await commit(
       next,
@@ -360,17 +367,25 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       `${changed.join(", ")} → v${next.version}`,
     );
     /**
-     * The box cannot read `_fleet`, so the switch reaches it through the fleet
-     * manifest (§6.5) — republished only when the *effective* value moved, so
-     * stating what absence already means writes nothing to the bucket.
+     * The box cannot read `_fleet`, so the switch and the files settings reach
+     * it through the fleet manifest (§6.5) — republished only when an
+     * *effective* value moved, so stating what absence already means writes
+     * nothing to the bucket.
      */
-    if (autoUpdateHermeticd(settings) === autoUpdateHermeticd(next)) return result;
-    const warning = await republish(fleet, stack, autoUpdateHermeticd(next), who);
+    const autoMoved = autoUpdateHermeticd(settings) !== autoUpdateHermeticd(next);
+    const filesNext = resolveFilesSettings(next);
+    const filesMoved = !sameFiles(resolveFilesSettings(settings), filesNext);
+    if (!autoMoved && !filesMoved) return result;
+    const warning = await republish(fleet, stack, who, {
+      auto: autoMoved ? autoUpdateHermeticd(next) : null,
+      files: filesMoved ? filesNext : null,
+    });
     return warning === undefined ? result : { ...result, warning };
   }
 
   /**
-   * Republish the manifest after the switch has been committed, and say —
+   * Republish the manifest after a change the boxes read from it has been
+   * committed, and say —
    * rather than throw — if that could not be done.
    *
    * The settings write has already landed and is in the run log, so failing
@@ -384,10 +399,11 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
   async function republish(
     fleet: FleetItem,
     stack: StackInfo,
-    on: boolean,
     who: string,
+    moved: { auto: boolean | null; files: FilesSettings | null },
   ): Promise<string | undefined> {
-    const state = on ? "on" : "off";
+    const state = moved.auto ? "on" : "off";
+    const files = moved.files === null ? "" : describeFiles(moved.files);
     try {
       const written = await republishAutoUpdate(
         deps.ctx.backend.artifacts,
@@ -402,23 +418,57 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
           updatedAt: deps.ctx.nowIso(),
         },
       );
-      await deps.ctx.appendEvent(
-        FLEET_KEY,
-        "settings.auto_update_hermeticd",
-        written
-          ? `hermeticd auto-update ${state}; the fleet manifest now says so`
-          : `hermeticd auto-update ${state}; no fleet manifest published yet, so the next push carries it`,
-      );
+      if (moved.auto !== null) {
+        await deps.ctx.appendEvent(
+          FLEET_KEY,
+          "settings.auto_update_hermeticd",
+          written
+            ? `hermeticd auto-update ${state}; the fleet manifest now says so`
+            : `hermeticd auto-update ${state}; no fleet manifest published yet, so the next push carries it`,
+        );
+      }
+      if (moved.files !== null) {
+        await deps.ctx.appendEvent(
+          FLEET_KEY,
+          "settings.files",
+          written
+            ? `files settings ${files}; the fleet manifest now says so`
+            : `files settings ${files}; no fleet manifest published yet, so the next push carries them`,
+        );
+      }
       return undefined;
     } catch (e) {
       const why = isHermeticError(e) ? `${e.code}: ${e.message}` : String(e);
-      const warning = `hermeticd auto-update is saved as ${state}, but the fleet manifest could not be republished (${why}); the boxes keep following the old setting until \`hermetic artifacts push\` republishes it`;
-      await deps.ctx
-        .appendEvent(FLEET_KEY, "settings.auto_update_hermeticd", warning)
-        .catch(() => undefined);
+      const saved = [
+        ...(moved.auto === null ? [] : [`hermeticd auto-update is saved as ${state}`]),
+        ...(moved.files === null ? [] : [`the files settings are saved as ${files}`]),
+      ].join(" and ");
+      const warning = `${saved}, but the fleet manifest could not be republished (${why}); the boxes keep following the old setting until \`hermetic artifacts push\` republishes it`;
+      const event = moved.auto === null ? "settings.files" : "settings.auto_update_hermeticd";
+      await deps.ctx.appendEvent(FLEET_KEY, event, warning).catch(() => undefined);
       return warning;
     }
   }
 
   return { settingsGet, settingsSet };
+}
+
+/** `obj` without its `undefined` keys: a patch states only what it names. */
+function definedKeys<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+function sameFiles(a: FilesSettings, b: FilesSettings): boolean {
+  return (
+    a.require_cap === b.require_cap &&
+    a.max_bytes === b.max_bytes &&
+    a.retention_days === b.retention_days
+  );
+}
+
+/** For the run log: `cap required, 256 MiB, 7 d`. */
+function describeFiles(f: FilesSettings): string {
+  const mib = f.max_bytes / (1024 * 1024);
+  const size = Number.isInteger(mib) ? `${mib} MiB` : `${f.max_bytes} bytes`;
+  return `${f.require_cap ? "cap required" : "no cap"}, ${size}, ${f.retention_days} d`;
 }

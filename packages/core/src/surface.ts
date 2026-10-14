@@ -49,6 +49,10 @@ import {
   ChatObserveInput as ChatObserveInputSchema,
   ChatSendInput as ChatSendInputSchema,
   FilesDeclineInput as FilesDeclineInputSchema,
+  FilesGetApiInput as FilesGetApiInputSchema,
+  FilesGetInput as FilesGetInputSchema,
+  FilesListInput as FilesListInputSchema,
+  FilesRmInput as FilesRmInputSchema,
   FilesPutApiInput as FilesPutApiInputSchema,
   FilesPutInput as FilesPutInputSchema,
   FilesStageApiInput as FilesStageApiInputSchema,
@@ -112,6 +116,7 @@ import {
 } from "./schema/index.ts";
 import type {
   CreateAgentInput,
+  FilesGetInput,
   FilesPutInput,
   InitInput,
   LocalConfig,
@@ -193,6 +198,11 @@ export const PUBLIC_METHODS = [
   // Agent file requests: answer one with a file or a text secret, or say no.
   "files.put",
   "files.decline",
+  // The Files tab: what is on an agent's box, one file off it, and one entry
+  // removed (planned, then `apply`: a durable secret's SSM slot goes with it).
+  "files.list",
+  "files.get",
+  "files.rm",
   "artifacts.push",
   "teardown",
   "doctor",
@@ -360,6 +370,15 @@ export const REQUEST_SCHEMAS = {
    */
   "files.put": FilesPutApiInputSchema,
   "files.decline": FilesDeclineInputSchema,
+  "files.list": FilesListInputSchema,
+  /**
+   * A download. A stream like `files.stage`, and like it not in
+   * `STREAMING_METHODS`: a live pipe, not an op. The bridge names a folder
+   * the save dialog registered (`dest_id`), never a path; a path is the CLI's.
+   */
+  "files.get": FilesGetApiInputSchema,
+  // A plan, like `plan.destroy`: `apply` executes it.
+  "files.rm": FilesRmInputSchema,
   // The HTTP surface may name a version and nothing else: a browser must not be
   // able to name a path on the server's filesystem.
   "artifacts.push": ArtifactsPushApiInputSchema,
@@ -425,9 +444,9 @@ export const REQUEST_SCHEMAS = {
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**
- * The CLI's view of the same table. It differs in exactly three places, all for
- * the same reason: `artifacts push`, `files stage` and `files put` may name a
- * local path, because the CLI runs on the laptop that holds the file.
+ * The CLI's view of the same table. It differs in exactly four places, all for
+ * the same reason: `artifacts push`, `files stage`, `files put` and `files get`
+ * may name a local path, because the CLI runs on the laptop that holds the file.
  */
 export const CLI_REQUEST_SCHEMAS = {
   ...REQUEST_SCHEMAS,
@@ -435,6 +454,7 @@ export const CLI_REQUEST_SCHEMAS = {
   // The CLI runs on the laptop that holds the file, so it may name its path.
   "files.stage": FilesStageInputSchema,
   "files.put": FilesPutInputSchema,
+  "files.get": FilesGetInputSchema,
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**
@@ -548,5 +568,17 @@ export function redactFilesPutInput(
   input: FilesPutInput,
 ): Omit<FilesPutInput, "source"> & { source: FilesPutInput["source"] | { path: "(redacted)" } } {
   if ("path" in input.source) return { ...input, source: { path: "(redacted)" } };
+  return input;
+}
+
+/**
+ * The fields of `FilesGetInput` that are safe to record or display: as
+ * `redactFilesPutInput`, a destination path is replaced (it ends in the file's
+ * name); a save-dialog id is opaque and kept.
+ */
+export function redactFilesGetInput(
+  input: FilesGetInput,
+): Omit<FilesGetInput, "dest"> & { dest: FilesGetInput["dest"] | { path: "(redacted)" } } {
+  if ("path" in input.dest) return { ...input, dest: { path: "(redacted)" } };
   return input;
 }

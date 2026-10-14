@@ -40,6 +40,8 @@ import {
   useInboxMenus,
 } from "./InboxParts.tsx";
 import { openNotification } from "./NotificationRow.tsx";
+import { FileRequestRows } from "./FileRequestRows.tsx";
+import { useFileRequestsIfAvailable } from "../../state/file-requests-state.tsx";
 
 export function NotificationCenter({
   anchor,
@@ -54,6 +56,9 @@ export function NotificationCenter({
   onOpenSettings?: (section: "notifications") => void;
 }) {
   const notify = useNotify();
+  /** Open file requests (§8.6): rows of their own above the inbox, counted as needing you. */
+  const fileRequests = useFileRequestsIfAvailable()?.all.length ?? 0;
+  const needsYou = notify.needsAction + fileRequests;
   const [tab, setTab] = useState<CenterTab>("all");
   const [focus, setFocus] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -189,10 +194,10 @@ export function NotificationCenter({
           <span className="ph-title">Inbox</span>
           <span className="ph-count">
             {notify.unread} unread
-            {notify.needsAction ? (
+            {needsYou ? (
               <>
                 {" · "}
-                <b>{notify.needsAction} need you</b>
+                <b>{needsYou} need you</b>
               </>
             ) : null}
           </span>
@@ -260,8 +265,9 @@ export function NotificationCenter({
               Could not read the inbox: {notify.error}
             </div>
           ) : null}
+          <FileRequestRows onNavigated={onClose} />
           {cards.length === 0 ? (
-            tab === "needs_you" ? (
+            fileRequests > 0 ? null : tab === "needs_you" ? (
               <InboxZero big="Nothing waiting on you">
                 <div className="sm">No approvals, no stuck updates. Gold rows land here first.</div>
               </InboxZero>

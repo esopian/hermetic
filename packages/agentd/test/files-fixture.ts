@@ -12,6 +12,7 @@ import {
   HERMES_HOME,
   formatContentDigest,
 } from "@hermetic/core/shared";
+import type { FilesSettings } from "@hermetic/core/shared";
 import type { MaterialisedFileSecret } from "../src/files/context.ts";
 import { type FilesService, makeFilesService } from "../src/files/service.ts";
 import { TAGGED_DEVICES_LOGIN, type Whois, makeRpcHandler } from "../src/rpc.ts";
@@ -56,6 +57,10 @@ export interface BoxOptions {
   uploadIdleMs?: number;
   /** The RPC policy's `allowedTags`. */
   allowedTags?: readonly string[];
+  /** The fleet's files settings in force; the defaults when absent. */
+  settings?: () => FilesSettings;
+  /** What `whois` answers per peer; `peer` for any `100.64.` address when absent. */
+  whois?: (ip: string) => Whois | null;
 }
 
 export async function filesBox(options: BoxOptions = {}) {
@@ -76,13 +81,15 @@ export async function filesBox(options: BoxOptions = {}) {
     ...(options.materialiseSecret ? { materialiseSecret: options.materialiseSecret } : {}),
     ...(options.removeSecret ? { removeSecret: options.removeSecret } : {}),
     ...(options.uploadIdleMs !== undefined ? { uploadIdleMs: options.uploadIdleMs } : {}),
+    ...(options.settings ? { settings: options.settings } : {}),
   });
   const rpc = makeRpcHandler({
     host,
     name: TEST_NAME,
     hermeticdVersion: "0.1.0",
     configHash: async () => null,
-    whois: async (ip) => (ip.startsWith("100.64.") ? (options.peer ?? MEMBER) : null),
+    whois: async (ip) =>
+      options.whois ? options.whois(ip) : ip.startsWith("100.64.") ? (options.peer ?? MEMBER) : null,
     log,
     files: service.tailnet,
     ...(options.allowedTags ? { allowedTags: options.allowedTags } : {}),

@@ -1,6 +1,7 @@
 /**
  * The `hermetic-files` Hermes plugin (plan §06): `request_file`,
- * `request_secret`, `await_file`, `list_files`, and the tool-result scrub hook.
+ * `request_secret`, `await_file`, `list_files`, `share_file`, the tool-result
+ * scrub hook, and the `MEDIA:` line hook that turns a reply's file into a share.
  *
  * **Shipped inside hermeticd.** The plugin's two files are imported as text, so
  * `bun build --compile` embeds them in the binary and the box needs no second

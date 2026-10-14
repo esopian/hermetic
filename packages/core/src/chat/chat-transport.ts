@@ -24,7 +24,7 @@ import type { ChatFetch, ChatSocket, HermesChatClient, HermesChatDeps } from "./
  */
 export function defaultHermesChat(
   now: () => string,
-  opts: Pick<HermesChatDeps, "listFileRequests"> = {},
+  opts: Pick<HermesChatDeps, "listFileRequests" | "listOutbox"> = {},
 ): HermesChatClient {
   const http: ChatFetch = (input, init) => fetch(input, init);
   return createHermesChat({
@@ -32,6 +32,7 @@ export function defaultHermesChat(
     openSocket: runtimeSocket,
     now,
     ...(opts.listFileRequests !== undefined ? { listFileRequests: opts.listFileRequests } : {}),
+    ...(opts.listOutbox !== undefined ? { listOutbox: opts.listOutbox } : {}),
   });
 }
 

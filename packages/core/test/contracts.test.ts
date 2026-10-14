@@ -83,9 +83,19 @@ describe("REQUEST_SCHEMAS", () => {
     expect(REQUEST_SCHEMAS["files.put"].safeParse(upload).success).toBe(true);
   });
 
-  test("the two tables differ in exactly those three places", () => {
+  /** A download: the bridge names a save-dialog folder by id; the CLI names a path. */
+  test("the bridge's files.get rejects a local path; the CLI's accepts it", () => {
+    const base = { name: "atlas", id: "f_aaaaaaaaaaaa" };
+    const path = { ...base, dest: { path: "/tmp/out.pdf" } };
+    expect(REQUEST_SCHEMAS["files.get"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.get"].safeParse(path).success).toBe(true);
+    const folder = { ...base, dest: { dest_id: "sv_00000000-0000-4000-8000-000000000000" } };
+    expect(REQUEST_SCHEMAS["files.get"].safeParse(folder).success).toBe(true);
+  });
+
+  test("the two tables differ in exactly those four places", () => {
     const differing = PUBLIC_METHODS.filter((m) => REQUEST_SCHEMAS[m] !== CLI_REQUEST_SCHEMAS[m]);
-    expect(differing.sort()).toEqual(["artifacts.push", "files.put", "files.stage"]);
+    expect(differing.sort()).toEqual(["artifacts.push", "files.get", "files.put", "files.stage"]);
   });
 });
 

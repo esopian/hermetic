@@ -324,7 +324,10 @@ const discardUpload = (upload_id: string): void => {
 /**
  * The native dialog: the main process reads the file, the page gets an upload
  * id and the main process's D6 sniff (`looks_like_key`). A key-looking pick on
- * a normal request goes to `onKey` instead of being sent.
+ * a normal request goes to `onKey` instead of being sent. The dialog answers
+ * whenever the operator is done with it: if by then the slot has closed or the
+ * card has left (`isLive`), every upload the pick made is discarded and
+ * nothing else happens.
  */
 function choose(
   instance: string,
@@ -332,11 +335,16 @@ function choose(
   opts: filesApi.PutOptions,
   onKey: ((held: HeldKey) => void) | null,
   onChosen: (chosen: Chosen) => void,
+  isLive: () => boolean,
 ): void {
   put.clear();
   filesApi
     .pickNative(instance)
     .then(({ files }) => {
+      if (!isLive()) {
+        for (const file of files) discardUpload(file.upload_id);
+        return;
+      }
       const [first, ...rest] = files;
       for (const extra of rest) discardUpload(extra.upload_id);
       if (!first) return;
@@ -434,9 +442,23 @@ function FileCard({ block, instance, agent, untrusted, at, slot, now, refresh, n
   const asking = askingToReplace(put);
   useLetGoWhenClosed(live, put);
 
+  // Whether a pick that resolves later still has a live slot to go to: the
+  // native dialog answers after the operator chose, which may be after the
+  // slot closed or the card left. Mounted is its own flag, set in the mount
+  // effect's body, so a StrictMode remount does not leave the card dead.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const mounted = useRef(false);
+  const stillLive = (): boolean => mounted.current && liveRef.current;
   const hold = (next: HeldKey): void => {
     const prev = held.current;
     if (prev?.kind === "upload") discardUpload(prev.upload_id);
+    if (!stillLive()) {
+      // Nothing left to answer: a held pick's bytes go, and nobody is asked.
+      held.current = null;
+      if (next.kind === "upload") discardUpload(next.upload_id);
+      return;
+    }
     held.current = next;
     setKeyPrompt(true);
   };
@@ -454,27 +476,42 @@ function FileCard({ block, instance, agent, untrusted, at, slot, now, refresh, n
     else put.putUpload(current.upload_id, current.size, opts);
   };
   // A card that unmounts with a pick held lets its upload go.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       const current = held.current;
       held.current = null;
       if (current?.kind === "upload") discardUpload(current.upload_id);
-    },
-    [],
-  );
+    };
+  }, []);
+  // The slot closed under the question (expired, declined, fulfilled from
+  // elsewhere): the D6 question has nothing left to answer, so the held file
+  // goes — a native pick's bytes in the main process included.
+  useEffect(() => {
+    if (live || held.current === null) return;
+    const current = held.current;
+    held.current = null;
+    setKeyPrompt(false);
+    setChosen(null);
+    if (current.kind === "upload") discardUpload(current.upload_id);
+  }, [live]);
 
   const take = async (file: File | undefined): Promise<void> => {
     if (!file || !live || uploading) return;
     put.clear();
     setChosen(await chosenFile(file));
+    if (!stillLive()) return;
     if (!secret && (await looksLikeKey(file, file.name))) {
       hold({ kind: "file", file });
       return;
     }
+    // The slot can close while the file is read; a put then only earns a refusal.
+    if (!stillLive()) return;
     put.putFile(file);
   };
   const pick = (opts: filesApi.PutOptions): void =>
-    choose(instance, put, opts, secret ? null : hold, setChosen);
+    choose(instance, put, opts, secret ? null : hold, setChosen, stillLive);
   const hintName = slot.name_hint ? baseName(slot.name_hint.replace(/\\/g, "/")) : null;
   // What core's `requestFileName` will call the file: known once one is
   // chosen; before that, the rule in words, never a name it may not use.
@@ -574,7 +611,7 @@ function FileCard({ block, instance, agent, untrusted, at, slot, now, refresh, n
             {secret ? "Drop the key here or choose…" : "Drop a file here or choose…"}
           </button>
         ) : null}
-        {keyPrompt ? (
+        {keyPrompt && live ? (
           <div className="ch-freq-keynote" role="alert">
             <span>Looks like a private key — it will be stored as a secret.</span>
             <div className="ch-freq-actions">

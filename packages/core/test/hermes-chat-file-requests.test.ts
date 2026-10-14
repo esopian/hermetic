@@ -90,7 +90,7 @@ describe("render hints", () => {
     const shell = running("bash", "c1");
     expect(shell.render).toBe("terminal");
     expect("request_id" in shell).toBe(false);
-    expect(running("share_file", "c1").render).toBeNull();
+    expect(running("share_file", "c1").render).toBe("file_share");
   });
 });
 

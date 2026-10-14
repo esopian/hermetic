@@ -9,12 +9,20 @@
  * (`tests/files-put-bridge.test.ts`); here they are the line formatting.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { FilesPutInput, HermeticError, runRecorderFor } from "@hermetic/core";
-import { declineLine, holdStdinSecret, putFlags, putLines, putRefusal } from "../src/commands/files.ts";
+import {
+  declineLine,
+  expiresIn,
+  holdStdinSecret,
+  putFlags,
+  putLines,
+  putRefusal,
+  renderFileRequests,
+} from "../src/commands/files.ts";
 import { runningCommand, setGlobalFlags, setRunningCommand } from "../src/context.ts";
 import { buildProgram } from "../src/program.ts";
 import { cliBinary, seedFixtureHome } from "./cli-binary.ts";
@@ -278,5 +286,116 @@ describe("files put / decline (spawned)", () => {
     const { code, stderr } = await run(["files", "decline", "atlas", "fr_abcdefabcdef"]);
     expect(code).not.toBe(0);
     expect(stderr).toContain("FILE_NOT_FOUND");
+  });
+});
+
+/**
+ * `files ls`/`get`/`rm` against the seeded fixture fleet (`fixture-files-seed.ts`):
+ * `corvid` has an inbox PDF, a shared CSV, two stored secrets and one open request.
+ */
+describe("files ls / get / rm", () => {
+  const OUT = mkdtempSync(join(tmpdir(), "hermetic-cli-files-get-"));
+
+  test("ls prints the entries, the open request and the usage line", async () => {
+    const { code, stdout } = await run(["files", "ls", "corvid"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("f_fxcorvidpdf1");
+    expect(stdout).toContain("sh_fxcorvidcsv1");
+    expect(stdout).toContain("env-github");
+    expect(stdout).toContain("open requests:");
+    expect(stdout).not.toContain("ghp_FIXTURE");
+  });
+
+  test("ls --requests --json is the open slots only", async () => {
+    const { code, stdout } = await run(["files", "ls", "corvid", "--requests", "--json"]);
+    expect(code).toBe(0);
+    const slots = JSON.parse(stdout) as { state: string; purpose: string }[];
+    expect(slots).toHaveLength(1);
+    expect(slots[0]?.state).toBe("open");
+  });
+
+  test("get writes the file, refuses an existing path, and keeps the path out of the run log", async () => {
+    const path = join(OUT, "FIXTURE-contract-copy.pdf");
+    const first = await run(["files", "get", "corvid", "f_fxcorvidpdf1", "-o", path]);
+    expect(first.code).toBe(0);
+    expect(readFileSync(path).subarray(0, 5).toString()).toBe("%PDF-");
+    const again = await run(["files", "get", "corvid", "f_fxcorvidpdf1", "-o", path]);
+    expect(again.code).not.toBe(0);
+    expect(again.stderr).toContain("CONFLICT");
+    const recorder = runRecorderFor({ home: HOME, fixture: true });
+    try {
+      for (const r of await recorder.list({ limit: 50 })) {
+        expect(JSON.stringify(r)).not.toContain("FIXTURE-contract-copy");
+        expect(JSON.stringify(r)).not.toContain("vendor-contract-2026");
+      }
+    } finally {
+      recorder.close();
+    }
+  });
+
+  test("get of a stored secret is refused and writes nothing", async () => {
+    const path = join(OUT, "pem-copy");
+    const { code, stderr } = await run(["files", "get", "corvid", "f_fxcorvidpem1", "-o", path]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("FILE_SECRET_FORBIDDEN");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("rm without --yes and without a terminal asks for confirmation (exit 8)", async () => {
+    const { code, stderr } = await run(["files", "rm", "corvid", "f_fxcorvidenv1"]);
+    expect(code).toBe(8);
+    expect(stderr).toContain("CONFIRMATION_REQUIRED");
+  });
+
+  test("rm --yes prints the plan with the SSM slot, then applies it", async () => {
+    const { code, stderr } = await run(["files", "rm", "corvid", "f_fxcorvidenv1", "--yes"]);
+    expect(code).toBe(0);
+    expect(stderr).toContain("/corvid/env-github");
+    // The plan names the slot; the op's own events (run log, app.log) do not.
+    expect(stderr).toContain("deleted the secret's SSM slot");
+    expect(stderr.slice(stderr.indexOf("re-reading"))).not.toContain("env-github");
+  });
+
+  test("get refuses -o pointing at an existing file it did not create, leaving it alone", async () => {
+    const path = join(OUT, "keep.txt");
+    writeFileSync(path, "KEEP");
+    const { code } = await run(["files", "get", "corvid", "sh_fxcorvidcsv1", "-o", path]);
+    expect(code).not.toBe(0);
+    expect(readFileSync(path, "utf8")).toBe("KEEP");
+  });
+});
+
+describe("renderFileRequests", () => {
+  test("id, kind, expiry and the purpose on one clipped line", () => {
+    const now = Date.parse("2026-10-14T12:00:00.000Z");
+    const text = renderFileRequests(
+      [
+        {
+          request_id: "fr_abcdefabcdef",
+          kind: "file",
+          purpose: `Need the signed contract\n${"x".repeat(100)}`,
+          accept: [".pdf"],
+          max_bytes: 1024,
+          sensitivity: "normal",
+          durable: false,
+          state: "open",
+          created_at: "2026-10-14T11:00:00.000Z",
+          expires_at: "2026-10-14T14:00:00.000Z",
+        },
+      ],
+      now,
+    );
+    expect(text).toContain("fr_abcdefabcdef");
+    expect(text).toContain("file/normal");
+    expect(text).toContain("2h");
+    expect(text).toContain("…");
+    expect(text.split("\n")).toHaveLength(2);
+  });
+
+  test("expiresIn reads never, expired and days", () => {
+    const now = Date.parse("2026-10-14T12:00:00.000Z");
+    expect(expiresIn(null, now)).toBe("-");
+    expect(expiresIn("2026-10-14T11:00:00.000Z", now)).toBe("expired");
+    expect(expiresIn("2026-10-20T12:00:00.000Z", now)).toBe("6d");
   });
 });

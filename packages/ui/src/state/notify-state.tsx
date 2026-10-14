@@ -64,6 +64,7 @@ import { useTerminalNotify } from "./terminal-notify-state.ts";
 import type { ReturnToast } from "./terminal-notify-state.ts";
 import { viewedTerminal } from "./terminal-watch.ts";
 import { useFleetIfAvailable } from "./state.tsx";
+import { FileRequestsProvider } from "./file-requests-state.tsx";
 
 /**
  * How many rows the first read asks for; the stream keeps it current after.
@@ -1056,7 +1057,13 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
     ],
   );
 
-  return <NotifyContext.Provider value={value}>{children}</NotifyContext.Provider>;
+  // Open file requests ride beside the inbox (§8.6): the bell counts them, and
+  // every surface under the inbox reads the same poller.
+  return (
+    <NotifyContext.Provider value={value}>
+      <FileRequestsProvider>{children}</FileRequestsProvider>
+    </NotifyContext.Provider>
+  );
 }
 
 export function useNotify(): Notify {

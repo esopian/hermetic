@@ -390,6 +390,9 @@ export function createHermetic(deps: HermeticDeps) {
     heartbeatMs: deps.foundation?.heartbeatMs,
   });
 
+  // Files on an agent's box (§9). Built before `apply`, which executes `files.rm`'s plans.
+  const files = createFiles({ ctx });
+
   /**
    * Execute a plan produced by `plan.*` (`plan-apply.ts`). Core never asks "are
    * you sure" (§3.2 rule 3) — it insists the head did, and it reads the plan's
@@ -405,6 +408,7 @@ export function createHermetic(deps: HermeticDeps) {
     network,
     rollout,
     teardown,
+    files: { applyRm: files.internal.applyRm },
   });
 
   // ─── reads (`reads.ts`) ────────────────────────────────────────────────────
@@ -448,8 +452,6 @@ export function createHermetic(deps: HermeticDeps) {
 
   const volumes = createVolumes({ ctx, reservation: volumeClaims });
   const agentLogs = createAgentLogs({ ctx });
-  // Composer attachments. `stage` is public; `internal` is head machinery.
-  const files = createFiles({ ctx });
 
   // ─── chat, Bot Mode and Desktop share one adapter; fixture's is a stack (0014 §7) ──
 
@@ -462,6 +464,7 @@ export function createHermetic(deps: HermeticDeps) {
     defaultHermesChat(nowIso, {
       // A running request card's slot (`hermes-chat-file-requests.ts`).
       listFileRequests: async (name, signal) => (await backend.files.list(name, { signal })).requests,
+      listOutbox: async (name, signal) => (await backend.files.list(name, { signal })).outbox,
     });
   // §9.2: whether transcript content is masked, read by every chat read as it starts.
   const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
@@ -618,6 +621,9 @@ export function createHermetic(deps: HermeticDeps) {
       stage: files.stage,
       put: files.put,
       decline: files.decline,
+      list: files.list,
+      get: files.get,
+      rm: files.rm,
       internal: files.internal,
     },
     ssh: agentLogs.ssh,

@@ -5,14 +5,18 @@
  * has one writer (`store.ts`), and a timer would be a second.
  *
  * Two passes. The index pass deletes every entry past its `expires_at` — stage
- * after 1 h, inbox after the retention (7 d), outbox after 24 h, drop after
- * 1 h — expires open requests past theirs (waking their long-polls), forgets
+ * after 1 h, inbox after the retention (the fleet's `files.retention_days`,
+ * 7 d by default, fixed into an entry's `expires_at` when it lands), outbox
+ * after 24 h, drop after 1 h — expires open requests past theirs (waking their long-polls), forgets
  * entries whose file has gone, and forgets closed requests a retention after
  * they expired so the index does not grow without bound. The disk pass catches
  * what the index cannot know about — a part file from an upload that died with
  * the process, a stage directory from an app that quit, anything left when an
  * unreadable index was started empty — by age on disk, with `find` run as
- * hermes under `/data` and as root in the root-owned drop.
+ * hermes under `/data` and as root in the root-owned drop. Its inbox age is
+ * the retention in force at the sweep, so a fleet that lowers
+ * `retention_days` has older inbox files cleared at the next sweep after the
+ * box reads the new manifest; a raised one applies to files that land after.
  *
  * Neither pass touches an id some operation holds (`FilesStore.claim`): an
  * upload still streaming into its stage directory, a commit moving it, a
@@ -34,7 +38,7 @@ import {
   FILES_TTL,
 } from "@hermetic/core/shared";
 import { asHermes } from "../account-dirs.ts";
-import { type FilesCtx, isDue } from "./context.ts";
+import { type FilesCtx, inboxTtl, isDue } from "./context.ts";
 import { entryPresent, removeEntryFiles } from "./entries.ts";
 import { errorText } from "./errors.ts";
 import { expireIfDue, reclaimStalled } from "./requests.ts";
@@ -58,7 +62,10 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
  * upload streaming for longer than the stage TTL — are excluded by name, as
  * their stage directory and as their part file.
  */
-export function diskSweepCommands(inFlight: readonly string[] = []): string[][] {
+export function diskSweepCommands(
+  inFlight: readonly string[] = [],
+  inboxSeconds: number = FILES_TTL.inbox,
+): string[][] {
   const stage = minutes(FILES_TTL.stage);
   const ids = inFlight.filter((id) => SAFE_ID.test(id));
   const skipDirs = ids.flatMap((id) => ["-not", "-name", id]);
@@ -108,7 +115,7 @@ export function diskSweepCommands(inFlight: readonly string[] = []): string[][] 
       "-name",
       "????-??-??",
       "-mmin",
-      minutes(FILES_TTL.inbox),
+      minutes(inboxSeconds),
       "-exec",
       "rm",
       "-rf",
@@ -116,6 +123,7 @@ export function diskSweepCommands(inFlight: readonly string[] = []): string[][] 
       "{}",
       "+",
     ]),
+    // Share directories past the outbox TTL; a share still being copied is skipped by id.
     asHermes([
       "find",
       FILES_OUTBOX_DIR,
@@ -123,6 +131,7 @@ export function diskSweepCommands(inFlight: readonly string[] = []): string[][] 
       "1",
       "-maxdepth",
       "1",
+      ...skipDirs,
       "-mmin",
       minutes(FILES_TTL.outbox),
       "-exec",
@@ -191,7 +200,7 @@ export async function sweepOnce(ctx: FilesCtx): Promise<SweepReport> {
       }
       index.requests = index.requests.filter((r) => {
         if (r.state === "open" || r.state === "receiving") return true;
-        return Date.parse(r.expires_at) + FILES_TTL.inbox * 1000 > now;
+        return Date.parse(r.expires_at) + inboxTtl(ctx) * 1000 > now;
       });
     });
     for (const id of woken) ctx.store.wake(id);
@@ -244,7 +253,7 @@ export async function sweepOnce(ctx: FilesCtx): Promise<SweepReport> {
     }
   }
 
-  for (const argv of diskSweepCommands(ctx.store.inFlight())) {
+  for (const argv of diskSweepCommands(ctx.store.inFlight(), inboxTtl(ctx))) {
     try {
       await ctx.host.exec(argv);
     } catch (e) {

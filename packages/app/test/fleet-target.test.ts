@@ -113,12 +113,16 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "files.chunk.close": "seals bytes in this head's memory; nothing leaves the laptop",
   "files.chunk.discard": "frees bytes in this head's memory",
   "files.capability": "reads a box's /healthz; it writes nothing",
-  "files.content": "reads a staged image's bytes for its thumbnail; it writes nothing",
+  "files.content": "reads an image's bytes (a file or a share) for a preview; it writes nothing",
   "files.pickNative":
     "opens the laptop's file dialog and registers the picks in memory; it touches no box",
   // Agent requests: the put's cancel, and the card's read of the box's slot.
   "files.put.abort": "closes a stream this head opened",
   "files.request.get": "reads a box's request slot; it writes nothing",
+  // The Files tab: a download's cancel, and the save dialog.
+  "files.get.abort": "closes a stream this head opened",
+  "files.saveNative":
+    "opens the laptop's folder dialog and registers the folder in memory; it touches no box",
 };
 
 /**

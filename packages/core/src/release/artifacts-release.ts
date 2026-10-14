@@ -65,6 +65,10 @@ export const AGENTD_STAGES = "packages/agentd/stages";
 const FINGERPRINT_DIRS = [
   "packages/agentd/src",
   "packages/core/src/schema",
+  // The other door agentd may use (`@hermetic/core/shared`), and what `schema`
+  // itself is built from: a shared-only edit — a route, a limit, a parser — is
+  // compiled into the binary, so it is a new release too.
+  "packages/core/src/shared",
   "packages/agentd/stages",
   // The Hermes plugin hermeticd embeds as text (agentd's `apply/plugins.ts`):
   // compiled into the binary, so an edit to it is a new release.
@@ -86,7 +90,14 @@ const FINGERPRINT_DIRS = [
  * somewhere without a lockfile still gets a usable fingerprint, just a coarser
  * one.
  */
-const FINGERPRINT_FILES = [".bun-version", "bun.lock", "packages/agentd/package.json"];
+const FINGERPRINT_FILES = [
+  ".bun-version",
+  "bun.lock",
+  "packages/agentd/package.json",
+  // The one core file outside `schema` and `shared` that both of them import
+  // (`HermeticError`), and so compiled into the binary with them.
+  "packages/core/src/errors.ts",
+];
 
 export interface HermeticdCandidate {
   path: string;

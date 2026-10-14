@@ -7,6 +7,7 @@
  * is a claim the file makes about itself and the MIME type is the box's.
  */
 import { useState } from "react";
+import { isShareId } from "@hermetic/core/shared";
 import { RedactedText, plainText } from "../RedactedText.tsx";
 import type { ChatBlockOf } from "../../../api/index.ts";
 import { fmtBytes, safeHref, safeImageSrc } from "../../chat-logic.ts";
@@ -16,16 +17,8 @@ import { useChatIfAvailable } from "../../chat-state.tsx";
 import { useThumbnail } from "../../thumbnails.ts";
 import { useFleetIfAvailable } from "../../../state/state.tsx";
 import { fleetIdOf } from "../../../api/index.ts";
-
-/** `image/png` → `PNG`, `application/pdf` → `PDF`. The square on the left of the row. */
-export function typeTag(mime: string, name: string): string {
-  const sub = (typeof mime === "string" ? mime : "").split("/")[1] ?? "";
-  const cleaned = sub.split("+")[0] ?? "";
-  if (cleaned && cleaned.length <= 4) return cleaned.toUpperCase();
-  const file = typeof name === "string" ? name : "";
-  const ext = file.includes(".") ? (file.split(".").pop() ?? "") : "";
-  return (ext || cleaned || "file").slice(0, 4).toUpperCase();
-}
+import { ShareAttachment } from "./ShareCard.tsx";
+import { typeTag } from "../../file-type-tag.ts";
 
 /**
  * A file that went through the files service: `href` is a path on the box,
@@ -93,6 +86,10 @@ export function AttachmentBlock({
   instance?: string;
   fleetId?: string;
 }) {
+  // A file the agent shared (`MEDIA:` naming the outbox): the share card.
+  if (block.file_id && isShareId(block.file_id)) {
+    return <ShareAttachment block={block} {...(instance ? { instance } : {})} />;
+  }
   if (block.file_id) {
     return (
       <StagedAttachment

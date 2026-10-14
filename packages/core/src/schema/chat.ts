@@ -21,7 +21,7 @@
  */
 import { z } from "zod";
 import { Iso } from "./common.ts";
-import { FileRequestId } from "./files.ts";
+import { FileRequestId, ShareFileResult } from "./files.ts";
 import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
 
 export {
@@ -250,6 +250,11 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * head draws a request card from hermeticd's copy of the slot named by the
  * block's `request_id` — never from the tool's arguments, which are the
  * model's words — and falls back to the tool row while that id is unknown.
+ *
+ * `file_share` (`share_file`) is the agent handing the operator a file through
+ * the box's outbox. A head draws a file card from the block's `share` — the
+ * plugin's result, validated — never from the tool's arguments, and falls back
+ * to the tool row when `share` is null (a refusal, or a result it cannot read).
  */
 export const ToolRender = z.enum([
   "diff",
@@ -260,6 +265,7 @@ export const ToolRender = z.enum([
   "message_agent",
   "file_request",
   "secret_request",
+  "file_share",
 ]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
@@ -378,6 +384,14 @@ const ToolBlock = z.object({
    * while unknown; a head then shows the card as waiting for the box.
    */
   request_id: FileRequestId.nullish(),
+  /**
+   * What a `file_share` block shared: the plugin's result (`POST /outbox`'s
+   * answer), set only when it parses as a `ShareFileResult`. Never read from
+   * the tool's arguments, which are the model's words. Null on a running call,
+   * a refusal, or a result this build cannot read; a head then draws the tool
+   * row. The bytes are fetched by `share_id` through `files.content`.
+   */
+  share: ShareFileResult.nullish(),
 });
 
 /**

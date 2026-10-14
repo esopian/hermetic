@@ -1,5 +1,6 @@
 /**
- * `files.stage`, `files.put`, `files.decline` and the desktop head's upload
+ * `files.stage`, `files.put`, `files.decline`, the Files tab's `files.list`,
+ * `files.get` and `files.rm`, and the desktop head's upload and save
  * machinery (§9).
  *
  * ## The public methods
@@ -8,7 +9,10 @@
  * `stream_id`, frames follow on `files.frame`, and `files.stage.abort` stops
  * it. `files.put` (answering an agent's request) is the same shape, its frames
  * on `files.put.frame` and ending `fulfilled` or `error`, stopped by
- * `files.put.abort`. `files.decline` answers once. A failure after the stream opened is a `done` frame carrying
+ * `files.put.abort`. `files.get` (a download) is the same shape again, its
+ * frames on `files.get.frame`, ending `saved` or `error`, stopped by
+ * `files.get.abort`. `files.decline`, `files.list` and `files.rm` (a plan,
+ * executed by `apply`) answer once. A failure after the stream opened is a `done` frame carrying
  * `{ type: "error", code, message }` (`FilesStageFrame`), because by then the
  * request has already been answered; anything refused before that — the
  * schema, the fleet guard, a path — is a refused request like any other.
@@ -22,6 +26,25 @@
  * `chunk_upload_id`, and a request carrying `source.path` is refused
  * `UNSUPPORTED` before anything reads it.
  *
+ * A download is the mirror image: the native folder dialog
+ * (`files.saveNative`) registers the folder with core and answers an opaque
+ * `dest_id`; `files.get` names that id, core writes `<folder>/<sanitized name>`
+ * with exclusive create, and the answer reports the saved name only. A
+ * `files.get` naming `dest.path` is refused `UNSUPPORTED`. On macOS the saved
+ * file is then marked quarantined (`ctx.native.quarantine`,
+ * `main/quarantine.ts`), as a browser marks a download.
+ *
+ * ## Which requests carry the fleet guard
+ *
+ * The ones that write to a box (`files.stage`, `files.put`, `files.decline`,
+ * `files.discard`) carry `target` and `requireTarget` (§4.7). `files.list`,
+ * `files.get` and `files.rm` are reads of a box, like `agents.get` and the
+ * `plan.*` requests: `files.rm` only plans, and the `apply` that executes it
+ * is guarded and re-reads the box (`PLAN_STALE`); `files.get` writes only to
+ * this laptop, into the folder this window's dialog chose, and the `f_`/`sh_`
+ * id it names is random per box, so a stale window gets `FILE_NOT_FOUND`
+ * rather than another fleet's file.
+ *
  * ## Nothing here logs a file name
  *
  * A file's name can be as sensitive as its contents. The bridge logs a failed
@@ -34,9 +57,13 @@ import {
   FilesChunkAppendInput,
   FilesChunkOpenInput,
   FilesChunkRefInput,
+  FilesContentInput,
   FilesDeclineInput,
   FilesEntryRefInput,
+  FilesGetApiInput,
+  FilesListInput,
   FilesPutApiInput,
+  FilesRmInput,
   FilesRequestRefInput,
   FilesStageApiInput,
   FILES_LIMITS,
@@ -44,6 +71,8 @@ import {
   isImageMime,
 } from "@hermetic/core";
 import type {
+  FilesGetApiInput as FilesGetApiInputType,
+  FilesGetFrame,
   FilesPutApiInput as FilesPutApiInputType,
   FilesPutFrame,
   FilesStageApiInput as FilesStageApiInputType,
@@ -65,6 +94,9 @@ export const filesPutSchema = declareRpc("files.put", FilesPutApiInput);
 export const filesPutBody = withTarget(filesPutSchema);
 export const filesDeclineSchema = declareRpc("files.decline", FilesDeclineInput);
 export const filesDeclineBody = withTarget(filesDeclineSchema);
+export const filesListSchema = declareRpc("files.list", FilesListInput);
+export const filesGetSchema = declareRpc("files.get", FilesGetApiInput);
+export const filesRmSchema = declareRpc("files.rm", FilesRmInput);
 
 /** Closes a `files.stage` stream: the chip's cancel while it uploads. */
 export const FILES_STAGE_ABORT = declareMachineryRpc("files.stage.abort");
@@ -89,6 +121,14 @@ export const FILES_PUT_ABORT = declareMachineryRpc("files.put.abort");
  * list, cap and expiry from hermeticd's copy, never from the agent's tool args.
  */
 export const FILES_REQUEST_GET = declareMachineryRpc("files.request.get");
+/** Closes a `files.get` stream: the Files tab's cancel while it downloads. */
+export const FILES_GET_ABORT = declareMachineryRpc("files.get.abort");
+/**
+ * The native folder dialog for a download (`ctx.native.pickFolder`, built in
+ * `main/index.ts`). The chosen folder is registered with core here, and the
+ * page gets back only an opaque `dest_id` for `files.get` — never the path.
+ */
+export const FILES_SAVE_NATIVE = declareMachineryRpc("files.saveNative");
 
 /** Deleting a staged entry writes to the box, so it carries the fleet guard. */
 export const filesDiscardBody = withTarget(FilesEntryRefInput);
@@ -238,6 +278,84 @@ export async function decline(ctx: HandlerContext, params: unknown) {
   return await h.files.decline(input, { signal: ctx.signal });
 }
 
+/** `files.list`: what is on one box, metadata only. A read. */
+export async function list(ctx: HandlerContext, params: unknown) {
+  return await ctx.hermetic().files.list(parseInput(filesListSchema, params), {
+    signal: ctx.signal,
+  });
+}
+
+/** `files.rm`: the plan. A read; the page confirms and sends it to `apply`. */
+export async function rm(ctx: HandlerContext, params: unknown) {
+  return await ctx.hermetic().files.rm(parseInput(filesRmSchema, params), { signal: ctx.signal });
+}
+
+/** Whether a request names a laptop path as its destination, read before anything else is. */
+function namesDestPath(params: unknown): boolean {
+  if (typeof params !== "object" || params === null) return false;
+  const dest = (params as { dest?: unknown }).dest;
+  return typeof dest === "object" && dest !== null && "path" in dest;
+}
+
+function startGet(
+  ctx: HandlerContext,
+  h: Hermetic,
+  input: FilesGetApiInputType,
+  sink: StreamSink,
+): { stream_id: string } {
+  const controller = new AbortController();
+  const quarantine = ctx.native?.quarantine;
+  const events = h.files.get(input, {
+    signal: controller.signal,
+    ...(quarantine ? { afterWrite: (path: string) => quarantine(path) } : {}),
+  });
+  return pumpFiles(
+    ctx,
+    "files.get",
+    controller,
+    events,
+    sink,
+    (e) => (e satisfies FilesGetFrame).type === "saved",
+  );
+}
+
+/**
+ * `files.get`: download one inbox file or outbox share into the folder the
+ * save dialog chose. The page names the folder by its `dest_id` only.
+ */
+export async function get(
+  ctx: HandlerContext,
+  params: unknown,
+  sink: StreamSink,
+): Promise<{ stream_id: string }> {
+  if (namesDestPath(params)) {
+    throw new HermeticError(
+      "UNSUPPORTED",
+      "the app never sends a file path; choose the folder through the save dialog",
+    );
+  }
+  return startGet(ctx, ctx.hermetic(), parseInput(filesGetSchema, params), sink);
+}
+
+/**
+ * The save dialog. Validated for shape only, like `files.pickNative`: the
+ * instance names whose Files tab asked. Answers `{ dest_id: null }` when the
+ * operator cancelled.
+ */
+export async function saveNative(
+  ctx: HandlerContext,
+  params: unknown,
+): Promise<{ dest_id: string | null }> {
+  parseInput(FilesCapabilityInput, params);
+  if (ctx.native === undefined) {
+    throw new HermeticError("UNSUPPORTED", "files.saveNative is answered by the desktop head");
+  }
+  const folder = await ctx.native.pickFolder();
+  if (folder === null || folder === "") return { dest_id: null };
+  const { dest_id } = await ctx.hermetic().files.internal.registerDestination(folder);
+  return { dest_id };
+}
+
 export async function requestGet(ctx: HandlerContext, params: unknown) {
   const { instance, request_id } = parseInput(FilesRequestRefInput, params);
   return await ctx.hermetic().files.internal.request(instance, request_id, { signal: ctx.signal });
@@ -302,15 +420,16 @@ export async function discard(ctx: HandlerContext, params: unknown) {
 }
 
 /**
- * A staged image's bytes, for its thumbnail. Images only, and no larger than
- * Hermes takes one: anything else is refused from the box's response headers
+ * An image's bytes, for a preview: a staged or inbox file's thumbnail (`f_…`)
+ * or a share card's image (`sh_…`). Images only, and no larger than Hermes
+ * takes one: anything else is refused from the box's response headers
  * (`Content-Type`, `Content-Length`), before its body is read.
  */
 export async function content(
   ctx: HandlerContext,
   params: unknown,
 ): Promise<{ mime: string; data_b64: string }> {
-  const { instance, id } = parseInput(FilesEntryRefInput, params);
+  const { instance, id } = parseInput(FilesContentInput, params);
   const file = await ctx.hermetic().files.internal.content(instance, id, FILES_LIMITS.imageBytes, {
     signal: ctx.signal,
     imagesOnly: true,
@@ -398,4 +517,10 @@ export const filesHandlers = {
   "files.decline": decline,
   [FILES_PUT_ABORT]: stageAbort,
   [FILES_REQUEST_GET]: requestGet,
+  "files.list": list,
+  "files.get": (ctx: HandlerContext, params: unknown, sink?: StreamSink) =>
+    get(ctx, params, requireSink(sink)),
+  [FILES_GET_ABORT]: stageAbort,
+  [FILES_SAVE_NATIVE]: saveNative,
+  "files.rm": rm,
 } satisfies Record<string, Handler>;

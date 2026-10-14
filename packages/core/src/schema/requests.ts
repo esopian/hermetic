@@ -13,7 +13,7 @@ import { VolumeId } from "./volumes.ts";
 import { HermesLogFile } from "./rpc.ts";
 import { MAX_ROLLOUT_WAIT_MS } from "./foundation.ts";
 import { FileId } from "./files.ts";
-import { FILES_LIMITS } from "../shared/files.ts";
+import { FILES_LIMITS, FILES_RETENTION_DAYS } from "../shared/files.ts";
 
 /**
  * The twelve digits of an AWS account id, typed back by the operator (§4.7 step
@@ -504,16 +504,39 @@ export const SettingsSetInput = z
      * fleet manifest, which is how the boxes hear about it.
      */
     auto_update_hermeticd: z.boolean().optional(),
+    /**
+     * Change the files service's fleet settings (`FleetSettings.files`), key
+     * by key onto what is stored. Bounded here, on the write: `max_bytes` at
+     * most `FILES_LIMITS.fileBytes`, `retention_days` within
+     * `FILES_RETENTION_DAYS`. Changing the effective values republishes the
+     * fleet manifest, as `auto_update_hermeticd` does.
+     */
+    files: z
+      .object({
+        require_cap: z.boolean().optional(),
+        max_bytes: z.number().int().positive().max(FILES_LIMITS.fileBytes).optional(),
+        retention_days: z
+          .number()
+          .int()
+          .min(FILES_RETENTION_DAYS.min)
+          .max(FILES_RETENTION_DAYS.max)
+          .optional(),
+      })
+      .refine((f) => Object.values(f).some((v) => v !== undefined), {
+        message: "name at least one of require_cap, max_bytes or retention_days",
+      })
+      .optional(),
   })
   .refine(
     (v) =>
       v.defaults !== undefined ||
       v.agent_defaults !== undefined ||
       v.default_profile !== undefined ||
-      v.auto_update_hermeticd !== undefined,
+      v.auto_update_hermeticd !== undefined ||
+      v.files !== undefined,
     {
       message:
-        "name at least one of defaults, agent_defaults, default_profile or auto_update_hermeticd",
+        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd or files",
     },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;

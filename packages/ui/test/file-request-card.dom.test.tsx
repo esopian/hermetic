@@ -288,3 +288,56 @@ test("a text secret the agent was still waiting for offers nothing late", async 
   await waitFor(() => expect(cardText()).toContain("secret delivered"));
   expect(cardText().includes("delivered after the turn ended")).toBe(false);
 });
+
+test("a native pick that answers after the slot expired is discarded, never put", async () => {
+  const id = "fr_0000000late2";
+  let state: FileRequestSlot["state"] = "open";
+  let answerPick: (answer: unknown) => void = () => undefined;
+  server = fakeServer({
+    "files.request.get": () =>
+      textSlot(id, {
+        kind: "file",
+        sensitivity: "normal",
+        durable: false,
+        accept: [".pdf"],
+        keys: undefined,
+        slug: undefined,
+        session_id: SESSION,
+        state,
+      }),
+    "files.pickNative": () =>
+      new Promise((resolve) => {
+        answerPick = resolve;
+      }),
+    "files.decline": () => {
+      state = "expired";
+      return { ok: true };
+    },
+    "files.chunk.discard": () => ({ ok: true }),
+  });
+  render(
+    <Shell chat={chatWith([])}>
+      <FileRequestBlock
+        block={block(id, { name: "request_file", render: "file_request" })}
+        instance="atlas"
+        agent="atlas"
+      />
+    </Shell>,
+  );
+  await waitFor(() => expect(button("Choose file…") !== undefined).toBe(true));
+  fireEvent.click(button("Choose file…")!);
+  await waitFor(() => expect(server!.to("files.pickNative").length).toBe(1));
+  // The slot closes while the dialog is still open.
+  fireEvent.click(button("Decline")!);
+  await waitFor(() => expect(button("Choose file…") === undefined).toBe(true));
+  await act(async () =>
+    answerPick({
+      files: [{ upload_id: "up_late_pick_01", name: "report.pdf", size: 1024, looks_like_key: false }],
+    }),
+  );
+  await waitFor(() => expect(server!.to("files.chunk.discard").length).toBe(1));
+  const discarded = server!.to("files.chunk.discard")[0]!.params as { upload_id: string };
+  expect(discarded.upload_id).toBe("up_late_pick_01");
+  expect(server!.streams.some((s) => s.name === "files.put")).toBe(false);
+  expect(cardText().includes("report.pdf")).toBe(false);
+});

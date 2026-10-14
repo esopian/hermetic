@@ -1,6 +1,7 @@
 /**
  * The plugin socket, `FILES_SOCKET_PATH`: how the Hermes plugin on this box
- * opens a request slot, long-polls it, consumes what arrived, and lists files.
+ * opens a request slot, long-polls it, consumes what arrived, lists files, and
+ * shares one of its own files with the operator (`POST /outbox`, `outbox.ts`).
  * It never accepts upload bytes, so the agent cannot fulfil its own request.
  *
  * **Access is filesystem-gated, deliberately.** The plan called for
@@ -14,13 +15,14 @@
  * the process was started with.
  */
 import type { FileEntry, FileRequest, FilesHello } from "@hermetic/core/schema";
-import { OpenFileRequestBody, OpenSecretRequestBody } from "@hermetic/core/schema";
+import { OpenFileRequestBody, OpenSecretRequestBody, ShareFileBody } from "@hermetic/core/schema";
 import { FILES_SOCKET_PATH, HERMES_ACCOUNT, matchSocketRoute } from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { type FilesCtx, waitResult } from "./context.ts";
 import { consumeRequest, isSecret, listFiles } from "./entries.ts";
 import { FilesError, filesErrorResponse, jsonResponse, toFilesResponse } from "./errors.ts";
+import { shareFile } from "./outbox.ts";
 import { getRequest, openRequest, waitForRequest } from "./requests.ts";
 import { type BodySchema, jsonBody } from "./routes.ts";
 
@@ -110,9 +112,10 @@ export function makeFilesSocketHandler(ctx: FilesCtx): FilesSocketHandler {
           return jsonResponse(await waitForRequest(ctx, route.id, route.s, request.signal));
         case "consume":
           return jsonResponse(await consumeRequest(ctx, route.id));
-        case "outbox":
-          // share_file lands in a later change.
-          throw new FilesError("UNSUPPORTED", "sharing files from the agent is not available yet", 501);
+        case "outbox": {
+          const body = await jsonBody(request, ShareFileBody, false, ctx.uploadIdleMs);
+          return jsonResponse(await shareFile(ctx, body, request.signal), 201);
+        }
         case "files": {
           const listed = await listFiles(ctx);
           return jsonResponse({

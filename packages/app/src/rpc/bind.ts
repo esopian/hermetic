@@ -21,7 +21,7 @@ import { KEEPALIVE_EVENT } from "../handlers/streams.ts";
 import type { StreamFrame, StreamSink } from "../handlers/streams.ts";
 import { terminalMessageHandlers } from "../handlers/terminal.ts";
 import type { TerminalFrame } from "../terminal/channel.ts";
-import type { FilesPutFrame, FilesStageFrame } from "@hermetic/core";
+import type { FilesGetFrame, FilesPutFrame, FilesStageFrame } from "@hermetic/core";
 import { InitInFlightError } from "../init-op.ts";
 import type { AppLog } from "../log.ts";
 import { RequestValidationError } from "../validation.ts";
@@ -241,6 +241,7 @@ const FINITE_MESSAGES: readonly StreamMessageName[] = [
   "logs.line",
   "files.frame",
   "files.put.frame",
+  "files.get.frame",
 ];
 
 function stringField(value: unknown, field: string): string | undefined {
@@ -300,6 +301,15 @@ function push(
         frame.event === "done"
           ? { stream_id: id, done: frame.data as FilesPutFrame }
           : { stream_id: id, frame: frame.data as FilesPutFrame },
+      );
+      return;
+    case "files.get.frame":
+      // …and only `FilesGetFrame`s on a get stream.
+      send(
+        "files.get.frame",
+        frame.event === "done"
+          ? { stream_id: id, done: frame.data as FilesGetFrame }
+          : { stream_id: id, frame: frame.data as FilesGetFrame },
       );
       return;
     case "terminal.frame":

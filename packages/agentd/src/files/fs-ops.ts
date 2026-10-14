@@ -80,6 +80,45 @@ export async function pathKindAsHermes(host: Host, path: string): Promise<PathKi
 }
 
 /**
+ * The shell `resolveAsHermes` runs as the account: `realpath -e` the path
+ * (every symlink and `..` followed, every component required to exist), then
+ * one of `missing`, `other` (a directory, a fifo, anything but a regular
+ * file), or `regular <size>` followed by the resolved path on the next line.
+ * Exit 0 whatever the answer, so a non-zero exit is the check itself failing.
+ * `$1` is the path, positional, never parsed as shell.
+ */
+export const RESOLVE_SCRIPT =
+  'p=$(realpath -e -- "$1" 2>/dev/null) || { echo missing; exit 0; }; ' +
+  'if [ -f "$p" ] && [ ! -L "$p" ]; then printf "regular %s\\n%s\\n" "$(stat -c %s -- "$p")" "$p"; ' +
+  "else echo other; fi";
+
+/** What `resolveAsHermes` found: the canonical path and its size, for a regular file. */
+export type Resolved =
+  | { readonly kind: "missing" }
+  | { readonly kind: "other" }
+  | { readonly kind: "regular"; readonly path: string; readonly size: number };
+
+/**
+ * Resolve `path` the way the account would open it: symlinks followed, as
+ * hermes — so the answer is what hermes can reach, never what root can.
+ * Throws `INTERNAL` when the check could not be made.
+ */
+export async function resolveAsHermes(host: Host, path: string): Promise<Resolved> {
+  const res = await host.exec(asHermes(["sh", "-c", RESOLVE_SCRIPT, "sh", path]));
+  const out = res.stdout.replace(/\n$/, "");
+  if (res.code === 0) {
+    if (out === "missing" || out === "other") return { kind: out };
+    const cut = out.indexOf("\n");
+    const head = /^regular (\d{1,15})$/.exec(cut < 0 ? out : out.slice(0, cut));
+    const resolved = cut < 0 ? "" : out.slice(cut + 1);
+    if (head && resolved.startsWith("/")) {
+      return { kind: "regular", path: resolved, size: Number(head[1]) };
+    }
+  }
+  throw new FilesError("INTERNAL", `resolving a file on the box failed (exit ${res.code})`);
+}
+
+/**
  * Move `from` to `to` as hermes, never over anything. `mv -n -T`: `-T` so a
  * directory at `to` is not moved *into*, `-n` so nothing is replaced.
  *

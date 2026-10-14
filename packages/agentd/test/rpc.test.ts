@@ -463,6 +463,7 @@ describe("tailscale whois", () => {
       login: "evan@example.com",
       node: "laptop.tailnet.ts.net",
       tags: ["tag:operator"],
+      caps: [],
     });
   });
 });

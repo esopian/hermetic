@@ -10,6 +10,7 @@ import {
   type FilesListResult,
   type FilesSecretBody,
   type FilesStageResult,
+  type ShareFileResult,
   OpenFileRequestBody,
   OpenSecretRequestBody,
 } from "../../schema/index.ts";
@@ -31,6 +32,8 @@ import {
   looksLikeKeyMaterial,
   newFileId,
   newRequestId,
+  newShareId,
+  outboxRelPath,
   sanitizeFileName,
   secretTextSlug,
   sniffMime,
@@ -74,7 +77,8 @@ export interface MemoryFileEntry {
   mime: string;
   sha256: string;
   class: FileClass;
-  state: "staged" | "inbox";
+  /** `outbox`: a file the agent shared (`sh_…` id), listed and downloadable, never committed. */
+  state: "staged" | "inbox" | "outbox";
   created_at: string;
   expires_at: string;
   session_id?: string;
@@ -82,6 +86,8 @@ export interface MemoryFileEntry {
   rel?: string;
   /** Set on commit: the absolute path on the box. */
   path?: string;
+  /** An outbox share's note from the agent. */
+  note?: string;
 }
 
 export interface MemoryFilesHost {
@@ -279,6 +285,11 @@ export class MemoryFiles implements FilesApi {
     opts: FilesCallOptions & FilesContentOptions,
   ): Promise<FilesContent> {
     this.requireAgent(agent);
+    // As on the box: the content route refuses a secret outright (403).
+    const secret = this.secretEntries.get(id);
+    if (secret !== undefined && secret.agent === agent) {
+      throw filesRefusal("FILE_SECRET_FORBIDDEN", agent);
+    }
     const entry = this.live(agent, id);
     if (opts.imagesOnly && !isImageMime(entry.mime)) {
       throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: only images have a preview`, {
@@ -290,7 +301,21 @@ export class MemoryFiles implements FilesApi {
         name: agent,
       });
     }
+    // The box streams the file with the digest its index recorded; bytes that
+    // changed under it end the transfer as a mismatch, here as there.
+    if (createHash("sha256").update(entry.bytes).digest("hex") !== entry.sha256) {
+      throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
+    }
     return { bytes: entry.bytes.slice(), mime: entry.mime, sha256: entry.sha256 };
+  }
+
+  /**
+   * Fixture-only: a durable secret already on the box, as `place` would have
+   * left it — what the seeded fleet's stored secrets are (`fixture-files-seed.ts`).
+   */
+  seedSecret(agent: string, entry: FileEntry): void {
+    this.requireAgent(agent);
+    this.secretEntries.set(entry.id, { ...entry, agent });
   }
 
   async remove(agent: string, id: string, _opts: FilesCallOptions): Promise<void> {
@@ -331,6 +356,45 @@ export class MemoryFiles implements FilesApi {
   /** Every committed (inbox) entry on one agent's box, oldest first. */
   committed(agent: string): MemoryFileEntry[] {
     return [...this.entries.values()].filter((e) => e.agent === agent && e.state === "inbox");
+  }
+
+  /**
+   * Fixture-only: what `POST /outbox` leaves behind for a file the agent
+   * shared — an outbox entry under a fresh `sh_` id, sniffed and digested, and
+   * the `ShareFileResult` the plugin returns. Takes the bytes rather than a
+   * path, since the fixture has no box disk; the `E2E_FILE_SHARE` turn uses it
+   * (`fixture-chat-file-share.ts`).
+   */
+  share(
+    agent: string,
+    file: { name: string; bytes: Uint8Array; note?: string; session_id?: string },
+  ): ShareFileResult {
+    this.requireAgent(agent);
+    const clean = sanitizeFileName(file.name);
+    if (!clean.ok) throw filesRefusal("FILE_NAME_INVALID", agent, undefined, { reason: clean.reason });
+    const now = this.host.now();
+    const id = newShareId();
+    const bytes = file.bytes.slice();
+    const mime = sniffMime(bytes.subarray(0, FILES_LIMITS.sniffBytes), clean.name);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const rel = outboxRelPath(id, clean.name);
+    this.entries.set(id, {
+      id,
+      agent,
+      name: clean.name,
+      bytes,
+      mime,
+      sha256,
+      class: isImageMime(mime) ? "image" : "file",
+      state: "outbox",
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + FILES_TTL.outbox * 1000).toISOString(),
+      rel,
+      path: `${HERMES_HOME}/${rel}`,
+      ...(file.note ? { note: file.note } : {}),
+      ...(file.session_id ? { session_id: file.session_id } : {}),
+    });
+    return { share_id: id, name: clean.name, bytes: bytes.byteLength, mime, sha256 };
   }
 
   // ─── Request slots (`request_file` / `request_secret`) ─────────────────────
@@ -522,6 +586,7 @@ export class MemoryFiles implements FilesApi {
       (e) => e.agent === agent && Date.parse(e.expires_at) > now,
     );
     const inbox = mine.filter((e) => e.state === "inbox").map((e) => this.listed(e));
+    const outbox = mine.filter((e) => e.state === "outbox").map((e) => this.listed(e));
     const requests: FileRequest[] = [];
     for (const held of this.requests.values()) {
       if (held.agent !== agent) continue;
@@ -533,21 +598,22 @@ export class MemoryFiles implements FilesApi {
       .map(({ agent: _agent, ...entry }) => entry);
     return {
       inbox,
-      outbox: [],
+      outbox,
       secrets,
       requests,
       usage: {
         inbox_bytes: inbox.reduce((n, e) => n + e.bytes, 0),
-        outbox_bytes: 0,
+        outbox_bytes: outbox.reduce((n, e) => n + e.bytes, 0),
         retention_days: Math.round(FILES_TTL.inbox / 86_400),
       },
     };
   }
 
   private listed(e: MemoryFileEntry): FileEntry {
+    const outbox = e.state === "outbox";
     return {
       id: e.id,
-      dir: "inbox",
+      dir: outbox ? "outbox" : "inbox",
       class: e.class,
       name: e.name,
       bytes: e.bytes.byteLength,
@@ -557,8 +623,11 @@ export class MemoryFiles implements FilesApi {
       expires_at: e.expires_at,
       ...(e.rel ? { rel: e.rel } : {}),
       ...(e.path ? { path: e.path } : {}),
-      from: { kind: "operator", login: FIXTURE_OPERATOR_LOGIN, node: "fixture" },
+      from: outbox
+        ? { kind: "agent" }
+        : { kind: "operator", login: FIXTURE_OPERATOR_LOGIN, node: "fixture" },
       ...(e.session_id ? { session_id: e.session_id } : {}),
+      ...(e.note ? { note: e.note } : {}),
     };
   }
 
