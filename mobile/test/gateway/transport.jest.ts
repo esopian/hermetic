@@ -232,7 +232,7 @@ describe("turns", () => {
     expect(s.events.filter((e) => e.type !== "frame")).toEqual([]);
   });
 
-  test("forgetTurn never interrupts the box: the stream is left, not aborted", async () => {
+  test("forgetTurn never interrupts the box: the stream is drained, not aborted", async () => {
     const s = setup({ frames: [delta(1, "working")], hold: true, after: [delta(2, " more"), done(3)] });
     await s.transport.startTurn({ ...ATLAS, message: "hello" });
     await flush();
@@ -242,7 +242,7 @@ describe("turns", () => {
     // An aborted signal is what makes the adapter send `session.interrupt`.
     expect(s.streams[0]?.signal?.aborted).toBe(false);
     expect(s.calls.some((c) => c.method === "abort")).toBe(false);
-    // The box's next frame: the pump leaves the stream (closing its socket), delivering nothing.
+    // The box finishes the turn: the pump drains the stream to its end, delivering nothing.
     s.release();
     await flush();
     await flush();

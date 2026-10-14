@@ -171,10 +171,11 @@ interface TurnRun {
   /** `abortTurn` was asked: the end is `aborted`, whatever the stream says. */
   stopping: boolean;
   /**
-   * `forgetTurn` was asked: nothing more is delivered, and the pump leaves the
-   * adapter's stream at its next frame (`return()`, which closes the socket)
-   * rather than aborting it — an aborted stream owes the box a
-   * `session.interrupt`, and forgetting a turn is not stopping it.
+   * `forgetTurn` was asked: nothing more is delivered, but the pump keeps
+   * reading the adapter's stream to its end. Both ways out of it early owe the
+   * box a `session.interrupt` — an aborted signal, and a `return()` mid-turn
+   * (the adapter holds the session's socket, so nothing else would ever stop
+   * an abandoned turn) — and forgetting a turn is not stopping it.
    */
   forgotten: boolean;
 }
@@ -310,7 +311,9 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
           signal,
           ...(session !== undefined ? { session } : {}),
         })) {
-          if (signal.aborted || run.forgotten) break;
+          if (signal.aborted) break;
+          // Drained, not left: see `TurnRun.forgotten`.
+          if (run.forgotten) continue;
           deliver(mask.frame(frame));
         }
       }
@@ -372,12 +375,12 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
 
   /**
    * Stop following a turn; the turn itself keeps running on the box (the
-   * `ConversationTransport.forgetTurn` contract). Only the pump is let go: it
-   * stops delivering at once and leaves the adapter's stream at the next frame
-   * the box sends. The run's controller is **not** aborted — the adapter
-   * answers an aborted signal with `session.interrupt`, which would stop a turn
-   * the operator only looked away from (a backgrounded phone, a left screen, a
-   * quiet tool run). `abortTurn` is the only path that stops a turn.
+   * `ConversationTransport.forgetTurn` contract). Only delivery is let go: the
+   * pump stops delivering at once and drains the adapter's stream to its end.
+   * The run's controller is **not** aborted, and the stream is not left early —
+   * the adapter answers either with `session.interrupt`, which would stop a
+   * turn the operator only looked away from (a backgrounded phone, a left
+   * screen, a quiet tool run). `abortTurn` is the only path that stops a turn.
    */
   function forgetTurn(turn_id: string): void {
     const run = runs.get(turn_id);

@@ -176,8 +176,14 @@ describe("the walk is not vacuous", () => {
 const POLYFILLED_GLOBALS = ["AbortSignal.timeout", "AbortSignal.any", "structuredClone"] as const;
 
 const EXPECTED_GLOBAL_USES: Record<(typeof POLYFILLED_GLOBALS)[number], readonly string[]> = {
-  "AbortSignal.timeout": ["src/chat/hermes/hermes-chat-resume.ts"],
-  "AbortSignal.any": ["src/chat/hermes/hermes-chat-resume.ts"],
+  "AbortSignal.timeout": [
+    "src/chat/hermes/hermes-chat-resume.ts",
+    "src/chat/hermes/hermes-chat-session-socket.ts",
+  ],
+  "AbortSignal.any": [
+    "src/chat/hermes/hermes-chat-resume.ts",
+    "src/chat/hermes/hermes-chat-session-socket.ts",
+  ],
   structuredClone: ["src/chat/hermes/hermes-chat-subagent.ts"],
 };
 

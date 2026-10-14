@@ -246,7 +246,7 @@ describe("phone gateway ↔ scripted Hermes gateway", () => {
       await until(() => p.frames.some((f) => f.type === "delta"));
       p.transport.forgetTurn?.(turn_id);
       const delivered = p.frames.length;
-      // The box keeps talking: the pump leaves the stream at this frame and closes it.
+      // The box keeps talking: the pump drains the frame and delivers nothing.
       gateway.push(NEXT_FRAME);
       await Bun.sleep(100);
       expect(interrupts()).toBe(before);
