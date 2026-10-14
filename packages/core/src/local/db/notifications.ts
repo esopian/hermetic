@@ -560,9 +560,25 @@ export class SqliteNotificationStore implements NotificationStore {
   setSeenStatus(fleet: string | null, agent: string, status: string): void {
     this.db.run(
       `INSERT INTO agent_status_seen (fleet, agent, status, seen_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(fleet, agent) DO UPDATE SET status = excluded.status, seen_at = excluded.seen_at`,
+       ON CONFLICT(fleet, agent) DO UPDATE SET
+         status = excluded.status, seen_at = excluded.seen_at, pending_since = NULL`,
       [fleet ?? "", agent, status, this.now().toISOString()],
     );
+  }
+
+  pendingSince(fleet: string | null, agent: string): string | null {
+    const row = this.db
+      .query(`SELECT pending_since FROM agent_status_seen WHERE fleet = ? AND agent = ?`)
+      .get(fleet ?? "", agent) as { pending_since: string | null } | null;
+    return row?.pending_since ?? null;
+  }
+
+  setPendingSince(fleet: string | null, agent: string, at: string | null): void {
+    this.db.run(`UPDATE agent_status_seen SET pending_since = ? WHERE fleet = ? AND agent = ?`, [
+      at,
+      fleet ?? "",
+      agent,
+    ]);
   }
 
   forgetSeen(fleet: string | null, agent: string): void {
