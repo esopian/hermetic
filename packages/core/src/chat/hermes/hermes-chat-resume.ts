@@ -26,7 +26,7 @@ import {
   OBSERVE_RECONNECT_MAX_MS,
 } from "../chat-observe.ts";
 import { HermeticError } from "../../errors.ts";
-import { advertiseServerRequests, nextEvent, type Rpc } from "./hermes-chat-rpc.ts";
+import { advertiseServerRequests, nextEvent, type Rpc, untilAbort } from "./hermes-chat-rpc.ts";
 import { CHAT_ERROR_CODES, CHAT_RECONNECT_BLOCK_KEY, type BoxAddress } from "./hermes-chat-types.ts";
 import { HERMETIC_SESSION_SOURCE, num, rec, str } from "./hermes-chat-wire.ts";
 import type { ChatBlock, SubagentBlock } from "../../schema/index.ts";
@@ -52,36 +52,6 @@ const RESUME_UNSUPPORTED_MS = 5 * 60_000;
  * is a box whose turn will be reclaimed by the gateway's own timeouts anyway.
  */
 const INTERRUPT_DEADLINE_MS = 5_000;
-
-/**
- * Reject when `signal` fires, whatever the promise is still doing.
- *
- * `Promise.race` against an abort is not enough anywhere a dial is involved:
- * `connect` awaits the socket's `opened`, and a socket that neither opens nor
- * fails — a box that fell off the tailnet mid-turn — never settles it. The
- * abort signal reaches the *requests*, which is how a hung handshake unwinds,
- * but nothing settles the open itself, so the caller has to stop waiting.
- */
-function within<T>(promise: Promise<T>, signal: AbortSignal, what: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const give = (): void => reject(new HermeticError("ABORTED", `operation aborted during ${what}`));
-    if (signal.aborted) {
-      give();
-      return;
-    }
-    signal.addEventListener("abort", give, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", give);
-        resolve(value);
-      },
-      (e: unknown) => {
-        signal.removeEventListener("abort", give);
-        reject(e instanceof Error ? e : new Error(String(e)));
-      },
-    );
-  });
-}
 
 /**
  * One step, or the reason there was not one.
@@ -168,6 +138,13 @@ export interface TurnPump {
   /** The socket a turn should interrupt or close — which may not be the one it opened. */
   current(): Rpc;
   close(): void;
+  /**
+   * End the pump without closing the socket it ended on, and return that
+   * socket: a held conversation keeps it (`hermes-chat-session-socket.ts`). A
+   * reconnect still mid-handshake is closed, since nothing adopted it. Null
+   * once the pump is closed.
+   */
+  detach(): Rpc | null;
 }
 
 export interface TurnResumeDeps {
@@ -527,15 +504,11 @@ export function createTurnResume(deps: TurnResumeDeps) {
         // already aborted (that is why we are here), and an unreachable box
         // would otherwise hold the turn open until the OS gave up on the TCP
         // connection — minutes, with a `done` frame waiting behind it.
-        const dialled = deps.connect(box, stop);
-        // A dial that lands after the bound is a socket nobody asked for.
-        void dialled.then(
-          (rpc2) => {
-            if (stop.aborted) rpc2.close();
-          },
-          () => null,
-        );
-        last = await within(dialled, stop, "session.interrupt");
+        // A dial that lands after the bound is closed by `connect` itself: the
+        // turn's is detached and closes a late socket (`dialDetached`), and a
+        // socket dialled with `stop` closes with it. The race only ends the
+        // wait for a dial that never settles.
+        last = await untilAbort(deps.connect(box, stop), stop, "session.interrupt");
         await last.request("session.interrupt", { session_id: session }, interruptMs, {
           signal: stop,
         });
@@ -573,12 +546,12 @@ export function createTurnResume(deps: TurnResumeDeps) {
           const merged =
             signal === undefined ? expiry.signal : AbortSignal.any([signal, expiry.signal]);
           try {
-            // `within`, not a bare await: the abort reaches the handshake's
+            // `untilAbort`, not a bare await: the abort reaches the handshake's
             // requests but never the dial itself, so an attempt against a box
             // that stopped answering would hold this loop open past every
             // deadline it is supposed to honour. The abandoned attempt unwinds
             // on `merged` and closes whatever it opened (see `attempt`).
-            await within(attempt(merged), expiry.signal, "reconnect");
+            await untilAbort(attempt(merged), expiry.signal, "reconnect");
           } catch {
             // The deadline, not a failure: `attempt` never throws.
           } finally {
@@ -625,6 +598,13 @@ export function createTurnResume(deps: TurnResumeDeps) {
         handshake?.close();
         handshake = null;
         rpc.close();
+      },
+      detach: () => {
+        if (closed) return null;
+        closed = true;
+        handshake?.close();
+        handshake = null;
+        return rpc;
       },
     };
   }

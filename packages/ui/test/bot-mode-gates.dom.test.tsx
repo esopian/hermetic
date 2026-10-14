@@ -148,6 +148,8 @@ async function mount(): Promise<FakeServer> {
 
 /** Opens the room from the rail and waits for its pane to accept a message. */
 async function openRoom(): Promise<void> {
+  // The rail opens on Unread, which hides this idle room; ask for the full list.
+  fireEvent.click(await screen.findByRole("button", { name: "All" }));
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(ROOM.name) }));
   await screen.findByLabelText("Message the room");
 }

@@ -12,7 +12,7 @@ import { ChatProvider, useChat } from "../src/chat/chat-state.tsx";
 import { ChatView } from "../src/chat/components/ChatView.tsx";
 import { useRef } from "react";
 import { useFocusTrap } from "../src/lib/focus.ts";
-import { botOf, harness, mount, sendable, sessionOf, swarmOf } from "./chat-fixtures.tsx";
+import { botOf, harness, mount, sendable, sessionOf, showAllRail, swarmOf } from "./chat-fixtures.tsx";
 import type { Harness } from "./chat-fixtures.tsx";
 import { useEffect, useState } from "react";
 import { ChatShell } from "../src/chat/components/ChatShell.tsx";
@@ -263,6 +263,7 @@ describe("persistent entry frames", () => {
     const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
     const { container } = mountEntry(h);
     await sendable(container);
+    showAllRail();
     const granite = Array.from(container.querySelectorAll<HTMLButtonElement>(".ch-conv")).find((row) =>
       row.textContent?.includes("granite"),
     )!;
@@ -626,6 +627,7 @@ test("observed turn activity reaches selected and background avatar owners witho
   const h = harness({ swarms: [swarmOf("atlas"), swarmOf("granite")] });
   const { container } = mount(h);
   await sendable(container);
+  showAllRail();
   const owner = (selector: string, name: string) =>
     [...container.querySelectorAll(selector)].find((element) => element.textContent?.includes(name))!;
   const phase = (element: Element) =>

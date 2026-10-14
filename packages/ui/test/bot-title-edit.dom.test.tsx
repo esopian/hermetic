@@ -133,7 +133,9 @@ describe("renaming a bot from its thread header", () => {
     expect(s.to("bots.update").map((c) => c.params)).toEqual([
       expect.objectContaining({ instance: INSTANCE, bot: BOT, title: "Archivist" }),
     ]);
-    expect(document.activeElement).toBe(pencil());
+    // The header can show the new title a tick before the passive effect that
+    // moves focus back to the pencil has run, so focus is waited for too.
+    await waitFor(() => expect(document.activeElement === pencil()).toBe(true));
   });
 
   test("an empty field resets the title, and the header falls back to the profile name", async () => {
@@ -183,7 +185,7 @@ describe("renaming a bot from its thread header", () => {
     fireEvent.submit(field().form as HTMLFormElement);
     await screen.findByText(/changed elsewhere/);
     await waitFor(() => expect(field().disabled).toBe(false));
-    expect(document.activeElement === field()).toBe(true);
+    await waitFor(() => expect(document.activeElement === field()).toBe(true));
   });
 
   test("a saved title whose roster refresh rejects is not a failed rename", async () => {
@@ -195,7 +197,7 @@ describe("renaming a bot from its thread header", () => {
     await waitFor(() => expect(screen.queryByLabelText("Bot name")?.outerHTML).toBeUndefined());
     expect(document.querySelector(".ch-title-error")?.textContent).toBeUndefined();
     expect(s.to("bots.update")).toHaveLength(1);
-    expect(document.activeElement === pencil()).toBe(true);
+    await waitFor(() => expect(document.activeElement === pencil()).toBe(true));
   });
 });
 

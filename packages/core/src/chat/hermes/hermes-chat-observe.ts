@@ -45,10 +45,21 @@
  * Opening the stream also reconciles those ledgers against the gateway's live
  * roster (`reconcileSubagents`, on a socket of its own), because a reopened
  * stream is exactly the moment a child may have finished unheard.
+ *
+ * ## Events from held sockets
+ *
+ * A conversation's held socket (`hermes-chat-session-socket.ts`) stays attached
+ * between turns, and the gateway addresses a finished background process — and
+ * the turn it then starts on its own — to the sockets attached to that session,
+ * not to this passive one. So those events arrive here over an in-process bus
+ * (`idle`) and are merged with the socket's own. Such an event names the
+ * gateway's runtime id, but the hold says which stored conversation it belongs
+ * to, so it is filtered and reported by the stored id a watch is pinned to.
  */
 import type { BoxAddress, ObserveOptions } from "./hermes-chat-types.ts";
 import type { ChatObserveHint } from "../chat-observe.ts";
-import type { Rpc } from "./hermes-chat-rpc.ts";
+import { channel, type Rpc } from "./hermes-chat-rpc.ts";
+import type { IdleEventListener, SessionHold } from "./hermes-chat-session-socket.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
 import { observedSubagent, type SubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { reconcileSubagents } from "./hermes-chat-resume.ts";
@@ -60,6 +71,8 @@ export interface ChatObserveAdapterDeps {
   connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc>;
   /** The client's per-session subagent ledgers; absent relays hints only. */
   subagents?: SubagentLedgers | undefined;
+  /** Events from this client's idle held sockets; absent reads the socket alone. */
+  idle?: { subscribe(box: BoxAddress, listener: IdleEventListener): () => void } | undefined;
 }
 
 export function createChatObserve(deps: ChatObserveAdapterDeps) {
@@ -68,10 +81,34 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
     bot: string,
     opts: ObserveOptions = {},
   ): AsyncIterable<ChatObserveHint> {
-    const rpc = await deps.connect(box, opts.signal);
     const ledgers = deps.subagents;
     const watch = { box, bot, session: opts.session, sessions: opts.sessions };
+    // Both sources into one queue, because a generator can await only one of
+    // them. The socket's loop ends the queue when the socket ends, which is
+    // what ends this observation; the bus never does. Subscribed before the
+    // dial, so an event published while it is in flight is buffered, not lost.
+    const merged = channel<{ event: Record<string, unknown>; held: SessionHold | null }>();
+    const unsubscribe =
+      deps.idle?.subscribe(box, (hold, event) => {
+        // Another bot's conversation is not this watch's, and a frame about
+        // the socket rather than a session (`gateway.ready`) is nobody's.
+        if (hold.bot !== bot || str(event.session_id) === null) return;
+        if (!concerns(hold.stored, opts)) return;
+        merged.push({ event, held: hold });
+      }) ?? (() => {});
+    let rpc: Rpc | null = null;
     try {
+      rpc = await deps.connect(box, opts.signal);
+      const socket = rpc;
+      void (async () => {
+        try {
+          for await (const event of socket.events) merged.push({ event, held: null });
+        } catch {
+          // A stream that errors is a stream that ended, with a worse mood.
+        } finally {
+          merged.close();
+        }
+      })();
       if (ledgers) {
         const changed = await reconcileSubagents(
           { connect: deps.connect, ledgers },
@@ -80,8 +117,9 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
         );
         for (const { stored, block } of changed) yield { session: stored, subagent: block };
       }
-      for await (const event of rpc.events) {
+      for await (const { event, held } of merged.drain()) {
         if (opts.signal?.aborted) return;
+        // Always the runtime id: it is what the subagent ledgers are keyed by.
         const session = str(event.session_id);
         const type = str(event.type);
         if (ledgers && session && type && isSubagentEvent(type)) {
@@ -96,14 +134,21 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
             continue;
           }
         }
+        // Already filtered by its stored id on the way in.
+        if (held) {
+          yield { session: held.stored };
+          continue;
+        }
         if (session !== null && !concerns(session, opts)) continue;
         yield { session };
       }
     } finally {
+      unsubscribe();
       // The socket is this observation's, so it closes with it. A detached
       // observer that left one open would hold a connection to a box for the
       // rest of the portal's life.
-      rpc.close();
+      rpc?.close();
+      merged.close();
     }
   }
   return { observe };

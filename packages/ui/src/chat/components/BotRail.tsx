@@ -55,7 +55,7 @@ export function BotRail({
   canonicalId?: string | null;
 }) {
   const [tab, setTab] = useState<"bots" | "sessions">("bots");
-  const [filter, setFilter] = useState<"all" | "unread" | "needs">("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "needs">("unread");
   const bots = swarms.flatMap((swarm) => swarm.bots);
   /**
    * The inbox's unread `chat.*` rows, added to the roster's own count: the two
@@ -68,13 +68,17 @@ export function BotRail({
    * Rooms obey the filter the bots obey. A room is *needs you* when it has a
    * pending approval and *unread* when this laptop holds unread rows for it;
    * under either filter, a room that is neither is not an exception to the
-   * question the operator asked.
+   * question the operator asked — except the room that is open, which stays
+   * listed the way Slack keeps the current channel under its Unread filter.
+   * Reading it is what clears it, and a rail that drops the conversation the
+   * moment it is read claims nothing is open.
    */
   const rooms = swarms
     .flatMap((swarm) => swarm.rooms)
     .filter(
       (item) =>
         filter === "all" ||
+        (room?.id === item.id && room.instance === item.instance) ||
         (filter === "needs" && item.needs_action) ||
         (filter === "unread" && unreadOf(item.instance, item.id) > 0),
     );
@@ -82,9 +86,13 @@ export function BotRail({
   const prefs = useRailPrefs(fleetId);
   const pinned = new Set(prefs.pinned);
   const collapsed = new Set(prefs.collapsed);
+  /** The bot that owns the open thread; the filters never hide it (see `rooms`). */
+  const isOpen = (bot: BotView) =>
+    !room && selection?.instance === bot.instance && selection.bot === bot.name;
   const shown = (bot: BotView) =>
     matchesQuery(query, bot.title, bot.name, bot.instance) &&
     (filter === "all" ||
+      isOpen(bot) ||
       (filter === "needs" && bot.needs_action) ||
       (filter === "unread" && railUnread(bot, unreadOf(bot.instance, bot.name)) > 0));
   /**
