@@ -25,24 +25,21 @@
  * sensitive (`acme-prod-root.pem`). Failures are reported by slot name, which is
  * a lossy slug the laptop already shows in the run log.
  *
- * Within this process every write and removal runs under one lock
+ * The real host holds an OS file lock from SSM read through placement and
+ * sweep, shared by the daemon and `hermeticd apply`. Within this process every
+ * write and removal also runs under one lock
  * (`exclusive`): the stale-file sweep in `materialiseAllFileSecrets` lists the
  * directory and removes what no slot claimed, and a secret placed by a route
  * in the middle of that would be swept the moment it landed. The sweep also
  * skips dot-prefixed names, which are `writeAtomically`'s staging files.
  *
- * SSM is read *outside* the lock, and every read is bounded
- * (`SSM_TIMEOUT_MS`): a hung call must not wedge the lock, and with it every
- * apply, converge and route that writes here. That opens a window the lock
- * used to close — a route reading its slot after the bulk listing began —
- * which `placedAt` closes instead: each read takes a ticket when it starts,
+ * SSM is read outside the in-process lock, and every read is bounded
+ * (`SSM_TIMEOUT_MS`): a hung call must not wedge the process queue. Tickets
+ * also preserve freshness among concurrent reads within one process: each
+ * read takes a ticket when it starts,
  * each placement records its ticket by name, and the bulk pass neither
  * overwrites nor sweeps a name placed from a read that started after its
- * listing did (that value is the fresher one). A
- * second *process* — `hermeticd apply` from the CLI, which refreshes the same
- * directory — is outside the lock: a slot written by the daemon after that
- * apply listed SSM but before it swept could still be removed, and comes back
- * at the next apply or boot. Closing that needs a file lock both share.
+ * listing did (that value is the fresher one).
  */
 import { createHash } from "node:crypto";
 import {
@@ -74,6 +71,12 @@ const placedAt = new Map<string, number>();
 
 /** How long one SSM call may take before the read is given up. */
 export const SSM_TIMEOUT_MS = 30_000;
+
+const FILE_SECRETS_LOCK = `${SECRETS_ENV_DIR}/file-secrets.lock`;
+
+function withProcessLock<T>(host: Host, work: () => Promise<T>): Promise<T> {
+  return host.withFileLock ? host.withFileLock(FILE_SECRETS_LOCK, work) : work();
+}
 
 /**
  * `promise`, or an `INTERNAL` naming `what` after `ms`. The SSM call itself is
@@ -283,6 +286,15 @@ export async function materialiseFileSecret(
   expectName?: string,
   check?: SecretContentCheck,
 ): Promise<MaterialisedSecret> {
+  return withProcessLock(deps.host, () => materialiseFileSecretUnlocked(deps, slot, expectName, check));
+}
+
+async function materialiseFileSecretUnlocked(
+  deps: FileSecretDeps,
+  slot: string,
+  expectName?: string,
+  check?: SecretContentCheck,
+): Promise<MaterialisedSecret> {
   const first = await materialiseOnce(deps, slot, expectName, check);
   if (first !== null) return first;
   // A read that began after this one placed the file while this one waited on
@@ -346,6 +358,10 @@ function placedSince(name: string, ticket: number): boolean {
  * failure leaves the previous copy in place rather than sweeping it.
  */
 export async function materialiseAllFileSecrets(deps: FileSecretDeps): Promise<MaterialisedSecret[]> {
+  return withProcessLock(deps.host, () => materialiseAllFileSecretsUnlocked(deps));
+}
+
+async function materialiseAllFileSecretsUnlocked(deps: FileSecretDeps): Promise<MaterialisedSecret[]> {
   // `paramPath(prefix, slot)` is `<prefix>/<slot>` with exactly one slash, so
   // the slots are the parameters directly under the prefix without its
   // trailing slash: the hierarchy SSM's own examples name.
@@ -424,8 +440,10 @@ export async function removeFileSecret(host: Host, name: string): Promise<void> 
   if (!clean.ok || clean.name !== name) {
     throw new AgentdError("USAGE", "not a valid secret file name");
   }
-  await exclusive(async () => {
-    await host.remove(secretPath(clean.name));
-    placedAt.set(clean.name, nextTicket++);
-  });
+  await withProcessLock(host, () =>
+    exclusive(async () => {
+      await host.remove(secretPath(clean.name));
+      placedAt.set(clean.name, nextTicket++);
+    }),
+  );
 }

@@ -102,6 +102,19 @@ test("a drop stages by upload id and ends on a staged `done` frame", async () =>
   };
   expect(content.mime).toBe("image/png");
   expect(Buffer.from(content.data_b64, "base64")).toEqual(Buffer.from(PNG));
+  expect(
+    await dispatch(ctx, "files.content", {
+      instance: "atlas",
+      id: frame.file.id,
+      expected_sha256: frame.file.sha256,
+    }),
+  ).toEqual(content);
+  const mismatch = await dispatch(ctx, "files.content", {
+    instance: "atlas",
+    id: frame.file.id,
+    expected_sha256: "0".repeat(64),
+  }).catch((error: unknown) => error as { code?: string });
+  expect((mismatch as { code?: string }).code).toBe("FILE_DIGEST_MISMATCH");
 
   expect(
     await dispatch(ctx, "files.discard", { instance: "atlas", id: frame.file.id, target }),
@@ -526,7 +539,7 @@ test("files.rm answers a plan naming the SSM slot, which apply then removes", as
   const { ctx, target } = await harness();
   const plan = (await dispatch(ctx, "files.rm", { name: "atlas", id: "f_fxatlasenv01" })) as Plan;
   expect(plan.kind).toBe("files-rm");
-  expect(plan.steps.map((s) => s.id)).toEqual(["box", "ssm"]);
+  expect(plan.steps.map((s) => s.id)).toEqual(["ssm", "box"]);
   const accepted = (await dispatch(ctx, "apply", { plan, yes: true, target })) as { op_id: string };
   await ctx.ops.wait(accepted.op_id);
   const listed = (await dispatch(ctx, "files.list", { name: "atlas" })) as {

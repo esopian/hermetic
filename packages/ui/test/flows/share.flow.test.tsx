@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HermeticError } from "@hermetic/core";
 import { setFleetTarget } from "../../src/api/index.ts";
 import { Block } from "../../src/chat/components/blocks/index.tsx";
 import { type FakeServer, fakeServer } from "../fake-transport.ts";
@@ -116,11 +117,10 @@ test("share_file draws one card per file; the chart shows once its sha256 checks
 
 test("an image whose bytes do not hash to the shared sha256 is not shown", async () => {
   harness = await flowHarness();
-  // The box answers the preview with other bytes than it shared.
-  harness.intercept("files.content", () => ({
-    mime: "image/png",
-    data_b64: btoa("\x89PNG\r\n\x1a\nFIXTURE-not-the-shared-bytes"),
-  }));
+  // The main process rejects bytes whose digest differs from the shared one.
+  harness.intercept("files.content", () => {
+    throw new HermeticError("FILE_DIGEST_MISMATCH", "the shared image changed");
+  });
   const { cards } = await share(harness);
   const png = () => card(cards(), "q3-revenue.png");
   await waitFor(() => expect(png()?.textContent ?? "").toContain("preview withheld"), WAIT);

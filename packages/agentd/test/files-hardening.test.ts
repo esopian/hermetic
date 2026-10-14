@@ -40,6 +40,7 @@ import {
   READ_STREAM_SCRIPT,
   WRITE_STREAM_SCRIPT,
   pipeIntoChild,
+  realHost,
 } from "../src/host.ts";
 import { FakeHost } from "./fake-host.ts";
 import {
@@ -567,6 +568,71 @@ describe("SSM and the secrets lock (round 2, finding 3)", () => {
   const PREFIX = "/hermes/fxtr0001/research-1/";
   const value = (bytes: Uint8Array) =>
     encodeSecretEnvelope({ name: "late.pem", bytes, sha256: sha256(bytes) });
+
+  test("the shared lock spans SSM listing and the stale-file sweep", async () => {
+    let held = false;
+    const host = Object.assign(new FakeHost(), {
+      async withFileLock<T>(_path: string, work: () => Promise<T>): Promise<T> {
+        held = true;
+        try {
+          return await work();
+        } finally {
+          held = false;
+        }
+      },
+    });
+    const readdir = host.readdir.bind(host);
+    host.readdir = async (path) => {
+      expect(held).toBe(true);
+      return readdir(path);
+    };
+    const aws = {
+      getParametersByPath: async () => {
+        expect(held).toBe(true);
+        return [];
+      },
+    } as unknown as Aws;
+    await materialiseAllFileSecrets({ host, aws, paramPrefix: PREFIX });
+    expect(held).toBe(false);
+  });
+
+  test("the OS lock serializes separate holders until the first finishes", async () => {
+    if (process.platform !== "linux") return;
+    const dir = mkdtempSync(join(tmpdir(), "hermetic-secret-lock-"));
+    const host = realHost();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let acquired: () => void = () => {};
+    const firstAcquired = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    let entered = false;
+    try {
+      const first = host.withFileLock!(join(dir, "secrets.lock"), () => {
+        acquired();
+        return gate;
+      });
+      await Promise.race([
+        firstAcquired,
+        first.then(() => {
+          throw new Error("the first lock holder finished before acquiring the lock");
+        }),
+      ]);
+      const second = host.withFileLock!(join(dir, "secrets.lock"), async () => {
+        entered = true;
+      });
+      await Bun.sleep(20);
+      expect(entered).toBe(false);
+      release();
+      await Promise.all([first, second]);
+      expect(entered).toBe(true);
+    } finally {
+      release();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("a hung SSM read times out instead of hanging", async () => {
     const host = new FakeHost();

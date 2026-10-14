@@ -143,7 +143,12 @@ export type FilesEntryRefInput = z.infer<typeof FilesEntryRefInput>;
  * file's thumbnail (`f_…`), or a share card's image (`sh_…`), which the box's
  * content route serves alike.
  */
-export const FilesContentInput = z.object({ instance: AgentName, id: FileEntryId });
+export const FilesContentInput = z.object({
+  instance: AgentName,
+  id: FileEntryId,
+  /** A share card's pinned digest; verified in the main process before bytes reach the page. */
+  expected_sha256: Sha256.optional(),
+});
 export type FilesContentInput = z.infer<typeof FilesContentInput>;
 
 /** Whether a box serves the files routes, from its `/healthz`. */

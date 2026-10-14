@@ -585,7 +585,9 @@ export class MemoryFiles implements FilesApi {
     const mine = [...this.entries.values()].filter(
       (e) => e.agent === agent && Date.parse(e.expires_at) > now,
     );
-    const inbox = mine.filter((e) => e.state === "inbox").map((e) => this.listed(e));
+    const inbox = mine
+      .filter((e) => e.state === "inbox" || e.state === "staged")
+      .map((e) => this.listed(e));
     const outbox = mine.filter((e) => e.state === "outbox").map((e) => this.listed(e));
     const requests: FileRequest[] = [];
     for (const held of this.requests.values()) {
@@ -613,7 +615,7 @@ export class MemoryFiles implements FilesApi {
     const outbox = e.state === "outbox";
     return {
       id: e.id,
-      dir: outbox ? "outbox" : "inbox",
+      dir: outbox ? "outbox" : e.state === "staged" ? "stage" : "inbox",
       class: e.class,
       name: e.name,
       bytes: e.bytes.byteLength,

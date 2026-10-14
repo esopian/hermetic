@@ -64,6 +64,8 @@ export type ExecEvent =
 
 export interface Host {
   exec(argv: readonly string[], opts?: ExecOptions): Promise<ExecResult>;
+  /** Hold an OS file lock across `work`, including awaits; the real daemon and apply share it. */
+  withFileLock?<T>(path: string, work: () => Promise<T>): Promise<T>;
   /** `null` when the path does not exist — hermeticd never throws on absence. */
   readFile(path: string): Promise<string | null>;
   readBytes(path: string): Promise<Uint8Array | null>;
@@ -568,6 +570,39 @@ async function readOrNull(path: string): Promise<Uint8Array | null> {
  */
 export function realHost(): Host {
   return {
+    async withFileLock(path, work) {
+      const { mkdir } = await import("node:fs/promises");
+      const { dirname } = await import("node:path");
+      await mkdir(dirname(path), { recursive: true, mode: 0o711 });
+      // `flock` keeps the lock for as long as its child is alive. A ready line
+      // distinguishes acquisition from merely starting a process that is waiting.
+      const proc = Bun.spawn(
+        ["flock", "-x", "-w", "300", path, "sh", "-c", "printf 'ready\\n'; cat >/dev/null"],
+        { stdin: "pipe", stdout: "pipe", stderr: "ignore" },
+      );
+      const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+      let ready = "";
+      try {
+        while (!ready.includes("\n")) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new AgentdError("COMMAND_FAILED", "could not acquire file secret lock");
+          ready += new TextDecoder().decode(chunk.value);
+        }
+        if (ready.split("\n", 1)[0] !== "ready") {
+          throw new AgentdError("COMMAND_FAILED", "could not acquire file secret lock");
+        }
+        return await work();
+      } finally {
+        reader.releaseLock();
+        try {
+          await proc.stdin.end();
+        } catch {
+          // Acquisition may have failed and closed the child's stdin already.
+        }
+        await proc.exited;
+      }
+    },
+
     async exec(argv, opts) {
       const proc = Bun.spawn([...argv], {
         env: opts?.env ? { ...process.env, ...opts.env } : process.env,

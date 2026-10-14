@@ -50,9 +50,17 @@ export function filesDiscard(instance: string, id: string): Promise<Answer<"file
   return transport().request("files.discard", { instance, id, target: target() });
 }
 
-/** A staged image's bytes, for its thumbnail. */
-export function filesContent(instance: string, id: string): Promise<Answer<"files.content">> {
-  return transport().request("files.content", { instance, id });
+/** Verified image bytes, with an optional digest pinned by a share card. */
+export function filesContent(
+  instance: string,
+  id: string,
+  expected_sha256?: string,
+): Promise<Answer<"files.content">> {
+  return transport().request("files.content", {
+    instance,
+    id,
+    ...(expected_sha256 ? { expected_sha256 } : {}),
+  });
 }
 
 /** The native open dialog. `files: []` when the operator cancelled. */

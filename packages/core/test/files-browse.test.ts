@@ -2,7 +2,7 @@
  * The Files tab's three public methods (§9): `files.list` (metadata only),
  * `files.get` (a verified, exclusive-create download that never takes a
  * secret) and `files.rm` (a plan `apply` executes, deleting a durable secret's
- * SSM slot after the entry).
+ * SSM slot before the entry).
  *
  * Against the seeded fixture fleet (`fixture-files-seed.ts`), so the entries
  * these read are the ones the dashboard shows in fixture mode.
@@ -327,14 +327,14 @@ describe("files.rm", () => {
     expect(backend.mutations).not.toContain("secrets.delete");
   });
 
-  test("a durable secret's plan names its SSM parameter; apply deletes it after the entry", async () => {
+  test("a durable secret's plan names its SSM parameter; apply deletes it before the entry", async () => {
     const { hermetic, backend, fleet } = open();
     const path = agentParamPath(fleet, AGENT, "file-github-app-pem");
     // The fixture seeds the entry, not its parameter; put one where apply will look.
     backend.params.set(path, "FIXTURE-envelope");
     const plan = await hermetic.files.rm({ name: AGENT, id: IDS.pem });
-    expect(plan.steps.map((s) => s.id)).toEqual(["box", "ssm"]);
-    expect(plan.steps[1]?.description).toInclude(path);
+    expect(plan.steps.map((s) => s.id)).toEqual(["ssm", "box"]);
+    expect(plan.steps[0]?.description).toInclude(path);
     await drain(hermetic.apply({ plan, yes: true }));
     expect(backend.params.has(path)).toBe(false);
     const listed = await hermetic.files.list({ name: AGENT });
@@ -352,6 +352,35 @@ describe("files.rm", () => {
     const e = await refusal(drain(hermetic.apply({ plan: stale, yes: true })));
     expect(e.code).toBe("PLAN_STALE");
     expect(backend.params.has(agentParamPath(fleet, AGENT, "env-github"))).toBe(true);
+  });
+
+  test("a staged file committed after planning is not deleted by the old plan", async () => {
+    const { hermetic, backend } = open();
+    const path = fresh("planned.pdf");
+    writeFileSync(path, "FIXTURE planned attachment");
+    let result: { type: "staged"; file: { id: string } } | undefined;
+    for await (const event of hermetic.files.stage({ instance: AGENT, source: { path } })) {
+      if (event.type === "staged") result = event;
+    }
+    if (result?.type !== "staged") throw new Error("expected a staged file");
+    const plan = await hermetic.files.rm({ name: AGENT, id: result.file.id });
+    await backend.files.commit(AGENT, result.file.id, {}, {});
+
+    const error = await refusal(drain(hermetic.apply({ plan, yes: true })));
+    expect(error.code).toBe("PLAN_STALE");
+    expect(backend.files.entry(AGENT, result.file.id)?.state).toBe("inbox");
+  });
+
+  test("a plan with a changed file class is stale", async () => {
+    const { hermetic, backend } = open();
+    const plan = await hermetic.files.rm({ name: AGENT, id: IDS.pdf });
+    const forged: Plan = {
+      ...plan,
+      options: { ...plan.options, file: { ...plan.options.file!, class: "image" } },
+    };
+    const error = await refusal(drain(hermetic.apply({ plan: forged, yes: true })));
+    expect(error.code).toBe("PLAN_STALE");
+    expect(backend.files.entry(AGENT, IDS.pdf)).toBeDefined();
   });
 
   test("a plan naming a slot that is not file-*/env-* is refused before anything is deleted", async () => {
@@ -394,7 +423,7 @@ describe("files.rm against SSM (aws-sdk-client-mock)", () => {
     expect(calls).toEqual([{ Name: agentParamPath(fleet, AGENT, "env-github") }]);
   });
 
-  test("op events never name the slot; an SSM failure says how to finish, the slot in details only", async () => {
+  test("an SSM failure keeps the box entry visible and lets the same plan retry", async () => {
     const { hermetic, fleet } = withSsm();
     const path = agentParamPath(fleet, AGENT, "file-github-app-pem");
     ssm.on(DeleteParameterCommand).rejects(new Error(`throttled deleting ${path}`));
@@ -413,10 +442,43 @@ describe("files.rm against SSM (aws-sdk-client-mock)", () => {
       expect(text).not.toInclude("github-app-pem");
       expect(text).not.toInclude(path);
     }
-    expect(failure.message).toInclude("by hand");
+    expect(failure.message).toInclude("plan its deletion again");
     expect(failure.details).toMatchObject({ ssm_slot: "file-github-app-pem", ssm_path: path });
-    const listed = await hermetic.files.list({ name: AGENT });
-    expect(listed.secrets.map((e) => e.id)).not.toContain(IDS.pem);
+    expect((await hermetic.files.list({ name: AGENT })).secrets.map((e) => e.id)).toContain(IDS.pem);
+    ssm.reset();
+    ssm.on(DeleteParameterCommand).resolves({});
+    await drain(hermetic.apply({ plan, yes: true }));
+    expect((await hermetic.files.list({ name: AGENT })).secrets.map((e) => e.id)).not.toContain(
+      IDS.pem,
+    );
+  });
+
+  test("a box failure after SSM deletion leaves a visible entry for retry", async () => {
+    const { hermetic, backend } = withSsm();
+    const plan = await hermetic.files.rm({ name: AGENT, id: IDS.pem });
+    const remove = backend.files.remove.bind(backend.files);
+    let fail = true;
+    backend.files.remove = async (...args) => {
+      if (fail) {
+        fail = false;
+        throw new Error("FIXTURE box unavailable");
+      }
+      return remove(...args);
+    };
+    const error = await refusal(drain(hermetic.apply({ plan, yes: true })));
+    expect(error.message).toInclude("box entry remains");
+    expect((await hermetic.files.list({ name: AGENT })).secrets.map((e) => e.id)).toContain(IDS.pem);
+    ssm.reset();
+    ssm
+      .on(DeleteParameterCommand)
+      .rejects(
+        Object.assign(new Error("FIXTURE parameter already deleted"), { name: "ParameterNotFound" }),
+      );
+    await drain(hermetic.apply({ plan, yes: true }));
+    expect(ssm.commandCalls(DeleteParameterCommand)).toHaveLength(1);
+    expect((await hermetic.files.list({ name: AGENT })).secrets.map((e) => e.id)).not.toContain(
+      IDS.pem,
+    );
   });
 
   test("an inbox file sends no DeleteParameter", async () => {

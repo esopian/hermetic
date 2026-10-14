@@ -430,7 +430,7 @@ export async function content(
   ctx: HandlerContext,
   params: unknown,
 ): Promise<{ mime: string; data_b64: string }> {
-  const { instance, id } = parseInput(FilesContentInput, params);
+  const { instance, id, expected_sha256 } = parseInput(FilesContentInput, params);
   const file = await ctx.hermetic().files.internal.content(instance, id, FILES_LIMITS.imageBytes, {
     signal: ctx.signal,
     imagesOnly: true,
@@ -438,6 +438,11 @@ export async function content(
   // Core already refused it from the headers; checked again on what was read.
   if (!isImageMime(file.mime)) {
     throw new HermeticError("FILE_TYPE_REJECTED", `${instance}: only images have a preview`, {
+      name: instance,
+    });
+  }
+  if (expected_sha256 !== undefined && file.sha256 !== expected_sha256) {
+    throw new HermeticError("FILE_DIGEST_MISMATCH", `${instance}: the shared image changed`, {
       name: instance,
     });
   }

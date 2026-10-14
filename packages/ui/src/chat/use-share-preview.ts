@@ -7,8 +7,7 @@
  * (`page-blob-urls.ts`), the only kind `safeImageSrc` lets an `<img>` load.
  *
  * Fail closed: a picture is drawn only when the share names its full 64-hex
- * sha256 and the received bytes hash to it (`sha256Hex`, `lib/sha256.ts`:
- * WebCrypto where the page has it, a pure-TS fallback where it does not). A
+ * sha256 and the main process verifies the received bytes against it. A
  * share naming no digest, or only a short prefix of one, is never read for a
  * preview — Save… still works, and core verifies what it saves. A digest that
  * is neither is malformed and reads as a mismatch: a picture the box altered
@@ -17,8 +16,8 @@
  */
 import { useEffect, useState } from "react";
 import { filesContent } from "../api/files.ts";
-import { sha256Hex } from "../lib/sha256.ts";
 import { mintBlobUrl, pinBlobUrl, revokeBlobUrl } from "./page-blob-urls.ts";
+import { readVerifiedImage } from "./verified-image.ts";
 
 export type SharePreview =
   | { state: "loading" }
@@ -44,13 +43,6 @@ export function previewDigest(
   if (FULL_SHA256.test(hex)) return { kind: "full", hex };
   if (PREFIX_SHA256.test(hex)) return { kind: "unverified" };
   return { kind: "malformed" };
-}
-
-function decode(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
-  const out = new Uint8Array(new ArrayBuffer(bin.length));
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
 
 /**
@@ -82,15 +74,10 @@ export function useSharePreview(
     let url: string | null = null;
     let unpin: () => void = () => undefined;
     setPreview({ state: "loading" });
-    read(instance, id)
-      .then(async ({ mime, data_b64 }) => {
-        const bytes = decode(data_b64);
-        if ((await sha256Hex(bytes)) !== expected) {
-          if (live) setPreview({ state: "mismatch" });
-          return;
-        }
+    readVerifiedImage(instance, id, expected, read)
+      .then((blob) => {
         if (!live) return;
-        const minted = mintBlobUrl(new Blob([bytes], { type: mime }), () => {
+        const minted = mintBlobUrl(blob, () => {
           // Evicted to make room: read it again rather than draw a dead URL.
           if (live && url === minted) {
             url = null;
@@ -104,7 +91,13 @@ export function useSharePreview(
       .catch((e: unknown) => {
         if (!live) return;
         const code = typeof e === "object" && e !== null && "code" in e ? String(e.code) : "";
-        setPreview(code === "FILE_NOT_FOUND" ? { state: "gone" } : { state: "failed" });
+        setPreview(
+          code === "FILE_NOT_FOUND"
+            ? { state: "gone" }
+            : code === "FILE_DIGEST_MISMATCH"
+              ? { state: "mismatch" }
+              : { state: "failed" },
+        );
       });
     return () => {
       live = false;

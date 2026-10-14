@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { filesContent } from "../api/files.ts";
 import { mintBlobUrl, pinBlobUrl } from "./page-blob-urls.ts";
+import { readVerifiedImage } from "./verified-image.ts";
 
 export type Thumbnail =
   | { state: "loading" }
@@ -32,13 +33,6 @@ const failedAt = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
 
 type Fetch = typeof filesContent;
-
-function decode(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
-  const out = new Uint8Array(new ArrayBuffer(bin.length));
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 function notify(k: string): void {
   for (const tell of [...(listeners.get(k) ?? [])]) tell();
@@ -64,9 +58,8 @@ function current(k: string): Thumbnail | undefined {
 
 function load(k: string, instance: string, file_id: string, read: Fetch): void {
   cache.set(k, LOADING);
-  read(instance, file_id).then(
-    ({ mime, data_b64 }) => {
-      const blob = new Blob([decode(data_b64)], { type: mime });
+  readVerifiedImage(instance, file_id, undefined, read).then(
+    (blob) => {
       let url = "";
       url = mintBlobUrl(blob, () => {
         const held = cache.get(k);

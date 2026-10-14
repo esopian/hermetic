@@ -23,10 +23,10 @@ import { filesRefusal } from "./errors.ts";
  *
  * The plan names the entry, its class and, for a durable secret, the exact SSM
  * parameter it deletes. Its typed `options.file` is what `apply` holds the box
- * to: the same id, the same bytes (`sha256`) and the same slot, or
- * `PLAN_STALE`. The entry goes first, then the slot: a box that refused leaves
- * the slot in place, and a slot left behind after the entry went is named in
- * the error's details (`ssm_slot`), so a retry has something to aim at.
+ * to: the same id, directory, class, bytes (`sha256`) and slot, or `PLAN_STALE`.
+ * The SSM slot goes first. If that deletion fails, the box entry remains as a
+ * visible retry record; if the box deletion fails, a retry can remove its
+ * entry because deleting an already absent SSM parameter succeeds.
  *
  * Op events and error messages never name the file, nor the slot (a slug of
  * the file's name); only the plan's steps, which the operator reads before
@@ -101,7 +101,7 @@ export function createFilesRm(deps: RmDeps) {
     ];
     const warnings: string[] = [];
     if (slot !== undefined) {
-      steps.push({
+      steps.unshift({
         id: "ssm",
         description: `delete the SSM parameter ${agentParamPath(ctx.fleetId(), agent, slot)}`,
         destructive: true,
@@ -130,8 +130,8 @@ export function createFilesRm(deps: RmDeps) {
 
   /**
    * Execute a `files-rm` plan (`plan-apply.ts`). The box is read again first:
-   * an entry that is gone, holds other bytes or names another slot is not the
-   * one the operator approved.
+   * an entry that moved, changed class, holds other bytes or names another slot
+   * is not the one the operator approved.
    */
   async function* applyRm(plan: Plan, opts: { signal?: AbortSignal } = {}): AsyncIterable<OpEvent> {
     const agent = validateName(plan.target);
@@ -158,7 +158,13 @@ export function createFilesRm(deps: RmDeps) {
     const listing = await ctx.backend.files.list(agent, opts);
     const entry = findEntry(listing, file.id);
     const slotNow = entry?.dir === "secret" && isDurableSlot(entry.slot) ? entry.slot : undefined;
-    if (entry === undefined || entry.sha256 !== file.sha256 || slotNow !== file.slot) {
+    if (
+      entry === undefined ||
+      entry.dir !== file.dir ||
+      entry.class !== file.class ||
+      entry.sha256 !== file.sha256 ||
+      slotNow !== file.slot
+    ) {
       throw new HermeticError(
         "PLAN_STALE",
         `${agent}: the entry this plan removes has changed or is gone; plan it again`,
@@ -167,37 +173,40 @@ export function createFilesRm(deps: RmDeps) {
     }
     yield evt("check", 0.2, "the entry is the one planned", at(), undefined, "done");
 
-    yield evt("box", 0.3, `deleting ${file.id} from ${agent}'s box`, at(), undefined, "start");
-    await ctx.backend.files.remove(agent, file.id, opts);
-    yield evt("box", file.slot === undefined ? 1 : 0.6, `deleted ${file.id}`, at(), undefined, "done");
-
     if (file.slot !== undefined) {
       const path = agentParamPath(ctx.fleetId(), agent, file.slot);
-      yield evt("ssm", 0.7, "deleting the secret's SSM slot", at(), undefined, "start");
+      yield evt("ssm", 0.3, "deleting the secret's SSM slot", at(), undefined, "start");
       try {
         await ctx.backend.secrets.delete(path);
       } catch (e) {
-        // hermeticd re-reads every file-*/env-* slot at its next start and its
-        // next config apply (`materialiseAllFileSecrets`) and writes it back to
-        // tmpfs, though not to the files index: the secret returns to the box
-        // without being listed, so `files rm` cannot reach it again and the
-        // parameter has to go by hand. The slot, its path and the failure's own
-        // text (which may carry the path) ride in the details.
         throw new HermeticError(
           e instanceof HermeticError ? e.code : "INTERNAL",
-          `${agent}: the entry is gone from the box, but its SSM parameter could not be deleted. ` +
-            "Until it is, hermeticd puts the secret back on the box (unlisted) each time it starts " +
-            "or applies its config; delete the SSM parameter the plan named by hand",
-          {
-            name: agent,
-            ssm_slot: file.slot,
-            ssm_path: path,
-            cause: e instanceof Error ? e.message : String(e),
-          },
+          `${agent}: the SSM parameter could not be deleted; the box entry remains, so plan its deletion again`,
+          { name: agent, id: file.id, ssm_slot: file.slot, ssm_path: path },
         );
       }
-      yield evt("ssm", 1, "deleted the secret's SSM slot", at(), undefined, "done");
+      yield evt("ssm", 0.6, "deleted the secret's SSM slot", at(), undefined, "done");
     }
+
+    yield evt(
+      "box",
+      file.slot === undefined ? 0.3 : 0.7,
+      `deleting ${file.id} from ${agent}'s box`,
+      at(),
+      undefined,
+      "start",
+    );
+    try {
+      await ctx.backend.files.remove(agent, file.id, opts);
+    } catch (e) {
+      if (file.slot === undefined) throw e;
+      throw new HermeticError(
+        e instanceof HermeticError ? e.code : "INTERNAL",
+        `${agent}: the SSM parameter was deleted, but the box entry remains; plan its deletion again`,
+        { name: agent, id: file.id, ssm_slot: file.slot },
+      );
+    }
+    yield evt("box", 1, `deleted ${file.id}`, at(), undefined, "done");
   }
 
   return { rm, applyRm };
