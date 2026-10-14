@@ -1,6 +1,6 @@
 /**
  * The desktop head's files requests (`handlers/files.ts`) over the fixture
- * backend: a webview drop sent in chunks, staged by id and streamed back as
+ * backend: a webview drop sent by loopback PUT, staged by id and streamed back as
  * `files.frame`s; a failure after the stream opened arriving as its last
  * frame; a thumbnail; and the app log never holding a file's name.
  */
@@ -66,17 +66,34 @@ async function until(frames: StreamFrame[], want: (f: StreamFrame) => boolean): 
 }
 
 async function dropped(ctx: HandlerContext, name: string, bytes: Uint8Array): Promise<string> {
-  const { upload_id } = (await dispatch(ctx, "files.chunk.open", { name, size: bytes.byteLength })) as {
+  const { upload_id, url } = (await dispatch(ctx, "files.upload.open", {
+    name,
+    size: bytes.byteLength,
+  })) as {
     upload_id: string;
+    url: string;
   };
-  await dispatch(ctx, "files.chunk.append", {
-    upload_id,
-    offset: 0,
-    data_b64: Buffer.from(bytes).toString("base64"),
-  });
-  await dispatch(ctx, "files.chunk.close", { upload_id });
+  void fetch(url, { method: "PUT", body: new Blob([bytes.slice().buffer as ArrayBuffer]) }).catch(
+    () => undefined,
+  );
   return upload_id;
 }
+
+test("a bounded text secret registers once and can be discarded", async () => {
+  const { ctx } = await harness();
+  const registered = (await dispatch(ctx, "files.secretText.upload", {
+    name: "github.env",
+    data_b64: Buffer.from("GITHUB_TOKEN=FIXTURE\n").toString("base64"),
+  })) as { upload_id: string; size: number };
+  expect(registered.upload_id).toMatch(/^up_/);
+  expect(registered.size).toBe(21);
+  expect(await dispatch(ctx, "files.upload.discard", { upload_id: registered.upload_id })).toEqual({
+    discarded: true,
+  });
+  expect(await dispatch(ctx, "files.upload.discard", { upload_id: registered.upload_id })).toEqual({
+    discarded: false,
+  });
+});
 
 test("a drop stages by upload id and ends on a staged `done` frame", async () => {
   const { ctx, frames, sink, target } = await harness();

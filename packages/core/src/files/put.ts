@@ -647,7 +647,7 @@ export function createFilesPut(deps: PutDeps) {
         if (origin === "secret_text" && slot.kind !== "secret_text") {
           throw new HermeticError(
             "VALIDATION",
-            "--secret-stdin answers a text secret request; use a file path for this request",
+            "text input can only answer a text secret request; use a file for this request",
             { name: instance },
           );
         }

@@ -123,9 +123,7 @@ test("'Just this once' sends the picked key to tmpfs, not SSM", async () => {
   // The native dialog, played by the main process's own upload registry.
   const uploads = harness!.ctx.hermetic().files.internal.uploads;
   const bytes = new TextEncoder().encode(PEM);
-  const { upload_id } = uploads.open({ name: "github-app.pem", size: bytes.byteLength });
-  uploads.append(upload_id, 0, bytes);
-  uploads.close(upload_id);
+  const { upload_id } = uploads.registerBytes("github-app.pem", bytes);
   harness!.intercept("files.pickNative", () => ({
     files: [{ upload_id, name: "github-app.pem", size: bytes.byteLength }],
   }));
@@ -241,11 +239,11 @@ test("the slot expiring under the replace question lets a native pick's upload g
   await userEvent.click(button(card()!, "Choose file…")!);
   await waitFor(() => expect(button(card()!, "Replace") !== undefined).toBe(true), WAIT);
   // Core kept the pick registered for the answer; nothing discarded it yet.
-  expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(false);
+  expect(harness!.calls.some((c) => c.name === "files.upload.discard")).toBe(false);
   harness!.backend().files.expire("atlas", id);
   await waitFor(() => expect(card()?.textContent ?? "").toContain("expired"), WAIT);
   await waitFor(
-    () => expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(true),
+    () => expect(harness!.calls.some((c) => c.name === "files.upload.discard")).toBe(true),
     WAIT,
   );
   expect(card()!.textContent?.includes("This replaces the stored secret")).toBe(false);

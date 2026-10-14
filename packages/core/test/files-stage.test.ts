@@ -9,6 +9,7 @@ import {
   MemoryBackend,
   seedFixtureFleet,
 } from "../src/backend/memory.ts";
+import { FIXTURE_HERMETICD_VERSION } from "../src/backend/fixture/memory-fixture.ts";
 import { HermeticError } from "../src/errors.ts";
 import { UPLOAD_LIMITS, createUploadRegistry } from "../src/files/uploads.ts";
 import type { FilesStageEvent } from "../src/schema/index.ts";
@@ -56,62 +57,44 @@ function writeTemp(name: string, bytes: Uint8Array): string {
 }
 
 describe("the upload registry", () => {
-  test("open, append in order, close, take", () => {
+  test("register bytes, take a copy, and zero held bytes on discard", () => {
     const r = createUploadRegistry();
-    const { upload_id } = r.open({ name: "a.txt", size: 6 });
+    const source = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const { upload_id } = r.registerBytes("a.txt", source);
     expect(upload_id).toMatch(UPLOAD_ID_RE);
-    expect(r.append(upload_id, 0, new Uint8Array([1, 2, 3]))).toEqual({ received: 3 });
-    expect(r.append(upload_id, 3, new Uint8Array([4, 5, 6]))).toEqual({ received: 6 });
-    expect(r.close(upload_id)).toEqual({ upload_id, name: "a.txt", size: 6 });
+    source.fill(0);
     const src = r.take(upload_id);
     expect(src.kind).toBe("bytes");
     if (src.kind === "bytes") expect([...src.bytes]).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(r.discard(upload_id)).toEqual({ discarded: true });
+    expect(() => r.take(upload_id)).toThrow(/no such upload/);
   });
 
-  test("an out-of-order offset, an oversize chunk and an overrun are refused", () => {
-    const r = createUploadRegistry();
-    const { upload_id } = r.open({ name: "a.txt", size: 4 });
-    expect(() => r.append(upload_id, 1, new Uint8Array([1]))).toThrow(/out of order/);
-    expect(() => r.append(upload_id, 0, new Uint8Array(5))).toThrow(/past the size/);
-    const big = createUploadRegistry({ limits: { chunkBytes: 2 } });
-    const id = big.open({ name: "b.txt", size: 10 }).upload_id;
-    expect(() => big.append(id, 0, new Uint8Array(3))).toThrow(/at most/);
-  });
-
-  test("close refuses an incomplete upload, and take refuses an unclosed one", () => {
-    const r = createUploadRegistry();
-    const { upload_id } = r.open({ name: "a.txt", size: 4 });
-    r.append(upload_id, 0, new Uint8Array(2));
-    expect(() => r.close(upload_id)).toThrow(/incomplete/);
-    expect(() => r.take(upload_id)).toThrow(/still receiving/);
-  });
-
-  test("one upload is capped, and so is everything in flight", () => {
-    const r = createUploadRegistry();
+  test("one held value is capped, and so is the total", () => {
+    const r = createUploadRegistry({ limits: { uploadBytes: 4, totalBytes: 8 } });
     let e: unknown;
     try {
-      r.open({ name: "a.bin", size: UPLOAD_LIMITS.uploadBytes + 1 });
+      r.registerBytes("a.bin", new Uint8Array(5));
     } catch (x) {
       e = x;
     }
     expect((e as HermeticError).code).toBe("FILE_TOO_LARGE");
-    for (let i = 0; i < UPLOAD_LIMITS.totalBytes / UPLOAD_LIMITS.uploadBytes; i++) {
-      r.open({ name: `a${i}.bin`, size: UPLOAD_LIMITS.uploadBytes });
-    }
-    expect(r.heldBytes()).toBe(UPLOAD_LIMITS.totalBytes);
-    expect(() => r.open({ name: "one-more.bin", size: 1 })).toThrow(/still uploading/);
+    r.registerBytes("a.bin", new Uint8Array(4));
+    r.registerBytes("b.bin", new Uint8Array(4));
+    expect(r.heldBytes()).toBe(8);
+    expect(() => r.registerBytes("one-more.bin", new Uint8Array(1))).toThrow(/held in memory/);
   });
 
   test("an idle upload is dropped after the TTL, and discard forgets one", () => {
     let now = 0;
     const r = createUploadRegistry({ now: () => now });
-    const a = r.open({ name: "a.txt", size: 1 }).upload_id;
-    const b = r.open({ name: "b.txt", size: 1 }).upload_id;
+    const a = r.registerBytes("a.txt", new Uint8Array([1])).upload_id;
+    const b = r.registerBytes("b.txt", new Uint8Array([1])).upload_id;
     now = UPLOAD_LIMITS.idleMs - 1;
-    r.append(b, 0, new Uint8Array([1]));
+    r.take(b);
     now = UPLOAD_LIMITS.idleMs + 1;
-    expect(() => r.append(a, 0, new Uint8Array([1]))).toThrow(/no such upload/);
-    expect(r.close(b).size).toBe(1);
+    expect(() => r.take(a)).toThrow(/no such upload/);
+    expect(r.take(b).size).toBe(1);
     expect(r.discard(b)).toEqual({ discarded: true });
     expect(r.discard(b)).toEqual({ discarded: false });
   });
@@ -120,7 +103,7 @@ describe("the upload registry", () => {
     const r = createUploadRegistry();
     let e: unknown;
     try {
-      r.open({ name: ".env", size: 1 });
+      r.registerBytes(".env", new Uint8Array([1]));
     } catch (x) {
       e = x;
     }
@@ -193,12 +176,10 @@ describe("files.stage", () => {
     }
   });
 
-  test("a chunked upload stages by id, and the registry lets go of it", async () => {
+  test("registered bytes stage by id, and the registry lets go of them", async () => {
     const { hermetic } = open();
     const uploads = hermetic.files.internal.uploads;
-    const { upload_id } = uploads.open({ name: "notes.txt", size: 5 });
-    uploads.append(upload_id, 0, new TextEncoder().encode("hello"));
-    uploads.close(upload_id);
+    const { upload_id } = uploads.registerBytes("notes.txt", new TextEncoder().encode("hello"));
     const events = await drain(
       hermetic.files.stage({
         instance: "atlas",
@@ -208,6 +189,21 @@ describe("files.stage", () => {
     );
     expect(events.at(-1)).toMatchObject({ type: "staged", file: { name: "notes.txt", bytes: 5 } });
     expect(uploads.discard(upload_id)).toEqual({ discarded: false });
+  });
+
+  test("text-secret bytes cannot be staged as an ordinary file", async () => {
+    const { hermetic } = open();
+    const uploads = hermetic.files.internal.uploads;
+    const { upload_id } = uploads.registerBytes(
+      "github.env",
+      new TextEncoder().encode("GITHUB_TOKEN=FIXTURE\n"),
+      { secretText: true },
+    );
+    const error = await refusal(
+      drain(hermetic.files.stage({ instance: "atlas", source: { chunk_upload_id: upload_id } })),
+    );
+    expect(error.code).toBe("VALIDATION");
+    expect(uploads.discard(upload_id)).toEqual({ discarded: true });
   });
 
   test("an image over the image cap is refused before a byte is sent", async () => {
@@ -298,11 +294,11 @@ describe("files.stage", () => {
 });
 
 describe("files.internal", () => {
-  test("capability reads /healthz: the fixture's older hermeticd has no files", async () => {
+  test("capability reads /healthz: one fixture box has no files", async () => {
     const { hermetic } = open();
     expect(await hermetic.files.internal.capability("atlas")).toEqual({
       files: true,
-      hermeticd_version: "0.6.0",
+      hermeticd_version: FIXTURE_HERMETICD_VERSION,
     });
     expect((await hermetic.files.internal.capability(FIXTURE_NO_FILES_AGENT)).files).toBe(false);
   });

@@ -22,10 +22,11 @@
  * The page never names a file on this laptop. A drop or a paste is PUT by the
  * page to the loopback upload port (`files.upload.open`, `upload-port.ts`) and
  * piped through core's upload registry to the box as it arrives, never held
- * whole and never written to disk; a text secret arrives as small chunks
- * (`files.chunk.*`) held in the same registry; the native dialog
+ * whole and never written to disk; a bounded text secret arrives in one RPC
+ * (`files.secretText.upload`) and is held in the same registry; the native dialog
  * (`files.pickNative`, owned by the desktop shell) registers its pick there
- * too. Either way the page stages by `chunk_upload_id`, and a request
+ * too. Either way the page stages by the upload id (`chunk_upload_id` in the
+ * public request schema), and a request
  * carrying `source.path` is refused `UNSUPPORTED` before anything reads it.
  *
  * A download is the mirror image: the native folder dialog
@@ -56,9 +57,8 @@
 import { open } from "node:fs/promises";
 import {
   FilesCapabilityInput,
-  FilesChunkAppendInput,
-  FilesChunkOpenInput,
-  FilesChunkRefInput,
+  FilesSecretTextUploadInput,
+  FilesUploadRefInput,
   FilesUploadOpenInput,
   FilesContentInput,
   FilesDeclineInput,
@@ -106,10 +106,8 @@ export const filesRmSchema = declareRpc("files.rm", FilesRmInput);
 /** Closes a `files.stage` stream: the chip's cancel while it uploads. */
 export const FILES_STAGE_ABORT = declareMachineryRpc("files.stage.abort");
 export const FILES_UPLOAD_OPEN = declareMachineryRpc("files.upload.open");
-export const FILES_CHUNK_OPEN = declareMachineryRpc("files.chunk.open");
-export const FILES_CHUNK_APPEND = declareMachineryRpc("files.chunk.append");
-export const FILES_CHUNK_CLOSE = declareMachineryRpc("files.chunk.close");
-export const FILES_CHUNK_DISCARD = declareMachineryRpc("files.chunk.discard");
+export const FILES_SECRET_TEXT_UPLOAD = declareMachineryRpc("files.secretText.upload");
+export const FILES_UPLOAD_DISCARD = declareMachineryRpc("files.upload.discard");
 export const FILES_CAPABILITY_RPC = declareMachineryRpc("files.capability");
 export const FILES_DISCARD = declareMachineryRpc("files.discard");
 export const FILES_CONTENT = declareMachineryRpc("files.content");
@@ -385,17 +383,12 @@ export async function uploadOpen(ctx: HandlerContext, params: unknown) {
   return { upload_id, url: uploadPort.url(upload_id, (body) => uploads.feed(upload_id, body)) };
 }
 
-export async function chunkOpen(ctx: HandlerContext, params: unknown) {
-  const input = parseInput(FilesChunkOpenInput, params);
-  return ctx.hermetic().files.internal.uploads.open(input);
-}
-
 function decodeBase64(data: string): Uint8Array {
   let bin: string;
   try {
     bin = atob(data);
   } catch {
-    throw new HermeticError("VALIDATION", "a chunk's data is not base64");
+    throw new HermeticError("VALIDATION", "text secret data is not base64");
   }
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -411,20 +404,22 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-export async function chunkAppend(ctx: HandlerContext, params: unknown) {
-  const input = parseInput(FilesChunkAppendInput, params);
-  return ctx
-    .hermetic()
-    .files.internal.uploads.append(input.upload_id, input.offset, decodeBase64(input.data_b64));
+export async function secretTextUpload(ctx: HandlerContext, params: unknown) {
+  const { name, data_b64 } = parseInput(FilesSecretTextUploadInput, params);
+  const bytes = decodeBase64(data_b64);
+  try {
+    if (bytes.byteLength > FILES_LIMITS.secretTextBytes) {
+      throw new HermeticError("FILE_TOO_LARGE", "text input exceeds the 64 KiB limit");
+    }
+    return ctx.hermetic().files.internal.uploads.registerBytes(name, bytes, { secretText: true });
+  } finally {
+    bytes.fill(0);
+  }
 }
 
-export async function chunkClose(ctx: HandlerContext, params: unknown) {
-  const { upload_id } = parseInput(FilesChunkRefInput, params);
-  return ctx.hermetic().files.internal.uploads.close(upload_id);
-}
-
-export async function chunkDiscard(ctx: HandlerContext, params: unknown) {
-  const { upload_id } = parseInput(FilesChunkRefInput, params);
+export async function uploadDiscard(ctx: HandlerContext, params: unknown) {
+  const { upload_id } = parseInput(FilesUploadRefInput, params);
+  uploadPort.forget(upload_id);
   return ctx.hermetic().files.internal.uploads.discard(upload_id);
 }
 
@@ -542,10 +537,8 @@ export const filesHandlers = {
     stage(ctx, params, requireSink(sink)),
   [FILES_STAGE_ABORT]: stageAbort,
   [FILES_UPLOAD_OPEN]: uploadOpen,
-  [FILES_CHUNK_OPEN]: chunkOpen,
-  [FILES_CHUNK_APPEND]: chunkAppend,
-  [FILES_CHUNK_CLOSE]: chunkClose,
-  [FILES_CHUNK_DISCARD]: chunkDiscard,
+  [FILES_SECRET_TEXT_UPLOAD]: secretTextUpload,
+  [FILES_UPLOAD_DISCARD]: uploadDiscard,
   [FILES_CAPABILITY_RPC]: capability,
   [FILES_DISCARD]: discard,
   [FILES_CONTENT]: content,

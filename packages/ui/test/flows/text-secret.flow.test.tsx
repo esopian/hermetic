@@ -2,10 +2,10 @@
  * An agent's text secret request (attachments plan §8.4b) over the real
  * `bind` and `dispatch` and the fixture backend: the card names the keys and
  * where they go; a single-line value submits on Enter; a multi-line request
- * opens in multi-line mode; a multi-line paste into the single-line field
- * switches modes and loses nothing, and switching back is refused; "Treat as"
+ * opens in multi-line mode; "Treat as"
  * reaches the box; and a key nobody asked for blocks the submit (D10). The
- * value is never in the page's text and never in a request's parameters.
+ * value is never in the page's text and appears only encoded in the bounded
+ * upload request.
  *
  * Assertions compare strings and booleans, never DOM nodes: a failing
  * `expect(node)` makes bun format the whole portal.
@@ -71,10 +71,6 @@ function enter(el: HTMLInputElement | HTMLTextAreaElement, text: string): void {
   fireEvent.input(el, { target: { value: text } });
 }
 
-function paste(el: HTMLInputElement | HTMLTextAreaElement, text: string): void {
-  fireEvent.paste(el, { clipboardData: { getData: () => text, types: ["text/plain"] } });
-}
-
 /** Every string anywhere in a request's parameters. */
 function strings(v: unknown): string[] {
   if (typeof v === "string") return [v];
@@ -93,9 +89,9 @@ function unb64(s: string): string {
 }
 
 /**
- * Nothing the operator typed ever left the card except as upload chunks: not
+ * Nothing the operator typed ever left the card except as one bounded upload: not
  * in the page, not in plain text in any request, and in base64 only in
- * `files.chunk.append` (the bytes on their way to the main process's upload
+ * `files.secretText.upload` (the bytes on their way to the main process's upload
  * registry) — never in the `files.put` or anything else that names the upload.
  */
 function neverLeaked(value: string, sent = true): void {
@@ -108,7 +104,7 @@ function neverLeaked(value: string, sent = true): void {
     if (all.some((s) => unb64(s).includes(value))) encoded.push(call.name);
   }
   expect(plain).toEqual([]);
-  expect([...new Set(encoded)]).toEqual(sent ? ["files.chunk.append"] : []);
+  expect([...new Set(encoded)]).toEqual(sent ? ["files.secretText.upload"] : []);
 }
 
 test("a single-line secret submits on Enter and is stored, never shown", async () => {
@@ -142,25 +138,6 @@ test("a multi-line request opens in multi-line mode and stores every key", async
   await waitFor(() => expect(card()?.textContent ?? "").toContain("secret delivered"), WAIT);
   expect((await slotOf(id)).fulfilled?.keys).toEqual(["DB_USER", "DB_PASS", "DB_URL"]);
   neverLeaked("FIXTURE_pass_value");
-}, 20_000);
-
-test("a multi-line paste switches modes, keeps every line, and cannot be switched back", async () => {
-  const card = await ask("replica creds E2E_TEXT_SECRET_MULTI");
-  const id = requestId();
-  await userEvent.click(button(card()!, "Single line")!);
-  await waitFor(() => expect(field(card()!).tagName).toBe("INPUT"), WAIT);
-  paste(field(card()!), "DB_USER=FIXTURE_u\nDB_PASS=FIXTURE_pasted_pass\nDB_URL=FIXTURE_url");
-  await waitFor(() => expect(field(card()!).tagName).toBe("TEXTAREA"), WAIT);
-  // Back to one line would drop two of the three: refused, with the reason.
-  await userEvent.click(button(card()!, "Single line")!);
-  expect(card()!.textContent).toContain(
-    "This value has 3 lines. Single line would drop all but the first.",
-  );
-  expect(field(card()!).tagName).toBe("TEXTAREA");
-  await userEvent.click(button(card()!, "Submit secret")!);
-  await waitFor(() => expect(card()?.textContent ?? "").toContain("secret delivered"), WAIT);
-  expect((await slotOf(id)).fulfilled?.keys).toEqual(["DB_USER", "DB_PASS", "DB_URL"]);
-  neverLeaked("FIXTURE_pasted_pass");
 }, 20_000);
 
 test("Treat as Raw value reaches the box, durable or just this once", async () => {
@@ -211,9 +188,9 @@ test("a key that was not requested blocks the submit (D10)", async () => {
     WAIT,
   );
   expect(button(card()!, "Submit secret")!.disabled).toBe(true);
-  expect(harness!.calls.some((c) => c.name === "files.put" || c.name === "files.chunk.open")).toBe(
-    false,
-  );
+  expect(
+    harness!.calls.some((c) => c.name === "files.put" || c.name === "files.secretText.upload"),
+  ).toBe(false);
   neverLeaked("FIXTURE_extra", false);
 }, 20_000);
 
@@ -237,7 +214,7 @@ test("Enter that commits an IME composition does not submit", async () => {
   enter(el, TOKEN);
   fireEvent.keyDown(el, { key: "Enter", keyCode: 229 });
   fireEvent.keyDown(el, { key: "Enter", isComposing: true });
-  expect(harness!.calls.some((c) => c.name === "files.chunk.open")).toBe(false);
+  expect(harness!.calls.some((c) => c.name === "files.secretText.upload")).toBe(false);
   expect(field(card()!).value).toBe(TOKEN);
   neverLeaked(TOKEN, false);
 }, 20_000);

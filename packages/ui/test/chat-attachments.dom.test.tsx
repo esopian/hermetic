@@ -1,22 +1,14 @@
 /**
  * The composer's attachment pipeline (`chat-attachments.ts`) against a fake
- * bridge: a drop is sent in 1 MiB chunks at the right offsets and staged by
- * upload id; the 64 MiB drop cap and the ten-file cap are chips, not calls;
+ * bridge: a drop streams by upload id; the ten-file cap is a chip, not a call;
  * removing a chip stops its work or deletes what the box staged; and only
  * `blob:` URLs this page minted pass `safeImageSrc`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useReducer } from "react";
-import { FILES_LIMITS } from "@hermetic/core/shared";
 import { act, cleanup, render, waitFor } from "./dom.ts";
 import { stubUploadFetch } from "./chat-fixtures.tsx";
-import {
-  attachmentErrorText,
-  chunkOffsets,
-  summarize,
-  toBase64,
-  useDraftAttachments,
-} from "../src/chat/chat-attachments.ts";
+import { attachmentErrorText, useDraftAttachments } from "../src/chat/chat-attachments.ts";
 import type { AttachmentsApi, AttachmentsControl } from "../src/chat/chat-attachments.ts";
 import { fresh, key } from "../src/chat/chat-conversation-record.ts";
 import type { Conversation } from "../src/chat/chat-conversation-record.ts";
@@ -63,7 +55,7 @@ function fakeApi(
       const upload_id = `up_${++n}`;
       return { upload_id, url: `http://127.0.0.1:1/upload/${upload_id}` };
     }) as never,
-    chunkDiscard: rec("chunkDiscard", () => ({ discarded: true })) as never,
+    uploadDiscard: rec("uploadDiscard", () => ({ discarded: true })) as never,
     filesCapability: rec("filesCapability", () => ({ files: true, hermeticd_version: "x" })) as never,
     filesDiscard: rec("filesDiscard", () => ({ deleted: true })) as never,
     pickNative: rec("pickNative", () => ({ files: picks })) as never,
@@ -140,7 +132,7 @@ afterEach(() => {
   resetThumbnails();
 });
 
-const discarded = (fake: Fake, name = "chunkDiscard") =>
+const discarded = (fake: Fake, name = "uploadDiscard") =>
   fake.calls.filter((c) => c.name === name).map((c) => c.args[c.args.length - 1]);
 
 function sent(n: number, from = 0) {
@@ -153,16 +145,6 @@ function sent(n: number, from = 0) {
 }
 
 describe("pure helpers", () => {
-  test("chunk offsets step by 1 MiB and an empty file is one chunk", () => {
-    const MiB = FILES_LIMITS.chunkBytes;
-    expect(chunkOffsets(0)).toEqual([0]);
-    expect(chunkOffsets(MiB)).toEqual([0]);
-    expect(chunkOffsets(2 * MiB + 1)).toEqual([0, MiB, 2 * MiB]);
-  });
-  test("base64 round-trips", () => {
-    const bytes = new Uint8Array([0, 1, 2, 250, 255]);
-    expect(atob(toBase64(bytes))).toBe(String.fromCharCode(...bytes));
-  });
   test("refusals read as words", () => {
     expect(attachmentErrorText("FILE_DIGEST_MISMATCH", "", { size: 1, mime: "" })).toBe(
       "Upload corrupted — retry",
@@ -181,36 +163,10 @@ describe("pure helpers", () => {
 });
 
 describe("the pipeline", () => {
-  test("a drop is opened as one streamed upload, staged by its id, and taken by a send", async () => {
-    const fake = fakeApi();
-    const h = mount(fake);
-    const MiB = FILES_LIMITS.chunkBytes;
-    const file = new File([new Uint8Array(2 * MiB + 5)], "big.bin");
-    act(() => h.files().addFiles([file]));
-    expect(h.files().items[0]?.state).toBe("uploading");
-    await waitFor(() => expect(fake.stages).toHaveLength(1));
-    expect(fake.calls.find((c) => c.name === "uploadOpen")?.args).toEqual(["big.bin", 2 * MiB + 5]);
-    expect(fake.calls.some((c) => c.name === "chunkAppend")).toBe(false);
-    expect(fake.stages[0]!.upload_id).toBe("up_1");
-    expect(summarize(h.files().items)).toEqual({ ready: 0, uploading: 1, failed: 0 });
-    act(() => fake.stages[0]!.handlers.onDone(staged("f_one")));
-    expect(h.files().items[0]?.state).toBe("staged");
-    let sent: ReturnType<AttachmentsControl["take"]> = [];
-    act(() => {
-      sent = h.files().take();
-    });
-    expect(sent.map((s) => s.file_id)).toEqual(["f_one"]);
-    expect(h.files().items).toHaveLength(0);
-    // A send takes the ids; nothing on the box is deleted.
-    expect(fake.calls.some((c) => c.name === "filesDiscard")).toBe(false);
-    act(() => h.files().restore(sent));
-    expect(h.files().items[0]?.file_id).toBe("f_one");
-  });
-
   test("a drop of any size streams, and the eleventh file is a chip that never reaches the bridge", async () => {
     const fake = fakeApi();
     const h = mount(fake);
-    const huge = { name: "huge.iso", size: FILES_LIMITS.chunkUploadBytes + 1, type: "" } as File;
+    const huge = { name: "huge.iso", size: 64 * 1024 * 1024 + 1, type: "" } as File;
     act(() => h.files().addFiles([huge]));
     expect(h.files().items[0]?.state).toBe("uploading");
     const many = Array.from({ length: 10 }, (_, i) => new File(["x"], `f${i}.txt`));
@@ -218,20 +174,6 @@ describe("the pipeline", () => {
     const errors = h.files().items.filter((a) => a.state === "error");
     expect(errors.map((a) => a.error?.message)).toEqual(["max 10 files per message"]);
     expect(fake.calls.filter((c) => c.name === "uploadOpen")).toHaveLength(10);
-  });
-
-  test("removing a chip closes its stage, and removing a staged one deletes it on the box", async () => {
-    const fake = fakeApi();
-    const h = mount(fake);
-    act(() => h.files().addFiles([new File(["a"], "a.txt"), new File(["b"], "b.txt")]));
-    await waitFor(() => expect(fake.stages).toHaveLength(2));
-    const [first, second] = h.files().items;
-    act(() => h.files().remove(first!.local_id));
-    expect(fake.stages[0]!.closed).toBe(true);
-    act(() => fake.stages[1]!.handlers.onDone(staged("f_two")));
-    act(() => h.files().remove(second!.local_id));
-    expect(fake.calls.find((c) => c.name === "filesDiscard")?.args).toEqual(["atlas", "f_two"]);
-    expect(h.files().items).toHaveLength(0);
   });
 
   test("FILE_LOOKS_SECRET offers Attach anyway, which stages the bytes again with not_secret", async () => {
@@ -255,7 +197,6 @@ describe("the pipeline", () => {
     act(() => h.files().pick());
     await waitFor(() => expect(fake.stages).toHaveLength(1));
     expect(fake.stages[0]!.upload_id).toBe("up_native");
-    expect(fake.calls.some((c) => c.name === "chunkAppend")).toBe(false);
   });
 
   test("an upload is freed in the main process when its chip is removed mid-stage or its stage fails", async () => {

@@ -23,9 +23,8 @@
  */
 import type {
   FilesCapabilityInput,
-  FilesChunkAppendInput,
-  FilesChunkOpenInput,
-  FilesChunkRefInput,
+  FilesSecretTextUploadInput,
+  FilesUploadRefInput,
   FilesUploadOpenInput,
   FilesContentInput,
   FilesGetFrame,
@@ -178,21 +177,19 @@ export type MachineryRequests = {
 
   /**
    * The composer's attachments. `files.stage` is public; these
-   * are its cancel, the webview's chunked upload into main-process memory, the
+   * are its cancel, the webview's bounded text-secret upload into main-process memory, the
    * capability probe, a staged entry's delete, its thumbnail bytes and the
    * native open dialog.
    */
   "files.stage.abort": RpcRequest<StreamRef, StreamClosed>;
   "files.upload.open": RpcRequest<Input<typeof FilesUploadOpenInput>, Answer<typeof files.uploadOpen>>;
-  "files.chunk.open": RpcRequest<Input<typeof FilesChunkOpenInput>, Answer<typeof files.chunkOpen>>;
-  "files.chunk.append": RpcRequest<
-    Input<typeof FilesChunkAppendInput>,
-    Answer<typeof files.chunkAppend>
+  "files.secretText.upload": RpcRequest<
+    Input<typeof FilesSecretTextUploadInput>,
+    Answer<typeof files.secretTextUpload>
   >;
-  "files.chunk.close": RpcRequest<Input<typeof FilesChunkRefInput>, Answer<typeof files.chunkClose>>;
-  "files.chunk.discard": RpcRequest<
-    Input<typeof FilesChunkRefInput>,
-    Answer<typeof files.chunkDiscard>
+  "files.upload.discard": RpcRequest<
+    Input<typeof FilesUploadRefInput>,
+    Answer<typeof files.uploadDiscard>
   >;
   "files.capability": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.capability>>;
   "files.discard": RpcRequest<Input<typeof files.filesDiscardBody>, Answer<typeof files.discard>>;
@@ -287,10 +284,8 @@ export const MACHINERY_REQUEST_NAMES = [
   "logs.close",
   "files.stage.abort",
   "files.upload.open",
-  "files.chunk.open",
-  "files.chunk.append",
-  "files.chunk.close",
-  "files.chunk.discard",
+  "files.secretText.upload",
+  "files.upload.discard",
   "files.capability",
   "files.discard",
   "files.content",

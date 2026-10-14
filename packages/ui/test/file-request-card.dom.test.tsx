@@ -313,7 +313,7 @@ test("a native pick that answers after the slot expired is discarded, never put"
       state = "expired";
       return { ok: true };
     },
-    "files.chunk.discard": () => ({ ok: true }),
+    "files.upload.discard": () => ({ ok: true }),
   });
   render(
     <Shell chat={chatWith([])}>
@@ -335,8 +335,8 @@ test("a native pick that answers after the slot expired is discarded, never put"
       files: [{ upload_id: "up_late_pick_01", name: "report.pdf", size: 1024, looks_like_key: false }],
     }),
   );
-  await waitFor(() => expect(server!.to("files.chunk.discard").length).toBe(1));
-  const discarded = server!.to("files.chunk.discard")[0]!.params as { upload_id: string };
+  await waitFor(() => expect(server!.to("files.upload.discard").length).toBe(1));
+  const discarded = server!.to("files.upload.discard")[0]!.params as { upload_id: string };
   expect(discarded.upload_id).toBe("up_late_pick_01");
   expect(server!.streams.some((s) => s.name === "files.put")).toBe(false);
   expect(cardText().includes("report.pdf")).toBe(false);

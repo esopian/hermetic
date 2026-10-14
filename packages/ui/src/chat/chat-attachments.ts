@@ -30,7 +30,7 @@ import type { Conversation } from "./chat-conversation-record.ts";
 import { key } from "./chat-conversation-record.ts";
 import { fmtBytes } from "./chat-logic.ts";
 import type { ChatSelection } from "./chat-types.ts";
-import { putStream } from "./chunk-upload.ts";
+import { putStream } from "./upload.ts";
 
 /** One chip in the composer's tray. Replaced, never mutated, so a render sees it move. */
 export interface DraftAttachment {
@@ -97,7 +97,7 @@ export interface AttachmentsControl {
 /** The calls the pipeline makes, injectable so a test can count them. */
 export type AttachmentsApi = Pick<
   typeof filesApi,
-  "uploadOpen" | "chunkDiscard" | "filesCapability" | "filesDiscard" | "pickNative" | "stageUpload"
+  "uploadOpen" | "uploadDiscard" | "filesCapability" | "filesDiscard" | "pickNative" | "stageUpload"
 >;
 
 const NO_ITEMS: readonly DraftAttachment[] = [];
@@ -115,8 +115,6 @@ export const NO_ATTACHMENTS: AttachmentsControl = {
   restore: () => undefined,
   discard: () => undefined,
 };
-
-export { chunkOffsets, toBase64 } from "./chunk-upload.ts";
 
 const MB = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
@@ -268,7 +266,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
   const release = useCallback((job: Job) => {
     const upload = job.upload;
     job.upload = null;
-    if (upload !== null) void apiRef.current.chunkDiscard(upload).catch(() => undefined);
+    if (upload !== null) void apiRef.current.uploadDiscard(upload).catch(() => undefined);
   }, []);
 
   const fail = useCallback(
@@ -484,13 +482,13 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
       }
       if (!live()) {
         // Nobody is left to attach these to: the main process lets go of them.
-        for (const f of picked) void apiRef.current.chunkDiscard(f.upload_id).catch(() => undefined);
+        for (const f of picked) void apiRef.current.uploadDiscard(f.upload_id).catch(() => undefined);
         return;
       }
       let over = 0;
       for (const f of picked) {
         if (roomFor(target) <= 0) {
-          void apiRef.current.chunkDiscard(f.upload_id).catch(() => undefined);
+          void apiRef.current.uploadDiscard(f.upload_id).catch(() => undefined);
           over += 1;
           continue;
         }

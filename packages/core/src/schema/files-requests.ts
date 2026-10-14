@@ -16,7 +16,8 @@ import { AgentName } from "./requests.ts";
 /**
  * The laptop side of the files service: what `files.stage` takes and streams,
  * and the request shapes of the desktop head's upload machinery
- * (`files.chunk.*`, `files.capability`, `files.discard`, `files.content`).
+ * (`files.secretText.upload`, `files.upload.discard`, `files.capability`,
+ * `files.discard`, `files.content`).
  *
  * Kept apart from `files.ts`, which is the box's wire format and is read by
  * hermeticd, and from `requests.ts`, which is near the file-size limit. None of
@@ -107,19 +108,6 @@ export type FilesStageFrame = z.infer<typeof FilesStageFrame>;
 // --- The desktop head's upload machinery -----------------------------------
 
 /**
- * Open a chunked upload. `name` is checked with `sanitizeFileName` by core, so
- * a refusal can say why; `size` is the whole file, capped by core at
- * `FILES_LIMITS.chunkUploadBytes`.
- */
-export const FilesChunkOpenInput = z.object({
-  name: z.string().min(1).max(1024),
-  // Not capped here: core refuses an oversize drop `FILE_TOO_LARGE` with the
-  // advice to use the dialog instead, which a schema refusal could not carry.
-  size: z.number().int().nonnegative(),
-});
-export type FilesChunkOpenInput = z.infer<typeof FilesChunkOpenInput>;
-
-/**
  * Open a streamed upload: the page then PUTs the file to the URL this answers
  * (`app/src/upload-port.ts`). No size cap: the fleet's `files.max_bytes` is
  * checked by the stage and by the box.
@@ -130,17 +118,15 @@ export const FilesUploadOpenInput = z.object({
 });
 export type FilesUploadOpenInput = z.infer<typeof FilesUploadOpenInput>;
 
-/** One chunk, base64, at most `FILES_LIMITS.chunkBytes` decoded. */
-export const FilesChunkAppendInput = z.object({
-  upload_id: ChunkUploadId,
-  offset: z.number().int().nonnegative(),
-  // Base64 of 1 MiB is 4/3 of it, rounded up to a multiple of four.
-  data_b64: z.string().max(Math.ceil(FILES_LIMITS.chunkBytes / 3) * 4),
+/** One bounded text secret, sent in one request and held by upload id. */
+export const FilesSecretTextUploadInput = z.object({
+  name: z.string().min(1).max(1024),
+  data_b64: z.string().max(Math.ceil(FILES_LIMITS.secretTextBytes / 3) * 4),
 });
-export type FilesChunkAppendInput = z.infer<typeof FilesChunkAppendInput>;
+export type FilesSecretTextUploadInput = z.infer<typeof FilesSecretTextUploadInput>;
 
-export const FilesChunkRefInput = z.object({ upload_id: ChunkUploadId });
-export type FilesChunkRefInput = z.infer<typeof FilesChunkRefInput>;
+export const FilesUploadRefInput = z.object({ upload_id: ChunkUploadId });
+export type FilesUploadRefInput = z.infer<typeof FilesUploadRefInput>;
 
 export const FilesCapabilityInput = z.object({ instance: AgentName });
 export type FilesCapabilityInput = z.infer<typeof FilesCapabilityInput>;

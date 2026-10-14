@@ -4,7 +4,7 @@
  * The head line is the box's usage; then the requests waiting on the operator
  * — from any session, a cron job's included, which is why this reads the box
  * and not the chat — and one table of inbox files, outbox shares and stored
- * secrets. A request is answered with the chat's own card (`FileRequestBlock`),
+ * secrets. A request is answered with the shared delivery card (`FileRequestCard`),
  * so the deliver flow — the native pick, the key-material prompt, the secret
  * lane — is the one the chat uses, not a second copy of it. Files save through
  * the chat's own Save… (`useFileSave`: the folder dialog, then the download);
@@ -21,9 +21,8 @@ import { ApiError, applyPlan, followOp } from "../../api/index.ts";
 import type { AgentView } from "../../api/index.ts";
 import { decline, filesList, filesRm } from "../../api/files.ts";
 import type { FileRequestView, FilesList, FilesRmPlan } from "../../api/files.ts";
-import { FileRequestBlock } from "../../chat/components/blocks/FileRequest.tsx";
+import { FileRequestCard } from "../../chat/components/blocks/FileRequest.tsx";
 import { countdown, shortSha } from "../../chat/file-request-logic.ts";
-import type { RequestToolBlock } from "../../chat/file-request-logic.ts";
 import { saveErrorText, useFileSave } from "../../chat/use-file-save.ts";
 import { isOff } from "../../logic/format.ts";
 import { isStalePlan } from "../../logic/destroy-plan.ts";
@@ -58,24 +57,6 @@ function useNow(intervalMs: number | null): number {
     return () => clearInterval(timer);
   }, [intervalMs]);
   return now;
-}
-
-/**
- * The block a request card is drawn from. The card reads everything it shows
- * from the box's slot by `request_id`; the rest is the shape of a finished
- * tool call with no result, which offers no "tell the agent" (there is no
- * conversation here to tell it in).
- */
-function requestBlock(request_id: string, secret: boolean): RequestToolBlock {
-  return {
-    kind: "tool",
-    name: secret ? "request_secret" : "request_file",
-    args: null,
-    result: null,
-    status: "ok",
-    render: secret ? "secret_request" : "file_request",
-    request_id,
-  } as RequestToolBlock;
 }
 
 interface RmState {
@@ -306,8 +287,9 @@ export function AgentFiles({ agent }: { agent: AgentView }) {
                     {delivering.has(id) ? (
                       <tr className="fl-card-row">
                         <td colSpan={5}>
-                          <FileRequestBlock
-                            block={requestBlock(id, secret)}
+                          <FileRequestCard
+                            request_id={id}
+                            secret={secret}
                             instance={name}
                             agent={name}
                           />

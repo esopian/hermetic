@@ -28,7 +28,7 @@
  * The real host holds an OS file lock from SSM read through placement and
  * sweep, shared by the daemon and `hermeticd apply`. Within this process every
  * write and removal also runs under one lock
- * (`exclusive`): the stale-file sweep in `materialiseAllFileSecrets` lists the
+ * (the shared file lock): the stale-file sweep in `materialiseAllFileSecrets` lists the
  * directory and removes what no slot claimed, and a secret placed by a route
  * in the middle of that would be swept the moment it landed. The sweep also
  * skips dot-prefixed names, which are `writeAtomically`'s staging files.
@@ -60,22 +60,13 @@ import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { FilesError } from "./errors.ts";
 
-/** The tail of the chain every write and removal here queues on. */
-let lockTail: Promise<unknown> = Promise.resolve();
-
-/** The ticket the next SSM read takes; later reads take larger ones. */
-let nextTicket = 0;
-
-/** By file name: the ticket of the read whose value is on tmpfs now. */
-const placedAt = new Map<string, number>();
-
 /** How long one SSM call may take before the read is given up. */
 export const SSM_TIMEOUT_MS = 30_000;
 
 const FILE_SECRETS_LOCK = `${SECRETS_ENV_DIR}/file-secrets.lock`;
 
 function withProcessLock<T>(host: Host, work: () => Promise<T>): Promise<T> {
-  return host.withFileLock ? host.withFileLock(FILE_SECRETS_LOCK, work) : work();
+  return host.withFileLock(FILE_SECRETS_LOCK, work);
 }
 
 /**
@@ -96,13 +87,6 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Pr
   } finally {
     clearTimeout(timer);
   }
-}
-
-/** Run `fn` after every earlier `exclusive` call in this process has settled. */
-function exclusive<T>(fn: () => Promise<T>): Promise<T> {
-  const run = lockTail.then(fn);
-  lockTail = run.catch(() => undefined);
-  return run;
 }
 
 /**
@@ -286,25 +270,18 @@ export async function materialiseFileSecret(
   expectName?: string,
   check?: SecretContentCheck,
 ): Promise<MaterialisedSecret> {
-  return withProcessLock(deps.host, () => materialiseFileSecretUnlocked(deps, slot, expectName, check));
-}
-
-async function materialiseFileSecretUnlocked(
-  deps: FileSecretDeps,
-  slot: string,
-  expectName?: string,
-  check?: SecretContentCheck,
-): Promise<MaterialisedSecret> {
-  const first = await materialiseOnce(deps, slot, expectName, check);
-  if (first !== null) return first;
-  // A read that began after this one placed the file while this one waited on
-  // SSM: its value is newer, so writing ours would put a stale secret back.
-  // Read again, once, and let a second loss stand as written by the newer read.
-  const again = await materialiseOnce(deps, slot, expectName, check);
-  if (again !== null) return again;
-  const prepared = prepare(slot, await readSlot(deps, slot));
-  check?.(prepared.content);
-  return describeSecret(prepared);
+  return withProcessLock(deps.host, async () => {
+    requireSecretSlot(slot);
+    const prepared = prepare(slot, await readSlot(deps, slot));
+    if (expectName !== undefined && prepared.name !== expectName) {
+      throw new FilesError(
+        "VALIDATION",
+        "the secret slot names a different file than the request said",
+      );
+    }
+    check?.(prepared.content);
+    return place(deps.host, prepared);
+  });
 }
 
 function readSlot(deps: FileSecretDeps, slot: string): Promise<string> {
@@ -313,33 +290,6 @@ function readSlot(deps: FileSecretDeps, slot: string): Promise<string> {
     deps.ssmTimeoutMs ?? SSM_TIMEOUT_MS,
     `SSM slot ${slot}`,
   );
-}
-
-/** One read-then-place; `null` when a newer read already placed the same name. */
-async function materialiseOnce(
-  deps: FileSecretDeps,
-  slot: string,
-  expectName?: string,
-  check?: SecretContentCheck,
-): Promise<MaterialisedSecret | null> {
-  requireSecretSlot(slot);
-  const ticket = nextTicket++;
-  const prepared = prepare(slot, await readSlot(deps, slot));
-  if (expectName !== undefined && prepared.name !== expectName) {
-    throw new FilesError("VALIDATION", "the secret slot names a different file than the request said");
-  }
-  check?.(prepared.content);
-  return exclusive(async () => {
-    if (placedSince(prepared.name, ticket)) return null;
-    const placed = await place(deps.host, prepared);
-    placedAt.set(prepared.name, ticket);
-    return placed;
-  });
-}
-
-/** Whether `name` on tmpfs came from a read that started after the one holding `ticket`. */
-function placedSince(name: string, ticket: number): boolean {
-  return (placedAt.get(name) ?? -1) > ticket;
 }
 
 /**
@@ -367,20 +317,18 @@ async function materialiseAllFileSecretsUnlocked(deps: FileSecretDeps): Promise<
   // trailing slash: the hierarchy SSM's own examples name.
   const base = paramPath(deps.paramPrefix, "");
   const listPath = base.length > 1 ? base.slice(0, -1) : base;
-  const ticket = nextTicket++;
   const listed = await withTimeout(
     deps.aws.getParametersByPath(listPath),
     deps.ssmTimeoutMs ?? SSM_TIMEOUT_MS,
     "the SSM listing",
   );
-  return exclusive(() => materialiseAll(deps, base, listed, ticket));
+  return materialiseAll(deps, base, listed);
 }
 
 async function materialiseAll(
   deps: FileSecretDeps,
   base: string,
   listed: ReadonlyArray<{ name: string; value: string }>,
-  ticket: number,
 ): Promise<MaterialisedSecret[]> {
   const log = deps.log ?? (() => {});
 
@@ -407,12 +355,8 @@ async function materialiseAll(
       continue;
     }
     claimed.set(prepared.name, slot);
-    // A route placed this name from a read that began after this listing:
-    // its value is the fresher one, so it stays.
-    if (placedSince(prepared.name, ticket)) continue;
     try {
       out.push(await place(deps.host, prepared));
-      placedAt.set(prepared.name, ticket);
     } catch (e) {
       log(
         `file secret ${slot}: could not be written (${e instanceof AgentdError ? e.code : "INTERNAL"})`,
@@ -424,12 +368,7 @@ async function materialiseAll(
     // Never a sanitized name (the sanitizer refuses a leading dot), and so
     // possibly a write in progress: `writeAtomically` stages beside its target.
     if (claimed.has(entry) || entry.startsWith(".")) continue;
-    // Placed from a read that began after this listing: not stale, just newer.
-    if (placedSince(entry, ticket)) continue;
     await deps.host.remove(`${FILES_SECRET_DIR}/${entry}`);
-    // A tombstone, not a delete: an older pass still in flight must not
-    // re-place what this newer listing found gone from SSM.
-    placedAt.set(entry, ticket);
   }
   return out;
 }
@@ -440,10 +379,5 @@ export async function removeFileSecret(host: Host, name: string): Promise<void> 
   if (!clean.ok || clean.name !== name) {
     throw new AgentdError("USAGE", "not a valid secret file name");
   }
-  await withProcessLock(host, () =>
-    exclusive(async () => {
-      await host.remove(secretPath(clean.name));
-      placedAt.set(clean.name, nextTicket++);
-    }),
-  );
+  await withProcessLock(host, () => host.remove(secretPath(clean.name)));
 }

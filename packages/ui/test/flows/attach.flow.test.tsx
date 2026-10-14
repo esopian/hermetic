@@ -1,7 +1,7 @@
 /**
  * Composer attachments (attachments plan §8.1–8.2) over the real `bind` and
  * `dispatch` and the fixture backend: a file dropped on the thread is sent in
- * chunks, staged on the box and carried by `chat.turn` as an id, and the box's
+ * one streamed upload, staged on the box and carried by `chat.turn` as an id, and the box's
  * own row keeps the chip once the transcript is read again; a message may be
  * files alone; removing a staged chip deletes it on the box; a staging the box
  * refuses reads as words; a box without the files service disables attaching,
@@ -78,7 +78,6 @@ test("a dropped file is staged, and the turn carries its id", async () => {
   expect(pane.querySelector(".ch-file-status")?.textContent).toContain("✓ staged");
   // A drop streams to the loopback upload port: one open, no chunk calls.
   expect(harness!.calls.filter((c) => c.name === "files.upload.open")).toHaveLength(1);
-  expect(harness!.calls.filter((c) => c.name === "files.chunk.append")).toHaveLength(0);
   expect(pane.querySelector(".ch-attach-sum")?.textContent).toContain("1 ready");
 
   await userEvent.type(composer, "look at this{Enter}");

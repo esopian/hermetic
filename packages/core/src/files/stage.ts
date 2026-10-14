@@ -33,8 +33,8 @@ import type { UploadRegistry } from "./uploads.ts";
  * Every limit is checked before the first byte leaves: the name, the image or
  * file cap (from the sniffed type, never the extension), and the key-material
  * refusal. A path is read twice — once to hash, once to send — because the
- * digest goes in a header ahead of the body; a chunked upload is already in
- * memory and is hashed in one step.
+ * digest goes in a header ahead of the body; a registered text secret is
+ * already in memory and is hashed in one step.
  *
  * Nothing here names the file in a message or a progress event. The name is in
  * the terminal `staged` event, which is data for the head, not a log line.
@@ -247,6 +247,9 @@ export function createFilesStage(deps: StageDeps) {
       return { kind: "path", name: nameFor(input.name ?? basename(path)), size, path, upload_id: null };
     }
     const upload_id = input.source.chunk_upload_id;
+    if (uploads.origin(upload_id) === "secret_text") {
+      throw new HermeticError("VALIDATION", "a text secret can only answer a text secret request");
+    }
     const source = uploads.take(upload_id);
     const name = input.name ?? source.name;
     if (source.kind === "path") {

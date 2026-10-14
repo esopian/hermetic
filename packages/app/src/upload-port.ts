@@ -22,6 +22,8 @@ export type UploadFeed = (body: ReadableStream<Uint8Array> | null) => Promise<vo
 export interface UploadPort {
   /** The URL the page PUTs `upload_id`'s bytes to; starts the listener on first use. */
   url(upload_id: string, feed: UploadFeed): string;
+  /** Revoke a URL when its upload is discarded before the PUT arrives. */
+  forget(upload_id: string): void;
   stop(): void;
 }
 
@@ -58,9 +60,16 @@ function statusOf(e: unknown): number {
   }
 }
 
-export function createUploadPort(): UploadPort {
-  const routes = new Map<string, { feed: UploadFeed; at: number }>();
+export function createUploadPort(opts: { routeTtlMs?: number } = {}): UploadPort {
+  const routes = new Map<string, { feed: UploadFeed; timer: ReturnType<typeof setTimeout> }>();
   let server: ReturnType<typeof Bun.serve> | null = null;
+
+  const forget = (id: string): void => {
+    const route = routes.get(id);
+    if (route === undefined) return;
+    clearTimeout(route.timer);
+    routes.delete(id);
+  };
 
   const start = (): ReturnType<typeof Bun.serve> => {
     const listener = Bun.serve({
@@ -79,7 +88,7 @@ export function createUploadPort(): UploadPort {
         if (id === undefined || route === undefined) {
           return reply(404, { code: "NOT_FOUND", message: "no such upload" });
         }
-        routes.delete(id);
+        forget(id);
         try {
           await route.feed(req.body);
           return reply(200, { code: "OK", message: "received" });
@@ -97,16 +106,18 @@ export function createUploadPort(): UploadPort {
 
   return {
     url(upload_id, feed) {
-      const cutoff = Date.now() - ROUTE_TTL_MS;
-      for (const [id, r] of routes) if (r.at < cutoff) routes.delete(id);
       server ??= start();
-      routes.set(upload_id, { feed, at: Date.now() });
+      forget(upload_id);
+      const timer = setTimeout(() => forget(upload_id), opts.routeTtlMs ?? ROUTE_TTL_MS);
+      timer.unref?.();
+      routes.set(upload_id, { feed, timer });
       return `http://127.0.0.1:${server.port}/upload/${upload_id}`;
     },
+    forget,
     stop() {
       void server?.stop(true);
       server = null;
-      routes.clear();
+      for (const id of routes.keys()) forget(id);
     },
   };
 }

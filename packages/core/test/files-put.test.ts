@@ -592,12 +592,21 @@ function cliStdinUpload(h: ReturnType<typeof open>["hermetic"], text: string): s
   }).upload_id;
 }
 
-/** A webview drop: opened, sent in one chunk, closed. */
+/** A webview drop: its body waits until the put starts reading. */
 function droppedUpload(h: ReturnType<typeof open>["hermetic"], name: string, bytes: Uint8Array) {
   const uploads = h.files.internal.uploads;
-  const { upload_id } = uploads.open({ name, size: bytes.byteLength });
-  uploads.append(upload_id, 0, bytes);
-  uploads.close(upload_id);
+  const { upload_id } = uploads.openStream({ name, size: bytes.byteLength });
+  void uploads
+    .feed(
+      upload_id,
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    )
+    .catch(() => undefined);
   return upload_id;
 }
 
@@ -723,7 +732,7 @@ describe("files.put: --secret-stdin answers a text secret request only", () => {
     );
     expect(e.code).toBe("VALIDATION");
     expect(e.message).toBe(
-      "--secret-stdin answers a text secret request; use a file path for this request",
+      "text input can only answer a text secret request; use a file for this request",
     );
     expect(calls).toEqual([]);
     expect(slots()).toEqual([]);
@@ -771,7 +780,7 @@ describe("files.put: an upload that may hold a secret is forgotten on any failur
     }
   });
 
-  test("a closed slot: held bytes and a secret slot's drop are forgotten; a plain drop stays", async () => {
+  test("a closed slot forgets held bytes and one-pass drops", async () => {
     const { backend, hermetic } = open();
     const plainSlot = backend.files.openRequest(AGENT, fileRequest());
     const secretSlot = backend.files.openRequest(AGENT, fileRequest({ sensitivity: "secret" }));
@@ -789,7 +798,7 @@ describe("files.put: an upload that may hold a secret is forgotten on any failur
     expect((await put(plainSlot.request_id, plainDrop)).code).toBe("FILE_REQUEST_CLOSED");
     expect(stillHeld(hermetic, held)).toBe(false);
     expect(stillHeld(hermetic, secretDrop)).toBe(false);
-    expect(stillHeld(hermetic, plainDrop)).toBe(true);
+    expect(stillHeld(hermetic, plainDrop)).toBe(false);
   });
 
   test("D6: key material too large for an SSM slot is refused and forgotten", async () => {
@@ -815,14 +824,12 @@ describe("files.put: an upload that may hold a secret is forgotten on any failur
 
   test("the registry reports where an upload came from", async () => {
     const registry = createUploadRegistry();
-    const { upload_id: drop } = registry.open({ name: "a.log", size: LOG.byteLength });
-    registry.append(drop, 0, LOG);
-    registry.close(drop);
+    const { upload_id: drop } = registry.openStream({ name: "a.log", size: LOG.byteLength });
     const held = registry.registerBytes("b.log", LOG).upload_id;
     const stdin = registry.registerBytes("stdin", LOG, { secretText: true }).upload_id;
     const picked = (await registry.registerPath(writeTemp("picked.log", LOG))).upload_id;
     expect([drop, held, stdin, picked].map((id) => registry.origin(id))).toEqual([
-      "chunks",
+      "stream",
       "held",
       "secret_text",
       "path",

@@ -134,7 +134,7 @@ export function fakeFiles(): { api: AttachmentsApi; stages: FakeStage[] } {
       names.set(upload_id, name);
       return Promise.resolve({ upload_id, url: `http://127.0.0.1:1/upload/${upload_id}` }) as never;
     },
-    chunkDiscard: () => Promise.resolve({ discarded: true }) as never,
+    uploadDiscard: () => Promise.resolve({ discarded: true }) as never,
     filesCapability: () => Promise.resolve({ files: true, hermeticd_version: "x" }) as never,
     filesDiscard: () => Promise.resolve({ deleted: true }) as never,
     pickNative: () => Promise.resolve({ files: [] }) as never,

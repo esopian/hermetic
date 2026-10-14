@@ -174,7 +174,7 @@ test("a key-looking file on a normal request asks, and 'This isn't a secret' ove
   );
   // Held for the operator's answer: nothing is sent yet.
   expect(harness!.calls.some((c) => c.name === "files.put")).toBe(false);
-  expect(harness!.calls.some((c) => c.name === "files.chunk.open")).toBe(false);
+  expect(harness!.calls.some((c) => c.name === "files.secretText.upload")).toBe(false);
   const override = Array.from(card()!.querySelectorAll("button")).find(
     (b) => b.textContent === "This isn't a secret",
   )!;
@@ -262,7 +262,7 @@ test("a key picked with Choose file… asks first, and Cancel lets the upload go
   expect(picked !== undefined).toBe(true);
   await userEvent.click(button(card()!, "Cancel")!);
   await waitFor(
-    () => expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(true),
+    () => expect(harness!.calls.some((c) => c.name === "files.upload.discard")).toBe(true),
     WAIT,
   );
   expect(card()!.textContent).not.toContain("Looks like a private key");
@@ -289,11 +289,11 @@ test("a key-looking pick held for D6 is let go when the slot closes under the qu
       ),
     WAIT,
   );
-  expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(false);
+  expect(harness!.calls.some((c) => c.name === "files.upload.discard")).toBe(false);
   // The slot times out on the box while the operator has not answered.
   harness!.backend().files.expire("atlas", id);
   await waitFor(
-    () => expect(harness!.calls.some((c) => c.name === "files.chunk.discard")).toBe(true),
+    () => expect(harness!.calls.some((c) => c.name === "files.upload.discard")).toBe(true),
     WAIT,
   );
   await waitFor(() => expect(card()?.textContent ?? "").toContain("expired"), WAIT);
@@ -301,7 +301,7 @@ test("a key-looking pick held for D6 is let go when the slot closes under the qu
   expect(button(card()!, "Store as secret") === undefined).toBe(true);
   // Nothing was sent, and the one held pick was let go once.
   expect(harness!.calls.some((c) => c.name === "files.put")).toBe(false);
-  expect(harness!.calls.filter((c) => c.name === "files.chunk.discard").length).toBe(1);
+  expect(harness!.calls.filter((c) => c.name === "files.upload.discard").length).toBe(1);
 }, 20_000);
 
 test("a plain picked file is sent with no question", async () => {
@@ -328,7 +328,7 @@ test("a file dragged over the card body is neither the composer's nor shown as i
   await waitFor(() => expect(pane.querySelector(".ch-drop") === null).toBe(true), WAIT);
   fireEvent.drop(body, { dataTransfer });
   expect(pane.querySelector(".ch-drop") === null).toBe(true);
-  expect(harness!.calls.some((c) => c.name === "files.chunk.open")).toBe(false);
+  expect(harness!.calls.some((c) => c.name === "files.secretText.upload")).toBe(false);
   expect(harness!.calls.some((c) => c.name === "files.stage")).toBe(false);
   expect(harness!.calls.some((c) => c.name === "files.put")).toBe(false);
 }, 20_000);

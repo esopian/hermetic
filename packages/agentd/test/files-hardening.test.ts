@@ -131,7 +131,7 @@ describe("durable secrets on tmpfs (finding 3)", () => {
   const PREFIX = "/hermes/fxtr0001/research-1/";
   const value = encodeSecretEnvelope({ name: "late.pem", bytes: PEM, sha256: sha256(PEM) });
 
-  test("a secret placed while the boot sweep is listing SSM is not swept", async () => {
+  test("a secret placed after the boot sweep is not swept", async () => {
     const host = new FakeHost();
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -610,7 +610,7 @@ describe("SSM and the secrets lock (round 2, finding 3)", () => {
     });
     let entered = false;
     try {
-      const first = host.withFileLock!(join(dir, "secrets.lock"), () => {
+      const first = host.withFileLock(join(dir, "secrets.lock"), () => {
         acquired();
         return gate;
       });
@@ -620,7 +620,7 @@ describe("SSM and the secrets lock (round 2, finding 3)", () => {
           throw new Error("the first lock holder finished before acquiring the lock");
         }),
       ]);
-      const second = host.withFileLock!(join(dir, "secrets.lock"), async () => {
+      const second = host.withFileLock(join(dir, "secrets.lock"), async () => {
         entered = true;
       });
       await Bun.sleep(20);
@@ -645,70 +645,27 @@ describe("SSM and the secrets lock (round 2, finding 3)", () => {
     expect((err as AgentdError).code).toBe("INTERNAL");
   }, 2000);
 
-  test("a hung listing does not hold up a route placing its own slot", async () => {
+  test("a timed-out listing releases the lock before a route reads its slot", async () => {
     const host = new FakeHost();
+    let routeRead = false;
     const aws = {
       getParametersByPath: () => new Promise(() => {}),
-      getParameter: async () => value(PEM),
+      getParameter: async () => {
+        routeRead = true;
+        return value(PEM);
+      },
     } as unknown as Aws;
-    const all = materialiseAllFileSecrets({ host, aws, paramPrefix: PREFIX, ssmTimeoutMs: 100 }).catch(
+    const all = materialiseAllFileSecrets({ host, aws, paramPrefix: PREFIX, ssmTimeoutMs: 20 }).catch(
       (e: unknown) => e,
     );
-    await materialiseFileSecret({ host, aws, paramPrefix: PREFIX }, "file-late-pem");
-    expect(host.files.has(`${FILES_SECRET_DIR}/late.pem`)).toBe(true);
-    expect(await all).toBeInstanceOf(AgentdError);
-  }, 2000);
-
-  test("a listing older than a route's read does not overwrite what the route placed", async () => {
-    const host = new FakeHost();
-    const fresh = new TextEncoder().encode("FIXTURE-fresh");
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const aws = {
-      getParametersByPath: async () => {
-        await gate;
-        return [{ name: `${PREFIX}file-late-pem`, value: value(PEM) }];
-      },
-      getParameter: async () => value(fresh),
-    } as unknown as Aws;
-    const all = materialiseAllFileSecrets({ host, aws, paramPrefix: PREFIX });
-    await materialiseFileSecret({ host, aws, paramPrefix: PREFIX }, "file-late-pem");
-    release();
-    await all;
-    expect(host.files.get(`${FILES_SECRET_DIR}/late.pem`)?.content).toBe("FIXTURE-fresh");
-  });
-
-  test("a route read that loses to a newer listing does not put its stale value back", async () => {
-    const host = new FakeHost();
-    const stale = new TextEncoder().encode("FIXTURE-stale");
-    const fresh = new TextEncoder().encode("FIXTURE-fresh");
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let reads = 0;
-    const aws = {
-      getParametersByPath: async () => [{ name: `${PREFIX}file-late-pem`, value: value(fresh) }],
-      // The first route read hangs until the listing has placed; a re-read sees the fresh value.
-      getParameter: async () => {
-        reads += 1;
-        if (reads === 1) {
-          await gate;
-          return value(stale);
-        }
-        return value(fresh);
-      },
-    } as unknown as Aws;
     const route = materialiseFileSecret({ host, aws, paramPrefix: PREFIX }, "file-late-pem");
-    await materialiseAllFileSecrets({ host, aws, paramPrefix: PREFIX });
-    release();
-    const placed = await route;
-    expect(host.files.get(`${FILES_SECRET_DIR}/late.pem`)?.content).toBe("FIXTURE-fresh");
-    expect(reads).toBe(2);
-    expect(placed.name).toBe("late.pem");
-  });
+    await Bun.sleep(5);
+    expect(routeRead).toBe(false);
+    expect(await all).toBeInstanceOf(AgentdError);
+    await route;
+    expect(routeRead).toBe(true);
+    expect(host.files.has(`${FILES_SECRET_DIR}/late.pem`)).toBe(true);
+  }, 2000);
 });
 
 describe("taking a slot (round 2, finding 4)", () => {

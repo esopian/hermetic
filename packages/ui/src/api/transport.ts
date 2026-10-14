@@ -151,10 +151,8 @@ export type RequestName =
   | "routines.history"
   // The composer's attachments (machinery, `app/src/handlers/files.ts`).
   | "files.upload.open"
-  | "files.chunk.open"
-  | "files.chunk.append"
-  | "files.chunk.close"
-  | "files.chunk.discard"
+  | "files.secretText.upload"
+  | "files.upload.discard"
   | "files.capability"
   | "files.discard"
   | "files.content"

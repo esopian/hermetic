@@ -113,6 +113,23 @@ export function ranInOrder(host: FakeHost, patterns: ReadonlyArray<string | RegE
 
 export class FakeHost implements Host {
   readonly files = new Map<string, FakeFile>();
+  private readonly fileLocks = new Map<string, Promise<void>>();
+
+  async withFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.fileLocks.get(path);
+    let release: () => void = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.fileLocks.set(path, current);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.fileLocks.get(path) === current) this.fileLocks.delete(path);
+    }
+  }
   /**
    * The directories an Ubuntu box already has before hermeticd touches it.
    *

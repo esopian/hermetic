@@ -65,7 +65,7 @@ export type ExecEvent =
 export interface Host {
   exec(argv: readonly string[], opts?: ExecOptions): Promise<ExecResult>;
   /** Hold an OS file lock across `work`, including awaits; the real daemon and apply share it. */
-  withFileLock?<T>(path: string, work: () => Promise<T>): Promise<T>;
+  withFileLock<T>(path: string, work: () => Promise<T>): Promise<T>;
   /** `null` when the path does not exist — hermeticd never throws on absence. */
   readFile(path: string): Promise<string | null>;
   readBytes(path: string): Promise<Uint8Array | null>;

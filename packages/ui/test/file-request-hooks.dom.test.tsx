@@ -135,7 +135,7 @@ describe("useFileRequest", () => {
 describe("useFilePut", () => {
   type Handlers = Parameters<PutApi["putUpload"]>[4];
 
-  function fakeApi(opts: { holdAppend?: boolean } = {}) {
+  function fakeApi(opts: { holdOpen?: boolean; holdText?: boolean } = {}) {
     const discarded: string[] = [];
     const closed: string[] = [];
     const puts: { upload_id: string; handlers: Handlers }[] = [];
@@ -144,18 +144,16 @@ describe("useFilePut", () => {
     const api = {
       // A drop or paste: held here while the main process "opens" the upload.
       uploadOpen: async () => {
-        if (opts.holdAppend) await new Promise<void>((resolve) => releases.push(resolve));
+        if (opts.holdOpen) await new Promise<void>((resolve) => releases.push(resolve));
         opened += 1;
         return { upload_id: `up_${opened}`, url: `http://127.0.0.1:1/upload/up_${opened}` };
       },
-      chunkOpen: async () => {
+      secretTextUpload: async () => {
+        if (opts.holdText) await new Promise<void>((resolve) => releases.push(resolve));
         opened += 1;
         return { upload_id: `up_${opened}` };
       },
-      chunkAppend: () =>
-        opts.holdAppend ? new Promise<void>((resolve) => releases.push(resolve)) : Promise.resolve(),
-      chunkClose: async () => ({}),
-      chunkDiscard: async (upload_id: string) => {
+      uploadDiscard: async (upload_id: string) => {
         discarded.push(upload_id);
         return { discarded: true };
       },
@@ -222,7 +220,7 @@ describe("useFilePut", () => {
   });
 
   test("a second job stops the first: its upload is discarded and it never reaches files.put", async () => {
-    const fake = fakeApi({ holdAppend: true });
+    const fake = fakeApi({ holdOpen: true });
     const m = mount(fake.api);
     act(() => m.put().putFile(file("first.log")));
     await flush();
@@ -258,6 +256,20 @@ describe("useFilePut", () => {
     expect(bytes.every((b) => b === 0)).toBe(true);
     expect(m.put().state.phase).toBe("idle");
     expect(fake.puts.length).toBe(1);
+  });
+
+  test("cancel during text upload discards the id returned later", async () => {
+    const fake = fakeApi({ holdText: true });
+    const m = mount(fake.api);
+    const bytes = new TextEncoder().encode("GITHUB_TOKEN=FIXTURE");
+    act(() => m.put().putBytes(bytes, "github.env"));
+    await flush();
+    act(() => m.put().cancel());
+    expect(bytes.every((b) => b === 0)).toBe(true);
+    for (const release of fake.releases) release();
+    await flush();
+    expect(fake.discarded).toEqual(["up_1"]);
+    expect(fake.puts).toEqual([]);
   });
 
   test("Replace sends the held bytes again with replace, then zeroes them", async () => {

@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as filesApi from "../api/files.ts";
 import type { PutOptions } from "../api/files.ts";
-import { putStream, sendChunks } from "./chunk-upload.ts";
+import { putStream, toBase64 } from "./upload.ts";
 
 export type PutState =
   | { phase: "idle" }
@@ -32,7 +32,7 @@ export type PutState =
 
 export type PutApi = Pick<
   typeof filesApi,
-  "uploadOpen" | "chunkOpen" | "chunkAppend" | "chunkClose" | "chunkDiscard" | "putUpload"
+  "uploadOpen" | "secretTextUpload" | "uploadDiscard" | "putUpload"
 >;
 
 /** What a job sends, kept so a "Replace" can send it again. */
@@ -92,14 +92,14 @@ export function useFilePut(
   const discard = (current: Job): void => {
     const upload = current.upload;
     current.upload = null;
-    if (upload !== null) void apiRef.current.chunkDiscard(upload).catch(() => undefined);
+    if (upload !== null) void apiRef.current.uploadDiscard(upload).catch(() => undefined);
   };
 
   /** A source nobody will send again: text zeroed, a native pick discarded. */
   const drop = (source: Source | null): void => {
     if (source?.kind === "bytes") source.bytes.fill(0);
     if (source?.kind === "upload")
-      void apiRef.current.chunkDiscard(source.upload_id).catch(() => undefined);
+      void apiRef.current.uploadDiscard(source.upload_id).catch(() => undefined);
   };
 
   /** Ends a job's hold on its source. A native pick's upload is the job's own `upload` to discard. */
@@ -231,25 +231,15 @@ export function useFilePut(
       const total = body.byteLength;
       setState({ phase: "uploading", progress: 0, sent: 0, total });
       try {
-        const upload_id = await sendChunks(apiRef.current, body, name, {
-          onOpen: (id) => {
-            current.upload = id;
-          },
-          onChunk: (sent, size) => {
-            if (job.current !== current) return;
-            const progress = size === 0 ? 0.5 : (sent / size) * 0.5;
-            setState({ phase: "uploading", progress, sent, total });
-          },
-          cancelled: () => current.cancelled,
-        });
-        // Cancelled, replaced or unmounted while the chunks went: nobody is
-        // left to put it, so the upload goes rather than waiting to idle out.
-        if (upload_id === null || current.cancelled || job.current !== current) {
+        const { upload_id } = await apiRef.current.secretTextUpload(name, toBase64(body));
+        current.upload = upload_id;
+        // A cancellation during the RPC still needs to discard its newly returned id.
+        if (current.cancelled || job.current !== current) {
           discard(current);
           release(current);
           return;
         }
-        put(current, upload_id, total, 0.5);
+        put(current, upload_id, total, 0);
       } catch (e) {
         if (current.cancelled) {
           discard(current);

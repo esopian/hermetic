@@ -6,27 +6,23 @@ import { FILES_LIMITS, sanitizeFileName } from "../shared/files.ts";
 import { streamChunks } from "./stream-source.ts";
 
 /**
- * The upload registry: bytes a webview drop sent over the bridge in chunks,
- * bytes the page streams to the loopback upload port, and paths the native
+ * The upload registry: small text secrets held in memory, bytes the page
+ * streams to the loopback upload port, and paths the native
  * file dialog picked, each under an opaque `up_…` id the page can stage by.
  *
- * In memory only. A chunked upload's bytes are never written to the laptop's
- * disk — they live here until `files.stage` sends them or the entry is
+ * In memory only. A registered text secret's bytes are never written to the laptop's
+ * disk — they live here until `files.put` sends them or the entry is
  * discarded or idles out — and a registered path is never shown to the page,
  * which only ever holds the id. A streamed upload holds no more than the
  * pipe's own buffer: the page's request body is read only as fast as the box
  * takes it, so a file of any size passes through.
  */
 
-const MiB = 1024 * 1024;
-
 export const UPLOAD_LIMITS = {
-  /** One chunked upload (`FILES_LIMITS.chunkUploadBytes`). */
-  uploadBytes: FILES_LIMITS.chunkUploadBytes,
-  /** One `append` (`FILES_LIMITS.chunkBytes`). */
-  chunkBytes: FILES_LIMITS.chunkBytes,
-  /** Every chunked upload held at once, across every window. */
-  totalBytes: 256 * MiB,
+  /** One registered text secret. */
+  uploadBytes: FILES_LIMITS.secretTextBytes,
+  /** Every registered value held at once, across every window. */
+  totalBytes: 64 * FILES_LIMITS.secretTextBytes,
   /** An upload untouched this long is dropped. */
   idleMs: 60 * 60 * 1000,
 } as const;
@@ -38,16 +34,14 @@ export type UploadSource =
   /** One pass only: the bytes are read as the page sends them and cannot be taken again. */
   | { kind: "stream"; name: string; size: number; body: AsyncIterable<Uint8Array> };
 
-interface ChunkEntry {
+interface BytesEntry {
   kind: "bytes";
   name: string;
   size: number;
-  received: number;
-  parts: Uint8Array[];
-  closed: boolean;
+  bytes: Uint8Array;
   touched: number;
-  /** Set by `registerBytes`: bytes this process already held, never a drop. */
-  held?: "bytes" | "secret_text";
+  /** A text secret may only answer a text-secret request. */
+  secretText: boolean;
 }
 
 interface PathEntry {
@@ -72,19 +66,15 @@ interface StreamEntry {
   active: boolean;
 }
 
-type Entry = ChunkEntry | PathEntry | StreamEntry;
+type Entry = BytesEntry | PathEntry | StreamEntry;
 
 /**
- * Where an upload came from: a webview drop sent in chunks, a path the native
- * dialog picked, or bytes this process already held (`registerBytes`) — and,
- * of those, the CLI's `--secret-stdin` text, which answers a text secret
- * request and nothing else.
+ * Where an upload came from: a streamed drop, a native pick, or bytes
+ * registered for a text secret request.
  */
-export type UploadOrigin = "chunks" | "path" | "held" | "secret_text" | "stream";
+export type UploadOrigin = "path" | "held" | "secret_text" | "stream";
 
 export interface UploadRegistry {
-  /** Reserve a chunked upload of `size` bytes. */
-  open(input: { name: string; size: number }): { upload_id: string };
   /**
    * Reserve a streamed upload of `size` bytes: nothing is held until `feed`
    * is called with the page's request body, and `files.stage`/`files.put`
@@ -98,16 +88,11 @@ export interface UploadRegistry {
    * reader) on a short or long body, a second feed, or a discard.
    */
   feed(upload_id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
-  /** Add the next chunk. `offset` must be exactly the bytes received so far. */
-  append(upload_id: string, offset: number, bytes: Uint8Array): { received: number };
-  /** Finish a chunked upload; the bytes received must be the size it was opened with. */
-  close(upload_id: string): { upload_id: string; name: string; size: number };
   /**
-   * Hold bytes already in this process (the CLI's `--secret-stdin`) under an
-   * upload id, closed and ready to take, so the value travels to core as an id
+   * Hold bytes already in this process (the CLI's `--secret-stdin` or the
+   * page's text-secret request) under an upload id, ready to take, so the value travels to core as an id
    * and never as an input field. The registry keeps its own copy; the caller
-   * should zero its buffer. `secretText` marks the CLI's `--secret-stdin`
-   * text, which `files.put` takes for a text secret request only.
+   * should zero its buffer. `secretText` confines the bytes to a text-secret request.
    */
   registerBytes(
     name: string,
@@ -120,9 +105,9 @@ export interface UploadRegistry {
   discard(upload_id: string): { discarded: boolean };
   /** Where an upload came from, or `null` for an unknown id. Does not touch it. */
   origin(upload_id: string): UploadOrigin | null;
-  /** The source a stage reads. Refuses an unknown id and an unclosed upload. */
+  /** The source a stage reads. Refuses an unknown id. */
   take(upload_id: string): UploadSource;
-  /** The bytes every chunked upload holds right now. */
+  /** The bytes every registered upload holds right now. */
   heldBytes(): number;
 }
 
@@ -158,13 +143,13 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
   };
 
   /**
-   * Remove one entry, zeroing its chunks first: a dropped secret must not
+   * Remove one entry, zeroing its bytes first: a dropped secret must not
    * linger in a buffer the garbage collector has yet to reclaim.
    */
   const forget = (id: string): boolean => {
     const entry = entries.get(id);
     if (entry === undefined) return false;
-    if (entry.kind === "bytes") for (const p of entry.parts) p.fill(0);
+    if (entry.kind === "bytes") entry.bytes.fill(0);
     // Fails whoever reads the pipe and whoever feeds it; a no-op once it closed cleanly.
     if (entry.kind === "stream") {
       void entry.writer
@@ -190,48 +175,7 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
     return entry;
   };
 
-  const getChunked = (upload_id: string): ChunkEntry => {
-    const entry = get(upload_id);
-    if (entry.kind !== "bytes") {
-      throw new HermeticError("VALIDATION", "that upload is not a chunked one and takes no chunks");
-    }
-    return entry;
-  };
-
   return {
-    open({ name, size }) {
-      sweep();
-      const clean = cleanName(name);
-      if (!Number.isInteger(size) || size < 0) {
-        throw new HermeticError("VALIDATION", "an upload's size must be a whole number of bytes");
-      }
-      if (size > limits.uploadBytes) {
-        throw new HermeticError(
-          "FILE_TOO_LARGE",
-          `a dropped file can be at most ${Math.floor(limits.uploadBytes / MiB)} MB; use the attach button for larger files`,
-          { size, limit: limits.uploadBytes },
-        );
-      }
-      if (held() + size > limits.totalBytes) {
-        throw new HermeticError(
-          "CONFLICT",
-          "too many dropped files are still uploading; wait for them to finish",
-          { limit: limits.totalBytes },
-        );
-      }
-      const upload_id = `up_${randomUUID()}`;
-      entries.set(upload_id, {
-        kind: "bytes",
-        name: clean,
-        size,
-        received: 0,
-        parts: [],
-        closed: false,
-        touched: now(),
-      });
-      return { upload_id };
-    },
-
     openStream({ name, size }) {
       sweep();
       const clean = cleanName(name);
@@ -301,54 +245,13 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
       }
     },
 
-    append(upload_id, offset, bytes) {
-      const entry = getChunked(upload_id);
-      if (entry.closed) throw new HermeticError("CONFLICT", "that upload is already complete");
-      if (bytes.byteLength > limits.chunkBytes) {
-        throw new HermeticError(
-          "VALIDATION",
-          `a chunk can be at most ${Math.floor(limits.chunkBytes / 1024)} KiB`,
-        );
-      }
-      if (offset !== entry.received) {
-        throw new HermeticError(
-          "CONFLICT",
-          `chunk out of order: expected offset ${entry.received}, got ${offset}`,
-          { expected: entry.received, offset },
-        );
-      }
-      if (entry.received + bytes.byteLength > entry.size) {
-        throw new HermeticError(
-          "VALIDATION",
-          "the chunks run past the size the upload was opened with",
-        );
-      }
-      // Copied: the caller's buffer may be a view onto something it reuses.
-      entry.parts.push(bytes.slice());
-      entry.received += bytes.byteLength;
-      return { received: entry.received };
-    },
-
-    close(upload_id) {
-      const entry = getChunked(upload_id);
-      if (entry.received !== entry.size) {
-        throw new HermeticError(
-          "VALIDATION",
-          `the upload is incomplete: ${entry.received} of ${entry.size} bytes received`,
-          { received: entry.received, size: entry.size },
-        );
-      }
-      entry.closed = true;
-      return { upload_id, name: entry.name, size: entry.size };
-    },
-
     registerBytes(name, bytes, opts = {}) {
       sweep();
       const clean = cleanName(name);
       if (bytes.byteLength > limits.uploadBytes) {
         throw new HermeticError(
           "FILE_TOO_LARGE",
-          `held input can be at most ${Math.floor(limits.uploadBytes / MiB)} MB`,
+          `text input can be at most ${Math.floor(limits.uploadBytes / 1024)} KiB`,
           { size: bytes.byteLength, limit: limits.uploadBytes },
         );
       }
@@ -362,11 +265,9 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
         kind: "bytes",
         name: clean,
         size: bytes.byteLength,
-        received: bytes.byteLength,
-        parts: [bytes.slice()],
-        closed: true,
+        bytes: bytes.slice(),
         touched: now(),
-        held: opts.secretText === true ? "secret_text" : "bytes",
+        secretText: opts.secretText === true,
       });
       return { upload_id, name: clean, size: bytes.byteLength };
     },
@@ -400,8 +301,7 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
       if (entry === undefined) return null;
       if (entry.kind === "path") return "path";
       if (entry.kind === "stream") return "stream";
-      if (entry.held === "secret_text") return "secret_text";
-      return entry.held === "bytes" ? "held" : "chunks";
+      return entry.secretText ? "secret_text" : "held";
     },
 
     take(upload_id) {
@@ -424,16 +324,7 @@ export function createUploadRegistry(deps: UploadRegistryDeps = {}): UploadRegis
           body: streamChunks(entry.pipe.readable),
         };
       }
-      if (!entry.closed) {
-        throw new HermeticError("CONFLICT", "the upload is still receiving chunks; close it first");
-      }
-      const bytes = new Uint8Array(entry.size);
-      let at = 0;
-      for (const p of entry.parts) {
-        bytes.set(p, at);
-        at += p.byteLength;
-      }
-      return { kind: "bytes", name: entry.name, size: entry.size, bytes };
+      return { kind: "bytes", name: entry.name, size: entry.size, bytes: entry.bytes.slice() };
     },
 
     heldBytes: () => {

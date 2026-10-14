@@ -24,7 +24,8 @@ import { createUploadRegistry, type UploadRegistry } from "./uploads.ts";
  * `stage`, `put`, `decline`, `list`, `get` and `rm` are the public methods
  * (`files.stage`, `files.put`, `files.decline`, `files.list`, `files.get`,
  * `files.rm`). Everything under `internal` is machinery the desktop head wraps
- * in its own requests (`files.chunk.*`, `files.capability`, `files.discard`,
+ * in its own requests (`files.secretText.upload`, `files.upload.discard`,
+ * `files.capability`, `files.discard`,
  * `files.content`, `files.request.get`, `files.saveNative`) and the chat turn
  * and `apply` call directly (`commit`, `applyRm`): none of it is a §9 command,
  * so none of it is in
@@ -243,11 +244,8 @@ export function createFiles(deps: FilesDeps) {
     rm,
     internal: {
       uploads: {
-        open: uploads.open,
         openStream: uploads.openStream,
         feed: uploads.feed,
-        append: uploads.append,
-        close: uploads.close,
         registerPath: uploads.registerPath,
         registerBytes: uploads.registerBytes,
         discard: uploads.discard,

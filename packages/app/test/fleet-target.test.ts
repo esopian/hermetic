@@ -105,14 +105,13 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "terminal.list": "reads this head's own sessions",
   "terminal.open": "logs in with core's `ssh` argv for the configured fleet; it writes nothing",
   "terminal.resize": "resizes a session this head owns",
-  // The composer's attachments. The chunk registry is this
+  // The composer's attachments. The upload registry is this
   // process's memory, the capability probe and the thumbnail are reads.
   "files.stage.abort": "closes a stream this head opened",
   "files.upload.open": "reserves a streamed upload in this head's memory; nothing leaves the laptop",
-  "files.chunk.open": "reserves bytes in this head's memory; nothing leaves the laptop",
-  "files.chunk.append": "adds bytes in this head's memory; nothing leaves the laptop",
-  "files.chunk.close": "seals bytes in this head's memory; nothing leaves the laptop",
-  "files.chunk.discard": "frees bytes in this head's memory",
+  "files.secretText.upload":
+    "holds a bounded text secret in this head's memory; nothing leaves the laptop",
+  "files.upload.discard": "frees an upload in this head's memory",
   "files.capability": "reads a box's /healthz; it writes nothing",
   "files.content": "reads an image's bytes (a file or a share) for a preview; it writes nothing",
   "files.pickNative":

@@ -61,15 +61,16 @@ function harness() {
 
 async function dropped(ctx: HandlerContext, name: string, text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text);
-  const { upload_id } = (await dispatch(ctx, "files.chunk.open", { name, size: bytes.byteLength })) as {
+  const { upload_id, url } = (await dispatch(ctx, "files.upload.open", {
+    name,
+    size: bytes.byteLength,
+  })) as {
     upload_id: string;
+    url: string;
   };
-  await dispatch(ctx, "files.chunk.append", {
-    upload_id,
-    offset: 0,
-    data_b64: Buffer.from(bytes).toString("base64"),
-  });
-  await dispatch(ctx, "files.chunk.close", { upload_id });
+  void fetch(url, { method: "PUT", body: new Blob([bytes.slice().buffer as ArrayBuffer]) }).catch(
+    () => undefined,
+  );
   return upload_id;
 }
 

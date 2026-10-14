@@ -73,7 +73,25 @@ export function FileRequestBlock(props: FileRequestProps) {
   // Keyed by the id: a provisional id that changes is a different request, and
   // nothing typed, held or dismissed for the old one may carry over to it.
   const request_id = props.block.request_id;
-  return <RequestCard key={request_id} {...props} request_id={request_id} />;
+  return (
+    <RequestCard
+      key={request_id}
+      {...props}
+      request_id={request_id}
+      secret={props.block.render === "secret_request"}
+    />
+  );
+}
+
+/** The same delivery card outside a chat thread, where no tool block exists. */
+export function FileRequestCard({
+  request_id,
+  secret,
+  ...props
+}: Omit<FileRequestProps, "block"> & { request_id: string; secret: boolean }) {
+  return (
+    <RequestCard key={request_id} {...props} request_id={request_id} secret={secret} block={null} />
+  );
 }
 
 /** A second-resolution clock, only while something on the card counts down. */
@@ -87,11 +105,17 @@ function useSeconds(active: boolean): number {
   return now;
 }
 
-function RequestCard(props: FileRequestProps & { request_id: string }) {
-  const { block, instance, request_id } = props;
+type RequestCardProps = Omit<FileRequestProps, "block"> & {
+  request_id: string;
+  secret: boolean;
+  block: RequestToolBlock | null;
+};
+
+function RequestCard(props: RequestCardProps) {
+  const { block, instance, request_id, secret } = props;
   const view = useFileRequest(instance, request_id);
   const now = useSeconds(slotLive(view.slot) && !view.missing);
-  const secretAsk = block.render === "secret_request";
+  const secretAsk = secret;
   if (view.missing) return <GoneCard block={block} request_id={request_id} secret={secretAsk} />;
   const slot = view.slot;
   const notice = view.unreachable ? <Unreachable retry={view.refresh} /> : null;
@@ -132,7 +156,7 @@ function Unreachable({ retry }: { retry: () => void }) {
   );
 }
 
-type CardProps = FileRequestProps & {
+type CardProps = RequestCardProps & {
   slot: FileRequestSlot;
   now: number;
   refresh: () => void;
@@ -318,7 +342,7 @@ function useDecline(instance: string, request_id: string, refresh: () => void) {
 type HeldKey = { kind: "file"; file: File } | { kind: "upload"; upload_id: string; size: number };
 
 const discardUpload = (upload_id: string): void => {
-  void filesApi.chunkDiscard(upload_id).catch(() => undefined);
+  void filesApi.uploadDiscard(upload_id).catch(() => undefined);
 };
 
 /**
@@ -584,7 +608,7 @@ function FileCard({ block, instance, agent, untrusted, at, slot, now, refresh, n
       ];
 
   const done = slot.fulfilled;
-  const late = deliveredLate(block, slot);
+  const late = block !== null && deliveredLate(block, slot);
   return (
     <Shell
       tone={secret ? "secret" : "file"}
@@ -839,7 +863,7 @@ function TextSecretCard({
             <span>{`No secret within ${lifetimeLabel(slot)}. Ask ${agent} to request again.`}</span>
           </div>
         ) : null}
-        {done && deliveredLate(block, slot) ? (
+        {done && block !== null && deliveredLate(block, slot) ? (
           <LateDelivery
             instance={instance}
             agent={agent}
@@ -860,11 +884,14 @@ function GoneCard({
   request_id,
   secret,
 }: {
-  block: RequestToolBlock;
+  block: RequestToolBlock | null;
   request_id: string;
   secret: boolean;
 }) {
-  const status = resultStatus(block.result) ?? (block.status === "running" ? "waiting" : "closed");
+  const status =
+    block === null
+      ? "closed"
+      : (resultStatus(block.result) ?? (block.status === "running" ? "waiting" : "closed"));
   return (
     <Shell
       tone={secret ? "secret" : "file"}

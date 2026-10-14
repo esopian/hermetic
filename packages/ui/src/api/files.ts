@@ -1,19 +1,72 @@
 /**
  * The composer's attachments over the bridge (`app/src/handlers/files.ts`).
  *
- * The page never names a laptop path. A drop or a paste is sent in base64
- * chunks into main-process memory (`files.chunk.*`); the native dialog
- * (`files.pickNative`) registers its picks in the same registry. Either way
- * the page stages by upload id and gets back the staged entry's `file_id`,
- * which is all `chat.send` carries.
+ * The page never names a laptop path. A drop or paste streams to a loopback
+ * upload port; a bounded text secret goes over RPC; the native dialog
+ * (`files.pickNative`) registers its picks in the same registry. The page
+ * stages an attachment by upload id and gets back the entry's `file_id`,
+ * which is all `chat.send` carries; request answers use `files.put`.
  */
 import type { HermeticRPC } from "@hermetic/app";
 import { target } from "./client.ts";
 import type { FleetTarget } from "./client.ts";
 import { transport } from "./transport.ts";
+import type { StreamName } from "./transport.ts";
 
 type Requests = HermeticRPC["bun"]["requests"];
 type Answer<K extends keyof Requests> = Requests[K]["response"];
+
+type FileProgress = { type: "progress" };
+type FileError = { type: "error"; code: string; message: string };
+
+/** Finite file streams share completion, refusal and cancellation rules. */
+function openFileStream<F extends { type: string }>(
+  name: Extract<StreamName, "files.stage" | "files.put" | "files.get">,
+  params: Record<string, unknown>,
+  handlers: {
+    onProgress?: (frame: Extract<F, FileProgress>) => void;
+    onDone: (frame: Exclude<F, FileProgress>) => void;
+  },
+  stopped: string,
+  errorFrame: (code: string, message: string) => Exclude<F, FileProgress>,
+): () => void {
+  let settled = false;
+  const finish = (frame: Exclude<F, FileProgress>): void => {
+    if (settled) return;
+    settled = true;
+    handlers.onDone(frame);
+  };
+  const close = transport().openStream(name, params, {
+    onFrame: (frame) => {
+      const data = frame.data as F | undefined;
+      if (data === undefined || typeof data !== "object") return;
+      if (data.type === "progress") handlers.onProgress?.(data as Extract<F, FileProgress>);
+      else finish(data as Exclude<F, FileProgress>);
+    },
+    onEnd: (_ok, failure) => {
+      finish(errorFrame(failure?.code ?? "STREAM_CLOSED", failure?.message ?? stopped));
+    },
+  });
+  return () => {
+    settled = true;
+    close();
+  };
+}
+
+function targetOrRefuse(onDone: (frame: FileError) => void): FleetTarget | null {
+  try {
+    return target();
+  } catch (error) {
+    queueMicrotask(() =>
+      onDone({
+        type: "error",
+        code: "NO_TARGET",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return null;
+  }
+}
 
 /** One frame of a staging, as the app pushes it (`FilesStageFrame`). */
 export type FilesStageFrame = NonNullable<HermeticRPC["webview"]["messages"]["files.frame"]["done"]>;
@@ -29,24 +82,15 @@ export function uploadOpen(name: string, size: number): Promise<Answer<"files.up
   return transport().request("files.upload.open", { name, size });
 }
 
-export function chunkOpen(name: string, size: number): Promise<Answer<"files.chunk.open">> {
-  return transport().request("files.chunk.open", { name, size });
-}
-
-export function chunkAppend(
-  upload_id: string,
-  offset: number,
+export function secretTextUpload(
+  name: string,
   data_b64: string,
-): Promise<Answer<"files.chunk.append">> {
-  return transport().request("files.chunk.append", { upload_id, offset, data_b64 });
+): Promise<Answer<"files.secretText.upload">> {
+  return transport().request("files.secretText.upload", { name, data_b64 });
 }
 
-export function chunkClose(upload_id: string): Promise<Answer<"files.chunk.close">> {
-  return transport().request("files.chunk.close", { upload_id });
-}
-
-export function chunkDiscard(upload_id: string): Promise<Answer<"files.chunk.discard">> {
-  return transport().request("files.chunk.discard", { upload_id });
+export function uploadDiscard(upload_id: string): Promise<Answer<"files.upload.discard">> {
+  return transport().request("files.upload.discard", { upload_id });
 }
 
 export function filesCapability(instance: string): Promise<Answer<"files.capability">> {
@@ -93,25 +137,8 @@ export function stageUpload(
   opts: { not_secret?: boolean; session?: string },
   handlers: StageHandlers,
 ): () => void {
-  let fleet: FleetTarget;
-  try {
-    fleet = target();
-  } catch (error) {
-    queueMicrotask(() =>
-      handlers.onDone({
-        type: "error",
-        code: "NO_TARGET",
-        message: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    return () => {};
-  }
-  let settled = false;
-  const finish = (frame: Exclude<FilesStageFrame, FilesStageProgress>): void => {
-    if (settled) return;
-    settled = true;
-    handlers.onDone(frame);
-  };
+  const fleet = targetOrRefuse(handlers.onDone);
+  if (fleet === null) return () => {};
   const params: Record<string, unknown> = {
     instance,
     source: { chunk_upload_id: upload_id },
@@ -119,25 +146,13 @@ export function stageUpload(
   };
   if (opts.not_secret === true) params["not_secret"] = true;
   if (opts.session !== undefined) params["session"] = opts.session;
-  const close = transport().openStream("files.stage", params, {
-    onFrame: (frame) => {
-      const data = frame.data as FilesStageFrame | undefined;
-      if (data === undefined || typeof data !== "object") return;
-      if (data.type === "progress") handlers.onProgress(data);
-      else finish(data);
-    },
-    onEnd: (_ok, failure) => {
-      finish({
-        type: "error",
-        code: failure?.code ?? "STREAM_CLOSED",
-        message: failure?.message ?? "the upload stopped before the box answered",
-      });
-    },
-  });
-  return () => {
-    settled = true;
-    close();
-  };
+  return openFileStream<FilesStageFrame>(
+    "files.stage",
+    params,
+    handlers,
+    "the upload stopped before the box answered",
+    (code, message) => ({ type: "error", code, message }),
+  );
 }
 
 // ─── an agent's file request (attachments plan §8.3–8.4b) ──────────────────
@@ -188,25 +203,8 @@ export function putUpload(
   opts: PutOptions,
   handlers: PutHandlers,
 ): () => void {
-  let fleet: FleetTarget;
-  try {
-    fleet = target();
-  } catch (error) {
-    queueMicrotask(() =>
-      handlers.onDone({
-        type: "error",
-        code: "NO_TARGET",
-        message: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    return () => {};
-  }
-  let settled = false;
-  const finish = (frame: Exclude<FilesPutFrame, FilesPutProgress>): void => {
-    if (settled) return;
-    settled = true;
-    handlers.onDone(frame);
-  };
+  const fleet = targetOrRefuse(handlers.onDone);
+  if (fleet === null) return () => {};
   const params: Record<string, unknown> = {
     instance,
     request_id,
@@ -218,25 +216,13 @@ export function putUpload(
   if (opts.ephemeral === true) params["ephemeral"] = true;
   if (opts.as !== undefined && opts.as !== "auto") params["as"] = opts.as;
   if (opts.replace === true) params["replace"] = true;
-  const close = transport().openStream("files.put", params, {
-    onFrame: (frame) => {
-      const data = frame.data as FilesPutFrame | undefined;
-      if (data === undefined || typeof data !== "object") return;
-      if (data.type === "progress") handlers.onProgress(data);
-      else finish(data);
-    },
-    onEnd: (_ok, failure) => {
-      finish({
-        type: "error",
-        code: failure?.code ?? "STREAM_CLOSED",
-        message: failure?.message ?? "the upload stopped before the box answered",
-      });
-    },
-  });
-  return () => {
-    settled = true;
-    close();
-  };
+  return openFileStream<FilesPutFrame>(
+    "files.put",
+    params,
+    handlers,
+    "the upload stopped before the box answered",
+    (code, message) => ({ type: "error", code, message }),
+  );
 }
 
 // ─── saving a file the agent shared (attachments plan §8.5) ──────────────────
@@ -292,24 +278,12 @@ export function saveFile(name: string, id: string, handlers: SaveHandlers): () =
       return;
     }
     handlers.onStarted?.();
-    close = transport().openStream(
+    close = openFileStream<FilesGetFrame>(
       "files.get",
       { name, id, dest: { dest_id } },
-      {
-        onFrame: (frame) => {
-          const data = frame.data as FilesGetFrame | undefined;
-          if (data === undefined || typeof data !== "object") return;
-          if (data.type === "progress") handlers.onProgress?.(data);
-          else finish(data);
-        },
-        onEnd: (_ok, failure) => {
-          finish({
-            type: "error",
-            code: failure?.code ?? "STREAM_CLOSED",
-            message: failure?.message ?? "the download stopped before the box answered",
-          });
-        },
-      },
+      { onProgress: handlers.onProgress, onDone: finish },
+      "the download stopped before the box answered",
+      (code, message) => ({ type: "error", code, message }),
     );
   }, fail);
   return () => {

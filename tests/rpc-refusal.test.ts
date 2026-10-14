@@ -218,14 +218,16 @@ describe("a files refusal", () => {
    */
   const bridge = (name: string): never => name as never;
 
-  test("an oversize drop is refused FILE_TOO_LARGE, pointing at the dialog", async () => {
+  test("an oversize text secret is refused without repeating its name", async () => {
     const page = await pageOverApp();
     const thrown = (await refusalAtThePage(
-      page.request(bridge("files.chunk.open"), { name: NAME, size: 65 * 1024 * 1024 }),
+      page.request(bridge("files.secretText.upload"), {
+        name: NAME,
+        data_b64: "A".repeat(90_000),
+      }),
     )) as ApiError;
     expect(thrown).toBeInstanceOf(ApiError);
-    expect(thrown.code).toBe("FILE_TOO_LARGE");
-    expect(thrown.message).toContain("attach button");
+    expect(thrown.code).toBe("VALIDATION");
     expect(thrown.message).not.toContain(NAME);
   });
 
