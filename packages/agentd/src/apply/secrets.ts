@@ -3,7 +3,14 @@
  * (§6.4, §8.3).
  */
 import type { AgentConfig } from "@hermetic/core/schema";
-import { MEMORY_LLM_ENV_PATH, memoryServiceOf } from "@hermetic/core/shared";
+import {
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_SERVICE_UNIT,
+  MEMORY_WORKER_UNIT,
+  memoryServiceOf,
+} from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { AgentdError } from "../errors.ts";
@@ -16,6 +23,27 @@ import { sha256 } from "./shared.ts";
  */
 export const SECRETS_ENV_PATH = "/run/hermetic/secrets.env";
 export const SECRETS_ENV_DIR = "/run/hermetic";
+
+/**
+ * The boot oneshot core renders on every agent (`secretsUnit`), whose
+ * `ExecStart` is `hermeticd secrets materialise`: it writes `SECRETS_ENV_PATH`
+ * and `MEMORY_LLM_ENV_PATH` from the manifest at `MANIFEST_PATH`.
+ */
+export const SECRETS_UNIT = "hermetic-secrets.service";
+
+/**
+ * Every unit core renders with `Requires=` on `SECRETS_UNIT`: both Hermes
+ * units (the gateway through its drop-in), the memory server and honcho's
+ * worker. They read the two files that unit writes, and systemd restarts them
+ * whenever it is restarted. honcho's database reads neither and is not here.
+ * `tests/seams.test.ts` holds the list against the renderer.
+ */
+export const SECRETS_DEPENDENTS: readonly string[] = [
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  MEMORY_SERVICE_UNIT,
+  MEMORY_WORKER_UNIT,
+];
 
 /**
  * Values that need no quoting in a systemd `EnvironmentFile`. Everything else

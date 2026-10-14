@@ -1,6 +1,7 @@
 /**
  * Which Hermes external memory provider a new agent gets, and the refusals a
- * create makes about it before it owns anything.
+ * create — or an `agents.set` that changes it — makes about it before it
+ * writes anything.
  *
  * Its own module rather than more of `create-agent.ts` (core rule 5), and
  * shaped like `profile-binding.ts`: a pure resolution, then checks the create
@@ -8,12 +9,17 @@
  * provider's model calls use the agent's own provider credential, which the
  * box copies for it (`memory.llm.key_env`, `render/render-memory.ts`).
  *
- * The choice is made once, at create, and pinned on the row (`Agent.memory`).
- * A later change to `settings.default_memory_provider` moves no existing agent,
- * for the reason `Agent.seed` is pinned: a fleet default re-read at render time
- * would re-hash every agent's configuration the day somebody changed it.
+ * The choice is pinned on the row (`Agent.memory`). The fleet default is read
+ * once, at create: a later change to `settings.default_memory_provider` moves
+ * no existing agent, for the reason `Agent.seed` is pinned — a fleet default
+ * re-read at render time would re-hash every agent's configuration the day
+ * somebody changed it. An existing agent changes provider only when its
+ * operator says so, through `agents.set` (`memory_provider`), which runs the
+ * same checks against the agent as it stands after the change and reaches a
+ * running box through the ordinary rollout (§6.2).
  */
 import type {
+  Agent,
   AgentCapability,
   AgentMemory,
   FleetSettings,
@@ -22,6 +28,7 @@ import type {
 } from "../../schema/index.ts";
 import { SIZES } from "../../schema/index.ts";
 import {
+  MEMORY_PROVIDER_NONE,
   MEMORY_HONCHO_CAPABILITY,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDER_CAPABILITY,
@@ -32,7 +39,7 @@ import {
   type MemoryProvider,
   type MemoryProviderSpec,
 } from "../../shared/memory-providers.ts";
-import type { Provider } from "../../shared/providers.ts";
+import { PROVIDERS, type Provider } from "../../shared/providers.ts";
 import { HermeticError } from "../../errors.ts";
 import {
   isMemoryServiceProvider,
@@ -54,6 +61,28 @@ export function resolveMemoryProvider(
   // again here so a store that hands back an unparsed row cannot pin a
   // since-removed provider on a new agent.
   return resolved === null || !isMemoryProvider(resolved) ? null : resolved;
+}
+
+/**
+ * The provider an `agents.set` names: `undefined` when it names none (no
+ * change), `null` for `none`. Unlike `resolveMemoryProvider`, never the fleet
+ * default — that is read once, at create.
+ */
+export function statedMemoryProvider(
+  choice: MemoryProviderChoice | undefined,
+): MemoryProvider | null | undefined {
+  if (choice === undefined) return undefined;
+  return choice === MEMORY_PROVIDER_NONE || !isMemoryProvider(choice) ? null : choice;
+}
+
+/**
+ * The model a memory server is handed for this row: the one `renderAgentConfig`
+ * resolves — the row's `hermes.model`, else the model seeded at create, else
+ * the vendor's default (`splitHermesSettings`, and `render.ts`'s call to
+ * `renderMemory`).
+ */
+export function renderedMemoryModel(agent: Pick<Agent, "provider" | "hermes" | "seed">): string {
+  return agent.hermes?.model ?? agent.seed?.model ?? PROVIDERS[agent.provider].default_model;
 }
 
 /** What the row records for a resolved provider: `null` is built-in memory only. */

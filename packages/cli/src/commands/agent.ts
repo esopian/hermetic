@@ -495,7 +495,9 @@ export function register(program: Command): void {
 
   agent.addCommand(
     hermesOptions(globals(new Cmd("set")))
-      .description("change an agent's settings; takes effect on the next rerun or recreate")
+      .description(
+        "change an agent's settings; takes effect on the next rerun or recreate, or `plan rollout` + `apply`",
+      )
       .argument("<name>", "agent name")
       .option("--secrets <mode>", "none | bitwarden")
       .option(
@@ -521,6 +523,10 @@ export function register(program: Command): void {
       )
       .option("--hermes-version <version>", "pin a hermes version")
       .option(
+        "--memory <provider|none>",
+        `Hermes external memory provider: ${MEMORY_PROVIDER_IDS.join(" | ")} | none; switching keeps the old provider's data on the volume`,
+      )
+      .option(
         "--expected-version <n>",
         "refuse unless the agent row is still at this version (`agent status --json` prints it)",
       )
@@ -528,7 +534,10 @@ export function register(program: Command): void {
         "after",
         "\nA provider change is saved, not applied: `hermetic plan rollout <name>` shows\n" +
           "what it will do and `hermetic apply` performs it — copying the credential,\n" +
-          "re-rendering the configuration and restarting Hermes on the box.\n",
+          "re-rendering the configuration and restarting Hermes on the box.\n" +
+          "\nA --memory switch reaches a running box the same way (`plan rollout`, then\n" +
+          "`apply`). The old provider's data stays on the volume, so switching back finds it —\n" +
+          "except openviking's after a rebinding that changes how the agent embeds.\n",
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -561,8 +570,18 @@ export function register(program: Command): void {
             hermes_version: opts["hermesVersion"],
             hermes: hermesFrom(opts, { omitModel: true }),
             hold: holdFrom(opts["hold"]),
+            memory_provider: opts["memory"],
           }),
         );
+        /**
+         * The provider before the call, read only to tell the operator what
+         * moved: `set` returns the row after, and a no-op returns it unchanged.
+         * Skipped under `--json`, which prints only the row.
+         */
+        const memoryBefore =
+          input.memory_provider !== undefined && !ctx.flags.json
+            ? ((await ctx.hermetic.agents.get(input.name)).memory?.provider ?? "none")
+            : null;
         const agent = await ctx.hermetic.agents.set(input);
         if (ctx.flags.json) {
           await outJson(agent);
@@ -573,6 +592,15 @@ export function register(program: Command): void {
           await err(
             `saved — pending apply: profile ${agent.pending.profile_id} r${agent.pending.profile_revision}, model ${agent.pending.model}. ` +
               `Run \`hermetic apply\` (\`hermetic plan rollout ${agent.name}\` first) to perform it.\n`,
+          );
+        }
+        const memoryAfter = agent.memory?.provider ?? "none";
+        if (memoryBefore !== null && memoryBefore !== memoryAfter) {
+          await err(
+            `memory: ${memoryBefore} → ${memoryAfter}; run \`hermetic plan rollout ${agent.name}\` then ` +
+              "`hermetic apply` to switch the running box (restarts Hermes briefly)" +
+              (memoryBefore === "none" ? "" : `; ${memoryBefore}'s data stays on the volume`) +
+              "\n",
           );
         }
       }),

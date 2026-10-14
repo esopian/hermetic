@@ -221,6 +221,21 @@ export const SetAgentInput = z.object({
    * every setting its operator stated until this is sent.
    */
   hold: HermesHold.optional(),
+  /**
+   * Choose or change the agent's Hermes external memory provider after create
+   * (§6.2): a provider id, or `none` for built-in memory only. Absent leaves the
+   * row's provider alone; it never means "the fleet default", which is read
+   * once, at create.
+   *
+   * Checked exactly as create checks it, against the size, vendor and model
+   * the agent has after this call: `MEMORY_PROVIDER_UNDERSIZED`,
+   * `MEMORY_LLM_UNSUPPORTED`. Switching away stops the old provider's services
+   * on the box but never deletes its data, so switching back finds it again
+   * (openviking's only while the agent's vendor embeds the same way, §6.2).
+   * Like every other `set`, it reaches a running box through `plan rollout` and
+   * `apply`.
+   */
+  memory_provider: MemoryProviderChoice.optional(),
 });
 export type SetAgentInput = z.infer<typeof SetAgentInput>;
 

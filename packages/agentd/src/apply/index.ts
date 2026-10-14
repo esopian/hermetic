@@ -20,6 +20,7 @@ import {
   HERMES_GATEWAY_UNIT,
   MEMORY_LLM_ENV_PATH,
   MEMORY_SERVICE_UNIT,
+  MEMORY_SERVICE_UNITS,
   MEMORY_WORKER_UNIT,
   PROVIDERS,
 } from "@hermetic/core/shared";
@@ -61,8 +62,20 @@ import { ensureAgentVenv } from "./agent-python.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { ensureMemoryDeps } from "./memory.ts";
-import { assertMemoryPin, ensureMemoryService, removeMemoryService } from "./memory-service.ts";
-import { SECRETS_ENV_PATH, materialiseMemoryLlm, materialiseSecrets, memoryLlmFor } from "./secrets.ts";
+import {
+  assertMemoryPin,
+  awaitMemoryServer,
+  ensureMemoryService,
+  removeMemoryService,
+} from "./memory-service.ts";
+import {
+  SECRETS_DEPENDENTS,
+  SECRETS_ENV_PATH,
+  SECRETS_UNIT,
+  materialiseMemoryLlm,
+  materialiseSecrets,
+  memoryLlmFor,
+} from "./secrets.ts";
 import { ensureShellIntegration } from "./shell.ts";
 
 /**
@@ -104,8 +117,10 @@ export {
   shasumFor,
 } from "./node-web.ts";
 export {
+  SECRETS_DEPENDENTS,
   SECRETS_ENV_DIR,
   SECRETS_ENV_PATH,
+  SECRETS_UNIT,
   envLine,
   materialiseMemoryLlm,
   materialiseSecrets,
@@ -114,9 +129,12 @@ export {
 export { distributionOf, ensureMemoryDeps, importNameOf } from "./memory.ts";
 export {
   MEMORY_PIN_MARKER,
+  MEMORY_READY_POLL_MS,
+  MEMORY_READY_TIMEOUT_MS,
   MEMORY_SERVICE_UNIT_PATH,
   PLUGIN_REF_MARKER,
   assertMemoryPin,
+  awaitMemoryServer,
   ensureMemoryService,
   removeMemoryService,
 } from "./memory-service.ts";
@@ -346,28 +364,33 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
    * same content for the same manifest, so this does not take authorship away
    * from that unit; it keeps the two in step between boots.
    */
-  const wroteSecrets = await materialiseSecrets({
-    host,
-    ...(manifest.secrets_mode === "bitwarden" && opts.bwsToken
-      ? { bitwarden: { token: opts.bwsToken, project: opts.bwsProject ?? manifest.name } }
-      : {}),
-    ...(keyEnv !== null && opts.providerKey
-      ? { providerKey: { env: keyEnv, value: opts.providerKey } }
-      : {}),
-    ...(dry ? { dryRun: true } : {}),
-  });
+  // A function because the units phase calls it again: see `SECRETS_UNIT` there.
+  const materialiseSecretsEnv = () =>
+    materialiseSecrets({
+      host,
+      ...(manifest.secrets_mode === "bitwarden" && opts.bwsToken
+        ? { bitwarden: { token: opts.bwsToken, project: opts.bwsProject ?? manifest.name } }
+        : {}),
+      ...(keyEnv !== null && opts.providerKey
+        ? { providerKey: { env: keyEnv, value: opts.providerKey } }
+        : {}),
+      ...(dry ? { dryRun: true } : {}),
+    });
+  // The memory server's own credential file: written for a service provider
+  // (empty for a role-authenticated vendor), removed for any other agent.
+  const materialiseMemoryEnv = () =>
+    materialiseMemoryLlm({
+      host,
+      memoryLlm,
+      ...(dry ? { dryRun: true } : {}),
+    });
+  const wroteSecrets = await materialiseSecretsEnv();
   if (wroteSecrets) {
     result.changed.push(SECRETS_ENV_PATH);
     result.contentChanged.push(SECRETS_ENV_PATH);
     rewritten.add(SECRETS_ENV_PATH);
   }
-  // The memory server's own credential file: written for a service provider
-  // (empty for a role-authenticated vendor), removed for any other agent.
-  const wroteMemoryLlm = await materialiseMemoryLlm({
-    host,
-    memoryLlm,
-    ...(dry ? { dryRun: true } : {}),
-  });
+  const wroteMemoryLlm = await materialiseMemoryEnv();
   if (wroteMemoryLlm) {
     result.changed.push(MEMORY_LLM_ENV_PATH);
     result.contentChanged.push(MEMORY_LLM_ENV_PATH);
@@ -519,20 +542,89 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   // it as well as writing it, so `is-enabled` already answers `enabled` by the
   // time the loop above runs and the unit is neither newly enabled nor rendered
   // by hermetic — it would be left installed and stopped.
-  const toRestart = manifest.units.filter(
-    (unit) =>
-      rewritten.has(`${UNIT_DIR}/${unit}`) ||
-      newlyEnabled.has(unit) ||
-      watchTriggered.has(unit) ||
-      (gatewayInstalled && unit === HERMES_GATEWAY_UNIT),
+  const due = new Set(
+    manifest.units.filter(
+      (unit) =>
+        rewritten.has(`${UNIT_DIR}/${unit}`) ||
+        newlyEnabled.has(unit) ||
+        watchTriggered.has(unit) ||
+        (gatewayInstalled && unit === HERMES_GATEWAY_UNIT),
+    ),
   );
+  /**
+   * `SECRETS_UNIT`, which this apply never re-runs once it is up.
+   *
+   * Its `ExecStart` is `hermeticd secrets materialise`, which rewrites both
+   * files phase 3b has just written, from the manifest at `MANIFEST_PATH`. In
+   * a bootstrap that is the manifest being applied (`03-config` lands it before
+   * `04-apply` runs), but a converge writes `MANIFEST_PATH` only once its apply
+   * has succeeded (`converge.ts`). So during a converge, restarting the unit
+   * put the previous configuration's `secrets.env` back, under the previous
+   * vendor's variable, and wrote or deleted `memory-llm.env` for the previous
+   * memory provider, just after phase 3b had written the files for this one.
+   * The units restarted next then started on those files. This happens when
+   * the unit's own file changes, which a vendor or `secrets_mode` change does.
+   *
+   * So a unit that is already active is left alone: this apply wrote its
+   * outputs from this manifest, and a `RemainAfterExit` oneshot has nothing
+   * else to restart. A unit that is not active yet (a new box, or a failed
+   * boot) is started as before, and both files are written again straight
+   * after it, so whichever manifest it read, this apply's version is on disk.
+   *
+   * Either way its dependents are restarted after it, because they are what
+   * reads the files. That replaces the restart systemd would have propagated
+   * to them through `Requires=`.
+   */
+  if (due.has(SECRETS_UNIT)) {
+    const probe = await host.exec(["systemctl", "is-active", SECRETS_UNIT]);
+    const live =
+      !newlyEnabled.has(SECRETS_UNIT) && probe.code === 0 && probe.stdout.trim() === "active";
+    if (live) {
+      due.delete(SECRETS_UNIT);
+      emit(
+        opEvent(
+          "units",
+          0.7,
+          `${SECRETS_UNIT} is active and its files were written above; restarting its dependents instead`,
+          at(),
+        ),
+      );
+    }
+    for (const unit of SECRETS_DEPENDENTS) due.add(unit);
+  }
+  /**
+   * Restart order: the secrets oneshot, then the memory server's units, then
+   * everything else, otherwise in the manifest's order. Core renders the units
+   * in that order already. Sorting here makes the ordering independent of the
+   * manifest, because the memory readiness wait below relies on it.
+   */
+  const rank = (unit: string): number =>
+    unit === SECRETS_UNIT ? 0 : (MEMORY_SERVICE_UNITS as readonly string[]).includes(unit) ? 1 : 2;
+  const toRestart = manifest.units.filter((unit) => due.has(unit)).sort((a, b) => rank(a) - rank(b));
   // The obligation restated, now that it is a fact rather than a prediction:
   // these units, and no others, are what this apply owes from here.
   if (!dry) await writeApplyPending(host, toRestart, manifest.config_hash);
+  let memoryServerRestarted = false;
   for (const unit of toRestart) {
+    /**
+     * Hermes only after the memory server is listening (`awaitMemoryServer`):
+     * its plugin connects at start. Waited on once, and only on a restart
+     * of the server by this loop.
+     */
+    if (memoryServerRestarted && (unit === HERMES_DASHBOARD_UNIT || unit === HERMES_GATEWAY_UNIT)) {
+      memoryServerRestarted = false;
+      await awaitMemoryServer(host, manifest, emit);
+    }
     emit(opEvent("units", 0.75, `restarting ${unit}`, at()));
     if (!dry) await must(host, ["systemctl", "restart", unit]);
     result.restarted.push(unit);
+    if (!dry && unit === MEMORY_SERVICE_UNIT) memoryServerRestarted = true;
+    // The oneshot read `MANIFEST_PATH`, which a converge has not moved yet:
+    // put this apply's files back before anything that reads them restarts.
+    if (!dry && unit === SECRETS_UNIT) {
+      await materialiseSecretsEnv();
+      await materialiseMemoryEnv();
+    }
     // After the restart, never before it: a `must` that throws has to leave the
     // next apply the same instruction this one was given.
     if (!dry) await dropApplyPendingUnit(host, unit);

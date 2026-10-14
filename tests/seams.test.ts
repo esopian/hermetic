@@ -105,7 +105,9 @@ import {
   HERMES_REPO,
   HERMETIC_RENDERED_MARKER,
   PROVIDER_EXTRAS,
+  SECRETS_DEPENDENTS,
   SECRETS_ENV_PATH,
+  SECRETS_UNIT,
 } from "../packages/agentd/src/apply/index.ts";
 import { ownershipOf } from "../packages/agentd/src/apply/accounts.ts";
 import { HERMETICD_CAPABILITIES, parseManifest } from "../packages/agentd/src/manifest.ts";
@@ -1115,6 +1117,74 @@ describe("seam: honcho's units and files are the ones hermeticd installs and lin
     const ref = /^\$\{([A-Z_]+)\}$/.exec(conf.embedding.dense.api_key)?.[1];
     expect(ref).toBeDefined();
     expect(ov.memory?.llm?.key_env).toContain(ref as never);
+  });
+});
+
+/**
+ * A memory provider changed in place reaches the box as a converge, and two
+ * facts the units phase relies on for that are the renderer's.
+ *
+ * `apply` never re-runs an active `hermetic-secrets.service` (it has just
+ * written both of its files itself) and restarts the oneshot's dependents
+ * instead, from its own list (`SECRETS_DEPENDENTS`). A unit core renders with
+ * `Requires=` on the oneshot and missing from that list would keep files the
+ * apply had changed under it. And Hermes learns of a new provider only by
+ * restarting, which it does because the managed `config.yaml` names the
+ * provider and lists both Hermes units in `restart_units`.
+ */
+describe("seam: a memory switch restarts what reads the files it moves", () => {
+  const render = (memory?: RenderInput["memory"]) =>
+    parseManifest(
+      overTheWire(
+        renderAgentConfig({
+          name: "atlas",
+          size: "small",
+          provider: "openai",
+          secrets_mode: "none",
+          hermes_version: "0.21.1",
+          hermes_ref: "v2026.8.31",
+          chrome_ref: CHROME_REF,
+          region: "us-east-1",
+          tailnet: "tail0.ts.net",
+          ...(memory === undefined ? {} : { memory }),
+        } as RenderInput).manifest,
+      ),
+    );
+  const choices = [undefined, "holographic", "hindsight", "openviking", "honcho"] as const;
+  const docs = choices.map((provider) => render(provider === undefined ? undefined : { provider }));
+
+  test("the units that require the secrets oneshot are exactly the ones apply restarts in its place", () => {
+    const requiring = new Set<string>();
+    for (const read of docs) {
+      expect(read.units[0]).toBe(SECRETS_UNIT);
+      expect(read.files.some((f) => f.path === `/etc/systemd/system/${SECRETS_UNIT}`)).toBe(true);
+      for (const f of read.files) {
+        const m = /^\/etc\/systemd\/system\/([^/]+?\.service)(?:\.d\/[^/]+)?$/.exec(f.path);
+        if (m && f.content.includes(`Requires=${SECRETS_UNIT}`)) requiring.add(m[1]!);
+      }
+    }
+    expect([...requiring].sort()).toEqual([...SECRETS_DEPENDENTS].sort());
+  });
+
+  test("the memory units come before Hermes in the order apply restarts them", () => {
+    for (const read of docs) {
+      const memory = read.units.filter((u) => (MEMORY_SERVICE_UNITS as readonly string[]).includes(u));
+      const hermes = read.units.indexOf(HERMES_DASHBOARD_UNIT);
+      for (const unit of memory) expect(read.units.indexOf(unit)).toBeLessThan(hermes);
+    }
+  });
+
+  test("every change of provider rewrites the managed config, which restarts both Hermes units", () => {
+    const managed = (read: ReturnType<typeof parseManifest>) =>
+      read.files.find((f) => f.path === HERMES_MANAGED_CONFIG)!;
+    for (const [i, a] of docs.entries()) {
+      expect(managed(a).restart_units).toEqual(
+        expect.arrayContaining([HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT]),
+      );
+      for (const [j, b] of docs.entries()) {
+        if (i !== j) expect(managed(a).content).not.toBe(managed(b).content);
+      }
+    }
   });
 });
 

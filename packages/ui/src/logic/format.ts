@@ -389,7 +389,7 @@ const NO_ACTIONS: DrawerActions = {
 const REBOOTABLE = new Set(["ready", "degraded", "bootstrapping", "error", "unreachable"]);
 
 /** The statuses whose box can answer an in-place converge; see `DrawerActions.upgradeNow`. */
-const CONVERGEABLE = new Set(["ready", "degraded", "error"]);
+export const CONVERGEABLE: ReadonlySet<string> = new Set(["ready", "degraded", "error"]);
 
 /** Recreate needs a settled row (§6.5): mid-flight statuses have no edge to it. */
 const REBUILDABLE = new Set(["ready", "degraded", "creating", "stopped", "error", "unreachable"]);

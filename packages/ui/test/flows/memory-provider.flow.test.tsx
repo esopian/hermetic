@@ -316,3 +316,87 @@ test("agent detail: Honcho is named by its label on the agent seeded with it", a
   await waitFor(() => expect(within(ibis).getByText(HONCHO)).toBeTruthy());
   expect(within(ibis).queryByText(/key: /)).toBeNull();
 }, 20_000);
+
+/*
+ * The agent drawer's memory switch: Change → choose → read what the switch
+ * does → Switch memory, which saves the provider on the row and rolls the one
+ * agent out (`plan.rollout`, then `apply`). `fathom` is small (16 GiB, enough
+ * for every provider), running, on the anthropic profile, with no provider.
+ */
+test("agent detail: switching memory saves, rolls out, and the row names the new provider", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  mountPortal();
+  const user = userEvent.setup();
+
+  const fathom = await openConfig(user, "fathom");
+  await waitFor(() => expect(within(fathom).getByText("Built-in only")).toBeTruthy());
+  await user.click(within(fathom).getByRole("button", { name: "Change memory provider" }));
+
+  const select = within(fathom).getByLabelText("Memory provider") as HTMLSelectElement;
+  expect(document.activeElement).toBe(select);
+  expect(select.value).toBe("none");
+  expect(within(select).getByRole("option", { name: "None — built-in only · current" })).toBeTruthy();
+  const switchButton = within(fathom).getByRole("button", { name: "Switch memory" });
+  // The current provider is no change at all.
+  expect((switchButton as HTMLButtonElement).disabled).toBe(true);
+
+  await user.selectOptions(select, "hindsight");
+  const confirm = within(fathom).getByRole("group", { name: "Confirm memory switch" });
+  expect(confirm.textContent).toContain(`Built-in only → ${HINDSIGHT}`);
+  expect(confirm.textContent).toContain("stays on the data volume");
+  expect(confirm.textContent).toContain("there again if you switch back");
+  expect(confirm.textContent).toContain("do not migrate between providers");
+  expect(confirm.textContent).toContain("restarts Hermes briefly");
+  // Hindsight is a server hermeticd installs: the first install is not brief.
+  expect(confirm.textContent).toContain("can take several minutes");
+  expect((switchButton as HTMLButtonElement).disabled).toBe(false);
+
+  const version = (await h.ctx.hermetic().agents.get("fathom")).version;
+  await user.click(switchButton);
+
+  await waitFor(() => expect(paramsOf(h, "apply").length).toBe(1));
+  const set = paramsOf(h, "agents.set");
+  expect(set.length).toBe(1);
+  expect(set[0]).toMatchObject({
+    name: "fathom",
+    memory_provider: "hindsight",
+    expected_version: version,
+  });
+  expect(paramsOf(h, "plan.rollout")[0]).toMatchObject({ agents: ["fathom"] });
+  expect(paramsOf(h, "apply")[0]).toMatchObject({ plan: { kind: "rollout" } });
+
+  // The editor closed and the row is the row core wrote.
+  await waitFor(() => expect(within(fathom).getByText(HINDSIGHT)).toBeTruthy());
+  expect(within(fathom).queryByLabelText("Memory provider")).toBeNull();
+  expect((await h.ctx.hermetic().agents.get("fathom")).memory?.provider).toBe("hindsight");
+}, 20_000);
+
+test("agent detail: a provider the agent's vendor cannot serve is offered disabled, with the reason", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  mountPortal();
+  const user = userEvent.setup();
+
+  // kestrel: medium, on the anthropic profile — Honcho needs an embeddings vendor.
+  const kestrel = await openConfig(user, "kestrel");
+  await user.click(await within(kestrel).findByRole("button", { name: "Change memory provider" }));
+  const select = within(kestrel).getByLabelText("Memory provider") as HTMLSelectElement;
+  const honcho = within(select).getByRole("option", {
+    name: `${HONCHO} — not for anthropic`,
+  }) as HTMLOptionElement;
+  expect(honcho.disabled).toBe(true);
+  expect((within(select).getByRole("option", { name: HINDSIGHT }) as HTMLOptionElement).disabled).toBe(
+    false,
+  );
+
+  // Cancel restores the row and sends nothing.
+  await user.click(within(kestrel).getByRole("button", { name: "Cancel" }));
+  expect(within(kestrel).queryByLabelText("Memory provider")).toBeNull();
+  expect(paramsOf(h, "agents.set").length).toBe(0);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      within(kestrel).getByRole("button", { name: "Change memory provider" }),
+    ),
+  );
+}, 20_000);

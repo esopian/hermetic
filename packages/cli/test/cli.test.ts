@@ -1438,15 +1438,15 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
   });
 
   test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.0", "--now", "--no-rollout");
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.1", "--now", "--no-rollout");
     expect(code).toBe(2);
     expect(stderr).toContain("--now and --no-rollout contradict each other");
   });
 
   test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
-    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.0", "--now");
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.1", "--now");
     expect(code).toBe(0);
-    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.0 now");
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.1 now");
   });
 
   test("`artifacts push V --no-rollout` publishes and asks no box", async () => {

@@ -6,7 +6,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture010000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -94,7 +94,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 18000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000001",
     "instance_type": "t4g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:42.000Z",
@@ -141,7 +141,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture020000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -230,7 +230,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 12000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000002",
     "instance_type": "r8g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:48.000Z",
@@ -414,7 +414,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture040000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -502,7 +502,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 30000,
     "hermes_version": "0.14.2",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000004",
     "instance_type": "r8g.large",
     "last_heartbeat": "2026-09-01T11:59:30.000Z",
@@ -543,7 +543,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture050000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -631,7 +631,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 6000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000005",
     "instance_type": "t4g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:54.000Z",
@@ -801,7 +801,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture070000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -890,7 +890,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 18000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000007",
     "instance_type": "r8g.large",
     "last_heartbeat": "2026-09-01T11:59:42.000Z",
@@ -1065,7 +1065,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture090000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -1154,7 +1154,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 12000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000009",
     "instance_type": "t4g.2xlarge",
     "last_heartbeat": "2026-09-01T11:59:48.000Z",
@@ -1199,7 +1199,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "applied_config_hash": "fixture100000000",
     "bootstrap": {
       "current": null,
-      "hermeticd_version": "0.8.0",
+      "hermeticd_version": "0.8.1",
       "last_command_id": null,
       "stages": [
         {
@@ -1287,7 +1287,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     },
     "heartbeat_age_ms": 1200000,
     "hermes_version": "0.21.0",
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "instance_id": "i-fixture00000000010",
     "instance_type": "r8g.large",
     "last_heartbeat": "2026-09-01T11:40:00.000Z",
@@ -1462,7 +1462,7 @@ exports[`--json output is a golden contract agent status atlas 1`] = `
   "applied_config_hash": "fixture010000000",
   "bootstrap": {
     "current": null,
-    "hermeticd_version": "0.8.0",
+    "hermeticd_version": "0.8.1",
     "last_command_id": null,
     "stages": [
       {
@@ -1550,7 +1550,7 @@ exports[`--json output is a golden contract agent status atlas 1`] = `
   },
   "heartbeat_age_ms": 18000,
   "hermes_version": "0.21.0",
-  "hermeticd_version": "0.8.0",
+  "hermeticd_version": "0.8.1",
   "instance_id": "i-fixture00000000001",
   "instance_type": "t4g.2xlarge",
   "last_heartbeat": "2026-09-01T11:59:42.000Z",

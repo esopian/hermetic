@@ -390,6 +390,59 @@ async function ensurePlugin(
   );
 }
 
+/** How long the units phase waits for a restarted memory server before starting Hermes anyway. */
+export const MEMORY_READY_TIMEOUT_MS = 60_000;
+/** The pause between two readiness probes. */
+export const MEMORY_READY_POLL_MS = 1_000;
+
+/**
+ * Wait, bounded, until the agent's memory server accepts a connection on its
+ * loopback port — called by the units phase after it restarted the server and
+ * before it restarts Hermes, whose plugin connects to the server as it starts.
+ *
+ * Every server is `Type=simple`, so `systemctl restart` returns as soon as the
+ * process has been forked, not once it listens; a model load or a migration
+ * can keep it from listening for a while after that. A Hermes started into
+ * that window would find no server for its provider.
+ *
+ * The probe is a TCP connect (`bash`'s `/dev/tcp`, capped by `timeout`), not
+ * an HTTP request: each server answers on a different path, and an open port
+ * is what Hermes's plugin connects to. (uvicorn, which honcho runs under,
+ * binds only after the application's startup has finished.)
+ *
+ * Never fatal. A server that is still not listening at the deadline is
+ * reported, and Hermes is started anyway: failing the apply would leave Hermes
+ * stopped, which is worse than starting it before its memory server is ready.
+ *
+ * Returns whether the server answered; `true` for a manifest with no server.
+ */
+export async function awaitMemoryServer(
+  host: Host,
+  manifest: AgentConfig,
+  emit: Emit,
+): Promise<boolean> {
+  const service = serviceOf(manifest);
+  if (service === null) return true;
+  const { provider, spec } = service;
+  const probe = ["timeout", "2", "bash", "-c", `: </dev/tcp/127.0.0.1/${String(spec.port)}`];
+  const deadline = host.now().getTime() + MEMORY_READY_TIMEOUT_MS;
+  for (;;) {
+    if ((await host.exec(probe)).code === 0) return true;
+    if (host.now().getTime() >= deadline) break;
+    await host.sleep(MEMORY_READY_POLL_MS);
+  }
+  emit(
+    opEvent(
+      "units",
+      0.76,
+      `the ${provider} server is not listening on 127.0.0.1:${String(spec.port)} after ` +
+        `${String(MEMORY_READY_TIMEOUT_MS / 1000)}s; starting Hermes anyway`,
+      host.now(),
+    ),
+  );
+  return false;
+}
+
 /**
  * Take a memory server's units away from an agent whose manifest no longer
  * lists them, and honcho's plugin config link from one no longer on honcho.

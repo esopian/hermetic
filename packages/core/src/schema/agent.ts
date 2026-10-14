@@ -538,12 +538,12 @@ export const Agent = z.object({
    */
   hermes: HermesSettings.nullish(),
   /**
-   * The Hermes external memory provider this agent was created with, and the
-   * instance slot its key was copied into. Null or absent is Hermes's built-in
-   * memory only — what every row written before the field means, and what a
-   * create that said `none` (or inherited no fleet default) records. Nullish
-   * for the reason `credential_ref` is. Rendered into the managed config, so
-   * the box cannot switch it; changing it after create is not supported.
+   * The Hermes external memory provider this agent runs. Null or absent is
+   * Hermes's built-in memory only — what every row written before the field
+   * means, and what a create that said `none` (or inherited no fleet default)
+   * records. Nullish for the reason `credential_ref` is. Rendered into the
+   * managed config, so the box cannot switch it; the operator can, with
+   * `agents.set` (`memory_provider`), and the rollout delivers it (§6.2).
    */
   memory: AgentMemory.nullish(),
   /**

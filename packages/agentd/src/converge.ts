@@ -27,7 +27,7 @@
  */
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { PROVIDERS, providerKeyRefOf } from "@hermetic/core/shared";
-import { apply } from "./apply/index.ts";
+import { apply, resetAptIndexState } from "./apply/index.ts";
 import type { Aws } from "./aws.ts";
 import { AgentdError } from "./errors.ts";
 import { paramPath } from "./fleet.ts";
@@ -137,6 +137,16 @@ export async function convergeOnce(
     providerKey = await aws.getParameter(paramPath(deps.paramPrefix, providerKeyRefOf(manifest)));
   }
 
+  /**
+   * A converge runs in `hermeticd serve`, which lives for weeks, and the apt
+   * index is refreshed once per process (`installPackages`). Without this, the
+   * first converge that needs a package (an agent moved onto honcho, which
+   * needs Postgres) would install from whatever index the process last fetched,
+   * possibly days old, and a mirror that has rotated the old package versions
+   * out answers 404. Each converge counts as a fresh process for that purpose.
+   */
+  resetAptIndexState();
+
   await apply(manifest, {
     host,
     ...(deps.emit ? { emit: deps.emit } : {}),
@@ -169,7 +179,11 @@ export async function convergeOnce(
    * config, which is the exact failure that function exists to prevent.
    *
    * `apply()` never reads this path — it takes the parsed manifest object — so
-   * nothing needed the file to be there first.
+   * nothing needed the file to be there first. The one process that does read
+   * it during an apply, `hermetic-secrets.service`, is never re-run by `apply`
+   * while it is active, and when it is started its files are written again
+   * after it (`SECRETS_UNIT` in `apply/index.ts`), so it cannot put the previous
+   * configuration's secrets back.
    *
    * The cost of the new ordering is one window: a crash between a successful
    * apply and this write leaves the old hash on the row, and the next converge
