@@ -204,9 +204,9 @@ export interface HermeticDeps {
   /** §7.3's browser mirror: the real one downloads ~190 MB from a CDN. */
   browserMirror?: BrowserMirrorFn;
   /**
-   * Where the bare Hermes mirror is kept between pushes. `open.ts` puts it
-   * beside the local database (`$HERMETIC_HOME/mirror`); absent, that is what it
-   * works out for itself.
+   * Where a Hermes mirror push stages its shallow fetch and build, deleted when
+   * the push is done. `open.ts` puts it beside the local database
+   * (`$HERMETIC_HOME/mirror`); absent, that is what it works out for itself.
    */
   mirrorDir?: string;
   /**
