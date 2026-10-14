@@ -164,6 +164,21 @@ describe("Composer", () => {
     await renderUi(<Harness {...base} {...handlers()} sending questionOpen />);
     expect(screen.getByText(/A question is waiting above — Send now skips it/)).toBeTruthy();
   });
+
+  test("an open question over a paused queue is one line, carrying the count", async () => {
+    await renderUi(
+      <Harness
+        {...base}
+        {...handlers()}
+        sending
+        parked
+        questionOpen
+        queue={[{ id: "q1", text: "next thing", at: "2026-10-13T10:00:00.000Z" }]}
+      />,
+    );
+    expect(screen.getByText(/A question is waiting above — .* · 1 queued$/)).toBeTruthy();
+    expect(screen.queryByText(/Queue paused/)).toBeNull();
+  });
 });
 
 describe("isAutocorrectEcho", () => {

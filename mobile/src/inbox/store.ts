@@ -310,6 +310,12 @@ export interface WatchedThread {
    * or the separate session's own. What an event's `session` is matched on.
    */
   resolved?: string | null;
+  /**
+   * Bot Chat only: the ids of the bot's separate sessions, once its session
+   * list is known. What reading the Bot Chat leaves unread (`read.ts`); the
+   * alert decision does not use it.
+   */
+  separate?: readonly string[];
   /** The app is in the foreground and this conversation is the visible screen. */
   focused: boolean;
 }

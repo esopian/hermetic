@@ -16,6 +16,7 @@ import {
   type ChatMessage,
   type HermesChatClient,
   type QuestionBlock,
+  type Swarm,
 } from "@hermetic/core/chat-client";
 import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 import type { FleetStore } from "../fleet/store.ts";
@@ -77,6 +78,30 @@ export function requestAlertBody(block: ApprovalBlock | QuestionBlock): string {
 }
 
 /**
+ * The title of an alert (and its inbox entry) about one bot: the bot's display
+ * title as the roster lists it, else its name; then, after " · ", its instance
+ * when the phone listens to more than one. Two bots of one instance with one
+ * title are told apart by name, as home's suffix does.
+ */
+export function alertTitle(
+  roster: { swarms: readonly Pick<Swarm, "instance" | "bots">[]; listening: readonly string[] },
+  t: { instance: string; bot: string },
+): string {
+  const shown = (b: { name: string; title?: string | null }) => (b.title || b.name).trim();
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const listed = roster.swarms
+    .find((s) => s.instance === t.instance)
+    ?.bots.find((b) => b.name === t.bot);
+  const title = listed ? shown(listed) || t.bot : t.bot;
+  const twin = roster.swarms
+    .find((s) => s.instance === t.instance)
+    ?.bots.some((b) => b.name !== t.bot && same(shown(b), title));
+  const named = twin ? `${title} (${t.bot})` : title;
+  // With one instance listened, every bot alerting is one of its own.
+  return new Set(roster.listening).size > 1 ? `${named} · ${t.instance}` : named;
+}
+
+/**
  * The key an event this phone saw on its own socket is filed under. The box
  * keys its pushes `<instance>:<session>:<message_count>:<kind>`, which the
  * phone cannot know; the inbox's same-conversation, same-kind window
@@ -96,6 +121,13 @@ export const UNLISTENED = "UNLISTENED";
 
 /** How often a turn still running on its box is asked after (`session.active_list`). */
 export const REMOTE_POLL_MS = 3_000;
+/**
+ * How often such a turn is asked after while its conversation is off screen
+ * and the box says it waits on the operator: the bot's needs-you mark on home
+ * rests on that answer, and a request answered elsewhere (the desktop) must
+ * clear it within about one roster read's time.
+ */
+export const REMOTE_WAITING_POLL_MS = 30_000;
 /** Failed asks in a row after which a turn still running on its box is reported gone. */
 export const REMOTE_FAILURES = 5;
 /**
@@ -175,7 +207,10 @@ export interface HermeticClientOptions {
  *   `starting`, `waiting`): the store keeps the turn in flight as running on
  *   the box (`chat.onTurnRemote`), and while its conversation is on screen
  *   the box is asked again every `REMOTE_POLL_MS` until the session is idle
- *   or gone. A definite answer that it is over — `idle`, or absent from
+ *   or gone. Off screen it is asked again only while the box says `waiting`,
+ *   every `REMOTE_WAITING_POLL_MS`, so a request answered elsewhere clears
+ *   the bot's needs-you mark on home (`chat.waiting()`); such a turn is also
+ *   asked after again on the return from the background. A definite answer that it is over — `idle`, or absent from
  *   `REMOTE_MISSES` answers in a row — is `chat.onRemoteDone` on the first ask
  *   as on any later one: the turn ran to its end, so the transcript is re-read
  *   and the queue released, with nothing marked dropped. Absent with no live
@@ -294,7 +329,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     });
   };
 
-  const title = (t: { instance: string; bot: string }) => `${t.bot} · ${t.instance}`;
+  const title = (t: { instance: string; bot: string }) => alertTitle(roster.getState(), t);
   const sessionOf = (where: ConversationTarget) =>
     chat.view(where).resolvedSession ?? where.session ?? "";
 
@@ -367,8 +402,10 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     },
     onRemoteShown: (turnId, on) => {
       if (on) {
+        // Shown: ask now and at the on-screen pace, whatever slow ask was pending.
+        stopFollowing(turnId);
         if (!suspended) followRemote(turnId, false);
-      } else stopFollowing(turnId);
+      } else if (chat.turnTarget(turnId)?.remote !== "waiting") stopFollowing(turnId);
     },
   });
 
@@ -447,7 +484,8 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
 
   /**
    * Ask a detached turn's box what its session is doing, and keep asking
-   * while the box says it is busy and its conversation is on screen. `back`:
+   * while the box says it is busy and its conversation is on screen, or (every
+   * `REMOTE_WAITING_POLL_MS`) while it says `waiting` off screen. `back`:
    * the first ask on the return to the foreground, where no answer at all is
    * `onTurnGone`. A row once matched names the turn's live id, which the next
    * ask matches on too (a compaction renames the stored id, not the live one).
@@ -469,7 +507,10 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       /** `timers.now()` at the first of the current misses. */
       let missedSince: number | null = null;
       for (let first = true; ; first = false) {
-        if (!first) await pause(REMOTE_POLL_MS, signal);
+        if (!first) {
+          const shown = chat.turnTarget(turnId)?.opened ?? false;
+          await pause(shown ? REMOTE_POLL_MS : REMOTE_WAITING_POLL_MS, signal);
+        }
         if (signal.aborted) return;
         const where = chat.turnTarget(turnId);
         if (!where) {
@@ -517,8 +558,10 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
         misses = 0;
         missedSince = null;
         chat.onTurnRemote(turnId, row.status, row.id, row.session_key);
-        // Off screen: the turn stays "running on the box" until it is shown again.
-        if (!chat.turnTarget(turnId)?.opened) return done();
+        // Off screen: the turn stays "running on the box" until it is shown
+        // again, except one waiting on the operator, whose needs-you mark on
+        // home must clear once the request is answered elsewhere.
+        if (!chat.turnTarget(turnId)?.opened && row.status !== "waiting") return done();
       }
     })();
   }
@@ -545,10 +588,13 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       if (next !== was && (next === "background" || next === "active")) resetTunnelChecks();
       if (next === "background" && !suspended) {
         suspended = true;
-        // A first ask still out is asked again on the return; a turn already
-        // known to run on its box is asked again when its conversation reopens.
+        // A first ask still out is asked again on the return, and so is a turn
+        // waiting on the operator (its needs-you mark rests on the answer); any
+        // other turn known to run on its box is asked again when its
+        // conversation reopens.
         for (const turnId of [...following.keys()]) {
-          if (chat.turnTarget(turnId)?.remote === null) detached.push(turnId);
+          const remote = chat.turnTarget(turnId)?.remote;
+          if (remote === null || remote === "waiting") detached.push(turnId);
           stopFollowing(turnId);
         }
         for (const turn of transport.detachTurnsSince()) {

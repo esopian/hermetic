@@ -2,8 +2,8 @@
  * The conversation route around its own effects, over a real client (its
  * `setWatched`, roster and inbox; the box faked at the adapter): a `?fresh=1`
  * open that lands after the operator left replaces nothing, and what focusing
- * a conversation marks read (the Bot Chat clears the bot; a separate session
- * only its own inbox entries).
+ * a conversation marks read (the Bot Chat clears the bot but its listed
+ * separate sessions' entries; a separate session only its own inbox entries).
  */
 import type { ChatConversation, HermesChatClient, Session } from "@hermetic/core/chat-client";
 import { encodeMobileLink } from "@hermetic/core/shared";
@@ -203,17 +203,18 @@ describe("conversation: fresh=1", () => {
 });
 
 describe("conversation: what focus marks read (the client's own setWatched)", () => {
-  test("the Bot Chat clears the bot: roster unread and every inbox entry", async () => {
+  test("the Bot Chat clears the bot: roster unread and its own entries, not a separate session's", async () => {
     const { client, inbox, setWatched } = await setup({ instance: "atlas", bot: "scribe" });
     expect(setWatched).toHaveBeenLastCalledWith({
       instance: "atlas",
       bot: "scribe",
       session: null,
       resolved: "s-1",
+      separate: ["s-2"],
       focused: true,
     });
     expect(rosterUnread(client)).toBe(0);
-    expect(unread(inbox)).toEqual([]);
+    expect(unread(inbox)).toEqual(["s-2"]);
   });
 
   test("a separate session clears only its own entries and leaves the Bot Chat's unread", async () => {
@@ -231,6 +232,6 @@ describe("conversation: what focus marks read (the client's own setWatched)", ()
   test("a ?session= that is the canonical one (a notification tap) counts as the Bot Chat", async () => {
     const { client, inbox } = await setup({ instance: "atlas", bot: "scribe", session: "s-1" });
     expect(rosterUnread(client)).toBe(0);
-    expect(unread(inbox)).toEqual([]);
+    expect(unread(inbox)).toEqual(["s-2"]);
   });
 });

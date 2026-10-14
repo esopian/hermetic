@@ -86,6 +86,7 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
           alignItems: "center",
           gap: t.space.sm,
           minHeight: 34,
+          borderRadius: 10,
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
@@ -136,16 +137,16 @@ export function ActivityGroup({
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? summary.kids.length > 0;
   if (summary.steps.length === 0 && summary.kids.length === 0 && !streaming) return null;
-  const edge = summary.tone === "bad" ? t.c.bad : summary.tone === "warn" ? t.c.warn : t.c.line2;
+  // The group's tone rides on its round marker; there is no rule down the side.
+  const marker = streaming
+    ? t.c.acc
+    : summary.tone === "bad"
+      ? t.c.bad
+      : summary.tone === "warn"
+        ? t.c.warn
+        : t.c.fg3;
   return (
-    <View
-      style={{
-        borderLeftWidth: t.border.control,
-        borderLeftColor: edge,
-        paddingLeft: t.space.md,
-        marginVertical: t.space.xs,
-      }}
-    >
+    <View style={{ marginVertical: t.space.xs }}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
@@ -159,14 +160,11 @@ export function ActivityGroup({
           alignItems: "center",
           gap: t.space.sm,
           minHeight: 36,
+          borderRadius: 10,
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
-        <StatusSquare
-          size={8}
-          color={streaming ? t.c.acc : summary.tone === "bad" ? t.c.bad : t.c.fg3}
-          pulse={streaming}
-        />
+        <StatusSquare size={8} round color={marker} pulse={streaming} />
         <Text
           variant="bodySmall"
           weight={700}
@@ -176,11 +174,11 @@ export function ActivityGroup({
         >
           {summary.status}
         </Text>
-        <Text mono variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
+        <Text variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
           {summary.count}
         </Text>
         {summary.usage ? (
-          <Text mono variant="caption" tone="fg3" numberOfLines={1}>
+          <Text variant="caption" tone="fg3" numberOfLines={1}>
             {summary.usage}
           </Text>
         ) : null}
@@ -189,7 +187,9 @@ export function ActivityGroup({
         </Text>
       </Pressable>
       {open ? (
-        <View>
+        // Steps indent to the head's text (marker plus gap), which reads as
+        // nesting without the rule the group used to carry.
+        <View style={{ paddingLeft: 8 + t.space.sm }}>
           {summary.steps.map((block, i) => (
             <Step key={`${block.kind}:${i}`} block={block} streaming={streaming} />
           ))}

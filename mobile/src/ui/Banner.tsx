@@ -1,19 +1,46 @@
 /**
- * Banners: the in-app alert (a slim bar at the top while the app is in front;
- * tap opens, close dismisses) and home's Tailscale strip.
+ * Banners: the in-app alert (a soft card at the top while the app is in front;
+ * tap opens, close or a swipe up dismisses) and home's Tailscale strip.
  */
 import { useEffect } from "react";
-import { Linking, Pressable, View } from "react-native";
-import Animated, { FadeInUp, FadeOutUp } from "react-native-reanimated";
+import { Linking, Pressable, StyleSheet, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  FadeInUp,
+  FadeOutUp,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Alert } from "../client/client.ts";
 import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import { useTheme } from "../theme/theme.tsx";
+import { Avatar } from "./avatar/Avatar.tsx";
 import { Icon } from "./IconButton.tsx";
-import { Kicker } from "./Kicker.tsx";
 import { Text } from "./Text.tsx";
 
+/** How long an arrival stays up. */
 export const BANNER_DWELL_MS = 4000;
+/**
+ * How long a "needs you" or "turn failed" alert stays up. Longer than an
+ * arrival, but not until dismissed: the card sits over home's gear, search and
+ * `+`, and the bot's row keeps its needs-you and failed marks after it goes.
+ */
+export const BANNER_STICKY_DWELL_MS = 10000;
+/** An upward drag past this (pt), or a flick, dismisses the card. */
+export const BANNER_SWIPE_PT = 24;
+const SWIPE_VELOCITY = 500;
+
+const RADIUS = 18;
+const AVATAR = 40;
+
+/** The small coloured word beside the title, for the alerts that are not plain arrivals. */
+function alertTag(kind: Alert["data"]["kind"]): { label: string; tone: "warn" | "bad" } | null {
+  if (kind === "needs_action") return { label: "Needs you", tone: "warn" };
+  if (kind === "turn.error") return { label: "Turn failed", tone: "bad" };
+  return null;
+}
 
 export function Banner({
   alert,
@@ -27,59 +54,120 @@ export function Banner({
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const sticky = alert?.data.kind === "needs_action" || alert?.data.kind === "turn.error";
+  const lift = useSharedValue(0);
   useEffect(() => {
-    if (!alert || sticky) return;
-    const timer = setTimeout(onDismiss, BANNER_DWELL_MS);
+    if (!alert) return;
+    lift.value = 0;
+    const timer = setTimeout(onDismiss, sticky ? BANNER_STICKY_DWELL_MS : BANNER_DWELL_MS);
     return () => clearTimeout(timer);
-  }, [alert, sticky, onDismiss]);
+  }, [alert, sticky, onDismiss, lift]);
+  const dragged = useAnimatedStyle(() => ({ transform: [{ translateY: lift.value }] }));
   if (!alert) return null;
-  const edge =
-    alert.data.kind === "needs_action" ? t.c.warn : alert.data.kind === "turn.error" ? t.c.bad : t.c.fg;
+  // Upward only: the card follows the finger up, resists a pull down, and
+  // either leaves or springs back. A tap still reaches the Pressable, since
+  // the pan only activates after a few points of vertical travel.
+  const swipe = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetY([-8, 8])
+    .onUpdate((e) => {
+      lift.value = e.translationY < 0 ? e.translationY : e.translationY / 6;
+    })
+    .onEnd((e) => {
+      if (e.translationY < -BANNER_SWIPE_PT || e.velocityY < -SWIPE_VELOCITY) onDismiss();
+      else lift.value = withSpring(0);
+    });
+  const tag = alertTag(alert.data.kind);
+  const dark = t.scheme === "dark";
   return (
-    <Animated.View
-      entering={FadeInUp.duration(t.motion.slide)}
-      exiting={FadeOutUp.duration(t.motion.fade)}
-      style={{ position: "absolute", top: insets.top + 4, left: 8, right: 8, zIndex: 100 }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => onOpen(alert)}
+    <GestureDetector gesture={swipe}>
+      <Animated.View
+        testID="alert-banner"
+        entering={FadeInUp.duration(t.motion.slide)}
+        exiting={FadeOutUp.duration(t.motion.fade)}
         style={{
-          backgroundColor: t.c.bg2,
-          borderWidth: t.border.control,
-          borderColor: edge,
-          padding: t.space.md,
+          position: "absolute",
+          top: insets.top + t.space.xs,
+          left: t.space.md,
+          right: t.space.md,
+          zIndex: 100,
         }}
       >
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-          <Kicker tone={alert.data.kind === "needs_action" ? "warn" : "fg3"}>
-            {alert.data.kind === "needs_action"
-              ? "Needs you"
-              : alert.data.kind === "turn.error"
-                ? "Turn failed"
-                : "Hermetic"}
-          </Kicker>
+        {/* The drag rides on an inner view, so it never fights the entering
+            and exiting animations for the outer view's transform. */}
+        <Animated.View
+          style={[
+            {
+              borderRadius: RADIUS,
+              // Dark lifts the card a step (bg3) over the page it floats on,
+              // and a hairline gives it the edge a shadow cannot on black;
+              // light keeps its own card fill and ring.
+              backgroundColor: dark ? t.c.bg3 : t.c.card,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: dark ? t.c.line : t.c.cardEdge,
+              shadowColor: "#000",
+              shadowOpacity: dark ? 0.45 : 0.12,
+              shadowRadius: 18,
+              shadowOffset: { width: 0, height: 8 },
+            },
+            dragged,
+          ]}
+        >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Dismiss"
-            hitSlop={12}
-            onPress={onDismiss}
+            accessibilityHint="Opens the conversation. Swipe up to dismiss."
+            onPress={() => onOpen(alert)}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: t.space.md,
+              paddingLeft: t.space.md,
+              paddingVertical: t.space.md,
+              borderRadius: RADIUS,
+              opacity: pressed ? 0.75 : 1,
+            })}
           >
-            <Text variant="mono" tone="fg3">
-              ✕
-            </Text>
+            <Avatar
+              fleet_id={alert.data.fleet_id}
+              instance={alert.data.instance}
+              bot={alert.data.bot}
+              size={AVATAR}
+            />
+            <View style={{ flex: 1, gap: t.space.xxs }}>
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm }}>
+                <Text weight={600} numberOfLines={1} style={{ flexShrink: 1 }}>
+                  {alert.title}
+                </Text>
+                {tag ? (
+                  <Text variant="caption" weight={600} tone={tag.tone}>
+                    {tag.label}
+                  </Text>
+                ) : null}
+              </View>
+              {alert.body ? (
+                <Text variant="bodySmall" tone="fg2" numberOfLines={2}>
+                  {alert.body}
+                </Text>
+              ) : null}
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+              onPress={onDismiss}
+              style={{
+                alignSelf: "flex-start",
+                width: t.touch.min,
+                height: t.touch.min,
+                marginTop: -t.space.sm,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon name="close" size={14} color={t.c.fg3} />
+            </Pressable>
           </Pressable>
-        </View>
-        <Text variant="title" numberOfLines={1}>
-          {alert.title}
-        </Text>
-        {alert.body ? (
-          <Text variant="bodySmall" tone="fg2" numberOfLines={2}>
-            {alert.body}
-          </Text>
-        ) : null}
-      </Pressable>
-    </Animated.View>
+        </Animated.View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

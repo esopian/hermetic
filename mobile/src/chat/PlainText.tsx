@@ -22,7 +22,9 @@ function PlainTextImpl({ text }: { text: string }) {
         seg.kind === "fence" ? (
           // Wrapped rather than scrolled: the bubble shrinks to its content,
           // and a horizontal scroller inside a shrink-wrapped box has no width.
-          <CodePane key={i} text={seg.text} copy={false} wrap />
+          // Filled with the page colour: the bubble is `sel`, and `bg3` all
+          // but vanishes on it in the dark scheme.
+          <CodePane key={i} text={seg.text} copy={false} wrap fill={t.c.bg} />
         ) : (
           <Text key={i} selectable>
             {seg.parts.map((part, n) =>

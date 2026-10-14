@@ -85,7 +85,13 @@ from it on demand:
   something needing you or unread, then the most recent. A bot in the hero is not repeated below.
   The needs-you mark comes from the roster, from this phone's unread `needs_action` inbox entries
   (a box's push; reading the thread clears it), and from a request still open in a turn this phone
-  follows, which stays until it is answered, expires or its turn ends, however the thread was read. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
+  follows, which stays until it is answered, expires or its turn ends, however the thread was read.
+  A followed turn the phone let go in the background and found `waiting` on its box keeps the mark
+  only while the box says so: off screen the phone asks again every 30 s
+  (`REMOTE_WAITING_POLL_MS`), so a request answered on the desktop clears it within one ask. A row's
+  count is the larger of the roster's Bot Chat unread and the inbox's unread entries about the bot,
+  in any session. The failed mark is an unread `turn.error`: a failure seen with its chat on screen
+  is filed read and leaves no mark. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
   The Tailscale band appears under the bar only when something is wrong.
 - **Settings** (the gear): pairing and sign-out, listened instances, notifications, appearance,
   Tailscale detail, the agent list (detail and noVNC), and the version.
@@ -98,15 +104,19 @@ from it on demand:
 - **Conversation**: a slim bar (a round back button, the bot's avatar and name, which opens the
   session switcher, and one round overflow button for Sessions, the agent browser and Mark read), the
   transcript with the operator's words in soft rounded bubbles, and a pill-shaped composer with a
-  round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread; opening a
-  separate session clears only that session's inbox entries. The Bot Chat and a separate session
-  are two conversations: while one is on screen, an event in the other is filed unread and alerts.
+  round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread and its inbox
+  entries, except those naming one of its listed separate sessions; opening a separate session
+  clears only that session's inbox entries (by the id it was opened with or the one a compaction
+  rotated it to). So a bot's row keeps a count after its Bot Chat is read while a separate session
+  is unread; the row's Mark read clears both. The Bot Chat and a separate session are two
+  conversations: while one is on screen, an event in the other is filed unread and alerts.
 
 The phone-local inbox store (`src/inbox/store.ts`) has no screen of its own: it feeds the unread
 and failure marks on the home rows, the app badge and notification routing. The badge counts only
 the instances this phone listens to; an unlistened instance's entries stay unread, so listening again
-brings its marks back. A notification tap opens
-the conversation it is about.
+brings its marks back, and it is not set until the pairing has loaded on launch. A notification tap
+opens the conversation it is about. An alert this phone raises is titled with the bot's display
+title, followed by its instance only when the phone listens to more than one.
 
 ## Chat: a request raised while the phone was away
 

@@ -244,6 +244,23 @@ describe("sending and streaming", () => {
     expect(s.requests).toHaveLength(1);
   });
 
+  test("waiting(): an open request counts, but once the turn runs on its box only while the box says waiting", async () => {
+    const s = setup();
+    await started(s);
+    expect(s.store.waiting()).toEqual([]);
+    s.store.onTurnFrame("T1", 1, block(0, approval()));
+    expect(s.store.waiting()).toEqual([T]);
+    // Detached and still running: the box's word decides.
+    expect(s.store.onTurnRemote("T1", "waiting")).toBe(true);
+    expect(s.store.waiting()).toEqual([T]);
+    s.store.onTurnRemote("T1", "working");
+    expect(s.store.waiting()).toEqual([]);
+    s.store.onTurnRemote("T1", "waiting");
+    expect(s.store.waiting()).toEqual([T]);
+    s.store.onRemoteDone("T1");
+    expect(s.store.waiting()).toEqual([]);
+  });
+
   test("an error frame and turn.end error set turnError and park the queue", async () => {
     const s = setup();
     await started(s);

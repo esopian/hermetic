@@ -27,6 +27,7 @@ import { Button } from "../ui/Button.tsx";
 import { haptic } from "../ui/haptics.ts";
 import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
+import { multilineTint } from "../ui/tint.ts";
 import { glyphColor, useTicker } from "./blocks/Subagent.tsx";
 
 export interface SubagentControl {
@@ -215,7 +216,7 @@ export function SubagentSheet({
               <TextInput
                 keyboardAppearance={t.scheme}
                 accessibilityLabel="Steer this subagent"
-                selectionColor={t.c.acc}
+                selectionColor={multilineTint(t.c.acc)}
                 cursorColor={t.c.acc}
                 value={draft}
                 onChangeText={setDraft}

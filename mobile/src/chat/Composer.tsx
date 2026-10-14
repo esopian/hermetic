@@ -29,6 +29,7 @@ import type { QueuedMessage } from "../client/conversation-store.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { haptic } from "../ui/haptics.ts";
+import { multilineTint } from "../ui/tint.ts";
 import { Text } from "../ui/Text.tsx";
 
 export type ComposerMode = "disabled" | "send" | "queue" | "stop" | "stopping";
@@ -301,7 +302,7 @@ function ComposerImpl(props: ComposerProps) {
     <View style={{ gap: t.space.xs }}>
       {queue.length > 0 ? (
         <View style={{ gap: t.space.xs }}>
-          {parked ? (
+          {parked && !props.questionOpen ? (
             <Hint warn>
               {`Queue paused · ${queue.length} waiting — send one now, or send a new message to resume`}
             </Hint>
@@ -316,8 +317,14 @@ function ComposerImpl(props: ComposerProps) {
           ))}
         </View>
       ) : null}
+      {/* One warning line at most: an open question is why the queue waits, so
+          it wins over the paused-queue line and carries the queue's count. */}
       {props.questionOpen ? (
-        <Hint warn>A question is waiting above — Send now skips it, Queue waits behind it</Hint>
+        <Hint warn>
+          {`A question is waiting above — Send now skips it, Queue waits behind it${
+            queue.length > 0 ? ` · ${queue.length} queued` : ""
+          }`}
+        </Hint>
       ) : mode === "queue" ? (
         <Hint>Queue waits for the turn · Send now steers it</Hint>
       ) : null}
@@ -337,7 +344,7 @@ function ComposerImpl(props: ComposerProps) {
           placeholder={sending ? "Queue a message, or steer this turn…" : placeholder}
           placeholderTextColor={t.c.fg3}
           multiline
-          selectionColor={t.c.acc}
+          selectionColor={multilineTint(t.c.acc)}
           cursorColor={t.c.acc}
           style={{
             flex: 1,

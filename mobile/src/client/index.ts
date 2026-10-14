@@ -29,7 +29,8 @@
  *   (`src/gateway/tailscale.ts`), probing ready boxes first (`probeHosts`).
  * - `setPhase` / `setWatched` — what the alert decision reads. `setWatched`
  *   names the focused conversation: its bot, `session` (`null` for the Bot
- *   Chat) and the `resolved` id on screen. It is read at once
+ *   Chat), the `resolved` id on screen and, for the Bot Chat, the bot's
+ *   `separate` session ids once listed. It is read at once
  *   (`markConversationRead`, `read.ts`), and an event about it is filed read
  *   without alerting; an event about the bot's other conversation is neither.
  *   `setPhase` also detaches turns and closes observations on `"background"`

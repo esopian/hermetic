@@ -15,6 +15,7 @@ import { memo } from "react";
 import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import type { HomeRow } from "../client/home-rows.ts";
 import { useTheme } from "../theme/theme.tsx";
+import { palettes } from "../theme/tokens.ts";
 import { Icon } from "../ui/IconButton.tsx";
 import { Text } from "../ui/Text.tsx";
 import { edgeBadge, FittedAvatar, homeRowLabel, NeedsPill } from "./HomeBotRow.tsx";
@@ -24,6 +25,15 @@ export const HERO_SOLO = 112;
 export const HERO_MANY = 88;
 
 export const heroSize = (count: number): number => (count <= 1 ? HERO_SOLO : HERO_MANY);
+
+/**
+ * The pin badge looks the same in both schemes: the dark scheme's bright amber
+ * with a near-black star. The light scheme's `warn` is a deep mustard, and a
+ * pale star on it read muddy at this size. Only the ring (the page's `bg`)
+ * follows the scheme, so the badge is cut cleanly out of the avatar.
+ */
+const STAR_FILL = palettes.dark.warn;
+const STAR_INK = palettes.dark.bg;
 
 /** The horizontal room a hero takes around its blob (half each side), for its name. */
 const CELL_PAD = 24;
@@ -91,12 +101,12 @@ function HeroBot({
               borderRadius: star / 2,
               alignItems: "center",
               justifyContent: "center",
-              backgroundColor: t.c.warn,
+              backgroundColor: STAR_FILL,
               borderWidth: ring,
               borderColor: t.c.bg,
             }}
           >
-            <Icon name="star" size={star * 0.45} color={t.c.bg} />
+            <Icon name="star" size={star * 0.45} color={STAR_INK} />
           </View>
         ) : null}
         {needs ? (

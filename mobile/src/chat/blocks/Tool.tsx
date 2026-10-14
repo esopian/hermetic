@@ -140,7 +140,7 @@ export function ToolBlock({ block }: { block: ToolBlockType }) {
         </Text>
       ) : null}
       <Text mono weight={700} variant="bodySmall" tone={running ? "acc" : "fg"} numberOfLines={1}>
-        {running ? `● ${block.name}` : block.name}
+        {block.name}
       </Text>
     </View>
   );
@@ -156,7 +156,7 @@ export function ToolBlock({ block }: { block: ToolBlockType }) {
       {running ? (
         <View style={{ gap: t.space.sm }}>
           <RunningBar />
-          <Text mono variant="caption" tone="fg3">
+          <Text variant="caption" tone="fg3">
             running on the box
           </Text>
         </View>

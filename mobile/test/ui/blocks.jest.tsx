@@ -82,7 +82,8 @@ describe("cards", () => {
 
   test("tool running: accent name, not collapsible", async () => {
     await draw(tool({ status: "running" }));
-    expect(screen.getByText("● terminal")).toBeTruthy();
+    // The card's accent dot says it is running; the name carries no bullet of its own.
+    expect(screen.getByText("terminal")).toBeTruthy();
     expect(screen.getByText("running on the box")).toBeTruthy();
   });
 

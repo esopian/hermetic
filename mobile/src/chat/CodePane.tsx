@@ -1,7 +1,8 @@
 /**
  * Monospace text that keeps its lines: horizontal scroll rather than wrap,
  * selectable, and a Copy button that says it copied. Fenced code blocks, tool
- * output and payloads all draw through this.
+ * output and payloads all draw through this. Drawn soft: a rounded fill with
+ * no border or inner rules, so it sits in a card or on the page alike.
  */
 import * as Clipboard from "expo-clipboard";
 import { memo, useEffect, useState } from "react";
@@ -13,12 +14,15 @@ import { Text } from "../ui/Text.tsx";
 /** Past this many lines a pane starts clipped, with "Show all N lines". */
 const CLIP_LINES = 40;
 
+const RADIUS = 10;
+
 function CodePaneImpl({
   text,
   lang,
   copy = true,
   wrap = false,
   lineTone,
+  fill,
 }: {
   text: string;
   lang?: string | null;
@@ -27,6 +31,8 @@ function CodePaneImpl({
   wrap?: boolean;
   /** Per-line colour (a diff's adds and dels). */
   lineTone?: (line: string) => string | null;
+  /** The pane's fill, where `bg3` would not stand off its surface (an operator bubble is `sel`). */
+  fill?: string;
 }) {
   const t = useTheme();
   const [copied, setCopied] = useState(false);
@@ -40,7 +46,13 @@ function CodePaneImpl({
   const clipped = !all && lines.length > CLIP_LINES;
   const shown = clipped ? lines.slice(0, CLIP_LINES) : lines;
   const body = (
-    <View style={{ padding: t.space.sm }}>
+    <View
+      style={{
+        paddingHorizontal: t.space.md,
+        paddingTop: lang || copy ? 0 : t.space.sm,
+        paddingBottom: t.space.sm,
+      }}
+    >
       {lineTone ? (
         shown.map((line, i) => (
           <Text
@@ -61,19 +73,17 @@ function CodePaneImpl({
     </View>
   );
   return (
-    <View style={{ backgroundColor: t.c.bg, borderWidth: 1, borderColor: t.c.line }}>
+    <View style={{ backgroundColor: fill ?? t.c.bg3, borderRadius: RADIUS, overflow: "hidden" }}>
       {lang || copy ? (
         <View
           style={{
             flexDirection: "row",
             alignItems: "center",
-            borderBottomWidth: 1,
-            borderBottomColor: t.c.line,
-            paddingLeft: t.space.sm,
-            minHeight: 28,
+            paddingLeft: t.space.md,
+            minHeight: 30,
           }}
         >
-          <Text mono variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
+          <Text variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
             {lang ?? ""}
           </Text>
           {copy ? (
@@ -91,8 +101,8 @@ function CodePaneImpl({
               }}
               style={{ paddingHorizontal: t.space.md, paddingVertical: 6 }}
             >
-              <Text mono variant="caption" tone={copied ? "ok" : "fg2"} weight={700}>
-                {copied ? "COPIED" : "COPY"}
+              <Text variant="caption" tone={copied ? "ok" : "fg2"} weight={600}>
+                {copied ? "Copied" : "Copy"}
               </Text>
             </Pressable>
           ) : null}
@@ -109,9 +119,9 @@ function CodePaneImpl({
         <Pressable
           accessibilityRole="button"
           onPress={() => setAll(true)}
-          style={{ padding: t.space.sm, borderTopWidth: 1, borderTopColor: t.c.line }}
+          style={{ paddingHorizontal: t.space.md, paddingVertical: t.space.sm }}
         >
-          <Text mono variant="caption" tone="fg2">
+          <Text variant="caption" weight={600} tone="fg2">
             {`Show all ${lines.length} lines`}
           </Text>
         </Pressable>

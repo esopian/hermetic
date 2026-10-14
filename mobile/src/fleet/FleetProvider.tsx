@@ -314,7 +314,10 @@ export function FleetProvider({
   // The app badge follows the inbox, counting only the instances listened to:
   // an unlistened one's entries stay unread (listening again brings them back)
   // but do not hold the badge up.
+  // Not before the boot has loaded both: an inbox read before the pairing
+  // would count against no listened instance and zero the badge on launch.
   useEffect(() => {
+    if (status === "loading") return;
     let last = -1;
     const sync = () => {
       const count = inbox.badgeCount(listenedEntry(fleet));
@@ -322,13 +325,14 @@ export function FleetProvider({
       last = count;
       void deps.notifier.setBadge(count);
     };
+    sync();
     const offInbox = inbox.subscribe(sync);
     const offFleet = fleet.subscribe(sync);
     return () => {
       offInbox();
       offFleet();
     };
-  }, [deps, fleet, inbox]);
+  }, [deps, fleet, inbox, status]);
 
   // Entries about a bot its box no longer lists are marked read once per
   // roster read (not on every roster change), so they cannot pin the badge.

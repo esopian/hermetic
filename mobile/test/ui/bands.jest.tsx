@@ -1,13 +1,69 @@
 import { fireEvent, screen } from "@testing-library/react-native";
 import { RemoteBand, ThreadBand } from "../../src/chat/Bands.tsx";
 import { remoteTurnView } from "../../src/client/chat-logic.ts";
+import type { Alert } from "../../src/client/client.ts";
 import {
+  BANNER_DWELL_MS,
+  BANNER_STICKY_DWELL_MS,
+  Banner,
   openTailscale,
   TAILSCALE_APP_STORE_URL,
   TAILSCALE_URL,
   TailscaleBanner,
 } from "../../src/ui/Banner.tsx";
+import type { ReactElement } from "react";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { renderUi } from "../helpers/render.tsx";
+
+const METRICS = {
+  frame: { x: 0, y: 0, width: 393, height: 852 },
+  insets: { top: 59, left: 0, right: 0, bottom: 34 },
+};
+const renderTop = (ui: ReactElement) =>
+  renderUi(<SafeAreaProvider initialMetrics={METRICS}>{ui}</SafeAreaProvider>);
+
+const alert = (kind: Alert["data"]["kind"]): Alert => ({
+  decision: "banner",
+  title: "Clio",
+  body: "Done: the volume is mounted at /data.",
+  data: { fleet_id: "fxtr0001", instance: "atlas", bot: "clio", session: "s-1", kind, dedupe: "d-1" },
+  category: null,
+});
+
+describe("Banner", () => {
+  afterEach(() => jest.useRealTimers());
+
+  test("tap opens, the close button dismisses, and nothing is drawn without an alert", async () => {
+    const onOpen = jest.fn();
+    const onDismiss = jest.fn();
+    const a = alert("turn.done");
+    await renderTop(<Banner alert={a} onOpen={onOpen} onDismiss={onDismiss} />);
+    expect(screen.getByText("Clio")).toBeTruthy();
+    expect(screen.getByText("Done: the volume is mounted at /data.")).toBeTruthy();
+    await fireEvent.press(screen.getByText("Clio"));
+    expect(onOpen).toHaveBeenCalledWith(a);
+    await fireEvent.press(screen.getByLabelText("Dismiss"));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await renderTop(<Banner alert={null} onOpen={onOpen} onDismiss={onDismiss} />);
+    expect(screen.queryByTestId("alert-banner")).toBeNull();
+  });
+
+  test("an arrival leaves on its own; needs-you stays longer, tagged, but not for good", async () => {
+    jest.useFakeTimers();
+    const onDismiss = jest.fn();
+    await renderTop(<Banner alert={alert("turn.done")} onOpen={jest.fn()} onDismiss={onDismiss} />);
+    jest.advanceTimersByTime(BANNER_DWELL_MS);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    const sticky = jest.fn();
+    await renderTop(<Banner alert={alert("needs_action")} onOpen={jest.fn()} onDismiss={sticky} />);
+    expect(screen.getByText("Needs you")).toBeTruthy();
+    jest.advanceTimersByTime(BANNER_DWELL_MS);
+    expect(sticky).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(BANNER_STICKY_DWELL_MS - BANNER_DWELL_MS);
+    expect(sticky).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("TailscaleBanner", () => {
   test("off: says so and opens Tailscale, not a retry", async () => {

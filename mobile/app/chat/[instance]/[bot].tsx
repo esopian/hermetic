@@ -188,19 +188,29 @@ export default function Conversation() {
   }, [client, target]);
   const session = view?.sessions.find((s) => s.id === (view.resolvedSession ?? target.session)) ?? null;
   const onCanonical = target.session === null || session?.kind === "canonical";
-  // What this screen shows as read: the Bot Chat clears the bot, a separate
-  // session only its own entries (`markConversationRead`). A `?session=` that
+  // What this screen shows as read (`markConversationRead`): the Bot Chat
+  // clears the bot but leaves its separate sessions' entries unread (until the
+  // session list is known, it reads only its own); a separate session clears
+  // only its own entries, by its opened or its resolved id. A `?session=` that
   // turns out to be the canonical one (a notification tap) counts as the Bot Chat.
+  const separateKey =
+    onCanonical && view && view.sessions.length > 0
+      ? view.sessions
+          .filter((s) => s.kind !== "canonical")
+          .map((s) => s.id)
+          .join("\n")
+      : null;
+  const shownSession = view?.resolvedSession ?? target.session;
   const readTarget = useMemo(
     () => ({
       instance: target.instance,
       bot: target.bot,
       session: onCanonical ? null : target.session,
+      resolved: shownSession,
+      ...(separateKey !== null ? { separate: separateKey ? separateKey.split("\n") : [] } : {}),
     }),
-    [target, onCanonical],
+    [target, onCanonical, shownSession, separateKey],
   );
-
-  const shownSession = view?.resolvedSession ?? target.session;
 
   // Focused: this is the watched conversation, read at once (`setWatched`
   // applies `markConversationRead`) and never a banner. Not while a new
@@ -209,20 +219,14 @@ export default function Conversation() {
   useFocusEffect(
     useCallback(() => {
       if (!client || freshPending) return;
-      client.setWatched({
-        instance: readTarget.instance,
-        bot: readTarget.bot,
-        session: readTarget.session,
-        resolved: shownSession,
-        focused: true,
-      });
+      client.setWatched({ ...readTarget, focused: true });
       // Back from the background, the provider re-opens this one.
       focusConversation(target);
       return () => {
         client.setWatched(null);
         focusConversation(null);
       };
-    }, [client, target, readTarget, shownSession, focusConversation, freshPending]),
+    }, [client, target, readTarget, focusConversation, freshPending]),
   );
 
   // A clarify still open in the running turn: "Send now" skips it before steering.

@@ -34,6 +34,9 @@ export default function Listening() {
   // sticky first row instead.
   return (
     <FlatList
+      // VoiceOver stays inside the sheet: the home under it is not reachable
+      // while the sheet is up.
+      accessibilityViewIsModal
       style={{ flex: 1, backgroundColor: t.c.bg2 }}
       data={agents}
       keyExtractor={(a) => a.name}

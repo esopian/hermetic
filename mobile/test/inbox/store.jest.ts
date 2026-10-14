@@ -233,6 +233,19 @@ describe("onScreen", () => {
     expect(onScreen(at("s-1"), "active", watched(null, "s-1"))).toBe(true);
   });
 
+  test("a separate session whose resolved id is not known yet matches only the id it was opened with", () => {
+    expect(onScreen(at("s-2"), "active", watched("s-2", null))).toBe(true);
+    expect(onScreen(at("s-1"), "active", watched("s-2", null))).toBe(false);
+    // An event naming no session is the Bot Chat's, never the separate session's.
+    expect(onScreen(at(""), "active", watched("s-2", null))).toBe(false);
+    expect(onScreen(at(""), "active", watched("s-2", "s-2"))).toBe(false);
+  });
+
+  test("an event naming no session is on the Bot Chat's screen, its id known or not", () => {
+    expect(onScreen(at(""), "active", watched(null, "s-1"))).toBe(true);
+    expect(onScreen(at(""), "active", watched(null, null))).toBe(true);
+  });
+
   test("another bot, an unfocused screen or the app away is never on screen", () => {
     expect(onScreen({ ...at("s-1"), bot: "other" }, "active", watched(null, "s-1"))).toBe(false);
     expect(onScreen(at("s-1"), "active", { ...watched(null, "s-1"), focused: false })).toBe(false);

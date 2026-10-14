@@ -1,4 +1,10 @@
-import type { ChatFrame, ChatMessage, HermesChatClient, Session } from "@hermetic/core/chat-client";
+import type {
+  Bot,
+  ChatFrame,
+  ChatMessage,
+  HermesChatClient,
+  Session,
+} from "@hermetic/core/chat-client";
 import type { MobileFleetView } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
 import {
@@ -9,9 +15,11 @@ import {
   REMOTE_MISSES,
   REMOTE_POLL_MS,
   REMOTE_UNKNOWN_MAX_MS,
+  REMOTE_WAITING_POLL_MS,
+  alertTitle,
   tailShowsDone,
 } from "../../src/client/client.ts";
-import { homeRowsByKey, needsBots } from "../../src/client/home-rows.ts";
+import { failedBots, homeRowsByKey, needsBots } from "../../src/client/home-rows.ts";
 import type { Timers } from "../../src/client/timers.ts";
 import { noteTunnel, resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
@@ -54,6 +62,8 @@ function adapter(
     history?: () => ChatMessage[];
     /** What `abort` answers (default `true`: the box interrupted something). */
     aborted?: () => boolean;
+    /** The bots every swarm lists (default one `scribe`). */
+    bots?: Bot[];
   } = {},
 ): HermesChatClient & {
   sent: string[];
@@ -97,7 +107,7 @@ function adapter(
     token: async () => "FIXTURE",
     swarm: async (box) => {
       swarmed.push(box.baseUrl);
-      return swarm(box.instance, [bot()]);
+      return swarm(box.instance, opts.bots ?? [bot()]);
     },
     sessions: async (box, b) => [
       session({ id: "s-1", instance: box.instance, bot: b, kind: "canonical" }),
@@ -188,6 +198,18 @@ function badgeOf(s: { client: HermeticClient; inbox: InboxStore }, key: string):
   return rows.get(key)?.badge ?? null;
 }
 
+/** Whether home draws a bot's row with the failed mark. */
+function failedOf(s: { client: HermeticClient; inbox: InboxStore }, key: string): boolean {
+  const roster = s.client.roster.getState();
+  const rows = homeRowsByKey({
+    swarms: roster.swarms,
+    listening: roster.listening,
+    unreadOf: s.inbox.unreadFor,
+    failed: failedBots(s.inbox.getState().entries),
+  });
+  return rows.get(key)?.failed ?? false;
+}
+
 /** The fixture fleet's view: atlas ready, corvid in error. */
 const VIEW2: MobileFleetView = fleetView({
   agents: [
@@ -218,6 +240,7 @@ async function setup(
     aborted?: () => boolean;
     timers?: Timers;
     previews?: boolean;
+    bots?: Bot[];
   } = {},
 ) {
   const read = readPairingLink(
@@ -468,6 +491,72 @@ describe("createHermeticClient", () => {
     on.client.chat.send(T, "question");
     await settle();
     expect(on.alerts[0]?.body).toBe("slow down");
+  });
+
+  test("a separate session's message moves the bot's time, never its Bot Chat count", async () => {
+    const s = await setup([], { bots: [bot({ unread: 3 })] });
+    await s.client.roster.refresh();
+    const scribe = () =>
+      s.client.roster.getState().swarms.find((sw) => sw.instance === "atlas")?.bots[0];
+    expect(scribe()?.unread).toBe(3);
+    const separate = { instance: "atlas", bot: "scribe", session: "s-2" };
+    const at = "2026-10-13T10:05:00.000Z";
+    s.client.chat.onObserveEvent(s.client.chat.view(separate).key, {
+      type: "message",
+      ...separate,
+      message: msg({ id: "sep-1", at, text: "in the thread" }),
+    });
+    expect(scribe()).toMatchObject({ unread: 3, last_message_at: at });
+    // The Bot Chat's own message is what the operator sees there: its count clears.
+    s.client.chat.onObserveEvent(s.client.chat.view(T).key, {
+      type: "message",
+      ...T,
+      message: msg({ id: "bot-1", at, text: "in the Bot Chat" }),
+    });
+    expect(scribe()?.unread).toBe(0);
+    s.client.dispose();
+  });
+
+  test("a failure that lands off screen marks the bot failed on home; opening its chat clears it", async () => {
+    const s = await setup([errorFrame("RATE_LIMITED", "slow down")]);
+    await s.client.roster.refresh();
+    s.client.chat.send(T, "question");
+    await settle();
+    expect(failedOf(s, "atlas/scribe")).toBe(true);
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    expect(failedOf(s, "atlas/scribe")).toBe(false);
+    s.client.setWatched(null);
+    expect(failedOf(s, "atlas/scribe")).toBe(false);
+  });
+
+  test("a failure seen on screen is read: leaving the chat leaves no failed mark", async () => {
+    const s = await setup([errorFrame("RATE_LIMITED", "slow down")]);
+    await s.client.roster.refresh();
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    s.client.chat.send(T, "question");
+    await settle();
+    s.client.setWatched(null);
+    expect(s.inbox.getState().entries[0]).toMatchObject({ kind: "turn.error" });
+    expect(failedOf(s, "atlas/scribe")).toBe(false);
+  });
+
+  test("an alert is titled with the bot's display title, and its instance only when it tells bots apart", async () => {
+    const s = await setup([delta(1, "x"), done(2)]);
+    s.client.chat.send(T, "before the roster");
+    await settle();
+    // No roster read yet: the bot's name; two instances listened, so the instance too.
+    expect(s.alerts[0]?.title).toBe("scribe · atlas");
+    await s.client.roster.refresh();
+    s.client.chat.send(T, "two instances");
+    await settle();
+    expect(s.alerts[1]?.title).toBe("SCRIBE · atlas");
+    expect(s.inbox.getState().entries[0]?.title).toBe("SCRIBE · atlas");
+    await s.fleet.setListening("corvid", false);
+    await s.client.roster.refresh();
+    s.client.chat.send(T, "one instance");
+    await settle();
+    expect(s.alerts[2]?.title).toBe("SCRIBE");
+    s.client.dispose();
   });
 
   test("every move into the background or the foreground forgets the tunnel proofs", async () => {
@@ -833,6 +922,70 @@ describe("a turn still running on its box after the phone was away", () => {
     s.client.dispose();
   });
 
+  test("off screen, a turn waiting on the operator keeps needs-you until the box says it moved on", async () => {
+    let status = "waiting";
+    const s = await away(() => row(status), { frames: [block(1, approval())] });
+    await s.client.roster.refresh();
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // Read and left: the request is still pending on the box, so the mark stays.
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    s.client.setWatched(null);
+    s.client.chat.leave(T);
+    expect(s.inbox.badgeCount()).toBe(0);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // The on-screen pace runs out once; off screen it is the slow one.
+    await s.tick(REMOTE_POLL_MS);
+    const asked = s.chat.rpcs.length;
+    await s.tick(REMOTE_POLL_MS * 5);
+    expect(s.chat.rpcs).toHaveLength(asked);
+    await s.tick(REMOTE_WAITING_POLL_MS - REMOTE_POLL_MS * 5);
+    expect(s.chat.rpcs).toHaveLength(asked + 1);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // Answered on the desktop: cleared within one slow ask, and the asking stops.
+    status = "working";
+    await s.tick(REMOTE_WAITING_POLL_MS);
+    expect(badgeOf(s, "atlas/scribe")).toBeNull();
+    await s.client.roster.refresh();
+    expect(badgeOf(s, "atlas/scribe")).toBeNull();
+    const after = s.chat.rpcs.length;
+    await s.tick(REMOTE_WAITING_POLL_MS * 3);
+    expect(s.chat.rpcs).toHaveLength(after);
+    expect(s.client.chat.view(T).remote?.status).toBe("working");
+    s.client.dispose();
+  });
+
+  test("a waiting turn's conversation shown again is asked at once and at the on-screen pace", async () => {
+    const s = await away(() => row("waiting"), { frames: [block(1, approval())] });
+    s.client.chat.leave(T);
+    await s.tick(REMOTE_POLL_MS);
+    const asked = s.chat.rpcs.length;
+    s.client.chat.open(T);
+    await settle();
+    expect(s.chat.rpcs).toHaveLength(asked + 1);
+    await s.tick(REMOTE_POLL_MS);
+    expect(s.chat.rpcs).toHaveLength(asked + 2);
+    s.client.dispose();
+  });
+
+  test("a turn waiting on the operator off screen is asked after again on the return from the background", async () => {
+    let status = "waiting";
+    const s = await away(() => row(status), { frames: [block(1, approval())] });
+    await s.client.roster.refresh();
+    s.client.chat.leave(T);
+    s.client.setPhase("background");
+    await settle();
+    status = "idle";
+    const asked = s.chat.rpcs.length;
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    s.client.setPhase("active");
+    await settle();
+    await s.tick(0);
+    expect(s.chat.rpcs).toHaveLength(asked + 1);
+    expect(s.client.chat.view(T)).toMatchObject({ sending: false, remote: null });
+    expect(s.client.chat.waiting()).toEqual([]);
+    s.client.dispose();
+  });
+
   test("the asking stops in the background and starts again on the return", async () => {
     const s = await away(() => row("working"));
     const asked = s.chat.rpcs.length;
@@ -844,6 +997,36 @@ describe("a turn still running on its box after the phone was away", () => {
     expect(s.chat.rpcs).toHaveLength(asked + 1);
     expect(s.client.chat.view(T).remote?.status).toBe("working");
     s.client.dispose();
+  });
+});
+
+describe("alertTitle", () => {
+  const b = (instance: string, name: string, title: string) => bot({ instance, name, title });
+  const roster = (listening: string[], bots: ReturnType<typeof bot>[]) => ({
+    listening,
+    swarms: listening.map((instance) =>
+      swarm(
+        instance,
+        bots.filter((x) => x.instance === instance),
+      ),
+    ),
+  });
+
+  test("one instance: the display title alone, the name when the bot has no title or is not listed", () => {
+    const r = roster(["atlas"], [b("atlas", "clio", "Clio"), b("atlas", "wren", "")]);
+    expect(alertTitle(r, { instance: "atlas", bot: "clio" })).toBe("Clio");
+    expect(alertTitle(r, { instance: "atlas", bot: "wren" })).toBe("wren");
+    expect(alertTitle(r, { instance: "atlas", bot: "ghost" })).toBe("ghost");
+  });
+
+  test("two bots of one instance with one title are told apart by name", () => {
+    const r = roster(["atlas"], [b("atlas", "clio", "Helper"), b("atlas", "wren", "helper")]);
+    expect(alertTitle(r, { instance: "atlas", bot: "clio" })).toBe("Helper (clio)");
+  });
+
+  test("more than one instance listened: the instance follows", () => {
+    const r = roster(["atlas", "corvid"], [b("atlas", "clio", "Clio"), b("corvid", "wren", "Wren")]);
+    expect(alertTitle(r, { instance: "atlas", bot: "clio" })).toBe("Clio · atlas");
   });
 });
 

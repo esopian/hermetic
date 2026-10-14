@@ -12,6 +12,7 @@ import { Button } from "../ui/Button.tsx";
 import { codeSpans } from "../ui/codeSpans.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
+import { multilineTint } from "../ui/tint.ts";
 
 export function PairForm({
   busy,
@@ -53,7 +54,7 @@ export function PairForm({
           if (looksWhole(v) && v.length - link.length > 8) onSubmit(v);
         }}
         placeholder="hermetic://fleet?v=2&…"
-        selectionColor={t.c.acc}
+        selectionColor={multilineTint(t.c.acc)}
         cursorColor={t.c.acc}
         placeholderTextColor={t.c.fg3}
         autoCapitalize="none"

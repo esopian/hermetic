@@ -87,7 +87,11 @@ async function waitFor(ok: () => boolean, ms = 10_000) {
   }
 }
 
-async function setup(seed: Record<string, string> = {}, clock: () => string = () => NOW) {
+async function setup(
+  seed: Record<string, string> = {},
+  clock: () => string = () => NOW,
+  inboxText: string | null = null,
+) {
   const kit = fixtureKit("1", clock) as FixtureKit;
   const note = fakeNotifier();
   const appState = fakeAppState();
@@ -96,7 +100,7 @@ async function setup(seed: Record<string, string> = {}, clock: () => string = ()
   const deps: FleetDeps = {
     secure,
     viewCache: memoryFile(),
-    inboxFile: memoryFile(),
+    inboxFile: memoryFile(inboxText),
     fetch: kit.fetch,
     openSocket: () => {
       throw new Error("no socket in fixture mode");
@@ -225,6 +229,31 @@ describe("FleetProvider", () => {
     await settle();
     expect(second.value().status).toBe("paired");
     expect(second.value().fleet.getState().link?.label).toBe("main");
+  });
+
+  test("boot never zeroes the badge before the pairing has loaded", async () => {
+    const first = await setup();
+    await settle();
+    await act(() => first.value().pair(first.link()));
+    await settle();
+    const stored = Object.fromEntries((first.secure as ReturnType<typeof memoryKv>).map);
+    const entry = {
+      id: "i1",
+      kind: "turn.done",
+      instance: "atlas",
+      bot: "scribe",
+      session: "s-1",
+      title: "scribe · atlas",
+      body: "done",
+      at: NOW,
+      read_at: null,
+      dedupe: "atlas:s-1:4:turn.done",
+    };
+    const second = await setup(stored, () => NOW, JSON.stringify([entry]));
+    await settle();
+    expect(second.value().status).toBe("paired");
+    expect(second.note.badges).not.toContain(0);
+    expect(second.note.badges.at(-1)).toBe(1);
   });
 
   test("push: enabling registers with listened boxes; a listening change follows; sign out unregisters", async () => {
