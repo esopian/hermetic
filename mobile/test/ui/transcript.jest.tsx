@@ -132,6 +132,34 @@ describe("PinController", () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
+  test("a pin does not answer the momentum end its own scroll raises", () => {
+    // What RCTScrollViewComponentView does with a scrollToOffset that is not
+    // animated: UIKit rounds the offset to the pixel grid (3x here), then the
+    // view sends a scroll event and a momentum end, with no momentum begin.
+    // The requested offset never equals the rounded one, so every pin moved
+    // the view and raised the pair again.
+    const scrollTo = jest.fn<void, [number, boolean]>();
+    let offsetY = 0;
+    const pin = new PinController({
+      scrollTo: (offset, animated) => {
+        scrollTo(offset, animated);
+        if (scrollTo.mock.calls.length > 50) return; // the loop, cut short
+        if (offset === offsetY) return;
+        offsetY = Math.round(offset * 3) / 3;
+        pin.onScroll({ offsetY, contentHeight: pin.size.content, viewportHeight: 600 });
+        pin.momentumEnd();
+      },
+      onFollowing: jest.fn(),
+    });
+    pin.onViewport(600);
+    pin.onContentSize(1000.1);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    pin.onContentSize(1200.1);
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenLastCalledWith(endOffset(1200.1, 600), false);
+    expect(pin.following).toBe(true);
+  });
+
   test("dispose drops pending re-pins", () => {
     const { pin, scrollTo } = controller();
     pin.onInset(300);

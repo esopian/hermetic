@@ -112,8 +112,8 @@ const globalTimers: PinTimers = {
  * - An inset change (the keyboard moving) re-pins only once the inset has
  *   settled (`INSET_SETTLE_MS`), to its final value.
  * - A touch's end catches up a growth skipped during it: at release with no
- *   velocity, at momentum end, or `MOMENTUM_GRACE_MS` after a release with
- *   velocity when no momentum begins.
+ *   velocity, at the end of a momentum that began, or `MOMENTUM_GRACE_MS`
+ *   after a release with velocity when no momentum begins.
  */
 export class PinController {
   following = true;
@@ -226,7 +226,18 @@ export class PinController {
     this.touch.momentum = true;
   }
 
+  /**
+   * The end of a fling's momentum: the touch is over, so catch up a growth
+   * skipped during it. Only a momentum seen to begin counts. iOS also sends
+   * a momentum end after every programmatic scroll (`scrollToOffset` on
+   * `RCTScrollViewComponentView`, at once when not animated), so re-pinning
+   * on that one answers our own pin with another pin. UIKit rounds the offset
+   * to the pixel grid, the next pin's offset never equals the one the view
+   * holds, and the pair looped on the JS thread for as long as the transcript
+   * stayed mounted.
+   */
   momentumEnd(): void {
+    if (!this.touch.momentum) return;
     this.touch.momentum = false;
     this.repinIfFree();
   }
