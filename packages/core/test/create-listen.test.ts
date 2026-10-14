@@ -20,6 +20,19 @@ afterAll(() => {
   for (const home of homes) rmSync(home, { recursive: true, force: true });
 });
 
+/** A listening store whose first `failures` writes throw, as a locked SQLite would. */
+class FlakyListening extends MemoryInstanceListeningStore {
+  calls = 0;
+  constructor(private readonly failures: number) {
+    super();
+  }
+  override set(fleet: string | null, instance: string, listening: boolean): void {
+    this.calls += 1;
+    if (this.calls <= this.failures) throw new Error("database is locked");
+    super.set(fleet, instance, listening);
+  }
+}
+
 async function listening(hermetic: ReturnType<typeof testHermetic>): Promise<string[]> {
   return (await hermetic.chat.listening({})).instances;
 }
@@ -118,6 +131,31 @@ describe("agents.create listens by default", () => {
     // The row stays for `rerun` or a re-run create to finish.
     expect(await backend.store.agents.get("atlas")).not.toBeNull();
     expect(await listening(hermetic)).toEqual(["atlas"]);
+  });
+
+  test("a listen that fails at the claim is tried once more at handoff", async () => {
+    const { backend } = freshFleet();
+    const instanceListening = new FlakyListening(1);
+    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG, instanceListening });
+    const events = await drain(hermetic.agents.create({ name: "atlas" }));
+    expect(instanceListening.calls).toBe(2);
+    expect(await listening(hermetic)).toEqual(["atlas"]);
+    // The claim's failure was said once; the retry that worked says nothing.
+    expect(events.filter((e) => e.message.includes("could not listen")).length).toBe(1);
+    expect(events.at(-1)?.phase).toBe("done");
+  });
+
+  test("a listen that never works costs the create two warnings, not the agent", async () => {
+    const { backend } = freshFleet();
+    const instanceListening = new FlakyListening(Infinity);
+    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG, instanceListening });
+    const events = await drain(hermetic.agents.create({ name: "atlas" }));
+    expect(instanceListening.calls).toBe(2);
+    expect(await listening(hermetic)).toEqual([]);
+    const warned = events.filter((e) => e.message.includes("could not listen"));
+    expect(warned.map((e) => e.level)).toEqual(["warn", "warn"]);
+    expect(events.at(-1)?.phase).toBe("done");
+    expect((await backend.store.agents.get("atlas"))!.resources.instance_id).toBeString();
   });
 
   test("fixture mode listens to a new agent too, in its own SQLite", async () => {

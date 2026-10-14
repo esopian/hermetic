@@ -14,6 +14,7 @@ import {
   CHAT_RESYNC_DEBOUNCE_MS,
   CHAT_WATCHDOG_BACKOFF_BASE_MS,
   CHAT_WATCHDOG_BACKOFF_MAX_MS,
+  CHAT_WATCHDOG_HEALTHY_RESET_MS,
   CHAT_WATCHDOG_INTERVAL_MS,
   CHAT_WATCHDOG_STALE_MS,
   createChatWatchdog,
@@ -215,7 +216,49 @@ describe("re-sync triggers", () => {
     await watchdog.tick();
     await clock.advance(CHAT_RESYNC_DEBOUNCE_MS);
     expect(state.syncs).toBe(1);
-    expect(watchdog.status().sync_requests).toBeGreaterThan(1);
+    // The roster and the tick left the pending sync to answer them: no box
+    // spent a backoff attempt on a gap that sync was about to close.
+    expect(watchdog.status().backoff).toEqual([]);
+  });
+
+  test("a roster gap seen while a sync runs, and closed by it, buys no second sync", async () => {
+    const { clock, state, watchdog } = harness();
+    let release: () => void = () => {};
+    state.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await watchdog.reachable(["atlas"]);
+    await clock.advance(CHAT_RESYNC_DEBOUNCE_MS);
+    expect(state.syncs).toBe(1);
+
+    // The poller's roster lands mid-sync; the sync pins both bots.
+    await watchdog.roster([swarm("atlas", ["default", "scout"])]);
+    state.owned = [ref("atlas", "default"), ref("atlas", "scout")];
+    state.gate = null;
+    release();
+    await flush();
+    await clock.advance(CHAT_RESYNC_DEBOUNCE_MS * 3);
+    expect(state.syncs).toBe(1);
+    expect(watchdog.status().backoff).toEqual([]);
+  });
+
+  test("a roster gap seen while a sync runs, and left open by it, buys exactly one more", async () => {
+    const { clock, state, watchdog } = harness();
+    let release: () => void = () => {};
+    state.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await watchdog.reachable(["atlas"]);
+    await clock.advance(CHAT_RESYNC_DEBOUNCE_MS);
+    // The sync read the roster before `scout` appeared, and pins only `default`.
+    await watchdog.roster([swarm("atlas", ["default", "scout"])]);
+    state.owned = [ref("atlas", "default")];
+    state.gate = null;
+    release();
+    await flush();
+    await clock.advance(CHAT_RESYNC_DEBOUNCE_MS * 3);
+    expect(state.syncs).toBe(2);
+    expect(watchdog.status().backoff.map((b) => b.key)).toEqual(["atlas"]);
   });
 
   test("requests during a sync in flight buy exactly one more sync after it", async () => {
@@ -329,7 +372,7 @@ describe("failed conversations", () => {
     expect(watchdog.status().deferred).toBeGreaterThan(0);
   });
 
-  test("a conversation seen healthy again starts its backoff over", async () => {
+  test("a conversation that stays healthy starts its backoff over", async () => {
     const { clock, state, watchdog } = harness();
     state.owned = [ref("atlas", "default")];
     state.failed = [ref("atlas", "scout")];
@@ -341,12 +384,34 @@ describe("failed conversations", () => {
     state.failed = [];
     state.health = [healthy(ref("atlas", "scout"))];
     await watchdog.tick();
+    // One good read is not recovery yet.
+    expect(watchdog.status().backoff.length).toBe(1);
+    await clock.advance(CHAT_WATCHDOG_HEALTHY_RESET_MS);
+    await watchdog.tick();
     expect(watchdog.status().backoff).toEqual([]);
 
     state.failed = [ref("atlas", "scout")];
     state.health = [];
     await watchdog.tick();
     expect(state.resumes.length).toBe(3);
+  });
+
+  test("a conversation that flaps between failed and healthy still backs off to the cap", async () => {
+    const { clock, state, watchdog } = harness();
+    const scout = ref("atlas", "scout");
+    state.owned = [ref("atlas", "default")];
+    const start = clock.now();
+    const at: number[] = [];
+    for (let minute = 0; minute < 40; minute += 1) {
+      // Failed on even minutes; on odd ones the resume took and the read is good.
+      state.failed = minute % 2 === 0 ? [scout] : [];
+      state.health = minute % 2 === 0 ? [] : [healthy(scout)];
+      const before = state.resumes.length;
+      await watchdog.tick();
+      if (state.resumes.length > before) at.push((clock.now() - start) / 60_000);
+      await clock.advance(CHAT_WATCHDOG_INTERVAL_MS);
+    }
+    expect(at).toEqual([0, 2, 4, 8, 16, 26, 36]);
   });
 
   test("an owner reset (a fleet switch) clears every backoff", async () => {
@@ -387,6 +452,37 @@ describe("a read stuck reconnecting", () => {
     // Behind the same per-conversation backoff as a resume.
     await watchdog.tick();
     expect(state.restarts.length).toBe(1);
+  });
+
+  test("a read that recovers while the tick is resuming another is not restarted", async () => {
+    const { clock, owner, state, watchdog } = harness();
+    const stuck = ref("atlas", "default");
+    state.owned = [stuck];
+    state.failed = [ref("atlas", "scout")];
+    state.health = [
+      {
+        ref: stuck,
+        pinned: true,
+        session: null,
+        health: "reconnect",
+        healthSince: clock.now() - CHAT_WATCHDOG_STALE_MS - 1,
+      },
+    ];
+    // The tick's health read is taken before it resumes `scout`; by the time
+    // the resume answers, `default` has reconnected on its own.
+    const resume = owner.resume;
+    owner.resume = (target) => {
+      state.health = [healthy(stuck)];
+      return resume(target);
+    };
+    await watchdog.tick();
+    expect(state.resumes.length).toBe(1);
+    expect(state.restarts).toEqual([]);
+    expect(watchdog.status().restarts).toBe(0);
+    // Nor did it spend `default`'s backoff: only `scout` has an entry.
+    expect(watchdog.status().backoff.map((b) => b.key)).toEqual([
+      JSON.stringify(["atlas", "scout", null]),
+    ]);
   });
 
   test("a guest is not the watchdog's to restart", async () => {

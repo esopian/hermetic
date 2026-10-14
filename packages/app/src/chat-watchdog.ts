@@ -23,12 +23,15 @@
  *   for that box is reset: a box that just came up deserves an immediate try.
  * - **The roster shows a bot nobody watches** (`roster`, the poller's
  *   `onRoster` hook, which hands over the roster read it already paid for) —
- *   the same debounced sync, subject to that box's backoff.
+ *   the same debounced sync, subject to that box's backoff. Not while a sync
+ *   is pending or running: that one is the answer, and a gap it leaves open is
+ *   looked at again when it ends.
  * - **The minute tick** (`tick`) — for each listened box the poller says is
  *   `ready`/`degraded`: a sync if its coverage has a hole; `owner.resume` for
  *   each failed conversation; `owner.restart` for a pinned one that has been
  *   reconnecting for longer than `CHAT_WATCHDOG_STALE_MS`. Each of the last two
- *   is behind its own exponential backoff.
+ *   is behind its own exponential backoff, which starts over only once the
+ *   conversation has stayed healthy for `CHAT_WATCHDOG_HEALTHY_RESET_MS`.
  *
  * Every sync request inside the debounce window, and every one that arrives
  * while a sync is running, collapses into one: a burst of eleven boxes coming
@@ -44,7 +47,12 @@
  * bots and counts — never a message, a transcript or a token.
  */
 import type { AgentView, ChatSwarmsResult } from "@hermetic/core";
-import type { ChatConversationRef, ChatObserveTarget, ChatOwner } from "./chat-owner.ts";
+import type {
+  ChatConversationRef,
+  ChatObserveTarget,
+  ChatOwnedHealth,
+  ChatOwner,
+} from "./chat-owner.ts";
 import { classifyFailure } from "./errors.ts";
 import type { AppLog, LogLevel } from "./log.ts";
 
@@ -63,6 +71,12 @@ export const CHAT_WATCHDOG_BACKOFF_MAX_MS = 600_000;
  * not going to end on its own.
  */
 export const CHAT_WATCHDOG_STALE_MS = 600_000;
+/**
+ * How long a conversation must stay healthy before its backoff starts over.
+ * One good read between failures is not recovery: a box that is up but whose
+ * stream keeps dying would otherwise be resumed every minute forever.
+ */
+export const CHAT_WATCHDOG_HEALTHY_RESET_MS = 600_000;
 
 /** As much of the owner as the watchdog may touch: three levers and four reads. */
 export type ChatWatchdogOwner = Pick<
@@ -183,8 +197,12 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
   const instanceBackoff = new Map<string, { attempts: number; nextAt: number }>();
   /** Per-conversation backoff for resumes and restarts, keyed by `conversationKey`. */
   const conversationBackoff = new Map<string, { attempts: number; nextAt: number; instance: string }>();
+  /** When a backed-off conversation was first seen healthy in its current streak. */
+  const healthySince = new Map<string, number>();
   /** The last roster `roster()` saw for each listened instance: its bot names. */
   const rosters = new Map<string, Set<string>>();
+  /** Instances whose gap was seen while a sync ran: looked at again when it ends. */
+  const recheck = new Set<string>();
   /** The owner's epoch these maps describe; a fleet switch empties them. */
   let epoch = owner.epoch();
 
@@ -203,7 +221,9 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
     epoch = current;
     instanceBackoff.clear();
     conversationBackoff.clear();
+    healthySince.clear();
     rosters.clear();
+    recheck.clear();
     log("debug", "state cleared", { reason: "owner reset" });
   }
 
@@ -248,7 +268,9 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
   function resetInstance(instance: string): void {
     instanceBackoff.delete(instance);
     for (const [key, entry] of conversationBackoff) {
-      if (entry.instance === instance) conversationBackoff.delete(key);
+      if (entry.instance !== instance) continue;
+      conversationBackoff.delete(key);
+      healthySince.delete(key);
     }
   }
 
@@ -268,10 +290,15 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
       })
       .finally(() => {
         syncing = null;
-        if (again && !stopped) {
+        if (stopped) return;
+        if (again) {
+          // The follow-up reads every roster afresh, so it answers the rechecks too.
           again = false;
+          recheck.clear();
           requestSync("follow-up");
+          return;
         }
+        recheckGaps();
       });
   }
 
@@ -323,6 +350,41 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
     return false;
   }
 
+  /**
+   * Whether a gap on `instance` is worth a sync of its own, recording the
+   * backoff attempt if so. Not while one is pending or running: that sync is
+   * the answer, and a gap judged against the coverage it is about to change
+   * would cost the box a backoff attempt and a second full read of every
+   * roster. A pending one has not read anything yet, so it will see this bot;
+   * a running one may have read the roster before the bot appeared, so the gap
+   * is looked at once more when it ends (`recheckGaps`).
+   */
+  function gapWantsSync(instance: string): boolean {
+    if (cancelDebounce !== null) return false;
+    if (syncing !== null) {
+      recheck.add(instance);
+      return false;
+    }
+    return gateInstance(instance);
+  }
+
+  /** After a sync: each gap seen while it ran that it did not close. */
+  function recheckGaps(): void {
+    if (recheck.size === 0) return;
+    const owned = owner.owned();
+    const failed = owner.failed();
+    let wantSync = false;
+    for (const instance of recheck) {
+      if (!rosters.has(instance) || !hasGap(instance, owned, failed)) continue;
+      if (gateInstance(instance)) {
+        log("debug", "gap outlived sync", { instance });
+        wantSync = true;
+      }
+    }
+    recheck.clear();
+    if (wantSync) requestSync("gap outlived sync");
+  }
+
   async function listened(): Promise<readonly string[] | null> {
     try {
       return await deps.listening();
@@ -371,11 +433,22 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
     const failed = owner.failed();
     const health = owner.health();
 
-    // A conversation that is held and has had a good read is well again: its
-    // backoff starts over the next time it fails.
+    // A conversation that is held and has stayed healthy for
+    // `CHAT_WATCHDOG_HEALTHY_RESET_MS` is well again: its backoff starts over
+    // the next time it fails. A streak ends at any tick that does not see it
+    // healthy — reconnecting, failed or gone.
+    const t0 = now();
+    const well = new Set<string>();
     for (const entry of health) {
-      if (entry.health === null && entry.session !== null)
-        conversationBackoff.delete(conversationKey(entry.ref));
+      const key = conversationKey(entry.ref);
+      if (entry.health !== null || entry.session === null || !conversationBackoff.has(key)) continue;
+      well.add(key);
+      const since = healthySince.get(key) ?? t0;
+      healthySince.set(key, since);
+      if (t0 - since >= CHAT_WATCHDOG_HEALTHY_RESET_MS) conversationBackoff.delete(key);
+    }
+    for (const key of [...healthySince.keys()]) {
+      if (!well.has(key) || !conversationBackoff.has(key)) healthySince.delete(key);
     }
 
     // (a) Coverage.
@@ -385,7 +458,7 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
         instanceBackoff.delete(instance);
         continue;
       }
-      if (gateInstance(instance)) {
+      if (gapWantsSync(instance)) {
         log("debug", "coverage gap", { instance });
         wantSync = true;
       }
@@ -409,18 +482,27 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
       }
     }
 
-    // (c) A pinned read stuck in `reconnect` for too long.
-    const t = now();
-    for (const entry of health) {
+    // (c) A pinned read stuck in `reconnect` for too long. Judged on the pool as
+    // it is now, not as `health` saw it: the awaits above and between restarts
+    // give a read time to recover, and restarting a healthy one drops what the
+    // operator is looking at and spends its backoff for nothing.
+    const stale = (entry: ChatOwnedHealth, t: number): boolean =>
+      entry.pinned &&
+      entry.health === "reconnect" &&
+      entry.healthSince !== null &&
+      t - entry.healthSince > CHAT_WATCHDOG_STALE_MS;
+    for (const seen of health) {
       if (stopped) return;
-      if (!entry.pinned || entry.health !== "reconnect" || entry.healthSince === null) continue;
-      if (t - entry.healthSince <= CHAT_WATCHDOG_STALE_MS) continue;
-      if (!reachable.has(entry.ref.instance) || !gateConversation(entry.ref)) continue;
+      if (!stale(seen, now()) || !reachable.has(seen.ref.instance)) continue;
+      const key = conversationKey(seen.ref);
+      const entry = owner.health().find((held) => conversationKey(held.ref) === key);
+      const t = now();
+      if (entry === undefined || !stale(entry, t) || !gateConversation(entry.ref)) continue;
       counters.restarts += 1;
       log("warn", "stale reconnect", {
         instance: entry.ref.instance,
         bot: entry.ref.bot,
-        since_ms: t - entry.healthSince,
+        since_ms: t - (entry.healthSince ?? t),
       });
       try {
         const restarted = await owner.restart(target(entry.ref), "watchdog: stale reconnect");
@@ -472,6 +554,7 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
       cancelDebounce?.();
       cancelDebounce = null;
       again = false;
+      recheck.clear();
       log("debug", "stopped");
     },
     async reachable(names: readonly string[]): Promise<void> {
@@ -504,7 +587,7 @@ export function createChatWatchdog(deps: ChatWatchdogDeps): ChatWatchdog {
           if (!instances.includes(swarm.instance) || !swarm.reachable) continue;
           rosters.set(swarm.instance, new Set(swarm.bots.map((bot) => bot.name)));
           if (!hasGap(swarm.instance, owned, failed)) continue;
-          if (gateInstance(swarm.instance)) {
+          if (gapWantsSync(swarm.instance)) {
             log("debug", "roster gap", { instance: swarm.instance });
             wantSync = true;
           }

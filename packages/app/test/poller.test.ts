@@ -696,9 +696,18 @@ describe("the poller hooks", () => {
     } as unknown as Hermetic;
     const poller = new FleetPoller(stub, Date.now, { onReachable: (n) => void seen.push(n) });
     await poller.poll();
+    // Scanned, but nothing read: the chat watchdog must not take this as an empty fleet.
+    expect(poller.snapshot().scanned).toBe(true);
+    expect(poller.hasBaseline()).toBe(false);
     fail = false;
     await poller.poll();
     expect(seen).toEqual([]);
+    expect(poller.hasBaseline()).toBe(true);
+    // A later failure leaves the last fleet read standing.
+    fail = true;
+    await poller.poll();
+    expect(poller.hasBaseline()).toBe(true);
+    expect(poller.snapshot().agents.map((a) => a.name)).toEqual(["atlas"]);
   });
 
   test("stopped to ready fires once, with the name", async () => {

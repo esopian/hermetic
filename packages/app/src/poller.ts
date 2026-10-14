@@ -308,6 +308,14 @@ export class FleetPoller {
     };
   }
 
+  /**
+   * Whether `snapshot().agents` is a fleet that was read rather than the empty
+   * map a failed first scan leaves: `scanned` alone cannot tell the two apart.
+   */
+  hasBaseline(): boolean {
+    return this.baselined;
+  }
+
   subscribe(listener: (e: FleetEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

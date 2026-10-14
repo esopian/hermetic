@@ -174,10 +174,11 @@ const chatOwner = createChatOwner({ hermetic: () => state.hermetic, log });
 const watchdog = createChatWatchdog({
   owner: chatOwner,
   listening: async () => (await state.hermetic.chat.listening({})).instances,
-  // "No answer yet" is not "no agents": before the first scan, nothing is skipped as stopped.
+  // "No answer yet" is not "no agents": until a scan has read the fleet — one
+  // that failed read nothing — no listened box is skipped as unknown.
   agents: () => {
-    const scan = state.poller?.snapshot();
-    return scan?.scanned === true ? scan.agents : null;
+    const poller = state.poller;
+    return poller?.hasBaseline() === true ? poller.snapshot().agents : null;
   },
   log,
 });

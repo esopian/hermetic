@@ -549,6 +549,10 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     }
 
     let agent: Agent;
+    /** The claim's listen failed: this run tries it once more at handoff. */
+    let listenAgain = false;
+    const listenFailed = (e: unknown): string =>
+      `could not listen to ${name} on this machine (${e instanceof Error ? e.message : String(e)}); turn it on with \`hermetic chat listen ${name}\``;
     if (claim.kind === "claimed") {
       /**
        * H4's other half. The gate at the top of this function was read before
@@ -575,18 +579,14 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        * create that fails and is finished later by `rerun` or a re-run create
        * (the `resume` branch below, which never comes here) is still listened
        * to, and a listen the operator turned off in between is never turned back
-       * on. A rollback that deletes this row purges it again (below).
+       * on. A rollback that deletes this row purges it again (below). One that
+       * fails is tried once more at handoff, by this run only (`listenAgain`).
        */
       try {
         await deps.listenLocal?.(fleet.fleet_id, agent);
       } catch (e) {
-        yield say(
-          "claim",
-          0.03,
-          `could not listen to ${name} on this machine (${e instanceof Error ? e.message : String(e)}); turn it on with \`hermetic chat listen ${name}\``,
-          nowIso(),
-          "warn",
-        );
+        listenAgain = true;
+        yield say("claim", 0.03, listenFailed(e), nowIso(), "warn");
       }
     } else {
       yield say("resume", 0.05, `resuming an interrupted create of ${name}`, nowIso(), "warn");
@@ -1137,6 +1137,17 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
         undefined,
         "done",
       );
+
+      // The claim's listen failed: one more try, now that the agent is real.
+      // Never on a resume, which may be finishing an agent the operator stopped
+      // listening to.
+      if (listenAgain) {
+        try {
+          await deps.listenLocal?.(fleet.fleet_id, agent);
+        } catch (e) {
+          yield say("instance", 0.93, listenFailed(e), nowIso(), "warn");
+        }
+      }
 
       /**
        * The op does not end at handoff any more (`handoff.ts`). Nothing below
