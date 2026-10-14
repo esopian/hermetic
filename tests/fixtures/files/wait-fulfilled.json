@@ -1,0 +1,11 @@
+{
+  "status": "fulfilled",
+  "request_id": "fr_7k2m4p9q3f9a",
+  "path": "/run/hermetic/files/github-app-pem",
+  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "bytes": 1679,
+  "by": "evan@example.com",
+  "class": "secret",
+  "deliver_with": [],
+  "expires_at": "2026-10-13T19:42:00Z"
+}

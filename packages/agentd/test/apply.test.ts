@@ -21,6 +21,7 @@ import {
   hermesBundleKey,
 } from "@hermetic/core/schema";
 import type { FleetManifest } from "@hermetic/core/schema";
+import { FILES_INBOX_DIR, FILES_OUTBOX_DIR, FILES_STAGE_DIR } from "@hermetic/core/shared";
 import { collector } from "../src/events.ts";
 import { ensureLoginShell } from "../src/apply/accounts.ts";
 import { AgentdError } from "../src/errors.ts";
@@ -273,6 +274,22 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
     expect(installs).toContain(
       "runuser -u hermes -- install -d -m 0755 /data/hermes/.hermes/lazy-packages",
     );
+    // The files service's roots, made by the account at 0700 — after
+    // `$HERMES_HOME` exists, and the inbox before the stage directory inside it.
+    const inboxAt = installs.indexOf(`runuser -u hermes -- install -d -m 0700 ${FILES_INBOX_DIR}`);
+    const stageAt = installs.indexOf(`runuser -u hermes -- install -d -m 0700 ${FILES_STAGE_DIR}`);
+    const outboxAt = installs.indexOf(`runuser -u hermes -- install -d -m 0700 ${FILES_OUTBOX_DIR}`);
+    expect(inboxAt).toBeGreaterThan(rootAt);
+    expect(stageAt).toBeGreaterThan(inboxAt);
+    expect(outboxAt).toBeGreaterThan(rootAt);
+    expect(FILES_STAGE_DIR.startsWith(FILES_INBOX_DIR + "/")).toBe(true);
+    // Never a root `install -d` under `$HERMES_HOME`: the account could have
+    // swapped any of these names for a symlink.
+    expect(
+      installs
+        .filter((c) => /\/(inbox|outbox)/.test(c))
+        .every((c) => c.startsWith("runuser -u hermes -- ")),
+    ).toBe(true);
 
     expect(
       ranInOrder(host, [new RegExp(`^install -d .* ${HERMES_ACCOUNT_HOME}$`), /^systemctl restart /]),

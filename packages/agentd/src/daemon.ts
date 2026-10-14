@@ -9,6 +9,7 @@ import { makeHeartbeat } from "./heartbeat.ts";
 import { HERMETICD_PATH } from "./stages.ts";
 import { reportBrowsers } from "./browser-health.ts";
 import { serveRpc, tailscaleWhois } from "./rpc.ts";
+import { startFiles } from "./files/service.ts";
 import {
   SWAP_SETTLE_MS,
   autoUpdate,
@@ -139,6 +140,17 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     onFirstWrite: settled,
   });
 
+  // The files service (attachments, request slots, the plugin socket). Best
+  // effort throughout: without it the box is an older hermeticd to the laptop.
+  const files = await startFiles({
+    host,
+    aws: ctx.aws,
+    paramPrefix: ctx.paramPrefix,
+    name: ctx.userData.name,
+    hermeticdVersion: HERMETICD_VERSION,
+    log,
+  });
+
   const listener = await serveRpc(
     {
       host,
@@ -153,17 +165,20 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
       // One audit line per RPC, through the same redacting stderr writer
       // everything else here uses — journald is where it belongs (§8.3).
       log,
+      ...(files.tailnet ? { files: files.tailnet } : {}),
     },
     { log },
   );
   log(`rpc on ${listener.hostname}:${listener.port}`);
 
   const forever = new AbortController();
-  // Three loops, never awaiting each other.
+  // Four loops, never awaiting each other. The files sweeper never resolves
+  // on its own; it is in the race so it stops with the rest.
   const beats = heartbeat.run(forever.signal);
   const updates = updateLoop(host, ctx, gate, forever.signal);
   const converges = convergeLoop(host, ctx, converge, forever.signal);
-  await Promise.race([beats, updates, converges]);
+  const sweeps = files.run(forever.signal);
+  await Promise.race([beats, updates, converges, sweeps]);
 }
 
 /**

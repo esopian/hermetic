@@ -1,0 +1,301 @@
+/**
+ * Request slots: the agent asks for a file (`request_file`), a human answers.
+ *
+ *     open ──PUT──▶ receiving ──digest ✓ accept ✓──▶ fulfilled ──consume──▶ consumed
+ *       ▲               │
+ *       └──rejected─────┘   (digest ✗ / type ✗ / size ✗: the slot stays open)
+ *     open ──decline──▶ declined        open ──ttl──▶ expired
+ *
+ * Only the plugin socket opens a slot, and only the tailnet fills or declines
+ * one, so the agent can never answer its own request: a request always ends
+ * with a human. `receiving` is the lock that makes one slot one file — a
+ * second upload while the first is in flight is refused, not raced.
+ *
+ * The lock is backed by a claim on the slot's id (`FilesStore.claim`), whose
+ * signal the upload reads under. A slot `receiving` for longer than
+ * `FILES_TTL.receivingMax`, or with no live claim behind it, is reclaimed: the
+ * upload is aborted and the slot is `open` again (`reclaimStalled`). With the
+ * per-read idle timeout (`MeteredBody`) that bounds how long one client can
+ * hold a slot, however slowly it sends.
+ */
+import type {
+  FileClass,
+  FileRequest,
+  FileWaitResult,
+  OpenFileRequestBody,
+} from "@hermetic/core/schema";
+import { FILES_LIMITS, FILES_TTL, newRequestId } from "@hermetic/core/shared";
+import { FilesError } from "./errors.ts";
+import { type FilesCtx, isDue, isoAfter, nowIso, waitResult } from "./context.ts";
+import type { Claim, FilesIndex } from "./store.ts";
+
+/** The byte cap a slot's class allows: 1 MiB for an ephemeral secret, the file cap otherwise. */
+export function classCap(sensitivity: FileRequest["sensitivity"]): number {
+  return sensitivity === "secret" ? FILES_LIMITS.secretEphemeralBytes : FILES_LIMITS.fileBytes;
+}
+
+function find(index: FilesIndex, id: string): FileRequest {
+  const request = index.requests.find((r) => r.request_id === id);
+  if (!request) throw new FilesError("FILE_NOT_FOUND", "no such request on this box");
+  return request;
+}
+
+/**
+ * Mark a slot `expired` if its TTL has passed and nothing has filled it.
+ * `true` when it changed, so the caller wakes the slot's waiters.
+ */
+export function expireIfDue(ctx: FilesCtx, request: FileRequest): boolean {
+  // Only an `open` slot expires. One mid-upload is left to finish; its own
+  // completion is what decides it.
+  if (request.state !== "open" || !isDue(ctx.host, request.expires_at)) return false;
+  request.state = "expired";
+  return true;
+}
+
+/**
+ * Reopen a `receiving` slot whose upload is gone or has run too long: past
+ * `FILES_TTL.receivingMax`, its claim is reclaimed (the upload's body read
+ * aborts, and its own cleanup unlinks the part); with no claim at all the
+ * upload died without unwinding. Call inside `mutate`. `true` when it changed.
+ */
+export function reclaimStalled(ctx: FilesCtx, request: FileRequest): boolean {
+  if (request.state !== "receiving") return false;
+  const held = ctx.store.claimed(request.request_id);
+  if (held && ctx.host.now().getTime() - held.since < FILES_TTL.receivingMax * 1000) return false;
+  if (held) ctx.store.reclaim(request.request_id);
+  request.state = "open";
+  request.rejected = {
+    code: "VALIDATION",
+    message: "the upload stalled and was stopped; send it again",
+    at: nowIso(ctx.host),
+  };
+  return true;
+}
+
+/** Open or mid-upload: a slot still waiting for its file. */
+function isLive(request: FileRequest): boolean {
+  return request.state === "open" || request.state === "receiving";
+}
+
+/**
+ * Open a slot (socket `POST /requests`). Refused with `CONFLICT` once
+ * `FILES_LIMITS.openRequests` slots are live: the socket is the agent's, and
+ * an agent in a loop must not be able to grow the index without bound.
+ */
+export async function openRequest(ctx: FilesCtx, body: OpenFileRequestBody): Promise<FileRequest> {
+  const sensitivity = body.sensitivity ?? "normal";
+  const cap = classCap(sensitivity);
+  const request: FileRequest = {
+    request_id: newRequestId(),
+    kind: "file",
+    purpose: body.purpose,
+    ...(body.name_hint ? { name_hint: body.name_hint } : {}),
+    accept: body.accept ?? [],
+    max_bytes: Math.min(body.max_bytes ?? cap, cap),
+    sensitivity,
+    durable: body.durable ?? sensitivity === "secret",
+    state: "open",
+    created_at: nowIso(ctx.host),
+    expires_at: isoAfter(ctx.host, FILES_TTL.request),
+    ...(body.session_id ? { session_id: body.session_id } : {}),
+  };
+  const woken: string[] = [];
+  await ctx.store.mutate((index) => {
+    for (const r of index.requests) if (expireIfDue(ctx, r)) woken.push(r.request_id);
+    if (index.requests.filter(isLive).length >= FILES_LIMITS.openRequests) {
+      throw new FilesError(
+        "CONFLICT",
+        `this box already has ${FILES_LIMITS.openRequests} requests waiting for a file; ` +
+          "wait for one to be answered, declined or expire before asking again",
+      );
+    }
+    index.requests.push(request);
+  });
+  for (const id of woken) ctx.store.wake(id);
+  return request;
+}
+
+/** One slot, its TTL applied. */
+export async function getRequest(ctx: FilesCtx, id: string): Promise<FileRequest> {
+  const current = find(ctx.store.read(), id);
+  if (expireIfDue(ctx, { ...current })) {
+    await ctx.store.mutate((index) => {
+      if (expireIfDue(ctx, find(index, id))) ctx.store.wake(id);
+    });
+  }
+  return find(ctx.store.read(), id);
+}
+
+/** Every slot, each with its TTL applied. */
+export async function listRequests(ctx: FilesCtx): Promise<FileRequest[]> {
+  const due = ctx.store.read().requests.filter((r) => expireIfDue(ctx, { ...r }));
+  if (due.length > 0) {
+    await ctx.store.mutate((index) => {
+      for (const r of index.requests) if (expireIfDue(ctx, r)) ctx.store.wake(r.request_id);
+    });
+  }
+  return ctx.store.read().requests;
+}
+
+/**
+ * The long-poll: answer as soon as the slot leaves `open`, or after `seconds`
+ * with whatever it is then. `signal` is the client hanging up.
+ */
+export async function waitForRequest(
+  ctx: FilesCtx,
+  id: string,
+  seconds: number,
+  signal?: AbortSignal,
+): Promise<FileWaitResult> {
+  let request = await getRequest(ctx, id);
+  if (seconds <= 0 || (request.state !== "open" && request.state !== "receiving")) {
+    return waitResult(ctx.name, request);
+  }
+  const stop = new AbortController();
+  const onAbort = (): void => stop.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const deadline = ctx.host.now().getTime() + seconds * 1000;
+    const timer = ctx.delay(seconds * 1000, stop.signal).then(() => "timeout" as const);
+    for (;;) {
+      const outcome = await Promise.race([
+        ctx.store.changed(id, stop.signal).then(() => "changed" as const),
+        timer,
+      ]);
+      request = await getRequest(ctx, id);
+      if (request.state !== "open" && request.state !== "receiving") break;
+      if (outcome === "timeout" || stop.signal.aborted || ctx.host.now().getTime() >= deadline) break;
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    stop.abort();
+  }
+  return waitResult(ctx.name, request);
+}
+
+/**
+ * Take the slot's lock for an upload: the slot `receiving`, and a claim on its
+ * id whose signal the upload reads under. The caller releases the claim when
+ * the upload ends, either way. Refuses a slot that is not `open`: 410 once
+ * expired, 409 when filled, in flight, declined or consumed.
+ */
+export async function beginReceiving(
+  ctx: FilesCtx,
+  id: string,
+): Promise<{ slot: FileRequest; claim: Claim }> {
+  // The claim is taken inside the mutation, beside the state it backs, so a
+  // `receiving` slot is never persisted — or seen by the sweeper's
+  // `reclaimStalled` — without a live claim behind it.
+  const held: { claim: Claim | null } = { claim: null };
+  try {
+    const slot = await ctx.store.mutate((index) => {
+      const request = find(index, id);
+      if (reclaimStalled(ctx, request)) ctx.store.wake(id);
+      if (expireIfDue(ctx, request)) ctx.store.wake(id);
+      const taken = takeSlot(request);
+      // Only this function claims a slot's id, and only once `takeSlot` moved
+      // the slot to `receiving`, which it refuses to do twice — so the id is free.
+      held.claim = ctx.store.claim(id);
+      if (held.claim === null) {
+        throw new FilesError(
+          "FILE_REQUEST_FULFILLED",
+          "an upload for this request is already in flight",
+        );
+      }
+      return taken;
+    });
+    return { slot, claim: held.claim as Claim };
+  } catch (e) {
+    // The mutation threw after claiming, or the index would not save: the slot
+    // is not `receiving`, so nothing may hold its id.
+    held.claim?.release();
+    throw e;
+  }
+}
+
+function takeSlot(request: FileRequest): FileRequest {
+  switch (request.state) {
+    case "open":
+      request.state = "receiving";
+      return { ...request };
+    case "expired":
+      throw new FilesError(
+        "FILE_REQUEST_EXPIRED",
+        "this request has expired; ask the agent to request it again",
+      );
+    case "receiving":
+      throw new FilesError("FILE_REQUEST_FULFILLED", "an upload for this request is already in flight");
+    case "fulfilled":
+      throw new FilesError("FILE_REQUEST_FULFILLED", "this request has already been fulfilled");
+    default:
+      throw new FilesError("FILE_REQUEST_CLOSED", `this request was ${request.state}`);
+  }
+}
+
+/**
+ * An upload failed its checks: back to `open`, the refusal recorded for the
+ * card. With `claim`, only while that claim still holds the slot — an upload
+ * the slot was reclaimed from must not reopen a newer upload's lock.
+ */
+export async function rejectReceiving(
+  ctx: FilesCtx,
+  id: string,
+  error: unknown,
+  claim?: Claim,
+): Promise<void> {
+  const code = error instanceof FilesError ? error.code : "INTERNAL";
+  const message = error instanceof FilesError ? error.message : "the upload failed";
+  await ctx.store.mutate((index) => {
+    const request = index.requests.find((r) => r.request_id === id);
+    if (request?.state !== "receiving") return;
+    if (claim && ctx.store.claimed(id) !== claim) return;
+    request.state = "open";
+    request.rejected = { code, message, at: nowIso(ctx.host) };
+  });
+  ctx.store.wake(id);
+}
+
+/**
+ * The upload landed: `fulfilled`, with where it is and who sent it. Refuses
+ * (`CONFLICT`) when `claim` no longer holds the slot — it was reclaimed while
+ * the bytes were being written.
+ */
+export function markFulfilled(
+  ctx: FilesCtx,
+  index: FilesIndex,
+  id: string,
+  claim: Claim,
+  fulfilled: { path: string; sha256: string; bytes: number; by: string; class: FileClass },
+): void {
+  const request = find(index, id);
+  if (request.state !== "receiving" || ctx.store.claimed(id) !== claim) {
+    throw new FilesError("CONFLICT", "this upload was stopped before it landed; send it again");
+  }
+  request.state = "fulfilled";
+  request.fulfilled = { ...fulfilled, at: nowIso(ctx.host) };
+  delete request.rejected;
+}
+
+/** The operator said no (`POST /files/requests/:id/decline`). */
+export async function declineRequest(ctx: FilesCtx, id: string, reason?: string): Promise<FileRequest> {
+  const out = await ctx.store.mutate((index) => {
+    const request = find(index, id);
+    expireIfDue(ctx, request);
+    if (request.state === "expired") {
+      throw new FilesError("FILE_REQUEST_EXPIRED", "this request has already expired");
+    }
+    if (request.state === "fulfilled" || request.state === "receiving") {
+      throw new FilesError(
+        "FILE_REQUEST_FULFILLED",
+        "this request has already been answered with a file",
+      );
+    }
+    if (request.state !== "open")
+      throw new FilesError("FILE_REQUEST_CLOSED", `this request was ${request.state}`);
+    request.state = "declined";
+    request.declined = { ...(reason ? { reason } : {}), at: nowIso(ctx.host) };
+    return { ...request };
+  });
+  ctx.store.wake(id);
+  return out;
+}

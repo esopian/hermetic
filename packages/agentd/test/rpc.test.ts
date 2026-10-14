@@ -416,6 +416,19 @@ describe("the RPC listener (§6.4)", () => {
     expect(Object.keys((await res.json()) as object)).not.toContain("browsers");
   });
 
+  /**
+   * A build without the files service says nothing about it: no
+   * `capabilities`, and `/files` is a 404 — which is how a head tells it from
+   * a box that can take an attachment.
+   */
+  test("without the files service, /healthz has no capabilities and /files is a 404", async () => {
+    const { fetch } = handler();
+    const health = await fetch(new Request(`http://x${RPC_PATHS.health}`), OPERATOR_IP);
+    expect(Object.keys((await health.json()) as object)).not.toContain("capabilities");
+    const files = await fetch(new Request("http://x/files"), OPERATOR_IP);
+    expect(files.status).toBe(404);
+  });
+
   test("a box that has never fetched a config reports config_hash null", async () => {
     const { fetch } = handler({ configHash: null });
     const res = await fetch(new Request(`http://x${RPC_PATHS.health}`), OPERATOR_IP);

@@ -20,15 +20,27 @@ import { realHost, type Host } from "./host.ts";
 import { paramPath } from "./fleet.ts";
 import { normalize, resolve } from "node:path";
 import { MANIFEST_PATH, parseManifestJson, readBundleManifest } from "./manifest.ts";
-import { apply, materialiseSecrets, SECRETS_ENV_DIR, SECRETS_ENV_PATH } from "./apply/index.ts";
+import {
+  apply,
+  materialiseSecrets,
+  SECRETS_ENV_DIR,
+  SECRETS_ENV_DIR_MODE,
+  SECRETS_ENV_PATH,
+} from "./apply/index.ts";
 import { checkHermes } from "./hermes-check.ts";
 import { bootstrap, installBootstrapUnit } from "./bootstrap.ts";
 import { DATA_MOUNT, DEVICE_WAIT_MS, mountDataVolume } from "./disk.ts";
 import { makeHeartbeat } from "./heartbeat.ts";
 import { settleSwap, update } from "./update/index.ts";
-import { PROVIDERS, isProviderKeySlot, providerKeyRefOf } from "@hermetic/core/shared";
+import {
+  PROVIDERS,
+  isEnvSecretSlot,
+  isFileSecretSlot,
+  isProviderKeySlot,
+  providerKeyRefOf,
+} from "@hermetic/core/shared";
 import { HERMETICD_VERSION } from "./version.ts";
-import { bootContext, context, log, stderrEmit, type RunDeps } from "./context.ts";
+import { bootContext, context, log, stderrEmit, type Context, type RunDeps } from "./context.ts";
 import { serve } from "./daemon.ts";
 
 /** The SSM slots an agent has. A stage may ask for these and nothing else. */
@@ -51,10 +63,26 @@ export type SecretSlot = (typeof SECRET_SLOTS)[number];
  * an operator staging a profile-bound agent's key would be told the slot the
  * manifest names is not a slot.
  */
-export const SECRET_SLOT_USAGE = [...SECRET_SLOTS, "provider-key-<profile>-r<N>"].join("|");
+export const SECRET_SLOT_USAGE = [
+  ...SECRET_SLOTS,
+  "provider-key-<profile>-r<N>",
+  "file-<slug>",
+  "env-<slug>",
+].join("|");
 
+/**
+ * The durable file secrets (`file-<slug>`, `env-<slug>`) are two more families
+ * under the same prefix, and the same reasoning admits them: the slug is
+ * validated like a name (`FILE_SECRET_SLOT_RE`/`ENV_SECRET_SLOT_RE`), so the
+ * guard stays a fixed shape rather than "anything under the prefix".
+ */
 export function isKnownSlot(slot: string): boolean {
-  return (SECRET_SLOTS as readonly string[]).includes(slot) || isProviderKeySlot(slot);
+  return (
+    (SECRET_SLOTS as readonly string[]).includes(slot) ||
+    isProviderKeySlot(slot) ||
+    isFileSecretSlot(slot) ||
+    isEnvSecretSlot(slot)
+  );
 }
 
 export interface Argv {
@@ -139,8 +167,13 @@ export async function writeSecretFile(host: Host, out: string, value: string): P
   assertTmpfs(out);
   const dir = out.slice(0, out.lastIndexOf("/"));
   if (dir.length > 0) {
-    await host.mkdir(dir, "0700");
-    await host.chmod(dir, "0700");
+    // `/run/hermetic` itself is 0711 (`SECRETS_ENV_DIR_MODE`): still not
+    // listable, but traversable so `hermes` can reach the files service's paths
+    // under it. Setting 0700 here would undo that on every stage that stages a
+    // key. Any other directory keeps 0700.
+    const mode = dir === SECRETS_ENV_DIR ? SECRETS_ENV_DIR_MODE : "0700";
+    await host.mkdir(dir, mode);
+    await host.chmod(dir, mode);
   }
   await host.writeFile(out, value, "0600");
 }
@@ -234,11 +267,12 @@ export async function run(
       const dryRun = flags["dry-run"] === true;
       let bwsToken: string | undefined;
       let providerKey: string | undefined;
+      let ctx: Context | null = null;
       // Only when `apply` would rewrite `secrets.env` at all. On a box where it
       // would not, `hermetic-secrets.service` remains the file's sole author and
       // there is nothing for apply to preserve — so no SSM call is made.
       if (manifest.secrets_mode === "bitwarden" || PROVIDERS[manifest.provider].env !== null) {
-        const ctx = await context(host, deps);
+        ctx = await context(host, deps);
         if (manifest.secrets_mode === "bitwarden") {
           bwsToken = await ctx.aws.getParameter(paramPath(ctx.paramPrefix, "bws-token"));
         }
@@ -248,12 +282,26 @@ export async function run(
           );
         }
       }
+      /**
+       * The durable file secrets need the role and prefix even when neither slot
+       * above was read. Best-effort, like the step itself: a box whose fleet
+       * cache cannot be read still applies, and only those files wait for the
+       * next apply or boot.
+       */
+      if (!dryRun && ctx === null) {
+        try {
+          ctx = await context(host, deps);
+        } catch (e) {
+          log(`durable file secrets skipped: ${e instanceof AgentdError ? e.code : "no AWS context"}`);
+        }
+      }
       const result = await apply(manifest, {
         host,
         emit: stderrEmit,
         ...(dryRun ? { dryRun: true } : {}),
         ...(bwsToken ? { bwsToken } : {}),
         ...(providerKey ? { providerKey } : {}),
+        ...(ctx && !dryRun ? { fileSecrets: { aws: ctx.aws, paramPrefix: ctx.paramPrefix, log } } : {}),
       });
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       return EXIT_OK;

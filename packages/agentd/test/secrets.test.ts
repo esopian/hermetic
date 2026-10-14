@@ -12,8 +12,10 @@
  * configure and hermeticd writes no `HERMES_DASHBOARD_*` variables at all.
  */
 import { describe, expect, test } from "bun:test";
-import { GetParameterCommand } from "@aws-sdk/client-ssm";
-import { envLine, materialiseSecrets, SECRETS_ENV_PATH } from "../src/apply/index.ts";
+import { createHash } from "node:crypto";
+import { GetParameterCommand, GetParametersByPathCommand } from "@aws-sdk/client-ssm";
+import { FILES_SECRET_DIR, encodeSecretEnvelope } from "@hermetic/core/shared";
+import { envLine, materialiseSecrets, SECRETS_ENV_DIR, SECRETS_ENV_PATH } from "../src/apply/index.ts";
 import { makeAws } from "../src/aws.ts";
 import { FLEET_CACHE_PATH } from "../src/fleet.ts";
 import { MANIFEST_PATH } from "../src/manifest.ts";
@@ -73,6 +75,16 @@ function rig(options: RigOptions = {}) {
     const value = slots[slot];
     if (value === undefined) throw parameterNotFound();
     return { Parameter: { Value: value } };
+  });
+  // The durable file secrets are listed, one level, under the same prefix.
+  ssm.byCommand.set("GetParametersByPathCommand", (command) => {
+    const path = (command as GetParametersByPathCommand).input.Path ?? "";
+    return {
+      Parameters: Object.entries(slots).map(([slot, value]) => ({
+        Name: `${path}/${slot}`,
+        Value: value,
+      })),
+    };
   });
 
   const aws = makeAws({
@@ -197,6 +209,82 @@ describe("the tmpfs environment file (§8.3)", () => {
     expect(code).toBe(0);
     expect(r.env()).toBe("NOUS_API_KEY=nous-FIXTURE-KEY\n");
     expect(host0600(r.host)).toBe(true);
+  });
+
+  /**
+   * `/run/hermetic` is 0711 now — traversable by `hermes`, still not listable —
+   * and a box booted before that has a 0700 one, which `mkdir` would leave as
+   * it is. So the mode is set, not just asked for.
+   */
+  test("the tmpfs directory is made 0711 even when it already existed", async () => {
+    const r = rig({ provider: "bedrock", secrets_mode: "none" });
+    r.host.dirs.add(SECRETS_ENV_DIR);
+
+    await captureStderr(async () => void (await r.materialise()));
+
+    expect(r.host.chmods).toContainEqual([SECRETS_ENV_DIR, "0711"]);
+    expect(host0600(r.host)).toBe(true);
+  });
+
+  /**
+   * `hermeticd apply` (stage 04, and a converge) re-materialises the durable
+   * file secrets from SSM — even on a Bedrock box, where no other slot is read
+   * and so no AWS context would otherwise exist.
+   */
+  test("`hermeticd apply` re-materialises the durable file secrets", async () => {
+    const bytes = new TextEncoder().encode("FIXTURE-PEM\n");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const r = rig({
+      provider: "bedrock",
+      secrets_mode: "none",
+      slots: { "file-app-pem": encodeSecretEnvelope({ name: "app.pem", bytes, sha256 }) },
+    });
+
+    let code = -1;
+    await captureStderr(async () => void (code = await r.apply()));
+
+    expect(code).toBe(0);
+    expect(r.host.files.get(`${FILES_SECRET_DIR}/app.pem`)?.mode).toBe("0600");
+    expect(r.host.commands).toContain(`chown hermes:hermes -- ${FILES_SECRET_DIR}/app.pem`);
+    expect(r.ssm.commandCalls(GetParametersByPathCommand).map((c) => c.input.Path)).toEqual([
+      "/hermes/research-1",
+    ]);
+  });
+});
+
+describe("Aws.getParametersByPath", () => {
+  test("follows NextToken to the last page, one level, decrypted", async () => {
+    const ssm = new RecordingSink();
+    ssm.responses.push(
+      {
+        Parameters: [
+          { Name: "/p/a", Value: "1" },
+          { Name: "/p/b", Value: "2" },
+        ],
+        NextToken: "t1",
+      },
+      { Parameters: [{ Name: "/p/c", Value: "3" }], NextToken: "t2" },
+      { Parameters: [] },
+    );
+    const aws = makeAws({
+      ddb: new RecordingSink(),
+      ssm,
+      s3: new RecordingSink(),
+      agentsTable: TEST_AGENTS_TABLE,
+      eventsTable: TEST_EVENTS_TABLE,
+      now: () => new Date(0),
+    });
+
+    expect(await aws.getParametersByPath("/p")).toEqual([
+      { name: "/p/a", value: "1" },
+      { name: "/p/b", value: "2" },
+      { name: "/p/c", value: "3" },
+    ]);
+    const inputs = ssm.commandCalls(GetParametersByPathCommand).map((c) => c.input);
+    expect(inputs.map((i) => i.NextToken)).toEqual([undefined, "t1", "t2"]);
+    expect(
+      inputs.every((i) => i.Path === "/p" && i.Recursive === false && i.WithDecryption === true),
+    ).toBe(true);
   });
 });
 

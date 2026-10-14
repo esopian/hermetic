@@ -2,8 +2,8 @@
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "7878c0c59de2c1c7",
-  "key": "config/atlas/7878c0c59de2c1c7.tgz",
+  "config_hash": "bd79fcf7036cf051",
+  "key": "config/atlas/bd79fcf7036cf051.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -44,7 +44,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "7878c0c59de2c1c7",
+    "config_hash": "bd79fcf7036cf051",
     "files": [
       {
         "content": 
@@ -584,7 +584,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 
 [Install]
@@ -684,8 +684,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "f8ada0aa43048f8c",
-  "key": "config/atlas/f8ada0aa43048f8c.tgz",
+  "config_hash": "b6d04e2b7aff1ce4",
+  "key": "config/atlas/b6d04e2b7aff1ce4.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -731,7 +731,7 @@ exports[`renderAgentConfig snapshot: small/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "f8ada0aa43048f8c",
+    "config_hash": "b6d04e2b7aff1ce4",
     "files": [
       {
         "content": 
@@ -1271,7 +1271,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
 
@@ -1373,8 +1373,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "29ebd3a7105d619b",
-  "key": "config/atlas/29ebd3a7105d619b.tgz",
+  "config_hash": "51d54d7ff7ac4c2f",
+  "key": "config/atlas/51d54d7ff7ac4c2f.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -1415,7 +1415,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "29ebd3a7105d619b",
+    "config_hash": "51d54d7ff7ac4c2f",
     "files": [
       {
         "content": 
@@ -1951,7 +1951,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -2052,8 +2052,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "c1a9939b957f21dd",
-  "key": "config/atlas/c1a9939b957f21dd.tgz",
+  "config_hash": "4b2babcd822e906a",
+  "key": "config/atlas/4b2babcd822e906a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2099,7 +2099,7 @@ exports[`renderAgentConfig snapshot: small/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c1a9939b957f21dd",
+    "config_hash": "4b2babcd822e906a",
     "files": [
       {
         "content": 
@@ -2635,7 +2635,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -2738,8 +2738,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "dcbc5d9f286eeadd",
-  "key": "config/atlas/dcbc5d9f286eeadd.tgz",
+  "config_hash": "2d1996bf0ec88b0e",
+  "key": "config/atlas/2d1996bf0ec88b0e.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -2780,7 +2780,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "dcbc5d9f286eeadd",
+    "config_hash": "2d1996bf0ec88b0e",
     "files": [
       {
         "content": 
@@ -3316,7 +3316,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -3417,8 +3417,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "e616717ebdce4d96",
-  "key": "config/atlas/e616717ebdce4d96.tgz",
+  "config_hash": "d40d052f87b4ec9a",
+  "key": "config/atlas/d40d052f87b4ec9a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -3464,7 +3464,7 @@ exports[`renderAgentConfig snapshot: small/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "e616717ebdce4d96",
+    "config_hash": "d40d052f87b4ec9a",
     "files": [
       {
         "content": 
@@ -4000,7 +4000,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -4103,8 +4103,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
 {
-  "config_hash": "0a0545d61984fa20",
-  "key": "config/atlas/0a0545d61984fa20.tgz",
+  "config_hash": "ed9f8b4e5cedf144",
+  "key": "config/atlas/ed9f8b4e5cedf144.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4145,7 +4145,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0a0545d61984fa20",
+    "config_hash": "ed9f8b4e5cedf144",
     "files": [
       {
         "content": 
@@ -4683,7 +4683,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -4784,8 +4784,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "ab44c03a28373db8",
-  "key": "config/atlas/ab44c03a28373db8.tgz",
+  "config_hash": "3f777f773303a65b",
+  "key": "config/atlas/3f777f773303a65b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -4831,7 +4831,7 @@ exports[`renderAgentConfig snapshot: small/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ab44c03a28373db8",
+    "config_hash": "3f777f773303a65b",
     "files": [
       {
         "content": 
@@ -5369,7 +5369,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -5472,8 +5472,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
 {
-  "config_hash": "5495aea9e7c65b3c",
-  "key": "config/atlas/5495aea9e7c65b3c.tgz",
+  "config_hash": "3a5d4a5888750893",
+  "key": "config/atlas/3a5d4a5888750893.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -5514,7 +5514,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "5495aea9e7c65b3c",
+    "config_hash": "3a5d4a5888750893",
     "files": [
       {
         "content": 
@@ -6050,7 +6050,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -6151,8 +6151,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "495404dfecc858fa",
-  "key": "config/atlas/495404dfecc858fa.tgz",
+  "config_hash": "c380b208336171e6",
+  "key": "config/atlas/c380b208336171e6.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6198,7 +6198,7 @@ exports[`renderAgentConfig snapshot: small/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "495404dfecc858fa",
+    "config_hash": "c380b208336171e6",
     "files": [
       {
         "content": 
@@ -6734,7 +6734,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -6837,8 +6837,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
 {
-  "config_hash": "ea50312b6cba7b81",
-  "key": "config/atlas/ea50312b6cba7b81.tgz",
+  "config_hash": "153bc81eec2f630a",
+  "key": "config/atlas/153bc81eec2f630a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -6879,7 +6879,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ea50312b6cba7b81",
+    "config_hash": "153bc81eec2f630a",
     "files": [
       {
         "content": 
@@ -7415,7 +7415,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -7516,8 +7516,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "a5241e57f667f330",
-  "key": "config/atlas/a5241e57f667f330.tgz",
+  "config_hash": "f55f4a40bf31b708",
+  "key": "config/atlas/f55f4a40bf31b708.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -7563,7 +7563,7 @@ exports[`renderAgentConfig snapshot: small/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "a5241e57f667f330",
+    "config_hash": "f55f4a40bf31b708",
     "files": [
       {
         "content": 
@@ -8099,7 +8099,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -8202,8 +8202,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "c28569c39eac5260",
-  "key": "config/atlas/c28569c39eac5260.tgz",
+  "config_hash": "1654efc8f5bb9e94",
+  "key": "config/atlas/1654efc8f5bb9e94.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8244,7 +8244,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "c28569c39eac5260",
+    "config_hash": "1654efc8f5bb9e94",
     "files": [
       {
         "content": 
@@ -8784,7 +8784,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 
 [Install]
@@ -8884,8 +8884,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "52352cdd1a770082",
-  "key": "config/atlas/52352cdd1a770082.tgz",
+  "config_hash": "d08d4b556709014f",
+  "key": "config/atlas/d08d4b556709014f.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -8931,7 +8931,7 @@ exports[`renderAgentConfig snapshot: medium/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "52352cdd1a770082",
+    "config_hash": "d08d4b556709014f",
     "files": [
       {
         "content": 
@@ -9471,7 +9471,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
 
@@ -9573,8 +9573,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "772635aaf36bc532",
-  "key": "config/atlas/772635aaf36bc532.tgz",
+  "config_hash": "fdf7af2374d9f335",
+  "key": "config/atlas/fdf7af2374d9f335.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -9615,7 +9615,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "772635aaf36bc532",
+    "config_hash": "fdf7af2374d9f335",
     "files": [
       {
         "content": 
@@ -10151,7 +10151,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -10252,8 +10252,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "33102030760b708f",
-  "key": "config/atlas/33102030760b708f.tgz",
+  "config_hash": "e163e140b72fb2a7",
+  "key": "config/atlas/e163e140b72fb2a7.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10299,7 +10299,7 @@ exports[`renderAgentConfig snapshot: medium/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "33102030760b708f",
+    "config_hash": "e163e140b72fb2a7",
     "files": [
       {
         "content": 
@@ -10835,7 +10835,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -10938,8 +10938,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "0753009a273f4f41",
-  "key": "config/atlas/0753009a273f4f41.tgz",
+  "config_hash": "bba6027bd7b83259",
+  "key": "config/atlas/bba6027bd7b83259.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -10980,7 +10980,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0753009a273f4f41",
+    "config_hash": "bba6027bd7b83259",
     "files": [
       {
         "content": 
@@ -11516,7 +11516,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -11617,8 +11617,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "72950f7f8204fa1b",
-  "key": "config/atlas/72950f7f8204fa1b.tgz",
+  "config_hash": "0499b0412b7f1656",
+  "key": "config/atlas/0499b0412b7f1656.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -11664,7 +11664,7 @@ exports[`renderAgentConfig snapshot: medium/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "72950f7f8204fa1b",
+    "config_hash": "0499b0412b7f1656",
     "files": [
       {
         "content": 
@@ -12200,7 +12200,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -12303,8 +12303,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
 {
-  "config_hash": "00ed4b8a43d67bb1",
-  "key": "config/atlas/00ed4b8a43d67bb1.tgz",
+  "config_hash": "3ef8fa38a5ae974c",
+  "key": "config/atlas/3ef8fa38a5ae974c.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -12345,7 +12345,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "00ed4b8a43d67bb1",
+    "config_hash": "3ef8fa38a5ae974c",
     "files": [
       {
         "content": 
@@ -12883,7 +12883,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -12984,8 +12984,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "07de6f0748fa7991",
-  "key": "config/atlas/07de6f0748fa7991.tgz",
+  "config_hash": "c26c4ab890d9f4ae",
+  "key": "config/atlas/c26c4ab890d9f4ae.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13031,7 +13031,7 @@ exports[`renderAgentConfig snapshot: medium/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "07de6f0748fa7991",
+    "config_hash": "c26c4ab890d9f4ae",
     "files": [
       {
         "content": 
@@ -13569,7 +13569,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -13672,8 +13672,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
 {
-  "config_hash": "0a015840ab496c15",
-  "key": "config/atlas/0a015840ab496c15.tgz",
+  "config_hash": "b0ce52828328cd9f",
+  "key": "config/atlas/b0ce52828328cd9f.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -13714,7 +13714,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "0a015840ab496c15",
+    "config_hash": "b0ce52828328cd9f",
     "files": [
       {
         "content": 
@@ -14250,7 +14250,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -14351,8 +14351,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "686bed265065a7af",
-  "key": "config/atlas/686bed265065a7af.tgz",
+  "config_hash": "34924c30574927ac",
+  "key": "config/atlas/34924c30574927ac.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -14398,7 +14398,7 @@ exports[`renderAgentConfig snapshot: medium/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "686bed265065a7af",
+    "config_hash": "34924c30574927ac",
     "files": [
       {
         "content": 
@@ -14934,7 +14934,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -15037,8 +15037,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
 {
-  "config_hash": "584380ecceae1b9b",
-  "key": "config/atlas/584380ecceae1b9b.tgz",
+  "config_hash": "b380d502fb4b239d",
+  "key": "config/atlas/b380d502fb4b239d.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15079,7 +15079,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "584380ecceae1b9b",
+    "config_hash": "b380d502fb4b239d",
     "files": [
       {
         "content": 
@@ -15615,7 +15615,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -15716,8 +15716,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "d5cd041cc5849052",
-  "key": "config/atlas/d5cd041cc5849052.tgz",
+  "config_hash": "ee5e1d724fcad6ee",
+  "key": "config/atlas/ee5e1d724fcad6ee.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -15763,7 +15763,7 @@ exports[`renderAgentConfig snapshot: medium/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "d5cd041cc5849052",
+    "config_hash": "ee5e1d724fcad6ee",
     "files": [
       {
         "content": 
@@ -16299,7 +16299,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -16402,8 +16402,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
 {
-  "config_hash": "ade9a576a02926ea",
-  "key": "config/atlas/ade9a576a02926ea.tgz",
+  "config_hash": "d1b7ceddff2310f0",
+  "key": "config/atlas/d1b7ceddff2310f0.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -16444,7 +16444,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "ade9a576a02926ea",
+    "config_hash": "d1b7ceddff2310f0",
     "files": [
       {
         "content": 
@@ -16984,7 +16984,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 
 [Install]
@@ -17084,8 +17084,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
 {
-  "config_hash": "56d5903ad33e6b74",
-  "key": "config/atlas/56d5903ad33e6b74.tgz",
+  "config_hash": "19c29445c7d06788",
+  "key": "config/atlas/19c29445c7d06788.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17131,7 +17131,7 @@ exports[`renderAgentConfig snapshot: large/bedrock/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "56d5903ad33e6b74",
+    "config_hash": "19c29445c7d06788",
     "files": [
       {
         "content": 
@@ -17671,7 +17671,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
 
@@ -17773,8 +17773,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
 {
-  "config_hash": "973feaabf4f00025",
-  "key": "config/atlas/973feaabf4f00025.tgz",
+  "config_hash": "05d3a66b0350cfcc",
+  "key": "config/atlas/05d3a66b0350cfcc.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -17815,7 +17815,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "973feaabf4f00025",
+    "config_hash": "05d3a66b0350cfcc",
     "files": [
       {
         "content": 
@@ -18351,7 +18351,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -18452,8 +18452,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
 {
-  "config_hash": "8881657a177ff948",
-  "key": "config/atlas/8881657a177ff948.tgz",
+  "config_hash": "ba6dd2739c767f14",
+  "key": "config/atlas/ba6dd2739c767f14.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -18499,7 +18499,7 @@ exports[`renderAgentConfig snapshot: large/anthropic/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "8881657a177ff948",
+    "config_hash": "ba6dd2739c767f14",
     "files": [
       {
         "content": 
@@ -19035,7 +19035,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # ANTHROPIC_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -19138,8 +19138,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
 {
-  "config_hash": "6d37bd549b1eb7eb",
-  "key": "config/atlas/6d37bd549b1eb7eb.tgz",
+  "config_hash": "589638c2f91a468a",
+  "key": "config/atlas/589638c2f91a468a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19180,7 +19180,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "6d37bd549b1eb7eb",
+    "config_hash": "589638c2f91a468a",
     "files": [
       {
         "content": 
@@ -19716,7 +19716,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -19817,8 +19817,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
 {
-  "config_hash": "eefa0865d9c0ea65",
-  "key": "config/atlas/eefa0865d9c0ea65.tgz",
+  "config_hash": "834bbe2de798b34a",
+  "key": "config/atlas/834bbe2de798b34a.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -19864,7 +19864,7 @@ exports[`renderAgentConfig snapshot: large/openrouter/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "eefa0865d9c0ea65",
+    "config_hash": "834bbe2de798b34a",
     "files": [
       {
         "content": 
@@ -20400,7 +20400,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENROUTER_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -20503,8 +20503,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
 {
-  "config_hash": "5eeafb4942702ab4",
-  "key": "config/atlas/5eeafb4942702ab4.tgz",
+  "config_hash": "066619e1e3cc0331",
+  "key": "config/atlas/066619e1e3cc0331.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -20545,7 +20545,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "5eeafb4942702ab4",
+    "config_hash": "066619e1e3cc0331",
     "files": [
       {
         "content": 
@@ -21083,7 +21083,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -21184,8 +21184,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
 {
-  "config_hash": "541c84cbbb86c547",
-  "key": "config/atlas/541c84cbbb86c547.tgz",
+  "config_hash": "fb58752cf6afa7ab",
+  "key": "config/atlas/fb58752cf6afa7ab.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21231,7 +21231,7 @@ exports[`renderAgentConfig snapshot: large/nous/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "541c84cbbb86c547",
+    "config_hash": "fb58752cf6afa7ab",
     "files": [
       {
         "content": 
@@ -21769,7 +21769,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # NOUS_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -21872,8 +21872,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
 {
-  "config_hash": "7f67ff1c54cef356",
-  "key": "config/atlas/7f67ff1c54cef356.tgz",
+  "config_hash": "01fa6688bebd487b",
+  "key": "config/atlas/01fa6688bebd487b.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -21914,7 +21914,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "7f67ff1c54cef356",
+    "config_hash": "01fa6688bebd487b",
     "files": [
       {
         "content": 
@@ -22450,7 +22450,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -22551,8 +22551,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
 {
-  "config_hash": "1612b6137e791b1b",
-  "key": "config/atlas/1612b6137e791b1b.tgz",
+  "config_hash": "41b0d7940b66b8d0",
+  "key": "config/atlas/41b0d7940b66b8d0.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -22598,7 +22598,7 @@ exports[`renderAgentConfig snapshot: large/openai/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "1612b6137e791b1b",
+    "config_hash": "41b0d7940b66b8d0",
     "files": [
       {
         "content": 
@@ -23134,7 +23134,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # OPENAI_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.
@@ -23237,8 +23237,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
 {
-  "config_hash": "357242f27db466c3",
-  "key": "config/atlas/357242f27db466c3.tgz",
+  "config_hash": "72c5055e450b9ade",
+  "key": "config/atlas/72c5055e450b9ade.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23279,7 +23279,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=none 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "357242f27db466c3",
+    "config_hash": "72c5055e450b9ade",
     "files": [
       {
         "content": 
@@ -23815,7 +23815,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 
@@ -23916,8 +23916,8 @@ WantedBy=multi-user.target
 
 exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
 {
-  "config_hash": "4a9439cebf14f39a",
-  "key": "config/atlas/4a9439cebf14f39a.tgz",
+  "config_hash": "713b645eeda4308c",
+  "key": "config/atlas/713b645eeda4308c.tgz",
   "manifest": {
     "approvals_mode": "off",
     "apt_sources": [
@@ -23963,7 +23963,7 @@ exports[`renderAgentConfig snapshot: large/vercel/secrets=bitwarden 1`] = `
       "timeout 120 tailscale serve --bg --yes --https=443 'http://127.0.0.1:9120'",
       "timeout 120 tailscale serve --bg --yes --https=443 --set-path=/vnc 'http://127.0.0.1:6080'",
     ],
-    "config_hash": "4a9439cebf14f39a",
+    "config_hash": "713b645eeda4308c",
     "files": [
       {
         "content": 
@@ -24499,7 +24499,7 @@ Before=hermes-dashboard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic
+ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic
 ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600
 # AI_GATEWAY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/provider-key by hermeticd.
 # The bws access token is read from SSM at this fleet's SSM prefix + atlas/bws-token by hermeticd.

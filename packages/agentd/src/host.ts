@@ -125,6 +125,191 @@ export interface Host {
   execLines(argv: readonly string[], opts?: ExecOptions): AsyncIterable<string>;
   /** Streamed exec with both pipes and the exit code — how a stage is run (§4.2). */
   execEvents(argv: readonly string[], opts?: ExecOptions): AsyncIterable<ExecEvent>;
+  /**
+   * Create `path` as `user` and stream `chunks` into it — the files service's
+   * one way of putting bytes under `/data/hermes` (`files/fs-ops.ts`).
+   *
+   * As the account, never as root: every directory on the way is the
+   * account's own, so it can swap any of them for a symlink, and a root
+   * writer would follow it. Exclusive: the create fails if anything — a file,
+   * a symlink — is already at `path`, so nothing is ever overwritten. Created
+   * at mode 0600 (umask 077), then set to `opts.mode`.
+   *
+   * A failure mid-stream — the iterator throwing, the child dying — rejects,
+   * and may leave the partial file behind: the caller owns cleaning it up,
+   * because the caller is the one that named it.
+   */
+  writeStreamAs(
+    user: string,
+    path: string,
+    chunks: AsyncIterable<Uint8Array>,
+    opts: { readonly mode: string },
+  ): Promise<{ readonly bytes: number }>;
+  /**
+   * The bytes of `path`, read as `user` — so nothing is read with root's
+   * permissions. Refuses a symlink and anything but a regular file
+   * (`READ_STREAM_SCRIPT`): the account could otherwise point a path the index
+   * trusts at a file it can read but must not hand out (`$HERMES_HOME/.env`, a
+   * tmpfs secret). The stream errors if the file cannot be read. Cancelling it
+   * stops the reader.
+   */
+  readStreamAs(user: string, path: string): ReadableStream<Uint8Array>;
+}
+
+/**
+ * The shell `writeStreamAs` runs as the target account. `umask 077` makes the
+ * create 0600. `set -C` (noclobber) makes `>` an `O_EXCL` create for a path
+ * that does not exist and a refusal for a *regular* file that does — but it
+ * still opens an existing non-regular file, and follows a symlink to one, so
+ * a link to `/dev/null` or a fifo would swallow the upload and "succeed". The
+ * explicit test before it refuses anything at all at `$1`, a dangling or
+ * non-regular symlink included, with exit 17 (EEXIST); `set -C` stays to
+ * close the window between that test and the create. `$1` is the path, `$2`
+ * the final mode — positional, so neither is ever parsed as shell.
+ */
+export const WRITE_STREAM_SCRIPT =
+  'umask 077; set -C; [ -e "$1" ] || [ -L "$1" ] && exit 17; cat > "$1" || exit $?; [ "$2" = 0600 ] || chmod -- "$2" "$1"';
+
+/**
+ * The shell `readStreamAs` runs as the account: exit 40 for a symlink or
+ * anything but a regular file, else `cat` it. A check-then-open, so the
+ * account can still swap the path between the two (the files service checks
+ * the byte count against its index and the laptop verifies `Content-Digest`;
+ * see `files/entries.ts`).
+ */
+export const READ_STREAM_SCRIPT = '[ -L "$1" ] || [ ! -f "$1" ] && exit 40; exec cat -- "$1"';
+
+/** `READ_STREAM_SCRIPT`'s refusal. */
+export const READ_STREAM_REFUSED = 40;
+
+/** The slice of a Bun subprocess `pipeIntoChild` drives — structural, so a test can hand it a real child. */
+export interface PipedChild {
+  readonly stdin: { write(chunk: Uint8Array): unknown; flush(): unknown; end(): unknown };
+  readonly stderr: ReadableStream<Uint8Array>;
+  readonly exited: Promise<number>;
+  kill(): void;
+}
+
+/** How long a broken pipe waits for the child's exit status before killing it. */
+const PIPE_EXIT_GRACE_MS = 1000;
+
+/**
+ * Stream `chunks` into `proc`'s stdin, with backpressure, and wait for it.
+ *
+ * The child exiting early ends the read: each write's flush is raced against
+ * `proc.exited`, so a `cat` that refused its target (noclobber, a full disk)
+ * stops the upload there and surfaces its own exit code and stderr, instead
+ * of the rest of a 256 MiB body being read and written into a dead pipe. An
+ * early exit with status 0 is a failure too: the child stopped reading before
+ * the body ended.
+ *
+ * Two kinds of failure, told apart by where they come from. The iterator's
+ * own (a 408 for a stalled body, a 413 for one over its length) is the
+ * caller's answer and is rethrown as it is, after the child is stopped — even
+ * when the child had already died. A write or flush failing (`EPIPE`) is only
+ * the symptom of the child going away: it waits for the child's exit status
+ * and reports that, with the child's stderr.
+ */
+export async function pipeIntoChild(
+  proc: PipedChild,
+  chunks: AsyncIterable<Uint8Array>,
+  what: string,
+  details: Record<string, unknown> = {},
+): Promise<{ bytes: number }> {
+  const state: { code: number | null } = { code: null };
+  const exited = proc.exited.then(
+    (code) => {
+      state.code = code;
+      return code;
+    },
+    () => {
+      state.code = 1;
+      return 1;
+    },
+  );
+  const stop = async (): Promise<void> => {
+    if (state.code === null) {
+      try {
+        proc.kill();
+      } catch {
+        // Already gone.
+      }
+    }
+    await exited;
+  };
+  const iterator = chunks[Symbol.asyncIterator]();
+  let bytes = 0;
+  let early = false;
+  for (;;) {
+    let next: IteratorResult<Uint8Array>;
+    try {
+      next = await iterator.next();
+    } catch (e) {
+      await stop();
+      throw e;
+    }
+    if (next.done) break;
+    if (state.code !== null) {
+      early = true;
+      break;
+    }
+    const chunk = next.value;
+    bytes += chunk.byteLength;
+    try {
+      proc.stdin.write(chunk);
+      // Backpressure: a 256 MiB upload must not sit in this process's memory
+      // because the disk was slower than the network.
+      const won = await Promise.race([
+        Promise.resolve(proc.stdin.flush()).then(() => "flushed" as const),
+        exited.then(() => "exited" as const),
+      ]);
+      if (won === "exited") {
+        early = true;
+        break;
+      }
+    } catch {
+      // A broken pipe: the child is going or gone, and its exit says why.
+      early = true;
+      break;
+    }
+  }
+  if (early) {
+    // Stop the body: nothing more of it is wanted.
+    await Promise.resolve(iterator.return?.()).catch(() => undefined);
+  } else {
+    try {
+      await proc.stdin.end();
+    } catch {
+      early = true;
+    }
+  }
+  if (early && state.code === null) {
+    // Give a child that broke the pipe a moment to report its status before
+    // stopping it, so the error carries its exit code and not a bare EPIPE.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      exited.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), PIPE_EXIT_GRACE_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!settled) await stop();
+  }
+  const [stderr, code] = await Promise.all([new Response(proc.stderr).text().catch(() => ""), exited]);
+  if (code !== 0) {
+    throw new AgentdError("COMMAND_FAILED", `${what} exited ${code}: ${redactValue(stderr.trim())}`, {
+      ...details,
+      code,
+    });
+  }
+  if (early) {
+    throw new AgentdError("COMMAND_FAILED", `${what} stopped reading before the body ended`, {
+      ...details,
+      code,
+    });
+  }
+  return { bytes };
 }
 
 /**
@@ -474,6 +659,57 @@ export function realHost(): Host {
         .finally(() => queue.close());
 
       return queue;
+    },
+
+    async writeStreamAs(user, path, chunks, opts) {
+      const proc = Bun.spawn(
+        ["runuser", "-u", user, "--", "sh", "-c", WRITE_STREAM_SCRIPT, "sh", path, opts.mode],
+        { env: execEnv(), stdin: "pipe", stdout: "ignore", stderr: "pipe" },
+      );
+      return pipeIntoChild(proc, chunks, `writing as ${user}`, { path });
+    },
+
+    readStreamAs(user, path) {
+      const proc = Bun.spawn(
+        ["runuser", "-u", user, "--", "sh", "-c", READ_STREAM_SCRIPT, "sh", path],
+        {
+          env: execEnv(),
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "ignore",
+        },
+      );
+      const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+      return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const next = await reader.read();
+          if (!next.done) {
+            controller.enqueue(next.value);
+            return;
+          }
+          const code = await proc.exited;
+          if (code === 0) controller.close();
+          else
+            controller.error(
+              code === READ_STREAM_REFUSED
+                ? new AgentdError("COMMAND_FAILED", `reading as ${user}: not a regular file`, {
+                    path,
+                    code,
+                  })
+                : new AgentdError("COMMAND_FAILED", `reading as ${user} exited ${code}`, {
+                    path,
+                    code,
+                  }),
+            );
+        },
+        cancel() {
+          try {
+            proc.kill();
+          } catch {
+            // Already gone.
+          }
+        },
+      });
     },
 
     // `node:fs`, not `Bun.file`: a `BunFile` that has been stat'ed (`exists()`

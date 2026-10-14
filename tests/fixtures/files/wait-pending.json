@@ -1,0 +1,9 @@
+{
+  "status": "pending",
+  "request_id": "fr_7k2m4p9q3f9a",
+  "deliver_with": [
+    "hermetic files put sindri --request fr_7k2m4p9q3f9a ~/Downloads/github-app.pem",
+    "curl -T ~/Downloads/github-app.pem http://sindri:7434/files/requests/fr_7k2m4p9q3f9a"
+  ],
+  "expires_at": "2026-10-13T19:42:00Z"
+}
