@@ -532,7 +532,7 @@ export function register(program: Command): void {
       )
       .addHelpText(
         "after",
-        "\nA provider change is saved, not applied: `hermetic plan rollout <name>` shows\n" +
+        "\nA provider change is saved, not applied: `hermetic plan rollout --agent <name>` shows\n" +
           "what it will do and `hermetic apply` performs it — copying the credential,\n" +
           "re-rendering the configuration and restarting Hermes on the box.\n" +
           "\nA --memory switch reaches a running box the same way (`plan rollout`, then\n" +
@@ -591,13 +591,13 @@ export function register(program: Command): void {
         if (agent.pending !== null && agent.pending !== undefined) {
           await err(
             `saved — pending apply: profile ${agent.pending.profile_id} r${agent.pending.profile_revision}, model ${agent.pending.model}. ` +
-              `Run \`hermetic apply\` (\`hermetic plan rollout ${agent.name}\` first) to perform it.\n`,
+              `Run \`hermetic apply\` (\`hermetic plan rollout --agent ${agent.name}\` first) to perform it.\n`,
           );
         }
         const memoryAfter = agent.memory?.provider ?? "none";
         if (memoryBefore !== null && memoryBefore !== memoryAfter) {
           await err(
-            `memory: ${memoryBefore} → ${memoryAfter}; run \`hermetic plan rollout ${agent.name}\` then ` +
+            `memory: ${memoryBefore} → ${memoryAfter}; run \`hermetic plan rollout --agent ${agent.name}\` then ` +
               "`hermetic apply` to switch the running box (restarts Hermes briefly)" +
               (memoryBefore === "none" ? "" : `; ${memoryBefore}'s data stays on the volume`) +
               "\n",

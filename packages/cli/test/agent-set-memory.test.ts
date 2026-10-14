@@ -44,7 +44,7 @@ describe.concurrent("agent set --memory", () => {
     const { code, stderr } = await run("agent", "set", "atlas", "--memory", "hindsight");
     expect(code).toBe(0);
     expect(stderr).toContain(
-      "memory: holographic → hindsight; run `hermetic plan rollout atlas` then `hermetic apply`",
+      "memory: holographic → hindsight; run `hermetic plan rollout --agent atlas` then `hermetic apply`",
     );
     expect(stderr).toContain("holographic's data stays on the volume");
   });
