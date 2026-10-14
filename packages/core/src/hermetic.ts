@@ -60,6 +60,7 @@ import { createVolumes } from "./volumes/volumes.ts";
 import { createDesktop } from "./agents/desktop.ts";
 import { createVolumeReservation } from "./volumes/volume-claims.ts";
 import { createProbe } from "./agents/probe.ts";
+import { createFiles } from "./files/files.ts";
 import { createFoundation } from "./fleet/foundation/index.ts";
 import { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
 import { FOUNDATION_VERSION } from "./version.ts";
@@ -446,6 +447,8 @@ export function createHermetic(deps: HermeticDeps) {
 
   const volumes = createVolumes({ ctx, reservation: volumeClaims });
   const agentLogs = createAgentLogs({ ctx });
+  // Composer attachments. `stage` is public; `internal` is head machinery.
+  const files = createFiles({ ctx });
 
   // ─── chat, Bot Mode and Desktop share one adapter; fixture's is a stack (0014 §7) ──
 
@@ -478,6 +481,9 @@ export function createHermetic(deps: HermeticDeps) {
       return rows;
     },
     hermes: hermesChat,
+    // A turn's attachments are committed through the files service (plan §8.2).
+    commitFile: (instance, id, session, signal) =>
+      files.internal.commit(instance, id, session, signal ? { signal } : {}),
     // §4.9: the roster read raises `chat.message`, a failed turn
     // raises `chat.error`. Core owns the row and its wording; no head is involved.
     notifications: notificationDeps,
@@ -592,6 +598,12 @@ export function createHermetic(deps: HermeticDeps) {
      * with them. A turn is not an op and is never registered as one.
      */
     chat,
+    /**
+     * Composer attachments (§9): files to and from an agent's box. `files.stage` is the
+     * public method; `files.internal` is the desktop head's upload machinery
+     * and the chat turn's commit, none of it a §9 command.
+     */
+    files: { stage: files.stage, internal: files.internal },
     ssh: agentLogs.ssh,
     logs: agentLogs.logs,
     upgrade,

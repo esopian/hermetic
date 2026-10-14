@@ -48,6 +48,8 @@ import {
   ShareFileResult,
 } from "../packages/core/src/schema/index.ts";
 
+import { PDF, filesBox, post, put } from "../packages/agentd/test/files-fixture.ts";
+
 const FIXTURES = join(import.meta.dir, "fixtures/files");
 const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
 /** The two calls this file makes on a schema; root `tests/` does not depend on zod itself. */
@@ -98,6 +100,34 @@ describe("stage upload: laptop builds, hermeticd parses", () => {
       id: rid,
       s: 25,
     });
+  });
+});
+
+describe("commit: hermeticd answers, the laptop parses", () => {
+  // The box's real routes (`packages/agentd`), over its in-memory host; each
+  // answer goes through the schema core reads it with (`aws/files-http.ts`).
+  test("stage and commit answers parse as core's FilesStageResult and FilesCommitResult", async () => {
+    const box = await filesBox();
+    const staged = await box.fetch(
+      FILES_ROUTES.stage("chart notes.pdf"),
+      put(PDF, {
+        [FILES_SESSION_HEADER]: "20261013_120000_abcdef",
+      }),
+    );
+    expect(staged.status).toBe(201);
+    const stage = FilesStageResult.parse(await staged.json());
+    const first = await box.fetch(
+      FILES_ROUTES.commit(stage.id),
+      post({ session_id: "20261013_120000_abcdef" }),
+    );
+    expect(first.ok).toBe(true);
+    const commit = FilesCommitResult.parse(await first.json());
+    expect(commit).toMatchObject({ id: stage.id, name: "chart notes.pdf", mime: "application/pdf" });
+    expect(commit.rel).toMatch(/^inbox\/\d{4}-\d{2}-\d{2}\/f_[a-z0-9]{12}\/chart notes\.pdf$/);
+    // A second commit — under any session — answers what the first did; the
+    // fixture (`memory-files.ts`) is held to the same.
+    const again = await box.fetch(FILES_ROUTES.commit(stage.id), post({ session_id: "other" }));
+    expect(FilesCommitResult.parse(await again.json())).toEqual(commit);
   });
 });
 
@@ -204,7 +234,16 @@ describe("every schema survives JSON", () => {
     [
       "FilesCommitResult",
       FilesCommitResult,
-      { id: "f_abcdefghijkl", path: entry.path, rel: entry.rel },
+      {
+        id: "f_abcdefghijkl",
+        path: entry.path,
+        rel: entry.rel,
+        name: entry.name,
+        bytes: entry.bytes,
+        mime: entry.mime,
+        sha256: entry.sha256,
+        class: entry.class,
+      },
     ],
     [
       "FilesFulfilResult",

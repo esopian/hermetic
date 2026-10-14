@@ -22,6 +22,7 @@ import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-ch
 import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
+import { attachToTurn, detachQueued } from "./hermes-chat-attach.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
 import {
   createSubagentLedgers,
@@ -179,6 +180,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
     }
 
     let active: { runtime: string; stored: string | null } | null = null;
+    /** Images this turn queued on the session; taken back unless the prompt was accepted. */
+    const queued = new Set<string>();
+    let accepted = false;
     let pump: TurnPump | null = null;
     let delegation: ReturnType<typeof subagentTurn> | null = null;
     const key = turnKey(box, bot);
@@ -226,11 +230,28 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // session's sequence *as it was when the turn started*: a baseline taken
       // after the first events had arrived would skip them on a reconnect, and
       // one taken at zero would replay the previous turn as this one.
+      // Committed, framed and queued before the cursor is taken: nothing here
+      // writes an event to the session, and everything here can fail.
+      const prompt = opts.attachments?.ids.length
+        ? await attachToTurn({
+            rpc,
+            instance: box.instance,
+            session,
+            commitSession: stored ?? session,
+            attachments: opts.attachments,
+            message: text,
+            signal: opts.signal,
+            queued,
+          })
+        : text;
       pump = continuation.pump({ rpc, box, bot, session });
       const baseline = await pump.probe(opts.signal);
+      // The last moment a stop can still take the queued images back.
+      if (queued.size > 0) checkAbort(opts.signal, "prompt submit");
       const submitted = rec(
-        await rpc.request("prompt.submit", { session_id: session, profile: bot, text }),
+        await rpc.request("prompt.submit", { session_id: session, profile: bot, text: prompt }),
       );
+      accepted = true;
       // Everything the socket delivered before this point — `gateway.ready`,
       // `session.info` — arrived because the socket opened, not because a turn
       // started. The snapshot is what lets the deadline below distinguish "the
@@ -257,6 +278,19 @@ export function createChatTurn(deps: ChatTurnDeps) {
     } catch (e) {
       yield errorFrame(e);
     } finally {
+      // Before the socket closes: upstream keeps a session's image queue across
+      // an interrupt, so an image left there rides along with the next prompt.
+      // A stop has closed the turn's socket by now, so the detach may need a
+      // connection of its own (`detachQueued`).
+      if (!accepted && active && queued.size > 0) {
+        await detachQueued({
+          rpc,
+          live: !opts.signal?.aborted,
+          reconnect: (signal) => deps.connect(box, signal),
+          session: active.runtime,
+          paths: [...queued],
+        });
+      }
       delegation?.close();
       if (active) {
         const entries = activeTurns.get(key);

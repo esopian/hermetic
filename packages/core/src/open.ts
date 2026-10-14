@@ -758,6 +758,7 @@ function notInitializedBackend(): Backend {
       "setPolicy",
     ]),
     rpc: group("rpc", ["logs", "health"]),
+    files: group("files", ["stage", "commit", "content", "remove"]),
     /**
      * §4.8. The directory is account-global rather than fleet-scoped, but it is
      * still an AWS table in an account nobody has chosen yet, so it refuses

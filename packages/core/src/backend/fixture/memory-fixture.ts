@@ -15,6 +15,7 @@
  * `from "./backend/memory.ts"` import keeps working.
  */
 import { createHash } from "node:crypto";
+import { seedFixtureChatFiles } from "./fixture-chat-files.ts";
 import type {
   Agent,
   DirectoryEntry,
@@ -1410,5 +1411,7 @@ export function fixtureBackend(opts: FixtureSeed & { account?: FixtureAccount | 
   // board. `staging` exists to be small, and giving it four volumes no agent
   // row explains would make the two fleets differ in the wrong dimension.
   if (fleet === "main") seedFixtureVolumes(backend);
+  // The bytes behind the canned transcripts' attachment chips.
+  seedFixtureChatFiles(backend);
   return { backend, config: fixtureConfigFor(fleet) };
 }

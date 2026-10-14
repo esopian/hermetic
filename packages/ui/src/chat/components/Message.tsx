@@ -366,6 +366,8 @@ export function Message({
                     mine={mine}
                     closed={requestClosed(section.blocks[0], closed)}
                     pending={pending}
+                    instance={instance}
+                    fleetId={fleetId}
                   />
                 )}
               </RowBoundary>

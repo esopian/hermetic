@@ -9,6 +9,7 @@
  */
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { FIXTURE_CHAT_FILES, fixtureAttachmentBlock } from "./fixture-chat-files.ts";
 import { storedUsage, usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
@@ -295,13 +296,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           render: "diff",
         },
         { kind: "text", markdown: FENCED },
-        {
-          kind: "attachment",
-          name: "granite-iostat-2026-09-17.md",
-          mime: "text/markdown",
-          bytes: 8241,
-          href: "/api/chat/attachments/fixture/granite-iostat-2026-09-17.md",
-        },
+        fixtureAttachmentBlock(FIXTURE_CHAT_FILES.iostat),
       ],
       usage: storedUsage(21105, 612, 0.0288, "claude-sonnet-5"),
       error: null,
@@ -397,13 +392,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           duration_ms: 9820,
           render: "image",
         },
-        {
-          kind: "attachment",
-          name: "queue-depth.png",
-          mime: "image/png",
-          bytes: 421_776,
-          href: "/api/chat/attachments/fixture/queue-depth.png",
-        },
+        fixtureAttachmentBlock(FIXTURE_CHAT_FILES.queueDepth),
         // A delegated child as history re-reads it (`settledDelegation`), so
         // the catalogue carries every block kind. Live subagent scripts are
         // the fixture's own triggers, not this canned row.

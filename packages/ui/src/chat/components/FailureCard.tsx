@@ -25,7 +25,7 @@ import { useChatIfAvailable } from "../chat-state.tsx";
 import { chatHash, isChatHash } from "../chat-routing.ts";
 import {
   draftInto,
-  failedPrompt,
+  failedTurnPrompt,
   failureDetails,
   failureView,
   isLatestFailure,
@@ -129,9 +129,11 @@ function Recovery({
 
   const target = chat?.selection ?? null;
   const all = chat ? (chat.live ? [...chat.messages, chat.live] : chat.messages) : [];
-  // The turn's own prompt when this browser watched it fail; else read back.
-  const prompt =
-    ids.map((id) => chat?.turnPrompts.get(id)).find((text) => !!text) ?? failedPrompt(all, ids);
+  // What Retry sends: the turn's prompt and the staged files that went with
+  // it, as this browser remembered them when it sent; else read back.
+  const turn = chat ? failedTurnPrompt(all, ids, chat.turnPrompts) : null;
+  const prompt = turn?.text || null;
+  const canResend = !!turn && (!!turn.text || turn.attachments.length > 0);
   const idle = !!chat && !chat.sending && !busy;
   // Sending again is the latest failure's to offer (`isLatestFailure`); an
   // older card keeps Edit, the links and Copy details.
@@ -149,10 +151,13 @@ function Recovery({
     }
   };
   const retry = () => {
-    if (prompt) chat?.send(prompt);
+    if (turn && canResend) chat?.send(turn.text, turn.attachments);
   };
   const edit = () => {
-    if (chat && prompt) draftInto(chat.draft, chat.setDraft, prompt, root.current);
+    if (!chat || !turn) return;
+    if (prompt) draftInto(chat.draft, chat.setDraft, prompt, root.current);
+    // The files go back to the tray with the words, staged as they were.
+    if (turn.attachments.length > 0) chat.attachments.restore(turn.attachments);
   };
   const compact = () =>
     void run(async () => {
@@ -182,22 +187,29 @@ function Recovery({
   }, []);
   const fresh = () =>
     void run(async () => {
-      if (!chat || !target || !prompt) return;
+      if (!chat || !target || !turn || !canResend) return;
+      const text = turn.text;
+      const files = turn.attachments;
       const from = JSON.stringify(target);
       const opened = await chatOpen({ instance: target.instance, bot: target.bot, new_session: true });
       const next = { instance: opened.instance, bot: opened.bot, session: opened.session };
       const now = latest.current;
       if (!now) return;
       const park = (why: string) => {
-        now.stageDraft(next, prompt);
-        setNote(`Opened a new session${why}. The prompt is waiting in its draft.`);
+        now.stageDraft(next, text);
+        // A draft's files belong to the conversation that holds them, so the
+        // failed one keeps them rather than losing them on the way.
+        if (files.length > 0) chat.attachments.restore(files);
+        const kept =
+          files.length > 0 ? " Its attached files are back in this conversation's draft." : "";
+        setNote(`Opened a new session${why}. The prompt is waiting in its draft.${kept}`);
       };
       if (!mounted.current || JSON.stringify(now.selection) !== from)
         return park(" while you were elsewhere");
       if (!now.select(next.instance, next.bot, next.session))
         return park(", but this window could not switch to it");
       if (isChatHash(window.location.hash)) window.location.hash = chatHash(next);
-      if (!now.send(prompt)) park(", but the turn did not start");
+      if (!now.send(text, files)) park(", but the turn did not start");
     });
   const binding = () => {
     if (!nav || !target) return;
@@ -224,14 +236,14 @@ function Recovery({
           <button
             className="btn btn-secondary"
             type="button"
-            disabled={!idle || !prompt || waiting !== null}
+            disabled={!idle || !canResend || waiting !== null}
             onClick={retry}
           >
             Retry
           </button>
         ) : null}
         {plan.editMessage && chat ? (
-          <button className="btn btn-secondary" type="button" disabled={!prompt} onClick={edit}>
+          <button className="btn btn-secondary" type="button" disabled={!canResend} onClick={edit}>
             Edit message
           </button>
         ) : null}
@@ -244,7 +256,7 @@ function Recovery({
           <button
             className="btn btn-secondary"
             type="button"
-            disabled={!idle || !prompt}
+            disabled={!idle || !canResend}
             onClick={fresh}
           >
             Start new session

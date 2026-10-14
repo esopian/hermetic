@@ -12,6 +12,8 @@ import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
 import { HermesLogFile } from "./rpc.ts";
 import { MAX_ROLLOUT_WAIT_MS } from "./foundation.ts";
+import { FileId } from "./files.ts";
+import { FILES_LIMITS } from "../shared/files.ts";
 
 /**
  * The twelve digits of an AWS account id, typed back by the operator (§4.7 step
@@ -1051,14 +1053,37 @@ export type ChatHistoryInput = z.infer<typeof ChatHistoryInput>;
  * field nor the head that sent it. 200,000 characters is far past any message
  * a person types or a bot composes, so nothing legitimate meets it.
  */
-export const ChatSendInput = z.object({
-  instance: AgentName,
-  bot: BotName,
-  message: z.string().min(1).max(200_000),
-  /** Continue a session; omitted means the bot's canonical one. */
-  session: z.string().min(1).optional(),
-  new_session: z.boolean().optional(),
-});
+export const ChatSendInput = z
+  .object({
+    instance: AgentName,
+    bot: BotName,
+    /** May be empty only when the turn carries attachments: their framing is then the whole prompt. */
+    message: z.string().max(200_000),
+    /** Continue a session; omitted means the bot's canonical one. */
+    session: z.string().min(1).optional(),
+    new_session: z.boolean().optional(),
+    /**
+     * Files already staged on the box (`files.stage`), by id, to commit and hand
+     * to this turn. Ids only — bytes never travel in a chat request.
+     */
+    attachments: z
+      .array(z.object({ file_id: FileId }))
+      .max(FILES_LIMITS.attachmentsPerTurn)
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    const ids = (input.attachments ?? []).map((a) => a.file_id);
+    if (input.message.length === 0 && ids.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["message"],
+        message: "a turn needs a message or an attachment",
+      });
+    }
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: "custom", path: ["attachments"], message: "a file is attached twice" });
+    }
+  });
 export type ChatSendInput = z.infer<typeof ChatSendInput>;
 
 export const ChatOpenInput = z.object({

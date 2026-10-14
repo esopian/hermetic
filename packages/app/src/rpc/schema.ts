@@ -21,13 +21,24 @@
  * `RPCSchema` lays a contract out — `bun`/`webview`, each with `requests` and
  * `messages` — so the re-type is a parameterisation and not a rewrite.
  */
-import type { FleetTarget, PublicMethod, REQUEST_SCHEMAS } from "@hermetic/core";
+import type {
+  FilesCapabilityInput,
+  FilesChunkAppendInput,
+  FilesChunkOpenInput,
+  FilesChunkRefInput,
+  FilesEntryRefInput,
+  FilesStageFrame,
+  FleetTarget,
+  PublicMethod,
+  REQUEST_SCHEMAS,
+} from "@hermetic/core";
 import { PUBLIC_METHODS } from "@hermetic/core";
 import type { z, ZodType } from "zod";
 import type * as agents from "../handlers/agents.ts";
 import type * as app from "../handlers/app.ts";
 import type * as botMode from "../handlers/bot-mode.ts";
 import type * as chat from "../handlers/chat.ts";
+import type * as files from "../handlers/files.ts";
 import type * as fixture from "../handlers/fixture.ts";
 import type * as fleet from "../handlers/fleet.ts";
 import type * as init from "../handlers/init.ts";
@@ -94,6 +105,7 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof app.appHandlers &
   typeof botMode.botModeHandlers &
   typeof chat.chatHandlers &
+  typeof files.filesHandlers &
   typeof fixture.fixtureHandlers &
   typeof fleet.fleetHandlers &
   typeof init.initHandlers &
@@ -159,6 +171,28 @@ export type MachineryRequests = {
 
   "logs.open": RpcRequest<Input<typeof agents.logsSchema>, { stream_id: string }>;
   "logs.close": RpcRequest<StreamRef, StreamClosed>;
+
+  /**
+   * The composer's attachments. `files.stage` is public; these
+   * are its cancel, the webview's chunked upload into main-process memory, the
+   * capability probe, a staged entry's delete, its thumbnail bytes and the
+   * native open dialog.
+   */
+  "files.stage.abort": RpcRequest<StreamRef, StreamClosed>;
+  "files.chunk.open": RpcRequest<Input<typeof FilesChunkOpenInput>, Answer<typeof files.chunkOpen>>;
+  "files.chunk.append": RpcRequest<
+    Input<typeof FilesChunkAppendInput>,
+    Answer<typeof files.chunkAppend>
+  >;
+  "files.chunk.close": RpcRequest<Input<typeof FilesChunkRefInput>, Answer<typeof files.chunkClose>>;
+  "files.chunk.discard": RpcRequest<
+    Input<typeof FilesChunkRefInput>,
+    Answer<typeof files.chunkDiscard>
+  >;
+  "files.capability": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.capability>>;
+  "files.discard": RpcRequest<Input<typeof files.filesDiscardBody>, Answer<typeof files.discard>>;
+  "files.content": RpcRequest<Input<typeof FilesEntryRefInput>, Answer<typeof files.content>>;
+  "files.pickNative": RpcRequest<Input<typeof FilesCapabilityInput>, Answer<typeof files.pickNative>>;
 
   /**
    * Fixture-only staging. Core validates inside the fixture control surface —
@@ -237,6 +271,15 @@ export const MACHINERY_REQUEST_NAMES = [
   "chat.observe.resume",
   "logs.open",
   "logs.close",
+  "files.stage.abort",
+  "files.chunk.open",
+  "files.chunk.append",
+  "files.chunk.close",
+  "files.chunk.discard",
+  "files.capability",
+  "files.discard",
+  "files.content",
+  "files.pickNative",
   "fixture.chat.inject",
   "fixture.chat.hint",
   "app.info",
@@ -292,6 +335,11 @@ export type WebviewMessages = {
   "chat.frame": { stream_id: string; frame?: unknown; done?: unknown };
   /** `line` is core's `LogLine`; `done` is the tail's `{ ok }`. */
   "logs.line": { stream_id: string; line?: unknown; done?: unknown };
+  /**
+   * One `files.stage` frame: `frame` is a progress event, `done` the last word
+   * — `staged` with the box's answer, or `error` (`FilesStageFrame`).
+   */
+  "files.frame": { stream_id: string; frame?: FilesStageFrame; done?: FilesStageFrame };
   /** The updater's state, for the footer. */
   "app.update": { status: string; version?: string };
   /**
@@ -371,6 +419,7 @@ export const MESSAGE_FOR_REQUEST = {
   "chat.send": "chat.frame",
   logs: "logs.line",
   "logs.open": "logs.line",
+  "files.stage": "files.frame",
   "terminal.attach": "terminal.frame",
 } as const satisfies Record<string, WebviewMessageName>;
 

@@ -12,6 +12,14 @@ import type {
   RpcHealth,
 } from "../schema/index.ts";
 import type { BedrockApi } from "../aws/bedrock.ts";
+import type { FilesApi } from "./files-port.ts";
+export type {
+  FilesApi,
+  FilesCallOptions,
+  FilesContent,
+  FilesProgress,
+  FilesStageUpload,
+} from "./files-port.ts";
 import type { ResourceOwner } from "../agents/ownership.ts";
 
 /**
@@ -1265,6 +1273,8 @@ export interface Backend {
   foundation: FoundationApi;
   tailscale: TailscaleApi;
   rpc: RpcApi;
+  /** hermeticd's files service on the same port as `rpc` (`files-port.ts`). */
+  files: FilesApi;
   directory: DirectoryApi;
   /**
    * §8.3's Bedrock model catalog, in the fleet's region. Optional because it is

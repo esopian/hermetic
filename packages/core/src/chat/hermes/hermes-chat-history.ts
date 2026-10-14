@@ -21,6 +21,7 @@ import { chatFailure, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { subagentVerdict } from "./hermes-chat-subagent.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
 import { stripBotDelivery } from "./bot-delivery.ts";
+import { readAttachments } from "./hermes-chat-framing.ts";
 import { parseProcessNotice } from "./process-notice.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
@@ -167,6 +168,13 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // signature becomes `from_bot` and the text keeps only the message. The key
     // is omitted rather than null on every other row, so their shape is as before.
     const delivery = role === "user" && !notice ? stripBotDelivery(blocks) : null;
+    // The operator's attachments, as chips rather than the prompt text that
+    // carried them to the agent (plan §8.2, `hermes-chat-framing.ts`). Rows
+    // carry no source of their own, so the one test available is the author:
+    // a notice or another bot's delivery never had attachments of ours, and a
+    // framing block in one is that sender's text, not chips.
+    const shown = delivery ? delivery.blocks : blocks;
+    const operator = role === "user" && !notice && !delivery;
     out.push({
       id:
         str(row.id) ??
@@ -180,7 +188,7 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
       role: notice ? "system" : role,
       author: authorRef(box, row.author ?? row.from),
       at,
-      blocks: delivery ? delivery.blocks : blocks,
+      blocks: operator ? readAttachments(shown) : shown,
       usage: mapUsage(rec(row.usage)),
       error: str(row.error),
       ...failureOf(row),

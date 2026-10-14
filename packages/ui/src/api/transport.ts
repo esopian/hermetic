@@ -148,10 +148,24 @@ export type RequestName =
   | "routines.update"
   | "routines.delete"
   | "routines.run"
-  | "routines.history";
+  | "routines.history"
+  // The composer's attachments (machinery, `app/src/handlers/files.ts`).
+  | "files.chunk.open"
+  | "files.chunk.append"
+  | "files.chunk.close"
+  | "files.chunk.discard"
+  | "files.capability"
+  | "files.discard"
+  | "files.content"
+  | "files.pickNative";
 
 /** The name of a finite stream. Disjoint from `RequestName` on purpose: a stream is not an answer. */
-export type StreamName = "ops.subscribe" | "logs.open" | "chat.turn" | "terminal.attach";
+export type StreamName =
+  | "ops.subscribe"
+  | "logs.open"
+  | "chat.turn"
+  | "terminal.attach"
+  | "files.stage";
 
 /** Which long-lived feed a `subscribe` means. One socket each, today and under RPC. */
 export type SubscriptionKind = "fleet" | "chat";

@@ -34,7 +34,7 @@ import {
   ERROR_CODES,
   HermeticError,
 } from "@hermetic/core";
-import { shortCommand } from "@hermetic/core/shared";
+import { FILES_LIMITS, shortCommand } from "@hermetic/core/shared";
 import type {
   Bot,
   ChatBlock,
@@ -53,6 +53,7 @@ import { err, out, outJson } from "../io.ts";
 import { onOff } from "./inbox.ts";
 import { formatAge, renderTable } from "../table.ts";
 import { declare } from "../declare.ts";
+import { stageForTurn } from "./files.ts";
 
 const listeningSchema = declare("chat.listening", "chat listening", ChatListeningInput);
 const listenSchema = declare("chat.listen", "chat listen", ChatListenInput);
@@ -501,11 +502,20 @@ export function register(program: Command): void {
     .argument("<target>", "`<instance>` or `<instance>/<bot>`")
     .argument("[message]", "the message; omit it to send piped stdin")
     .option("--session <id>", "continue a session instead of the bot's canonical one")
+    .option(
+      "--attach <path>",
+      `attach a file to the turn (repeatable, at most ${FILES_LIMITS.attachmentsPerTurn})`,
+      (path: string, paths: string[] = []) => [...paths, path],
+    )
+    .option("--not-secret", "send an attached file that looks like a private key as a normal file")
     .addHelpText(
       "after",
       "\n  hermetic chat atlas 'what is the disk at'      one turn, reply streamed\n" +
         "  echo 'summarise today' | hermetic chat atlas   the same, from stdin\n" +
         "  hermetic chat atlas 'hello' --json             ChatFrame NDJSON on stdout\n" +
+        "  hermetic chat atlas 'read this' --attach ./incident.pdf\n" +
+        "\nEach --attach file is uploaded to the box's stage area first, then committed\n" +
+        "to its inbox as the turn is sent. Images up to 25 MB, other files up to 256 MB.\n" +
         "\nA turn is not an op: it is a live pipe to Hermes on the box, so it is not in\n" +
         "`hermetic ops`, it cannot be resumed, and Ctrl-C ends it here and on the box.\n" +
         "\nThere is no interactive session yet. Pass a message or pipe one.\n",
@@ -518,14 +528,47 @@ export function register(program: Command): void {
         cmd: Command,
       ) => {
         const ctx = await openCtx(cmd);
-        const input = validate(
-          sendSchema,
-          defined({
-            ...parseBotRef(target),
-            message: await messageFrom(message),
-            session: opts["session"],
-          }),
-        );
+        const paths = (opts["attach"] as string[] | undefined) ?? [];
+        if (paths.length > FILES_LIMITS.attachmentsPerTurn) {
+          throw new HermeticError(
+            "VALIDATION",
+            `at most ${FILES_LIMITS.attachmentsPerTurn} --attach files per turn`,
+          );
+        }
+        const ref = parseBotRef(target);
+        // With files attached the message may be empty, so a terminal with no
+        // argument sends the files alone rather than waiting on stdin.
+        const text =
+          paths.length > 0 && message === undefined && process.stdin.isTTY === true
+            ? ""
+            : await messageFrom(message);
+        const inputWith = (ids: readonly string[]) =>
+          validate(
+            sendSchema,
+            defined({
+              ...ref,
+              message: text,
+              session: opts["session"],
+              attachments: ids.length > 0 ? ids.map((file_id) => ({ file_id })) : undefined,
+            }),
+          );
+        // Everything but the ids checked before a byte is uploaded: a turn the
+        // schema refuses must not leave files staged on the box. Stand-in ids,
+        // distinct and well-formed, hold the attachments' places.
+        inputWith(paths.map((_, i) => `f_${String(i).padStart(12, "0")}`));
+        // Staged before the turn's input is built: the ids are what it carries.
+        const ids: string[] = [];
+        for (const path of paths) {
+          ids.push(
+            await stageForTurn(ctx, {
+              instance: ref.instance,
+              path,
+              notSecret: opts["notSecret"] === true,
+              session: opts["session"] as string | undefined,
+            }),
+          );
+        }
+        const input = inputWith(ids);
         let failure: HermeticError | null = null;
         // Whether the reply has left the cursor mid-sentence; see `frameText`.
         let midLine = false;

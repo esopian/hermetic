@@ -239,6 +239,13 @@ describe("one id, two operations (findings 5 and 15)", () => {
     const second = await fetch(`/files/${id}/commit`, post({}));
     expect(second.status).toBe(200);
     expect(await second.json()).toEqual(first);
+    // The answer describes the entry, so a turn retried with the same id can
+    // frame it for the agent without a second read.
+    expect(first).toMatchObject({ id, name: "a.txt", bytes: TEXT.byteLength, class: "file" });
+    expect((first as { rel: string }).rel).toMatch(
+      new RegExp(`^inbox/\\d{4}-\\d{2}-\\d{2}/${id}/a\\.txt$`),
+    );
+    expect((first as { sha256: string }).sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("the sweeper skips a claimed entry, and the disk pass excludes in-flight ids", async () => {

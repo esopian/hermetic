@@ -205,6 +205,20 @@ export async function stageUpload(
   };
 }
 
+/** What a commit answers: where the entry now is, and the index's own description of it. */
+function commitResult(entry: FileEntry, path: string, rel: string): FilesCommitResult {
+  return {
+    id: entry.id,
+    path,
+    rel,
+    name: entry.name,
+    bytes: entry.bytes,
+    mime: entry.mime,
+    sha256: entry.sha256,
+    class: entry.class,
+  };
+}
+
 /**
  * `POST /files/:id/commit` — Send: the staged file moves to the inbox, 7 d retention.
  *
@@ -221,7 +235,7 @@ export async function commitStaged(
 ): Promise<FilesCommitResult> {
   const committed = (): FilesCommitResult | null => {
     const e = ctx.store.read().entries.find((x) => x.id === id);
-    return e?.dir === "inbox" && e.path && e.rel ? { id, path: e.path, rel: e.rel } : null;
+    return e?.dir === "inbox" && e.path && e.rel ? commitResult(e, e.path, e.rel) : null;
   };
   // A second commit of a committed id answers what the first did.
   const done = committed();
@@ -293,7 +307,7 @@ export async function commitStaged(
       login: caller.login,
       class: found.class,
     });
-    return { id, path, rel };
+    return commitResult(found, path, rel);
   } finally {
     claim.release();
   }

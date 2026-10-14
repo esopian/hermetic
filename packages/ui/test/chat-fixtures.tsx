@@ -22,6 +22,7 @@ import type {
 import type { Destination } from "../src/chat/chat-logic.ts";
 import { ChatProvider } from "../src/chat/chat-state.tsx";
 import type { ChatApi } from "../src/chat/chat-state.tsx";
+import type { AttachmentsApi } from "../src/chat/chat-attachments.ts";
 import { ChatView } from "../src/chat/components/ChatView.tsx";
 import { FAKE_TARGET } from "./fake-transport.ts";
 import { setFleetTarget } from "../src/api/index.ts";
@@ -103,8 +104,70 @@ export interface Turn {
   bot: string;
   message: string;
   session: string | undefined;
+  /** The file ids the turn carried, `[]` for a turn without any. */
+  attachments: string[];
   handlers: ChatTurnHandlers;
   cancelled: boolean;
+}
+
+/** One `files.stage` the fake attachment pipeline was asked for. */
+export interface FakeStage {
+  instance: string;
+  upload_id: string;
+  /** The id the staged entry answers with: `f_<upload_id>`. */
+  file_id: string;
+}
+
+/**
+ * The attachment pipeline (`api/files.ts`), answered at once: every box serves
+ * files, every upload stages on the next microtask as `f_<upload_id>` under
+ * the name it was opened with, and
+ * every staging is recorded with the box it went to.
+ */
+export function fakeFiles(): { api: AttachmentsApi; stages: FakeStage[] } {
+  const stages: FakeStage[] = [];
+  const names = new Map<string, string>();
+  let n = 0;
+  const api: AttachmentsApi = {
+    chunkOpen: (name) => {
+      const upload_id = `up_${++n}`;
+      names.set(upload_id, name);
+      return Promise.resolve({ upload_id }) as never;
+    },
+    chunkAppend: () => Promise.resolve({ received: 0 }) as never,
+    chunkClose: () => Promise.resolve({}) as never,
+    chunkDiscard: () => Promise.resolve({ discarded: true }) as never,
+    filesCapability: () => Promise.resolve({ files: true, hermeticd_version: "x" }) as never,
+    filesDiscard: () => Promise.resolve({ deleted: true }) as never,
+    pickNative: () => Promise.resolve({ files: [] }) as never,
+    stageUpload: (instance, upload_id, _opts, handlers) => {
+      const file_id = `f_${upload_id}`;
+      stages.push({ instance, upload_id, file_id });
+      let live = true;
+      queueMicrotask(() => {
+        if (!live) return;
+        handlers.onDone({
+          type: "staged",
+          file: {
+            id: file_id,
+            dir: "stage",
+            class: "file",
+            name: names.get(upload_id) ?? upload_id,
+            bytes: 1,
+            mime: "text/plain",
+            sha256: "0".repeat(64),
+            created_at: "2026-09-16T12:00:00Z",
+            expires_at: null,
+            from: "operator",
+          },
+        } as never);
+      });
+      return () => {
+        live = false;
+      };
+    },
+  };
+  return { api, stages };
 }
 
 export interface Harness {
@@ -135,7 +198,9 @@ export interface Harness {
   releaseSessions: (() => void) | null;
 }
 
-export function harness(over: { swarms?: SwarmView[]; sessions?: SessionView[] } = {}): Harness {
+export function harness(
+  over: { swarms?: SwarmView[]; sessions?: SessionView[]; files?: AttachmentsApi } = {},
+): Harness {
   /**
    * The fleet target, per harness rather than once per process.
    *
@@ -215,7 +280,7 @@ export function harness(over: { swarms?: SwarmView[]; sessions?: SessionView[] }
       bot: string,
       message: string,
       handlers: ChatTurnHandlers,
-      opts: { session?: string } = {},
+      opts: { session?: string; attachments?: readonly { file_id: string }[] } = {},
     ) => {
       h.calls.send++;
       const turn: Turn = {
@@ -223,6 +288,7 @@ export function harness(over: { swarms?: SwarmView[]; sessions?: SessionView[] }
         bot,
         message,
         session: opts.session,
+        attachments: (opts.attachments ?? []).map((a) => a.file_id),
         handlers,
         cancelled: false,
       };
@@ -236,6 +302,7 @@ export function harness(over: { swarms?: SwarmView[]; sessions?: SessionView[] }
       h.calls.abort++;
       return Promise.resolve({ instance, bot, aborted: true } as never);
     },
+    ...(over.files ? { files: over.files } : {}),
   };
   return h;
 }

@@ -48,12 +48,23 @@ describe("parity", () => {
      * neither is something a head could invoke.
      */
     const skip = new Set(["constants", "target"]);
+    /**
+     * Head machinery, not commands: the desktop head's upload registry, the
+     * capability probe and a staged entry's delete and thumbnail, each wrapped
+     * by a `declareMachineryRpc` request in `handlers/files.ts`, and the chat
+     * turn's commit. None is a §9 command, so none needs a CLI verb — the same
+     * standing as `hermetic.fixture`, which this walk never sees because it is
+     * `null` outside fixture mode.
+     */
+    const machinery = new Set(["files.internal"]);
     const found: string[] = [];
     for (const [key, value] of Object.entries(hermetic)) {
       if (skip.has(key)) continue;
       if (typeof value === "function") found.push(key);
       else if (value && typeof value === "object") {
-        for (const sub of Object.keys(value)) found.push(`${key}.${sub}`);
+        for (const sub of Object.keys(value)) {
+          if (!machinery.has(`${key}.${sub}`)) found.push(`${key}.${sub}`);
+        }
       }
     }
     expect(found.sort()).toEqual([...PUBLIC_METHODS].sort());
@@ -160,6 +171,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // outgoing message at all. It writes nothing — that is the property the whole
   // design rests on, and `chat watch` is named for it.
   "chat.observe": "chat watch",
+  // Composer attachments: one file to an agent's stage area. A stream like `chat`, not an op.
+  "files.stage": "files stage",
   "artifacts.push": "artifacts push",
   teardown: "teardown",
   doctor: "doctor",
@@ -263,12 +276,12 @@ describe("parity: core ↔ CLI ↔ RPC", () => {
   });
 
   test("the two tables differ only where the heads genuinely differ", () => {
-    // `artifacts push` may name a local file from the CLI and never from the
-    // app; anything else diverging is a bug in one of the heads.
+    // `artifacts push` and `files stage` may name a local file from the CLI and
+    // never from the app; anything else diverging is a bug in one of the heads.
     const different = [...PUBLIC_METHODS].filter(
       (p) => (REQUEST_SCHEMAS[p] as unknown) !== (CLI_REQUEST_SCHEMAS[p] as unknown),
     );
-    expect(different).toEqual(["artifacts.push"]);
+    expect(different.sort()).toEqual(["artifacts.push", "files.stage"]);
   });
 
   test("no command wraps anything that is not a public method", () => {

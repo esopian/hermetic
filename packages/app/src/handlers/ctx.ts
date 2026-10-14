@@ -16,7 +16,7 @@ import type { TerminalHost } from "../terminal/host.ts";
 import type { StreamRegistry } from "./streams.ts";
 
 /**
- * The five things only a native head can do (`handlers/app.ts`).
+ * The things only a native head can do (`handlers/app.ts`).
  *
  * Declared here as plain functions rather than imported from `main/`, because
  * every module under `main/` that matters is reached through `main/index.ts`,
@@ -39,6 +39,13 @@ export interface NativeDeps {
     delivered: true;
     permission: "granted";
   };
+  /**
+   * The native open dialog (`Utils.openFileDialog`), files only, several at
+   * once. Resolves to the picked paths, `[]` when the operator cancelled. The
+   * paths stay in the main process: `files.pickNative` registers each one and
+   * answers with upload ids (`handlers/files.ts`).
+   */
+  pickFiles(): Promise<string[]>;
 }
 
 export interface AppOptions {

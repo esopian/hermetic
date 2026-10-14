@@ -15,7 +15,7 @@
  * failure.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -609,6 +609,42 @@ describe.concurrent("against the fixture, whose boxes are canned", () => {
       .map((line) => JSON.parse(line) as { type: string });
     expect(frames.length).toBeGreaterThan(1);
     expect(frames.at(-1)?.type).toBe("done");
+  });
+
+  test("--attach stages each file, prints its line on stderr, and the turn carries the ids", async () => {
+    const notes = join(HOME, "queue notes.txt");
+    writeFileSync(notes, "queue depth notes, FIXTURE\n");
+    const { code, stdout, stderr } = await run(
+      "chat",
+      "atlas",
+      "read this",
+      "--attach",
+      notes,
+      "--json",
+    );
+    expect(code).toBe(0);
+    expect(stderr).toMatch(/^staged queue notes\.txt \d+ B sha256 [0-9a-f]{12}$/m);
+    const frames = stdout
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as { type: string; text?: string });
+    expect(frames.at(-1)?.type).toBe("done");
+    expect(frames.map((f) => f.text ?? "").join("")).toContain("1 attached file: queue notes.txt");
+  });
+
+  test("more than ten --attach files are refused before anything is staged", async () => {
+    const args = Array.from({ length: 11 }, () => ["--attach", "./nope.txt"]).flat();
+    const { code, stderr } = await run("chat", "atlas", "x", ...args);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("at most 10 --attach files");
+  });
+
+  test("a turn the schema refuses is refused before any --attach file is staged", async () => {
+    const notes = join(HOME, "never staged.txt");
+    writeFileSync(notes, "FIXTURE\n");
+    const { code, stderr } = await run("chat", "atlas", "x".repeat(200_001), "--attach", notes);
+    expect(code).not.toBe(0);
+    expect(stderr).not.toContain("staged");
   });
 
   test("a turn that cannot happen exits non-zero after printing the frame", async () => {

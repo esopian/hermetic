@@ -68,13 +68,34 @@ export interface StartRunInput {
   args: string[];
 }
 
+/**
+ * Commands whose arguments and output name a file on this laptop. A file's
+ * name can be as sensitive as its contents, so the row keeps the agent (the
+ * first argument) and nothing else, and the output is not kept at all.
+ */
+const FILE_COMMANDS: ReadonlySet<string> = new Set(["files stage"]);
+
+/** Set by a command that printed a file's name mid-run (`chat --attach`). */
+let outputRedacted = false;
+
+/** Keep this run's output out of the log: something it printed names a file. */
+export function redactRunOutput(): void {
+  outputRedacted = true;
+}
+
+/** The arguments the row records: everything, except a file command's path. */
+export function recordedArgs(command: string, args: string[]): string[] {
+  if (!FILE_COMMANDS.has(command)) return args;
+  return args.length <= 1 ? args : [args[0] as string, "[redacted]"];
+}
+
 export function startRun(input: StartRunInput): void {
   try {
     runs = runRecorderFor({ fixture: input.fixture });
     if (input.command === "") return;
     runId = runs.start({
       command: input.command,
-      args: input.args,
+      args: recordedArgs(input.command, input.args),
       agent: input.args[0] ?? null,
       fleet: provisionalFleet(input.fleetFlag),
     }).id;
@@ -113,6 +134,7 @@ const MAX_LOGGED_OUTPUT = 4 * 1024;
  */
 function loggedOutput(command: string): string {
   if (command.startsWith("secrets push")) return "[redacted]";
+  if (FILE_COMMANDS.has(command) || outputRedacted) return "[redacted]";
   // Any command that read a secret this run — `agent create` with a provider
   // key, say — is redacted on the same principle rather than on a name.
   if (secretWasRead()) return "[redacted]";

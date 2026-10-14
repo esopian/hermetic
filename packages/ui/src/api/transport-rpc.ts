@@ -165,6 +165,7 @@ const STREAM: Record<StreamName, { close: RpcName }> = {
   "logs.open": { close: "logs.close" },
   "chat.turn": { close: "chat.turn.abort" },
   "terminal.attach": { close: "terminal.detach" },
+  "files.stage": { close: "files.stage.abort" },
 };
 
 /**
@@ -192,6 +193,7 @@ const FLEET_EVENT = "fleet.event";
 const CHAT_EVENT = "chat.event";
 const APP_UPDATE = "app.update";
 const TERMINAL_FRAME = "terminal.frame";
+const FILES_FRAME = "files.frame";
 
 /** A source with nothing to say proves the channel alive; a channel needs no proof. */
 const KEEPALIVE = "keepalive";
@@ -545,6 +547,11 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
           opOrphans.set(payload.op_id, byStream);
         },
         [CHAT_FRAME]: (payload) => {
+          routeById(payload.stream_id, valueFrameOf(payload.frame, payload.done, null));
+        },
+        // A staging's frames discriminate themselves by `type` (`progress`),
+        // and its last one — `staged` or `error` — arrives as `done`.
+        [FILES_FRAME]: (payload) => {
           routeById(payload.stream_id, valueFrameOf(payload.frame, payload.done, null));
         },
         [LOGS_LINE]: (payload) => {

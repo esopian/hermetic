@@ -18,6 +18,7 @@ import type {
   ChatRespondInput,
   ChatUsage,
   ErrorCode,
+  FilesCommitResult,
   Session,
   Swarm,
 } from "../../schema/index.ts";
@@ -135,6 +136,22 @@ export interface HermesChatOptions {
 export interface SendOptions extends HermesChatOptions {
   /** Continue an existing session; omitted means create one. */
   session?: string | undefined;
+  /**
+   * Files already staged on the box, to commit into its inbox and hand to
+   * this turn (`hermes-chat-attach.ts`). Absent or empty is a plain turn.
+   */
+  attachments?: TurnAttachments | undefined;
+}
+
+/**
+ * A turn's attachments: the staged ids, in the operator's order, and the
+ * files service's commit, bound by the caller to the turn's box. The adapter
+ * calls `commit` once the turn's session is known, because the box records
+ * the session on the entry; it never reaches the files service any other way.
+ */
+export interface TurnAttachments {
+  ids: readonly string[];
+  commit(id: string, session: string, signal: AbortSignal | undefined): Promise<FilesCommitResult>;
 }
 
 export interface HistoryOptions extends HermesChatOptions {

@@ -8,6 +8,8 @@ import {
 } from "../src/hermetic.ts";
 import {
   ArtifactsPushApiInput,
+  FilesStageApiInput,
+  FilesStageInput,
   ArtifactsPushInput,
   ConfigShowInput,
   DoctorInput,
@@ -53,9 +55,23 @@ describe("REQUEST_SCHEMAS", () => {
     expect(cli.path).toBe("./hermeticd");
   });
 
-  test("the two tables differ in exactly that one place", () => {
+  /** Composer attachments: the page stages by upload id; only the CLI names a file on disk. */
+  test("the bridge's files.stage rejects a local path; the CLI's accepts it", () => {
+    expect(REQUEST_SCHEMAS["files.stage"]).toBe(FilesStageApiInput);
+    expect(CLI_REQUEST_SCHEMAS["files.stage"]).toBe(FilesStageInput);
+    const path = { instance: "atlas", source: { path: "/etc/passwd" } };
+    expect(REQUEST_SCHEMAS["files.stage"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.stage"].safeParse(path).success).toBe(true);
+    const upload = {
+      instance: "atlas",
+      source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+    };
+    expect(REQUEST_SCHEMAS["files.stage"].safeParse(upload).success).toBe(true);
+  });
+
+  test("the two tables differ in exactly those two places", () => {
     const differing = PUBLIC_METHODS.filter((m) => REQUEST_SCHEMAS[m] !== CLI_REQUEST_SCHEMAS[m]);
-    expect(differing).toEqual(["artifacts.push"]);
+    expect(differing.sort()).toEqual(["artifacts.push", "files.stage"]);
   });
 });
 

@@ -47,6 +47,9 @@ export function Block({
   closed,
   /** Open approvals in the turn, for the approval card's "N pending" label. */
   pending,
+  /** The conversation's own box and fleet, for a staged file's thumbnail. */
+  instance,
+  fleetId,
 }: {
   block: ChatBlockView;
   now: number;
@@ -54,6 +57,8 @@ export function Block({
   mine?: boolean;
   closed?: ClosedRequest;
   pending?: number;
+  instance?: string;
+  fleetId?: string;
 }) {
   switch (blockKind(block)) {
     case "text":
@@ -69,7 +74,13 @@ export function Block({
     case "tool":
       return <ToolBlock block={block as ChatBlockOf<"tool">} />;
     case "attachment":
-      return <AttachmentBlock block={block as ChatBlockOf<"attachment">} />;
+      return (
+        <AttachmentBlock
+          block={block as ChatBlockOf<"attachment">}
+          {...(instance ? { instance } : {})}
+          {...(fleetId ? { fleetId } : {})}
+        />
+      );
     case "approval":
       return (
         <ApprovalBlock

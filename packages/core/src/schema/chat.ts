@@ -355,13 +355,33 @@ const ToolBlock = z.object({
   render: ToolRender.nullish(),
 });
 
+/**
+ * A file in a message: one the operator attached to a turn, or one the agent
+ * produced.
+ *
+ * `file_id` is set when the file is an entry in the box's files service
+ * (`f_…`, read from its inbox path). `href` is then the entry's path relative
+ * to `$HERMES_HOME` (`inbox/<date>/<f_id>/<name>`), *not* a URL: a head
+ * fetches the bytes through `files.content` by id and must never load `href`.
+ * Without a `file_id`, `href` is whatever the box named — a path or a URL —
+ * and a head treats it as untrusted.
+ *
+ * `bytes` is `0` when the transcript did not say (an `@image:` line from
+ * another client), and approximate when it came from the human size in the
+ * turn's attachment block. `sha256` is the full digest when core knew it, and
+ * the 12-hex prefix the attachment block carries when it was read back from
+ * history.
+ */
 const AttachmentBlock = z.object({
   kind: z.literal("attachment"),
   name: z.string().min(1),
   mime: z.string().min(1),
   bytes: z.number().int().nonnegative(),
   href: z.string().min(1),
+  file_id: z.string().nullish(),
+  sha256: z.string().nullish(),
 });
+export type AttachmentBlock = z.infer<typeof AttachmentBlock>;
 
 /** The answers an approval can take, in the gateway's order (`server.py` `_approval_request_payload`). */
 export const ApprovalChoice = z.enum(["once", "session", "always", "deny"]);

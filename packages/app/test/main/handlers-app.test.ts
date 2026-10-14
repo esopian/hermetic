@@ -37,6 +37,7 @@ interface Calls {
 
 function fakeNative(calls: Calls): NativeDeps {
   return {
+    pickFiles: async () => [],
     info: () => ({
       version: "9.9.9",
       channel: "canary",

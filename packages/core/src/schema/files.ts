@@ -210,11 +210,22 @@ export type FilesStageResult = z.infer<typeof FilesStageResult>;
 export const FilesCommitBody = z.object({ session_id: OpaqueId.optional() });
 export type FilesCommitBody = z.infer<typeof FilesCommitBody>;
 
+/**
+ * The committed entry: where it now is, and what it is. The metadata is the
+ * index's own (the same `name`/`bytes`/`mime`/`sha256` the stage answered),
+ * repeated so the turn that commits it can describe the file to the agent
+ * without a second read.
+ */
 export const FilesCommitResult = z.object({
   id: FileId,
   path: z.string().min(1),
   /** The `@file:` reference, relative to `HERMES_HOME`. */
   rel: z.string().min(1),
+  name: FileName,
+  bytes: Bytes,
+  mime: z.string().min(1),
+  sha256: Sha256,
+  class: FileClass,
 });
 export type FilesCommitResult = z.infer<typeof FilesCommitResult>;
 

@@ -105,6 +105,17 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "terminal.list": "reads this head's own sessions",
   "terminal.open": "logs in with core's `ssh` argv for the configured fleet; it writes nothing",
   "terminal.resize": "resizes a session this head owns",
+  // The composer's attachments. The chunk registry is this
+  // process's memory, the capability probe and the thumbnail are reads.
+  "files.stage.abort": "closes a stream this head opened",
+  "files.chunk.open": "reserves bytes in this head's memory; nothing leaves the laptop",
+  "files.chunk.append": "adds bytes in this head's memory; nothing leaves the laptop",
+  "files.chunk.close": "seals bytes in this head's memory; nothing leaves the laptop",
+  "files.chunk.discard": "frees bytes in this head's memory",
+  "files.capability": "reads a box's /healthz; it writes nothing",
+  "files.content": "reads a staged image's bytes for its thumbnail; it writes nothing",
+  "files.pickNative":
+    "opens the laptop's file dialog and registers the picks in memory; it touches no box",
 };
 
 /**
@@ -147,6 +158,12 @@ const BODIES: Record<string, object> = {
   "chat.turn": { instance: "ember", bot: "default", message: "hello" },
   "chat.abort": { instance: "ember", bot: "default" },
   "chat.steer": { instance: "ember", bot: "default", text: "also check the logs" },
+  /* Composer attachments: both write to a box. */
+  "files.stage": {
+    instance: "ember",
+    source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+  },
+  "files.discard": { instance: "ember", id: "f_aaaaaaaaaaaa" },
   /* Bot Mode (§9.2): every one of these writes to a box. */
   "chat.open": { instance: "ember", bot: "default" },
   "chat.compact": { instance: "ember", bot: "default" },

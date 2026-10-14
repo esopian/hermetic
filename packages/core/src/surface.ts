@@ -48,6 +48,8 @@ import {
   ChatHistoryInput as ChatHistoryInputSchema,
   ChatObserveInput as ChatObserveInputSchema,
   ChatSendInput as ChatSendInputSchema,
+  FilesStageApiInput as FilesStageApiInputSchema,
+  FilesStageInput as FilesStageInputSchema,
   ChatSessionsInput as ChatSessionsInputSchema,
   ChatSwarmsInput as ChatSwarmsInputSchema,
   ConfigShowInput as ConfigShowInputSchema,
@@ -182,6 +184,8 @@ export const PUBLIC_METHODS = [
   "chat.steer",
   // §9.2: a watch on one conversation, independent of any send.
   "chat.observe",
+  // Composer attachments: one file to an agent's stage area, for a chat turn to attach.
+  "files.stage",
   "artifacts.push",
   "teardown",
   "doctor",
@@ -332,6 +336,13 @@ export const REQUEST_SCHEMAS = {
    * what makes reconnecting to it safe.
    */
   "chat.observe": ChatObserveInputSchema,
+  /**
+   * Composer attachments (§9). A stream like `chat.send`, and like it *not* in
+   * `STREAMING_METHODS`: an upload is a live pipe, not an op to restart, and
+   * ten attachments must not become ten Runs rows. The bridge's schema names
+   * an upload id only; a path is the CLI's (`CLI_REQUEST_SCHEMAS`).
+   */
+  "files.stage": FilesStageApiInputSchema,
   // The HTTP surface may name a version and nothing else: a browser must not be
   // able to name a path on the server's filesystem.
   "artifacts.push": ArtifactsPushApiInputSchema,
@@ -397,13 +408,15 @@ export const REQUEST_SCHEMAS = {
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**
- * The CLI's view of the same table. It differs in exactly one place:
- * `artifacts push` may name a local path, because the CLI runs on the laptop
- * that holds the compiled binary.
+ * The CLI's view of the same table. It differs in exactly two places, both for
+ * the same reason: `artifacts push` and `files stage` may name a local path,
+ * because the CLI runs on the laptop that holds the file.
  */
 export const CLI_REQUEST_SCHEMAS = {
   ...REQUEST_SCHEMAS,
   "artifacts.push": ArtifactsPushInputSchema,
+  // The CLI runs on the laptop that holds the file, so it may name its path.
+  "files.stage": FilesStageInputSchema,
 } as const satisfies Record<PublicMethod, unknown>;
 
 /**

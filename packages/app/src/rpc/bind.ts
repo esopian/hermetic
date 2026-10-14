@@ -21,6 +21,7 @@ import { KEEPALIVE_EVENT } from "../handlers/streams.ts";
 import type { StreamFrame, StreamSink } from "../handlers/streams.ts";
 import { terminalMessageHandlers } from "../handlers/terminal.ts";
 import type { TerminalFrame } from "../terminal/channel.ts";
+import type { FilesStageFrame } from "@hermetic/core";
 import { InitInFlightError } from "../init-op.ts";
 import type { AppLog } from "../log.ts";
 import { RequestValidationError } from "../validation.ts";
@@ -234,7 +235,12 @@ export const STREAM_ENDED = {
  * terminal to be waiting on — a synthetic `done` on one would be a frame with
  * no meaning at the other end.
  */
-const FINITE_MESSAGES: readonly StreamMessageName[] = ["op.event", "chat.frame", "logs.line"];
+const FINITE_MESSAGES: readonly StreamMessageName[] = [
+  "op.event",
+  "chat.frame",
+  "logs.line",
+  "files.frame",
+];
 
 function stringField(value: unknown, field: string): string | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -274,6 +280,16 @@ function push(
         frame.event === "done"
           ? { stream_id: id, done: frame.data }
           : { stream_id: id, line: frame.data },
+      );
+      return;
+    case "files.frame":
+      // `handlers/files.ts` sends only `FilesStageFrame`s, and its last word
+      // as `done`.
+      send(
+        "files.frame",
+        frame.event === "done"
+          ? { stream_id: id, done: frame.data as FilesStageFrame }
+          : { stream_id: id, frame: frame.data as FilesStageFrame },
       );
       return;
     case "terminal.frame":

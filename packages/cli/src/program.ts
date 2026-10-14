@@ -14,6 +14,7 @@ import * as agent from "./commands/agent.ts";
 import * as apply from "./commands/plan.ts";
 import * as fleet from "./commands/fleet.ts";
 import * as fleets from "./commands/fleets.ts";
+import * as files from "./commands/files.ts";
 import * as chat from "./commands/chat.ts";
 import * as inbox from "./commands/inbox.ts";
 import * as foundation from "./commands/foundation.ts";
@@ -63,6 +64,7 @@ export function buildProgram(): Command {
   providers.register(program);
   inbox.register(program);
   chat.register(program);
+  files.register(program);
   botMode.register(program);
   ops.register(program);
   policy.register(program);

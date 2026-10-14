@@ -53,7 +53,15 @@ import type {
   SendOptions,
 } from "../../chat/hermes/hermes-chat.ts";
 import type { ChatObserveHint } from "../../chat/chat-observe.ts";
-import type { ChatFailure, ChatFrame, ChatMessage, Session, Swarm } from "../../schema/index.ts";
+import type {
+  ChatFailure,
+  ChatFrame,
+  ChatMessage,
+  FilesCommitResult,
+  Session,
+  Swarm,
+} from "../../schema/index.ts";
+import { attachedUserBlocks, attachmentTurn } from "./fixture-chat-files.ts";
 import type { FixtureChatActivity } from "./fixture-chat-activity.ts";
 import {
   FIXTURE_CHAT_REPLY,
@@ -496,6 +504,27 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          */
         const id = `mx-fixture-live-${++turns}`;
         const session = opts.session ?? canonicalOf(instance, bot) ?? null;
+        /**
+         * The turn's attachments, committed into the fixture box's inbox the
+         * way the real adapter commits them: before anything else happens, so
+         * an unknown or expired id ends the turn with the box's own refusal and
+         * leaves no row behind.
+         */
+        const attached: FilesCommitResult[] = [];
+        if (opts.attachments && opts.attachments.ids.length > 0) {
+          try {
+            for (const fileId of opts.attachments.ids) {
+              attached.push(await opts.attachments.commit(fileId, session ?? "", opts.signal));
+            }
+          } catch (e) {
+            yield {
+              type: "error",
+              code: e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL,
+              message: e instanceof Error ? e.message : String(e),
+            } as const;
+            return;
+          }
+        }
         const flying = inflight.get(flightKey(instance, bot)) ?? [];
         inflight.set(flightKey(instance, bot), flying);
         flying.push(session);
@@ -514,7 +543,10 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             session,
             role: "user",
             at: mint(),
-            blocks: [{ kind: "text", markdown: text }],
+            blocks:
+              attached.length > 0
+                ? attachedUserBlocks(text, attached)
+                : [{ kind: "text", markdown: text }],
           });
         }
         /**
@@ -531,7 +563,12 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const clarify = fixtureClarifyScript(text);
         const approval = fixtureApprovalScript(text);
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
-        const log = clarify || approval || failing ? [] : [...turn(id)];
+        const log =
+          clarify || approval || failing
+            ? []
+            : attached.length > 0
+              ? [...attachmentTurn(id, attached)]
+              : [...turn(id)];
         /** The fixture's stand-in for `session.events.since`: everything past a cursor. */
         const eventsSince = (lastSeen: number): SequencedFrame[] =>
           log.filter((frame) => frame.seq > lastSeen);

@@ -101,6 +101,7 @@ export type {
   HistoryOptions,
   ObserveOptions,
   SendOptions,
+  TurnAttachments,
 } from "./hermes-chat-types.ts";
 export {
   createRequestPool,

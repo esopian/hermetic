@@ -24,6 +24,7 @@ import Electrobun, {
   Utils,
 } from "electrobun/bun";
 import { chmodSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import {
   HERMETICD_ENV,
@@ -391,6 +392,14 @@ const windows = createWindows({
         checkForUpdate: () => updater.check({ interactive: true }),
         installCli: runCliInstall,
         notify,
+        pickFiles: async () =>
+          await Utils.openFileDialog({
+            startingFolder: homedir(),
+            allowedFileTypes: "*",
+            canChooseFiles: true,
+            canChooseDirectory: false,
+            allowsMultipleSelection: true,
+          }),
       },
     };
     firstCtx ??= ctx;
