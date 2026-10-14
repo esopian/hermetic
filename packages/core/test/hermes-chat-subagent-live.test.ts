@@ -7,8 +7,8 @@
  * which socket carried what — control and reconcile each open a socket of
  * their own, and the observation's must stay passive.
  */
-import { describe, expect, test } from "bun:test";
-import { createHermesChat } from "../src/chat/hermes/hermes-chat.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import { createHermesChat, disposeChatRequestPools } from "../src/chat/hermes/hermes-chat.ts";
 import type {
   BoxAddress,
   ChatFetch,
@@ -37,6 +37,10 @@ import {
   SESSION_ID,
   STORED_SESSION_ID,
 } from "./fixtures/hermes-frames.ts";
+
+// A conversation's socket outlives its turn now (`hermes-chat-session-socket.ts`);
+// close every held one so no test inherits another's.
+afterEach(() => disposeChatRequestPools());
 
 const BOX: BoxAddress = {
   instance: "veronica",

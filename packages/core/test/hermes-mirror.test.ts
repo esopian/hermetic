@@ -2,8 +2,8 @@
  * `hermes-mirror.ts`: the laptop half of §3.6's Hermes source mirror.
  *
  * No network (§11). The "upstream" is a throwaway git repository in a temp
- * directory, which `git clone --mirror` reaches over a local path exactly as it
- * would reach github.com — so the bundle these tests assert on is built by the
+ * directory, which `git ls-remote` and `git fetch` reach over a local path
+ * exactly as they would reach github.com — so the bundle these tests assert on is built by the
  * same code path production uses, and the *only* thing faked is the URL.
  *
  * The tests that are about failure inject a spawner instead, because a git that
@@ -236,17 +236,25 @@ describe("ensureHermesMirror", () => {
     expect(second.block?.[REF]).toEqual(first.block![REF]!);
   });
 
-  test("the bare mirror is reused on the next ref rather than re-cloned", async () => {
+  /**
+   * A `--mirror` clone copies every branch and pull-request head upstream has —
+   * past ten gigabytes for hermes-agent — to read one tag's tree. The fetch
+   * names the tag and nothing else, one commit deep.
+   */
+  test("it fetches the one tag, shallow, and never clones", async () => {
     const artifacts = fakeArtifacts();
-    const mirrorDir = join(dir(), "mirror");
-    const repoUrl = upstream();
-    await ensureHermesMirror({ artifacts, mirrorDir, git: spawnGit }, { ref: REF, repoUrl });
-    expect(existsSync(join(mirrorDir, HERMES_MIRROR_DIR))).toBe(true);
-
-    const second = countingGit();
-    await ensureHermesMirror({ artifacts, mirrorDir, git: second.git }, { ref: LATER_REF, repoUrl });
-    expect(second.calls.some((c) => c.includes("clone"))).toBe(false);
-    expect(second.calls.some((c) => c.includes("fetch"))).toBe(true);
+    const { git, calls } = countingGit();
+    const result = await ensureHermesMirror(
+      { artifacts, mirrorDir: join(dir(), "mirror"), git },
+      { ref: REF, repoUrl: upstream() },
+    );
+    expect(result.status).toBe("pushed");
+    expect(calls.some((c) => c.includes("clone") || c.includes("--mirror"))).toBe(false);
+    const fetches = calls.filter((c) => c.includes("fetch"));
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]).toContain("--depth=1");
+    expect(fetches[0]).toContain("--no-tags");
+    expect(fetches[0]?.at(-1)).toBe(`+refs/tags/${REF}:refs/tags/${REF}`);
   });
 
   /**
@@ -400,31 +408,77 @@ describe("ensureHermesMirror", () => {
    * was closed, or a `git` this module killed on the mirror timeout, never
    * settles. Each one holds a partial copy of a repository that ships a web app.
    */
-  test("stale `.clone-*` staging directories are swept on the next run", async () => {
+  test("stale staging directories and an older build's mirror are swept", async () => {
     const artifacts = fakeArtifacts();
     const mirrorDir = join(dir(), "mirror");
     mkdirSync(join(mirrorDir, ".clone-abandoned"), { recursive: true });
     writeFileSync(join(mirrorDir, ".clone-abandoned", "half-a-repo"), "x");
+    // The persistent `--mirror` clone earlier builds kept between pushes.
+    mkdirSync(join(mirrorDir, HERMES_MIRROR_DIR, "objects", "pack"), { recursive: true });
+    writeFileSync(join(mirrorDir, HERMES_MIRROR_DIR, "objects", "pack", "pack-1.pack"), "x");
 
     await ensureHermesMirror(
       { artifacts, mirrorDir, git: spawnGit },
       { ref: REF, repoUrl: upstream() },
     );
-    expect(existsSync(join(mirrorDir, ".clone-abandoned"))).toBe(false);
-    expect(existsSync(join(mirrorDir, HERMES_MIRROR_DIR))).toBe(true);
+    expect(existsSync(mirrorDir)).toBe(false);
   });
 
-  test("it leaves no temp directory behind", async () => {
+  test("a soft failure sweeps an older build's mirror too", async () => {
     const artifacts = fakeArtifacts();
-    const home = dir();
-    const mirrorDir = join(home, "mirror");
+    const mirrorDir = join(dir(), "mirror");
+    mkdirSync(join(mirrorDir, HERMES_MIRROR_DIR), { recursive: true });
+    writeFileSync(join(mirrorDir, HERMES_MIRROR_DIR, "HEAD"), "x");
+    const result = await ensureHermesMirror(
+      { artifacts, mirrorDir, git: spawnGit },
+      { ref: "main", repoUrl: upstream() },
+    );
+    expect(result.status).toBe("skipped");
+    expect(existsSync(mirrorDir)).toBe(false);
+  });
+
+  /** The push most laptops make next: the bundle is already there, and no git runs. */
+  test("a push that finds the bundle present still sweeps an older build's mirror", async () => {
+    const artifacts = fakeArtifacts();
+    const repoUrl = upstream();
+    const first = await ensureHermesMirror(
+      { artifacts, mirrorDir: join(dir(), "mirror"), git: spawnGit },
+      { ref: REF, repoUrl },
+    );
+    const mirrorDir = join(dir(), "mirror");
+    mkdirSync(join(mirrorDir, HERMES_MIRROR_DIR), { recursive: true });
+    writeFileSync(join(mirrorDir, HERMES_MIRROR_DIR, "HEAD"), "x");
+    const { git, calls } = countingGit();
+    const again = await ensureHermesMirror(
+      { artifacts, mirrorDir, git },
+      { ref: REF, repoUrl, existing: first.block },
+    );
+    expect(again.status).toBe("present");
+    expect(calls).toEqual([]);
+    expect(existsSync(mirrorDir)).toBe(false);
+  });
+
+  test("a directory it does not own is left where it is", async () => {
+    const artifacts = fakeArtifacts();
+    const mirrorDir = join(dir(), "mirror");
+    mkdirSync(join(mirrorDir, "notes"), { recursive: true });
     await ensureHermesMirror(
       { artifacts, mirrorDir, git: spawnGit },
       { ref: REF, repoUrl: upstream() },
     );
-    // Only the bare mirror itself, no `.clone-` staging directory.
     const left = [...new Bun.Glob("*").scanSync({ cwd: mirrorDir, onlyFiles: false })];
-    expect(left).toEqual([HERMES_MIRROR_DIR]);
+    expect(left).toEqual(["notes"]);
+  });
+
+  test("it leaves nothing behind once the bundle is pushed", async () => {
+    const artifacts = fakeArtifacts();
+    const mirrorDir = join(dir(), "mirror");
+    const result = await ensureHermesMirror(
+      { artifacts, mirrorDir, git: spawnGit },
+      { ref: REF, repoUrl: upstream() },
+    );
+    expect(result.status).toBe("pushed");
+    expect(existsSync(mirrorDir)).toBe(false);
   });
 });
 

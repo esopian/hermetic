@@ -549,14 +549,29 @@ const MIGRATIONS: Migration[] = [
   },
   {
     /**
+     * When this laptop first saw an agent's current, not-yet-announced bad
+     * health status (§4.9). An `agent.health` alert waits for the trouble to
+     * hold, so the scan that first sees it has to leave a mark the next scan —
+     * possibly in another process, the CLI's or the app's — can measure from.
+     * Null whenever nothing is pending. Chat watermarks share the table and
+     * never set it.
+     */
+    name: "agent-health-pending",
+    version: 16,
+    statements: [],
+    columns: [{ table: "agent_status_seen", column: "pending_since", type: "TEXT" }],
+  },
+  {
+    /**
      * Once the laptop mobile bridge's paired phones and pair codes. The bridge
      * was removed before release (the phone now talks to the boxes over the
-     * tailnet), so this is a no-op. The name and version stay so a home that
-     * ran the original keeps a valid ladder; `mobile-tables-dropped` below
-     * removes whatever it created.
+     * tailnet), so this is a no-op. The name stays so a home that ran the
+     * original keeps a valid ledger (it ran as 16 there; the number moved to
+     * make way for `agent-health-pending`, which names make harmless), and
+     * `mobile-tables-dropped` below removes whatever it created.
      */
     name: "mobile-devices",
-    version: 16,
+    version: 17,
     statements: [],
   },
   {
@@ -565,16 +580,16 @@ const MIGRATIONS: Migration[] = [
      * the same reason as `mobile-devices`, and kept for the same ladder.
      */
     name: "mobile-devices-fleet",
-    version: 17,
+    version: 18,
     statements: [],
   },
   {
     /**
      * The laptop mobile bridge's tables, gone with the bridge. `IF EXISTS`,
-     * because only a home that ran the original 16 has them.
+     * because only a home that ran the original `mobile-devices` has them.
      */
     name: "mobile-tables-dropped",
-    version: 18,
+    version: 19,
     statements: ["DROP TABLE IF EXISTS mobile_devices", "DROP TABLE IF EXISTS mobile_pair_codes"],
   },
 ];

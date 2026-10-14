@@ -252,7 +252,7 @@ describe("the local database", () => {
       .query(`SELECT version FROM schema_migrations ORDER BY version`)
       .all() as Array<{ version: number }>;
     expect(applied.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     ]);
 
     const tables = (
@@ -606,6 +606,7 @@ describe("the migration ledger", () => {
     "agent-incarnations",
     "notifications-cleared-snoozed",
     "notifications-restored",
+    "agent-health-pending",
     "mobile-devices",
     "mobile-devices-fleet",
     "mobile-tables-dropped",
@@ -617,7 +618,7 @@ describe("the migration ledger", () => {
     const rows = ledger(local.db);
     expect(rows.map((r) => r.name)).toEqual(NAMES);
     expect(rows.map((r) => r.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     ]);
 
     const tables = tablesIn(local.db);
@@ -636,7 +637,7 @@ describe("the migration ledger", () => {
     ]) {
       expect(tables).toContain(table);
     }
-    // The laptop mobile bridge's tables: 16 is a no-op now, so never created.
+    // The laptop mobile bridge's tables: `mobile-devices` is a no-op now, so never created.
     expect(tables).not.toContain("mobile_devices");
     expect(tables).not.toContain("mobile_pair_codes");
     local.close();
@@ -644,7 +645,8 @@ describe("the migration ledger", () => {
 
   test("a home that ran the bridge's migrations loses its tables to the drop", () => {
     const local = openLocalDb({ home });
-    // As a home that ran the original 16 and 17 left it, before 18 existed.
+    // As a home that ran the original `mobile-devices` and `mobile-devices-fleet`
+    // left it, before `mobile-tables-dropped` existed.
     local.db.run(`CREATE TABLE mobile_devices (device_id TEXT PRIMARY KEY, fleet_id TEXT)`);
     local.db.run(`CREATE TABLE mobile_pair_codes (code_sha256 TEXT PRIMARY KEY)`);
     local.db.run(`DELETE FROM schema_migrations WHERE name = 'mobile-tables-dropped'`);

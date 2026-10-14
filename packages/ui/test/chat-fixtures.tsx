@@ -8,7 +8,7 @@
  * calls is what makes "the transcript was read again" assertable. The harness
  * lives here so the three files measure the same store the same way.
  */
-import { render, waitFor } from "./dom.ts";
+import { fireEvent, render, screen, waitFor } from "./dom.ts";
 import { expect } from "bun:test";
 import type {
   ChatHistoryResult,
@@ -264,4 +264,13 @@ export function mount(h: Harness) {
       <ChatView />
     </ChatProvider>,
   );
+}
+
+/**
+ * The rail opens on its Unread filter, which hides every conversation with
+ * nothing new in it. A test that needs the whole roster asks for it the way an
+ * operator would: it presses All.
+ */
+export function showAllRail(): void {
+  fireEvent.click(screen.getByRole("button", { name: "All" }));
 }

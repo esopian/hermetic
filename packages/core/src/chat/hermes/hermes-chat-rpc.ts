@@ -391,8 +391,19 @@ export function readRpc(
  * them. Buffered rather than dropping: `prompt.submit`'s reply and the first
  * event frames can arrive in the same tick, before the turn generator has begun
  * iterating events at all.
+ *
+ * Exported for the held session sockets (`hermes-chat-session-socket.ts`), which
+ * give each turn on a long-lived socket a tap of its own, and for the
+ * observation's merge of two event sources. One consumer per channel still:
+ * `wake` is last-writer-wins, so a second reader parks forever.
  */
-function channel<T>(): { push(v: T): void; close(): void; drain(): AsyncIterable<T> } {
+export function channel<T>(): {
+  push(v: T): void;
+  close(): void;
+  drain(): AsyncIterable<T>;
+  /** Remove and return everything buffered that no reader has taken yet. */
+  take(): T[];
+} {
   const buffer: T[] = [];
   let done = false;
   let wake: (() => void) | null = null;
@@ -411,6 +422,9 @@ function channel<T>(): { push(v: T): void; close(): void; drain(): AsyncIterable
     close(): void {
       done = true;
       nudge();
+    },
+    take(): T[] {
+      return buffer.splice(0);
     },
     async *drain(): AsyncIterable<T> {
       for (;;) {
@@ -469,6 +483,118 @@ export async function advertiseServerRequests(rpc: Rpc, signal?: AbortSignal): P
   } catch (e) {
     if (signal?.aborted) throw e;
   }
+}
+
+const abortedIn = (phase: string): HermeticError =>
+  new HermeticError("ABORTED", `operation aborted during ${phase}`, { phase });
+
+/**
+ * Await `promise`, but stop awaiting it once `signal` aborts, rejecting with
+ * the `ABORTED` error `checkAbort` would throw for `phase`. The promise itself
+ * runs on: this only lets the caller hang up on something that cannot be
+ * cancelled. A socket's open is the usual one — `connect` awaits `opened`, and
+ * a box that fell off the tailnet neither opens nor fails, so nothing else
+ * would ever settle the wait.
+ *
+ * The listener is removed on every path, for the reason `nextEvent` gives: a
+ * caller that probes and aborts repeatedly would otherwise pin a dead listener
+ * per attempt to a signal it still holds.
+ */
+export async function untilAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  phase = "chat connect",
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    // Nobody will await it now, so a later rejection must not surface as an
+    // unhandled one.
+    promise.catch(() => {});
+    throw abortedIn(phase);
+  }
+  let onAbort: (() => void) | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(abortedIn(phase));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort !== null) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * Dial a socket whose life is not the caller's signal, waiting for it only as
+ * long as the signal stands.
+ *
+ * A socket dialled *with* a signal closes when that signal aborts (the
+ * runtime's `ChatSocket` does), which is right for a socket a call owns and
+ * wrong for one that outlives the call — a conversation's held socket, which
+ * the app's per-turn signal would otherwise close after every turn. So `dial`
+ * gets a private signal instead, linked to the caller's only while the dial is
+ * in flight: an abort then still reaches the token fetch and closes a socket
+ * stuck opening (a box off the tailnet never settles `opened`), and once the
+ * dial settles the link is cut, so the socket that results answers to nobody's
+ * signal. A socket that opens after the caller hung up is closed, since nobody
+ * will ever read it. Requests on the socket keep their own per-request signal.
+ */
+export async function dialDetached<T extends { close(): void }>(
+  dial: (signal: AbortSignal) => Promise<T>,
+  signal: AbortSignal | undefined,
+  phase = "chat connect",
+): Promise<T> {
+  if (signal?.aborted) throw abortedIn(phase);
+  const own = new AbortController();
+  const link = (): void => own.abort();
+  signal?.addEventListener("abort", link, { once: true });
+  const unlink = (): void => signal?.removeEventListener("abort", link);
+  const dialled = dial(own.signal).then(
+    (socket) => {
+      unlink();
+      // The abort landed after the dial resolved but before this ran. A
+      // transport that honours its signal has closed the socket already; one
+      // that does not has not, so it is closed here either way.
+      if (own.signal.aborted) {
+        socket.close();
+        throw abortedIn(phase);
+      }
+      return socket;
+    },
+    (e: unknown) => {
+      unlink();
+      throw e;
+    },
+  );
+  try {
+    return await untilAbort(dialled, signal, phase);
+  } catch (e) {
+    // The race lost by a hair: the dial resolved, and the abort fired before
+    // the race saw it. The socket is nobody's, so it is closed.
+    if (signal?.aborted)
+      void dialled.then(
+        (late) => late.close(),
+        () => null,
+      );
+    throw e;
+  }
+}
+
+/**
+ * Tell the gateway this socket no longer answers server→client requests.
+ *
+ * For a held socket going idle between turns (`hermes-chat-session-socket.ts`):
+ * nobody reads it until the next turn leases it, so a prompt the gateway sent it
+ * would wait out its whole deadline unseen. The next turn advertises again
+ * before its prompt. Best effort and fire-and-forget, like the advertisement.
+ */
+export function withdrawServerRequests(rpc: Rpc): void {
+  rpc.request("client.capabilities", { server_requests: false }, CAPABILITIES_DEADLINE_MS).catch(() => {
+    // An older gateway, or a socket closing under the request: either way
+    // there is nothing to withdraw from.
+  });
 }
 
 /**

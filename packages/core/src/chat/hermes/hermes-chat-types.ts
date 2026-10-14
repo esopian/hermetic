@@ -11,6 +11,7 @@
 import type { ChatObserveHint } from "../chat-observe.ts";
 import type { createCanonicalSessions, ConversationOptions } from "../../render/hermes-canonical.ts";
 import { HermeticError } from "../../errors.ts";
+import type { SessionSocketTuning } from "./hermes-chat-session-socket.ts";
 import type {
   ChatConversation,
   ChatFrame,
@@ -126,6 +127,12 @@ export interface HermesChatDeps {
         sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
       }
     | undefined;
+  /**
+   * The redial budget for an idle held session socket
+   * (`hermes-chat-session-socket.ts`), injected for the same reason. Defaults
+   * fit inside the gateway's twenty-second orphan reap.
+   */
+  sessionTuning?: SessionSocketTuning | undefined;
 }
 
 export interface HermesChatOptions {
@@ -174,6 +181,12 @@ export interface HermesChatClient {
   ): Promise<ChatConversation | null>;
   compact?: ReturnType<typeof createCanonicalSessions>["compact"];
   archive?: ReturnType<typeof createCanonicalSessions>["archive"];
+  /**
+   * End a conversation's held socket (`hermes-chat-session-socket.ts`): close
+   * it, so the gateway reaps the session after its grace. False when nothing
+   * was held for it. Adapter-internal — no head reaches it through `Hermetic`.
+   */
+  release?(box: BoxAddress, bot: string, session: string): boolean;
   respond?(
     box: BoxAddress,
     input: ChatRespondInput,

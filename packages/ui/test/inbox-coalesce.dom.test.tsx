@@ -120,6 +120,8 @@ test("acking the card acks every row behind it", async () => {
   const hit = await screen.findByRole("button", { name: "Mark read: veronica has a new message" });
 
   await userEvent.click(hit);
+  // Read, the card leaves Unread; All keeps it on screen to be checked.
+  await userEvent.click(screen.getByRole("button", { name: /^All\b/ }));
 
   // One gesture, one batch write — not one request per row behind the card.
   await waitFor(() => expect(h.acks.length).toBe(1));
