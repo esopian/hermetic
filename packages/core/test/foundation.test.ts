@@ -745,12 +745,12 @@ describe("foundation.update", () => {
      * `min_hermetic_version` alone would delete the release every box in the
      * fleet is currently fetching.
      */
-    seedFixtureRelease(backend, "0.8.0");
+    seedFixtureRelease(backend, "0.9.0");
     const manifest = (await readFleetManifest(backend.artifacts))!;
     await backend.artifacts.putObject(
       FLEET_MANIFEST_KEY,
       new TextEncoder().encode(
-        `${JSON.stringify({ ...manifest, hermeticd: { ...manifest.hermeticd, version: "0.8.0" } }, null, 2)}\n`,
+        `${JSON.stringify({ ...manifest, hermeticd: { ...manifest.hermeticd, version: "0.9.0" } }, null, 2)}\n`,
       ),
     );
     await backend.artifacts.putObject("artifacts/0.4.0/hermeticd", new Uint8Array([1]));
@@ -760,7 +760,7 @@ describe("foundation.update", () => {
 
     const versions = new Set((await backend.artifacts.list("artifacts/")).map((k) => k.split("/")[1]));
     // The new one, `_fleet`'s previous one, and the one the manifest pointed at.
-    expect([...versions].sort()).toEqual(["0.4.0", "0.8.0", FIXTURE_HERMETICD_VERSION].sort());
+    expect([...versions].sort()).toEqual(["0.4.0", "0.9.0", FIXTURE_HERMETICD_VERSION].sort());
     expect(versions.has("0.2.0")).toBe(false);
     // Version-aware, because the bucket is versioned and a plain delete frees
     // nothing (§5).

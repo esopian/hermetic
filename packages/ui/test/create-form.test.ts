@@ -18,6 +18,8 @@ import {
 } from "../src/logic/create-form.ts";
 import type { CreateDraftSeed, CreateFormState, FormDefaults } from "../src/logic/create-form.ts";
 import type { Meta } from "../src/api/index.ts";
+import { memoryVendorBlock } from "../src/logic/memory-logic.ts";
+import { MEMORY_PROVIDERS } from "@hermetic/core/shared";
 import { FIXTURE_PROFILES } from "./profiles-fixture.ts";
 
 /** Nothing like the build's constants, so an inherited value is visible as one. */
@@ -266,5 +268,18 @@ describe("createRequestBody · the hermes object", () => {
     // A provider this build no longer offers reads as unstated, not as a choice.
     expect(seed({ draft: draft({ memory_provider: "supermemory" }) }).memory_provider).toBe("");
     expect(seed({ draft: draft() }).memory_provider).toBe("");
+  });
+
+  test("memory: a vendor the provider cannot serve gets the spec's note, others none", () => {
+    const note = MEMORY_PROVIDERS.honcho.vendors_note ?? null;
+    expect(note).not.toBeNull();
+    expect(memoryVendorBlock("honcho", "anthropic")).toBe(note);
+    expect(memoryVendorBlock("honcho", "bedrock")).toBe(note);
+    for (const v of ["openai", "openrouter", "nous", "vercel"] as const) {
+      expect(memoryVendorBlock("honcho", v)).toBeNull();
+    }
+    // A provider that serves every vendor blocks none; an unknown vendor blocks nothing.
+    expect(memoryVendorBlock("holographic", "anthropic")).toBeNull();
+    expect(memoryVendorBlock("honcho", null)).toBeNull();
   });
 });

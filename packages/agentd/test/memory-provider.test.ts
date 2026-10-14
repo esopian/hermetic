@@ -36,12 +36,12 @@ import { AgentdError } from "../src/errors.ts";
 import { collector } from "../src/events.ts";
 import { FLEET_CACHE_PATH } from "../src/fleet.ts";
 import { checkHermes } from "../src/hermes-check.ts";
-import type { ExecOptions, ExecResult, FileStat } from "../src/host.ts";
 import { HERMETICD_CAPABILITIES, MANIFEST_PATH } from "../src/manifest.ts";
 import { run } from "../src/main.ts";
 import { USER_DATA_JSON_PATH } from "../src/userdata.ts";
 import { BoxHost, fakeConfigBundle } from "./fake-box.ts";
-import { expectNotRan, expectRan, fail, ok, ran } from "./fake-host.ts";
+import { expectNotRan, expectRan, ran } from "./fake-host.ts";
+import { MemoryBox, blob, parseBlob } from "./memory-box.ts";
 import {
   RecordingSink,
   TEST_AGENTS_TABLE,
@@ -70,117 +70,6 @@ const HINDSIGHT_DIR = memoryServiceDir("hindsight");
 const OPENVIKING_DIR = memoryServiceDir("openviking");
 const PLUGIN_DIR = hermesPluginDir("hindsight");
 const MODEL_PATH = `${OPENVIKING_DIR}/models/${MODEL.file}`;
-
-/** A downloaded file this fake stands in for: its claimed digest and size, not its bytes. */
-const blob = (sha: string, size: number): string => `BLOB ${sha} ${size}`;
-function parseBlob(content: string | undefined): { sha: string; size: number } | null {
-  const m = /^BLOB ([0-9a-f]{64}) (\d+)$/.exec(content ?? "");
-  return m ? { sha: m[1]!, size: Number(m[2]) } : null;
-}
-
-const operands = (args: readonly string[]): string[] => args.filter((a) => !a.startsWith("-"));
-
-/**
- * `BoxHost` plus what the memory service's steps read back: `tee`/`rm`/`mv`
- * as the account move files, `uv pip install` into a venv records what it
- * installed (so a probe of Hermes's venv answers honestly), the plugin's
- * sparse clone leaves its subdirectory, and a model file `curl` fetched has
- * the digest and size the test said it would.
- */
-class MemoryBox extends BoxHost {
-  /** Modules importable from Hermes's venv; `python -c import X` probes this. */
-  readonly hermesModules = new Set<string>();
-
-  override async stat(path: string): Promise<FileStat | null> {
-    const stat = await super.stat(path);
-    const b = parseBlob(this.files.get(path)?.content);
-    return stat && b ? { ...stat, size: b.size } : stat;
-  }
-
-  override async sha256File(path: string): Promise<string | null> {
-    return parseBlob(this.files.get(path)?.content)?.sha ?? super.sha256File(path);
-  }
-
-  /** Everything at or under `path`, files and directories. */
-  private drop(path: string): void {
-    for (const key of [...this.files.keys()]) {
-      if (key === path || key.startsWith(`${path}/`)) this.files.delete(key);
-    }
-    for (const dir of [...this.dirs])
-      if (dir === path || dir.startsWith(`${path}/`)) this.dirs.delete(dir);
-  }
-
-  protected override builtin(argv: readonly string[], opts?: ExecOptions): ExecResult {
-    const [bin = "", ...args] = argv;
-    if (bin === "tee") {
-      const path = args.at(-1) ?? "";
-      if (!this.dirs.has(path.slice(0, path.lastIndexOf("/"))))
-        return fail(1, `tee: ${path}: No such file`);
-      this.files.set(path, { content: opts?.stdin ?? "", mode: "0644", ownership: "hermes:hermes" });
-      return ok(opts?.stdin ?? "");
-    }
-    // A non-recursive chown of a directory: `BoxHost` models ownership on files only.
-    if (bin === "chown" && !args.includes("-R") && this.dirs.has(operands(args).at(-1) ?? "")) {
-      return ok();
-    }
-    if (bin === "rm") {
-      for (const path of operands(args)) this.drop(path);
-      return ok();
-    }
-    if (bin === "mv") {
-      const [from, to] = operands(args);
-      if (!from || !to) return fail(1, "mv: missing operand");
-      if (!this.files.has(from) && !this.dirs.has(from)) return fail(1, `mv: cannot stat '${from}'`);
-      this.drop(to);
-      for (const [key, file] of [...this.files]) {
-        if (key === from || key.startsWith(`${from}/`)) {
-          this.files.delete(key);
-          this.files.set(to + key.slice(from.length), file);
-        }
-      }
-      for (const dir of [...this.dirs]) {
-        if (dir === from || dir.startsWith(`${from}/`)) {
-          this.dirs.delete(dir);
-          this.dirs.add(to + dir.slice(from.length));
-        }
-      }
-      return ok();
-    }
-    if (bin === "uv" && args[0] === "pip" && args[1] === "install" && !args.includes("-e")) {
-      const python = args[args.indexOf("--python") + 1];
-      if (python === HERMES_PYTHON) {
-        const specs: string[] = [];
-        for (let i = 2; i < args.length; i += 1) {
-          if (args[i] === "--python") i += 1;
-          else if (!args[i]!.startsWith("-")) specs.push(args[i]!);
-        }
-        for (const spec of specs) this.hermesModules.add(importNameOf(spec));
-      }
-      return ok();
-    }
-    if (bin === HERMES_PYTHON && args[0] === "-c") {
-      const module = /^import (\S+)$/.exec(args[1] ?? "")?.[1] ?? "";
-      return this.hermesModules.has(module) ? ok() : fail(1, `No module named '${module}'`);
-    }
-    // The plugin's sparse clone; Hermes's own checkout stays BoxHost's.
-    const clone = `${hermesPluginDir("")}.hindsight.clone`;
-    if (bin === "git" && args[0] === "clone" && args.at(-1) === clone) {
-      this.dirs.add(clone);
-      this.dirs.add(`${clone}/.git`);
-      return ok();
-    }
-    if (bin === "git" && args[0] === "-C" && args[1] === clone) {
-      if (args[2] === "checkout") {
-        const sub = `${clone}/${PLUGIN.subdir}`;
-        this.seed(`${sub}/plugin.yaml`, `name: hindsight\n# at ${args.at(-1)}\n`);
-        this.seed(`${sub}/__init__.py`, "\n");
-        this.dirs.add(sub);
-      }
-      return ok();
-    }
-    return super.builtin(argv, opts);
-  }
-}
 
 function unitFile(provider: "hindsight" | "openviking"): RenderedFile {
   const spec = MEMORY_SERVICES[provider];
@@ -443,7 +332,8 @@ describe("openviking", () => {
     expect([...host.files.keys()].filter((p) => p.endsWith(".part"))).toEqual([]);
     expect(host.files.get(openvikingConfPath)?.content).toContain("127.0.0.1");
     expect(host.files.get(openvikingConfPath)?.ownership).toBe("root:hermes");
-    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${OPENVIKING_DIR}/data$`);
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${OPENVIKING_DIR}/data$`, 1);
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${OPENVIKING_DIR}/data-remote$`, 1);
 
     // Bedrock: no key, and still the file the unit's `EnvironmentFile=` names.
     expect(host.files.get(MEMORY_LLM_ENV_PATH)).toEqual({ content: "\n", mode: "0600" });

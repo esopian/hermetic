@@ -5,11 +5,14 @@
  *
  * Fixture facts leaned on (`memory-fixture.ts`, `fixture-agents.ts`): `main`
  * has no default memory provider; `staging` defaults to hindsight. `atlas` was
- * created with holographic, `corvid` with hindsight. The loadout's default
- * preset is Standard (medium, 32 GiB), which every provider fits.
+ * created with holographic, `corvid` with hindsight, `ibis` with honcho (on the
+ * openrouter profile: Honcho needs an embeddings vendor). The loadout's default
+ * preset is Standard (medium, 32 GiB), which every provider fits, and its
+ * default profile is the anthropic one, which Honcho does not serve.
  */
 import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { MEMORY_PROVIDERS } from "@hermetic/core/shared";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
 let harness: FlowHarness | null = null;
@@ -34,6 +37,7 @@ function paramsOf(h: FlowHarness, name: string): Record<string, unknown>[] {
 }
 
 const HINDSIGHT = "Hindsight (local server)";
+const HONCHO = "Honcho (local server)";
 
 /** Open the create drawer, name the agent, unfold Customize, and hand back the Memory select. */
 async function openMemoryPicker(user: User, name: string) {
@@ -77,15 +81,65 @@ test("create: the picker offers exactly the catalogue, and a picked provider is 
     "holographic",
     "hindsight",
     "openviking",
+    "honcho",
   ]);
-  // Nothing is held back on the default preset: every provider fits a medium.
-  expect([...select.options].some((o) => o.disabled)).toBe(false);
+  // Nothing is held back on the default preset for size, and the only vendor
+  // block is Honcho on the fleet's default (anthropic) profile.
+  expect([...select.options].filter((o) => o.disabled).map((o) => o.value)).toEqual(["honcho"]);
   await user.selectOptions(select, "holographic");
   await user.click(create());
   await waitFor(() => expect(paramsOf(h, "agents.create").length).toBe(1));
   expect(paramsOf(h, "agents.create")[0]?.["memory_provider"]).toBe("holographic");
   await screen.findByText("Agent handed off", undefined, { timeout: 10_000 });
 }, 20_000);
+
+/*
+ * Honcho embeds through an OpenAI-compatible /embeddings endpoint, which
+ * anthropic and bedrock lack. The picker says so with the catalogue's own
+ * `vendors_note`, and a fleet default of Honcho on such a profile holds Create
+ * as core's MEMORY_LLM_UNSUPPORTED would.
+ */
+test("create: Honcho is blocked on an anthropic profile with the catalogue's note, and allowed on openrouter", async () => {
+  harness = await flowHarness({ fleet: "staging" });
+  const h = harness;
+  mountPortal();
+  const user = userEvent.setup();
+  const { drawer, select, create } = await openMemoryPicker(user, "wren");
+  const note = MEMORY_PROVIDERS.honcho.vendors_note as string;
+  expect(note.length).toBeGreaterThan(0);
+  const honcho = () => [...select.options].find((o) => o.value === "honcho") as HTMLOptionElement;
+
+  // The fleet's default profile is anthropic.
+  await waitFor(() => expect(honcho().disabled).toBe(true));
+  expect(honcho().textContent).toBe(`${HONCHO} — not for anthropic`);
+  // Each of the others is open on it.
+  expect([...select.options].filter((o) => o.disabled).map((o) => o.value)).toEqual(["honcho"]);
+
+  // A stated provider the vendor refuses (here one carried over from a draft or
+  // a profile switch) shows the note as the field's hint and holds Create.
+  await user.click(within(drawer).getByRole("button", { name: /^Brain/ }));
+  await user.click(document.querySelector<HTMLElement>('[data-profile="rtr00002"]') as HTMLElement);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(honcho().disabled).toBe(false));
+  await user.selectOptions(select, "honcho");
+  await waitFor(() => expect(within(drawer).getByText(/Peer-modelling memory/)).toBeTruthy());
+
+  await user.click(within(drawer).getByRole("button", { name: /^Brain/ }));
+  await user.click(document.querySelector<HTMLElement>('[data-profile="ant00001"]') as HTMLElement);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(within(drawer).getAllByText(new RegExp(note)).length).toBeGreaterThan(0));
+  expect(create().disabled).toBe(true);
+  expect(paramsOf(h, "agents.create").length).toBe(0);
+
+  // Back on a vendor that serves embeddings, the choice is sent.
+  await user.click(within(drawer).getByRole("button", { name: /^Brain/ }));
+  await user.click(document.querySelector<HTMLElement>('[data-profile="rtr00002"]') as HTMLElement);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(create().disabled).toBe(false));
+  await user.click(create());
+  await waitFor(() => expect(paramsOf(h, "agents.create").length).toBe(1));
+  expect(paramsOf(h, "agents.create")[0]?.["memory_provider"]).toBe("honcho");
+}, 30_000);
 
 test("create: the fleet default is inherited by omission", async () => {
   harness = await flowHarness();
@@ -158,6 +212,7 @@ test("Settings › Defaults: each provider says where it runs and what it needs"
     "holographic",
     "hindsight",
     "openviking",
+    "honcho",
   ]);
   const holo = providerRow("holographic").textContent ?? "";
   expect(holo).toContain("Inside Hermes");
@@ -168,6 +223,10 @@ test("Settings › Defaults: each provider says where it runs and what it needs"
   expect(hind).toContain("Needs ≥ 8 GiB");
   expect(hind).toContain("Uses the agent's model provider");
   expect(providerRow("openviking").textContent).toContain("Needs ≥ 4 GiB");
+  const honcho = providerRow("honcho").textContent ?? "";
+  expect(honcho).toContain("Runs on the box");
+  expect(honcho).toContain("Needs ≥ 4 GiB");
+  expect(honcho).toContain("Uses the agent's model provider");
   // Nothing about keys is left anywhere on the page.
   expect(document.body.textContent).not.toMatch(/\bkey missing\b|Set .* key|shared slot memory-/);
 }, 20_000);
@@ -246,4 +305,14 @@ test("agent detail: a service provider is named by its label", async () => {
   const corvid = await openConfig(user, "corvid");
   await waitFor(() => expect(within(corvid).getByText(HINDSIGHT)).toBeTruthy());
   expect(within(corvid).queryByText(/key: /)).toBeNull();
+}, 20_000);
+
+test("agent detail: Honcho is named by its label on the agent seeded with it", async () => {
+  harness = await flowHarness();
+  mountPortal();
+  const user = userEvent.setup();
+
+  const ibis = await openConfig(user, "ibis");
+  await waitFor(() => expect(within(ibis).getByText(HONCHO)).toBeTruthy());
+  expect(within(ibis).queryByText(/key: /)).toBeNull();
 }, 20_000);

@@ -7,6 +7,14 @@ import {
 } from "../shared/memory-providers.ts";
 import { PROVIDER_IDS } from "../shared/providers.ts";
 export {
+  HONCHO_APT_PACKAGES,
+  HONCHO_DB_NAME,
+  HONCHO_DB_SOCKET_DIR,
+  HONCHO_PG_BIN,
+  HONCHO_PG_MAJOR,
+  HONCHO_PLUGIN_CONFIG_LINK,
+  MEMORY_DB_UNIT,
+  MEMORY_HONCHO_CAPABILITY,
   MEMORY_LLM_ENV_PATH,
   MEMORY_LLM_KEY_ENVS,
   MEMORY_PROVIDERS,
@@ -19,18 +27,33 @@ export {
   MEMORY_SERVICE_CONF_DIR,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
+  MEMORY_SERVICE_UNITS,
+  MEMORY_WORKER_UNIT,
+  PROVIDER_EMBEDDING_DIMENSION,
+  PROVIDER_EMBEDDING_MODEL,
+  PROVIDER_EMBEDDING_VENDORS,
   hermesPluginDir,
+  honchoClientConfPath,
+  honchoEnvPath,
+  honchoPgDataDir,
+  honchoSrcDir,
+  honchoTiktokenDir,
   isMemoryProvider,
   memoryProviderIsService,
   memoryServiceDir,
+  OPENVIKING_DATA_DIRS,
   openvikingConfPath,
+  openvikingDataDir,
   memoryServiceOf,
+  providerEmbeddingModel,
 } from "../shared/memory-providers.ts";
 export type {
   MemoryLlmKeyEnv,
   MemoryProvider,
   MemoryProviderSpec,
+  MemoryServiceId,
   MemoryServicePlugin,
+  MemoryServiceSource,
   MemoryServiceSpec,
 } from "../shared/memory-providers.ts";
 

@@ -27,6 +27,8 @@ import { retry } from "./shared.ts";
  */
 const PIP_MODULES: Readonly<Record<string, string>> = {
   "hindsight-client": "hindsight_client",
+  // The honcho plugin's SDK (`honcho-ai==2.2.0`, Hermes's own pin).
+  "honcho-ai": "honcho",
   numpy: "numpy",
 };
 

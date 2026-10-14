@@ -175,9 +175,14 @@ export const ERROR_CODES = [
   /**
    * A create chose (or inherited) an external memory provider that makes model
    * calls of its own, and the agent's bound model provider is not one it can be
-   * mapped onto (`MEMORY_PROVIDERS[id].vendors`). Refused before anything
-   * exists: the alternative is a server that starts and fails every
+   * mapped onto (`MEMORY_PROVIDERS[id].vendors`) — honcho, for one, needs an
+   * embeddings endpoint anthropic and bedrock do not have. Refused before
+   * anything exists: the alternative is a server that starts and fails every
    * extraction. The remedy is another profile, or another provider.
+   *
+   * `agents.set` refuses the same rebinding, and also one that would move an
+   * openviking agent between the provider's embeddings and its local model,
+   * whose stored vectors have another width.
    */
   "MEMORY_LLM_UNSUPPORTED",
   /**

@@ -20,13 +20,17 @@
  */
 import type { AgentConfig } from "@hermetic/core/schema";
 import {
-  HERMES_ACCOUNT_HOME,
+  HONCHO_PLUGIN_CONFIG_LINK,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
+  MEMORY_SERVICE_UNITS,
+  OPENVIKING_DATA_DIRS,
   hermesPluginDir,
+  honchoClientConfPath,
   memoryServiceDir,
   memoryServiceOf,
   type MemoryProvider,
+  type MemoryServiceId,
   type MemoryServiceSpec,
 } from "@hermetic/core/shared";
 import { asHermes, installAccountDir } from "../account-dirs.ts";
@@ -37,49 +41,49 @@ import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { HERMES_USER } from "./accounts.ts";
 import { UV_ENV } from "./hermes.ts";
+import { ensureHoncho, linkTarget } from "./memory-honcho.ts";
+import {
+  ACCOUNT_ENV,
+  ACCOUNT_EXEC,
+  MEMORY_PIN_MARKER,
+  NET_ATTEMPTS,
+  NET_RETRY_MS,
+  ensureCheckout,
+  writeAsHermes,
+} from "./memory-shared.ts";
 import type { ApplyResult } from "./shared.ts";
 import { UNIT_DIR, retry } from "./shared.ts";
 
+export { MEMORY_PIN_MARKER, PLUGIN_REF_MARKER } from "./memory-shared.ts";
+
 export const MEMORY_SERVICE_UNIT_PATH = `${UNIT_DIR}/${MEMORY_SERVICE_UNIT}`;
-
-/** In the service dir: the pin whose packages the venv last received. */
-export const MEMORY_PIN_MARKER = ".hermetic-pin";
-/** In the plugin dir: the commit it was checked out at. */
-export const PLUGIN_REF_MARKER = ".hermetic-ref";
-
-/** Same budget as the Hermes checkout and its pip install: both are third parties. */
-const NET_ATTEMPTS = 3;
-const NET_RETRY_MS = 5_000;
-
-/**
- * `HOME` is the account's because `runuser` keeps root's, and uv's cache, git's
- * config and curl's `.curlrc` would otherwise be read out of `/root`. The
- * account's home is also the working directory, because uv reads a `uv.toml`
- * out of whatever directory it starts in (`--no-config` as well, for the same
- * reason as `ensureAgentVenv`).
- */
-const ACCOUNT_EXEC = { cwd: HERMES_ACCOUNT_HOME } as const;
-const ACCOUNT_ENV = { HOME: HERMES_ACCOUNT_HOME } as const;
-/** A clone that would otherwise block forever asking an unattended box to log in. */
-const GIT_ENV = { ...ACCOUNT_ENV, GIT_TERMINAL_PROMPT: "0" } as const;
 
 /**
  * The directories under the service dir each server writes into, made by
  * hermeticd so the rendered configuration can name them and the unit never
  * has to create anything: Hugging Face's cache for Hindsight's embedding and
- * reranker models; OpenViking's data and the GGUF model `ensureModel` seeds.
+ * reranker models; OpenViking's two stores (`OPENVIKING_DATA_DIRS`) and the
+ * GGUF model `ensureModel` seeds;
+ * honcho's tiktoken cache. (honcho's `src` and `pg` are moved into place
+ * whole, so neither is made here.)
  */
-const SERVICE_SUBDIRS: Readonly<Record<"hindsight" | "openviking", readonly string[]>> = {
+const SERVICE_SUBDIRS: Readonly<Record<MemoryServiceId, readonly string[]>> = {
   hindsight: ["hf"],
-  openviking: ["data", "models"],
+  // One store per embedding mode, both made so a flip finds its own.
+  openviking: [OPENVIKING_DATA_DIRS.local, OPENVIKING_DATA_DIRS.remote, "models"],
+  honcho: ["tiktoken"],
 };
+
+function isServiceId(provider: MemoryProvider | undefined): provider is MemoryServiceId {
+  return provider === "hindsight" || provider === "openviking" || provider === "honcho";
+}
 
 /** The provider and its pinned server, when the manifest names a service provider at all. */
 function serviceOf(
   manifest: AgentConfig,
-): { provider: "hindsight" | "openviking"; spec: MemoryServiceSpec } | null {
+): { provider: MemoryServiceId; spec: MemoryServiceSpec } | null {
   const provider = manifest.memory?.provider;
-  if (provider !== "hindsight" && provider !== "openviking") return null;
+  if (!isServiceId(provider)) return null;
   const spec = memoryServiceOf(provider);
   return spec === null ? null : { provider, spec };
 }
@@ -118,14 +122,20 @@ export function assertMemoryPin(manifest: AgentConfig): void {
  * 3. the model file, when the spec seeds one, verified by size and sha256;
  * 4. the Hermes plugin, when the spec names one, at its pinned commit.
  *
+ * A server built from a source checkout (honcho) replaces 2-4 with its own
+ * steps (`memory-honcho.ts`): distro Postgres, a second managed Python, the
+ * checkout and its locked sync, the database cluster and the plugin's config
+ * link.
+ *
  * Before the files phase, so the server's directories exist, the account's,
  * before anything else could create them. After `ensureHermes`, which
  * puts `uv` and the uv-managed Python 3.11 on the box (the venv is built on
  * that interpreter, as the account, which could not install one into the
  * root-owned `UV_PYTHON_INSTALL_DIR` itself), and after `ensureAccounts`.
  *
- * Returns `installed: true` when any of 2-4 did (or, on a dry run, would do)
- * work — the caller restarts the server and Hermes then.
+ * Returns `installed: true` when any of 2-4 (or of honcho's steps) did (or,
+ * on a dry run, would do) work — the caller restarts the server and Hermes
+ * then.
  */
 export async function ensureMemoryService(input: {
   host: Host;
@@ -142,6 +152,16 @@ export async function ensureMemoryService(input: {
   const dir = memoryServiceDir(provider);
 
   if (!dry) await ensureServiceDirs(host, provider, dir);
+  if (spec.source !== null) {
+    return ensureHoncho({
+      host,
+      spec,
+      dir,
+      emit,
+      dry,
+      ...(input.result ? { result: input.result } : {}),
+    });
+  }
   const venv = await ensureServiceVenv(host, provider, spec, dir, emit, dry);
   const model = await ensureModel(host, provider, spec, dir, emit, dry);
   const plugin = await ensurePlugin(host, provider, spec, emit, dry);
@@ -164,19 +184,69 @@ export async function ensureMemoryService(input: {
  * root-owned one, left by an operator, would otherwise make the unprivileged
  * `install -d` fail to set its mode. Never removed, by this or anything else:
  * it holds the agent's memory.
+ *
+ * The provider's dir (honcho's cluster under it included) is re-owned
+ * recursively, as root, when anything in it no longer belongs to the account
+ * (`reownAccountTree`).
  */
-async function ensureServiceDirs(
-  host: Host,
-  provider: "hindsight" | "openviking",
-  dir: string,
-): Promise<void> {
+async function ensureServiceDirs(host: Host, provider: MemoryServiceId, dir: string): Promise<void> {
   const found = await host.lstat(MEMORY_SERVICE_ROOT);
   if (found?.isDirectory && !found.isSymlink) {
     await must(host, ["chown", "-h", `${HERMES_USER}:${HERMES_USER}`, MEMORY_SERVICE_ROOT]);
   }
+  // The whole provider dir, honcho's cluster (`pg`) included: the probe walks it.
+  await reownAccountTree(host, dir);
   await installAccountDir(host, MEMORY_SERVICE_ROOT, "0750");
   await installAccountDir(host, dir, "0750");
   for (const sub of SERVICE_SUBDIRS[provider]) await installAccountDir(host, `${dir}/${sub}`, "0750");
+}
+
+/**
+ * Give `path` and everything under it back to the account when anything in
+ * it is not the account's — probed first, over the whole tree, so a converged
+ * box runs no `chown`.
+ *
+ * The `hermes` account is a `useradd --system` with no fixed uid, so a
+ * recreate can allocate it another one, and the data volume still carries
+ * the old. Most of the service would merely fail to write; Postgres refuses
+ * to start on a data directory it does not own, so honcho's database (and the
+ * API and worker behind it) would stay down for good.
+ *
+ * The probe is `find` for the first entry not owned by `hermes:hermes`, not a
+ * `stat` of the top: `chown -R` re-owns the top first, so a re-own killed
+ * part-way leaves a tree whose top is right and whose children are not, and
+ * only a walk sees that. `-xdev` and no `-L`: it stays on the data volume and
+ * never follows a link. A `find` that exits non-zero having printed nothing
+ * (a file Postgres removed mid-walk) re-owns nothing; the next apply asks
+ * again.
+ *
+ * As root, because only root can, with `-h` and no `-L`: a symlink planted in
+ * the tree is re-owned itself and never followed — the pattern
+ * `ensureHermesHomeOwnership` uses over `$HERMES_HOME`. A symlink at `path`
+ * itself is left alone for `installAccountDir` to refuse by name. Modes are
+ * not touched, so the cluster keeps the 0700 Postgres requires.
+ */
+async function reownAccountTree(host: Host, path: string): Promise<void> {
+  const found = await host.lstat(path);
+  if (found === null || !found.isDirectory || found.isSymlink) return;
+  const foreign = await host.exec([
+    "find",
+    path,
+    "-xdev",
+    "(",
+    "!",
+    "-user",
+    HERMES_USER,
+    "-o",
+    "!",
+    "-group",
+    HERMES_USER,
+    ")",
+    "-print",
+    "-quit",
+  ]);
+  if (foreign.stdout.trim() === "") return;
+  await must(host, ["chown", "-R", "-h", `${HERMES_USER}:${HERMES_USER}`, path]);
 }
 
 /**
@@ -293,12 +363,8 @@ async function ensureModel(
 
 /**
  * The Hermes plugin for the provider, at the commit the spec pins, in
- * `hermesPluginDir(<provider>)`.
- *
- * A blobless, sparse clone of just the plugin's subdirectory into a sibling
- * dot-directory, then moved over the old checkout. The marker inside the
- * checkout is the record: a dir without it, or with another commit in it, is
- * replaced; one that matches is left alone, edits and all.
+ * `hermesPluginDir(<provider>)`: a sparse checkout of just the plugin's
+ * subdirectory (`ensureCheckout`).
  */
 async function ensurePlugin(
   host: Host,
@@ -309,70 +375,45 @@ async function ensurePlugin(
 ): Promise<boolean> {
   const plugin = spec.plugin;
   if (plugin === null) return false;
-  const target = hermesPluginDir(provider);
-  const marker = `${target}/${PLUGIN_REF_MARKER}`;
-  if ((await host.readFile(marker))?.trim() === plugin.sha) return false;
-
-  emit(
-    opEvent(
-      "packages",
-      0.38,
-      `checking out the ${provider} Hermes plugin ${plugin.version} (${plugin.sha.slice(0, 12)})`,
-      host.now(),
-    ),
+  return ensureCheckout(
+    host,
+    {
+      repo: plugin.repo,
+      sha: plugin.sha,
+      subdir: plugin.subdir,
+      target: hermesPluginDir(provider),
+      label: `the ${provider} Hermes plugin ${plugin.version}`,
+    },
+    emit,
+    dry,
+    0.38,
   );
-  if (dry) return true;
-
-  const parent = target.slice(0, target.lastIndexOf("/"));
-  if ((await host.stat(parent))?.isDirectory !== true) await installAccountDir(host, parent, "0750");
-  const clone = `${parent}/.${provider}.clone`;
-  const git = { env: { ...GIT_ENV }, ...ACCOUNT_EXEC };
-  // The checkout fetches the subdirectory's blobs, so it is network too and
-  // sits inside the retry; each attempt starts from no clone at all.
-  await retry(host, NET_ATTEMPTS, NET_RETRY_MS, async () => {
-    await must(host, asHermes(["rm", "-rf", clone]), ACCOUNT_EXEC);
-    await must(
-      host,
-      asHermes(["git", "clone", "--filter=blob:none", "--no-checkout", "--quiet", plugin.repo, clone]),
-      git,
-    );
-    await must(
-      host,
-      asHermes(["git", "-C", clone, "sparse-checkout", "set", "--no-cone", plugin.subdir]),
-      git,
-    );
-    await must(host, asHermes(["git", "-C", clone, "checkout", "--quiet", plugin.sha]), git);
-  });
-  await must(host, asHermes(["rm", "-rf", target]), ACCOUNT_EXEC);
-  await must(host, asHermes(["mv", "-T", `${clone}/${plugin.subdir}`, target]), ACCOUNT_EXEC);
-  await must(host, asHermes(["rm", "-rf", clone]), ACCOUNT_EXEC);
-  await writeAsHermes(host, marker, `${plugin.sha}\n`);
-  return true;
-}
-
-/** A small file written by the account (`tee`, fed on stdin), for the reason the module header gives. */
-async function writeAsHermes(host: Host, path: string, content: string): Promise<void> {
-  await must(host, asHermes(["tee", path]), { stdin: content, ...ACCOUNT_EXEC });
 }
 
 /**
- * Take `hermetic-memory.service` away from an agent whose manifest no longer
- * names a service provider.
+ * Take a memory server's units away from an agent whose manifest no longer
+ * lists them, and honcho's plugin config link from one no longer on honcho.
  *
- * Not for a recreate: the unit is on the root volume, which a recreate
- * replaces, so the new box never had it. It is for a box whose manifest
- * changes under it — a provider removed from the catalogue (a stored row
- * then reads as no provider), or an in-place provider change should one ever
- * exist — where the unit would otherwise stay enabled with nothing rendering it.
+ * Not for a recreate: the units are on the root volume, which a recreate
+ * replaces, so the new box never had them. It is for a box whose manifest
+ * changes under it — a provider changed in place (honcho → hindsight leaves
+ * honcho's worker and database behind, while `MEMORY_SERVICE_UNIT` becomes
+ * hindsight's), dropped, or removed from the catalogue (a stored row then
+ * reads as no provider) — where a unit would otherwise stay enabled with
+ * nothing rendering it.
  *
  * `apply` has no general rule for a unit that left the manifest (see
- * `removeLegacyDashboardUnit`), so this one is named. The unit's name is
- * hermetic's own, so no marker is asked of the file. Only the unit goes:
- * `MEMORY_SERVICE_ROOT` is the agent's memory and outlives any provider
- * choice (§1). Reloads systemd itself, like the legacy removals, so the
- * caller can skip its own reload; a dry run reports the file and emits nothing.
+ * `removeLegacyDashboardUnit`), so this one is named: every
+ * `MEMORY_SERVICE_UNITS` member on disk and not in `manifest.units` is
+ * disabled, stopped and deleted, with one daemon-reload after them. The names
+ * are hermetic's own, so no marker is asked of the files. Only the units go:
+ * `MEMORY_SERVICE_ROOT` (honcho's database included) is the agent's memory and
+ * outlives any provider choice (§1), and the Postgres packages stay installed —
+ * with the distro's cluster never created and this unit gone, nothing of them
+ * runs. Reloads systemd itself, like the legacy removals, so the caller can
+ * skip its own reload; a dry run reports the paths and emits nothing.
  *
- * Returns whether it removed the unit.
+ * Returns whether it removed (and so reloaded) any unit.
  */
 export async function removeMemoryService(
   host: Host,
@@ -381,20 +422,56 @@ export async function removeMemoryService(
   emit: Emit,
   dry: boolean,
 ): Promise<boolean> {
-  if (serviceOf(manifest) !== null || manifest.units.includes(MEMORY_SERVICE_UNIT)) return false;
-  if ((await host.lstat(MEMORY_SERVICE_UNIT_PATH)) === null) return false;
-  result.changed.push(MEMORY_SERVICE_UNIT_PATH);
+  await removeHonchoLink(host, manifest, result, emit, dry);
+  const gone: string[] = [];
+  for (const unit of MEMORY_SERVICE_UNITS) {
+    if (manifest.units.includes(unit)) continue;
+    if ((await host.lstat(`${UNIT_DIR}/${unit}`)) !== null) gone.push(unit);
+  }
+  if (gone.length === 0) return false;
+  for (const unit of gone) result.changed.push(`${UNIT_DIR}/${unit}`);
   if (dry) return false;
+  for (const unit of gone) {
+    emit(
+      opEvent(
+        "units",
+        0.6,
+        `removing ${unit}: the agent's memory provider no longer runs it (its data under ${MEMORY_SERVICE_ROOT} is kept)`,
+        host.now(),
+      ),
+    );
+    await must(host, ["systemctl", "disable", "--now", unit]);
+    await host.remove(`${UNIT_DIR}/${unit}`);
+  }
+  await must(host, ["systemctl", "daemon-reload"]);
+  return true;
+}
+
+/**
+ * `HONCHO_PLUGIN_CONFIG_LINK`, once the agent is not on honcho — and only the
+ * link hermeticd made (a symlink to `honchoClientConfPath`): an operator's own
+ * file or link is theirs. Removed as the account, whose `$HERMES_HOME` it is in.
+ */
+async function removeHonchoLink(
+  host: Host,
+  manifest: AgentConfig,
+  result: ApplyResult,
+  emit: Emit,
+  dry: boolean,
+): Promise<void> {
+  if (manifest.memory?.provider === "honcho") return;
+  const found = await host.lstat(HONCHO_PLUGIN_CONFIG_LINK);
+  if (found?.isSymlink !== true) return;
+  if ((await linkTarget(host, HONCHO_PLUGIN_CONFIG_LINK)) !== honchoClientConfPath) return;
+  result.changed.push(HONCHO_PLUGIN_CONFIG_LINK);
+  if (dry) return;
   emit(
     opEvent(
       "units",
       0.6,
-      `removing ${MEMORY_SERVICE_UNIT}: the agent has no memory server any more (its data under ${MEMORY_SERVICE_ROOT} is kept)`,
+      `removing ${HONCHO_PLUGIN_CONFIG_LINK}: the agent is no longer on honcho`,
       host.now(),
     ),
   );
-  await must(host, ["systemctl", "disable", "--now", MEMORY_SERVICE_UNIT]);
-  await host.remove(MEMORY_SERVICE_UNIT_PATH);
-  await must(host, ["systemctl", "daemon-reload"]);
-  return true;
+  await must(host, asHermes(["rm", "-f", HONCHO_PLUGIN_CONFIG_LINK]), ACCOUNT_EXEC);
 }

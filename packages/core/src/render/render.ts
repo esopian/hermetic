@@ -21,9 +21,11 @@ import {
   HERMES_PROVENANCE_PATH,
   HERMES_PROXY_PORT,
   HERMES_SEED_CONFIG,
+  MEMORY_LLM_KEY_ENVS,
   PROVIDERS,
   SIZES,
   browserIdentities,
+  openvikingConfPath,
   requiredCapabilities,
   splitHermesSettings,
 } from "../schema/index.ts";
@@ -245,6 +247,15 @@ const SYSTEMD_ENV_REFERENCE = new RegExp("\\$\\{(?:" + BROWSER_ENV_REFS.join("|"
 const TEMPLATE_UNIT_PATH = /^\/etc\/systemd\/system\/[^/]+@\.service$/;
 
 /**
+ * The other legitimate `${…}`: openviking's `ov.conf`, which the server runs
+ * `os.path.expandvars` over, names a remote embedder's key by the variable the
+ * box materialises it under (`MEMORY_LLM_KEY_ENVS`), so the key itself is
+ * never written (`render-memory.ts`). Only those names, and only in that file
+ * (and the manifest that quotes it, for `MANIFEST_PATH`'s reason below).
+ */
+const MEMORY_KEY_REFERENCE = new RegExp("\\$\\{(?:" + MEMORY_LLM_KEY_ENVS.join("|") + ")\\}", "g");
+
+/**
  * The manifest quotes the body of every file it ships, so it carries those same
  * template units verbatim and has to be exempt too — but for a different
  * reason, and a safe one: every file embedded in it is also in the list below
@@ -257,7 +268,9 @@ const MANIFEST_PATH = "/etc/hermetic/manifest.json";
 export function assertFullyRendered(files: readonly RenderedFile[]): void {
   for (const f of files) {
     const exempt = TEMPLATE_UNIT_PATH.test(f.path) || f.path === MANIFEST_PATH;
-    const content = exempt ? f.content.replace(SYSTEMD_ENV_REFERENCE, "") : f.content;
+    const keyed = f.path === openvikingConfPath || f.path === MANIFEST_PATH;
+    let content = exempt ? f.content.replace(SYSTEMD_ENV_REFERENCE, "") : f.content;
+    if (keyed) content = content.replace(MEMORY_KEY_REFERENCE, "");
     for (const marker of TEMPLATE_MARKERS) {
       if (content.includes(marker)) {
         throw new Error(`rendered file ${f.path} still contains a template marker: ${marker}`);
@@ -430,6 +443,7 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
    * (`splitHermesSettings` puts it in exactly one of the two halves).
    */
   const memory = renderMemory({
+    name: input.name,
     memory: input.memory,
     provider: input.provider,
     model: hermesManaged.model ?? hermesSeed.model ?? PROVIDERS[input.provider].default_model,

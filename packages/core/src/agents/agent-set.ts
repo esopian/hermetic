@@ -19,7 +19,12 @@ import {
   type BindingPorts,
 } from "../profiles/profile-binding.ts";
 import type { CoreContext } from "../context.ts";
-import { assertMemoryLlm, assertMemoryModel, assertMemorySized } from "./lifecycle/memory-binding.ts";
+import {
+  assertMemoryEmbeddingsKept,
+  assertMemoryLlm,
+  assertMemoryModel,
+  assertMemorySized,
+} from "./lifecycle/memory-binding.ts";
 
 /** What `agents.set` needs beyond the shared context: the slots a binding reads (§8.3). */
 export interface SetDeps {
@@ -45,6 +50,19 @@ function memoryModelAfter(
     return { provider: agent.provider, model: hermes.model };
   }
   return null;
+}
+
+/**
+ * The memory provider pinned on the row still has to be callable through the
+ * vendor and model the agent moves onto (`memory-binding.ts`), and an
+ * openviking store has to keep its embedding width — checked against the
+ * vendor the box runs now, whose embeddings the store holds.
+ */
+function assertMemoryBinding(agent: Agent, next: { provider: Provider; model: string }): void {
+  const memoryProvider = agent.memory?.provider ?? null;
+  assertMemoryLlm(memoryProvider, next.provider);
+  assertMemoryModel(memoryProvider, next.provider, next.model);
+  assertMemoryEmbeddingsKept(memoryProvider, agent.provider, next.provider);
 }
 
 export function createAgentSet(deps: SetDeps) {
@@ -144,6 +162,9 @@ export function createAgentSet(deps: SetDeps) {
       }
       await assertProfileUsable(bindingPorts, profile);
       assertModelGranted(pending.provider, pending.model, fleet);
+      // Before the render `assertCanApply` makes, which would otherwise be
+      // the first to trip on a vendor the memory provider cannot use.
+      assertMemoryBinding(agent, pending);
       /**
        * Asked here rather than only at apply: a binding onto a revision slot is
        * a document an older hermeticd refuses, and an operator who learns that
@@ -191,10 +212,7 @@ export function createAgentSet(deps: SetDeps) {
       assertMemorySized(memoryProvider, parsed.size ?? agent.size, parsed.instance_type);
     }
     const nextBinding = memoryModelAfter(agent, patch);
-    if (nextBinding !== null) {
-      assertMemoryLlm(memoryProvider, nextBinding.provider);
-      assertMemoryModel(memoryProvider, nextBinding.provider, nextBinding.model);
-    }
+    if (nextBinding !== null) assertMemoryBinding(agent, nextBinding);
     if (parsed.size !== undefined) {
       patch["size"] = parsed.size;
       patch["instance_type"] = parsed.instance_type ?? SIZES[parsed.size].instance_type;

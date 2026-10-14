@@ -22,9 +22,11 @@ import type {
 } from "../../schema/index.ts";
 import { SIZES } from "../../schema/index.ts";
 import {
+  MEMORY_HONCHO_CAPABILITY,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDER_CAPABILITY,
   MEMORY_SERVICE_CAPABILITY,
+  OPENVIKING_DATA_DIRS,
   isMemoryProvider,
   memoryProviderIsService,
   type MemoryProvider,
@@ -32,7 +34,11 @@ import {
 } from "../../shared/memory-providers.ts";
 import type { Provider } from "../../shared/providers.ts";
 import { HermeticError } from "../../errors.ts";
-import { isMemoryServiceProvider, memoryLlmFor } from "../../render/render-memory.ts";
+import {
+  isMemoryServiceProvider,
+  memoryLlmFor,
+  openvikingEmbedsRemotely,
+} from "../../render/render-memory.ts";
 
 /**
  * The provider a create resolves to: what it stated, else the fleet's default,
@@ -86,7 +92,8 @@ export function assertMemorySized(
 /**
  * Whether a provider's own model calls can be mapped onto an agent bound to
  * `vendor`. Pure over a spec, so the refusal is testable against a narrowed
- * one: every provider this build ships lists every vendor.
+ * one as well as against honcho, the one shipped provider that does not list
+ * every vendor.
  */
 export function memoryLlmSupported(
   spec: Pick<MemoryProviderSpec, "vendors">,
@@ -103,16 +110,49 @@ export function memoryLlmSupported(
 export function assertMemoryLlm(
   provider: MemoryProvider | null,
   vendor: Provider,
-  spec: Pick<MemoryProviderSpec, "vendors"> | undefined = provider === null
+  spec: Pick<MemoryProviderSpec, "vendors" | "vendors_note"> | undefined = provider === null
     ? undefined
     : MEMORY_PROVIDERS[provider],
 ): void {
   if (provider === null || spec === undefined || memoryLlmSupported(spec, vendor)) return;
   throw new HermeticError(
     "MEMORY_LLM_UNSUPPORTED",
-    `memory provider ${provider} cannot make its model calls through ${vendor}; ` +
-      "bind the agent to another profile, or choose another memory provider",
+    `memory provider ${provider} cannot make its model calls through ${vendor}` +
+      (spec.vendors_note === undefined ? "" : ` (${spec.vendors_note})`) +
+      "; bind the agent to another profile, or choose another memory provider",
     { provider, vendor },
+  );
+}
+
+/**
+ * Refuse a rebinding that would move an openviking agent's embeddings between
+ * its vendor and the local model (`openvikingEmbedsRemotely`). Each mode has
+ * its own store (`OPENVIKING_DATA_DIRS`: `data` local, `data-remote` remote),
+ * so the server would still start — but on the other, empty store, with
+ * everything the agent remembered left on disk unused. The guard exists so an
+ * explicit rebinding never drops recall silently. A move between two embedding
+ * vendors keeps the model, the width and the store, and is allowed.
+ */
+export function assertMemoryEmbeddingsKept(
+  provider: MemoryProvider | null,
+  from: Provider,
+  to: Provider,
+): void {
+  if (provider !== "openviking" || from === to) return;
+  const before = openvikingEmbedsRemotely(from);
+  const after = openvikingEmbedsRemotely(to);
+  if (before === after) return;
+  const where = (remote: boolean, vendor: Provider) =>
+    remote ? `${vendor}'s embeddings endpoint` : "the local embedding model";
+  const store = (remote: boolean) =>
+    remote ? OPENVIKING_DATA_DIRS.remote : OPENVIKING_DATA_DIRS.local;
+  throw new HermeticError(
+    "MEMORY_LLM_UNSUPPORTED",
+    `memory provider openviking embeds through ${where(before, from)} for this agent, and ${to} ` +
+      `would move it to ${where(after, to)}: the agent would start on an empty ` +
+      `${store(after)} store, and what it remembers in ${store(before)} would stay on disk ` +
+      "unused. Bind the agent to a profile whose vendor embeds the same way",
+    { provider, from, to },
   );
 }
 
@@ -136,11 +176,13 @@ export function assertMemoryModel(
  * The hermeticd capabilities a create's memory choice adds (`requiredCapabilities`
  * in `schema/manifest.ts` asks the same of the rendered document): any
  * provider needs its Python dependencies settled; a service provider also
- * needs the box to install and run the server.
+ * needs the box to install and run the server; honcho also needs the box to
+ * know its Postgres, source build and three units (`MEMORY_HONCHO_CAPABILITY`).
  */
 export function memoryCapabilities(provider: MemoryProvider | null): AgentCapability[] {
   if (provider === null) return [];
-  return memoryProviderIsService(provider)
-    ? [MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY]
-    : [MEMORY_PROVIDER_CAPABILITY];
+  if (!memoryProviderIsService(provider)) return [MEMORY_PROVIDER_CAPABILITY];
+  const out: AgentCapability[] = [MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY];
+  if (provider === "honcho") out.push(MEMORY_HONCHO_CAPABILITY);
+  return out;
 }

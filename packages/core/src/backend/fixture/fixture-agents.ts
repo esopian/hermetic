@@ -102,8 +102,9 @@ export interface SeedSpec {
   pending_model?: string;
   /**
    * The external memory provider the agent was created with. One in-process
-   * and one on-box server seed, so both kinds of drawer memory line are on
-   * screen in `bun run dev:fixture`; every other seed is built-in only.
+   * seed and two on-box server seeds (one on a local-only server, one on a
+   * server that calls the agent's own provider), so every kind of drawer memory
+   * line is on screen in `bun run dev:fixture`; every other seed is built-in only.
    */
   memory?: MemoryProvider;
 }
@@ -115,7 +116,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.4",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 34,
     mem: 61,
     disk: 62,
@@ -137,7 +138,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "large",
     ip: "100.64.12.9",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 58,
     mem: 44,
     disk: 48,
@@ -173,7 +174,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.21",
     hermes: "0.14.2",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 12,
     mem: 39,
     disk: 34,
@@ -189,7 +190,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.23",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 41,
     mem: 72,
     disk: 55,
@@ -229,7 +230,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.31",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 8,
     mem: 27,
     disk: 22,
@@ -238,6 +239,12 @@ export const SEEDS: readonly SeedSpec[] = [
     heartbeat_age_min: 0.3,
     health: HEALTHY,
     browser: false,
+    // The on-box Honcho server, on an embedding-capable vendor: openrouter
+    // routes `/embeddings`, which Honcho needs. The fixture has no openai
+    // profile, and a sixth profile would change the documented fixture counts.
+    provider: "openrouter",
+    profile: "openrouter",
+    memory: "honcho",
   },
   {
     name: "juniper",
@@ -259,7 +266,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.40",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 29,
     mem: 55,
     disk: 41,
@@ -285,7 +292,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.44",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 63,
     mem: 34,
     disk: 18,
@@ -343,7 +350,7 @@ export const STAGING_SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.31.6",
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 21,
     mem: 38,
     disk: 30,
@@ -359,7 +366,7 @@ export const STAGING_SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: null,
     hermes: "0.21.0",
-    hermeticd: "0.7.0",
+    hermeticd: "0.8.0",
     cpu: 0,
     mem: 0,
     disk: 41,

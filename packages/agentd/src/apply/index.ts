@@ -20,6 +20,7 @@ import {
   HERMES_GATEWAY_UNIT,
   MEMORY_LLM_ENV_PATH,
   MEMORY_SERVICE_UNIT,
+  MEMORY_WORKER_UNIT,
   PROVIDERS,
 } from "@hermetic/core/shared";
 import { ensureChromeBuild, pruneSupersededBuilds } from "../browser-source.ts";
@@ -396,8 +397,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   const dashboardLegacyRemoved = manifest.units.includes(HERMES_DASHBOARD_UNIT)
     ? await removeLegacyDashboardUnit(host, result, emit, dry)
     : false;
-  // Not a rename but the same shape: a unit this agent no longer has, which
-  // nothing else would ever stop (`removeMemoryService`).
+  // Not a rename but the same shape: memory-server units this agent no longer
+  // has, which nothing else would ever stop, and honcho's plugin config link
+  // (`removeMemoryService`).
   const memoryServiceRemoved = await removeMemoryService(host, manifest, result, emit, dry);
   const legacyRemoved = browserLegacyRemoved || dashboardLegacyRemoved || memoryServiceRemoved;
 
@@ -480,8 +482,13 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
    * model or plugin moved under it (`memoryService.installed` — and Hermes
    * above, which loads the plugin), or the credential file its unit reads
    * changed, which an `EnvironmentFile` never tells a running process.
+   * honcho's worker runs out of the same venv and reads the same file, so it
+   * restarts with the API (a name not in `manifest.units` is ignored below).
    */
-  if (memoryService.installed || wroteMemoryLlm) watchTriggered.add(MEMORY_SERVICE_UNIT);
+  if (memoryService.installed || wroteMemoryLlm) {
+    watchTriggered.add(MEMORY_SERVICE_UNIT);
+    watchTriggered.add(MEMORY_WORKER_UNIT);
+  }
   /**
    * …and the same again for a swap that *did not finish*.
    *

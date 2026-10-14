@@ -83,12 +83,12 @@ function expectModelRefused(error: HermeticError | null, provider: string): void
 }
 
 describe("the memory provider catalogue", () => {
-  test("exactly the three providers hermetic can run on the box", () => {
-    expect([...MEMORY_PROVIDER_IDS]).toEqual(["holographic", "hindsight", "openviking"]);
+  test("exactly the four providers hermetic can run on the box", () => {
+    expect([...MEMORY_PROVIDER_IDS]).toEqual(["holographic", "hindsight", "openviking", "honcho"]);
     expect(MEMORY_PROVIDERS_LIST.map((p) => p.id)).toEqual([...MEMORY_PROVIDER_IDS]);
     expect(MEMORY_PROVIDERS.holographic.kind).toBe("in-process");
     expect(MEMORY_PROVIDERS.holographic.min_mem_gib).toBe(0);
-    for (const id of ["hindsight", "openviking"] as const) {
+    for (const id of ["hindsight", "openviking", "honcho"] as const) {
       expect(MEMORY_PROVIDERS[id].kind).toBe("service");
       expect(MEMORY_PROVIDERS[id].uses_llm).toBe(true);
       expect(MEMORY_SERVICES[id].pin.length).toBeGreaterThan(0);
@@ -100,7 +100,7 @@ describe("the memory provider catalogue", () => {
         "https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers",
       );
     }
-    for (const s of ["none", "builtin", "default", "", "supermemory", "mem0", "honcho", "retaindb"])
+    for (const s of ["none", "builtin", "default", "", "supermemory", "mem0", "retaindb"])
       expect(isMemoryProvider(s)).toBe(false);
   });
 });
@@ -193,8 +193,9 @@ describe("resolving and checking a create's memory provider", () => {
   });
 
   test("a vendor the provider cannot call through is MEMORY_LLM_UNSUPPORTED", () => {
-    // Every shipped provider lists every vendor, so the refusal is exercised on a narrowed spec.
-    for (const id of MEMORY_PROVIDER_IDS) {
+    // Every shipped provider but honcho lists every vendor (honcho: `memory-honcho.test.ts`),
+    // so the refusal is also exercised on a narrowed spec.
+    for (const id of MEMORY_PROVIDER_IDS.filter((p) => p !== "honcho")) {
       for (const vendor of PROVIDER_IDS) {
         expect(codeOf(() => assertMemoryLlm(id, vendor))).toBeNull();
       }
@@ -273,6 +274,7 @@ describe("mapping the agent's model onto a memory server", () => {
     for (const bad of ["a b", "a\nExecStart=/bin/sh", "x%n", "$HOME/m", "m${X}"]) {
       expect(codeOf(() => memoryLlmFor("openviking", "openai", bad))).toBe("VALIDATION");
       expect(codeOf(() => memoryLlmFor("hindsight", "openai", bad))).toBe("VALIDATION");
+      expect(codeOf(() => memoryLlmFor("honcho", "openai", bad))).toBe("VALIDATION");
     }
     expect(codeOf(() => memoryLlmFor("hindsight", "bedrock", "us.anthropic.claude-x-v2:0"))).toBeNull();
   });
@@ -289,7 +291,12 @@ const HINDSIGHT_PLUGIN_ENV = [
 
 describe("renderMemory", () => {
   const unitPath = `/etc/systemd/system/${MEMORY_SERVICE_UNIT}`;
-  const base = { provider: "anthropic" as Provider, model: "claude-sonnet-5", region: "us-east-1" };
+  const base = {
+    name: "atlas",
+    provider: "anthropic" as Provider,
+    model: "claude-sonnet-5",
+    region: "us-east-1",
+  };
 
   test("none and holographic render no files, no unit, no Hermes lines", () => {
     const none = renderMemory(base);
@@ -339,7 +346,7 @@ describe("renderMemory", () => {
     });
   });
 
-  test("openviking: ov.conf is strict JSON with no `$` and no key, and Hermes is told the endpoint", () => {
+  test("openviking: ov.conf is strict JSON naming the key by variable only, and Hermes is told the endpoint", () => {
     const r = renderMemory({
       ...base,
       provider: "nous",
@@ -363,13 +370,22 @@ describe("renderMemory", () => {
       group: "hermes",
     });
     expect(conf.restart_units).toEqual([MEMORY_SERVICE_UNIT]);
-    expect(conf.content).not.toInclude("$");
-    expect(conf.content.toLowerCase()).not.toInclude("api_key");
+    // The one `$`: the embedder's key, by the variable the unit's key file holds.
+    expect(conf.content.match(/\$/g)).toEqual(["$"]);
+    expect(conf.content).toInclude('"api_key": "${OPENAI_API_KEY}"');
     expect(JSON.parse(conf.content)).toEqual({
       server: { host: "127.0.0.1", port: 1933, auth_mode: null },
-      storage: { workspace: `${dir}/data` },
+      // Provider embeddings get their own store (`OPENVIKING_DATA_DIRS`).
+      storage: { workspace: `${dir}/data-remote` },
       embedding: {
-        dense: { provider: "local", model: "bge-small-zh-v1.5-f16", cache_dir: `${dir}/models` },
+        dense: {
+          provider: "openai",
+          model: "openai/text-embedding-3-small",
+          dimension: 1536,
+          api_base: "https://inference-api.nousresearch.com/v1",
+          api_key: "${OPENAI_API_KEY}",
+        },
+        allow_metadata_override: true,
       },
       vlm: {
         provider: "litellm",
@@ -387,6 +403,7 @@ describe("renderMemory", () => {
   test("bedrock: no key variable, the region on the server's unit", () => {
     for (const provider of ["hindsight", "openviking"] as const) {
       const r = renderMemory({
+        name: "atlas",
         provider: "bedrock",
         model: "zai.glm-4.7-flash",
         region: "eu-west-1",
@@ -416,6 +433,13 @@ describe("rendering an agent with each memory provider", () => {
     });
   const file = (r: ReturnType<typeof render>, path: string) =>
     r.files.find((f) => f.path === path)?.content ?? "";
+  /** None, and every provider whose model calls `vendor` can serve. */
+  const servable = (vendor: Provider): RenderInput["memory"][] => [
+    undefined,
+    ...MEMORY_PROVIDER_IDS.filter((provider) =>
+      MEMORY_PROVIDERS[provider].vendors.includes(vendor),
+    ).map((provider) => ({ provider })),
+  ];
 
   const none = render();
   const holo = render({ provider: "holographic" });
@@ -496,7 +520,7 @@ describe("rendering an agent with each memory provider", () => {
    */
   test("no provider renders a file under the hermes account's home", () => {
     for (const vendor of PROVIDER_IDS) {
-      for (const memory of [undefined, ...MEMORY_PROVIDER_IDS.map((provider) => ({ provider }))]) {
+      for (const memory of servable(vendor)) {
         const r = render(memory, vendor);
         for (const f of r.files) {
           expect(f.path === HERMES_ACCOUNT_HOME || f.path.startsWith(`${HERMES_ACCOUNT_HOME}/`)).toBe(
@@ -509,8 +533,10 @@ describe("rendering an agent with each memory provider", () => {
 
   test("every provider × vendor parses as AgentConfig, hashes apart, and carries no secret", () => {
     const hashes = new Set<string>();
+    let renders = 0;
     for (const vendor of PROVIDER_IDS) {
-      for (const memory of [undefined, ...MEMORY_PROVIDER_IDS.map((provider) => ({ provider }))]) {
+      for (const memory of servable(vendor)) {
+        renders += 1;
         const r = render(memory, vendor);
         const parsed = AgentConfig.parse(JSON.parse(JSON.stringify(r.manifest)));
         expect(parsed.memory).toEqual(r.manifest.memory);
@@ -523,7 +549,9 @@ describe("rendering an agent with each memory provider", () => {
         }
       }
     }
-    expect(hashes.size).toBe(PROVIDER_IDS.length * (MEMORY_PROVIDER_IDS.length + 1));
+    expect(hashes.size).toBe(renders);
+    // honcho is refused before render on anthropic and bedrock, and only there.
+    expect(renders).toBe(PROVIDER_IDS.length * (MEMORY_PROVIDER_IDS.length + 1) - 2);
   });
 
   test("a known provider's block is strict; a removed provider's reads as none", () => {

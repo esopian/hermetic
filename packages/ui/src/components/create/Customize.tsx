@@ -16,13 +16,19 @@ import {
   ROOT_GIB_MAX,
   ROOT_GIB_MIN,
   SIZES,
+  providerOption,
   volumeMonthlyUsd,
 } from "../../logic/format.ts";
 import type { SizeSpec } from "../../logic/format.ts";
 import type { ApprovalsMode, SecretsMode } from "../../logic/create-form.ts";
 import { APPROVALS_MODES } from "../../logic/settings-logic.ts";
 import { MEMORY_PROVIDERS, MEMORY_PROVIDERS_LIST, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
-import { memoryLabel, memoryTags, memoryUndersized } from "../../logic/memory-logic.ts";
+import {
+  memoryLabel,
+  memoryTags,
+  memoryUndersized,
+  memoryVendorBlock,
+} from "../../logic/memory-logic.ts";
 import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { Field, Seg, SizeCells, Slider } from "./controls.tsx";
 import { INHERITED_HINT, INHERITED_VALUE, isPrimarySize } from "./useCreateForm.ts";
@@ -304,15 +310,23 @@ function MemoryField({ f }: { f: CreateFormModel }) {
     fleetMemory === undefined ? "Fleet default" : `Fleet default (${memoryLabel(fleetMemory)})`;
   const undersized = (id: Parameters<typeof memoryUndersized>[0]) =>
     memGib !== null && memoryUndersized(id, memGib);
+  const vendorLabel = f.vendor === null ? "" : providerOption(f.vendor).label;
+  const vendorBlocked = (id: Parameters<typeof memoryUndersized>[0]) =>
+    memoryVendorBlock(id, f.vendor) !== null;
   // What the agent will actually get, for the hint's one line. A size too
   // small for it is said once, by the drawer above the footer (`f.memoryBlock`).
   const effective = f.memoryEffective;
+  // A provider the agent's vendor cannot carry says why, in the spec's words.
+  const vendorNote =
+    effective === undefined || effective === null ? null : memoryVendorBlock(effective, f.vendor);
   const hint =
     effective === undefined
       ? INHERITED_HINT
       : effective === null
         ? "Hermes's built-in MEMORY.md / USER.md only"
-        : `${MEMORY_PROVIDERS[effective].summary} ${memoryTags(effective).join(" · ")}`;
+        : vendorNote !== null
+          ? vendorNote
+          : `${MEMORY_PROVIDERS[effective].summary} ${memoryTags(effective).join(" · ")}`;
   return (
     <Field
       label="Memory"
@@ -330,8 +344,16 @@ function MemoryField({ f }: { f: CreateFormModel }) {
             <option value="">{inherited}</option>
             <option value={MEMORY_PROVIDER_NONE}>None — built-in only</option>
             {MEMORY_PROVIDERS_LIST.map((p) => (
-              <option key={p.id} value={p.id} disabled={undersized(p.id) && f.memory !== p.id}>
-                {undersized(p.id) ? `${p.label} — needs ≥ ${String(p.min_mem_gib)} GiB` : p.label}
+              <option
+                key={p.id}
+                value={p.id}
+                disabled={(undersized(p.id) || vendorBlocked(p.id)) && f.memory !== p.id}
+              >
+                {undersized(p.id)
+                  ? `${p.label} — needs ≥ ${String(p.min_mem_gib)} GiB`
+                  : vendorBlocked(p.id)
+                    ? `${p.label} — not for ${vendorLabel}`
+                    : p.label}
               </option>
             ))}
           </select>

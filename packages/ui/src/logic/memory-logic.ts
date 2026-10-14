@@ -8,8 +8,9 @@
  * that states nothing inherits.
  */
 import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE, isMemoryProvider } from "@hermetic/core/shared";
-import type { MemoryProvider } from "@hermetic/core/shared";
+import type { MemoryProvider, Provider } from "@hermetic/core/shared";
 import type { CreateAgentInput, Meta } from "../api/index.ts";
+import { providerOption } from "./format.ts";
 
 /** What a create may state: a provider, or `none` for built-in memory only. */
 export type MemoryChoice = NonNullable<CreateAgentInput["memory_provider"]>;
@@ -45,6 +46,25 @@ export function memoryTags(id: MemoryProvider): string[] {
  */
 export function memoryUndersized(id: MemoryProvider, memGib: number): boolean {
   return MEMORY_PROVIDERS[id].min_mem_gib > memGib;
+}
+
+/**
+ * Why a provider cannot serve an agent on `vendor`, or null when it can (or
+ * when the vendor is not known yet). It is the spec's own `vendors_note` — the
+ * sentence core's `MEMORY_LLM_UNSUPPORTED` refusal carries — and, for a
+ * provider that states none, a plain statement of the same fact.
+ */
+export function memoryVendorBlock(
+  id: MemoryProvider,
+  vendor: Provider | null | undefined,
+): string | null {
+  if (vendor === null || vendor === undefined) return null;
+  const spec = MEMORY_PROVIDERS[id];
+  if (spec.vendors.includes(vendor)) return null;
+  return (
+    spec.vendors_note ??
+    `${spec.label} cannot make its model calls through ${providerOption(vendor).label}`
+  );
 }
 
 /**

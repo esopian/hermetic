@@ -45,7 +45,7 @@ import type { MachineField, MachineState } from "../../logic/create-presets.ts";
 import { usePresets } from "../../state/presets-store.ts";
 import type { PresetView } from "@hermetic/core/shared";
 import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
-import { fleetDefaultMemory, memoryUndersized } from "../../logic/memory-logic.ts";
+import { fleetDefaultMemory, memoryUndersized, memoryVendorBlock } from "../../logic/memory-logic.ts";
 import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { profileById, readyProfiles } from "../../logic/provider-logic.ts";
 import { suggestedName } from "../../logic/volume-logic.ts";
@@ -361,13 +361,24 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    * and the drawer says what to change. Said outside Customize, because an
    * inherited fleet default blocks with it folded.
    */
+  /**
+   * The agent's vendor, when the chosen profile is one this create can use.
+   * Null until a ready profile is picked: nothing is held back on a guess.
+   */
+  const vendor = chosenReady ? profile.provider : null;
+  /**
+   * A provider whose model calls the agent's vendor cannot carry: core refuses
+   * the create with `MEMORY_LLM_UNSUPPORTED` (`assertMemoryLlm`), so the
+   * picker marks it and says why, in the spec's own words.
+   */
+  const memoryProvider = memoryEffective === undefined ? null : memoryEffective;
+  const vendorNote = memoryProvider === null ? null : memoryVendorBlock(memoryProvider, vendor);
   const memoryBlock =
-    memoryEffective !== undefined &&
-    memoryEffective !== null &&
-    memGib !== null &&
-    memoryUndersized(memoryEffective, memGib)
-      ? `${MEMORY_PROVIDERS[memoryEffective].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryEffective].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
-      : null;
+    memoryProvider !== null && memGib !== null && memoryUndersized(memoryProvider, memGib)
+      ? `${MEMORY_PROVIDERS[memoryProvider].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryProvider].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
+      : memoryProvider !== null && vendorNote !== null
+        ? `${MEMORY_PROVIDERS[memoryProvider].label} memory is not available on this provider profile: ${vendorNote} — pick another profile, or another memory provider`
+        : null;
   const disabled = !trimmed || taken || invalid || submitting || !chosenReady || memoryBlock !== null;
 
   /**
@@ -611,6 +622,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     fleetMemory,
     memGib,
     memoryEffective,
+    vendor,
     memoryBlock,
     presets,
     strip: stripPresets(presets),

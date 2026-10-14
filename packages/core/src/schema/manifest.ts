@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { DEFAULT_PROVIDER_KEY_SLOT } from "../shared/box.ts";
-import { MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY } from "../shared/memory-providers.ts";
+import {
+  MEMORY_HONCHO_CAPABILITY,
+  MEMORY_PROVIDER_CAPABILITY,
+  MEMORY_SERVICE_CAPABILITY,
+} from "../shared/memory-providers.ts";
 export {
   APT_LOCK_TIMEOUT_SECONDS,
   AGENT_CONFIG_SCHEMA_VERSION,
@@ -279,6 +283,17 @@ export const AGENT_CONFIG_CAPABILITIES = {
    * a service provider asks for it, and an in-process one does not.
    */
   [MEMORY_SERVICE_CAPABILITY]: "install and run the pinned memory server beside Hermes",
+  /**
+   * honcho's server is more than `memory-service` promises: distro Postgres
+   * with pgvector, a cluster created on the data volume, a source checkout
+   * synced from its lockfile into a second uv Python, three units, and the
+   * plugin's configuration linked under the `hermes` home. A box without it
+   * would read `honcho` as no provider at all (`StoredManifestMemory`) while
+   * Hermes was pointed at a server nobody runs — so a manifest naming honcho
+   * asks for it.
+   */
+  [MEMORY_HONCHO_CAPABILITY]:
+    "run honcho's memory server: its Postgres, source build, worker and plugin config link",
 } as const;
 export type AgentCapability = keyof typeof AGENT_CONFIG_CAPABILITIES;
 
@@ -328,5 +343,6 @@ export function requiredCapabilities(manifest: {
   if (manifest.memory !== undefined) out.push(MEMORY_PROVIDER_CAPABILITY);
   /* A pin is what a service provider's manifest carries, and only that one. */
   if (manifest.memory?.pin !== undefined) out.push(MEMORY_SERVICE_CAPABILITY);
+  if (manifest.memory?.provider === "honcho") out.push(MEMORY_HONCHO_CAPABILITY);
   return out;
 }
