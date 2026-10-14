@@ -41,6 +41,7 @@ import "./styles/polish.css";
 // second import and the `data-skin` attribute removes the soft skin whole.
 import "./chat/styles/chat.css";
 import "./chat/styles/chat-soft.css";
+import "./chat/styles/chat-dock.css";
 import "./chat/styles/chat-activity-status.css";
 // Background-process event rows, the burst fold and the DM reply card.
 import "./chat/styles/chat-events.css";

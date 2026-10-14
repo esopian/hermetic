@@ -13,6 +13,12 @@ export interface ChatEntry {
     message?: string | null,
   ) => boolean;
   quickJump: () => void;
+  dock: {
+    open: boolean;
+    unread: number;
+    active: number;
+    toggle: () => void;
+  };
 }
 export const ChatEntryContext = createContext<ChatEntry | null>(null);
 export function useChatEntry(): ChatEntry | null {

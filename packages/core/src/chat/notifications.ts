@@ -54,6 +54,7 @@ import type {
   VolumeView,
 } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
+import { HEARTBEAT_INTERVAL_MS } from "../agents/state.ts";
 import { DAY_MS } from "./notification-store.ts";
 import type { NotificationStore } from "./notification-store.ts";
 
@@ -246,17 +247,73 @@ function healthDetail(agent: AgentView): string | null {
 }
 
 /**
+ * How long a bad health status must hold, on this laptop's clock, before it
+ * alerts (§4.9): three heartbeat intervals. Both statuses it gates have already
+ * waited out three heartbeats before they exist at all — the box writes
+ * `degraded` only after three failing ticks in a row, and `unreachable` is
+ * derived only after three missed beats — so an alert means about six
+ * heartbeats, three minutes, of the same trouble. That is past anything
+ * routine: a Hermes restart on `apply`, a hermeticd binary swap, a reboot, a
+ * slow DynamoDB write. With the app's one-minute poll it lands on the second
+ * scan after the first that saw the status.
+ */
+export const HEALTH_ALERT_HOLD_MS = 3 * HEARTBEAT_INTERVAL_MS;
+
+/**
+ * Missed heartbeats after which `unreachable` alerts on first sight, without
+ * waiting out the hold: the row's own heartbeat age already proves the silence
+ * has lasted as long as the hold would have made sure of. This is the case of
+ * a laptop that was not watching — the app opened, or a `ps` run, on an agent
+ * that went quiet hours ago.
+ */
+export const UNREACHABLE_ALERT_HEARTBEATS = 6;
+
+/**
+ * Whether a bad status not yet announced has held long enough to announce.
+ *
+ * `error` never waits: it is a stored failure (a bootstrap stage, a failed
+ * operation), not a reading that can flap, and nothing moves it back without
+ * an operator. A `bootstrapping` agent shown `unreachable` has already been
+ * silent for `BOOTSTRAP_STALE_MS` — twenty heartbeats — so it does not wait
+ * either.
+ */
+function healthAlertDue(agent: AgentView, pendingSince: string | null, nowMs: number): boolean {
+  const status = agent.display_status;
+  if (status === "error") return true;
+  if (status === "unreachable") {
+    if (agent.status === "bootstrapping") return true;
+    const age = agent.heartbeat_age_ms;
+    if (age !== null && age >= UNREACHABLE_ALERT_HEARTBEATS * HEARTBEAT_INTERVAL_MS) return true;
+  }
+  if (pendingSince === null) return false;
+  const since = Date.parse(pendingSince);
+  return !Number.isNaN(since) && nowMs - since >= HEALTH_ALERT_HOLD_MS;
+}
+
+/**
  * The fleet scan's half of the inbox. Core's scan is stateless and the only
  * "previous status" anywhere was an in-memory map in the server's poller —
  * which would leave the CLI blind and lose every transition across a restart —
- * so the last status seen per agent is kept in the local store and diffed here.
+ * so the last status announced per agent is kept in the local store and diffed
+ * here.
  *
- * A flap produces two rows; there is deliberately no debounce in v1, because a
- * flapping agent is the thing the operator most needs to see.
+ * A move into a bad status is announced only once it has held
+ * (`healthAlertDue`). Until then the store keeps the last *announced* status
+ * and, beside it, when this laptop first saw the trouble (`pending_since`), so
+ * the wait survives from one scan to the next whichever process runs it. Bad
+ * to a different bad (`degraded` → `unreachable`) keeps the same clock: it is
+ * one stretch of trouble. Trouble that clears before it is announced clears
+ * silently, and so has no recovery row either — a recovery is only ever news
+ * about an alert the operator was given.
+ *
+ * Once announced, a flap still produces two rows: a recovery is reported on the
+ * first scan that sees `ready`, and the next stretch of trouble waits out its
+ * own hold.
  */
 export function observeHealth(deps: NotificationDeps, agents: readonly AgentView[]): void {
   try {
     const fleet = deps.fleet();
+    const now = (deps.now ?? (() => new Date()))();
     for (const agent of agents) {
       const current = agent.display_status;
       /**
@@ -274,11 +331,23 @@ export function observeHealth(deps: NotificationDeps, agents: readonly AgentView
         continue;
       }
       const previous = deps.store.seenStatus(fleet, agent.name);
-      deps.store.setSeenStatus(fleet, agent.name, current);
       // First sighting is recorded silently: there is no transition to report.
-      if (previous === null || previous === current) continue;
+      if (previous === null) {
+        deps.store.setSeenStatus(fleet, agent.name, current);
+        continue;
+      }
 
       if (!isBad(previous) && isBad(current)) {
+        const pendingSince = deps.store.pendingSince(fleet, agent.name);
+        if (!healthAlertDue(agent, pendingSince, now.getTime())) {
+          // Not yet: `previous` stays the announced status, and the clock
+          // starts on the first scan that saw the trouble.
+          if (pendingSince === null || Number.isNaN(Date.parse(pendingSince))) {
+            deps.store.setPendingSince(fleet, agent.name, now.toISOString());
+          }
+          continue;
+        }
+        deps.store.setSeenStatus(fleet, agent.name, current);
         deps.store.insert({
           source: "agent",
           kind: "agent.health",
@@ -289,7 +358,13 @@ export function observeHealth(deps: NotificationDeps, agents: readonly AgentView
           fleet,
           actions: [{ label: "Probe", target: "agent", ref: agent.name }],
         });
-      } else if (isBad(previous) && current === "ready") {
+        continue;
+      }
+
+      // Also ends anything pending: trouble that cleared unannounced is dropped.
+      deps.store.setSeenStatus(fleet, agent.name, current);
+      if (previous === current) continue;
+      if (isBad(previous) && current === "ready") {
         deps.store.insert({
           source: "agent",
           kind: "agent.health",

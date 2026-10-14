@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
+import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { fmtClock } from "../logic/format.ts";
 import { fleetTick, streamHealth, streamLabel, tickColor, volumeTick } from "../logic/loading.ts";
 import { VOLUME_POLL_MS } from "../state/state.tsx";
@@ -28,8 +29,6 @@ export function Footer({
   volumesReadAt = null,
   volumesBusy = false,
   volumesError = null,
-  shortcutsRef,
-  onShortcuts,
   update = null,
 }: {
   lastPollAt: string | null;
@@ -50,13 +49,6 @@ export function Footer({
   /** The last volume read failed (the last good inventory stays on screen). */
   volumesError?: string | null;
   /**
-   * The `?` sheet's anchor. The footer is where it belongs: the shortcuts were
-   * undiscoverable, and the footer is on every dashboard screen, so the hint
-   * costs no layout anywhere.
-   */
-  shortcutsRef?: RefObject<HTMLButtonElement | null>;
-  onShortcuts?: () => void;
-  /**
    * The updater's line (`state/app-update-state.tsx`), when there is a head
    * broadcasting one. A prop rather than a lookup from inside: the notice is
    * app chrome and the footer is the strip it belongs on, and passing it is the
@@ -64,6 +56,7 @@ export function Footer({
    */
   update?: ReactNode;
 }) {
+  const entry = useChatEntry();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -114,15 +107,24 @@ export function Footer({
         volumes
       </span>
       {update}
-      {onShortcuts ? (
+      {entry ? (
         <button
           type="button"
-          className="linkish foot-shortcuts right"
-          ref={shortcutsRef}
-          onClick={onShortcuts}
-          aria-haspopup="dialog"
+          className="ch-footer-chat"
+          onClick={entry.dock.toggle}
+          aria-label={entry.dock.open ? "Minimize chat dock" : "Open chat dock"}
         >
-          ? for shortcuts
+          Chat
+          {entry.dock.unread > 0 ? <strong>{entry.dock.unread} unread</strong> : null}
+          {entry.dock.active > 0 ? (
+            <>
+              <i aria-hidden="true" />
+              {entry.dock.active} active
+            </>
+          ) : null}
+          {entry.dock.unread === 0 && entry.dock.active === 0 ? (
+            <span className="idle">Idle</span>
+          ) : null}
         </button>
       ) : null}
     </div>

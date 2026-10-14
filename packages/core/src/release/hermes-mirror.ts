@@ -45,9 +45,7 @@
  * mode is canned in `fixtureHermesMirror` and never spawns git.
  */
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtemp, mkdir, readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactsApi } from "../backend/types.ts";
 import { HermeticError } from "../errors.ts";
@@ -62,13 +60,17 @@ import { type FleetManifest, hermesBundleKey, isHermesRef } from "../schema/inde
  */
 export const HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent.git";
 
-/** The bare mirror's directory name inside `mirrorDir`. */
+/**
+ * The bare repository's directory name inside a run's staging directory — and
+ * the name older builds gave the persistent mirror they kept directly in
+ * `mirrorDir`, which `sweepMirrorDir` now deletes on sight.
+ */
 export const HERMES_MIRROR_DIR = "hermes-agent.git";
 
 /**
- * Long, because this is the one attended fetch: a cold `--mirror` clone of a
- * repository that ships a web app is minutes of network on a good day, and a
- * timeout that fired mid-clone would look exactly like the outage this exists
+ * Long, because this is the one attended fetch: even a shallow fetch of a
+ * repository that ships a web app can be minutes of network on a bad link, and
+ * a timeout that fired mid-fetch would look exactly like the outage this exists
  * to route around.
  */
 export const MIRROR_TIMEOUT_MS = 15 * 60_000;
@@ -80,7 +82,7 @@ export const MIRROR_TIMEOUT_MS = 15 * 60_000;
  */
 export const KILL_GRACE_MS = 10_000;
 
-/** The prefix `buildAndPush` gives its interrupted-clone staging directories. */
+/** The prefix `buildAndPush` gives its per-run staging directories. */
 const STAGING_PREFIX = ".clone-";
 
 export interface GitResult {
@@ -99,7 +101,10 @@ export type GitRun = (args: readonly string[], opts?: { cwd?: string }) => Promi
  */
 export interface HermesMirrorDeps {
   artifacts: Pick<ArtifactsApi, "putObject" | "exists">;
-  /** `$HERMETIC_HOME/mirror`: where the bare mirror is kept between pushes. */
+  /**
+   * `$HERMETIC_HOME/mirror`: where a push stages its fetch and build. Empty, and
+   * removed, once the push is done.
+   */
   mirrorDir: string;
   git: GitRun;
 }
@@ -173,6 +178,11 @@ export async function ensureHermesMirror(
 
   try {
     /**
+     * Before the idempotence check, so the common no-op push is also the one
+     * that deletes an older build's ten-gigabyte mirror.
+     */
+    await sweepMirrorDir(deps.mirrorDir);
+    /**
      * Idempotent: a ref the manifest already names, whose object is still there,
      * is a no-op — no clone, no fetch, no upload. The digest is not re-verified
      * here because that would mean downloading the bundle on every push; the box
@@ -238,32 +248,51 @@ function digestOf(bytes: Uint8Array): string {
 }
 
 /**
- * Delete every `.clone-*` staging directory left in the mirror directory by an
- * earlier run.
+ * Clear what earlier runs left in the mirror directory: every `.clone-*`
+ * staging directory, and the persistent `--mirror` clone older builds kept
+ * between pushes — then the directory itself, if that leaves it empty.
  *
- * The `finally` around the clone removes this run's, but only if the promise
- * settles: a laptop closed mid-clone, a killed portal, or a `git` this module
- * SIGKILLed on the mirror timeout all leave one behind, each holding a partial
- * copy of a repository that ships a web app. Nothing else ever reads them, so
- * the newest is as stale as the oldest.
+ * The `finally` in `buildAndPush` removes this run's staging directory, but
+ * only if the promise settles: a laptop closed mid-fetch, a killed portal, or a
+ * `git` this module SIGKILLed on the mirror timeout all leave one behind.
+ * Nothing else ever reads them, so the newest is as stale as the oldest.
+ *
+ * The legacy mirror is the bigger of the two. `git clone --mirror` fetches
+ * `+refs/*:refs/*`, which on GitHub includes every `refs/pull/*` head, so it
+ * grew past ten gigabytes to serve a single tag's tree. Nothing reads it now.
  *
  * Swept on entry, before this run makes its own, so it never removes the
- * directory it is about to use. Two `artifacts push` runs on the same laptop at
+ * directory it is about to use. `ensureHermesMirror` sweeps on every call,
+ * including the no-op one that finds the bundle already in the bucket. Two `artifacts push` runs on the same laptop at
  * the same instant could still take each other's — which is a soft mirror
- * failure and a warning, the same outcome as any other interrupted clone.
+ * failure and a warning, the same outcome as any other interrupted fetch.
  */
-async function sweepStaging(mirrorDir: string): Promise<void> {
+async function sweepMirrorDir(mirrorDir: string): Promise<void> {
   const entries = await readdir(mirrorDir).catch((): string[] => []);
   for (const entry of entries) {
-    if (!entry.startsWith(STAGING_PREFIX)) continue;
+    if (!entry.startsWith(STAGING_PREFIX) && entry !== HERMES_MIRROR_DIR) continue;
     await rm(join(mirrorDir, entry), { recursive: true, force: true });
   }
+  await removeIfEmpty(mirrorDir);
 }
 
 /**
- * Clone or refresh the bare mirror, export the ref's tree, synthesize a
- * single-commit repository over it, bundle that and upload it. Throws on any
- * failure; `ensureHermesMirror` is what turns a failure into a warning.
+ * `rmdir` refuses a non-empty directory, which is the right answer when a
+ * concurrent run is still using it or something else was put there.
+ */
+async function removeIfEmpty(dir: string): Promise<void> {
+  await rmdir(dir).catch(() => {});
+}
+
+/**
+ * Fetch the ref, export its tree, synthesize a single-commit repository over
+ * it, bundle that and upload it. Throws on any failure; `ensureHermesMirror` is
+ * what turns a failure into a warning.
+ *
+ * Nothing is kept between runs. The fetch is shallow and names the one tag, so
+ * it costs about what the tree weighs, and a cache that saved that much on the
+ * next push would not be worth the disk it holds in the meantime — a push
+ * happens when `hermes_ref` is bumped, and the next bump is a different tag.
  */
 async function buildAndPush(
   deps: HermesMirrorDeps,
@@ -280,71 +309,54 @@ async function buildAndPush(
   };
 
   await mkdir(deps.mirrorDir, { recursive: true });
-  await sweepStaging(deps.mirrorDir);
-  const bare = join(deps.mirrorDir, HERMES_MIRROR_DIR);
-  if (existsSync(bare)) {
-    await git(["-C", bare, "fetch", "--tags", "--prune", "origin"]);
-  } else {
-    /**
-     * `--mirror` and not a plain `--bare`: a bare clone records no fetch
-     * refspec, so the *next* run's `git fetch origin` would quietly update
-     * nothing and a new tag would never appear. Cloned into a temp directory
-     * and renamed into place, so an interrupted clone leaves no half-repository
-     * that every later run then tries to fetch from.
-     */
-    const staging = await mkdtemp(join(deps.mirrorDir, STAGING_PREFIX));
-    try {
-      await git(["clone", "--mirror", repoUrl, join(staging, HERMES_MIRROR_DIR)]);
-      await rename(join(staging, HERMES_MIRROR_DIR), bare);
-    } finally {
-      await rm(staging, { recursive: true, force: true });
-    }
-  }
-
-  /**
-   * Tags only, resolved through `refs/tags/` rather than through the bare ref.
-   *
-   * `isHermesRef` cannot tell a tag from a branch — both are just names — and a
-   * branch is the one thing this module's idempotence rule cannot survive: a
-   * bundle built from `main` is uploaded once, matches on every later push
-   * because the key and the object are both still there, and goes on being
-   * installed long after `main` moved. So the contract (see the module comment)
-   * is that `hermes_ref` is a release tag, and this is where it is enforced —
-   * softly, because it reaches this line only after a clone or fetch, and every
-   * failure after that point is a warning rather than a refusal.
-   *
-   * `--verify --quiet` exits 1 with no output for a name that is not a tag,
-   * which is exactly the signal wanted; without `--quiet` git also writes the
-   * name to stderr, which the wrapper would quote back as though it were a
-   * transport error.
-   */
-  const tagged = await deps.git(
-    ["-C", bare, "rev-parse", "--verify", "--quiet", `refs/tags/${ref}^{commit}`],
-    {},
-  );
-  const upstreamSha = tagged.stdout.trim();
-  if (tagged.code !== 0 || !OBJECT_ID_RE.test(upstreamSha)) {
-    throw new Error(
-      `${ref} is not a tag in ${repoUrl}; hermetic mirrors tags only, because a ref that moves ` +
-        "would be pinned forever at whatever it named the day it was first mirrored",
-    );
-  }
-
-  const work = await mkdtemp(join(tmpdir(), "hermetic-hermes-"));
-  const tree = join(work, "tree");
-  const bundle = join(work, "bundle");
+  const staging = await mkdtemp(join(deps.mirrorDir, STAGING_PREFIX));
   try {
+    /**
+     * Tags only, asked of upstream before anything is fetched.
+     *
+     * `isHermesRef` cannot tell a tag from a branch — both are just names — and
+     * a branch is the one thing this module's idempotence rule cannot survive:
+     * a bundle built from `main` is uploaded once, matches on every later push
+     * because the key and the object are both still there, and goes on being
+     * installed long after `main` moved. So the contract (see the module
+     * comment) is that `hermes_ref` is a release tag, and this is where it is
+     * enforced — softly, like every other failure past validation.
+     *
+     * `ls-remote` matches patterns by trailing path components, so the output
+     * is checked for the exact refname rather than for being non-empty.
+     */
+    const tagRef = `refs/tags/${ref}`;
+    const listed = await git(["ls-remote", "--tags", repoUrl, tagRef]);
+    if (!listed.split("\n").some((line) => line.split("\t")[1] === tagRef)) {
+      throw new Error(
+        `${ref} is not a tag in ${repoUrl}; hermetic mirrors tags only, because a ref that moves ` +
+          "would be pinned forever at whatever it named the day it was first mirrored",
+      );
+    }
+
+    /**
+     * One tag, one commit deep, into a bare repository that exists only for
+     * this run. Not `clone --mirror`: that copies `+refs/*:refs/*`, every
+     * branch and every pull-request head upstream has, to read one tree.
+     */
+    const bare = join(staging, HERMES_MIRROR_DIR);
+    await git(["init", "-q", "--bare", bare]);
+    await git(["-C", bare, "fetch", "-q", "--no-tags", "--depth=1", repoUrl, `+${tagRef}:${tagRef}`]);
+    const upstreamSha = (await git(["-C", bare, "rev-parse", "--verify", `${tagRef}^{commit}`])).trim();
+    if (!OBJECT_ID_RE.test(upstreamSha)) {
+      throw new Error(`${tagRef} resolved to ${JSON.stringify(upstreamSha)}, not a commit id`);
+    }
+
+    const tree = join(staging, "tree");
+    const bundle = join(staging, "bundle");
     await mkdir(tree, { recursive: true });
     /**
      * The tree, and only the tree: a `--work-tree` checkout out of the bare
-     * mirror leaves no `.git` in `tree/`, which is what makes the next step a
-     * *new* repository rather than a graft onto upstream's history. It writes
-     * an index inside the bare mirror, which is ours and is never read again.
+     * repository leaves no `.git` in `tree/`, which is what makes the next step
+     * a *new* repository rather than a graft onto upstream's history. It
+     * writes an index inside the bare repository, which is deleted with it.
      */
-    await git(
-      [`--git-dir=${bare}`, `--work-tree=${tree}`, "checkout", "-f", `refs/tags/${ref}`, "--", "."],
-      tree,
-    );
+    await git([`--git-dir=${bare}`, `--work-tree=${tree}`, "checkout", "-f", tagRef, "--", "."], tree);
     await git(["-C", tree, "init", "-q", "-b", "main"]);
     // `-f`: a file upstream tracks *and* ignores is still part of the tree, and
     // a bundle that quietly dropped it would install a different checkout.
@@ -372,7 +384,8 @@ async function buildAndPush(
     await deps.artifacts.putObject(key, bytes, BUNDLE_CONTENT_TYPE);
     return { key, sha256: digestOf(bytes), size: bytes.byteLength, upstream_sha: upstreamSha };
   } finally {
-    await rm(work, { recursive: true, force: true });
+    await rm(staging, { recursive: true, force: true });
+    await removeIfEmpty(deps.mirrorDir);
   }
 }
 

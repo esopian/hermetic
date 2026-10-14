@@ -55,7 +55,7 @@ import {
   toastDwellMs,
   unreadChatByConversation,
 } from "../logic/notification-logic.ts";
-import type { NotificationPrefs, WatchedThread } from "../logic/notification-logic.ts";
+import type { NotificationPrefs, WatchedThread, WatchedThreads } from "../logic/notification-logic.ts";
 import { transport } from "../api/transport.ts";
 import { isVisible } from "../lib/visibility.ts";
 import { useListeningIfAvailable } from "./listening-state.tsx";
@@ -122,6 +122,8 @@ export interface Notify {
    */
   watching: WatchedThread | null;
   setWatching: (watched: WatchedThread | null) => void;
+  /** Every visible chat pane; `watching` remains the legacy single-thread view. */
+  setWatchingThreads?: (watched: readonly WatchedThread[]) => void;
   ack: (id: string) => Promise<void>;
   /**
    * Marks several rows read as one gesture, in one batch write (`{ ids }`).
@@ -292,6 +294,11 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   const [centerOpenState, setCenterOpenState] = useState(false);
   const centerOpen = centerOpenState;
   const [watching, setWatching] = useState<WatchedThread | null>(null);
+  const [watchedThreads, setWatchedThreads] = useState<WatchedThreads>(null);
+  const setWatchingThreads = useCallback((threads: readonly WatchedThread[]) => {
+    setWatchedThreads(threads.length ? threads : null);
+    setWatching(threads[0] ?? null);
+  }, []);
   const [snoozed, setSnoozed] = useState(0);
   const [history, setHistory] = useState(0);
   const [nextSnoozeAt, setNextSnoozeAt] = useState<string | null>(null);
@@ -301,7 +308,7 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   /** Led by a ref for the same reason `items` is (`writeItems` below). */
   const viewsRef = useRef(views);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerView, setDrawerView] = useState<DrawerView>("inbox");
+  const [drawerView, setDrawerView] = useState<DrawerView>("unread");
   const [settings, setSettings] = useState<NotificationSettingsView | null>(null);
   /** Read at delivery time by the `terminal_alerts` gate below. */
   const settingsRef = useRef(settings);
@@ -354,8 +361,8 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
   prefsRef.current = prefs;
   const centerRef = useRef(centerOpen);
   centerRef.current = centerOpen;
-  const watchingRef = useRef(watching);
-  watchingRef.current = watching;
+  const watchingRef = useRef<WatchedThreads>(watchedThreads ?? watching);
+  watchingRef.current = watchedThreads ?? watching;
   /**
    * The rows this provider already holds, read at delivery time. A streamed row
    * may be one the last fetch already returned and already counted, and the
@@ -971,6 +978,7 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       setCenterOpen,
       watching,
       setWatching,
+      setWatchingThreads,
       ack,
       ackMany,
       ackAll,
@@ -1013,6 +1021,7 @@ export function NotifyProvider({ children, api = LIVE_API }: { children: ReactNo
       centerOpen,
       setCenterOpen,
       watching,
+      setWatchingThreads,
       ack,
       ackMany,
       ackAll,

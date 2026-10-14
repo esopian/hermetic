@@ -49,6 +49,8 @@ export class MemoryNotificationStore implements NotificationStore {
   private readonly rows: Notification[] = [];
   private readonly muted = new Map<string, string>();
   private readonly seen = new Map<string, string>();
+  /** `agent_status_seen.pending_since`, keyed like `seen`. */
+  private readonly pending = new Map<string, string>();
   /** `restored_at` by row id: internal to the sweep, not a `Notification` field. */
   private readonly restored = new Map<string, string>();
   private current: NotificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS };
@@ -299,16 +301,31 @@ export class MemoryNotificationStore implements NotificationStore {
 
   setSeenStatus(fleet: string | null, agent: string, status: string): void {
     this.seen.set(this.seenKey(fleet, agent), status);
+    this.pending.delete(this.seenKey(fleet, agent));
+  }
+
+  pendingSince(fleet: string | null, agent: string): string | null {
+    return this.pending.get(this.seenKey(fleet, agent)) ?? null;
+  }
+
+  setPendingSince(fleet: string | null, agent: string, at: string | null): void {
+    const key = this.seenKey(fleet, agent);
+    if (at === null) this.pending.delete(key);
+    else if (this.seen.has(key)) this.pending.set(key, at);
   }
 
   forgetSeen(fleet: string | null, agent: string): void {
     this.seen.delete(this.seenKey(fleet, agent));
+    this.pending.delete(this.seenKey(fleet, agent));
   }
 
   forgetSeenPrefix(fleet: string | null, prefix: string): void {
     const head = this.seenKey(fleet, prefix);
     for (const key of [...this.seen.keys()]) {
-      if (key.startsWith(head)) this.seen.delete(key);
+      if (key.startsWith(head)) {
+        this.seen.delete(key);
+        this.pending.delete(key);
+      }
     }
   }
 

@@ -477,8 +477,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       rolloutWaitMs: FOUNDATION_ROLLOUT_WAIT_MS,
     },
     /**
-     * §3.6: the bare Hermes mirror lives beside the local database, like the
-     * recovery archive above. Real mode is the only mode that has one — fixture
+     * §3.6: the Hermes mirror stages its fetch beside the local database, like
+     * the recovery archive above, and deletes it once the bundle is pushed. Real mode is the only mode that has one — fixture
      * mode is canned and never spawns git.
      */
     mirrorDir: join(local.home, "mirror"),

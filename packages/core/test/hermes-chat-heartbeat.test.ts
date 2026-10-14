@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readRpc } from "../src/chat/hermes/hermes-chat-rpc.ts";
 import { createChatTurn, type ChatTurnDeps } from "../src/chat/hermes/hermes-chat-turn.ts";
+import { createSessionSockets } from "../src/chat/hermes/hermes-chat-session-socket.ts";
 import {
   CHAT_HEARTBEAT_DEADLINE_MS,
   CHAT_HEARTBEAT_MS,
@@ -172,11 +173,15 @@ describe("hermes chat · heartbeat", () => {
     });
     const rpc = readRpc(f.socket, 1_000, "veronica", { intervalMs: 5, deadlineMs: 60 });
     let dials = 0;
+    const connect = (): Promise<typeof rpc> => {
+      dials += 1;
+      return Promise.resolve(rpc);
+    };
     const turn = createChatTurn({
-      connect: () => {
-        dials += 1;
-        return Promise.resolve(rpc);
-      },
+      connect,
+      // The create below names no durable session, so nothing is held and the
+      // turn's socket closes with it, as before held sockets existed.
+      sockets: createSessionSockets({ connect }),
       now: () => NOW,
       // Shorter than a real turn's, and still five times the heartbeat
       // deadline: whichever clock ends this turn, the assertion below names it.

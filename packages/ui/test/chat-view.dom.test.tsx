@@ -44,6 +44,7 @@ import {
   PORTAL,
   sendable,
   sessionOf,
+  showAllRail,
   swarmOf,
 } from "./chat-fixtures.tsx";
 import type { Turn } from "./chat-fixtures.tsx";
@@ -255,11 +256,31 @@ describe("the rail", () => {
   test("draws one bucket per instance and lands the operator on a bot", async () => {
     const h = harness({ swarms: [swarmOf("atlas"), swarmOf("corvid")] });
     const { container } = mount(h);
+    showAllRail();
     await waitFor(() => expect(container.querySelectorAll(".ch-bucket").length).toBe(2));
     // The first selection is made for the operator: the rail's order already
     // puts the bot that wants attention first.
     await waitFor(() => expect(h.calls.history).toBeGreaterThan(0));
     expect(container.querySelector(".ch-conv[aria-current]")).not.toBeNull();
+  });
+
+  test("opens on the Unread filter, and All is one press away", async () => {
+    const h = harness({ swarms: [swarmOf("atlas"), swarmOf("corvid")] });
+    const { container } = mount(h);
+    await sendable(container);
+    const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    expect(pressed("Unread")).toBe("true");
+    expect(pressed("All")).toBe("false");
+    expect(pressed("Needs you")).toBe("false");
+    // Nothing is unread, so the default view draws only the open bot's bucket:
+    // the filter never hides the conversation on screen.
+    expect(container.querySelectorAll(".ch-bucket").length).toBe(1);
+    const rows = container.querySelectorAll(".ch-conv");
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.getAttribute("aria-current")).toBe("true");
+    showAllRail();
+    expect(pressed("All")).toBe("true");
+    expect(container.querySelectorAll(".ch-bucket").length).toBe(2);
   });
 
   test("an unreachable box keeps its bucket, striped, read-only, with its reason on it", async () => {
@@ -287,15 +308,19 @@ describe("the rail", () => {
         swarmOf("atlas"),
         swarmOf("corvid", { bots: [botOf("corvid", "corvid", { needs_action: true })] }),
         swarmOf("ember", { reachable: false, bots: [] }),
+        swarmOf("dusk"),
       ],
     });
     const { container } = mount(h);
-    await waitFor(() => expect(container.querySelectorAll(".ch-bucket").length).toBe(3));
+    showAllRail();
+    await waitFor(() => expect(container.querySelectorAll(".ch-bucket").length).toBe(4));
     await userEvent.click(screen.getByRole("button", { name: "Needs you" }));
     const buckets = [...container.querySelectorAll(".ch-bucket")].map((b) => b.textContent ?? "");
     expect(buckets.some((t) => t.includes("corvid"))).toBe(true);
     expect(buckets.some((t) => t.includes("ember"))).toBe(true);
-    expect(buckets.some((t) => t.includes("atlas"))).toBe(false);
+    // `atlas` is the bot opened on entry, which the filter never hides; `dusk`
+    // is the idle box the filter is there to drop.
+    expect(buckets.some((t) => t.includes("dusk"))).toBe(false);
   });
 });
 
@@ -505,6 +530,7 @@ test("abort carries the durable session and keeps ownership until its independen
     });
   };
   const { container } = mount(h);
+  showAllRail();
   await userEvent.type(await sendable(container), "first");
   await userEvent.click(screen.getByTitle(/Send/));
   await userEvent.click(screen.getByRole("button", { name: /Stop turn/ }));
