@@ -1,6 +1,7 @@
 /**
- * The chat rail's layout preferences: which bots are pinned to the top and
- * which instance buckets are folded shut.
+ * The chat rail's layout preferences: which bots are pinned to the top, which
+ * instance buckets are folded shut, and which filter (All, Unread, Needs you)
+ * the operator last chose.
  *
  * Both belong to this laptop, not the fleet — they are how one operator reads
  * the rail, and a second laptop on the same fleet has its own habits. They are
@@ -12,8 +13,14 @@
  * the bucket's unread and needs-you counts, and the bots in it keep notifying.
  * That is the whole difference between collapsing an instance and not
  * listening to it.
+ *
+ * The filter defaults to All and stays where the operator last put it. The rail
+ * remounts whenever the chat view does, so a filter held in component state
+ * would snap back to its default on every return; persisting it is what makes
+ * the choice stick. Unread-first is the inbox's default, not the rail's.
  */
 import { useSyncExternalStore } from "react";
+import type { RailFilter } from "./chat-logic.ts";
 
 export const CHAT_RAIL_PREFS_KEY = "hermetic.chat.rail";
 const CHANGED = "hermetic:chat-rail-prefs";
@@ -23,9 +30,17 @@ export interface RailPrefs {
   pinned: string[];
   /** Instances whose bucket is folded shut. */
   collapsed: string[];
+  /** The rail filter the operator last chose. */
+  filter: RailFilter;
 }
 
-const EMPTY: RailPrefs = { pinned: [], collapsed: [] };
+const EMPTY: RailPrefs = { pinned: [], collapsed: [], filter: "all" };
+
+const FILTERS: readonly RailFilter[] = ["all", "unread", "needs"];
+
+function railFilter(value: unknown): RailFilter {
+  return FILTERS.find((f) => f === value) ?? "all";
+}
 
 export function railKey(instance: string, bot: string): string {
   return `${instance}/${bot}`;
@@ -66,7 +81,11 @@ export function readRailPrefs(fleetId: string): RailPrefs {
     // treated as no preference rather than a broken rail.
     try {
       const doc = JSON.parse(raw) as Partial<Record<keyof RailPrefs, unknown>> | null;
-      prefs = { pinned: strings(doc?.pinned), collapsed: strings(doc?.collapsed) };
+      prefs = {
+        pinned: strings(doc?.pinned),
+        collapsed: strings(doc?.collapsed),
+        filter: railFilter(doc?.filter),
+      };
     } catch {
       prefs = EMPTY;
     }
@@ -97,6 +116,12 @@ export function togglePinned(fleetId: string, instance: string, bot: string): vo
 export function toggleCollapsed(fleetId: string, instance: string): void {
   const prefs = readRailPrefs(fleetId);
   writeRailPrefs(fleetId, { ...prefs, collapsed: toggled(prefs.collapsed, instance) });
+}
+
+export function setRailFilter(fleetId: string, filter: RailFilter): void {
+  const prefs = readRailPrefs(fleetId);
+  if (prefs.filter === filter) return;
+  writeRailPrefs(fleetId, { ...prefs, filter });
 }
 
 function subscribe(changed: () => void): () => void {

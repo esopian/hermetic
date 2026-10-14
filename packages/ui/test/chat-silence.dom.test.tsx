@@ -201,7 +201,7 @@ describe("intentional silence on the rail", () => {
         activities={[]}
       />,
     );
-    // BotRail opens on Unread; these markers sit on bots with nothing unread.
+    // These markers sit on bots with nothing unread, so make sure the rail shows All.
     fireEvent.click(screen.getByRole("button", { name: "All" }));
     expect(quoted()).toEqual(expected);
   });

@@ -91,7 +91,7 @@ function rail(
       activities={[]}
     />,
   );
-  // The rail opens on Unread; these tests are about the whole roster, so press All.
+  // These tests are about the whole roster, so make sure the rail shows All.
   fireEvent.click(screen.getByRole("button", { name: "All" }));
   return view;
 }
@@ -245,10 +245,12 @@ test("an unreachable box keeps a read-only header, not a fold control", () => {
 
 test("an unreadable stored document reads as no preference", () => {
   window.localStorage.setItem(`${CHAT_RAIL_PREFS_KEY}.${FLEET}`, "{not json");
-  expect(readRailPrefs(FLEET)).toEqual({ pinned: [], collapsed: [] });
+  expect(readRailPrefs(FLEET)).toEqual({ pinned: [], collapsed: [], filter: "all" });
   window.localStorage.setItem(
     `${CHAT_RAIL_PREFS_KEY}.${FLEET}`,
-    JSON.stringify({ pinned: ["a/b", 3, "a/b"], collapsed: "atlas" }),
+    JSON.stringify({ pinned: ["a/b", 3, "a/b"], collapsed: "atlas", filter: "bogus" }),
   );
-  expect(readRailPrefs(FLEET)).toEqual({ pinned: ["a/b"], collapsed: [] });
+  expect(readRailPrefs(FLEET)).toEqual({ pinned: ["a/b"], collapsed: [], filter: "all" });
+  window.localStorage.setItem(`${CHAT_RAIL_PREFS_KEY}.${FLEET}`, JSON.stringify({ filter: "needs" }));
+  expect(readRailPrefs(FLEET).filter).toBe("needs");
 });
