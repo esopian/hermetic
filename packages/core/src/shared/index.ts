@@ -75,21 +75,35 @@ export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./pro
 export type { Provider, ProviderSpec } from "./providers.ts";
 
 // --- External memory providers --------------------------------------------
-// The create drawer's picker, core's render and hermeticd's materialise step
-// must agree on the ids, the key variables and the slot names.
+// The create drawer's picker, core's render and hermeticd's install step must
+// agree on the ids, the pins, the unit name and the paths on the data volume.
 export {
-  MEMORY_KEY_SLOT,
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_LLM_KEY_ENVS,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDERS_LIST,
   MEMORY_PROVIDER_CAPABILITY,
   MEMORY_PROVIDER_IDS,
   MEMORY_PROVIDER_NONE,
+  MEMORY_SERVICES,
+  MEMORY_SERVICE_CAPABILITY,
+  MEMORY_SERVICE_CONF_DIR,
+  MEMORY_SERVICE_ROOT,
+  MEMORY_SERVICE_UNIT,
+  hermesPluginDir,
   isMemoryProvider,
-  memoryKeyEnv,
-  memoryKeySlug,
-  memoryProviderNeedsKey,
+  memoryProviderIsService,
+  memoryServiceDir,
+  openvikingConfPath,
+  memoryServiceOf,
 } from "./memory-providers.ts";
-export type { MemoryProvider, MemoryProviderSpec } from "./memory-providers.ts";
+export type {
+  MemoryLlmKeyEnv,
+  MemoryProvider,
+  MemoryProviderSpec,
+  MemoryServicePlugin,
+  MemoryServiceSpec,
+} from "./memory-providers.ts";
 
 // --- Sizes and create presets (§7.1, §4.6) --------------------------------
 export { SIZE_IDS, isSizeId } from "./sizes.ts";

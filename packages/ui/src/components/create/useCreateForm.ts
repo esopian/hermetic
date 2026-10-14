@@ -8,8 +8,8 @@
  * `create-presets.ts`. This hook is the React glue between the two.
  */
 import { useEffect, useMemo, useState } from "react";
-import { createAgent, fleetIdOf, listSecrets } from "../../api/index.ts";
-import type { Meta, ProfileView, SharedSecretView, VolumeView } from "../../api/index.ts";
+import { createAgent, fleetIdOf } from "../../api/index.ts";
+import type { Meta, ProfileView, VolumeView } from "../../api/index.ts";
 import { hostname, sizeSpec } from "../../logic/format.ts";
 import type { SizeSpec } from "../../logic/format.ts";
 import { randomAgentName } from "../../logic/name-dictionary.ts";
@@ -45,7 +45,7 @@ import type { MachineField, MachineState } from "../../logic/create-presets.ts";
 import { usePresets } from "../../state/presets-store.ts";
 import type { PresetView } from "@hermetic/core/shared";
 import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
-import { fleetDefaultMemory, memoryKeyState } from "../../logic/memory-logic.ts";
+import { fleetDefaultMemory, memoryUndersized } from "../../logic/memory-logic.ts";
 import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { profileById, readyProfiles } from "../../logic/provider-logic.ts";
 import { suggestedName } from "../../logic/volume-logic.ts";
@@ -231,26 +231,6 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   /** What a create that states no memory provider gets; `undefined` is "not reported". */
   const fleetMemory = fleetDefaultMemory(meta);
   /**
-   * The fleet's shared slots, read once on open, so a keyed provider whose
-   * `memory-<id>` slot is empty is marked before core refuses it with
-   * `MEMORY_KEY_MISSING`. `null` until read, and left `null` on a failed read:
-   * the picker then marks nothing rather than calling every key missing.
-   */
-  const [memorySlots, setMemorySlots] = useState<SharedSecretView[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    listSecrets()
-      .then((out) => {
-        if (live) setMemorySlots(out.secrets);
-      })
-      .catch(() => {
-        /* Unknown, not missing: core still checks the slot at create. */
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
-  /**
    * The selected preset's id, `null` when the loadout offers none (the machine
    * then follows the fleet's defaults, untouched).
    */
@@ -369,16 +349,24 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    */
   const memoryEffective = memory === "" ? fleetMemory : memory === MEMORY_PROVIDER_NONE ? null : memory;
   /**
-   * A keyed provider whose shared slot the read found empty: core would refuse
-   * the create with `MEMORY_KEY_MISSING`, so Create is held here and the drawer
-   * says where the key goes. Only a read that answered can block — a failed one
-   * is unknown, and core still checks.
+   * The instance memory of the size this create will get, or `null` when that
+   * is the fleet's default and the portal could not read it — core then
+   * decides, and the picker marks nothing.
+   */
+  const memGib = inherits("size") ? null : sizeSpec(size).memGib;
+  /**
+   * A provider whose server needs more instance memory than the chosen size
+   * has: core would refuse the create with `MEMORY_PROVIDER_UNDERSIZED`
+   * (`memory-binding.ts`, against the same size table), so Create is held here
+   * and the drawer says what to change. Said outside Customize, because an
+   * inherited fleet default blocks with it folded.
    */
   const memoryBlock =
     memoryEffective !== undefined &&
     memoryEffective !== null &&
-    memoryKeyState(memoryEffective, memorySlots) === "missing"
-      ? `${MEMORY_PROVIDERS[memoryEffective].label} memory has no key — set it in Settings › Defaults, or pick another memory provider`
+    memGib !== null &&
+    memoryUndersized(memoryEffective, memGib)
+      ? `${MEMORY_PROVIDERS[memoryEffective].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryEffective].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
       : null;
   const disabled = !trimmed || taken || invalid || submitting || !chosenReady || memoryBlock !== null;
 
@@ -621,7 +609,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     memory,
     setMemory,
     fleetMemory,
-    memorySlots,
+    memGib,
     memoryEffective,
     memoryBlock,
     presets,

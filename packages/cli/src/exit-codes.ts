@@ -98,12 +98,14 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   /** The fleet's role may not invoke that Bedrock model yet: also a conflict with reality. */
   MODEL_NOT_GRANTED: 7,
   /**
-   * A create chose (or inherited) a keyed memory provider whose fleet shared
-   * slot is empty (§6.2). A conflict with reality like `PROFILE_IN_USE`:
-   * nothing was created, and `hermetic secrets push _fleet --shared
-   * memory-<id>` is the fix.
+   * A create chose (or inherited) a memory provider the agent cannot run: its
+   * server needs more instance memory than the size has, or its model calls
+   * cannot go through the agent's bound vendor (§6.2). A conflict with reality
+   * like `PROFILE_IN_USE` — often the fleet's default against this create's
+   * size or profile — and nothing was created.
    */
-  MEMORY_KEY_MISSING: 7,
+  MEMORY_PROVIDER_UNDERSIZED: 7,
+  MEMORY_LLM_UNSUPPORTED: 7,
   /**
    * The box could not be reached for a chat turn, answered without a session
    * token, answered with something that is not the protocol, or never freed a

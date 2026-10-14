@@ -586,14 +586,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
       provider_key_ref: credentialSlotOf(agent),
       // Pinned on the row at create, like `seed`: a fleet default changed since
       // must not re-render this agent.
-      ...(agent.memory
-        ? {
-            memory: {
-              provider: agent.memory.provider,
-              ...(agent.memory.key_ref ? { key_ref: agent.memory.key_ref } : {}),
-            },
-          }
-        : {}),
+      ...(agent.memory ? { memory: { provider: agent.memory.provider } } : {}),
       region,
     });
   }

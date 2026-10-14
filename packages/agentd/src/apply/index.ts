@@ -15,7 +15,13 @@
  * testable without root, systemd or a network (§11.5).
  */
 import type { AgentConfig, RenderedFile } from "@hermetic/core/schema";
-import { HERMES_DASHBOARD_UNIT, HERMES_GATEWAY_UNIT, PROVIDERS } from "@hermetic/core/shared";
+import {
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_SERVICE_UNIT,
+  PROVIDERS,
+} from "@hermetic/core/shared";
 import { ensureChromeBuild, pruneSupersededBuilds } from "../browser-source.ts";
 import { ensureBrowserProfileRoot } from "../account-dirs.ts";
 import { must } from "../host.ts";
@@ -53,8 +59,9 @@ import {
 import { ensureAgentVenv } from "./agent-python.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
-import { ensureMemoryDeps, memoryKeyBinding } from "./memory.ts";
-import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
+import { ensureMemoryDeps } from "./memory.ts";
+import { assertMemoryPin, ensureMemoryService, removeMemoryService } from "./memory-service.ts";
+import { SECRETS_ENV_PATH, materialiseMemoryLlm, materialiseSecrets, memoryLlmFor } from "./secrets.ts";
 import { ensureShellIntegration } from "./shell.ts";
 
 /**
@@ -95,8 +102,23 @@ export {
   nodeDir,
   shasumFor,
 } from "./node-web.ts";
-export { SECRETS_ENV_DIR, SECRETS_ENV_PATH, envLine, materialiseSecrets } from "./secrets.ts";
-export { distributionOf, ensureMemoryDeps, importNameOf, memoryKeyBinding } from "./memory.ts";
+export {
+  SECRETS_ENV_DIR,
+  SECRETS_ENV_PATH,
+  envLine,
+  materialiseMemoryLlm,
+  materialiseSecrets,
+  memoryLlmFor,
+} from "./secrets.ts";
+export { distributionOf, ensureMemoryDeps, importNameOf } from "./memory.ts";
+export {
+  MEMORY_PIN_MARKER,
+  MEMORY_SERVICE_UNIT_PATH,
+  PLUGIN_REF_MARKER,
+  assertMemoryPin,
+  ensureMemoryService,
+  removeMemoryService,
+} from "./memory-service.ts";
 export {
   BASHRC_PATH,
   SHELL_HOOK_LINE,
@@ -122,9 +144,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
     commands: [],
   };
   const at = () => host.now();
-  // First, before anything is touched: a manifest naming a slot that is not the
-  // memory key's is refused outright (`memoryKeyBinding`).
-  const memoryKey = memoryKeyBinding(manifest);
+  // First, before anything is touched: a manifest pinning a memory server this
+  // hermeticd does not install is refused outright (`assertMemoryPin`).
+  assertMemoryPin(manifest);
 
   const write = async (
     path: string,
@@ -245,6 +267,13 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   // After the account exists and after `ensureHermes`, which is what puts `uv`
   // on the box.
   await ensureAgentVenv(host, emit, dry);
+  /**
+   * A service memory provider's server (`memory-service.ts`): after the
+   * account and `/data/hermes` exist and after `ensureHermes` put `uv` and its
+   * Python on the box; before the units phase starts the server out of the
+   * venv this builds.
+   */
+  const memoryService = await ensureMemoryService({ host, manifest, emit, dryRun: dry, result });
 
   // ─── 3. files ──────────────────────────────────────────────────────────────
   emit(opEvent("files", 0.4, `checking ${manifest.files.length} rendered file(s)`, at()));
@@ -298,12 +327,9 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
       `manifest sets provider: ${manifest.provider} but no ${keyEnv} was resolved for ${manifest.name}`,
     );
   }
-  if (memoryKey !== null && !opts.memoryKey) {
-    throw new AgentdError(
-      "INTERNAL",
-      `manifest sets memory.provider: ${manifest.memory?.provider} but no ${memoryKey.env} was resolved for ${manifest.name}`,
-    );
-  }
+  // Refuses a service provider whose `llm.key_env` names a variable with no
+  // provider key to put in it, before either file is touched.
+  const memoryLlm = memoryLlmFor(manifest, opts.providerKey);
   /**
    * **Unconditional**, and that is the change §8.3 needed.
    *
@@ -327,15 +353,24 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
     ...(keyEnv !== null && opts.providerKey
       ? { providerKey: { env: keyEnv, value: opts.providerKey } }
       : {}),
-    ...(memoryKey !== null && opts.memoryKey
-      ? { memoryKey: { env: memoryKey.env, value: opts.memoryKey } }
-      : {}),
     ...(dry ? { dryRun: true } : {}),
   });
   if (wroteSecrets) {
     result.changed.push(SECRETS_ENV_PATH);
     result.contentChanged.push(SECRETS_ENV_PATH);
     rewritten.add(SECRETS_ENV_PATH);
+  }
+  // The memory server's own credential file: written for a service provider
+  // (empty for a role-authenticated vendor), removed for any other agent.
+  const wroteMemoryLlm = await materialiseMemoryLlm({
+    host,
+    memoryLlm,
+    ...(dry ? { dryRun: true } : {}),
+  });
+  if (wroteMemoryLlm) {
+    result.changed.push(MEMORY_LLM_ENV_PATH);
+    result.contentChanged.push(MEMORY_LLM_ENV_PATH);
+    rewritten.add(MEMORY_LLM_ENV_PATH);
   }
 
   // ─── 4. units ──────────────────────────────────────────────────────────────
@@ -361,7 +396,10 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   const dashboardLegacyRemoved = manifest.units.includes(HERMES_DASHBOARD_UNIT)
     ? await removeLegacyDashboardUnit(host, result, emit, dry)
     : false;
-  const legacyRemoved = browserLegacyRemoved || dashboardLegacyRemoved;
+  // Not a rename but the same shape: a unit this agent no longer has, which
+  // nothing else would ever stop (`removeMemoryService`).
+  const memoryServiceRemoved = await removeMemoryService(host, manifest, result, emit, dry);
+  const legacyRemoved = browserLegacyRemoved || dashboardLegacyRemoved || memoryServiceRemoved;
 
   const unitFilesChanged = [...rewritten].some((p) => p.startsWith(UNIT_DIR + "/"));
   // `legacyRemoved` already reloaded, after removing the file and with every
@@ -433,10 +471,17 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
    * started before its memory provider's dependency was there may already
    * have given up on the provider, and a restart is what makes it look again.
    */
-  if (hermesChanged || revisionChanged || memoryDepsInstalled) {
+  if (hermesChanged || revisionChanged || memoryDepsInstalled || memoryService.installed) {
     watchTriggered.add(HERMES_DASHBOARD_UNIT);
     watchTriggered.add(HERMES_GATEWAY_UNIT);
   }
+  /**
+   * The memory server, for the same two reasons one level down: its venv,
+   * model or plugin moved under it (`memoryService.installed` — and Hermes
+   * above, which loads the plugin), or the credential file its unit reads
+   * changed, which an `EnvironmentFile` never tells a running process.
+   */
+  if (memoryService.installed || wroteMemoryLlm) watchTriggered.add(MEMORY_SERVICE_UNIT);
   /**
    * …and the same again for a swap that *did not finish*.
    *

@@ -247,11 +247,8 @@ describe("CreateDrawer · no ready profile", () => {
       true,
     );
     // No catalog is read: there is no profile to read one for. (The laptop's
-    // presets are, since the strip is drawn from them, and the fleet's shared
-    // slots are, so the memory picker can mark a provider whose key is missing.)
-    expect(
-      server.calls.filter((c) => c.name !== "presets.get" && c.name !== "secrets.list"),
-    ).toHaveLength(0);
+    // presets are, since the strip is drawn from them.)
+    expect(server.calls.filter((c) => c.name !== "presets.get")).toHaveLength(0);
   });
 
   test("the unfinished form survives the detour and comes back when the drawer reopens", async () => {

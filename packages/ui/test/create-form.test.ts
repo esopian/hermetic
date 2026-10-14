@@ -253,13 +253,18 @@ describe("createRequestBody · the hermes object", () => {
       "holographic",
     );
     expect(createRequestBody(form({ memory_provider: "none" })).memory_provider).toBe("none");
-    expect(createCliLine(form({ memory_provider: "supermemory" }))).toContain("--memory supermemory");
+    expect(createCliLine(form({ memory_provider: "hindsight" }))).toContain("--memory hindsight");
     expect(createCliLine(form())).not.toContain("--memory");
   });
 
   test("memory: a draft's choice is restored, and junk reads as unstated", () => {
-    expect(seed({ draft: draft({ memory_provider: "honcho" }) }).memory_provider).toBe("honcho");
+    expect(seed({ draft: draft({ memory_provider: "openviking" }) }).memory_provider).toBe(
+      "openviking",
+    );
+    expect(seed({ draft: draft({ memory_provider: "none" }) }).memory_provider).toBe("none");
     expect(seed({ draft: draft({ memory_provider: "letta" }) }).memory_provider).toBe("");
+    // A provider this build no longer offers reads as unstated, not as a choice.
+    expect(seed({ draft: draft({ memory_provider: "supermemory" }) }).memory_provider).toBe("");
     expect(seed({ draft: draft() }).memory_provider).toBe("");
   });
 });

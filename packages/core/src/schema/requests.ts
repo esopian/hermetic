@@ -119,9 +119,10 @@ export const CreateAgentInput = z
     /**
      * The Hermes external memory provider this agent runs beside its built-in
      * memory. Absent inherits `settings.default_memory_provider`; `none`
-     * overrides that to built-in only. A keyed provider's API key comes from
-     * the fleet's shared slot `memory-<id>`, and a create naming one whose slot
-     * is empty is refused with `MEMORY_KEY_MISSING` before anything exists.
+     * overrides that to built-in only. A provider whose server the chosen size
+     * cannot hold is refused with `MEMORY_PROVIDER_UNDERSIZED`, and one whose
+     * model calls cannot use the agent's vendor with `MEMORY_LLM_UNSUPPORTED`,
+     * both before anything exists.
      */
     memory_provider: MemoryProviderChoice.optional(),
   })

@@ -354,12 +354,7 @@ function DefaultsFormView({
           <span className="mono dim">pinned on the agent at create; existing agents keep theirs</span>
         }
       >
-        <MemoryDefaultRows
-          result={result}
-          expectedVersion={expected}
-          onSaved={onSaved}
-          onWritten={onReload}
-        />
+        <MemoryDefaultRows result={result} expectedVersion={expected} onSaved={onSaved} />
       </Block>
 
       {/*

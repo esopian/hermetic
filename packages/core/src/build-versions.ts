@@ -7,7 +7,7 @@
  * without importing the SDK assembly (`hermetic.ts`) that re-exports them.
  */
 export const BUILD_VERSIONS = {
-  hermeticd: "0.6.0",
+  hermeticd: "0.7.0",
   hermes: "0.21.5",
   /**
    * The upstream git tag that *is* `hermes: "0.21.3"` — Hermes Agent ships no

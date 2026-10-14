@@ -74,9 +74,6 @@ const SEEDED_PARAMS = [
   `${HERMETIC_PARAM_PREFIX}secrets/profile-${FIXTURE_PROFILE_IDS.openrouter}`,
   `${HERMETIC_PARAM_PREFIX}secrets/profile-${FIXTURE_PROFILE_IDS.nous}`,
   `${HERMETIC_PARAM_PREFIX}secrets/profile-${FIXTURE_PROFILE_IDS.vercel}`,
-  // The keyed memory provider's shared slot (`memory-supermemory`): a fleet
-  // secret like the rest, swept by the same purge.
-  `${HERMETIC_PARAM_PREFIX}secrets/memory-supermemory`,
   `${AGENT_PARAM_PREFIX}gone-one/ts-key`,
   `${AGENT_PARAM_PREFIX}gone-two/bws-token`,
 ];

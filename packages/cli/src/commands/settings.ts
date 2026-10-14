@@ -102,9 +102,9 @@ export function register(program: Command): void {
           "\nSwitching hermeticd auto-update republishes the fleet manifest, which is how\n" +
           "the boxes hear about it (§6.5).\n" +
           "\nThe default memory provider is read once, when an agent is created, and\n" +
-          "pinned on it: changing it moves no existing agent. A keyed provider needs its\n" +
-          "key in the fleet's shared slot first (`hermetic secrets push _fleet --shared\n" +
-          "memory-<provider>`), or the create that inherits it is refused.\n",
+          "pinned on it: changing it moves no existing agent. A create that inherits a\n" +
+          "provider whose server does not fit its size is refused (pass --memory none,\n" +
+          "or a larger --size).\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

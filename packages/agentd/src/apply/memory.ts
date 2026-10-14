@@ -1,15 +1,15 @@
 /**
- * The Hermes external memory provider, box side: the API key the manifest's
- * `memory.key_ref` names, and the provider's Python dependencies in Hermes's
- * venv (the `memory-provider` capability, `AGENT_CONFIG_CAPABILITIES`).
+ * The Hermes external memory provider, box side: the provider's Python
+ * dependencies in Hermes's venv (the `memory-provider` capability,
+ * `AGENT_CONFIG_CAPABILITIES`). A service provider's own server is
+ * `memory-service.ts`.
  *
  * The choice of provider itself is not here. It is `memory.provider` in the
  * managed `/etc/hermes/config.yaml`, which the laptop renders and the files
  * phase lands like any other rendered file.
  */
 import type { AgentConfig } from "@hermetic/core/schema";
-import { MEMORY_KEY_SLOT, MEMORY_PROVIDERS, memoryKeyEnv } from "@hermetic/core/shared";
-import { AgentdError } from "../errors.ts";
+import { MEMORY_PROVIDERS } from "@hermetic/core/shared";
 import { must } from "../host.ts";
 import type { Host } from "../host.ts";
 import type { Emit } from "../events.ts";
@@ -19,50 +19,18 @@ import type { ApplyResult } from "./shared.ts";
 import { retry } from "./shared.ts";
 
 /**
- * The slot a manifest's memory key is read from, and the variable it becomes in
- * `secrets.env` — or null when the manifest names no keyed provider.
- *
- * A `key_ref` beside a provider that reads no variable (holographic) is
- * ignored: there is no line it could become, so fetching it would only add an
- * SSM call that can fail.
- *
- * Any `key_ref` other than `MEMORY_KEY_SLOT` is refused before anything is
- * read. The string becomes an SSM path under this agent's prefix, and a
- * manifest is a document, not an authorisation (`providerKeyRefOf`): one naming
- * `ts-key` or `bws-token` would otherwise put that credential into
- * `secrets.env` under the memory provider's variable, where Hermes ships it to
- * a third party.
- */
-export function memoryKeyBinding(manifest: AgentConfig): { ref: string; env: string } | null {
-  const memory = manifest.memory;
-  if (!memory?.key_ref) return null;
-  const env = memoryKeyEnv(memory.provider);
-  if (env === null) return null;
-  if (memory.key_ref !== MEMORY_KEY_SLOT) {
-    throw new AgentdError(
-      "MANIFEST_REFUSED",
-      `manifest names memory.key_ref ${memory.key_ref}; the memory key is only read from ${MEMORY_KEY_SLOT}`,
-      { key_ref: memory.key_ref },
-    );
-  }
-  return { ref: MEMORY_KEY_SLOT, env };
-}
-
-/**
  * Distribution name → the module `import` finds it under, for every dependency
- * `MEMORY_PROVIDERS` lists. The two differ often enough (`honcho-ai` is
- * `honcho`, `mem0ai` is `mem0`) that guessing would probe the wrong name and
- * reinstall on every apply. A dependency missing from this table falls back to
- * the PEP 503-normalised name with `_` for `-`, which is right for most.
+ * `MEMORY_PROVIDERS` lists. The two can differ (a distribution named
+ * `foo-ai` that imports as `foo`), and guessing wrong would probe the wrong
+ * name and reinstall on every apply. A dependency missing from this table falls
+ * back to the PEP 503-normalised name with `_` for `-`, which is right for most.
  */
 const PIP_MODULES: Readonly<Record<string, string>> = {
-  supermemory: "supermemory",
-  "honcho-ai": "honcho",
-  mem0ai: "mem0",
-  requests: "requests",
+  "hindsight-client": "hindsight_client",
+  numpy: "numpy",
 };
 
-/** `mem0ai>=2.0.10,<3` → `mem0ai`: the distribution a requirement names. */
+/** `hindsight-client==0.10.3` → `hindsight-client`: the distribution a requirement names. */
 export function distributionOf(spec: string): string {
   return spec.split(/[<>=!~;[\s]/, 1)[0]!.toLowerCase();
 }

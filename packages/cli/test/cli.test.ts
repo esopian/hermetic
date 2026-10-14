@@ -554,7 +554,7 @@ describe.concurrent("settings and providers", () => {
     };
     expect(after.settings.default_memory_provider ?? null).toBeNull();
 
-    const bad = await run("settings", "set", "--default-memory-provider", "hindsight");
+    const bad = await run("settings", "set", "--default-memory-provider", "supermemory");
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("default_memory_provider");
   });
@@ -1078,14 +1078,13 @@ describe.concurrent("agent create · the credential the profile already holds", 
 
   /**
    * §6.2: `--memory` picks the Hermes external memory provider. `none` is the
-   * explicit built-in-only answer, a keyed provider copies the fleet's shared
-   * key into the agent's own `memory-key` slot (and never echoes it), and a
-   * keyed provider whose shared slot is empty is refused before anything
-   * exists.
+   * explicit built-in-only answer, a provider outside the catalogue is a usage
+   * error, and one whose server does not fit the size is refused before
+   * anything exists.
    */
   test("--memory maps onto memory_provider, and an absent flag states nothing", () => {
     expect(createInputFrom("plover", { memory: "none" }).memory_provider).toBe("none");
-    expect(createInputFrom("plover", { memory: "supermemory" }).memory_provider).toBe("supermemory");
+    expect(createInputFrom("plover", { memory: "hindsight" }).memory_provider).toBe("hindsight");
     // Absent inherits the fleet's default in core, so the head must not fill it.
     expect("memory_provider" in createInputFrom("plover", {})).toBe(false);
   });
@@ -1095,31 +1094,43 @@ describe.concurrent("agent create · the credential the profile already holds", 
     expect(code).toBe(0);
   });
 
-  test("--memory supermemory copies the shared key without echoing it", async () => {
-    const { code, stdout, stderr } = await run(
+  test("--memory hindsight on a size with room for its server creates", async () => {
+    const { code } = await run(
       "agent",
       "create",
       "sandpiper",
       "--memory",
-      "supermemory",
+      "hindsight",
+      "--size",
+      "small",
       "--json",
     );
+    // Each `run` is a fresh fixture process, so the row cannot be read back
+    // here; the refusal below is the same create one size down.
     expect(code).toBe(0);
-    for (const stream of [stdout, stderr]) {
-      expect(stream).not.toContain("sm-memory-FIXTURE");
-    }
   });
 
   test("a memory provider outside the catalogue is a usage error", async () => {
-    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "hindsight");
+    // `supermemory` was in an earlier catalogue; a create naming it is now
+    // rejected by the schema rather than silently mapped to built-in memory.
+    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "supermemory");
     expect(code).toBe(2);
     expect(stderr).toContain("memory_provider");
   });
 
-  test("a keyed provider with no shared key is MEMORY_KEY_MISSING", async () => {
-    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "honcho");
+  test("a server provider on a size too small for it is MEMORY_PROVIDER_UNDERSIZED", async () => {
+    const { code, stderr } = await run(
+      "agent",
+      "create",
+      "dunlin",
+      "--memory",
+      "hindsight",
+      "--size",
+      "xsmall",
+    );
     expect(code).toBe(7);
-    expect(stderr).toContain("hermetic secrets push _fleet --shared memory-honcho");
+    expect(stderr).toContain("MEMORY_PROVIDER_UNDERSIZED");
+    expect(stderr).toContain("--memory none");
   });
 
   /**
@@ -1427,15 +1438,15 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
   });
 
   test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "--hermeticd", "0.6.0", "--now", "--no-rollout");
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.7.0", "--now", "--no-rollout");
     expect(code).toBe(2);
     expect(stderr).toContain("--now and --no-rollout contradict each other");
   });
 
   test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
-    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.6.0", "--now");
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.7.0", "--now");
     expect(code).toBe(0);
-    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.6.0 now");
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.7.0 now");
   });
 
   test("`artifacts push V --no-rollout` publishes and asks no box", async () => {

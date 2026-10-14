@@ -187,13 +187,31 @@ export function SettingsShell({
    */
   const [saved, setSaved] = useState<SettingsResult | null>(null);
   const settings = saved ?? meta?.settings ?? null;
-  const onSaved = useCallback((result: SettingsResult) => {
-    setSaved((current) => nextSettings(current, result));
-  }, []);
+  const fleet = useFleetIfAvailable();
+  /**
+   * The page's own `/api/meta` copy carries the same settings, and it is the
+   * one the create drawer reads its fleet defaults from — the memory provider
+   * it names as "Fleet default (…)", the secrets mode, the approvals mode. A
+   * write that only lands in `saved` leaves that copy stale until something
+   * else re-reads meta, so the drawer opened right after a save showed the old
+   * default. Every write (and every reload) re-reads it too.
+   *
+   * The callback, not `fleet`: the context value changes on every poll tick,
+   * and `refreshMeta` is stable.
+   */
+  const refreshMeta = fleet?.refreshMeta;
+  const onSaved = useCallback(
+    (result: SettingsResult) => {
+      setSaved((current) => nextSettings(current, result));
+      void refreshMeta?.();
+    },
+    [refreshMeta],
+  );
   /** Rejects on failure: each section renders its own error rather than swallowing one. */
   const refreshSettings = useCallback(async () => {
     setSaved(await getSettings());
-  }, []);
+    void refreshMeta?.();
+  }, [refreshMeta]);
 
   /**
    * Fleet defaults' staged edits, held here rather than in the form so they
@@ -204,7 +222,6 @@ export function SettingsShell({
    */
   const defaultsDraft = useState<SeededDraft<DefaultsForm> | null>(null);
 
-  const fleet = useFleetIfAvailable();
   const fleetId = meta?.fleet?.id ?? config?.fleet_id ?? null;
   const status = railStatus({
     meta,

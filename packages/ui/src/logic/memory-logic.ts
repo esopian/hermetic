@@ -4,18 +4,12 @@
  *
  * The catalogue is core's (`@hermetic/core/shared`'s `MEMORY_PROVIDERS`); this
  * module only answers the questions every head asks of it: what a choice is
- * called, whether a keyed provider's fleet slot holds a key, and what a create
+ * called, what it costs the box, whether a size can run it, and what a create
  * that states nothing inherits.
  */
-import {
-  MEMORY_PROVIDERS,
-  MEMORY_PROVIDER_NONE,
-  isMemoryProvider,
-  memoryKeySlug,
-  memoryProviderNeedsKey,
-} from "@hermetic/core/shared";
+import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE, isMemoryProvider } from "@hermetic/core/shared";
 import type { MemoryProvider } from "@hermetic/core/shared";
-import type { CreateAgentInput, Meta, SharedSecretView } from "../api/index.ts";
+import type { CreateAgentInput, Meta } from "../api/index.ts";
 
 /** What a create may state: a provider, or `none` for built-in memory only. */
 export type MemoryChoice = NonNullable<CreateAgentInput["memory_provider"]>;
@@ -31,6 +25,29 @@ export function memoryLabel(id: MemoryProvider | null | undefined): string {
 }
 
 /**
+ * The short facts a picker shows beside a provider: where it runs (a server
+ * hermeticd runs beside Hermes, or inside Hermes itself), the instance memory
+ * it needs, and whether it spends the agent's own model credential.
+ */
+export function memoryTags(id: MemoryProvider): string[] {
+  const spec = MEMORY_PROVIDERS[id];
+  const tags = [spec.kind === "service" ? "Runs on the box" : "Inside Hermes"];
+  if (spec.min_mem_gib > 0) tags.push(`Needs ≥ ${String(spec.min_mem_gib)} GiB`);
+  if (spec.uses_llm) tags.push("Uses the agent's model provider");
+  return tags;
+}
+
+/**
+ * Whether a size with `memGib` of instance memory is too small for a
+ * provider's server — core's `MEMORY_PROVIDER_UNDERSIZED` rule
+ * (`memory-binding.ts`), over the size table the page already carries
+ * (`format.ts`'s `SIZES`, a restatement of core's).
+ */
+export function memoryUndersized(id: MemoryProvider, memGib: number): boolean {
+  return MEMORY_PROVIDERS[id].min_mem_gib > memGib;
+}
+
+/**
  * The fleet's default as `/api/meta` carries it: a provider, `null` for
  * "built-in only", or `undefined` when the settings were not reported — which
  * is "could not read", never "none".
@@ -40,22 +57,4 @@ export function fleetDefaultMemory(meta: Meta | null | undefined): MemoryProvide
   if (settings === undefined || settings === null) return undefined;
   const d = settings.default_memory_provider;
   return d !== undefined && d !== null && isMemoryProvider(d) ? d : null;
-}
-
-/**
- * A provider's key, as the fleet's shared slot `memory-<id>` holds it:
- * `local` needs none, `set` is filled, `missing` is absent or still the
- * placeholder, and `unknown` is a slot list that could not be read — which
- * must not be drawn as missing, because core is the one that decides.
- */
-export type MemoryKeyState = "local" | "set" | "missing" | "unknown";
-
-export function memoryKeyState(
-  id: MemoryProvider,
-  slots: readonly SharedSecretView[] | null,
-): MemoryKeyState {
-  if (!memoryProviderNeedsKey(id)) return "local";
-  if (slots === null) return "unknown";
-  const slot = slots.find((s) => s.slug === memoryKeySlug(id));
-  return slot?.exists && !slot.placeholder ? "set" : "missing";
 }

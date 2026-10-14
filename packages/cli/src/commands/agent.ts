@@ -296,7 +296,7 @@ export function register(program: Command): void {
           "  hermetic agent create atlas --provider nous             the fleet's nous profile, if it has exactly one\n" +
           "  hermetic agent create atlas --secrets bitwarden\n" +
           "  hermetic agent create cinder-2 --volume vol-0c85d3b7f1a94e620   reuse a destroyed agent's memory\n" +
-          "  hermetic agent create atlas --memory supermemory        an external memory provider beside the built-in one\n" +
+          "  hermetic agent create atlas --memory holographic        an external memory provider beside the built-in one\n" +
           "  hermetic agent create atlas --memory none               built-in memory only, whatever the fleet's default\n" +
           "  hermetic --fixture agent create atlas                   against the seeded fixture fleet\n" +
           "\nThe machine (size, data volume, system disk) comes from this laptop's create\n" +
@@ -306,8 +306,10 @@ export function register(program: Command): void {
           "fleet's defaults (`hermetic settings show`).\n" +
           "\nThere is no key to type. A credential belongs to a provider profile:\n" +
           "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n" +
-          "and a keyed memory provider's key to the fleet's shared slot for it:\n" +
-          "  hermetic secrets push _fleet --shared memory-supermemory\n",
+          "\nA memory provider needs no key either: it runs on the box, and one that makes\n" +
+          "model calls makes them with the agent's own provider credential. A provider\n" +
+          "that runs a server (hindsight, openviking) needs a size with room for it, or\n" +
+          "the create is refused before anything exists.\n",
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);

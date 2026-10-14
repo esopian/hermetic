@@ -27,7 +27,7 @@
  */
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { PROVIDERS, providerKeyRefOf } from "@hermetic/core/shared";
-import { apply, memoryKeyBinding } from "./apply/index.ts";
+import { apply } from "./apply/index.ts";
 import type { Aws } from "./aws.ts";
 import { AgentdError } from "./errors.ts";
 import { paramPath } from "./fleet.ts";
@@ -136,18 +136,14 @@ export async function convergeOnce(
   if (PROVIDERS[manifest.provider].env !== null) {
     providerKey = await aws.getParameter(paramPath(deps.paramPrefix, providerKeyRefOf(manifest)));
   }
-  let memoryKey: string | undefined;
-  const memory = memoryKeyBinding(manifest);
-  if (memory !== null) {
-    memoryKey = await aws.getParameter(paramPath(deps.paramPrefix, memory.ref));
-  }
 
   await apply(manifest, {
     host,
     ...(deps.emit ? { emit: deps.emit } : {}),
     ...(bwsToken ? { bwsToken } : {}),
+    // Also the memory server's credential (`memory.llm.key_env`): the agent's
+    // own key under the server's names, so there is no slot of its own to read.
     ...(providerKey ? { providerKey } : {}),
-    ...(memoryKey ? { memoryKey } : {}),
   });
 
   /**

@@ -101,9 +101,9 @@ export interface SeedSpec {
   pending_profile?: "anthropic" | "openrouter" | "nous" | "bedrock" | "vercel";
   pending_model?: string;
   /**
-   * The external memory provider the agent was created with. One local and
-   * one keyed seed, so the drawer's memory line and the `memory-key` slot are
-   * both on screen in `bun run dev:fixture`; every other seed is built-in only.
+   * The external memory provider the agent was created with. One in-process
+   * and one on-box server seed, so both kinds of drawer memory line are on
+   * screen in `bun run dev:fixture`; every other seed is built-in only.
    */
   memory?: MemoryProvider;
 }
@@ -115,7 +115,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.4",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 34,
     mem: 61,
     disk: 62,
@@ -137,7 +137,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "large",
     ip: "100.64.12.9",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 58,
     mem: 44,
     disk: 48,
@@ -151,7 +151,7 @@ export const SEEDS: readonly SeedSpec[] = [
     profile: "openrouter",
     pending_profile: "anthropic",
     pending_model: "claude-sonnet-5",
-    memory: "supermemory",
+    memory: "hindsight",
   },
   {
     name: "ember",
@@ -173,7 +173,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.21",
     hermes: "0.14.2",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 12,
     mem: 39,
     disk: 34,
@@ -189,7 +189,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.23",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 41,
     mem: 72,
     disk: 55,
@@ -229,7 +229,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.31",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 8,
     mem: 27,
     disk: 22,
@@ -259,7 +259,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: "100.64.12.40",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 29,
     mem: 55,
     disk: 41,
@@ -285,7 +285,7 @@ export const SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.12.44",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 63,
     mem: 34,
     disk: 18,
@@ -343,7 +343,7 @@ export const STAGING_SEEDS: readonly SeedSpec[] = [
     size: "small",
     ip: "100.64.31.6",
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 21,
     mem: 38,
     disk: 30,
@@ -359,7 +359,7 @@ export const STAGING_SEEDS: readonly SeedSpec[] = [
     size: "medium",
     ip: null,
     hermes: "0.21.0",
-    hermeticd: "0.6.0",
+    hermeticd: "0.7.0",
     cpu: 0,
     mem: 0,
     disk: 41,

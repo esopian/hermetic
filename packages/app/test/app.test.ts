@@ -259,16 +259,17 @@ describe("the reads", () => {
     expect(recorded.input).toMatchObject({ name: "tern", memory_provider: "holographic" });
     await ops.wait(op.id);
     const row = (await dispatch(ctx, "agents.get", { name: "tern" })) as {
-      memory?: { provider: string; key_ref?: string | null } | null;
+      memory?: { provider: string } | null;
     };
     expect(row.memory).toMatchObject({ provider: "holographic" });
   });
 
   test("a memory provider outside the catalogue is a plain VALIDATION", async () => {
     const { ctx } = await harness();
+    // Removed from the catalogue: a hosted service needing its own account and key.
     expect(
       await codeOf(
-        dispatch(ctx, "agents.create", write({ name: "tern", memory_provider: "hindsight" })),
+        dispatch(ctx, "agents.create", write({ name: "tern", memory_provider: "supermemory" })),
       ),
     ).toBe("VALIDATION");
   });
@@ -1114,12 +1115,11 @@ describe("the shared secrets methods", () => {
     const body = (await dispatch(ctx, "secrets.list", {})) as {
       secrets: Array<{ slug: string; used_by: string[]; placeholder: boolean }>;
     };
-    // The two hand-pushed slots, the Supermemory key behind `corvid`'s memory
-    // provider (§8.3), then the four the fixture's keyed provider profiles own
-    // — listed in slug order like everything else here.
+    // The two hand-pushed slots, then the four the fixture's keyed provider
+    // profiles own — listed in slug order like everything else here. No memory
+    // provider has a slot: none of them takes a key.
     expect(body.secrets.map((s) => s.slug)).toEqual(
       [
-        "memory-supermemory",
         "nous-key",
         "openrouter-key",
         ...(["anthropic", "openrouter", "nous", "vercel"] as const).map(

@@ -277,9 +277,10 @@ export function hermesManagedConfig(input: RenderInput): string {
 
   /**
    * Managed, not seeded: the external memory provider is chosen at create and
-   * hermetic owns the binding — its key is materialised by hermeticd from a
-   * slot only hermetic fills, so a box that switched providers on its own would
-   * be running one with no key. Nothing at all when there is none: Hermes's
+   * hermetic owns the binding — a service provider's server is one hermeticd
+   * installs and runs for exactly this choice (`render-memory.ts`), so a box
+   * that switched providers on its own would be pointing Hermes at a server
+   * that is not there. Nothing at all when there is none: Hermes's
    * built-in memory is its default, and an agent without a provider renders
    * the same bytes it always did.
    */

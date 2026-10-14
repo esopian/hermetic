@@ -15,7 +15,6 @@ import { HermeticError } from "../src/errors.ts";
 import {
   FIXTURE_BWS_TOKEN,
   FIXTURE_CONFIG,
-  FIXTURE_MEMORY_KEY,
   FIXTURE_PROFILE_IDS,
   FIXTURE_PROFILE_KEY,
   FIXTURE_SHARED_NOUS_KEY,
@@ -68,9 +67,6 @@ const SECRETS = [
   // read of a profile — `providers ls`, `providers models`, a failed catalog
   // fetch — is grepped for it too.
   FIXTURE_PROFILE_KEY,
-  // And the memory provider key behind `memory-supermemory` and `corvid`'s
-  // own `memory-key` copy.
-  FIXTURE_MEMORY_KEY,
 ];
 
 /**
@@ -81,8 +77,6 @@ const SECRETS = [
 const FIXTURE_SLUGS: readonly string[] = [
   "nous-key",
   "openrouter-key",
-  // The keyed memory provider's shared slot `main` holds for `corvid`.
-  "memory-supermemory",
   ...(["anthropic", "openrouter", "nous", "vercel"] as const).map(
     (p) => `profile-${FIXTURE_PROFILE_IDS[p]}`,
   ),
@@ -135,8 +129,6 @@ describe("secrets never leak", () => {
         name: "research-1",
         secrets: "bitwarden",
         provider: "anthropic",
-        // A keyed memory provider, so its key is copied in this run too.
-        memory_provider: "supermemory",
       }),
     );
     expect(events.length).toBeGreaterThan(3);
@@ -148,7 +140,6 @@ describe("secrets never leak", () => {
 
     // The secret really is in the slot — the test above is not vacuous.
     expect(backend.params.get("/hermes/fxtr0001/research-1/ts-key")).toInclude(FIXTURE_TS_KEY);
-    expect(backend.params.get("/hermes/fxtr0001/research-1/memory-key")).toBe(FIXTURE_MEMORY_KEY);
   });
 
   test("secrets.push never echoes the value", async () => {
@@ -483,9 +474,6 @@ describe("thrown errors never carry a secret", () => {
           // and is snapshotted into the agent's own slot before this fails, so
           // the failure still runs with a real secret in play.
           provider_profile: "openrouter-cheap",
-          // And the memory provider's key, copied from the fleet's shared slot
-          // before the launch fails.
-          memory_provider: "supermemory",
           rollback_on_failure,
         })) {
           seen.push(e);
@@ -503,12 +491,6 @@ describe("thrown errors never carry a secret", () => {
       const row = await backend.store.agents.get("atlas");
       if (rollback_on_failure) expect(row).toBeNull();
       else expect(row).not.toBeNull();
-      // The memory key really was in play: copied before the failure, and gone
-      // again only when the run was unwound.
-      expect(seen.some((e) => JSON.stringify(e).includes("SUPERMEMORY_API_KEY copied"))).toBe(true);
-      expect(backend.params.get("/hermes/fxtr0001/atlas/memory-key")).toBe(
-        rollback_on_failure ? undefined : FIXTURE_MEMORY_KEY,
-      );
       assertClean(JSON.stringify(seen));
       assertClean(JSON.stringify(await backend.store.events.query("atlas")));
     });

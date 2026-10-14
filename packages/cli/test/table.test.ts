@@ -161,14 +161,13 @@ describe("agent status · the memory provider", () => {
     expect(line(agent({ memory: null }), "memory")).toBe("built-in only");
   });
 
-  test("a keyed provider names its label, id and the slot its key sits in", () => {
-    const a = agent({ memory: { provider: "supermemory", key_ref: "memory-key" } });
-    expect(line(a, "memory")).toBe("Supermemory (supermemory) · key memory-key");
-  });
-
-  test("a local provider has no key to name", () => {
-    const a = agent({ memory: { provider: "holographic", key_ref: null } });
-    expect(line(a, "memory")).toBe("Holographic (local) (holographic)");
+  test("a provider names its label and id, and nothing else", () => {
+    expect(line(agent({ memory: { provider: "holographic" } }), "memory")).toBe(
+      "Holographic (local) (holographic)",
+    );
+    expect(line(agent({ memory: { provider: "hindsight" } }), "memory")).toBe(
+      "Hindsight (local server) (hindsight)",
+    );
   });
 });
 

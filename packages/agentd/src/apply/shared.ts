@@ -57,15 +57,11 @@ export interface ApplyOptions {
    * `provider-key-<profile_id>-r<revision>` on one rendered from a profile.
    * Present only
    * when the manifest's provider is key-authenticated; `undefined` means the
-   * instance role is the agent's only identity (§8.1).
+   * instance role is the agent's only identity (§8.1). A service memory
+   * provider's model calls use this same key (`memory.llm.key_env`,
+   * `memoryLlmFor`), so there is no second slot to read.
    */
   readonly providerKey?: string;
-  /**
-   * The external memory provider's API key, read by the caller from the slot
-   * `manifest.memory.key_ref` names under this agent's own SSM prefix. Present
-   * only when the manifest names a keyed memory provider (`memoryKeyBinding`).
-   */
-  readonly memoryKey?: string;
   /**
    * Reads one object out of the fleet bucket — the Hermes source bundle, and
    * the mirrored Chrome build a browser agent runs.

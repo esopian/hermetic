@@ -22,7 +22,7 @@ import type { SizeSpec } from "../../logic/format.ts";
 import type { ApprovalsMode, SecretsMode } from "../../logic/create-form.ts";
 import { APPROVALS_MODES } from "../../logic/settings-logic.ts";
 import { MEMORY_PROVIDERS, MEMORY_PROVIDERS_LIST, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
-import { memoryKeyState, memoryLabel } from "../../logic/memory-logic.ts";
+import { memoryLabel, memoryTags, memoryUndersized } from "../../logic/memory-logic.ts";
 import type { MemoryChoice } from "../../logic/memory-logic.ts";
 import { Field, Seg, SizeCells, Slider } from "./controls.tsx";
 import { INHERITED_HINT, INHERITED_VALUE, isPrimarySize } from "./useCreateForm.ts";
@@ -293,27 +293,26 @@ function Behaviour({ f }: { f: CreateFormModel }) {
 /**
  * The Hermes external memory provider. `""` first, as Approvals does: the
  * fleet's default reaches the agent by the request omitting the key, so the
- * option naming it is the choice to inherit, not a placeholder. A keyed
- * provider whose fleet slot is empty cannot be picked — core would refuse the
- * create with `MEMORY_KEY_MISSING` — and the hint says where the key goes.
+ * option naming it is the choice to inherit, not a placeholder. A provider
+ * whose server needs more instance memory than the chosen size has cannot be
+ * picked — core would refuse the create with `MEMORY_PROVIDER_UNDERSIZED` —
+ * and its option says how much it needs.
  */
 function MemoryField({ f }: { f: CreateFormModel }) {
-  const { fleetMemory, memorySlots } = f;
+  const { fleetMemory, memGib } = f;
   const inherited =
     fleetMemory === undefined ? "Fleet default" : `Fleet default (${memoryLabel(fleetMemory)})`;
-  const missing = (id: Parameters<typeof memoryKeyState>[0]) =>
-    memoryKeyState(id, memorySlots) === "missing";
-  // What the agent will actually get, for the hint's one line. A missing key
-  // is said once, by the drawer above the footer (`f.memoryBlock`).
+  const undersized = (id: Parameters<typeof memoryUndersized>[0]) =>
+    memGib !== null && memoryUndersized(id, memGib);
+  // What the agent will actually get, for the hint's one line. A size too
+  // small for it is said once, by the drawer above the footer (`f.memoryBlock`).
   const effective = f.memoryEffective;
   const hint =
     effective === undefined
       ? INHERITED_HINT
       : effective === null
         ? "Hermes's built-in MEMORY.md / USER.md only"
-        : missing(effective)
-          ? "no key yet — see below"
-          : MEMORY_PROVIDERS[effective].summary;
+        : `${MEMORY_PROVIDERS[effective].summary} ${memoryTags(effective).join(" · ")}`;
   return (
     <Field
       label="Memory"
@@ -331,8 +330,8 @@ function MemoryField({ f }: { f: CreateFormModel }) {
             <option value="">{inherited}</option>
             <option value={MEMORY_PROVIDER_NONE}>None — built-in only</option>
             {MEMORY_PROVIDERS_LIST.map((p) => (
-              <option key={p.id} value={p.id} disabled={missing(p.id) && f.memory !== p.id}>
-                {missing(p.id) ? `${p.label} — key missing` : p.label}
+              <option key={p.id} value={p.id} disabled={undersized(p.id) && f.memory !== p.id}>
+                {undersized(p.id) ? `${p.label} — needs ≥ ${String(p.min_mem_gib)} GiB` : p.label}
               </option>
             ))}
           </select>

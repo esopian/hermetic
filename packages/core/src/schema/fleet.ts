@@ -15,7 +15,7 @@ export {
 export { FLEET_KEY, cloudName, legacyCloudNames } from "../shared/naming.ts";
 import { FleetIdSchema, Iso, ProfileId, Region, SecretSlug, Sha256, Version } from "./common.ts";
 import { FleetName } from "./directory.ts";
-import { MemoryProviderId } from "./memory.ts";
+import { StoredMemoryProviderId } from "./memory.ts";
 import {
   Lock,
   PROVIDERS,
@@ -138,7 +138,7 @@ export const FleetSettings = z.object({
    * either way (`CreateAgentInput.memory_provider`). Read once, at create, and
    * pinned on the row — changing it moves no existing agent.
    */
-  default_memory_provider: MemoryProviderId.nullable().optional(),
+  default_memory_provider: StoredMemoryProviderId.optional(),
   /**
    * Whether a newly published hermeticd release reaches the fleet at once
    * (§6.5) — the laptop asking every running box to take it right after

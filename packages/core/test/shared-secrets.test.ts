@@ -28,8 +28,6 @@ import { sharedSecretPath as sharedSecretPathFor } from "../src/backend/constant
 const FIXTURE_SLUGS: readonly string[] = [
   "nous-key",
   "openrouter-key",
-  // The keyed memory provider's shared slot `main` holds for `corvid`.
-  "memory-supermemory",
   ...(["anthropic", "openrouter", "nous", "vercel"] as const).map(
     (p) => `profile-${FIXTURE_PROFILE_IDS[p]}`,
   ),

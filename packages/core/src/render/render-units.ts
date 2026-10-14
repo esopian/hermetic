@@ -18,9 +18,9 @@ import {
   browserIdentities,
   chromeBinaryPath,
   isProviderKeySlot,
-  memoryKeyEnv,
 } from "../schema/index.ts";
 import type { RenderInput } from "./render.ts";
+import { memoryHermesLines } from "./render-memory.ts";
 
 function unit(
   description: string,
@@ -198,8 +198,22 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
       "Environment=AWS_DEFAULT_REGION=" + input.region,
     );
   }
+  /**
+   * A service memory provider: ordered behind its server, and told where it
+   * is where the plugin needs telling (`memoryHermesLines`). Nothing for an
+   * agent without one, so its units render the bytes they always did.
+   */
+  const memory = memoryHermesLines(input);
+  service.push(...memory.service);
   // The tmpfs environment file must exist before either process starts (§6.4).
-  return { ordering: ["After=hermetic-secrets.service", "Requires=hermetic-secrets.service"], service };
+  return {
+    ordering: [
+      "After=hermetic-secrets.service",
+      "Requires=hermetic-secrets.service",
+      ...memory.ordering,
+    ],
+    service,
+  };
 }
 
 /**
@@ -364,12 +378,6 @@ export function secretsUnit(input: RenderInput): string {
         " is read from SSM at " +
         slot(providerKeyRef(input)) +
         " by hermeticd.",
-    );
-  }
-  const memoryEnv = input.memory === undefined ? null : memoryKeyEnv(input.memory.provider);
-  if (memoryEnv !== null && input.memory?.key_ref !== undefined) {
-    sources.push(
-      "# " + memoryEnv + " is read from SSM at " + slot(input.memory.key_ref) + " by hermeticd.",
     );
   }
   if (input.secrets_mode === "bitwarden") {

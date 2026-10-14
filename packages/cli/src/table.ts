@@ -281,17 +281,14 @@ function urlRows(a: AgentView): Array<[string, string]> {
 }
 
 /**
- * The `memory` line (§6.4): the external provider the agent was created with
- * and the slot its key was copied into, or `built-in only` for a row with none
- * — including every row written before the field existed. Hermes's own
+ * The `memory` line (§6.4): the external provider the agent was created with,
+ * or `built-in only` for a row with none — including every row written before
+ * the field existed, or under a provider since removed. Hermes's own
  * `MEMORY.md`/`USER.md` is on either way, so "none" would misdescribe it.
  */
 export function memoryLine(memory: AgentView["memory"]): string {
   if (memory === null || memory === undefined) return "built-in only";
-  const label = `${MEMORY_PROVIDERS[memory.provider].label} (${memory.provider})`;
-  const ref = memory.key_ref;
-  // A local provider has no key to name, and "no key" would read as a fault.
-  return ref === null || ref === undefined ? label : `${label} · key ${ref}`;
+  return `${MEMORY_PROVIDERS[memory.provider].label} (${memory.provider})`;
 }
 
 /** One side of the disk line: a percentage, or why there is no percentage. */

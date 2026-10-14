@@ -43,10 +43,13 @@ import {
 import { HERMES_REPO_URL } from "../packages/core/src/release/hermes-mirror.ts";
 import { Agent, PROVIDERS, PROVIDERS_LIST } from "../packages/core/src/schema/agent.ts";
 import {
-  MEMORY_KEY_SLOT,
+  MEMORY_LLM_ENV_PATH,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDER_CAPABILITY,
-  memoryKeyEnv,
+  MEMORY_SERVICES,
+  MEMORY_SERVICE_CAPABILITY,
+  MEMORY_SERVICE_UNIT,
+  openvikingConfPath,
 } from "../packages/core/src/schema/memory.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
 import { HEARTBEAT_ATTRIBUTES } from "../packages/agentd/src/aws.ts";
@@ -58,7 +61,9 @@ import {
   requiredCapabilities,
 } from "../packages/core/src/schema/manifest.ts";
 import {
+  HERMES_ACCOUNT_HOME,
   HERMES_DASHBOARD_PORT,
+  HERMES_GATEWAY_DROPIN,
   HERMES_MANAGED_CONFIG,
   HERMES_PROXY_PORT,
 } from "../packages/core/src/schema/hermes.ts";
@@ -83,7 +88,9 @@ import {
   HERMES_REPO,
   HERMETIC_RENDERED_MARKER,
   PROVIDER_EXTRAS,
+  SECRETS_ENV_PATH,
 } from "../packages/agentd/src/apply/index.ts";
+import { ownershipOf } from "../packages/agentd/src/apply/accounts.ts";
 import { HERMETICD_CAPABILITIES, parseManifest } from "../packages/agentd/src/manifest.ts";
 import { HERMES_HEALTH_URL } from "../packages/agentd/src/heartbeat.ts";
 import { checkHermes } from "../packages/agentd/src/hermes-check.ts";
@@ -689,12 +696,12 @@ describe("seam: the provider-key slot core names is the one hermeticd reads", ()
 
 /**
  * The external memory provider, from both ends. Core renders the provider into
- * the managed config and names the slot its key lives in on the manifest;
- * hermeticd reads that field, writes the key into `secrets.env` under the
- * provider's variable and preinstalls its Python dependencies. A drift in any
- * of those strings is a Hermes that has `memory.provider` set and no key — the
- * provider reports itself unavailable and the agent quietly runs on built-in
- * memory, which is the failure nobody would notice.
+ * the managed config and, for a service provider, its server's unit and the
+ * manifest's `memory` block: the pin hermeticd installs, and the variable(s)
+ * it copies the agent's provider key under into `MEMORY_LLM_ENV_PATH`. A drift
+ * in any of those strings is a Hermes that has `memory.provider` set and no
+ * server behind it — the provider reports itself unavailable and the agent
+ * quietly runs on built-in memory, which is the failure nobody would notice.
  */
 describe("seam: the memory provider core names is the one hermeticd configures", () => {
   const render = (memory?: RenderInput["memory"]) =>
@@ -713,58 +720,153 @@ describe("seam: the memory provider core names is the one hermeticd configures",
 
   const none = render();
 
-  test("a keyed provider and its slot survive the wire, and resolve to its variable", () => {
-    const rendered = render({ provider: "supermemory", key_ref: MEMORY_KEY_SLOT });
+  test("a service provider's pin, model and key variable survive the wire", () => {
+    const rendered = render({ provider: "hindsight" });
     const read = parseManifest(overTheWire(rendered.manifest));
-    expect(read.memory).toEqual({ provider: "supermemory", key_ref: "memory-key" });
-    // The strings the box acts on, from the table both ends import.
-    expect(memoryKeyEnv(read.memory!.provider)).toBe("SUPERMEMORY_API_KEY");
-    expect(MEMORY_PROVIDERS[read.memory!.provider].pip).toEqual(["supermemory"]);
+    expect(read.memory).toEqual({
+      provider: "hindsight",
+      pin: MEMORY_SERVICES.hindsight.pin,
+      llm: { vendor: "anthropic", model: "claude-sonnet-5", key_env: ["HINDSIGHT_API_LLM_API_KEY"] },
+    });
+    // The unit the box enables, under the one name for every service provider,
+    // loading the file the box writes the key into.
+    expect(read.units).toContain(MEMORY_SERVICE_UNIT);
+    const unit = read.files.find((f) => f.path === `/etc/systemd/system/${MEMORY_SERVICE_UNIT}`)!;
+    expect(unit.content).toInclude(`EnvironmentFile=${MEMORY_LLM_ENV_PATH}\n`);
+    // The client side hermeticd preinstalls into Hermes's venv, from the table both ends import.
+    expect(MEMORY_PROVIDERS[read.memory!.provider].pip).toEqual(["hindsight-client==0.10.3"]);
     // And what Hermes itself will be told, in the file hermetic manages.
-    const managed = rendered.files.find((f) => f.path === HERMES_MANAGED_CONFIG)!;
-    expect(managed.content).toInclude(`memory:\n  provider: "${read.memory!.provider}"\n`);
+    const managed = read.files.find((f) => f.path === HERMES_MANAGED_CONFIG)!;
+    expect(managed.content).toInclude(`memory:\n  provider: "hindsight"\n`);
+    // Names, never values: no secret reaches the document.
+    expect(JSON.stringify(read)).not.toMatch(/FIXTURE|sk-ant-/);
   });
 
-  test("a local provider survives the wire with no slot", () => {
+  test("an in-process provider survives the wire with no pin and no model", () => {
     const read = parseManifest(overTheWire(render({ provider: "holographic" }).manifest));
     expect(read.memory).toEqual({ provider: "holographic" });
-    expect(memoryKeyEnv("holographic")).toBeNull();
+    expect(read.units).not.toContain(MEMORY_SERVICE_UNIT);
   });
 
   /**
-   * Any provider asks for the capability, and this checkout's hermeticd claims
-   * it. Until hermeticd learns `memory-provider` this test is the one that
-   * says so — a laptop rendering a requirement its own box does not implement.
+   * Any provider asks for `memory-provider`; a service provider also asks for
+   * `memory-service`; and this checkout's hermeticd claims both — a laptop
+   * rendering a requirement its own box does not implement is the gap this
+   * test exists to name.
    */
-  test("a provider asks for the capability, and hermeticd advertises it", () => {
-    for (const memory of [
-      { provider: "holographic" as const },
-      { provider: "mem0" as const, key_ref: MEMORY_KEY_SLOT },
-    ]) {
-      const rendered = render(memory);
-      expect(requiredCapabilities(rendered.manifest)).toContain(MEMORY_PROVIDER_CAPABILITY);
-      expect([...(rendered.manifest.requires ?? [])]).toContain(MEMORY_PROVIDER_CAPABILITY);
+  test("a provider asks for its capabilities, and hermeticd advertises them", () => {
+    const holo = render({ provider: "holographic" });
+    expect(requiredCapabilities(holo.manifest)).toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(requiredCapabilities(holo.manifest)).not.toContain(MEMORY_SERVICE_CAPABILITY);
+    for (const provider of ["hindsight", "openviking"] as const) {
+      const rendered = render({ provider });
+      for (const cap of [MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY] as const) {
+        expect(requiredCapabilities(rendered.manifest)).toContain(cap);
+        expect([...(rendered.manifest.requires ?? [])]).toContain(cap);
+      }
     }
     expect(AGENT_CAPABILITY_LIST).toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(AGENT_CAPABILITY_LIST).toContain(MEMORY_SERVICE_CAPABILITY);
     expect(HERMETICD_CAPABILITIES.has(MEMORY_PROVIDER_CAPABILITY)).toBe(true);
+    expect(HERMETICD_CAPABILITIES.has(MEMORY_SERVICE_CAPABILITY)).toBe(true);
   });
 
   /**
-   * A manifest is a document, not an authorisation: the slot it names becomes
-   * an SSM path the box reads, so the box's own parse refuses any slot but
-   * `memory-key` — on the schema, before any capability is consulted.
+   * A manifest rendered under f5ad900 named a hosted provider and a key slot,
+   * and may still sit on a box's root volume when the new hermeticd boots. The
+   * box reads it as no provider — the boot oneshot keeps materialising
+   * `secrets.env`, and the next converge replaces the bundle — rather than
+   * refusing a document whose only unknown is a name it no longer serves. A
+   * known provider with a wrong pin or key variable is still refused.
    */
-  test("a manifest naming any other slot is refused by the box's parse", () => {
-    const rendered = render({ provider: "supermemory", key_ref: MEMORY_KEY_SLOT });
-    for (const key_ref of ["provider-key", "ts-key", "bws-token", "../ts-key"]) {
-      const forged = { ...rendered.manifest, memory: { provider: "supermemory", key_ref } };
-      let issues: string[] = [];
-      try {
-        parseManifest(overTheWire(forged));
-      } catch (e) {
-        issues = ((e as { detail?: { issues?: string[] } }).detail?.issues ?? []) as string[];
+  test("a manifest naming a removed provider reads as none; a known one is strict", () => {
+    const rendered = render({ provider: "holographic" });
+    const legacy = { ...rendered.manifest, memory: { provider: "supermemory", key_ref: "memory-key" } };
+    expect(parseManifest(overTheWire(legacy)).memory).toBeUndefined();
+    const hindsight = render({ provider: "hindsight" }).manifest;
+    const forgedKey = {
+      ...hindsight,
+      memory: { ...hindsight.memory, llm: { ...hindsight.memory?.llm, key_env: ["PATH"] } },
+    };
+    expect(() => parseManifest(overTheWire(forgedKey))).toThrow();
+  });
+
+  /**
+   * What each side does with a service provider's server settings, read from
+   * the manifest as the box reads it. openviking's `ov.conf` is a root-owned
+   * file the server reads as group `hermes`, under `/etc/hermetic` and not on
+   * the data volume; the unit's `--config` must name that same path. Both
+   * plugins find their server through `Environment=` on the Hermes units (the
+   * dashboard's unit and the gateway drop-in), because nothing hermetic
+   * renders may land under the `hermes` home.
+   */
+  const hermesUnits = (read: ReturnType<typeof parseManifest>) =>
+    [`/etc/systemd/system/${HERMES_DASHBOARD_UNIT}`, HERMES_GATEWAY_DROPIN].map((path) => {
+      const file = read.files.find((f) => f.path === path);
+      expect(file).toBeDefined();
+      return file!.content;
+    });
+
+  test("openviking's conf is root:hermes 0640 where the unit's --config names it", () => {
+    const read = parseManifest(overTheWire(render({ provider: "openviking" }).manifest));
+    const conf = read.files.find((f) => f.path === openvikingConfPath)!;
+    expect(conf).toBeDefined();
+    expect(openvikingConfPath).toBe("/etc/hermetic/memory/ov.conf");
+    expect(ownershipOf(conf)).toEqual({ owner: "root", group: "hermes" });
+    expect(conf.mode).toBe("0640");
+    expect(conf.restart_units).toContain(MEMORY_SERVICE_UNIT);
+    const unit = read.files.find((f) => f.path === `/etc/systemd/system/${MEMORY_SERVICE_UNIT}`)!;
+    const execStart = unit.content.split("\n").find((l) => l.startsWith("ExecStart="))!;
+    expect(execStart.endsWith(` --config ${openvikingConfPath}`)).toBe(true);
+    const endpoint = `Environment=OPENVIKING_ENDPOINT=http://127.0.0.1:${String(MEMORY_SERVICES.openviking.port)}\n`;
+    for (const content of hermesUnits(read)) {
+      expect(content).toInclude(endpoint);
+      expect(content).not.toInclude("HINDSIGHT_");
+    }
+  });
+
+  test("hindsight is configured by environment on the Hermes units, with no config file", () => {
+    const read = parseManifest(overTheWire(render({ provider: "hindsight" }).manifest));
+    const port = String(MEMORY_SERVICES.hindsight.port);
+    for (const content of hermesUnits(read)) {
+      for (const line of [
+        "Environment=HINDSIGHT_MODE=local_external",
+        `Environment=HINDSIGHT_API_URL=http://127.0.0.1:${port}`,
+        "Environment=HINDSIGHT_BANK_ID=hermes",
+        "Environment=HINDSIGHT_BUDGET=mid",
+        "Environment=HINDSIGHT_TIMEOUT=120",
+      ]) {
+        expect(content).toInclude(line + "\n");
       }
-      expect(issues.some((i) => i.startsWith("memory.key_ref"))).toBe(true);
+      expect(content).not.toInclude("OPENVIKING_");
+    }
+    expect(read.files.filter((f) => /\/hindsight\/config\.json$/.test(f.path))).toEqual([]);
+  });
+
+  /**
+   * `hermetic-memory.service` reads its LLM credential from
+   * `/run/hermetic/memory-llm.env`, and `hermeticd` rewrites that file on boot
+   * only when the secrets oneshot's `--out` is exactly its `SECRETS_ENV_PATH`.
+   * If the two drift, the unit's `EnvironmentFile=` is missing after a reboot.
+   */
+  test("the secrets unit's --out is the path hermeticd rewrites memory-llm.env on", () => {
+    const read = parseManifest(overTheWire(render({ provider: "hindsight" }).manifest));
+    const unit = read.files.find((f) => f.path === "/etc/systemd/system/hermetic-secrets.service");
+    expect(unit).toBeDefined();
+    const out = /^ExecStart=.*\ssecrets materialise\s.*--out\s+(\S+)/m.exec(unit!.content)?.[1];
+    expect(out).toBe(SECRETS_ENV_PATH);
+  });
+
+  /**
+   * Root's files phase writes and chowns what is rendered, and the `hermes`
+   * account controls every directory entry under its home: a rendered file
+   * there is one the account could swap for a symlink.
+   */
+  test("no service provider renders a file under the hermes home", () => {
+    for (const provider of ["hindsight", "openviking"] as const) {
+      const read = parseManifest(overTheWire(render({ provider }).manifest));
+      const under = read.files.filter((f) => f.path.startsWith(HERMES_ACCOUNT_HOME));
+      expect(under.map((f) => f.path)).toEqual([]);
     }
   });
 

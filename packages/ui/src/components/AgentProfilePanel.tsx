@@ -209,10 +209,7 @@ export function AgentProfilePanel({
           ) : (
             <>
               {memoryLabel(agent.memory.provider)}
-              <Dim>
-                {" "}
-                ({agent.memory.provider}){agent.memory.key_ref ? ` · key: ${agent.memory.key_ref}` : ""}
-              </Dim>
+              <Dim> ({agent.memory.provider})</Dim>
             </>
           )}
         </CfgRow>

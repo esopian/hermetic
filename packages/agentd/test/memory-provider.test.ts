@@ -1,14 +1,34 @@
 /**
- * The box half of the external memory provider (`memory-provider` capability):
- * the key `memory.key_ref` names lands in `secrets.env` under the provider's
- * variable, every author of that file writes it the same way, and the
- * provider's Python dependencies are in Hermes's venv before Hermes starts.
+ * The box half of the external memory provider: the provider's Python
+ * dependencies in Hermes's venv (`memory-provider`), and for a service
+ * provider the pinned server itself (`memory-service`) — its venv, model and
+ * Hermes plugin, the credential file its unit reads, and the unit's removal
+ * when the agent no longer has one.
+ *
+ * Manifests are the fixture's plus what core renders for a service provider
+ * (the unit, the server's config), written out by hand here: this suite is
+ * about what the box does with such a manifest, not about the renderer.
  */
 import { describe, expect, test } from "bun:test";
 import { GetParameterCommand } from "@aws-sdk/client-ssm";
-import type { AgentConfig, ApplyRequest } from "@hermetic/core/schema";
-import { MEMORY_KEY_SLOT } from "@hermetic/core/shared";
-import { apply, importNameOf, SECRETS_ENV_PATH } from "../src/apply/index.ts";
+import type { AgentConfig, ApplyRequest, RenderedFile } from "@hermetic/core/schema";
+import {
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_SERVICES,
+  MEMORY_SERVICE_ROOT,
+  MEMORY_SERVICE_UNIT,
+  hermesPluginDir,
+  memoryServiceDir,
+  openvikingConfPath,
+} from "@hermetic/core/shared";
+import {
+  MEMORY_PIN_MARKER,
+  MEMORY_SERVICE_UNIT_PATH,
+  PLUGIN_REF_MARKER,
+  SECRETS_ENV_PATH,
+  apply,
+  importNameOf,
+} from "../src/apply/index.ts";
 import { HERMES_VENV_DIR } from "../src/apply/hermes.ts";
 import { makeAws } from "../src/aws.ts";
 import { convergeOnce } from "../src/converge.ts";
@@ -16,11 +36,12 @@ import { AgentdError } from "../src/errors.ts";
 import { collector } from "../src/events.ts";
 import { FLEET_CACHE_PATH } from "../src/fleet.ts";
 import { checkHermes } from "../src/hermes-check.ts";
+import type { ExecOptions, ExecResult, FileStat } from "../src/host.ts";
 import { HERMETICD_CAPABILITIES, MANIFEST_PATH } from "../src/manifest.ts";
 import { run } from "../src/main.ts";
 import { USER_DATA_JSON_PATH } from "../src/userdata.ts";
 import { BoxHost, fakeConfigBundle } from "./fake-box.ts";
-import { expectNotRan, expectRan } from "./fake-host.ts";
+import { expectNotRan, expectRan, fail, ok, ran } from "./fake-host.ts";
 import {
   RecordingSink,
   TEST_AGENTS_TABLE,
@@ -30,17 +51,527 @@ import {
   makeFleetManifest,
   makeManifest,
   makeUserDataJson,
-  type ManifestOverrides,
 } from "./fixtures.ts";
 import { captureOutput } from "./quiet.ts";
 
 const out = captureOutput();
 
-/** Short and unshaped on purpose: no redaction pattern would catch it, so only not emitting it keeps it out. */
-const MEMORY_KEY = "FIXTURE-memory-key";
-const SUPERMEMORY = { provider: "supermemory", key_ref: MEMORY_KEY_SLOT } as const;
-const PYTHON = `${HERMES_VENV_DIR}/bin/python`;
-const PIP_SUPERMEMORY = `uv pip install --python ${PYTHON} supermemory`;
+/**
+ * The agent's provider key. A space and a `#` so `envLine` quotes it, and no
+ * shape any redaction pattern knows, so only never emitting it keeps it out.
+ */
+const PROVIDER_KEY = "FIXTURE anthropic #key";
+const HINDSIGHT = MEMORY_SERVICES.hindsight;
+const OPENVIKING = MEMORY_SERVICES.openviking;
+const PLUGIN = HINDSIGHT.plugin!;
+const MODEL = OPENVIKING.model!;
+const HERMES_PYTHON = `${HERMES_VENV_DIR}/bin/python`;
+const HINDSIGHT_DIR = memoryServiceDir("hindsight");
+const OPENVIKING_DIR = memoryServiceDir("openviking");
+const PLUGIN_DIR = hermesPluginDir("hindsight");
+const MODEL_PATH = `${OPENVIKING_DIR}/models/${MODEL.file}`;
+
+/** A downloaded file this fake stands in for: its claimed digest and size, not its bytes. */
+const blob = (sha: string, size: number): string => `BLOB ${sha} ${size}`;
+function parseBlob(content: string | undefined): { sha: string; size: number } | null {
+  const m = /^BLOB ([0-9a-f]{64}) (\d+)$/.exec(content ?? "");
+  return m ? { sha: m[1]!, size: Number(m[2]) } : null;
+}
+
+const operands = (args: readonly string[]): string[] => args.filter((a) => !a.startsWith("-"));
+
+/**
+ * `BoxHost` plus what the memory service's steps read back: `tee`/`rm`/`mv`
+ * as the account move files, `uv pip install` into a venv records what it
+ * installed (so a probe of Hermes's venv answers honestly), the plugin's
+ * sparse clone leaves its subdirectory, and a model file `curl` fetched has
+ * the digest and size the test said it would.
+ */
+class MemoryBox extends BoxHost {
+  /** Modules importable from Hermes's venv; `python -c import X` probes this. */
+  readonly hermesModules = new Set<string>();
+
+  override async stat(path: string): Promise<FileStat | null> {
+    const stat = await super.stat(path);
+    const b = parseBlob(this.files.get(path)?.content);
+    return stat && b ? { ...stat, size: b.size } : stat;
+  }
+
+  override async sha256File(path: string): Promise<string | null> {
+    return parseBlob(this.files.get(path)?.content)?.sha ?? super.sha256File(path);
+  }
+
+  /** Everything at or under `path`, files and directories. */
+  private drop(path: string): void {
+    for (const key of [...this.files.keys()]) {
+      if (key === path || key.startsWith(`${path}/`)) this.files.delete(key);
+    }
+    for (const dir of [...this.dirs])
+      if (dir === path || dir.startsWith(`${path}/`)) this.dirs.delete(dir);
+  }
+
+  protected override builtin(argv: readonly string[], opts?: ExecOptions): ExecResult {
+    const [bin = "", ...args] = argv;
+    if (bin === "tee") {
+      const path = args.at(-1) ?? "";
+      if (!this.dirs.has(path.slice(0, path.lastIndexOf("/"))))
+        return fail(1, `tee: ${path}: No such file`);
+      this.files.set(path, { content: opts?.stdin ?? "", mode: "0644", ownership: "hermes:hermes" });
+      return ok(opts?.stdin ?? "");
+    }
+    // A non-recursive chown of a directory: `BoxHost` models ownership on files only.
+    if (bin === "chown" && !args.includes("-R") && this.dirs.has(operands(args).at(-1) ?? "")) {
+      return ok();
+    }
+    if (bin === "rm") {
+      for (const path of operands(args)) this.drop(path);
+      return ok();
+    }
+    if (bin === "mv") {
+      const [from, to] = operands(args);
+      if (!from || !to) return fail(1, "mv: missing operand");
+      if (!this.files.has(from) && !this.dirs.has(from)) return fail(1, `mv: cannot stat '${from}'`);
+      this.drop(to);
+      for (const [key, file] of [...this.files]) {
+        if (key === from || key.startsWith(`${from}/`)) {
+          this.files.delete(key);
+          this.files.set(to + key.slice(from.length), file);
+        }
+      }
+      for (const dir of [...this.dirs]) {
+        if (dir === from || dir.startsWith(`${from}/`)) {
+          this.dirs.delete(dir);
+          this.dirs.add(to + dir.slice(from.length));
+        }
+      }
+      return ok();
+    }
+    if (bin === "uv" && args[0] === "pip" && args[1] === "install" && !args.includes("-e")) {
+      const python = args[args.indexOf("--python") + 1];
+      if (python === HERMES_PYTHON) {
+        const specs: string[] = [];
+        for (let i = 2; i < args.length; i += 1) {
+          if (args[i] === "--python") i += 1;
+          else if (!args[i]!.startsWith("-")) specs.push(args[i]!);
+        }
+        for (const spec of specs) this.hermesModules.add(importNameOf(spec));
+      }
+      return ok();
+    }
+    if (bin === HERMES_PYTHON && args[0] === "-c") {
+      const module = /^import (\S+)$/.exec(args[1] ?? "")?.[1] ?? "";
+      return this.hermesModules.has(module) ? ok() : fail(1, `No module named '${module}'`);
+    }
+    // The plugin's sparse clone; Hermes's own checkout stays BoxHost's.
+    const clone = `${hermesPluginDir("")}.hindsight.clone`;
+    if (bin === "git" && args[0] === "clone" && args.at(-1) === clone) {
+      this.dirs.add(clone);
+      this.dirs.add(`${clone}/.git`);
+      return ok();
+    }
+    if (bin === "git" && args[0] === "-C" && args[1] === clone) {
+      if (args[2] === "checkout") {
+        const sub = `${clone}/${PLUGIN.subdir}`;
+        this.seed(`${sub}/plugin.yaml`, `name: hindsight\n# at ${args.at(-1)}\n`);
+        this.seed(`${sub}/__init__.py`, "\n");
+        this.dirs.add(sub);
+      }
+      return ok();
+    }
+    return super.builtin(argv, opts);
+  }
+}
+
+function unitFile(provider: "hindsight" | "openviking"): RenderedFile {
+  const spec = MEMORY_SERVICES[provider];
+  return {
+    path: MEMORY_SERVICE_UNIT_PATH,
+    mode: "0644",
+    content:
+      "[Service]\nUser=hermes\n" +
+      `EnvironmentFile=${MEMORY_LLM_ENV_PATH}\n` +
+      `ExecStart=${memoryServiceDir(provider)}/venv/bin/${spec.command} --host 127.0.0.1 --port ${spec.port}\n`,
+  };
+}
+
+/** A service provider's manifest: the fixture's, plus the unit and the server's config. */
+function serviceManifest(
+  provider: "hindsight" | "openviking",
+  options: {
+    vendor?: "anthropic" | "bedrock";
+    pin?: string;
+    key_env?: NonNullable<NonNullable<AgentConfig["memory"]>["llm"]>["key_env"];
+  } = {},
+): AgentConfig {
+  const vendor = options.vendor ?? "anthropic";
+  const base = makeManifest({
+    provider: vendor,
+    memory: {
+      provider,
+      pin: options.pin ?? MEMORY_SERVICES[provider].pin,
+      llm: {
+        vendor,
+        model: "FIXTURE-model",
+        key_env: options.key_env ?? (vendor === "bedrock" ? [] : ["HINDSIGHT_API_LLM_API_KEY"]),
+      },
+    },
+    units: [
+      "hermeticd.service",
+      "hermes-dashboard.service",
+      "hermes-gateway.service",
+      MEMORY_SERVICE_UNIT,
+    ],
+  });
+  // Hindsight's plugin is configured by env lines in the Hermes units, so only
+  // OpenViking has a config file of its own.
+  const config: RenderedFile[] =
+    provider === "openviking"
+      ? [
+          {
+            path: openvikingConfPath,
+            mode: "0640",
+            content: '{"server":{"host":"127.0.0.1","port":1933}}\n',
+            owner: "root",
+            group: "hermes",
+          },
+        ]
+      : [];
+  return { ...base, files: [...base.files, unitFile(provider), ...config] };
+}
+
+function openvikingBox(): MemoryBox {
+  const host = new MemoryBox();
+  host.curlBodies.set(MODEL.url, blob(MODEL.sha256, MODEL.size));
+  return host;
+}
+
+/** The commands that would mean the second apply did install work. */
+const NETWORK_WORK = /^(?:runuser -u hermes -- )?(?:uv |git clone|git -C \S+\.clone|curl )/;
+
+/** Every file under `/data` or `/etc/hermetic` whose content holds `secret`. */
+function leaks(host: MemoryBox, secret: string): string[] {
+  return [...host.files]
+    .filter(
+      ([path, f]) =>
+        (path.startsWith("/data/") || path.startsWith("/etc/hermetic/")) && f.content.includes(secret),
+    )
+    .map(([path]) => path);
+}
+
+describe("capabilities", () => {
+  test("hermeticd advertises both memory capabilities", () => {
+    expect(HERMETICD_CAPABILITIES.has("memory-provider")).toBe(true);
+    expect(HERMETICD_CAPABILITIES.has("memory-service")).toBe(true);
+  });
+
+  test("distribution specs map to the module they import as", () => {
+    expect(importNameOf("hindsight-client==0.10.3")).toBe("hindsight_client");
+    expect(importNameOf("numpy")).toBe("numpy");
+  });
+});
+
+describe("hindsight", () => {
+  test("installs the server, the plugin and the client, and starts the unit", async () => {
+    const host = new MemoryBox();
+    const result = await apply(serviceManifest("hindsight"), { host, providerKey: PROVIDER_KEY });
+
+    // The dirs, as the account.
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${MEMORY_SERVICE_ROOT}$`);
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${HINDSIGHT_DIR}/hf$`);
+    // The venv, as the account, then the pinned server into it.
+    expectRan(
+      host,
+      `^runuser -u hermes -- uv venv --no-config --python 3\\.11 ${HINDSIGHT_DIR}/venv$`,
+      1,
+    );
+    const pip = ran(
+      host,
+      `^runuser -u hermes -- uv pip install .*--python ${HINDSIGHT_DIR}/venv/bin/python`,
+    );
+    expect(pip).toHaveLength(1);
+    expect(pip[0]!.split(" ")).toContain("hindsight-all==0.10.3");
+    // The wheel cache would otherwise land on the data volume, under the account's HOME.
+    expect(pip[0]!.split(" ")).toContain("--no-cache");
+    // Nothing re-owns the service tree recursively.
+    expectNotRan(host, `chown -R .*${MEMORY_SERVICE_ROOT}`);
+    expect(host.files.get(`${HINDSIGHT_DIR}/${MEMORY_PIN_MARKER}`)?.content).toBe(`${HINDSIGHT.pin}\n`);
+
+    // The plugin, at the pinned commit, as the account.
+    expectRan(
+      host,
+      `^runuser -u hermes -- git clone --filter=blob:none --no-checkout --quiet ${PLUGIN.repo} `,
+      1,
+    );
+    expectRan(
+      host,
+      `^runuser -u hermes -- git -C \\S+ sparse-checkout set --no-cone ${PLUGIN.subdir}$`,
+      1,
+    );
+    expectRan(host, `^runuser -u hermes -- git -C \\S+ checkout --quiet ${PLUGIN.sha}$`, 1);
+    expect(host.files.get(`${PLUGIN_DIR}/plugin.yaml`)?.content).toContain(PLUGIN.sha);
+    expect(host.files.get(`${PLUGIN_DIR}/${PLUGIN_REF_MARKER}`)?.content).toBe(`${PLUGIN.sha}\n`);
+    expect([...host.files.keys()].filter((p) => p.includes(".hindsight.clone"))).toEqual([]);
+
+    // The client side, in Hermes's venv.
+    expectRan(host, `^uv pip install --python ${HERMES_PYTHON} hindsight-client==0\\.10\\.3$`, 1);
+
+    // The unit: landed, enabled, started.
+    expect(host.files.get(MEMORY_SERVICE_UNIT_PATH)?.content).toContain("127.0.0.1");
+    expect(host.enabledUnits.has(MEMORY_SERVICE_UNIT)).toBe(true);
+    expect(result.restarted).toContain(MEMORY_SERVICE_UNIT);
+
+    // The credential: tmpfs, root-only, under the server's name, nowhere else.
+    const env = host.files.get(MEMORY_LLM_ENV_PATH);
+    expect(env?.mode).toBe("0600");
+    expect(env?.content).toBe("HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n");
+    expect(leaks(host, PROVIDER_KEY)).toEqual([]);
+    // Only Hermes's own variable in Hermes's environment file.
+    expect(host.files.get(SECRETS_ENV_PATH)?.content).not.toContain("HINDSIGHT_API_LLM_API_KEY");
+  });
+
+  test("the key never reaches stdout, stderr, events or argv", async () => {
+    const host = new MemoryBox();
+    const { emit, events } = collector();
+    await apply(serviceManifest("hindsight"), { host, emit, providerKey: PROVIDER_KEY });
+    expect(out.stdout).not.toContain(PROVIDER_KEY);
+    expect(out.stderr).not.toContain(PROVIDER_KEY);
+    expect(JSON.stringify(events)).not.toContain(PROVIDER_KEY);
+    expect(host.commands.join("\n")).not.toContain(PROVIDER_KEY);
+  });
+
+  test("a second apply on the converged box installs nothing and restarts nothing", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("hindsight");
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+
+    host.commands.length = 0;
+    host.restarted.length = 0;
+    const second = await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expect(host.commands.filter((c) => NETWORK_WORK.test(c))).toEqual([]);
+    expect(second.restarted).toEqual([]);
+    expect(host.restarted).toEqual([]);
+    expect(second.installed).toEqual([]);
+  });
+
+  test("a dry run reports the install and runs none of it", async () => {
+    const host = new MemoryBox();
+    const plan = await apply(serviceManifest("hindsight"), {
+      host,
+      providerKey: PROVIDER_KEY,
+      dryRun: true,
+    });
+    expect(plan.installed).toContain(`memory:${HINDSIGHT.pin}`);
+    expect(plan.installed).toContain(`plugin:hindsight@${PLUGIN.sha}`);
+    expect(
+      host.commands.filter((c) => /^runuser -u hermes -- (uv|git|curl|install|tee|mv|rm) /.test(c)),
+    ).toEqual([]);
+    expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
+  });
+
+  /**
+   * Bedrock, so the provider-key check before it has nothing to refuse, with a
+   * `key_env` core would never render for it: what refuses is `memoryLlmFor`.
+   */
+  test("a key_env with no provider key resolved is refused before either file", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("hindsight", {
+      vendor: "bedrock",
+      key_env: ["HINDSIGHT_API_LLM_API_KEY"],
+    });
+    const refused = await apply(manifest, { host }).catch((e) => e);
+    expect((refused as AgentdError).code).toBe("INTERNAL");
+    expect((refused as AgentdError).message).toContain("HINDSIGHT_API_LLM_API_KEY");
+    expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
+    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
+  });
+
+  test("a venv whose interpreter went with the root volume is rebuilt with --clear", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("hindsight");
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    // The first build had nothing to clear.
+    expectNotRan(host, /uv venv .*--clear/);
+
+    // A recreate: the data volume keeps the venv and its marker, the new root
+    // volume has no interpreter for `bin/python` to point at.
+    host.files.delete(`${HINDSIGHT_DIR}/venv/bin/python`);
+    host.commands.length = 0;
+    const result = await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expectRan(
+      host,
+      `^runuser -u hermes -- uv venv --no-config --clear --python 3\\.11 ${HINDSIGHT_DIR}/venv$`,
+      1,
+    );
+    expectRan(
+      host,
+      `^runuser -u hermes -- uv pip install .*--python ${HINDSIGHT_DIR}/venv/bin/python`,
+      1,
+    );
+    expect(result.restarted).toContain(MEMORY_SERVICE_UNIT);
+  });
+});
+
+describe("openviking", () => {
+  test("installs from upstream's wheel index, seeds the model, lands ov.conf", async () => {
+    const host = openvikingBox();
+    await apply(serviceManifest("openviking", { vendor: "bedrock" }), { host });
+
+    const pip = ran(
+      host,
+      `^runuser -u hermes -- uv pip install .*--python ${OPENVIKING_DIR}/venv/bin/python`,
+    );
+    expect(pip).toHaveLength(1);
+    const argv = pip[0]!.split(" ");
+    expect(
+      argv.slice(argv.indexOf("--extra-index-url"), argv.indexOf("--extra-index-url") + 2),
+    ).toEqual(["--extra-index-url", OPENVIKING.extra_index[0]!]);
+    expect(argv.slice(argv.indexOf("--only-binary"), argv.indexOf("--only-binary") + 2)).toEqual([
+      "--only-binary",
+      "llama-cpp-python",
+    ]);
+    expect(argv).toContain("openviking[local-embed]==0.5.0");
+
+    expectRan(
+      host,
+      `^runuser -u hermes -- curl -fsSL --retry 3 -o \\S+ ${MODEL.url.replace(/[.?]/g, "\\$&")}$`,
+      1,
+    );
+    expect(parseBlob(host.files.get(MODEL_PATH)?.content)).toEqual({
+      sha: MODEL.sha256,
+      size: MODEL.size,
+    });
+    expect([...host.files.keys()].filter((p) => p.endsWith(".part"))).toEqual([]);
+    expect(host.files.get(openvikingConfPath)?.content).toContain("127.0.0.1");
+    expect(host.files.get(openvikingConfPath)?.ownership).toBe("root:hermes");
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${OPENVIKING_DIR}/data$`);
+
+    // Bedrock: no key, and still the file the unit's `EnvironmentFile=` names.
+    expect(host.files.get(MEMORY_LLM_ENV_PATH)).toEqual({ content: "\n", mode: "0600" });
+    // No plugin to check out, no client to install: both are upstream's.
+    expectNotRan(host, /git clone --filter/);
+    expectNotRan(host, ` -c import `);
+  });
+
+  test("the model is fetched only when missing or wrong", async () => {
+    const host = openvikingBox();
+    const manifest = serviceManifest("openviking", { vendor: "bedrock" });
+    await apply(manifest, { host });
+
+    host.commands.length = 0;
+    await apply(manifest, { host });
+    expectNotRan(host, /^runuser -u hermes -- curl /);
+
+    // Swapped on the box since: replaced with the pinned file.
+    host.files.set(MODEL_PATH, { content: blob("0".repeat(64), MODEL.size), mode: "0644" });
+    host.commands.length = 0;
+    const repaired = await apply(manifest, { host });
+    expectRan(host, /^runuser -u hermes -- curl /, 1);
+    expect(repaired.installed).toEqual([`model:${MODEL.file}`]);
+    expect(parseBlob(host.files.get(MODEL_PATH)?.content)?.sha).toBe(MODEL.sha256);
+    expect(repaired.restarted).toContain(MEMORY_SERVICE_UNIT);
+  });
+
+  test("a download that is not the pinned file fails and leaves nothing behind", async () => {
+    const host = new MemoryBox();
+    host.curlBodies.set(MODEL.url, blob("f".repeat(64), MODEL.size));
+    const refused = await apply(serviceManifest("openviking", { vendor: "bedrock" }), { host }).catch(
+      (e) => e,
+    );
+    expect(refused).toBeInstanceOf(AgentdError);
+    expect((refused as AgentdError).code).toBe("CHECKSUM_MISMATCH");
+    expect([...host.files.keys()].filter((p) => p.startsWith(`${OPENVIKING_DIR}/models/`))).toEqual([]);
+  });
+
+  test("a second apply on the converged box installs nothing and restarts nothing", async () => {
+    const host = openvikingBox();
+    const manifest = serviceManifest("openviking", { vendor: "bedrock" });
+    await apply(manifest, { host });
+    host.commands.length = 0;
+    host.restarted.length = 0;
+    const second = await apply(manifest, { host });
+    expect(host.commands.filter((c) => NETWORK_WORK.test(c))).toEqual([]);
+    expect(second.restarted).toEqual([]);
+  });
+});
+
+describe("the pin", () => {
+  test("a pin this hermeticd does not install is refused before any command runs", async () => {
+    const host = new MemoryBox();
+    const refused = await apply(serviceManifest("hindsight", { pin: "hindsight-all==9.9.9" }), {
+      host,
+      providerKey: PROVIDER_KEY,
+    }).catch((e) => e);
+    expect(refused).toBeInstanceOf(AgentdError);
+    expect((refused as AgentdError).code).toBe("MANIFEST_REFUSED");
+    expect((refused as AgentdError).message).toContain("hindsight-all==9.9.9");
+    expect((refused as AgentdError).message).toContain(HINDSIGHT.pin);
+    expect(host.commands).toEqual([]);
+    expect(host.files.size).toBe(0);
+  });
+
+  test("a pin on an in-process provider is refused too", async () => {
+    const host = new MemoryBox();
+    const manifest = makeManifest({ memory: { provider: "holographic", pin: "numpy==1" } });
+    const refused = await apply(manifest, { host }).catch((e) => e);
+    expect((refused as AgentdError).code).toBe("MANIFEST_REFUSED");
+    expect(host.commands).toEqual([]);
+  });
+});
+
+describe("removal", () => {
+  /** A box that ran hindsight, now given a manifest with `memory`. */
+  function formerHindsightBox(): MemoryBox {
+    const host = new MemoryBox();
+    host.seed(MEMORY_SERVICE_UNIT_PATH, unitFile("hindsight").content);
+    host.enabledUnits.add(MEMORY_SERVICE_UNIT);
+    host.runningUnits.add(MEMORY_SERVICE_UNIT);
+    host.seed(`${HINDSIGHT_DIR}/pg/PG_VERSION`, "16\n");
+    host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-old\n", "0600");
+    return host;
+  }
+
+  for (const [label, memory] of [
+    ["no provider", undefined],
+    ["an in-process provider", { provider: "holographic" as const }],
+  ] as const) {
+    test(`a recreate onto ${label} stops and removes the unit, keeping the data`, async () => {
+      const host = formerHindsightBox();
+      host.hermesModules.add("numpy");
+      const result = await apply(makeManifest(memory ? { memory } : {}), { host });
+
+      expect(host.stopped).toContain(MEMORY_SERVICE_UNIT);
+      expect(host.enabledUnits.has(MEMORY_SERVICE_UNIT)).toBe(false);
+      expect(host.files.has(MEMORY_SERVICE_UNIT_PATH)).toBe(false);
+      expect(result.changed).toContain(MEMORY_SERVICE_UNIT_PATH);
+      expect(host.files.get(`${HINDSIGHT_DIR}/pg/PG_VERSION`)?.content).toBe("16\n");
+      expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
+      expect(host.daemonReloads.length).toBeGreaterThan(0);
+    });
+  }
+});
+
+describe("holographic", () => {
+  test("only numpy, in Hermes's venv: no server, no credential file", async () => {
+    const host = new MemoryBox();
+    const manifest = makeManifest({ memory: { provider: "holographic" } });
+    const first = await apply(manifest, { host });
+    expectRan(host, `^${HERMES_PYTHON} -c import numpy$`, 1);
+    expectRan(host, `^uv pip install --python ${HERMES_PYTHON} numpy$`, 1);
+    expect(first.installed).toContain("pip:numpy");
+    expect(first.restarted.sort()).toEqual(
+      ["hermes-dashboard.service", "hermes-gateway.service", "hermeticd.service"].sort(),
+    );
+    expectNotRan(host, MEMORY_SERVICE_ROOT);
+    expectNotRan(host, /^runuser -u hermes -- (uv pip|git|curl)/);
+    expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
+
+    host.commands.length = 0;
+    const second = await apply(manifest, { host });
+    expectRan(host, `^${HERMES_PYTHON} -c import numpy$`, 1);
+    expectNotRan(host, /uv pip install/);
+    expect(second.restarted).toEqual([]);
+  });
+});
 
 function parameterNotFound(): Error {
   const e = new Error("Parameter not found");
@@ -48,220 +579,77 @@ function parameterNotFound(): Error {
   return e;
 }
 
-/** A box with this agent's manifest on disk and SSM answering from `slots`. */
-function rig(options: ManifestOverrides & { slots?: Readonly<Record<string, string>> } = {}) {
-  const { slots = {}, ...manifestOverrides } = options;
-  const host = new BoxHost();
-  host.seed(USER_DATA_JSON_PATH, makeUserDataJson());
-  host.seed(FLEET_CACHE_PATH, JSON.stringify(makeFleetManifest()));
-  host.seed(MANIFEST_PATH, JSON.stringify(makeManifest(manifestOverrides)));
-
-  const ssm = new RecordingSink();
-  ssm.byCommand.set("GetParameterCommand", (command) => {
-    const name = (command as GetParameterCommand).input.Name ?? "";
-    const value = slots[name.slice(name.lastIndexOf("/") + 1)];
-    if (value === undefined) throw parameterNotFound();
-    return { Parameter: { Value: value } };
-  });
-  const aws = makeAws({
-    ddb: new RecordingSink(),
-    ssm,
-    s3: new RecordingSink(),
-    agentsTable: TEST_AGENTS_TABLE,
-    eventsTable: TEST_EVENTS_TABLE,
-    now: () => host.now(),
-  });
-  return {
-    host,
-    ssm,
-    materialise: () => run(["secrets", "materialise"], host, { aws: () => aws }),
-    apply: () => run(["apply"], host, { aws: () => aws }),
-    env: () => host.files.get(SECRETS_ENV_PATH)?.content ?? null,
-    slotsRead: () =>
-      ssm.commandCalls(GetParameterCommand).map((c) => {
-        const name = c.input.Name ?? "";
-        return name.slice(name.lastIndexOf("/") + 1);
-      }),
-  };
-}
-
-/**
- * `import supermemory` fails until `uv pip install … supermemory` has run, the
- * way a fresh venv answers. Returns the install count.
- */
-function venvWithoutSupermemory(host: BoxHost): { installs: () => number } {
-  let installs = 0;
-  host.when(`${PYTHON} -c import supermemory`, () => (installs > 0 ? { code: 0 } : { code: 1 }));
-  host.when(PIP_SUPERMEMORY, () => {
-    installs += 1;
-    return { code: 0 };
-  });
-  return { installs: () => installs };
-}
-
-describe("the memory key in secrets.env", () => {
-  test("hermeticd advertises the capability a memory manifest asks for", () => {
-    expect(HERMETICD_CAPABILITIES.has("memory-provider")).toBe(true);
-  });
-
-  test("materialise and apply write the same SUPERMEMORY_API_KEY line", async () => {
-    const m = rig({ memory: SUPERMEMORY, slots: { [MEMORY_KEY_SLOT]: MEMORY_KEY } });
-    expect(await m.materialise()).toBe(0);
-    expect(m.env()).toBe(`SUPERMEMORY_API_KEY=${MEMORY_KEY}\n`);
-    expect(m.host.files.get(SECRETS_ENV_PATH)?.mode).toBe("0600");
-    // Bedrock has no key of its own, so the memory slot is the only read.
-    expect(m.slotsRead()).toEqual([MEMORY_KEY_SLOT]);
-
-    const a = rig({ memory: SUPERMEMORY, slots: { [MEMORY_KEY_SLOT]: MEMORY_KEY } });
-    expect(await a.apply()).toBe(0);
-    expect(a.env()).toBe(m.env());
-    expect(a.slotsRead()).toEqual([MEMORY_KEY_SLOT]);
-  });
-
-  test("after the provider key, before Bitwarden", async () => {
-    const r = rig({
-      provider: "nous",
-      memory: SUPERMEMORY,
-      slots: { "provider-key": "nous-FIXTURE-KEY", [MEMORY_KEY_SLOT]: MEMORY_KEY },
+describe("the boot oneshot and converge", () => {
+  /** A box with `manifest` on disk and SSM answering the provider-key slot. */
+  function rig(manifest: AgentConfig) {
+    const host = new MemoryBox();
+    host.seed(USER_DATA_JSON_PATH, makeUserDataJson());
+    host.seed(FLEET_CACHE_PATH, JSON.stringify(makeFleetManifest()));
+    host.seed(MANIFEST_PATH, JSON.stringify(manifest));
+    const ssm = new RecordingSink();
+    ssm.byCommand.set("GetParameterCommand", (command) =>
+      (command as GetParameterCommand).input.Name?.endsWith("/provider-key")
+        ? { Parameter: { Value: PROVIDER_KEY } }
+        : parameterNotFound(),
+    );
+    const aws = makeAws({
+      ddb: new RecordingSink(),
+      ssm,
+      s3: new RecordingSink(),
+      agentsTable: TEST_AGENTS_TABLE,
+      eventsTable: TEST_EVENTS_TABLE,
+      now: () => host.now(),
     });
+    return {
+      host,
+      materialise: () => run(["secrets", "materialise"], host, { aws: () => aws }),
+      materialiseTo: (out: string) =>
+        run(["secrets", "materialise", "--out", out], host, { aws: () => aws }),
+      slotsRead: () =>
+        ssm.commandCalls(GetParameterCommand).map((c) => c.input.Name?.split("/").at(-1)),
+    };
+  }
+
+  test("secrets materialise writes the memory credential beside secrets.env", async () => {
+    const r = rig(serviceManifest("hindsight"));
     expect(await r.materialise()).toBe(0);
-    expect(r.env()).toBe(`NOUS_API_KEY=nous-FIXTURE-KEY\nSUPERMEMORY_API_KEY=${MEMORY_KEY}\n`);
+    expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
+      "HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n",
+    );
+    expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.mode).toBe("0600");
+    expect(r.host.files.get(SECRETS_ENV_PATH)?.content).toBe(
+      "ANTHROPIC_API_KEY='FIXTURE anthropic #key'\n",
+    );
+    // The provider key is the one read; the memory server has no slot of its own.
+    expect(r.slotsRead()).toEqual(["provider-key"]);
+    expect(out.stderr).not.toContain(PROVIDER_KEY);
   });
 
-  test("a local provider writes no memory line and reads no slot", async () => {
-    const r = rig({ memory: { provider: "holographic" } });
-    expect(await r.apply()).toBe(0);
-    expect(r.env()).toBe("\n");
-    expect(r.slotsRead()).toEqual([]);
+  test("secrets materialise --out elsewhere leaves the live credential file alone", async () => {
+    const r = rig(serviceManifest("hindsight"));
+    r.host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n", "0600");
+    expect(await r.materialiseTo("/run/hermetic/look.env")).toBe(0);
+    expect(r.host.files.get("/run/hermetic/look.env")).toBeDefined();
+    expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
+      "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n",
+    );
+
+    const bare = rig(makeManifest());
+    bare.host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n", "0600");
+    expect(await bare.materialiseTo("/run/hermetic/look.env")).toBe(0);
+    expect(bare.host.files.has(MEMORY_LLM_ENV_PATH)).toBe(true);
   });
 
-  test("the key never reaches stdout, stderr, events or argv", async () => {
-    const r = rig({ memory: SUPERMEMORY, slots: { [MEMORY_KEY_SLOT]: MEMORY_KEY } });
-    expect(await r.apply()).toBe(0);
+  test("secrets materialise removes it for an agent without a server", async () => {
+    const r = rig(makeManifest({ memory: { provider: "holographic" } }));
+    r.host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-old\n", "0600");
     expect(await r.materialise()).toBe(0);
-
-    const host = new BoxHost();
-    const { emit, events } = collector();
-    await apply(makeManifest({ memory: SUPERMEMORY }), { host, emit, memoryKey: MEMORY_KEY });
-
-    expect(r.env()).toContain(MEMORY_KEY);
-    expect(out.stdout).not.toContain(MEMORY_KEY);
-    expect(out.stderr).not.toContain(MEMORY_KEY);
-    expect(JSON.stringify(events)).not.toContain(MEMORY_KEY);
-    expect([...r.host.commands, ...host.commands].join("\n")).not.toContain(MEMORY_KEY);
+    expect(r.host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
   });
 
-  test("a manifest naming a key_ref with no key resolved is refused INTERNAL", async () => {
-    const host = new BoxHost();
-    const refused = await apply(makeManifest({ memory: SUPERMEMORY }), { host }).catch((e) => e);
-    expect(refused).toBeInstanceOf(AgentdError);
-    expect((refused as AgentdError).code).toBe("INTERNAL");
-    expect((refused as AgentdError).message).toContain("SUPERMEMORY_API_KEY");
-    // Refused before the file is touched: the previous binding's file stands.
-    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
-
-    // The CLI with an empty slot fails the same way, at the read.
-    const r = rig({ memory: SUPERMEMORY });
-    const viaCli = await r.apply().catch((e) => e);
-    expect((viaCli as AgentdError).code).toBe("INTERNAL");
-    expect(r.env()).toBe(null);
-  });
-
-  /**
-   * `key_ref` becomes an SSM path under the agent's own prefix, where `ts-key`
-   * and `bws-token` live too. A manifest that names one must not turn it into
-   * `SUPERMEMORY_API_KEY` — so it is refused before anything is read. Built
-   * past the schema, so this holds however core spells the field.
-   */
-  test("a key_ref that is not the memory slot is refused and never read", async () => {
-    const stolen = { provider: "supermemory", key_ref: "ts-key" } as unknown as AgentConfig["memory"];
-
-    const host = new BoxHost();
-    const refused = await apply(
-      { ...makeManifest(), memory: stolen },
-      { host, memoryKey: "tskey-auth-FIXTURE" },
-    ).catch((e) => e);
-    expect((refused as AgentdError).code).toBe("MANIFEST_REFUSED");
-    // Refused at the top: nothing installed, nothing written.
-    expect(host.commands).toEqual([]);
-    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
-
-    for (const command of ["materialise", "apply"] as const) {
-      const r = rig({ slots: { "ts-key": "tskey-auth-FIXTURE", [MEMORY_KEY_SLOT]: MEMORY_KEY } });
-      r.host.seed(MANIFEST_PATH, JSON.stringify({ ...makeManifest(), memory: stolen }));
-      const viaCli = await r[command]().catch((e) => e);
-      expect((viaCli as AgentdError).code).toBe("MANIFEST_REFUSED");
-      expect(r.slotsRead()).not.toContain("ts-key");
-      expect(r.env()).toBe(null);
-    }
-  });
-});
-
-describe("the memory provider's Python dependencies", () => {
-  test("a provider with no dependencies probes and installs nothing", async () => {
-    const host = new BoxHost();
-    await apply(makeManifest({ memory: { provider: "holographic" } }), { host });
-    expectNotRan(host, / -c import /);
-    expect(host.commands.filter((c) => /^uv pip install /.test(c) && !c.includes(" -e "))).toEqual([]);
-  });
-
-  test("supermemory is installed into Hermes's venv once, then probed and skipped", async () => {
-    const host = new BoxHost();
-    const venv = venvWithoutSupermemory(host);
-    const manifest = makeManifest({ memory: SUPERMEMORY });
-
-    const first = await apply(manifest, { host, memoryKey: MEMORY_KEY });
-    expect(venv.installs()).toBe(1);
-    expect(first.installed).toContain("pip:supermemory");
-    // After the venv exists, and before Hermes is started on it.
-    const pip = host.commands.indexOf(PIP_SUPERMEMORY);
-    expect(pip).toBeGreaterThan(host.commands.findIndex((c) => / -e /.test(c)));
-    expect(pip).toBeLessThan(host.commands.indexOf("systemctl restart hermes-gateway.service"));
-
-    host.commands.length = 0;
-    const second = await apply(manifest, { host, memoryKey: MEMORY_KEY });
-    expect(venv.installs()).toBe(1);
-    expectRan(host, `${PYTHON} -c import supermemory`, 1);
-    expect(second.installed).toEqual([]);
-    expect(second.restarted).toEqual([]);
-  });
-
-  test("an install on a running box restarts Hermes so it loads the provider", async () => {
-    const host = new BoxHost();
-    const manifest = makeManifest({ memory: SUPERMEMORY });
-    await apply(manifest, { host, memoryKey: MEMORY_KEY });
-    host.restarted.length = 0;
-    // The dependency went missing since (an operator's `uv pip uninstall`).
-    const venv = venvWithoutSupermemory(host);
-
-    const result = await apply(manifest, { host, memoryKey: MEMORY_KEY });
-    expect(venv.installs()).toBe(1);
-    expect(result.restarted.sort()).toEqual(["hermes-dashboard.service", "hermes-gateway.service"]);
-  });
-
-  test("a dry run probes and reports, and installs nothing", async () => {
-    const host = new BoxHost();
-    const manifest = makeManifest({ memory: SUPERMEMORY });
-    await apply(manifest, { host, memoryKey: MEMORY_KEY });
-    const venv = venvWithoutSupermemory(host);
-
-    const plan = await apply(manifest, { host, memoryKey: MEMORY_KEY, dryRun: true });
-    expect(plan.installed).toEqual(["pip:supermemory"]);
-    expect(venv.installs()).toBe(0);
-  });
-
-  test("distribution specs map to the module they import as", () => {
-    expect(importNameOf("supermemory")).toBe("supermemory");
-    expect(importNameOf("honcho-ai")).toBe("honcho");
-    expect(importNameOf("mem0ai>=2.0.10,<3")).toBe("mem0");
-    expect(importNameOf("requests")).toBe("requests");
-  });
-});
-
-describe("converge", () => {
-  test("a converge reads the memory slot and writes the key", async () => {
-    const host = new BoxHost();
-    const manifest: AgentConfig = { ...makeManifest({ memory: SUPERMEMORY }), config_hash: "cafef00d" };
+  test("a converge writes the credential from the provider key", async () => {
+    const host = new MemoryBox();
+    const manifest: AgentConfig = { ...serviceManifest("hindsight"), config_hash: "cafef00d" };
     const ddb = new RecordingSink();
     ddb.byCommand.set("GetCommand", () => ({
       Item: {
@@ -273,8 +661,8 @@ describe("converge", () => {
     }));
     const ssm = new RecordingSink();
     ssm.byCommand.set("GetParameterCommand", (command) =>
-      (command as GetParameterCommand).input.Name?.endsWith(`/${MEMORY_KEY_SLOT}`)
-        ? { Parameter: { Value: MEMORY_KEY } }
+      (command as GetParameterCommand).input.Name?.endsWith("/provider-key")
+        ? { Parameter: { Value: PROVIDER_KEY } }
         : parameterNotFound(),
     );
     const s3 = new RecordingSink();
@@ -307,7 +695,10 @@ describe("converge", () => {
     );
 
     expect(outcome.kind).toBe("applied");
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe(`SUPERMEMORY_API_KEY=${MEMORY_KEY}\n`);
+    expect(host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
+      "HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n",
+    );
+    expect(ssm.commandCalls(GetParameterCommand)).toHaveLength(1);
   });
 });
 
@@ -317,15 +708,16 @@ describe("verify-hermes", () => {
 
   test("the managed config must select the provider the manifest names", async () => {
     const host = new BoxHost();
-    host.seed("/etc/hermes/config.yaml", managed("supermemory"), "0640");
-    const ok = await checkHermes(host, makeManifest({ memory: SUPERMEMORY }));
-    expect(ok.find((c) => c.name === "memory")?.ok).toBe(true);
+    const manifest = makeManifest({ memory: { provider: "hindsight" } });
+    host.seed("/etc/hermes/config.yaml", managed("hindsight"), "0640");
+    const good = await checkHermes(host, manifest);
+    expect(good.find((c) => c.name === "memory")?.ok).toBe(true);
 
-    host.seed("/etc/hermes/config.yaml", managed("honcho"), "0640");
-    const drifted = await checkHermes(host, makeManifest({ memory: SUPERMEMORY }));
+    host.seed("/etc/hermes/config.yaml", managed("openviking"), "0640");
+    const drifted = await checkHermes(host, manifest);
     const memory = drifted.find((c) => c.name === "memory");
     expect(memory?.ok).toBe(false);
-    expect(memory?.detail).toContain("honcho");
+    expect(memory?.detail).toContain("openviking");
   });
 
   test("no memory check without a provider", async () => {

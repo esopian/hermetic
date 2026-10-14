@@ -1,47 +1,62 @@
 /**
  * The Hermes external memory provider: chosen at `agents.create`, inherited
- * from `settings.default_memory_provider`, pinned on the row, rendered into the
- * managed config, and — for a keyed provider — its key copied from the fleet's
- * shared `memory-<id>` slot into the agent's own `memory-key` slot.
+ * from `settings.default_memory_provider`, pinned on the row, refused before
+ * anything exists when the box cannot run it, and rendered — the managed
+ * config's `memory.provider` always, and for a service provider its server,
+ * its configuration and the manifest block hermeticd installs from.
  */
 import { describe, expect, test } from "bun:test";
 import { HermeticError } from "../src/errors.ts";
-import {
-  FIXTURE_CONFIG,
-  FIXTURE_MEMORY_KEY,
-  MemoryBackend,
-  fixtureConfigFor,
-  seedFixtureFleet,
-  seedFixtureFoundation,
-} from "../src/backend/memory.ts";
-import { SECRET_PLACEHOLDER, sharedSecretPath } from "../src/backend/constants.ts";
+import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/memory.ts";
 import {
   AgentConfig,
   AgentMemory,
   CreateAgentInput,
   FleetSettings,
+  HERMES_ACCOUNT_HOME,
+  HERMES_GATEWAY_DROPIN,
   HERMES_MANAGED_CONFIG,
-  MEMORY_KEY_SLOT,
+  MEMORY_LLM_ENV_PATH,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDERS_LIST,
   MEMORY_PROVIDER_CAPABILITY,
   MEMORY_PROVIDER_IDS,
+  MEMORY_SERVICES,
+  MEMORY_SERVICE_CAPABILITY,
+  MEMORY_SERVICE_UNIT,
   MemoryProviderChoice,
   SettingsSetInput,
+  type MemoryLlmKeyEnv,
+  StoredMemoryProviderId,
   isMemoryProvider,
-  memoryKeyEnv,
-  memoryKeySlug,
-  memoryProviderNeedsKey,
+  memoryServiceDir,
+  openvikingConfPath,
   requiredCapabilities,
+  type Provider,
 } from "../src/schema/index.ts";
+import { PROVIDER_IDS } from "../src/shared/providers.ts";
 import { renderAgentConfig, type RenderInput } from "../src/render/render.ts";
-import { resolveMemoryProvider } from "../src/agents/lifecycle/memory-binding.ts";
+import { memoryLlmFor, renderMemory } from "../src/render/render-memory.ts";
+import {
+  assertMemoryLlm,
+  assertMemorySized,
+  memoryCapabilities,
+  memoryLlmSupported,
+  memoryOf,
+  resolveMemoryProvider,
+} from "../src/agents/lifecycle/memory-binding.ts";
 import { drain, freshFleet, testHermetic } from "./helpers.ts";
 
-const SUPERMEMORY_SLOT = sharedSecretPath(FIXTURE_CONFIG.fleet_id, "memory-supermemory");
-const HONCHO_KEY = "hc-memory-FIXTURE-SECRET";
+function codeOf(run: () => unknown): string | null {
+  try {
+    run();
+    return null;
+  } catch (e) {
+    return e instanceof HermeticError ? e.code : `not a HermeticError: ${String(e)}`;
+  }
+}
 
-async function codeOf(run: () => Promise<unknown>): Promise<string | null> {
+async function codeOfAsync(run: () => Promise<unknown>): Promise<string | null> {
   try {
     await run();
     return null;
@@ -50,85 +65,476 @@ async function codeOf(run: () => Promise<unknown>): Promise<string | null> {
   }
 }
 
+/** The refusal itself, for a test that must tell one `VALIDATION` from another. */
+async function errorOfAsync(run: () => Promise<unknown>): Promise<HermeticError | null> {
+  try {
+    await run();
+    return null;
+  } catch (e) {
+    if (e instanceof HermeticError) return e;
+    throw e;
+  }
+}
+
+/** `assertModelId`'s refusal, as opposed to any other `VALIDATION`. */
+function expectModelRefused(error: HermeticError | null, provider: string): void {
+  expect(error?.code).toBe("VALIDATION");
+  expect(error?.message).toInclude(`cannot be handed to the ${provider} memory server`);
+}
+
 describe("the memory provider catalogue", () => {
-  test("ids, keys and slots agree with each other", () => {
-    expect([...MEMORY_PROVIDER_IDS]).toEqual([
-      "holographic",
-      "supermemory",
-      "honcho",
-      "mem0",
-      "retaindb",
-    ]);
+  test("exactly the three providers hermetic can run on the box", () => {
+    expect([...MEMORY_PROVIDER_IDS]).toEqual(["holographic", "hindsight", "openviking"]);
     expect(MEMORY_PROVIDERS_LIST.map((p) => p.id)).toEqual([...MEMORY_PROVIDER_IDS]);
-    for (const id of MEMORY_PROVIDER_IDS) {
-      const spec = MEMORY_PROVIDERS[id];
-      // A keyed provider names its variable; the local one names none.
-      expect(memoryProviderNeedsKey(id)).toBe(spec.env !== null);
-      expect(memoryKeyEnv(id)).toBe(spec.env);
-      expect(memoryKeySlug(id)).toBe(`memory-${id}`);
+    expect(MEMORY_PROVIDERS.holographic.kind).toBe("in-process");
+    expect(MEMORY_PROVIDERS.holographic.min_mem_gib).toBe(0);
+    for (const id of ["hindsight", "openviking"] as const) {
+      expect(MEMORY_PROVIDERS[id].kind).toBe("service");
+      expect(MEMORY_PROVIDERS[id].uses_llm).toBe(true);
+      expect(MEMORY_SERVICES[id].pin.length).toBeGreaterThan(0);
+      expect(MEMORY_SERVICES[id].port).toBeGreaterThan(1024);
+      expect(memoryServiceDir(id)).toBe(`/data/hermes/memory/${id}`);
+    }
+    for (const spec of MEMORY_PROVIDERS_LIST) {
       expect(spec.docs).toStartWith(
         "https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers",
       );
     }
-    expect(memoryProviderNeedsKey("holographic")).toBe(false);
-    expect(memoryKeyEnv("supermemory")).toBe("SUPERMEMORY_API_KEY");
-    expect(MEMORY_KEY_SLOT).toBe("memory-key");
-    expect(isMemoryProvider("mem0")).toBe(true);
-    // Upstream's built-in-only sentinels are not providers.
-    for (const s of ["none", "builtin", "default", "", "hindsight"])
+    for (const s of ["none", "builtin", "default", "", "supermemory", "mem0", "honcho", "retaindb"])
       expect(isMemoryProvider(s)).toBe(false);
   });
 });
 
 describe("memory provider schemas", () => {
   test("a create accepts a provider or `none`, and refuses anything else", () => {
-    expect(CreateAgentInput.parse({ name: "kite", memory_provider: "honcho" }).memory_provider).toBe(
-      "honcho",
+    expect(CreateAgentInput.parse({ name: "kite", memory_provider: "hindsight" }).memory_provider).toBe(
+      "hindsight",
     );
     expect(CreateAgentInput.parse({ name: "kite", memory_provider: "none" }).memory_provider).toBe(
       "none",
     );
     expect(CreateAgentInput.parse({ name: "kite" }).memory_provider).toBeUndefined();
-    expect(CreateAgentInput.safeParse({ name: "kite", memory_provider: "hindsight" }).success).toBe(
-      false,
-    );
-    expect(CreateAgentInput.safeParse({ name: "kite", memory_provider: "builtin" }).success).toBe(
-      false,
-    );
+    for (const bad of ["supermemory", "builtin", ""])
+      expect(CreateAgentInput.safeParse({ name: "kite", memory_provider: bad }).success).toBe(false);
     expect(MemoryProviderChoice.safeParse("").success).toBe(false);
   });
 
-  test("the fleet default takes a provider or null, never `none`", () => {
-    expect(SettingsSetInput.parse({ default_memory_provider: "mem0" }).default_memory_provider).toBe(
-      "mem0",
-    );
+  test("a settings write is strict; a stored fleet default is lenient", () => {
+    expect(
+      SettingsSetInput.parse({ default_memory_provider: "openviking" }).default_memory_provider,
+    ).toBe("openviking");
     expect(
       SettingsSetInput.parse({ default_memory_provider: null }).default_memory_provider,
     ).toBeNull();
     expect(SettingsSetInput.safeParse({ default_memory_provider: "none" }).success).toBe(false);
-    // On its own it is enough to make a write that names something.
-    expect(SettingsSetInput.safeParse({}).success).toBe(false);
-    expect(FleetSettings.shape.default_memory_provider.safeParse("bogus").success).toBe(false);
+    expect(SettingsSetInput.safeParse({ default_memory_provider: "mem0" }).success).toBe(false);
+    // A default written under a since-removed provider reads as none, not a failed parse.
+    expect(FleetSettings.shape.default_memory_provider.parse("mem0")).toBeNull();
+    expect(StoredMemoryProviderId.parse("mem0")).toBeNull();
+    expect(StoredMemoryProviderId.parse("holographic")).toBe("holographic");
+    expect(StoredMemoryProviderId.parse(null)).toBeNull();
   });
 
-  test("a row's memory names a provider and a nullish slot", () => {
+  test("a row written under f5ad900 reads as built-in memory, a current one as itself", () => {
+    expect(AgentMemory.parse({ provider: "supermemory", key_ref: "memory-key" })).toBeNull();
     expect(AgentMemory.parse({ provider: "holographic", key_ref: null })).toEqual({
       provider: "holographic",
-      key_ref: null,
     });
-    expect(AgentMemory.safeParse({ provider: "nope" }).success).toBe(false);
-    expect(AgentMemory.safeParse({ provider: "honcho", key_ref: "" }).success).toBe(false);
+    expect(AgentMemory.parse({ provider: "hindsight" })).toEqual({ provider: "hindsight" });
+    expect(AgentMemory.parse(null)).toBeNull();
+    expect(AgentMemory.parse("hindsight")).toBeNull();
   });
 });
 
-describe("resolving a create's memory provider", () => {
+describe("resolving and checking a create's memory provider", () => {
   test("stated wins, absent inherits, `none` overrides the default", () => {
     const fleet = { default_memory_provider: "holographic" as const };
-    expect(resolveMemoryProvider("honcho", fleet)).toBe("honcho");
+    expect(resolveMemoryProvider("hindsight", fleet)).toBe("hindsight");
     expect(resolveMemoryProvider(undefined, fleet)).toBe("holographic");
     expect(resolveMemoryProvider("none", fleet)).toBeNull();
     expect(resolveMemoryProvider(undefined, {})).toBeNull();
     expect(resolveMemoryProvider(undefined, { default_memory_provider: null })).toBeNull();
+    // An unparsed stored default from a removed provider pins nothing.
+    expect(resolveMemoryProvider(undefined, { default_memory_provider: "mem0" as never })).toBeNull();
+    expect(memoryOf("openviking")).toEqual({ provider: "openviking" });
+    expect(memoryOf(null)).toBeNull();
+  });
+
+  test("a size too small for the server is MEMORY_PROVIDER_UNDERSIZED", () => {
+    for (const size of ["micro", "xxsmall", "xsmall"] as const) {
+      expect(codeOf(() => assertMemorySized("hindsight", size, undefined))).toBe(
+        "MEMORY_PROVIDER_UNDERSIZED",
+      );
+    }
+    for (const size of ["micro", "xxsmall"] as const) {
+      expect(codeOf(() => assertMemorySized("openviking", size, undefined))).toBe(
+        "MEMORY_PROVIDER_UNDERSIZED",
+      );
+    }
+    expect(codeOf(() => assertMemorySized("openviking", "xsmall", undefined))).toBeNull();
+    expect(codeOf(() => assertMemorySized("hindsight", "small", undefined))).toBeNull();
+    expect(codeOf(() => assertMemorySized("holographic", "micro", undefined))).toBeNull();
+    expect(codeOf(() => assertMemorySized(null, "micro", undefined))).toBeNull();
+    // An explicit instance type's memory is unknown to core: the operator owns it.
+    expect(codeOf(() => assertMemorySized("hindsight", "micro", "r8g.large"))).toBeNull();
+
+    let error: HermeticError | null = null;
+    try {
+      assertMemorySized("hindsight", "xsmall", undefined);
+    } catch (e) {
+      error = e as HermeticError;
+    }
+    expect(error?.details).toEqual({
+      provider: "hindsight",
+      size: "xsmall",
+      mem_gib: 4,
+      min_mem_gib: 8,
+    });
+  });
+
+  test("a vendor the provider cannot call through is MEMORY_LLM_UNSUPPORTED", () => {
+    // Every shipped provider lists every vendor, so the refusal is exercised on a narrowed spec.
+    for (const id of MEMORY_PROVIDER_IDS) {
+      for (const vendor of PROVIDER_IDS) {
+        expect(codeOf(() => assertMemoryLlm(id, vendor))).toBeNull();
+      }
+    }
+    const narrowed = { vendors: ["anthropic", "openai"] as const satisfies readonly Provider[] };
+    expect(memoryLlmSupported(narrowed, "anthropic")).toBe(true);
+    expect(memoryLlmSupported(narrowed, "bedrock")).toBe(false);
+    expect(codeOf(() => assertMemoryLlm("hindsight", "bedrock", narrowed))).toBe(
+      "MEMORY_LLM_UNSUPPORTED",
+    );
+    expect(codeOf(() => assertMemoryLlm("hindsight", "openai", narrowed))).toBeNull();
+    expect(codeOf(() => assertMemoryLlm(null, "bedrock", narrowed))).toBeNull();
+  });
+
+  test("the capabilities a choice adds", () => {
+    expect(memoryCapabilities(null)).toEqual([]);
+    expect(memoryCapabilities("holographic")).toEqual([MEMORY_PROVIDER_CAPABILITY]);
+    expect(memoryCapabilities("hindsight")).toEqual([
+      MEMORY_PROVIDER_CAPABILITY,
+      MEMORY_SERVICE_CAPABILITY,
+    ]);
+  });
+});
+
+describe("mapping the agent's model onto a memory server", () => {
+  const NOUS = "https://inference-api.nousresearch.com/v1";
+  const VERCEL = "https://ai-gateway.vercel.sh/v1";
+
+  test("hindsight: its own provider names, a base URL for the compatible endpoints", () => {
+    const expected: Record<Provider, { provider: string; base?: string; keyed: boolean }> = {
+      anthropic: { provider: "anthropic", keyed: true },
+      openai: { provider: "openai", keyed: true },
+      openrouter: { provider: "openrouter", keyed: true },
+      nous: { provider: "openai", base: NOUS, keyed: true },
+      vercel: { provider: "openai", base: VERCEL, keyed: true },
+      bedrock: { provider: "bedrock", keyed: false },
+    };
+    for (const vendor of PROVIDER_IDS) {
+      const { llm, settings } = memoryLlmFor("hindsight", vendor, "some/model-1");
+      const want = expected[vendor];
+      expect(llm).toEqual({
+        vendor,
+        model: "some/model-1",
+        key_env: want.keyed ? ["HINDSIGHT_API_LLM_API_KEY"] : [],
+      });
+      expect(settings.env).toEqual({
+        HINDSIGHT_API_LLM_PROVIDER: want.provider,
+        HINDSIGHT_API_LLM_MODEL: "some/model-1",
+        ...(want.base === undefined ? {} : { HINDSIGHT_API_LLM_BASE_URL: want.base }),
+      });
+    }
+  });
+
+  test("openviking: a litellm route, the route's key variable, an api_base where compatible", () => {
+    const expected: Record<Provider, { route: string; base?: string; key_env: MemoryLlmKeyEnv[] }> = {
+      anthropic: { route: "anthropic", key_env: ["ANTHROPIC_API_KEY"] },
+      openai: { route: "openai", key_env: ["OPENAI_API_KEY"] },
+      openrouter: { route: "openrouter", key_env: ["OPENROUTER_API_KEY"] },
+      nous: { route: "openai", base: NOUS, key_env: ["OPENAI_API_KEY"] },
+      vercel: { route: "openai", base: VERCEL, key_env: ["OPENAI_API_KEY"] },
+      bedrock: { route: "bedrock", key_env: [] },
+    };
+    for (const vendor of PROVIDER_IDS) {
+      const { llm, settings } = memoryLlmFor("openviking", vendor, "m-2");
+      const want = expected[vendor];
+      expect(llm).toEqual({ vendor, model: "m-2", key_env: want.key_env });
+      expect(settings.vlm).toEqual({
+        provider: "litellm",
+        model: `${want.route}/m-2`,
+        ...(want.base === undefined ? {} : { api_base: want.base }),
+      });
+    }
+  });
+
+  test("a model id that could break a unit line or ov.conf is refused", () => {
+    for (const bad of ["a b", "a\nExecStart=/bin/sh", "x%n", "$HOME/m", "m${X}"]) {
+      expect(codeOf(() => memoryLlmFor("openviking", "openai", bad))).toBe("VALIDATION");
+      expect(codeOf(() => memoryLlmFor("hindsight", "openai", bad))).toBe("VALIDATION");
+    }
+    expect(codeOf(() => memoryLlmFor("hindsight", "bedrock", "us.anthropic.claude-x-v2:0"))).toBeNull();
+  });
+});
+
+/** The hindsight plugin's settings, as environment on the Hermes units (`memoryHermesLines`). */
+const HINDSIGHT_PLUGIN_ENV = [
+  "Environment=HINDSIGHT_MODE=local_external",
+  "Environment=HINDSIGHT_API_URL=http://127.0.0.1:8888",
+  "Environment=HINDSIGHT_BANK_ID=hermes",
+  "Environment=HINDSIGHT_BUDGET=mid",
+  "Environment=HINDSIGHT_TIMEOUT=120",
+];
+
+describe("renderMemory", () => {
+  const unitPath = `/etc/systemd/system/${MEMORY_SERVICE_UNIT}`;
+  const base = { provider: "anthropic" as Provider, model: "claude-sonnet-5", region: "us-east-1" };
+
+  test("none and holographic render no files, no unit, no Hermes lines", () => {
+    const none = renderMemory(base);
+    expect(none).toEqual({
+      files: [],
+      units: [],
+      manifestMemory: undefined,
+      hermesUnitLines: { ordering: [], service: [] },
+    });
+    const holo = renderMemory({ ...base, memory: { provider: "holographic" } });
+    expect(holo.files).toEqual([]);
+    expect(holo.units).toEqual([]);
+    expect(holo.manifestMemory).toEqual({ provider: "holographic" });
+    expect(holo.hermesUnitLines).toEqual({ ordering: [], service: [] });
+  });
+
+  test("hindsight: a loopback server under the data volume; the plugin told by environment", () => {
+    const r = renderMemory({ ...base, memory: { provider: "hindsight" } });
+    const dir = memoryServiceDir("hindsight");
+    expect(r.units).toEqual([MEMORY_SERVICE_UNIT]);
+    const unit = r.files.find((f) => f.path === unitPath)!.content;
+    expect(unit).not.toInclude("0.0.0.0");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_HOST=127.0.0.1\n");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_PORT=8888\n");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_DATABASE_URL=pg0\n");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_LLM_PROVIDER=anthropic\n");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_LLM_MODEL=claude-sonnet-5\n");
+    expect(unit).toInclude("Environment=HINDSIGHT_API_MODEL_INIT_TIMEOUT=1800\n");
+    expect(unit).toInclude(`Environment=HF_HOME=${dir}/hf\n`);
+    expect(unit).toInclude(`ExecStart=${dir}/venv/bin/hindsight-api\n`);
+    expect(unit).toInclude(`EnvironmentFile=${MEMORY_LLM_ENV_PATH}\n`);
+    expect(unit).toInclude("RequiresMountsFor=/data\n");
+    expect(unit).toInclude("User=hermes\n");
+    expect(unit).toInclude("Environment=HOME=/data/hermes\n");
+    expect(unit).not.toInclude("AWS_REGION");
+
+    // No plugin config file: the unit is the only file, and nothing lands under the hermes home.
+    expect(r.files.map((f) => f.path)).toEqual([unitPath]);
+    expect(r.hermesUnitLines).toEqual({
+      ordering: [`Wants=${MEMORY_SERVICE_UNIT}`, `After=${MEMORY_SERVICE_UNIT}`],
+      service: HINDSIGHT_PLUGIN_ENV,
+    });
+    expect(r.manifestMemory).toEqual({
+      provider: "hindsight",
+      pin: MEMORY_SERVICES.hindsight.pin,
+      llm: { vendor: "anthropic", model: "claude-sonnet-5", key_env: ["HINDSIGHT_API_LLM_API_KEY"] },
+    });
+  });
+
+  test("openviking: ov.conf is strict JSON with no `$` and no key, and Hermes is told the endpoint", () => {
+    const r = renderMemory({
+      ...base,
+      provider: "nous",
+      model: "deepseek/x",
+      memory: { provider: "openviking" },
+    });
+    const dir = memoryServiceDir("openviking");
+    const unit = r.files.find((f) => f.path === unitPath)!.content;
+    expect(unit).not.toInclude("0.0.0.0");
+    expect(openvikingConfPath).toBe("/etc/hermetic/memory/ov.conf");
+    expect(unit).toInclude(
+      `ExecStart=${dir}/venv/bin/openviking-server --config ${openvikingConfPath}\n`,
+    );
+    expect(unit).toInclude(`EnvironmentFile=${MEMORY_LLM_ENV_PATH}\n`);
+
+    expect(r.files.map((f) => f.path)).toEqual([unitPath, openvikingConfPath]);
+    const conf = r.files.find((f) => f.path === openvikingConfPath)!;
+    expect({ mode: conf.mode, owner: conf.owner, group: conf.group }).toEqual({
+      mode: "0640",
+      owner: "root",
+      group: "hermes",
+    });
+    expect(conf.restart_units).toEqual([MEMORY_SERVICE_UNIT]);
+    expect(conf.content).not.toInclude("$");
+    expect(conf.content.toLowerCase()).not.toInclude("api_key");
+    expect(JSON.parse(conf.content)).toEqual({
+      server: { host: "127.0.0.1", port: 1933, auth_mode: null },
+      storage: { workspace: `${dir}/data` },
+      embedding: {
+        dense: { provider: "local", model: "bge-small-zh-v1.5-f16", cache_dir: `${dir}/models` },
+      },
+      vlm: {
+        provider: "litellm",
+        model: "openai/deepseek/x",
+        api_base: "https://inference-api.nousresearch.com/v1",
+      },
+    });
+
+    expect(r.hermesUnitLines.service).toEqual([
+      "Environment=OPENVIKING_ENDPOINT=http://127.0.0.1:1933",
+    ]);
+    expect(r.manifestMemory?.llm?.key_env).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  test("bedrock: no key variable, the region on the server's unit", () => {
+    for (const provider of ["hindsight", "openviking"] as const) {
+      const r = renderMemory({
+        provider: "bedrock",
+        model: "zai.glm-4.7-flash",
+        region: "eu-west-1",
+        memory: { provider },
+      });
+      const unit = r.files.find((f) => f.path === unitPath)!.content;
+      for (const v of ["AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"])
+        expect(unit).toInclude(`Environment=${v}=eu-west-1\n`);
+      expect(r.manifestMemory?.llm?.key_env).toEqual([]);
+    }
+  });
+});
+
+describe("rendering an agent with each memory provider", () => {
+  const render = (memory?: RenderInput["memory"], provider: Provider = "anthropic") =>
+    renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider,
+      secrets_mode: "none",
+      hermes_version: "0.21.1",
+      hermes_ref: "v2026.9.24",
+      chrome_ref: "153.0.8010.12",
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      ...(memory === undefined ? {} : { memory }),
+    });
+  const file = (r: ReturnType<typeof render>, path: string) =>
+    r.files.find((f) => f.path === path)?.content ?? "";
+
+  const none = render();
+  const holo = render({ provider: "holographic" });
+  const hind = render({ provider: "hindsight" });
+  const ov = render({ provider: "openviking" });
+
+  test("none renders no memory and asks for nothing", () => {
+    expect(file(none, HERMES_MANAGED_CONFIG)).not.toInclude("memory:");
+    expect(none.manifest.memory).toBeUndefined();
+    expect(none.manifest.units).not.toContain(MEMORY_SERVICE_UNIT);
+    expect(none.manifest.requires ?? []).not.toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(file(none, "/etc/systemd/system/hermes-dashboard.service")).not.toInclude(
+      MEMORY_SERVICE_UNIT,
+    );
+  });
+
+  test("holographic is the managed config's selection and the memory-provider capability only", () => {
+    expect(file(holo, HERMES_MANAGED_CONFIG)).toInclude('memory:\n  provider: "holographic"\n');
+    expect(holo.manifest.memory).toEqual({ provider: "holographic" });
+    expect(requiredCapabilities(holo.manifest)).toContain(MEMORY_PROVIDER_CAPABILITY);
+    expect(requiredCapabilities(holo.manifest)).not.toContain(MEMORY_SERVICE_CAPABILITY);
+    expect(holo.manifest.units).not.toContain(MEMORY_SERVICE_UNIT);
+  });
+
+  test("a service provider adds its unit, orders Hermes behind it, and asks for both capabilities", () => {
+    for (const r of [hind, ov]) {
+      expect(r.manifest.units).toContain(MEMORY_SERVICE_UNIT);
+      expect(r.manifest.units.indexOf(MEMORY_SERVICE_UNIT)).toBeLessThan(
+        r.manifest.units.indexOf("hermes-dashboard.service"),
+      );
+      expect(r.manifest.requires).toContain(MEMORY_PROVIDER_CAPABILITY);
+      expect(r.manifest.requires).toContain(MEMORY_SERVICE_CAPABILITY);
+      for (const path of ["/etc/systemd/system/hermes-dashboard.service", HERMES_GATEWAY_DROPIN]) {
+        expect(file(r, path)).toInclude(`Wants=${MEMORY_SERVICE_UNIT}\nAfter=${MEMORY_SERVICE_UNIT}\n`);
+      }
+    }
+    const hermesUnits = ["/etc/systemd/system/hermes-dashboard.service", HERMES_GATEWAY_DROPIN];
+    for (const path of hermesUnits) {
+      expect(file(ov, path)).toInclude("Environment=OPENVIKING_ENDPOINT=http://127.0.0.1:1933\n");
+      expect(file(ov, path)).not.toInclude("HINDSIGHT_");
+      for (const line of HINDSIGHT_PLUGIN_ENV) expect(file(hind, path)).toInclude(`${line}\n`);
+      expect(file(hind, path)).not.toInclude("OPENVIKING_ENDPOINT");
+      for (const r of [none, holo]) {
+        expect(file(r, path)).not.toInclude("HINDSIGHT_");
+        expect(file(r, path)).not.toInclude("OPENVIKING_ENDPOINT");
+      }
+    }
+    expect(hind.manifest.memory?.pin).toBe(MEMORY_SERVICES.hindsight.pin);
+    expect(ov.manifest.memory?.pin).toBe(MEMORY_SERVICES.openviking.pin);
+  });
+
+  test("the model the server is told is the agent's own", () => {
+    expect(hind.manifest.memory?.llm?.model).toBe("claude-sonnet-5");
+    const r = renderAgentConfig({
+      name: "atlas",
+      size: "small",
+      provider: "openrouter",
+      secrets_mode: "none",
+      hermes_version: "0.21.1",
+      hermes_ref: "v2026.9.24",
+      chrome_ref: "153.0.8010.12",
+      region: "us-east-1",
+      tailnet: "tail0.ts.net",
+      hermes: { model: "qwen/qwen3-coder" },
+      memory: { provider: "hindsight" },
+    });
+    expect(r.manifest.memory?.llm).toEqual({
+      vendor: "openrouter",
+      model: "qwen/qwen3-coder",
+      key_env: ["HINDSIGHT_API_LLM_API_KEY"],
+    });
+  });
+
+  /**
+   * Root's files phase writes and chowns every rendered file, and the `hermes`
+   * account controls every directory entry under its own home — so nothing
+   * hermetic renders, for any provider, may land there.
+   */
+  test("no provider renders a file under the hermes account's home", () => {
+    for (const vendor of PROVIDER_IDS) {
+      for (const memory of [undefined, ...MEMORY_PROVIDER_IDS.map((provider) => ({ provider }))]) {
+        const r = render(memory, vendor);
+        for (const f of r.files) {
+          expect(f.path === HERMES_ACCOUNT_HOME || f.path.startsWith(`${HERMES_ACCOUNT_HOME}/`)).toBe(
+            false,
+          );
+        }
+      }
+    }
+  });
+
+  test("every provider × vendor parses as AgentConfig, hashes apart, and carries no secret", () => {
+    const hashes = new Set<string>();
+    for (const vendor of PROVIDER_IDS) {
+      for (const memory of [undefined, ...MEMORY_PROVIDER_IDS.map((provider) => ({ provider }))]) {
+        const r = render(memory, vendor);
+        const parsed = AgentConfig.parse(JSON.parse(JSON.stringify(r.manifest)));
+        expect(parsed.memory).toEqual(r.manifest.memory);
+        hashes.add(r.manifest.config_hash);
+        const serialised = JSON.stringify(r.manifest) + r.files.map((f) => f.content).join("\n");
+        expect(serialised).not.toInclude("FIXTURE");
+        expect(serialised).not.toMatch(/sk-[A-Za-z0-9]/);
+        if (r.manifest.memory?.llm) {
+          expect(Object.keys(r.manifest.memory.llm).sort()).toEqual(["key_env", "model", "vendor"]);
+        }
+      }
+    }
+    expect(hashes.size).toBe(PROVIDER_IDS.length * (MEMORY_PROVIDER_IDS.length + 1));
+  });
+
+  test("a known provider's block is strict; a removed provider's reads as none", () => {
+    const forged = { ...hind.manifest, memory: { provider: "hindsight", pin: "" } };
+    expect(AgentConfig.safeParse(forged).success).toBe(false);
+    // A bundle rendered under f5ad900, still on a box's root volume (`StoredManifestMemory`).
+    const stale = AgentConfig.parse({
+      ...hind.manifest,
+      memory: { provider: "supermemory", key_ref: "memory-key" },
+    });
+    expect(stale.memory).toBeUndefined();
   });
 });
 
@@ -138,153 +544,103 @@ describe("agents.create with a memory provider", () => {
     await drain(hermetic.agents.create({ name: "kite" }));
     const agent = (await backend.store.agents.get("kite"))!;
     expect(agent.memory).toBeNull();
-    expect(agent.resources.ssm_paths.some((p) => p.endsWith("/memory-key"))).toBe(false);
   });
 
-  test("an absent choice inherits the fleet default", async () => {
+  test("an absent choice inherits the fleet default; `none` overrides it", async () => {
     const { backend, hermetic } = freshFleet();
-    await hermetic.settings.set({ default_memory_provider: "holographic" });
+    await hermetic.settings.set({ default_memory_provider: "hindsight" });
     await drain(hermetic.agents.create({ name: "kite" }));
+    expect((await backend.store.agents.get("kite"))!.memory).toEqual({ provider: "hindsight" });
+    await drain(hermetic.agents.create({ name: "wren", memory_provider: "none" }));
+    expect((await backend.store.agents.get("wren"))!.memory).toBeNull();
+  });
+
+  test("a service provider renders its server into the uploaded config", async () => {
+    const { backend, hermetic } = freshFleet();
+    await drain(hermetic.agents.create({ name: "kite", memory_provider: "openviking" }));
     const agent = (await backend.store.agents.get("kite"))!;
-    expect(agent.memory).toEqual({ provider: "holographic", key_ref: null });
-    // A local provider needs no key, so no slot.
-    expect(agent.resources.ssm_paths.some((p) => p.endsWith("/memory-key"))).toBe(false);
+    expect(agent.memory).toEqual({ provider: "openviking" });
+    // No memory secret exists: nothing new under the agent's SSM prefix.
+    expect(agent.resources.ssm_paths.some((p) => p.includes("memory"))).toBe(false);
+    const tarball = backend.objects.get(agent.resources.config_key!)!;
+    const text = new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(tarball)));
+    expect(text).toInclude(MEMORY_SERVICE_UNIT);
+    expect(text).toInclude(MEMORY_SERVICES.openviking.pin);
   });
 
-  test("an explicit `none` overrides the fleet default to built-in only", async () => {
+  test("an undersized create is refused before the name is taken", async () => {
     const { backend, hermetic } = freshFleet();
-    await hermetic.settings.set({ default_memory_provider: "supermemory" });
-    await drain(hermetic.agents.create({ name: "kite", memory_provider: "none" }));
-    expect((await backend.store.agents.get("kite"))!.memory).toBeNull();
-  });
-
-  test("the staging fixture's default is inherited", async () => {
-    const backend = seedFixtureFoundation(new MemoryBackend(), { fleet: "staging" });
-    expect(backend.fleetItem!.settings!.default_memory_provider).toBe("holographic");
-    const hermetic = testHermetic({ backend, config: fixtureConfigFor("staging") });
-    await drain(hermetic.agents.create({ name: "kite" }));
-    expect((await backend.store.agents.get("kite"))!.memory).toEqual({
-      provider: "holographic",
-      key_ref: null,
-    });
-  });
-
-  test("a keyed provider's shared key is copied into the agent's own slot", async () => {
-    const { backend, hermetic } = freshFleet();
-    const events = await drain(
-      hermetic.agents.create({ name: "kite", memory_provider: "supermemory" }),
-    );
-    const agent = (await backend.store.agents.get("kite"))!;
-    expect(agent.memory).toEqual({ provider: "supermemory", key_ref: "memory-key" });
-    const slot = "/hermes/fxtr0001/kite/memory-key";
-    expect(agent.resources.ssm_paths).toContain(slot);
-    expect(backend.params.get(slot)).toBe(FIXTURE_MEMORY_KEY);
-
-    // The slot is named, the value never is.
-    const stream = JSON.stringify(events);
-    expect(stream).toInclude(
-      "SUPERMEMORY_API_KEY copied from the fleet's shared slot memory-supermemory",
-    );
-    expect(stream).not.toInclude(FIXTURE_MEMORY_KEY);
-    const history = await backend.store.events.query("kite");
-    expect(history.map((e) => e.detail)).toContain("memory-key from shared slot memory-supermemory");
-    expect(JSON.stringify(history)).not.toInclude(FIXTURE_MEMORY_KEY);
-  });
-
-  test("an absent shared slot is MEMORY_KEY_MISSING, before the name is taken", async () => {
-    const { backend, hermetic } = freshFleet();
-    let error: HermeticError | null = null;
-    try {
-      await drain(hermetic.agents.create({ name: "kite", memory_provider: "honcho" }));
-    } catch (e) {
-      error = e as HermeticError;
-    }
-    expect(error?.code).toBe("MEMORY_KEY_MISSING");
-    expect(error?.message).toInclude("hermetic secrets push _fleet --shared memory-honcho");
+    expect(
+      await codeOfAsync(() =>
+        drain(hermetic.agents.create({ name: "kite", size: "xsmall", memory_provider: "hindsight" })),
+      ),
+    ).toBe("MEMORY_PROVIDER_UNDERSIZED");
     expect(await backend.store.agents.get("kite")).toBeNull();
     expect(backend.mutations).not.toContain("compute.runInstance");
-  });
 
-  test("a placeholder shared slot is MEMORY_KEY_MISSING too, inherited or stated", async () => {
-    const { backend, hermetic } = freshFleet();
-    backend.params.set(SUPERMEMORY_SLOT, SECRET_PLACEHOLDER);
-    await hermetic.settings.set({ default_memory_provider: "supermemory" });
-    expect(await codeOf(() => drain(hermetic.agents.create({ name: "kite" })))).toBe(
-      "MEMORY_KEY_MISSING",
+    // An inherited default is checked the same way.
+    await hermetic.settings.set({ default_memory_provider: "hindsight" });
+    expect(
+      await codeOfAsync(() => drain(hermetic.agents.create({ name: "kite", size: "micro" }))),
+    ).toBe("MEMORY_PROVIDER_UNDERSIZED");
+    // `none`, or a provider that fits, still creates.
+    await drain(
+      hermetic.agents.create({ name: "kite", size: "xsmall", memory_provider: "openviking" }),
     );
-    expect(await backend.store.agents.get("kite")).toBeNull();
-    // `none` still creates, because it asks for no key.
-    await drain(hermetic.agents.create({ name: "kite", memory_provider: "none" }));
-    expect((await backend.store.agents.get("kite"))!.memory).toBeNull();
-  });
-
-  test("a filled shared slot of another provider is copied for that provider", async () => {
-    const { backend, hermetic } = freshFleet();
-    backend.params.set(sharedSecretPath(FIXTURE_CONFIG.fleet_id, "memory-honcho"), HONCHO_KEY);
-    await drain(hermetic.agents.create({ name: "kite", memory_provider: "honcho" }));
-    expect(backend.params.get("/hermes/fxtr0001/kite/memory-key")).toBe(HONCHO_KEY);
+    expect((await backend.store.agents.get("kite"))!.memory).toEqual({ provider: "openviking" });
   });
 
   /**
-   * A fleet whose published hermeticd says what it implements, and that list
-   * lacks `memory-provider`, is refused before the name is taken or a key is
-   * copied — not by `ensureConfig` after both.
+   * The model id the server is handed is checked before the name is claimed
+   * (`assertMemoryModel`), not first at the render after it — which would
+   * leave a claimed row every later render of the agent fails on.
    */
-  test("a published hermeticd without the capability refuses before anything exists", async () => {
+  test("a model id the memory server cannot be handed is refused before the name is taken", async () => {
+    const { backend, hermetic } = freshFleet();
+    for (const memory_provider of ["hindsight", "openviking"] as const) {
+      expectModelRefused(
+        await errorOfAsync(() =>
+          drain(hermetic.agents.create({ name: "kite", memory_provider, hermes: { model: "x%n" } })),
+        ),
+        memory_provider,
+      );
+      expect(await backend.store.agents.get("kite")).toBeNull();
+      expect(backend.params.has("/hermes/fxtr0001/kite/ts-key")).toBe(false);
+      expect(backend.mutations).not.toContain("compute.runInstance");
+    }
+  });
+
+  test("a published hermeticd without memory-service refuses a service provider before anything exists", async () => {
     const { backend, hermetic } = freshFleet();
     const manifest = JSON.parse(new TextDecoder().decode(backend.objects.get("manifest.json")!)) as {
       hermeticd: Record<string, unknown>;
     };
     manifest.hermeticd = {
       ...manifest.hermeticd,
-      capabilities: ["gateway-unit", "restart-units", "browser-stack", "provider-key-ref"],
+      capabilities: [
+        "gateway-unit",
+        "restart-units",
+        "browser-stack",
+        "provider-key-ref",
+        MEMORY_PROVIDER_CAPABILITY,
+      ],
     };
     backend.objects.set("manifest.json", new TextEncoder().encode(JSON.stringify(manifest)));
 
     let error: HermeticError | null = null;
     try {
-      await drain(hermetic.agents.create({ name: "kite", memory_provider: "supermemory" }));
+      await drain(hermetic.agents.create({ name: "kite", memory_provider: "hindsight" }));
     } catch (e) {
       error = e as HermeticError;
     }
     expect(error?.code).toBe("HERMETICD_UNAVAILABLE");
-    expect(error?.message).toInclude("memory-provider");
+    expect(error?.message).toInclude(MEMORY_SERVICE_CAPABILITY);
     expect(await backend.store.agents.get("kite")).toBeNull();
-    expect(backend.params.has("/hermes/fxtr0001/kite/memory-key")).toBe(false);
     expect(backend.params.has("/hermes/fxtr0001/kite/ts-key")).toBe(false);
 
-    // The same fleet still creates an agent that asks for no memory provider.
-    await drain(hermetic.agents.create({ name: "kite" }));
-    expect((await backend.store.agents.get("kite"))!.memory).toBeNull();
-  });
-
-  /**
-   * A resume finishes the row that exists: its memory, not the request's, and a
-   * copy an earlier run made survives the shared slot being emptied since.
-   */
-  test("a resumed create keeps the row's provider and its earlier copy", async () => {
-    const { backend, hermetic } = freshFleet();
-    const controller = new AbortController();
-    await expect(
-      (async () => {
-        for await (const e of hermetic.agents.create(
-          { name: "kite", memory_provider: "supermemory" },
-          { signal: controller.signal },
-        )) {
-          if (e.phase === "volume") controller.abort();
-        }
-      })(),
-    ).rejects.toThrow(HermeticError);
-    expect((await backend.store.agents.get("kite"))!.status).toBe("creating");
-    expect(backend.params.get("/hermes/fxtr0001/kite/memory-key")).toBe(FIXTURE_MEMORY_KEY);
-
-    backend.params.set(SUPERMEMORY_SLOT, SECRET_PLACEHOLDER);
-    const events = await drain(hermetic.agents.create({ name: "kite", memory_provider: "none" }));
-    expect(events[1]?.phase).toBe("resume");
-    const agent = (await backend.store.agents.get("kite"))!;
-    expect(agent.memory).toEqual({ provider: "supermemory", key_ref: "memory-key" });
-    expect(agent.resources.instance_id).toBeString();
-    expect(backend.params.get("/hermes/fxtr0001/kite/memory-key")).toBe(FIXTURE_MEMORY_KEY);
+    // The same fleet still creates an in-process provider.
+    await drain(hermetic.agents.create({ name: "kite", memory_provider: "holographic" }));
+    expect((await backend.store.agents.get("kite"))!.memory).toEqual({ provider: "holographic" });
   });
 
   /**
@@ -295,30 +651,59 @@ describe("agents.create with a memory provider", () => {
   test("a recreate renders the row's provider again", async () => {
     const backend = seedFixtureFleet(new MemoryBackend());
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
-    await hermetic.settings.set({ default_memory_provider: "supermemory" });
+    await hermetic.settings.set({ default_memory_provider: "openviking" });
     await drain(hermetic.agents.recreate({ name: "atlas", yes: true }));
     const after = (await backend.store.agents.get("atlas"))!;
-    expect(after.memory).toEqual({ provider: "holographic", key_ref: null });
+    expect(after.memory).toEqual({ provider: "holographic" });
     const tarball = backend.objects.get(after.resources.config_key!)!;
     const text = new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(tarball)));
     expect(text).toInclude('memory:\n  provider: "holographic"\n');
-    expect(text).not.toInclude("supermemory");
+    expect(text).not.toInclude("openviking");
+  });
+});
+
+/**
+ * `agents.set` re-renders the agent from the row it writes, so a change that
+ * leaves the bound memory provider unable to run — or unable to be rendered at
+ * all — is refused before the row moves.
+ */
+describe("agents.set with a memory provider bound", () => {
+  async function kite(memory_provider: "hindsight" | "openviking") {
+    const fleet = freshFleet();
+    await drain(fleet.hermetic.agents.create({ name: "kite", size: "small", memory_provider }));
+    const before = (await fleet.backend.store.agents.get("kite"))!;
+    expect(before.memory).toEqual({ provider: memory_provider });
+    return { ...fleet, before };
+  }
+
+  test("a size the server no longer fits in is MEMORY_PROVIDER_UNDERSIZED, the row unchanged", async () => {
+    const { backend, hermetic, before } = await kite("hindsight");
+    expect(await codeOfAsync(() => hermetic.agents.set({ name: "kite", size: "xsmall" }))).toBe(
+      "MEMORY_PROVIDER_UNDERSIZED",
+    );
+    expect(await backend.store.agents.get("kite")).toEqual(before);
+    // A size it still fits is written.
+    await hermetic.agents.set({ name: "kite", size: "medium" });
+    expect((await backend.store.agents.get("kite"))!.size).toBe("medium");
   });
 
-  test("the fixture seeds one local and one keyed agent, and reads surface them", async () => {
-    const backend = seedFixtureFleet(new MemoryBackend());
-    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
-    expect((await hermetic.agents.get("atlas")).memory).toEqual({
-      provider: "holographic",
-      key_ref: null,
-    });
-    expect((await hermetic.agents.get("corvid")).memory).toEqual({
-      provider: "supermemory",
-      key_ref: "memory-key",
-    });
-    expect(backend.params.get("/hermes/fxtr0001/corvid/memory-key")).toBe(FIXTURE_MEMORY_KEY);
-    expect(backend.params.get(SUPERMEMORY_SLOT)).toBe(FIXTURE_MEMORY_KEY);
-    expect(backend.fleetItem!.settings!.default_memory_provider).toBeUndefined();
+  test("a model id the server cannot be handed is VALIDATION, the row unchanged", async () => {
+    for (const provider of ["hindsight", "openviking"] as const) {
+      const { backend, hermetic, before } = await kite(provider);
+      // The managed setting, and the model staged with a profile switch.
+      expectModelRefused(
+        await errorOfAsync(() => hermetic.agents.set({ name: "kite", model: "m${X}" })),
+        provider,
+      );
+      expect(await backend.store.agents.get("kite")).toEqual(before);
+      expectModelRefused(
+        await errorOfAsync(() =>
+          hermetic.agents.set({ name: "kite", provider_profile: "openrouter-cheap", model: "a b" }),
+        ),
+        provider,
+      );
+      expect(await backend.store.agents.get("kite")).toEqual(before);
+    }
   });
 });
 
@@ -327,98 +712,40 @@ describe("settings: the fleet's default memory provider", () => {
     const { hermetic } = freshFleet();
     expect((await hermetic.settings.get()).settings.default_memory_provider).toBeUndefined();
 
-    const set = await hermetic.settings.set({ default_memory_provider: "mem0" });
-    expect(set.settings.default_memory_provider).toBe("mem0");
-    expect((await hermetic.settings.get()).settings.default_memory_provider).toBe("mem0");
+    const set = await hermetic.settings.set({ default_memory_provider: "openviking" });
+    expect(set.settings.default_memory_provider).toBe("openviking");
+    expect((await hermetic.settings.get()).settings.default_memory_provider).toBe("openviking");
 
     // Another write leaves it alone.
     await hermetic.settings.set({ auto_update_hermeticd: false });
-    expect((await hermetic.settings.get()).settings.default_memory_provider).toBe("mem0");
+    expect((await hermetic.settings.get()).settings.default_memory_provider).toBe("openviking");
 
     const cleared = await hermetic.settings.set({ default_memory_provider: null });
     expect(cleared.settings.default_memory_provider).toBeNull();
     expect((await hermetic.settings.get()).settings.default_memory_provider).toBeNull();
   });
 
-  test("a bad id is refused before anything is written", async () => {
+  test("a bad or removed id is refused before anything is written", async () => {
     const { backend, hermetic } = freshFleet();
     const version = backend.fleetItem!.settings!.version;
-    expect(
-      await codeOf(() => hermetic.settings.set({ default_memory_provider: "none" as never })),
-    ).not.toBeNull();
+    for (const bad of ["none", "supermemory"]) {
+      expect(
+        await codeOfAsync(() => hermetic.settings.set({ default_memory_provider: bad as never })),
+      ).not.toBeNull();
+    }
     expect(backend.fleetItem!.settings!.version).toBe(version);
   });
-});
 
-describe("rendering a memory provider", () => {
-  const render = (memory?: RenderInput["memory"]) =>
-    renderAgentConfig({
-      name: "atlas",
-      size: "small",
-      provider: "bedrock",
-      secrets_mode: "none",
-      hermes_version: "0.21.1",
-      hermes_ref: "v2026.9.24",
-      chrome_ref: "153.0.8010.12",
-      region: "us-east-1",
-      tailnet: "tail0.ts.net",
-      ...(memory === undefined ? {} : { memory }),
+  test("a stored default from a removed provider reads as none and is not inherited", async () => {
+    const { backend, hermetic } = freshFleet();
+    // What the DynamoDB store hands back for a row written under f5ad900: it
+    // parses every `_fleet` read through `FleetItem`.
+    backend.fleetItem!.settings = FleetSettings.parse({
+      ...backend.fleetItem!.settings,
+      default_memory_provider: "mem0",
     });
-  const file = (r: ReturnType<typeof render>, suffix: string) =>
-    r.files.find((f) => f.path.endsWith(suffix))?.content ?? "";
-
-  const none = render();
-  const local = render({ provider: "holographic" });
-  const keyed = render({ provider: "supermemory", key_ref: "memory-key" });
-
-  test("none renders no memory key, no env comment, no manifest field", () => {
-    expect(file(none, HERMES_MANAGED_CONFIG)).not.toInclude("memory:");
-    expect(file(none, "hermetic-secrets.service")).not.toInclude("memory-key");
-    expect(none.manifest.memory).toBeUndefined();
-    expect(none.manifest.requires ?? []).not.toContain(MEMORY_PROVIDER_CAPABILITY);
-  });
-
-  test("a local provider is selected in the managed config, with no key", () => {
-    expect(file(local, HERMES_MANAGED_CONFIG)).toInclude('memory:\n  provider: "holographic"\n');
-    // The seed file is the agent's; the binding is not.
-    expect(file(local, "/etc/hermes/config.seed.yaml")).not.toInclude('provider: "holographic"');
-    expect(file(local, "hermetic-secrets.service")).not.toInclude("memory-key");
-    expect(local.manifest.memory).toEqual({ provider: "holographic" });
-    expect(local.manifest.requires).toContain("memory-provider");
-  });
-
-  test("a keyed provider names its slot and the variable it arrives in", () => {
-    expect(file(keyed, HERMES_MANAGED_CONFIG)).toInclude('memory:\n  provider: "supermemory"\n');
-    expect(file(keyed, "hermetic-secrets.service")).toInclude(
-      "# SUPERMEMORY_API_KEY is read from SSM at this fleet's SSM prefix + atlas/memory-key by hermeticd.",
-    );
-    expect(keyed.manifest.memory).toEqual({ provider: "supermemory", key_ref: "memory-key" });
-    expect(requiredCapabilities(keyed.manifest)).toContain("memory-provider");
-    // The key itself is never rendered anywhere.
-    for (const f of keyed.files) expect(f.content).not.toInclude(FIXTURE_MEMORY_KEY);
-  });
-
-  test("the field is in the hash, and survives a parse", () => {
-    expect(local.manifest.config_hash).not.toBe(none.manifest.config_hash);
-    expect(keyed.manifest.config_hash).not.toBe(local.manifest.config_hash);
-    // Deterministic: the same input renders the same hash.
-    expect(render({ provider: "holographic" }).manifest.config_hash).toBe(local.manifest.config_hash);
-    expect(AgentConfig.parse(JSON.parse(JSON.stringify(keyed.manifest))).memory).toEqual({
-      provider: "supermemory",
-      key_ref: "memory-key",
-    });
-    expect(
-      AgentConfig.safeParse({ ...keyed.manifest, memory: { provider: "hindsight" } }).success,
-    ).toBe(false);
-    // A manifest is a document, not an authorisation: only `memory-key` may be
-    // named, so no manifest can point the box at another agent slot.
-    for (const key_ref of ["provider-key", "ts-key", "bws-token", "../x", "memory-key-2"]) {
-      expect(
-        AgentConfig.safeParse({ ...keyed.manifest, memory: { provider: "supermemory", key_ref } })
-          .success,
-      ).toBe(false);
-      // Nor can a render be talked into emitting one.
-      expect(() => render({ provider: "supermemory", key_ref })).toThrow();
-    }
+    expect((await hermetic.settings.get()).settings.default_memory_provider).toBeNull();
+    await drain(hermetic.agents.create({ name: "kite" }));
+    expect((await backend.store.agents.get("kite"))!.memory).toBeNull();
   });
 });

@@ -4,7 +4,7 @@
  * an explicit deps object (AGENTS.md rule 5): the shared guards, locks and
  * render come from `agent-runtime.ts`; the binding ports from `profile-apply.ts`.
  */
-import type { AgentView, HermesSettings, SetAgentInput } from "../schema/index.ts";
+import type { Agent, AgentView, HermesSettings, Provider, SetAgentInput } from "../schema/index.ts";
 import { SIZES, SetAgentInput as SetAgentInputSchema } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
@@ -19,11 +19,32 @@ import {
   type BindingPorts,
 } from "../profiles/profile-binding.ts";
 import type { CoreContext } from "../context.ts";
+import { assertMemoryLlm, assertMemoryModel, assertMemorySized } from "./lifecycle/memory-binding.ts";
 
 /** What `agents.set` needs beyond the shared context: the slots a binding reads (§8.3). */
 export interface SetDeps {
   ctx: CoreContext;
   bindingPorts: BindingPorts;
+}
+
+/**
+ * The vendor and model a patch moves the agent onto, or null when it moves
+ * neither: a staged binding is what lands at apply (`pending`), an unstaged
+ * model write is `hermes.model` on the agent's own vendor.
+ */
+function memoryModelAfter(
+  agent: Agent,
+  patch: Record<string, unknown>,
+): { provider: Provider; model: string } | null {
+  const pending = patch["pending"] as Agent["pending"] | undefined;
+  if (pending !== undefined && pending !== null) {
+    return { provider: pending.provider, model: pending.model };
+  }
+  const hermes = patch["hermes"] as HermesSettings | undefined;
+  if (hermes?.model !== undefined && hermes.model !== agent.hermes?.model) {
+    return { provider: agent.provider, model: hermes.model };
+  }
+  return null;
 }
 
 export function createAgentSet(deps: SetDeps) {
@@ -158,6 +179,21 @@ export function createAgentSet(deps: SetDeps) {
         assertModelGranted(agent.provider, parsed.model, fleet);
         patch["hermes"] = { ...hermesPatch, model: parsed.model };
       }
+    }
+    /**
+     * The memory provider pinned on the row still has to fit and still has to
+     * be callable, after the change as at create (`memory-binding.ts`) —
+     * refused before the row is written, since a render that fails on it
+     * afterwards fails every rollout the fleet plans.
+     */
+    const memoryProvider = agent.memory?.provider ?? null;
+    if (parsed.size !== undefined || parsed.instance_type !== undefined) {
+      assertMemorySized(memoryProvider, parsed.size ?? agent.size, parsed.instance_type);
+    }
+    const nextBinding = memoryModelAfter(agent, patch);
+    if (nextBinding !== null) {
+      assertMemoryLlm(memoryProvider, nextBinding.provider);
+      assertMemoryModel(memoryProvider, nextBinding.provider, nextBinding.model);
     }
     if (parsed.size !== undefined) {
       patch["size"] = parsed.size;

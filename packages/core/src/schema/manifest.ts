@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DEFAULT_PROVIDER_KEY_SLOT } from "../shared/box.ts";
-import { MEMORY_KEY_SLOT, MEMORY_PROVIDER_CAPABILITY } from "../shared/memory-providers.ts";
+import { MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY } from "../shared/memory-providers.ts";
 export {
   APT_LOCK_TIMEOUT_SECONDS,
   AGENT_CONFIG_SCHEMA_VERSION,
@@ -14,7 +14,7 @@ import { Provider, SecretsMode, Size } from "./agent.ts";
 import { BrowserIdentity } from "./browser.ts";
 import { ApprovalsMode } from "./hermes.ts";
 import { CHROME_REF_RE } from "./fleet.ts";
-import { MemoryProviderId } from "./memory.ts";
+import { StoredManifestMemory } from "./memory.ts";
 
 /** An extra apt source the manifest asks hermeticd to add before installing packages. */
 export const AptSource = z.object({
@@ -180,28 +180,19 @@ export const AgentConfig = z.object({
    */
   provider_key_ref: z.string().min(1).optional(),
   /**
-   * The Hermes external memory provider the managed `config.yaml` selects, and
-   * the instance slot its API key is materialised from (`memory-key`). Absent
-   * is built-in memory only, and `key_ref` is absent for a provider that needs
-   * no key (holographic).
+   * The Hermes external memory provider the managed `config.yaml` selects
+   * (`ManifestMemory`, `schema/memory.ts`): the provider, the pinned server
+   * release for a service provider, and the model its own calls are mapped
+   * onto. Absent is built-in memory only.
    *
    * Omitted rather than null when there is none, so every manifest rendered
    * before the field — and every agent without a provider since — hashes
    * exactly as it did. It is **in** `config_hash` for the reason
-   * `provider_key_ref` is: it names a slot the box reads.
+   * `provider_key_ref` is: it names what the box installs and which variables
+   * it materialises the provider key under. A block naming a provider the
+   * reader does not know reads as none (`StoredManifestMemory`).
    */
-  memory: z
-    .object({
-      provider: MemoryProviderId,
-      /**
-       * Only ever the one slot. A manifest is a document, not an
-       * authorisation: this string becomes an SSM path the box reads, so a
-       * manifest naming any other slot is refused rather than trusted — the
-       * rule `providerKeyRefOf` follows for the provider key.
-       */
-      key_ref: z.literal(MEMORY_KEY_SLOT).optional(),
-    })
-    .optional(),
+  memory: StoredManifestMemory,
   /**
    * What this document needs the *box* to be able to do — capability names, not
    * a version (`AGENT_CONFIG_CAPABILITIES` below). Absent on a manifest rendered
@@ -272,15 +263,22 @@ export const AGENT_CONFIG_CAPABILITIES = {
    */
   "browser-stack": "unpack the mirrored Chrome build and run the per-identity browser units",
   /**
-   * hermeticd writes the memory provider's API key from the slot
-   * `memory.key_ref` names into `secrets.env` under the provider's variable,
-   * and preinstalls the provider's Python dependencies into Hermes's venv. A
-   * box without it would run Hermes with `memory.provider` set and no key —
-   * the provider reports itself unavailable and the agent silently falls back
-   * to built-in memory — so a manifest naming a provider asks for it.
+   * hermeticd preinstalls the memory provider's Python dependencies into
+   * Hermes's venv. A box without it would run Hermes with `memory.provider`
+   * set and the plugin's client missing — the provider reports itself
+   * unavailable and the agent silently falls back to built-in memory — so a
+   * manifest naming any provider asks for it.
    */
-  [MEMORY_PROVIDER_CAPABILITY]:
-    "write the memory provider's key into secrets.env and preinstall its Python deps",
+  [MEMORY_PROVIDER_CAPABILITY]: "preinstall the memory provider's Python deps into Hermes's venv",
+  /**
+   * hermeticd installs the pinned memory server (`memory.pin`) into its own
+   * venv on the data volume, checks out its Hermes plugin, seeds its model,
+   * materialises the agent's provider key for it (`memory.llm.key_env`) and
+   * runs `hermetic-memory.service` on loopback. A box without it would land
+   * the unit file and fail it on a missing executable — so a manifest naming
+   * a service provider asks for it, and an in-process one does not.
+   */
+  [MEMORY_SERVICE_CAPABILITY]: "install and run the pinned memory server beside Hermes",
 } as const;
 export type AgentCapability = keyof typeof AGENT_CONFIG_CAPABILITIES;
 
@@ -299,7 +297,7 @@ export function requiredCapabilities(manifest: {
   files: readonly { restart_units?: readonly string[] | undefined }[];
   provider_key_ref?: string | undefined;
   browsers?: readonly BrowserIdentity[] | undefined;
-  memory?: { provider: string } | undefined;
+  memory?: { provider: string; pin?: string | undefined } | undefined;
 }): AgentCapability[] {
   const out: AgentCapability[] = [];
   if (manifest.units.some((u) => /^hermes-gateway.*\.service$/.test(u))) out.push("gateway-unit");
@@ -328,5 +326,7 @@ export function requiredCapabilities(manifest: {
    * dependencies settled by a hermeticd that knows the field exists.
    */
   if (manifest.memory !== undefined) out.push(MEMORY_PROVIDER_CAPABILITY);
+  /* A pin is what a service provider's manifest carries, and only that one. */
+  if (manifest.memory?.pin !== undefined) out.push(MEMORY_SERVICE_CAPABILITY);
   return out;
 }
