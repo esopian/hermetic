@@ -65,6 +65,8 @@ async function newSession(): Promise<void> {
 
 async function clickBackToBotChat(): Promise<void> {
   await userEvent.click(within(rail()).getByRole("tab", { name: /^Bots/ }));
+  // The Bots tab opens on Unread, which hides a bot with nothing new in it.
+  await userEvent.click(within(rail()).getByRole("button", { name: "All" }));
   await userEvent.click(within(rail()).getAllByRole("button", { name: /Marshall/ })[0]!);
   await waitFor(() => expect(window.location.hash).toBe("#chat/atlas/scribe"), { timeout: 4_000 });
   await userEvent.click(within(rail()).getByRole("tab", { name: "Sessions" }));

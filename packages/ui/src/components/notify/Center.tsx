@@ -54,7 +54,7 @@ export function NotificationCenter({
   onOpenSettings?: (section: "notifications") => void;
 }) {
   const notify = useNotify();
-  const [tab, setTab] = useState<CenterTab>("all");
+  const [tab, setTab] = useState<CenterTab>("unread");
   const [focus, setFocus] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const now = Date.now();
