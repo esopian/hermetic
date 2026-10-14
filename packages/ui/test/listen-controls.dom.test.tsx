@@ -19,6 +19,7 @@ function controls(api: ListeningApi) {
           drawerTarget: null,
           closeDrawer: () => {},
           quickJump: () => {},
+          dock: { open: false, unread: 0, active: 0, toggle: () => {} },
           open: (target) => {
             opened.push(target.instance);
             return true;

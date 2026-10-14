@@ -41,16 +41,19 @@ export function useSubagentControls(deps: {
   changed: () => void;
   permits: (instance: string) => boolean;
   api: RefObject<ChatApi>;
-}): SubagentControls {
+}): SubagentControls & { forTarget: (target: ChatSelection) => SubagentControls } {
   const { current, selected, get, find, changed, permits, api } = deps;
-  const record = useCallback((): Conversation | null => {
-    const where = selected.current;
-    return where && permits(where.instance) ? get(where) : null;
-  }, [get, permits, selected]);
+  const record = useCallback(
+    (target?: ChatSelection): Conversation | null => {
+      const where = target ?? selected.current;
+      return where && permits(where.instance) ? get(where) : null;
+    },
+    [get, permits, selected],
+  );
 
   const setDraft = useCallback(
-    (id: string, text: string) => {
-      const r = record();
+    (id: string, text: string, target?: ChatSelection) => {
+      const r = record(target);
       if (!r) return;
       if (text) r.subagentDrafts = remember(r.subagentDrafts, id, text);
       else if (r.subagentDrafts.has(id)) {
@@ -83,14 +86,14 @@ export function useSubagentControls(deps: {
   );
 
   const steer = useCallback(
-    async (id: string, text: string) => {
-      const r = record();
+    async (id: string, text: string, target?: ChatSelection) => {
+      const r = record(target);
       const body = text.trim();
       if (!r || !body) return;
       const at = Date.now();
       const session = sessionOf(r);
       control(r, id, { steer: { state: "sending", text: body, at, tools: 0 } });
-      setDraft(id, "");
+      setDraft(id, "", target);
       const call = api.current.steerSubagent;
       try {
         if (!call) throw new Error("this view cannot steer a subagent");
@@ -124,8 +127,8 @@ export function useSubagentControls(deps: {
   );
 
   const stop = useCallback(
-    async (id: string) => {
-      const r = record();
+    async (id: string, target?: ChatSelection) => {
+      const r = record(target);
       if (!r) return;
       const at = Date.now();
       const session = sessionOf(r);
@@ -147,6 +150,21 @@ export function useSubagentControls(deps: {
     [api, changed, control, owner, record],
   );
 
+  const forTarget = useCallback(
+    (target: ChatSelection): SubagentControls => {
+      const scoped = get(target);
+      return {
+        trail: scoped.subagentTrail,
+        drafts: scoped.subagentDrafts,
+        control: scoped.subagentControl,
+        setDraft: (id, text) => setDraft(id, text, target),
+        steer: (id, text) => steer(id, text, target),
+        stop: (id) => stop(id, target),
+      };
+    },
+    [get, setDraft, steer, stop],
+  );
+
   return useMemo(
     () => ({
       trail: current.subagentTrail,
@@ -155,7 +173,16 @@ export function useSubagentControls(deps: {
       setDraft,
       steer,
       stop,
+      forTarget,
     }),
-    [current.subagentTrail, current.subagentDrafts, current.subagentControl, setDraft, steer, stop],
+    [
+      current.subagentTrail,
+      current.subagentDrafts,
+      current.subagentControl,
+      setDraft,
+      steer,
+      stop,
+      forTarget,
+    ],
   );
 }

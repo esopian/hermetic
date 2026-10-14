@@ -141,6 +141,8 @@ async function openRoom({
     </ChatProvider>,
   );
   await screen.findByText(/Canonical Bot Chat/);
+  // The rail opens on Unread, which hides this idle room; ask for the full list.
+  fireEvent.click(await screen.findByRole("button", { name: "All" }));
   fireEvent.click(await screen.findByRole("button", { name: /Room A/ }));
   await screen.findByLabelText("Message the room");
   await waitFor(() => expect(server!.to(HISTORY).length).toBeGreaterThan(0));

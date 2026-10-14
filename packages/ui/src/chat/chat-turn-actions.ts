@@ -161,9 +161,10 @@ export function useTurnActions(deps: TurnActionDeps) {
 
   /** Start a turn. `false` when this store refused to, and nothing was sent. */
   const send = useCallback(
-    (text: string): boolean => {
-      if (!selected.current || !permits(selected.current.instance)) return false;
-      const record = get(selected.current);
+    (text: string, requested?: ChatSelection): boolean => {
+      const where = requested ?? selected.current;
+      if (!where || !permits(where.instance)) return false;
+      const record = get(where);
       const body = text.trim();
       if (!body || record.sending || record.aborting) return false;
       clearReconnect(record);
@@ -337,9 +338,10 @@ export function useTurnActions(deps: TurnActionDeps) {
    * message through means (`useSendQueue`).
    */
   const steer = useCallback(
-    async (text: string): Promise<SteerOutcome> => {
-      if (!selected.current || !permits(selected.current.instance)) return "refused";
-      const record = get(selected.current);
+    async (text: string, target?: ChatSelection): Promise<SteerOutcome> => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return "refused";
+      const record = get(where);
       const body = text.trim();
       if (!body) return "refused";
       // A turn this tab did not start is steered the same way (`chat.steer`
@@ -437,53 +439,61 @@ export function useTurnActions(deps: TurnActionDeps) {
    * Read at call time, so a caller acting on a keypress sees the record as it
    * is rather than as the last render left it.
    */
-  const openRequest = useCallback((): string | null => {
-    if (!selected.current || !permits(selected.current.instance)) return null;
-    return openRequestIn(get(selected.current));
-  }, [get, permits]);
+  const openRequest = useCallback(
+    (target?: ChatSelection): string | null => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return null;
+      return openRequestIn(get(where));
+    },
+    [get, permits],
+  );
 
-  const abort = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.aborting) return;
-    record.aborting = true;
-    const turn = record.turn;
-    const cancel = record.cancel;
-    clearReconnect(record);
-    record.dropped = false;
-    changed();
-    try {
-      await apiRef.current.abortTurn(
-        record.target.instance,
-        record.target.bot,
-        record.resolvedSession ?? record.target.session,
-      );
-    } catch (error) {
-      if (alive.current && record.turn === turn)
-        record.turnError = {
-          code: "ABORT_FAILED",
-          message: error instanceof Error ? error.message : String(error),
-        };
-    } finally {
-      if (alive.current && record.turn === turn) {
-        // Invalidate the old stream before cancelling, since cancellation can
-        // synchronously report an end and must not schedule reconnect retries.
-        record.turn += 1;
-        cancel?.();
-        record.cancel = null;
-        record.sending = false;
-        record.remoteBusy = false;
-        record.segments = [];
-        record.openRequests.clear();
-        record.rearm = null;
-        releaseHeld(record);
-        record.activity = "idle";
-        record.aborting = false;
-        changed();
-        await Promise.all([readHistory(record), readSessions(record)]);
+  const abort = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.aborting) return;
+      record.aborting = true;
+      const turn = record.turn;
+      const cancel = record.cancel;
+      clearReconnect(record);
+      record.dropped = false;
+      changed();
+      try {
+        await apiRef.current.abortTurn(
+          record.target.instance,
+          record.target.bot,
+          record.resolvedSession ?? record.target.session,
+        );
+      } catch (error) {
+        if (alive.current && record.turn === turn)
+          record.turnError = {
+            code: "ABORT_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+          };
+      } finally {
+        if (alive.current && record.turn === turn) {
+          // Invalidate the old stream before cancelling, since cancellation can
+          // synchronously report an end and must not schedule reconnect retries.
+          record.turn += 1;
+          cancel?.();
+          record.cancel = null;
+          record.sending = false;
+          record.remoteBusy = false;
+          record.segments = [];
+          record.openRequests.clear();
+          record.rearm = null;
+          releaseHeld(record);
+          record.activity = "idle";
+          record.aborting = false;
+          changed();
+          await Promise.all([readHistory(record), readSessions(record)]);
+        }
       }
-    }
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
 
   return { send, steer, settleRequest, releaseRequest, openRequest, abort };
 }

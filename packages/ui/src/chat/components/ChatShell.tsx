@@ -1,28 +1,48 @@
 /** Persistent entry chrome shares one store across full view, drawer, and floating dock. */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useChat } from "../chat-state.tsx";
+import { ChatTargetScope, useChat } from "../chat-state.tsx";
 import type { ChatSelection } from "../chat-state.tsx";
 import { ChatEntryContext } from "../chat-entry-state.tsx";
 import { chatHash, isChatHash, parseChatHash } from "../chat-routing.ts";
 import { FLEET_HASH } from "../../nav/fleet-nav.ts";
 import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
+import { useNotifyIfAvailable, useUnreadChatByConversation } from "../../state/notify-state.tsx";
 import { composerState, threadState } from "../chat-logic.ts";
+import { railUnread } from "../chat-logic.ts";
 import { botLabel } from "../chat-presentation.ts";
+import { activityFor } from "../chat-activity.ts";
+import type { TurnActivity } from "../chat-activity.ts";
+import {
+  closeChatTab,
+  closeDockPanel,
+  openChatInNewPanel,
+  openChatInPanel,
+  sameChat,
+} from "../chat-dock-layout.ts";
+import type { DockPanel } from "../chat-dock-layout.ts";
 import { hasOpenOverlay, keyboardOwned, ownsEscape } from "../../lib/focus.ts";
 import { ChatView } from "./ChatView.tsx";
+import { ChatDock } from "./ChatDock.tsx";
+import type { DockPicker } from "./ChatDock.tsx";
+import { Face } from "./Face.tsx";
 import { QuickJump } from "./QuickJump.tsx";
 
 export function ChatShell({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
   const chat = useChat();
   const instances = useListeningIfAvailable()?.instances;
   const fleet = useFleetIfAvailable();
+  const notify = useNotifyIfAvailable();
+  const inbox = useUnreadChatByConversation();
   const [navigation, setNavigation] = useState(0);
   const [quick, setQuick] = useState(false);
   const [dock, setDock] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [tabs, setTabs] = useState<ChatSelection[]>([]);
+  const [panels, setPanels] = useState<DockPanel[]>([]);
+  const [picker, setPicker] = useState<DockPicker | null>(null);
+  const nextPanelId = useRef(1);
+  const activePanelId = useRef<number | null>(null);
+  const [dismissedRailKey, setDismissedRailKey] = useState("");
   const [drawerTarget, setDrawerTarget] = useState<ChatSelection | null>(null);
   // A cold start on no hash reads `#chat` here only because `NavProvider` is a
   // child: its landing redirect (`redirectLandingHash`) runs before this
@@ -35,7 +55,20 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
   const hovered = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (instances === undefined) return;
-    setTabs((previous) => previous.filter((target) => instances.includes(target.instance)));
+    setPanels((previous) =>
+      previous
+        .map((panel) => {
+          const tabs = panel.tabs.filter((target) => instances.includes(target.instance));
+          return {
+            ...panel,
+            tabs,
+            selected: tabs.some((tab) => sameChat(tab, panel.selected))
+              ? panel.selected
+              : (tabs[0] ?? panel.selected),
+          };
+        })
+        .filter((panel) => panel.tabs.length > 0),
+    );
     setDrawerTarget((target) => (target && !instances.includes(target.instance) ? null : target));
     if (pendingSend.current && !instances.includes(pendingSend.current.target.instance))
       pendingSend.current = null;
@@ -56,15 +89,21 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
       setNavigation((n) => n + 1);
       pendingSend.current = draft === undefined ? null : { target, text: draft };
       if (draft !== undefined) chat.stageDraft(target, draft);
-      setTabs((prev) =>
-        prev.some((t) => chatHash(t) === chatHash(target)) ? prev : [...prev, target],
-      );
+      setPanels((prev) => {
+        if (prev.length === 0) {
+          const id = nextPanelId.current++;
+          activePanelId.current = id;
+          return [{ id, tabs: [target], selected: target }];
+        }
+        const owner = prev.find((panel) => panel.tabs.some((tab) => sameChat(tab, target)));
+        activePanelId.current = owner?.id ?? prev[0]!.id;
+        return openChatInPanel(prev, activePanelId.current, target);
+      });
       if (frame === "drawer") {
         setDrawerTarget(target);
       } else {
         setDrawerTarget(null);
         setDock(true);
-        setCollapsed(false);
         if (frame === "full") window.location.hash = chatHash(target, message);
         else if (isChatHash(window.location.hash)) window.location.hash = FLEET_HASH;
       }
@@ -166,16 +205,15 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
         if (e.shiftKey) {
           chat.activate();
           if (chat.selection) {
-            setTabs((prev) =>
-              prev.some((t) => chatHash(t) === chatHash(chat.selection!))
+            setPanels((prev) =>
+              prev.length
                 ? prev
-                : [...prev, chat.selection!],
+                : [{ id: nextPanelId.current++, tabs: [chat.selection!], selected: chat.selection! }],
             );
             // location changes before the queued hashchange updates React state.
             // Capture it now so an immediate full-to-dock shortcut expands reliably.
             const fromFull = isChatHash(window.location.hash);
-            setDock(true);
-            setCollapsed((v) => (dock && !fromFull ? !v : false));
+            setDock((v) => (dock && !fromFull ? !v : true));
             if (fromFull) window.location.hash = FLEET_HASH;
           } else quickJump();
         } else quickJump();
@@ -192,7 +230,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
       // `focus.ts`'s own document listener, so with no turn and no overlay this
       // is deliberately a no-op; the dock's own — button collapses it.
       if (e.key === "Escape") {
-        const onChat = isChatHash(hash) || (dock && !collapsed);
+        const onChat = isChatHash(hash) || dock;
         // An element that handles Escape itself keeps it (`ownsEscape`).
         if (!onChat || ownsEscape(e.target)) return;
         // A visible conversation owns Escape. `preventDefault` is what stops
@@ -200,7 +238,14 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
         // operator out of chat and back to Fleet on a key the composer tells
         // them means "stop".
         e.preventDefault();
-        if (chat.sending) void chat.abort();
+        const paneId = (e.target instanceof Element ? e.target : null)?.closest<HTMLElement>(
+          "[data-chat-panel-id]",
+        )?.dataset.chatPanelId;
+        const pane = panels.find((panel) => panel.id === Number(paneId));
+        if (pane) {
+          activePanelId.current = pane.id;
+          void chat.stopTarget(pane.selected);
+        } else if (chat.sending) void chat.abort();
         return;
       }
       if (typing) return;
@@ -236,58 +281,242 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
       window.removeEventListener("keydown", key, true);
       document.removeEventListener("pointerover", pointer);
     };
-  }, [chat, dock, collapsed, hash, open, quickJump, quick, enabled]);
+  }, [chat, dock, panels, hash, open, quickJump, quick, enabled]);
+
+  const activityItems = new Map<
+    string,
+    { target: ChatSelection; unread: number; activity: TurnActivity }
+  >();
+  const itemFor = (instance: string, bot: string) => {
+    const key = `${instance}/${bot}`;
+    let item = activityItems.get(key);
+    if (!item) {
+      item = { target: { instance, bot, session: null }, unread: 0, activity: "idle" };
+      activityItems.set(key, item);
+    }
+    return item;
+  };
+  for (const swarm of chat.swarms) {
+    for (const bot of swarm.bots) {
+      const item = itemFor(swarm.instance, bot.name);
+      item.unread = railUnread(bot, inbox.get(`${swarm.instance}/${bot.name}`) ?? 0);
+    }
+  }
+  for (const [key, count] of inbox) {
+    const slash = key.indexOf("/");
+    if (slash < 0) continue;
+    const item = itemFor(key.slice(0, slash), key.slice(slash + 1));
+    item.unread = Math.max(item.unread, count);
+  }
+  for (const activity of chat.turnActivities) {
+    const item = itemFor(activity.instance, activity.bot);
+    item.activity = activityFor(chat.turnActivities, activity.instance, activity.bot);
+    if (activity.activity !== "idle")
+      item.target = {
+        instance: activity.instance,
+        bot: activity.bot,
+        session: activity.session,
+      };
+  }
+  const attention = [...activityItems.values()].filter(
+    (item) => item.unread > 0 || item.activity !== "idle",
+  );
+  const unread = attention.reduce((sum, item) => sum + item.unread, 0);
+  const active = attention.filter((item) => item.activity !== "idle").length;
+  const notificationIds =
+    notify?.items
+      .filter((item) => item.kind.startsWith("chat.") && !item.read_at && !item.cleared_at)
+      .map((item) => item.id)
+      .join(",") ?? "";
+  const railKey =
+    attention.length > 0
+      ? attention
+          .map((item) => `${item.target.instance}/${item.target.bot}:${item.unread}:${item.activity}`)
+          .join("|") + notificationIds
+      : "";
+  const railVisible =
+    attention.length > 0 && railKey !== dismissedRailKey && !dock && !isChatHash(hash);
+  const toggleDock = () => {
+    if (dock && !isChatHash(hash)) {
+      setDock(false);
+      return;
+    }
+    if (isChatHash(hash)) {
+      window.location.hash = FLEET_HASH;
+      setDock(true);
+      return;
+    }
+    if (panels.length === 0) {
+      if (chat.selection) open(chat.selection, "dock");
+      else quickJump();
+    } else setDock(true);
+  };
+  const labelOf = (target: ChatSelection) =>
+    botLabel(
+      target.instance,
+      target.bot,
+      chat.swarms
+        .find((swarm) => swarm.instance === target.instance)
+        ?.bots.find((bot) => bot.name === target.bot)?.title,
+    );
+  const selectTab = (panelId: number, target: ChatSelection) => {
+    if (!chat.select(target.instance, target.bot, target.session)) return;
+    activePanelId.current = panelId;
+    setPanels((previous) => openChatInPanel(previous, panelId, target));
+    setNavigation((n) => n + 1);
+  };
+  const pick = (target: ChatSelection) => {
+    if (!picker || !chat.select(target.instance, target.bot, target.session)) return;
+    if (picker.mode === "panel") {
+      const id = nextPanelId.current++;
+      activePanelId.current = id;
+      setPanels((previous) => openChatInNewPanel(previous, id, target));
+    } else if (picker.panelId !== null) {
+      activePanelId.current = picker.panelId;
+      setPanels((previous) => openChatInPanel(previous, picker.panelId!, target));
+    }
+    setNavigation((n) => n + 1);
+    setPicker(null);
+  };
+  const closeTab = (panelId: number, target: ChatSelection) => {
+    const next = closeChatTab(panels, panelId, target);
+    setPanels(next);
+    if (next.length === 0) setDock(false);
+    if (!next.some((panel) => panel.id === activePanelId.current))
+      activePanelId.current = next[0]?.id ?? null;
+    const selection = next.find((panel) => panel.id === panelId)?.selected ?? next[0]?.selected;
+    if (selection && chat.selection && sameChat(chat.selection, target))
+      chat.select(selection.instance, selection.bot, selection.session);
+  };
+  const closePanel = (panelId: number) => {
+    const next = closeDockPanel(panels, panelId);
+    setPanels(next);
+    if (next.length === 0) setDock(false);
+    if (activePanelId.current === panelId) activePanelId.current = next[0]?.id ?? null;
+    else if (
+      chat.selection &&
+      panels.some(
+        (panel) => panel.id === panelId && panel.tabs.some((tab) => sameChat(tab, chat.selection!)),
+      )
+    )
+      chat.select(next[0]!.selected.instance, next[0]!.selected.bot, next[0]!.selected.session);
+  };
+  const changePaneSession = (panelId: number, oldTarget: ChatSelection, target: ChatSelection) => {
+    if (!chat.select(target.instance, target.bot, target.session)) return;
+    setPanels((previous) =>
+      previous.map((panel) => {
+        if (panel.id !== panelId) return panel;
+        const tabs = panel.tabs.filter((tab) => !sameChat(tab, oldTarget) && !sameChat(tab, target));
+        return { ...panel, tabs: [...tabs, target], selected: target };
+      }),
+    );
+  };
 
   return (
-    <ChatEntryContext.Provider value={{ navigation, drawerTarget, closeDrawer, open, quickJump }}>
+    <ChatEntryContext.Provider
+      value={{
+        navigation,
+        drawerTarget,
+        closeDrawer,
+        open,
+        quickJump,
+        dock: { open: dock && !isChatHash(hash), unread, active, toggle: toggleDock },
+      }}
+    >
       {children}
       {dock && !isChatHash(hash) && !drawerTarget ? (
-        <aside className={`ch-dock${collapsed ? " collapsed" : ""}`} aria-label="Chat dock">
-          <div className="ch-dock-tabs" role="tablist" aria-label="Dock conversations">
-            {tabs.map((target) => (
-              <button
-                type="button"
-                role="tab"
-                className="ch-dock-tab"
-                key={chatHash(target)}
-                aria-selected={chat.selection !== null && chatHash(chat.selection) === chatHash(target)}
-                onClick={() => open(target, "dock")}
-              >
-                {botLabel(
-                  target.instance,
-                  target.bot,
-                  chat.swarms
-                    .find((swarm) => swarm.instance === target.instance)
-                    ?.bots.find((bot) => bot.name === target.bot)?.title,
-                )}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="ch-dock-tab"
-              onClick={quickJump}
-              aria-label="Add conversation"
+        <ChatDock
+          panels={panels}
+          picker={picker}
+          full={false}
+          activePanelId={() => activePanelId.current}
+          onActivatePanel={(id) => {
+            activePanelId.current = id;
+          }}
+          onAddPanel={() => {
+            chat.activate();
+            setPicker({ mode: "panel", panelId: null });
+          }}
+          onAddTab={(panelId) => {
+            chat.activate();
+            setPicker({ mode: "tab", panelId });
+          }}
+          onSelectTab={selectTab}
+          onCloseTab={closeTab}
+          onClosePanel={closePanel}
+          onPick={pick}
+          onClosePicker={() => setPicker(null)}
+          onExpand={(target) => open(target, "full")}
+          onMinimize={() => {
+            setPicker(null);
+            setDock(false);
+          }}
+          renderThread={(target, panelId) => (
+            <ChatTargetScope
+              target={target}
+              onSelect={(next) => changePaneSession(panelId, target, next)}
             >
-              +
-            </button>
-            <button
-              type="button"
-              className="ch-dock-tab"
-              onClick={() => chat.selection && open(chat.selection, "full")}
-              aria-label="Expand chat"
-            >
-              ⤢
-            </button>
-            <button
-              type="button"
-              className="ch-dock-tab"
-              onClick={() => setCollapsed((v) => !v)}
-              aria-label={collapsed ? "Open chat dock" : "Collapse chat dock"}
-            >
-              {collapsed ? "↑" : "—"}
-            </button>
+              <ChatView withContext={false} withRail={false} />
+            </ChatTargetScope>
+          )}
+        />
+      ) : null}
+      {railVisible ? (
+        <aside className="ch-activity-rail" aria-label="Chat activity">
+          <div className="ch-activity-label">Chat activity</div>
+          <div className="ch-activity-items">
+            {attention.map((item) => {
+              const status = fleet?.byName.get(item.target.instance)?.display_status;
+              return (
+                <button
+                  type="button"
+                  className="ch-activity-item"
+                  key={`${item.target.instance}/${item.target.bot}`}
+                  onClick={() => open(item.target, "dock")}
+                  aria-label={`${labelOf(item.target)}, ${item.unread > 0 ? `${item.unread} unread` : item.activity}`}
+                >
+                  <Face
+                    fleetId={fleet?.meta?.config?.fleet_id ?? ""}
+                    instance={item.target.instance}
+                    bot={item.target.bot}
+                    size={22}
+                    square={false}
+                    status={
+                      status === "ready" ||
+                      status === "degraded" ||
+                      status === "error" ||
+                      status === "stopped" ||
+                      status === "destroyed"
+                        ? status
+                        : "pending"
+                    }
+                  />
+                  <span className="copy">
+                    <b>{labelOf(item.target)}</b>
+                    <em>
+                      {item.activity === "idle"
+                        ? "New activity"
+                        : item.activity === "thinking"
+                          ? "Thinking"
+                          : "Replying"}
+                    </em>
+                  </span>
+                  {item.unread > 0 ? <span className="ch-unread">{item.unread}</span> : null}
+                  {item.activity !== "idle" ? (
+                    <i className="ch-footer-running" aria-hidden="true" />
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
-          {!collapsed ? <ChatView withContext={false} withRail={false} /> : null}
+          <button
+            type="button"
+            className="ch-activity-hide"
+            aria-label="Hide activity rail"
+            onClick={() => setDismissedRailKey(railKey)}
+          >
+            ×
+          </button>
         </aside>
       ) : null}
       {chat.selectionError && !quick ? (

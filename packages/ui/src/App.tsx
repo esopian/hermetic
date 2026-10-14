@@ -452,8 +452,6 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
       volumesReadAt={volumes.readAt}
       volumesBusy={vscan.busy || vscan.skeleton}
       volumesError={volumes.error}
-      shortcutsRef={shortcutsAnchor}
-      onShortcuts={() => setShortcutsOpen((v) => !v)}
       update={<AppUpdateNotice />}
     />
   );

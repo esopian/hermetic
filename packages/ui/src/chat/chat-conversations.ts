@@ -39,9 +39,12 @@ export function useConversations(
   assemble: Assemble,
   instances?: readonly string[],
   onArrival?: (arrival: ChatArrival) => void,
+  isThreadShown?: (instance: string, bot: string) => boolean,
 ) {
   const arrived = useRef(onArrival);
   arrived.current = onArrival;
+  const shown = useRef(isThreadShown);
+  shown.current = isThreadShown;
   /**
    * The injected calls, reached through a ref rather than closed over.
    *
@@ -359,6 +362,7 @@ export function useConversations(
     alive,
     selected,
     arrived,
+    shown,
     api: apiRef,
     permits,
     get,
@@ -391,21 +395,29 @@ export function useConversations(
    * pairing the two put a second gateway read on the tailnet for every tick of
    * a poll that exists to catch new *messages*.
    */
-  const reloadTranscript = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await readHistory(record);
-  }, [changed, clearReconnect, get, readHistory, permits]);
+  const reloadTranscript = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await readHistory(record);
+    },
+    [changed, clearReconnect, get, readHistory, permits],
+  );
 
-  const reloadHistory = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    clearReconnect(record);
-    changed();
-    await Promise.all([readHistory(record), readSessions(record)]);
-  }, [changed, clearReconnect, get, readHistory, readSessions, permits]);
+  const reloadHistory = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      clearReconnect(record);
+      changed();
+      await Promise.all([readHistory(record), readSessions(record)]);
+    },
+    [changed, clearReconnect, get, readHistory, readSessions, permits],
+  );
   const stageDraft = useCallback(
     (target: ChatSelection, text: string) => {
       if (!permits(target.instance)) return;
@@ -433,6 +445,17 @@ export function useConversations(
     () => ({ state: current.observe, attempt: current.observeAttempt, error: current.observeError }),
     [current.observe, current.observeAttempt, current.observeError],
   );
+  const view = useCallback((target: ChatSelection) => get(target), [get]);
+  const ensure = useCallback(
+    (target: ChatSelection) => {
+      if (!permits(target.instance)) return;
+      const record = get(target);
+      if (!record.historyLoading && !record.historyRead && !record.sending && !record.aborting)
+        void readHistory(record);
+      if (record.sessionsState === "pending") void readSessions(record);
+    },
+    [get, permits, readHistory, readSessions],
+  );
   return {
     ...current,
     turnActivities,
@@ -454,5 +477,9 @@ export function useConversations(
     observeTransport,
     resumeObservation,
     subagents,
+    /** A pane reads a record without changing the full view's selection. */
+    view,
+    /** Opening a pane performs the same first reads as selecting a full-view thread. */
+    ensure,
   };
 }

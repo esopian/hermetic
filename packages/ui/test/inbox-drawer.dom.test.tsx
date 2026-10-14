@@ -56,6 +56,17 @@ function mount() {
   return fake;
 }
 
+test("opens on the Unread view, not Inbox", async () => {
+  mount();
+  await screen.findByText("alpha failed");
+
+  const views = within(screen.getByRole("navigation", { name: "Inbox views" }));
+  const pressed = (label: RegExp) =>
+    views.getByRole("button", { name: label }).getAttribute("aria-pressed");
+  expect(pressed(/^Unread/)).toBe("true");
+  expect(pressed(/^Inbox/)).toBe("false");
+});
+
 test("shift-click selects a range; the bulk bar clears exactly the selection, in one write", async () => {
   const fake = mount();
   const user = userEvent.setup();

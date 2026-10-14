@@ -49,7 +49,7 @@
  * ## The modules behind this one
  *
  * The adapter is one thing to its callers — every name below is imported from
- * this file — and eight modules behind that facade, each handed an explicit deps
+ * this file — and nine modules behind that facade, each handed an explicit deps
  * object rather than sharing one closure:
  *
  * | module | owns |
@@ -59,6 +59,7 @@
  * | `hermes-chat-sessions.ts` | the session registry → `Session` |
  * | `hermes-chat-history.ts` | the durable transcript → `ChatMessage` |
  * | `hermes-chat-turn.ts` | one live turn → `ChatFrame`, its abort and steer |
+ * | `hermes-chat-session-socket.ts` | one socket per conversation, held across turns |
  * | `hermes-chat-peer.ts` | Bot Mode's two raw transports |
  * | `hermes-chat-observe.ts` | a socket that only listens → `ChatObserveHint` |
  * | `hermes-chat-subagent-control.ts` | one delegated child's steer and stop |
@@ -88,6 +89,12 @@ import { createChatSessions } from "./hermes-chat-sessions.ts";
 import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
 import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
+import {
+  createIdleBus,
+  createSessionSockets,
+  disposeSessionSockets,
+} from "./hermes-chat-session-socket.ts";
+import { disposeChatRequestPools as disposeRequestPools } from "./hermes-chat-pool.ts";
 
 export { CHAT_ERROR_CODES, SLOT_WAIT_MS, WARM_SLOTS_PER_GATEWAY } from "./hermes-chat-types.ts";
 export type {
@@ -103,20 +110,29 @@ export type {
   ObserveOptions,
   SendOptions,
 } from "./hermes-chat-types.ts";
-export {
-  createRequestPool,
-  disposeChatRequestPools,
-  REQUEST_POOL_IDLE_MS,
-} from "./hermes-chat-pool.ts";
+export { createRequestPool, REQUEST_POOL_IDLE_MS } from "./hermes-chat-pool.ts";
 export type { RequestPool } from "./hermes-chat-pool.ts";
 export { mapSwarm } from "./hermes-chat-roster.ts";
 export { mapSessions } from "./hermes-chat-sessions.ts";
 export { mapHistory } from "./hermes-chat-history.ts";
 
+/**
+ * Close every socket the chat clients in this process keep open between calls:
+ * Bot Mode's pooled request sockets (`hermes-chat-pool.ts`) and every
+ * conversation's held session socket (`hermes-chat-session-socket.ts`). The
+ * name predates the second kind; heads call it on shutdown, and a one-shot CLI
+ * in its `finally`. Closing a held socket lets the gateway reap its session
+ * after the grace. Safe to call twice.
+ */
+export function disposeChatRequestPools(): void {
+  disposeRequestPools();
+  disposeSessionSockets();
+}
+
 /* ── the client ───────────────────────────────────────────────────────────── */
 
 /**
- * Wires the eight modules into one client.
+ * Wires the nine modules into one client.
  *
  * The order below is the dependency order and cannot be rearranged: everything
  * reaches a box through the connection, Bot Mode's REST transport is what
@@ -164,7 +180,15 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     conversation: canonical.conversation,
   });
   const subagents = createSubagentLedgers({ now: deps.now });
-  const observation = createChatObserve({ connect: connection.connect, subagents });
+  // Events on a conversation's idle held socket reach the observation through
+  // this bus: the gateway addresses them to that socket, not the passive one.
+  const idle = createIdleBus();
+  const sockets = createSessionSockets({
+    connect: connection.connect,
+    onIdleEvent: idle.publish,
+    ...(deps.sessionTuning !== undefined ? { tuning: deps.sessionTuning } : {}),
+  });
+  const observation = createChatObserve({ connect: connection.connect, subagents, idle });
   const live = createLiveUsage({ rpc: peer.botModeRpc });
   const probe = createBusyProbe({ rpc: peer.botModeRpc });
   const turn = createChatTurn({
@@ -173,6 +197,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     waitMs,
     conversation: canonical.conversation,
     subagents,
+    sockets,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
   });
   const children = createSubagentControl({
@@ -196,5 +221,43 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     botModeRpc: peer.botModeRpc,
     botModeRest: peer.botModeRest,
     ...canonical,
+    // An archived conversation has no next turn to hold the session for, so
+    // its hold ends once the archive is confirmed: the socket closes and the
+    // gateway reaps the session after its grace. A refused archive leaves the
+    // conversation as it was, held socket included.
+    //
+    // A Bot Chat may be archived by its root while the hold is keyed by its
+    // tip, which only the canonical lookup knows, and which the archive no
+    // longer resolves once the row is archived — so the tip is read first.
+    // Every id the conversation goes by is closed; a hold on the same runtime
+    // under yet another id was already folded into one of them.
+    archive: async (box, bot, session, opts) => {
+      // A failed lookup must not stop the archive: the ids the archive itself
+      // names are still closed.
+      const current = await canonical
+        .conversation(box, bot, {
+          session,
+          ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        })
+        .catch(() => null);
+      const archived = await canonical.archive(box, bot, session, opts);
+      for (const id of new Set([session, archived.session, current?.session]))
+        if (id) sockets.close(box, bot, id);
+      return archived;
+    },
+    // Compression keeps the gateway's runtime and moves the conversation onto a
+    // new tip id (`session_compression.py`'s `_sync_session_key_after_compress`),
+    // so the hold follows the tip rather than closing: closing it would let the
+    // gateway reap the conversation that continues, background processes and
+    // all. A failed compression moves nothing.
+    compact: async (box, bot, opts = {}) => {
+      const target =
+        opts.session ?? (await canonical.conversation(box, bot, { signal: opts.signal }))?.session;
+      const result = await canonical.compact(box, bot, opts);
+      const tip = result.conversation.session;
+      if (target && tip !== target) sockets.rekey(box, bot, target, tip);
+      return result;
+    },
+    release: (box, bot, session) => sockets.close(box, bot, session),
   };
 }

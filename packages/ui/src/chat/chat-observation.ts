@@ -45,6 +45,7 @@ export interface ObservationDeps {
   alive: RefObject<boolean>;
   selected: RefObject<ChatSelection | null>;
   arrived: RefObject<((arrival: ChatArrival) => void) | undefined>;
+  shown: RefObject<((instance: string, bot: string) => boolean) | undefined>;
   api: RefObject<ChatApi>;
   permits: (instance: string) => boolean;
   get: (target: ChatSelection) => Conversation;
@@ -59,6 +60,7 @@ export function useObservation(deps: ObservationDeps) {
     alive,
     selected,
     arrived,
+    shown,
     api: apiRef,
     permits,
     get,
@@ -93,7 +95,7 @@ export function useObservation(deps: ObservationDeps) {
           applySnapshot(record, event, { records, readSessions });
           break;
         case "message":
-          applyMessage(record, conversation, event, { selected, arrived });
+          applyMessage(record, conversation, event, { selected, arrived, shown });
           break;
         case "subagent":
           applySubagent(record, event, records);
@@ -215,77 +217,81 @@ export function useObservation(deps: ObservationDeps) {
    * Then the transcript is read, because whatever arrived while nothing was
    * watching is missing from the copy on screen.
    */
-  const resumeObservation = useCallback(async () => {
-    if (!selected.current || !permits(selected.current.instance)) return;
-    const record = get(selected.current);
-    if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
-    record.observeQuietTimer = null;
-    record.observe = "reconnecting";
-    record.observeError = null;
-    record.observeAttempt = 0;
-    changed();
-    const fail = (code: string, message: string): void => {
-      record.observe = "failed";
-      record.observeError = { code, message };
+  const resumeObservation = useCallback(
+    async (target?: ChatSelection) => {
+      const where = target ?? selected.current;
+      if (!where || !permits(where.instance)) return;
+      const record = get(where);
+      if (record.observeQuietTimer) clearTimeout(record.observeQuietTimer);
+      record.observeQuietTimer = null;
+      record.observe = "reconnecting";
+      record.observeError = null;
+      record.observeAttempt = 0;
       changed();
-    };
-    const ask = apiRef.current.resumeObservation;
-    if (!ask) {
-      // Optional for the same reason `chatStream` is: a tree mounted without a
-      // fan-in has no observation to ask back. Nothing falls through to the
-      // fleet-wide listen write — that is the call this route replaced.
-      fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
-      return;
-    }
-    let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
-    try {
+      const fail = (code: string, message: string): void => {
+        record.observe = "failed";
+        record.observeError = { code, message };
+        changed();
+      };
+      const ask = apiRef.current.resumeObservation;
+      if (!ask) {
+        // Optional for the same reason `chatStream` is: a tree mounted without a
+        // fan-in has no observation to ask back. Nothing falls through to the
+        // fleet-wide listen write — that is the call this route replaced.
+        fail("OBSERVE_RESUME_FAILED", "This view does not hold an observation to resume.");
+        return;
+      }
+      let answer: Awaited<ReturnType<NonNullable<ChatApi["resumeObservation"]>>>;
+      try {
+        /**
+         * The record's *identity*, not the session it happens to be reading.
+         *
+         * Every other address in the store is `resolvedSession ?? target.session`
+         * because those calls read a conversation, and reading wants the
+         * concrete session. A resume names a *subscription*, and the server keys
+         * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
+         * canonical record has `resolvedSession` filled in by the history read
+         * and moved by every rollover, so sending it here asked the server for a
+         * conversation it does not hold: it started a second pinned observation
+         * of one conversation, left the canonical key's remembered failure in
+         * place, and lost the new subscription again at the next reconcile.
+         * `target.session` is the identity, and the rollover block (`applySnapshot`) keeps it
+         * current for a record that names a session at all.
+         */
+        answer = await ask(record.target.instance, record.target.bot, record.target.session);
+      } catch (error) {
+        fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
+        return;
+      }
+      if (!alive.current || !permits(record.target.instance)) return;
       /**
-       * The record's *identity*, not the session it happens to be reading.
-       *
-       * Every other address in the store is `resolvedSession ?? target.session`
-       * because those calls read a conversation, and reading wants the
-       * concrete session. A resume names a *subscription*, and the server keys
-       * a canonical one on `session: null` (`chat-owner.ts` `keyOf`). A
-       * canonical record has `resolvedSession` filled in by the history read
-       * and moved by every rollover, so sending it here asked the server for a
-       * conversation it does not hold: it started a second pinned observation
-       * of one conversation, left the canonical key's remembered failure in
-       * place, and lost the new subscription again at the next reconcile.
-       * `target.session` is the identity, and the rollover block (`applySnapshot`) keeps it
-       * current for a record that names a session at all.
+       * The one answer a resume cannot fix by itself. Observations exist only for
+       * boxes this operator has chosen to monitor, so a box that is not listened
+       * to has nothing to resume — and turning listening on from here would be
+       * this store writing a preference that `listening-state.tsx` owns, silently,
+       * off a button that says "Watch again". It is said instead, naming the
+       * screen where the choice lives. (`observing: false` with `listening: true`
+       * is not a state the route can return.)
        */
-      answer = await ask(record.target.instance, record.target.bot, record.target.session);
-    } catch (error) {
-      fail("OBSERVE_RESUME_FAILED", error instanceof Error ? error.message : String(error));
-      return;
-    }
-    if (!alive.current || !permits(record.target.instance)) return;
-    /**
-     * The one answer a resume cannot fix by itself. Observations exist only for
-     * boxes this operator has chosen to monitor, so a box that is not listened
-     * to has nothing to resume — and turning listening on from here would be
-     * this store writing a preference that `listening-state.tsx` owns, silently,
-     * off a button that says "Watch again". It is said instead, naming the
-     * screen where the choice lives. (`observing: false` with `listening: true`
-     * is not a state the route can return.)
-     */
-    if (!answer.listening) {
-      fail(
-        "OBSERVE_NOT_LISTENING",
-        `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
-      );
-      return;
-    }
-    if (!answer.observing) {
-      fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
-      return;
-    }
-    await readHistory(record);
-    if (record.observe === "reconnecting") {
-      record.observe = "live";
-      changed();
-    }
-  }, [changed, get, permits, readHistory]);
+      if (!answer.listening) {
+        fail(
+          "OBSERVE_NOT_LISTENING",
+          `The portal is not listening to ${record.target.instance}. Turn it on for that box on the fleet screen, then watch again.`,
+        );
+        return;
+      }
+      if (!answer.observing) {
+        fail("OBSERVE_RESUME_FAILED", "The server did not re-open this conversation's observation.");
+        return;
+      }
+      await readHistory(record);
+      if (record.observe === "reconnecting") {
+        record.observe = "live";
+        changed();
+      }
+    },
+    [changed, get, permits, readHistory],
+  );
 
   return { observe, observeDropped, observeTransport, resumeObservation };
 }

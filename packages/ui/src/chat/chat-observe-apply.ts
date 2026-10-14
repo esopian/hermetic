@@ -277,9 +277,11 @@ export function applyMessage(
   deps: {
     selected: RefObject<ChatSelection | null>;
     arrived: RefObject<((arrival: ChatArrival) => void) | undefined>;
+    /** Whether a pane or the full view shows the thread; the selection when absent. */
+    shown: RefObject<((instance: string, bot: string) => boolean) | undefined>;
   },
 ): void {
-  const { selected, arrived } = deps;
+  const { selected, arrived, shown } = deps;
   observeLive(record);
   const message = event.message as unknown as ChatMessageView;
   /**
@@ -298,9 +300,10 @@ export function applyMessage(
    * a count the roster already owns, and the roster read reconciles it.
    */
   const note = (): void => {
-    const open =
-      selected.current?.instance === conversation.instance &&
-      selected.current?.bot === conversation.bot;
+    const open = shown.current
+      ? shown.current(conversation.instance, conversation.bot)
+      : selected.current?.instance === conversation.instance &&
+        selected.current?.bot === conversation.bot;
     arrived.current?.({
       instance: conversation.instance,
       bot: conversation.bot,

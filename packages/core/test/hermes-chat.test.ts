@@ -15,9 +15,10 @@
  * operator meets.
  */
 import { createHash } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   createHermesChat,
+  disposeChatRequestPools,
   mapHistory,
   mapSessions,
   mapSwarm,
@@ -67,6 +68,10 @@ import {
   UNKNOWN_TOOL_COMPLETE,
   UNKNOWN_TOOL_START,
 } from "./fixtures/hermes-frames.ts";
+
+// A conversation's socket outlives its turn now (`hermes-chat-session-socket.ts`);
+// close every held one so no test inherits another's.
+afterEach(() => disposeChatRequestPools());
 
 /* ── the double ───────────────────────────────────────────────────────────── */
 
@@ -1225,12 +1230,14 @@ describe("hermes-chat · steer", () => {
     await turn.next();
     await turn.next();
     expect(await adapter.steer?.(BOX, "research", "and then this")).toBe("redirected");
-    expect(h.sockets[1]?.sent.map(({ method, params }) => ({ method, params }))).toEqual([
-      {
-        method: "session.redirect",
-        params: { session_id: SESSION_ID, profile: "research", text: "and then this" },
-      },
-    ]);
+    // On the conversation's held socket, which is already attached: no second
+    // dial, and the redirect is the last thing that socket was sent.
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.at(-1)).toMatchObject({
+      method: "session.redirect",
+      params: { session_id: SESSION_ID, profile: "research", text: "and then this" },
+    });
+    expect(h.sockets[0]?.isClosed()).toBe(false);
     await turn.return?.();
   });
 });
@@ -2674,7 +2681,7 @@ describe("hermes-chat · history", () => {
 
 /** These cases use distinct durable and runtime IDs, which the original happy-path fixture did not. */
 describe("hermes-chat · durable addressing", () => {
-  test("send resumes the named profile and abort uses its exact runtime over a separate socket", async () => {
+  test("send resumes the named profile and abort uses its exact runtime over the held socket", async () => {
     const h = harness({
       results: {
         "session.resume": {
@@ -2718,12 +2725,23 @@ describe("hermes-chat · durable addressing", () => {
       },
     ]);
     expect(await adapter.abort(BOX, "research", { session: "durable-research" })).toBe(true);
-    expect(h.sockets[1]?.sent.map(({ method, params }) => ({ method, params }))).toEqual([
-      { method: "session.interrupt", params: { session_id: "runtime-research", profile: "research" } },
-    ]);
+    // The conversation's held socket carries the interrupt; nothing is dialled.
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.at(-1)).toEqual(
+      expect.objectContaining({
+        method: "session.interrupt",
+        params: { session_id: "runtime-research", profile: "research" },
+      }),
+    );
     await turn.return?.();
+    // The turn is over but the socket is still held, so the lazy resume that
+    // asks whether anything is running goes on it too, and it stays open.
     expect(await adapter.abort(BOX, "research", { session: "durable-research" })).toBe(false);
-    expect(h.sockets[2]?.sent.map((call) => call.method)).toEqual(["session.resume"]);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.at(-1)?.method).toBe("session.resume");
+    expect(h.sockets[0]?.isClosed()).toBe(false);
+    expect(adapter.release?.(BOX, "research", "durable-research")).toBe(true);
+    expect(h.sockets[0]?.isClosed()).toBe(true);
   });
 
   test("queued reaches prompt.submit only when asked for", async () => {
@@ -2831,7 +2849,9 @@ describe("hermes-chat · durable addressing", () => {
     await turn.next();
     expect(h.sockets[0]?.sent[1]?.params).toEqual({ profile: "research", source: "hermetic" });
     expect(await adapter.abort(BOX, "research")).toBe(true);
-    expect(h.sockets[1]?.sent[0]?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
+    // The turn's own held socket carries the interrupt, by runtime.
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.at(-1)?.params).toEqual({ session_id: SESSION_ID, profile: "research" });
     await turn.return?.();
   });
 
@@ -2951,6 +2971,8 @@ describe("semantic live activity and requests", () => {
       "session.create",
       "session.events.since",
       "prompt.submit",
+      // Released to the hold, it stops answering prompts until the next turn.
+      "client.capabilities",
     ]);
   });
 

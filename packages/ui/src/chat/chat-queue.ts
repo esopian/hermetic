@@ -59,6 +59,16 @@ export interface SendQueueDeps {
   send: (text: string) => boolean;
   abort: () => Promise<void>;
   steer: (text: string) => Promise<SteerOutcome>;
+  /** The persistent provider supplies these for independently visible dock panes. */
+  stateFor?: (target: ChatSelection) => {
+    sending: boolean;
+    remoteBusy: boolean | null;
+    turnError: unknown;
+    reconnecting: boolean;
+  };
+  sendTo?: (text: string, target: ChatSelection) => boolean;
+  abortTo?: (target: ChatSelection) => Promise<void>;
+  steerTo?: (text: string, target: ChatSelection) => Promise<SteerOutcome>;
 }
 
 export function useSendQueue({
@@ -70,8 +80,11 @@ export function useSendQueue({
   send,
   abort,
   steer,
+  stateFor,
+  sendTo,
+  abortTo,
+  steerTo,
 }: SendQueueDeps) {
-  const working = isWorking(sending, remoteBusy);
   /**
    * Queued sends, per conversation, and every reason one does not go out.
    *
@@ -94,6 +107,8 @@ export function useSendQueue({
    * started a turn, and the row leaves only when it did.
    */
   const [queues, setQueues] = useState<ReadonlyMap<string, QueuedMessage[]>>(() => new Map());
+  const [watched, setWatched] = useState<ReadonlyMap<string, ChatSelection>>(() => new Map());
+  const watchCounts = useRef(new Map<string, number>());
   const parked = useRef<Set<string>>(new Set());
   /**
    * A counter, because `parked` is a ref and the composer has to say so.
@@ -119,13 +134,24 @@ export function useSendQueue({
    * running. Until then `sending` below is the value from before it started,
    * and without this the next head would go out on that stale answer.
    */
-  const dispatched = useRef<{ key: string; id: string } | null>(null);
+  const dispatched = useRef(new Set<string>());
   /** `sending` as of the last render, for `force`, which reads it after an await. */
-  const sendingNow = useRef(sending);
-  sendingNow.current = sending;
-  /** The same for a turn this tab did not start. */
-  const remoteNow = useRef(remoteBusy);
-  remoteNow.current = remoteBusy;
+  const state = useCallback(
+    (target: ChatSelection) => stateFor?.(target) ?? { sending, remoteBusy, turnError, reconnecting },
+    [stateFor, sending, remoteBusy, turnError, reconnecting],
+  );
+  const sendFor = useCallback(
+    (text: string, target: ChatSelection) => sendTo?.(text, target) ?? send(text),
+    [sendTo, send],
+  );
+  const abortFor = useCallback(
+    (target: ChatSelection) => abortTo?.(target) ?? abort(),
+    [abortTo, abort],
+  );
+  const steerFor = useCallback(
+    (text: string, target: ChatSelection) => steerTo?.(text, target) ?? steer(text),
+    [steerTo, steer],
+  );
   const queued = selection ? (queues.get(queueKeyOf(selection)) ?? NO_QUEUE) : NO_QUEUE;
   /**
    * The queue is held rather than waiting its turn, and the composer says so.
@@ -158,12 +184,12 @@ export function useSendQueue({
   }, []);
 
   const queueMessage = useCallback(
-    (text: string) => {
+    (text: string, target = selection) => {
       const body = text.trim();
-      if (!body || !selection) return;
+      if (!body || !target) return;
       const id = `q${++queueSeq.current}`;
       const at = new Date().toISOString();
-      const key = queueKeyOf(selection);
+      const key = queueKeyOf(target);
       setQueues((previous) => {
         const next = new Map(previous);
         next.set(key, [...(previous.get(key) ?? []), { id, text: body, at }]);
@@ -174,9 +200,9 @@ export function useSendQueue({
   );
 
   const unqueue = useCallback(
-    (id: string) => {
-      if (!selection) return;
-      dropQueued(queueKeyOf(selection), id);
+    (id: string, target = selection) => {
+      if (!target) return;
+      dropQueued(queueKeyOf(target), id);
     },
     [selection, dropQueued],
   );
@@ -198,31 +224,34 @@ export function useSendQueue({
    * the head goes out once the box says the conversation is idle.
    */
   useEffect(() => {
-    if (!selection || working) return;
-    const key = queueKeyOf(selection);
-    if (turnError || reconnecting) {
-      // A turn that failed or dropped before any render saw it running.
-      if (dispatched.current?.key === key) dispatched.current = null;
-      if (queues.get(key)?.length) park(key);
-      return;
+    const targets = new Map(watched);
+    if (selection) targets.set(queueKeyOf(selection), selection);
+    for (const [key, target] of targets) {
+      const current = state(target);
+      if (isWorking(current.sending, current.remoteBusy)) continue;
+      if (current.turnError || current.reconnecting) {
+        dispatched.current.delete(key);
+        if (queues.get(key)?.length) park(key);
+        continue;
+      }
+      if (dispatched.current.has(key) || parked.current.has(key)) continue;
+      const head = queues.get(key)?.[0];
+      if (!head) continue;
+      if (!sendFor(head.text, target)) {
+        park(key);
+        continue;
+      }
+      dispatched.current.add(key);
+      dropQueued(key, head.id);
     }
-    if (dispatched.current || parked.current.has(key)) return;
-    const head = queues.get(key)?.[0];
-    if (!head) return;
-    // A send the store refused keeps the row and parks the queue: the operator
-    // decides, rather than the queue retrying into whatever refused it.
-    if (!send(head.text)) {
-      park(key);
-      return;
-    }
-    dispatched.current = { key, id: head.id };
-    dropQueued(key, head.id);
-  }, [selection, working, turnError, reconnecting, queues, send, park, dropQueued]);
+  }, [selection, watched, queues, state, sendFor, park, dropQueued]);
 
   /** The turn the last head started is on screen; the next waits for it to end. */
   useEffect(() => {
-    if (sending) dispatched.current = null;
-  }, [sending]);
+    const targets = new Map(watched);
+    if (selection) targets.set(queueKeyOf(selection), selection);
+    for (const [key, target] of targets) if (state(target).sending) dispatched.current.delete(key);
+  }, [sending, watched, selection, state]);
 
   /**
    * Leaving a conversation parks its queue.
@@ -238,8 +267,9 @@ export function useSendQueue({
     if (!selection) return;
     const key = queueKeyOf(selection);
     return () => {
+      if (watchCounts.current.has(key)) return;
       park(key);
-      if (dispatched.current?.key === key) dispatched.current = null;
+      dispatched.current.delete(key);
     };
   }, [selection, park]);
 
@@ -248,22 +278,38 @@ export function useSendQueue({
    * a turn started, as the store's own `send` does.
    */
   const sendMessage = useCallback(
-    (text: string): boolean => {
+    (text: string, target?: ChatSelection): boolean => {
+      if (target) {
+        const key = queueKeyOf(target);
+        unpark(key);
+        dispatched.current.delete(key);
+        return sendFor(text, target);
+      }
+      // The full view can select and send in the same callback (failure-card
+      // recovery). Its store selection ref has moved, while this hook's render
+      // value has not. Let the store address that current ref.
       if (selection) {
         const key = queueKeyOf(selection);
         unpark(key);
-        if (dispatched.current?.key === key) dispatched.current = null;
+        dispatched.current.delete(key);
       }
       return send(text);
     },
-    [selection, send, unpark],
+    [selection, send, sendFor, unpark],
   );
 
   /** Stopping keeps the queue and parks it; nothing is dropped. */
-  const stopTurn = useCallback(async () => {
-    if (selection) park(queueKeyOf(selection));
-    await abort();
-  }, [selection, abort, park]);
+  const stopTarget = useCallback(
+    async (target: ChatSelection | null) => {
+      if (target) {
+        park(queueKeyOf(target));
+        await abortFor(target);
+      } else await abort();
+    },
+    [abort, abortFor, park],
+  );
+  // React may pass a click event to `onAbort`; the public callback takes none.
+  const stopTurn = useCallback(() => stopTarget(selection), [stopTarget, selection]);
 
   /**
    * Put a message at the head of the queue — the row it already is, or a new
@@ -289,21 +335,22 @@ export function useSendQueue({
    * awaited, and the turn may have ended while the box was answering.
    */
   const force = useCallback(
-    async (text: string, id: string | null) => {
+    async (text: string, id: string | null, target = selection) => {
       const body = text.trim();
-      if (!selection || !body) return;
-      const key = queueKeyOf(selection);
+      if (!target || !body) return;
+      const key = queueKeyOf(target);
       // Whether the turn to get past is this tab's own. One another client
       // started is steered too, but never stopped from here.
-      const own = sendingNow.current;
-      if (!own && remoteNow.current !== true) {
+      const now = state(target);
+      const own = now.sending;
+      if (!own && now.remoteBusy !== true) {
         // Nothing to get past: this is an ordinary send, and like every
         // deliberate send it releases a parked queue behind it.
         if (id) dropQueued(key, id);
-        sendMessage(body);
+        sendMessage(body, target);
         return;
       }
-      const outcome = await steer(body);
+      const outcome = await steerFor(body, target);
       if (outcome === "redirected" || outcome === "queued") {
         if (id) dropQueued(key, id);
         return;
@@ -314,22 +361,68 @@ export function useSendQueue({
       // A turn this tab did not start is left running, and the message waits.
       promote(key, body, id);
       unpark(key);
-      if (own && sendingNow.current) await abort();
+      if (own && state(target).sending) await abortFor(target);
     },
-    [selection, steer, abort, dropQueued, promote, unpark, sendMessage],
+    [selection, state, steerFor, abortFor, dropQueued, promote, unpark, sendMessage],
   );
 
   /** Send what is in the composer now, past the queue and into the running turn. */
-  const sendNow = useCallback((text: string) => void force(text, null), [force]);
+  const sendNow = useCallback(
+    (text: string, target = selection) => void force(text, null, target),
+    [force, selection],
+  );
 
   /** Send one queued row now rather than when the turn ends. */
   const sendQueuedNow = useCallback(
-    (id: string) => {
-      if (!selection) return;
-      const row = queues.get(queueKeyOf(selection))?.find((r) => r.id === id);
-      if (row) void force(row.text, id);
+    (id: string, target = selection) => {
+      if (!target) return;
+      const row = queues.get(queueKeyOf(target))?.find((r) => r.id === id);
+      if (row) void force(row.text, id, target);
     },
     [selection, queues, force],
+  );
+
+  /** A mounted pane may drain its own queue; leaving parks it for the next visit. */
+  const watch = useCallback(
+    (target: ChatSelection) => {
+      const key = queueKeyOf(target);
+      watchCounts.current.set(key, (watchCounts.current.get(key) ?? 0) + 1);
+      setWatched((previous) => new Map(previous).set(key, target));
+      return () => {
+        const remaining = (watchCounts.current.get(key) ?? 1) - 1;
+        if (remaining > 0) {
+          watchCounts.current.set(key, remaining);
+          return;
+        }
+        watchCounts.current.delete(key);
+        park(key);
+        dispatched.current.delete(key);
+        setWatched((previous) => {
+          const next = new Map(previous);
+          next.delete(key);
+          return next;
+        });
+      };
+    },
+    [park],
+  );
+
+  const forTarget = useCallback(
+    (target: ChatSelection) => {
+      const key = queueKeyOf(target);
+      const rows = queues.get(key) ?? NO_QUEUE;
+      return {
+        queued: rows,
+        queueParked: rows.length > 0 && parked.current.has(key),
+        queueMessage: (text: string) => queueMessage(text, target),
+        unqueue: (id: string) => unqueue(id, target),
+        sendMessage: (text: string) => sendMessage(text, target),
+        stopTurn: () => stopTarget(target),
+        sendNow: (text: string) => sendNow(text, target),
+        sendQueuedNow: (id: string) => sendQueuedNow(id, target),
+      };
+    },
+    [queues, parkedAt, queueMessage, unqueue, sendMessage, stopTarget, sendNow, sendQueuedNow],
   );
 
   return {
@@ -341,5 +434,7 @@ export function useSendQueue({
     stopTurn,
     sendNow,
     sendQueuedNow,
+    forTarget,
+    watch,
   };
 }
