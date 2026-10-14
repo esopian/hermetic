@@ -81,7 +81,8 @@ import type {
 } from "@hermetic/core";
 import { looksLikeKeyMaterial } from "@hermetic/core/shared";
 import { declareMachineryRpc, declareRpc } from "../declare.ts";
-import { requireTarget, withTarget } from "../target.ts";
+import { requireTarget, stillBound, withTarget } from "../target.ts";
+import type { Targeted } from "../target.ts";
 import { parseInput } from "../validation.ts";
 import type { HandlerContext } from "./ctx.ts";
 import type { Handler } from "./dispatch.ts";
@@ -483,16 +484,29 @@ export async function pickNative(
   if (ctx.native === undefined) {
     throw new HermeticError("UNSUPPORTED", "files.pickNative is answered by the desktop head");
   }
+  // The dialog stays open for as long as the operator likes, and a fleet
+  // switch can land meanwhile. The picks belong to the fleet whose composer
+  // asked: pinned here, before the dialog, and re-asserted after every await,
+  // so a switch refuses the pick (`FLEET_MISMATCH`) instead of registering it
+  // with the fleet the head moved to.
+  const bound: Targeted<null> = {
+    hermetic: ctx.state.hermetic,
+    input: null,
+    boundTo: ctx.state.target,
+  };
   const paths = (await ctx.native.pickFiles()).filter((p) => p.length > 0);
-  const uploads = ctx.hermetic().files.internal.uploads;
+  stillBound(ctx.state, bound);
+  const uploads = bound.hermetic.files.internal.uploads;
   const files: PickedFile[] = [];
   try {
     for (const path of paths) {
       const picked = await uploads.registerPath(path);
       files.push({ ...picked, looks_like_key: await pickLooksLikeKey(path, picked.name) });
     }
+    stillBound(ctx.state, bound);
   } catch (e) {
-    // One unreadable pick fails the dialog; nothing it registered is kept.
+    // One unreadable pick, or a switch while reading them, fails the dialog;
+    // nothing it registered is kept.
     for (const f of files) uploads.discard(f.upload_id);
     throw e;
   }

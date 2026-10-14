@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { abortableSleep } from "../abort.ts";
 import { agentParamPath } from "../backend/constants.ts";
 import type { CoreContext } from "../context.ts";
 import { HermeticError } from "../errors.ts";
@@ -68,9 +69,11 @@ import type { UploadRegistry } from "./uploads.ts";
  * and whenever the source is text this process held (`registerBytes`). A plain
  * file's upload alone stays registered after a failure, so it can be retried.
  * A durable secret written to SSM that the box then refuses is deleted again
- * when the write created the parameter and the box does not hold the request
- * fulfilled from it (a stop or a lost answer can come after the box took it);
- * when it replaced one, the refusal says so, since the box loads that slot at
+ * when the write created the parameter and the box conclusively did not take
+ * it (a stop or a lost answer can come after the box took it, or while it is
+ * still `receiving`: then the put waits a bounded while, and keeps the
+ * parameter unless the slot is `open` again, declined, expired or answered
+ * from another slot); when it replaced one, the refusal says so, since the box loads that slot at
  * its next apply or boot. A slot that already holds a secret is replaced only
  * when the put says so (`replace`); otherwise the put is refused with
  * `CONFLICT` and `replace_required` before anything is written, and a native
@@ -85,7 +88,32 @@ import type { UploadRegistry } from "./uploads.ts";
 export interface PutDeps {
   ctx: CoreContext;
   uploads: UploadRegistry;
+  /**
+   * How often, and for how long, a durable secret's request is re-read after
+   * the box's answer was lost while the slot is still `receiving`
+   * (`settleSecret`). Defaults to `SECRET_SETTLE_INTERVAL_MS` and
+   * `SECRET_SETTLE_TIMEOUT_MS`; a test shortens both.
+   */
+  secretSettle?: { intervalMs: number; timeoutMs: number };
 }
+
+/** Between two reads of a request the box is still `receiving`. */
+export const SECRET_SETTLE_INTERVAL_MS = 250;
+/**
+ * The most a failed or stopped durable put waits for the box to finish with a
+ * request it is `receiving`. The box's part is one SSM read and one tmpfs
+ * write, so it settles well inside this; past it, the parameter stays.
+ */
+export const SECRET_SETTLE_TIMEOUT_MS = 10_000;
+
+/**
+ * What became of a durable secret whose `/secret` call failed or was stopped:
+ * `taken` (the box holds the request fulfilled from this slot), `refused` (the
+ * box conclusively did not take it: the slot is `open` again, declined,
+ * expired, or answered from another slot), `pending` (still `receiving` when
+ * the wait ran out), `unknown` (the slot could not be read).
+ */
+type SecretSettle = "taken" | "refused" | "pending" | "unknown";
 
 /** What a put reads, once resolved. */
 type Source =
@@ -156,12 +184,14 @@ interface Lane {
  */
 function afterSsmRefusal(
   e: unknown,
-  outcome: "removed" | "replaced" | "kept" | "taken" | "unknown",
+  outcome: "removed" | "replaced" | "kept" | "taken" | "pending" | "unknown",
 ): unknown {
   if (outcome === "removed") return e;
   const note = {
     replaced: "; the stored secret was replaced, and the box loads it at its next apply or boot",
     taken: "; the box had already taken the secret, so it stays stored in SSM",
+    pending:
+      "; the box was still taking the secret, so it may have been delivered; it stays stored in SSM, and the box loads it at its next apply or boot",
     unknown:
       "; whether the box took the secret could not be checked, so it stays stored in SSM, and the box loads it at its next apply or boot",
     kept: "; the secret could not be removed from SSM, and the box loads it at its next apply or boot",
@@ -191,6 +221,10 @@ function replaceRequired(instance: string, ssmSlot: string): HermeticError {
 
 export function createFilesPut(deps: PutDeps) {
   const { ctx, uploads } = deps;
+  const settle = deps.secretSettle ?? {
+    intervalMs: SECRET_SETTLE_INTERVAL_MS,
+    timeoutMs: SECRET_SETTLE_TIMEOUT_MS,
+  };
 
   async function resolve(input: FilesPutInput): Promise<Source> {
     if ("path" in input.source) {
@@ -267,10 +301,12 @@ export function createFilesPut(deps: PutDeps) {
           : thrown;
       if (existed) throw afterSsmRefusal(e, "replaced");
       // A stop, or an answer lost on the way back, may come after the box
-      // already took the secret: then the parameter is what backs its tmpfs
-      // copy at the next apply or boot, and stays. Unknown counts as taken.
-      const taken = await tookSecret(instance, slot.request_id, ssmSlot);
-      if (taken !== false) throw afterSsmRefusal(e, taken ? "taken" : "unknown");
+      // already took the secret, or while it is still taking it (the box does
+      // not stop its own work when the call is dropped): then the parameter
+      // is what backs its tmpfs copy at the next apply or boot, and stays.
+      // Only a box that conclusively did not take it lets the parameter go.
+      const settled = await settleSecret(instance, slot.request_id, ssmSlot);
+      if (settled !== "refused") throw afterSsmRefusal(e, settled);
       let outcome: "removed" | "kept" = "removed";
       try {
         await ctx.backend.secrets.delete(path);
@@ -282,20 +318,41 @@ export function createFilesPut(deps: PutDeps) {
   }
 
   /**
-   * Whether the box holds the request fulfilled from `ssmSlot`: `null` when
-   * the slot cannot be read. Read without the put's signal, which may be the
-   * very stop being cleaned up after.
+   * What the box made of a durable secret whose `/secret` answer never came
+   * back (`SecretSettle`). A slot still `receiving` is read again every
+   * `intervalMs` until it leaves that state or `timeoutMs` runs out.
+   *
+   * The wait runs on its own deadline, never the put's signal: that signal may
+   * be the very stop being cleaned up after, and the box does not see it, so
+   * the stop does not change what the box does. The deadline bounds a stopped
+   * put's wait as well as a failed one's, and each read is cut off with it. A
+   * read that fails ends the wait at once (the box is likely unreachable, and
+   * another read would only fail again); either way the parameter stays.
    */
-  async function tookSecret(
+  async function settleSecret(
     instance: string,
     requestId: string,
     ssmSlot: string,
-  ): Promise<boolean | null> {
+  ): Promise<SecretSettle> {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), settle.timeoutMs);
+    let seenReceiving = false;
     try {
-      const now = await ctx.backend.files.request(instance, requestId, {});
-      return now.state !== "open" && now.fulfilled?.ssm_slot === ssmSlot;
-    } catch {
-      return null;
+      for (;;) {
+        let now: FileRequest;
+        try {
+          now = await ctx.backend.files.request(instance, requestId, { signal: deadline.signal });
+        } catch {
+          return seenReceiving ? "pending" : "unknown";
+        }
+        if (now.state !== "open" && now.fulfilled?.ssm_slot === ssmSlot) return "taken";
+        if (now.state !== "receiving") return "refused";
+        seenReceiving = true;
+        await abortableSleep(settle.intervalMs, deadline.signal);
+        if (deadline.signal.aborted) return "pending";
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 

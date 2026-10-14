@@ -33,6 +33,7 @@ import { DRAG_IDLE_MS, useFileDrop } from "../src/chat/components/AttachTray.tsx
 import { NO_ATTACHMENTS } from "../src/chat/chat-attachments.ts";
 import { fireEvent } from "./dom.ts";
 import type { StageHandlers } from "../src/api/files.ts";
+import { setFleetTarget } from "../src/api/client.ts";
 
 const TARGET = { instance: "atlas", bot: "scribe", session: null };
 
@@ -80,6 +81,7 @@ function mount(fake: Fake) {
   const records = new Map<string, Conversation>();
   let control: AttachmentsControl | null = null;
   let record: Conversation | null = null;
+  let cancelAll: ((instance?: string) => void) | null = null;
   function Probe() {
     const [, bump] = useReducer((n: number) => n + 1, 0);
     const files = useDraftAttachments({
@@ -94,6 +96,7 @@ function mount(fake: Fake) {
       api: fake.api,
     });
     control = files.forTarget(TARGET);
+    cancelAll = files.cancelAll;
     record = records.get(key(TARGET)) ?? null;
     return null;
   }
@@ -101,6 +104,7 @@ function mount(fake: Fake) {
   return {
     files: () => control!,
     record: () => record!,
+    cancelAll: (instance?: string) => cancelAll!(instance),
   };
 }
 
@@ -320,6 +324,95 @@ describe("the pipeline", () => {
       ["up_key", true],
       ["up_other", false],
     ]);
+  });
+});
+
+/**
+ * The native dialog answers whenever the operator is done with it. By then the
+ * store that opened it may be gone (`cancelAll` on the provider's unmount, which
+ * is also what a fleet switch does) or the window may be on another fleet:
+ * either way its picks are discarded in the main process and nothing is staged.
+ */
+describe("a native dialog that answers late", () => {
+  const MAIN = { account_id: "123456789012", region: "us-east-1", fleet_id: "fxtr0001" };
+  const STAGING = { account_id: "123456789012", region: "us-east-1", fleet_id: "sg7k2m4p" };
+  const LATE = [
+    { upload_id: "up_late", name: "private.pdf", size: 9 },
+    { upload_id: "up_late2", name: "notes.txt", size: 3 },
+  ];
+
+  afterEach(() => setFleetTarget(null));
+
+  /** A bridge whose `pickNative` waits for the test to answer or fail it. */
+  function deferred() {
+    const fake = fakeApi();
+    let answer!: (files: typeof LATE) => void;
+    let refuse!: (e: Error) => void;
+    const pending = new Promise<{ files: typeof LATE }>((resolve, reject) => {
+      answer = (files) => resolve({ files });
+      refuse = reject;
+    });
+    fake.api.pickNative = ((instance: string) => {
+      fake.calls.push({ name: "pickNative", args: [instance] });
+      return pending;
+    }) as never;
+    const settle = async (run: () => void) => {
+      await act(async () => {
+        run();
+        await pending.catch(() => undefined);
+        await Promise.resolve();
+      });
+    };
+    return { fake, answer, refuse, settle };
+  }
+
+  test("a pick still open when the store is torn down stages nothing and frees its uploads", async () => {
+    setFleetTarget(MAIN);
+    const { fake, answer, settle } = deferred();
+    const h = mount(fake);
+    const record = h.record();
+    act(() => h.files().pick());
+    expect(fake.calls.filter((c) => c.name === "pickNative").length).toBe(1);
+    act(() => h.cancelAll());
+    cleanup();
+    await settle(() => answer(LATE));
+    expect(fake.stages.length).toBe(0);
+    expect(discarded(fake)).toEqual(["up_late", "up_late2"]);
+    expect(record.attachments.length).toBe(0);
+  });
+
+  test("a pick that answers after the window moved to another fleet stages nothing", async () => {
+    setFleetTarget(MAIN);
+    const { fake, answer, settle } = deferred();
+    const h = mount(fake);
+    act(() => h.files().pick());
+    setFleetTarget(STAGING);
+    await settle(() => answer(LATE));
+    expect(fake.stages.length).toBe(0);
+    expect(discarded(fake)).toEqual(["up_late", "up_late2"]);
+    expect(h.record().attachments.length).toBe(0);
+  });
+
+  test("cancelling one instance abandons its pick; a failed dialog then adds no chip", async () => {
+    setFleetTarget(MAIN);
+    const { fake, refuse, settle } = deferred();
+    const h = mount(fake);
+    act(() => h.files().pick());
+    act(() => h.cancelAll("atlas"));
+    await settle(() => refuse(Object.assign(new Error("dialog failed"), { code: "INTERNAL" })));
+    expect(fake.stages.length).toBe(0);
+    expect(h.record().attachments.length).toBe(0);
+  });
+
+  test("a pick on the same fleet, with another instance cancelled, still stages", async () => {
+    setFleetTarget(MAIN);
+    const { fake, answer, settle } = deferred();
+    const h = mount(fake);
+    act(() => h.files().pick());
+    act(() => h.cancelAll("orca"));
+    await settle(() => answer(LATE));
+    expect(fake.stages.map((s) => s.upload_id)).toEqual(["up_late", "up_late2"]);
+    expect(discarded(fake)).toEqual([]);
   });
 });
 

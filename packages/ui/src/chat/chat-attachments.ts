@@ -21,6 +21,8 @@
  */
 import { useCallback, useRef } from "react";
 import { FILES_LIMITS, isImageMime } from "@hermetic/core/shared";
+import { fleetTarget, sameFleetTarget } from "../api/client.ts";
+import type { FleetTarget } from "../api/client.ts";
 import * as filesApi from "../api/files.ts";
 import type { ChatBlockOf } from "../api/index.ts";
 import type { StageHandlers } from "../api/files.ts";
@@ -199,6 +201,23 @@ interface Job {
   cancelled: boolean;
 }
 
+/**
+ * A native dialog still open. It answers whenever the operator is done with
+ * it, which may be after the store that opened it was torn down (`cancelAll`
+ * on unmount, or for an instance this page lost) or after the window moved to
+ * another fleet. Either way its picks are discarded and nothing is staged.
+ */
+interface PendingPick {
+  instance: string;
+  /** The fleet the window was showing when the dialog opened. */
+  fleet: FleetTarget | null;
+  cancelled: boolean;
+}
+
+/** Same fleet, or both unknown (a stage then says `NO_TARGET`, as it would have anyway). */
+const sameFleet = (a: FleetTarget | null, b: FleetTarget | null): boolean =>
+  (a === null && b === null) || sameFleetTarget(a, b);
+
 export interface DraftAttachmentDeps {
   get: (target: ChatSelection) => Conversation;
   changed: () => void;
@@ -210,6 +229,7 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
   const apiRef = useRef<AttachmentsApi>(api ?? filesApi);
   apiRef.current = api ?? filesApi;
   const jobs = useRef(new Map<string, Job>());
+  const picks = useRef(new Set<PendingPick>());
   const seq = useRef(0);
   const capability = useRef(new Map<string, FilesCapabilityState | "pending">());
   const controls = useRef(
@@ -438,10 +458,18 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
   const pickInto = useCallback(
     async (target: ChatSelection, notSecretFor: { name: string; size: number } | null) => {
       if (!permits(target.instance) || capability.current.get(target.instance) === "no") return;
+      const pending: PendingPick = {
+        instance: target.instance,
+        fleet: fleetTarget(),
+        cancelled: false,
+      };
+      const live = () => !pending.cancelled && sameFleet(pending.fleet, fleetTarget());
+      picks.current.add(pending);
       let picked: { upload_id: string; name: string; size: number }[];
       try {
         picked = (await apiRef.current.pickNative(target.instance)).files;
       } catch (e) {
+        if (!live()) return;
         const code = typeof e === "object" && e !== null && "code" in e ? String(e.code) : "INTERNAL";
         add(target, {
           name: "file dialog",
@@ -457,6 +485,13 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
             }),
           },
         });
+        return;
+      } finally {
+        picks.current.delete(pending);
+      }
+      if (!live()) {
+        // Nobody is left to attach these to: the main process lets go of them.
+        for (const f of picked) void apiRef.current.chunkDiscard(f.upload_id).catch(() => undefined);
         return;
       }
       let over = 0;
@@ -525,10 +560,14 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
    * Abandon every job, or every job on `instance`: their stages closed and
    * their uploads freed in the main process. The chips are the record's, and
    * go with it; a staged file is left to the box's TTL, since the box may be
-   * one this page can no longer reach.
+   * one this page can no longer reach. A native dialog still open is
+   * abandoned too: whatever it answers later is discarded, never staged.
    */
   const cancelAll = useCallback(
     (instance?: string) => {
+      for (const pending of picks.current) {
+        if (instance === undefined || pending.instance === instance) pending.cancelled = true;
+      }
       for (const [local_id, job] of jobs.current) {
         if (instance !== undefined && job.target.instance !== instance) continue;
         jobs.current.delete(local_id);

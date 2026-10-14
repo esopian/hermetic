@@ -23,7 +23,8 @@ import { createStreamRegistry, type StreamFrame } from "../src/handlers/streams.
 import { memoryLog } from "../src/log.ts";
 import { OpRegistry } from "../src/ops.ts";
 import { createRpcBinding, type RpcOptions } from "../src/rpc/bind.ts";
-import { AppState, fixedInstance } from "../src/state.ts";
+import { AppState, fixedInstance, openState } from "../src/state.ts";
+import { testHome } from "./home.ts";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 
@@ -291,6 +292,85 @@ test("files.pickNative is UNSUPPORTED with no desktop head", async () => {
   await expect(dispatch(ctx, "files.pickNative", { instance: "atlas" })).rejects.toMatchObject({
     code: "UNSUPPORTED",
   });
+});
+
+/**
+ * A head that can switch fleets, for the pick's pin: the dialog stays open as
+ * long as the operator likes, and a `fleets.switch` can land meanwhile.
+ */
+async function switchable() {
+  const state = await openState({ fixture: true, home: testHome("hermetic-pick-switch-") });
+  const ctx: HandlerContext = {
+    state,
+    hermetic: () => state.hermetic,
+    ops: new OpRegistry(),
+    poller: () => state.poller,
+    chatOwner: createChatOwner({ hermetic: () => state.hermetic }),
+    fixture: true,
+    opts: { fixture: true },
+    streams: createStreamRegistry(),
+  };
+  return { state, ctx };
+}
+
+/** Counts what an instance's upload registry is asked to keep and to forget. */
+function spyUploads(h: Hermetic) {
+  const uploads = h.files.internal.uploads;
+  const seen = { registered: [] as string[], discarded: [] as string[] };
+  const registerPath = uploads.registerPath;
+  const discard = uploads.discard;
+  uploads.registerPath = async (path) => {
+    const picked = await registerPath(path);
+    seen.registered.push(picked.upload_id);
+    return picked;
+  };
+  uploads.discard = (id) => {
+    seen.discarded.push(id);
+    return discard(id);
+  };
+  return seen;
+}
+
+test("files.pickNative refuses a pick whose dialog closed after a fleet switch, registering nothing", async () => {
+  const { state, ctx } = await switchable();
+  const before = state.hermetic;
+  expect(state.target?.fleet_id).toBe("fxtr0001");
+  const old = spyUploads(before);
+  const dir = mkdtempSync(join(tmpdir(), "hermetic-pick-switch-"));
+  const path = join(dir, "late.png");
+  writeFileSync(path, PNG);
+  let close!: (paths: string[]) => void;
+  ctx.native = nativeWith(() => new Promise<string[]>((resolve) => (close = resolve)));
+  const pick = dispatch(ctx, "files.pickNative", { instance: "atlas" });
+  await Bun.sleep(0);
+  await dispatch(ctx, "fleets.switch", { fleet: "sg7k2m4p" });
+  expect(state.target?.fleet_id).toBe("sg7k2m4p");
+  expect(state.hermetic).not.toBe(before);
+  const now = spyUploads(state.hermetic);
+  close([path]);
+  await expect(pick).rejects.toMatchObject({ code: "FLEET_MISMATCH" });
+  expect(old.registered.length + now.registered.length).toBe(0);
+});
+
+test("files.pickNative discards what it registered when a switch lands while reading the picks", async () => {
+  const { state, ctx } = await switchable();
+  const before = state.hermetic;
+  const old = spyUploads(before);
+  const dir = mkdtempSync(join(tmpdir(), "hermetic-pick-switch-"));
+  const path = join(dir, "mid.png");
+  writeFileSync(path, PNG);
+  ctx.native = nativeWith(async () => [path]);
+  const registerPath = before.files.internal.uploads.registerPath;
+  before.files.internal.uploads.registerPath = async (p) => {
+    const picked = await registerPath(p);
+    await dispatch(ctx, "fleets.switch", { fleet: "sg7k2m4p" });
+    return picked;
+  };
+  await expect(dispatch(ctx, "files.pickNative", { instance: "atlas" })).rejects.toMatchObject({
+    code: "FLEET_MISMATCH",
+  });
+  expect(old.registered.length).toBe(1);
+  expect(old.discarded).toEqual(old.registered);
 });
 
 // --- files.put, files.decline, files.request.get ------------------------------
