@@ -120,6 +120,12 @@ export function Message({
    * (`threadItems`): Hermes woke the bot with that event, so this is its reply.
    */
   inReply = null,
+  /**
+   * The box's word on a turn running in the conversation, for the newest bot
+   * turn only (`Thread`): how a tool call with no result yet reads. Absent on
+   * every other row.
+   */
+  remoteBusy,
 }: {
   row: MessageRow<ChatMessageView> & { ids?: readonly string[] };
   fleetId: string;
@@ -131,6 +137,7 @@ export function Message({
   streaming?: boolean;
   activity?: TurnActivity;
   inReply?: string | null;
+  remoteBusy?: boolean | null;
 }) {
   const { message, continuation } = row;
   const dm = useBotDm();
@@ -143,6 +150,8 @@ export function Message({
   const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
   const sender = fromBot ? dmSender(fromBot, dm.teammates) : null;
   const mine = message.role === "user" && !fromBot;
+  // The operator's words, delivered into a turn that was already running.
+  const steered = mine && message.steered === true;
   const author = message.author ?? null;
   const who = fromBot
     ? dmBotName(sender, fromBot.name)
@@ -276,7 +285,7 @@ export function Message({
       data-chat-message={message.id}
       data-chat-ids={ids.join(" ")}
       tabIndex={-1}
-      className={`ch-msg${mine ? " me" : ""}${continuation ? " cont" : ""}`}
+      className={`ch-msg${mine ? " me" : ""}${steered ? " steered" : ""}${continuation ? " cont" : ""}`}
     >
       {fromBot ? (
         sender ? (
@@ -312,6 +321,14 @@ export function Message({
         ) : null}
         <div className="ch-msg-head">
           <span className="ch-msg-who">{who}</span>
+          {steered ? (
+            <span
+              className="kicker ch-msg-tag"
+              title="Sent while the agent was working; delivered into the running turn"
+            >
+              Steered
+            </span>
+          ) : null}
           <span className="ch-msg-meta">{meta}</span>
         </div>
         <div className="ch-msg-body">
@@ -338,6 +355,7 @@ export function Message({
                   }
                   activity={activity}
                   waiting={waiting}
+                  remoteBusy={remoteBusy}
                 />
               </RowBoundary>
             ) : (

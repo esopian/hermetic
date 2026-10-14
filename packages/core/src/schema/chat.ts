@@ -787,6 +787,14 @@ export const ChatMessage = z.object({
       connection: z.string().min(1).nullish(),
     })
     .nullish(),
+  /**
+   * Set on a `user` row the operator sent as a mid-turn steer rather than as a
+   * new prompt: Hermes stores it as its own user row after the newest tool
+   * result, typed `display_kind: "steer"` and wrapped in its out-of-band marker
+   * (`chat/hermes/steer-marker.ts`). The marker is stripped, so the row's text
+   * is what the operator typed. Omitted on every other row.
+   */
+  steered: z.boolean().nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -954,8 +962,9 @@ const ObserveErrorEvent = z.object({
 });
 
 /**
- * A delegated child's whole block, changed (§9.2) — the one documented
- * exception to an observation carrying only durable reads.
+ * A delegated child's whole block, changed (§9.2) — the first documented
+ * exception to an observation carrying only durable reads (`busy` is the
+ * other).
  *
  * A background `delegate_task` ends the parent turn at once and its children
  * keep running, so their progress has no turn left to ride on, and nothing
@@ -974,11 +983,43 @@ const ObserveSubagentEvent = z.object({
   block: SubagentBlock,
 });
 
+/**
+ * Whether a turn is running in the observed conversation (§9.2) — the second
+ * documented exception to an observation carrying only durable reads.
+ *
+ * `busy: true` means the box's gateway reports a turn running, or one waiting
+ * on a person (an approval, a clarify question), in this conversation;
+ * `false` means it reports none; `null` means it could not be asked (a timeout,
+ * a gateway that predates the read). It is a live advisory read of the
+ * gateway's in-memory state, not a transcript fact: it is never stored, and it
+ * can be stale by the time it arrives.
+ *
+ * It is how a head knows a turn *it did not start* is running — one Hermes
+ * began by itself (a background process's completion notice), or one another
+ * client started — which no durable read can say until the reply lands. A head
+ * that sends while it reads `true` should ask for `queued` (`ChatSendInput`)
+ * rather than let the gateway's busy-input mode interrupt that turn.
+ *
+ * Emitted after a read when the value changes, and again on every probe while
+ * it is `true`, so a head that cleared it locally is corrected within one
+ * reconcile. A joiner is handed the held value right after the held snapshot.
+ * `session` is the conversation's session as on `message`.
+ */
+const ObserveBusyEvent = z.object({
+  type: z.literal("busy"),
+  instance: z.string().min(1),
+  bot: z.string().min(1),
+  session: z.string().min(1).nullable(),
+  busy: z.boolean().nullable(),
+  at: Iso,
+});
+
 export const ChatObserveEvent = z.discriminatedUnion("type", [
   ObserveSnapshotEvent,
   ObserveMessageEvent,
   ObserveReconnectEvent,
   ObserveErrorEvent,
   ObserveSubagentEvent,
+  ObserveBusyEvent,
 ]);
 export type ChatObserveEvent = z.infer<typeof ChatObserveEvent>;

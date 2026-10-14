@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSelection } from "./chat-state.tsx";
 import type { SteerOutcome } from "./chat-conversations.ts";
+import { isWorking } from "./chat-remote-busy.ts";
 
 /**
  * One message typed while the agent was busy, waiting its turn.
@@ -43,6 +44,12 @@ const queueKeyOf = (target: ChatSelection): string =>
 export interface SendQueueDeps {
   selection: ChatSelection | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running in the conversation, whoever started it
+   * (`chat-remote-busy.ts`). `true` holds the queue like `sending` does, and
+   * makes "send now" steer a turn this tab did not start.
+   */
+  remoteBusy: boolean | null;
   turnError: unknown;
   reconnecting: boolean;
   /**
@@ -57,12 +64,14 @@ export interface SendQueueDeps {
 export function useSendQueue({
   selection,
   sending,
+  remoteBusy,
   turnError,
   reconnecting,
   send,
   abort,
   steer,
 }: SendQueueDeps) {
+  const working = isWorking(sending, remoteBusy);
   /**
    * Queued sends, per conversation, and every reason one does not go out.
    *
@@ -114,6 +123,9 @@ export function useSendQueue({
   /** `sending` as of the last render, for `force`, which reads it after an await. */
   const sendingNow = useRef(sending);
   sendingNow.current = sending;
+  /** The same for a turn this tab did not start. */
+  const remoteNow = useRef(remoteBusy);
+  remoteNow.current = remoteBusy;
   const queued = selection ? (queues.get(queueKeyOf(selection)) ?? NO_QUEUE) : NO_QUEUE;
   /**
    * The queue is held rather than waiting its turn, and the composer says so.
@@ -181,9 +193,12 @@ export function useSendQueue({
    * `sending` goes false, `turnError` stays null, and the transcript is being
    * re-read behind a band. Firing the backlog into that is how a queued message
    * lands in a conversation whose last turn nobody has read back yet.
+   *
+   * A turn the box reports from another client holds the drain the same way:
+   * the head goes out once the box says the conversation is idle.
    */
   useEffect(() => {
-    if (!selection || sending) return;
+    if (!selection || working) return;
     const key = queueKeyOf(selection);
     if (turnError || reconnecting) {
       // A turn that failed or dropped before any render saw it running.
@@ -202,7 +217,7 @@ export function useSendQueue({
     }
     dispatched.current = { key, id: head.id };
     dropQueued(key, head.id);
-  }, [selection, sending, turnError, reconnecting, queues, send, park, dropQueued]);
+  }, [selection, working, turnError, reconnecting, queues, send, park, dropQueued]);
 
   /** The turn the last head started is on screen; the next waits for it to end. */
   useEffect(() => {
@@ -278,7 +293,10 @@ export function useSendQueue({
       const body = text.trim();
       if (!selection || !body) return;
       const key = queueKeyOf(selection);
-      if (!sendingNow.current) {
+      // Whether the turn to get past is this tab's own. One another client
+      // started is steered too, but never stopped from here.
+      const own = sendingNow.current;
+      if (!own && remoteNow.current !== true) {
         // Nothing to get past: this is an ordinary send, and like every
         // deliberate send it releases a parked queue behind it.
         if (id) dropQueued(key, id);
@@ -293,9 +311,10 @@ export function useSendQueue({
       if (outcome === "refused") return;
       // The box would not take it into the running turn. Head of the queue,
       // queue released, turn stopped: the drain sends it once the stop lands.
+      // A turn this tab did not start is left running, and the message waits.
       promote(key, body, id);
       unpark(key);
-      if (sendingNow.current) await abort();
+      if (own && sendingNow.current) await abort();
     },
     [selection, steer, abort, dropQueued, promote, unpark, sendMessage],
   );

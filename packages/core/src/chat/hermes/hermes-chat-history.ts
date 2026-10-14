@@ -22,6 +22,7 @@ import { subagentVerdict } from "./hermes-chat-subagent.ts";
 import { memberRef } from "./hermes-chat-roster.ts";
 import { stripBotDelivery } from "./bot-delivery.ts";
 import { parseProcessNotice } from "./process-notice.ts";
+import { STEER_DISPLAY_KIND, unwrapSteer } from "./steer-marker.ts";
 import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import {
@@ -132,9 +133,12 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
   const rows = arr(rec(raw)?.messages ?? rec(raw)?.history ?? raw);
   const calls = new Map<string, Record<string, unknown>>();
   const completed = new Set<string>();
-  for (const entry of rows) {
+  /** The last visible row that is not a tool result: see `durableHistoryBlocks`' `atTail`. */
+  let lastTurnRow = -1;
+  for (const [index, entry] of rows.entries()) {
     const row = rec(entry);
     if (!row || row.display_kind === "hidden") continue;
+    if (row.role !== "tool") lastTurnRow = index;
     for (const value of arr(row.tool_calls)) {
       const call = rec(value);
       const id = str(call?.id) ?? str(call?.call_id);
@@ -146,7 +150,7 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
   const out: ChatMessage[] = [];
   /** The previous mapped row's `at`, carried forward for a row the box left unstamped. */
   let carried: string | null = null;
-  for (const entry of rows) {
+  for (const [index, entry] of rows.entries()) {
     const row = rec(entry);
     if (!row || row.display_kind === "hidden") continue;
     const durableId = num(row.id) ?? num(row.row_id);
@@ -161,12 +165,21 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // operator never typed it, so it is a system event, not "You". Only the
     // role and blocks change — the id below is computed from the row exactly
     // as before, so a transcript read either side of this change agrees.
-    const notice = role === "user" ? processNoticeOf(row) : null;
-    const blocks = notice ? [notice] : durableHistoryBlocks(row, calls, completed);
+    // A mid-turn steer (`steer-marker.ts`) is the operator's own text inside
+    // Hermes' out-of-band marker: the text without the marker, flagged
+    // `steered`. Checked first, so neither the notice nor the delivery reading
+    // below ever sees the marker. The id, again, comes from the raw row.
+    const steer = role === "user" ? steerOf(row) : null;
+    const notice = role === "user" && !steer ? processNoticeOf(row) : null;
+    const blocks = notice
+      ? [notice]
+      : steer && steer.text !== null
+        ? [{ kind: "text" as const, markdown: steer.text }]
+        : durableHistoryBlocks(row, calls, completed, index === lastTurnRow);
     // Another bot's `message_agent` delivery, likewise on the user role: the
     // signature becomes `from_bot` and the text keeps only the message. The key
     // is omitted rather than null on every other row, so their shape is as before.
-    const delivery = role === "user" && !notice ? stripBotDelivery(blocks) : null;
+    const delivery = role === "user" && !notice && !steer ? stripBotDelivery(blocks) : null;
     out.push({
       id:
         str(row.id) ??
@@ -186,6 +199,7 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
       ...failureOf(row),
       incomplete: row.incomplete === true ? true : null,
       ...(delivery ? { from_bot: delivery.from } : {}),
+      ...(steer ? { steered: true } : {}),
     });
   }
   return out;
@@ -282,11 +296,32 @@ function canonical(value: unknown): string {
 export function processNoticeOf(row: Record<string, unknown>): ProcessEventBlock | null {
   const content = row.display_content ?? row.content ?? row.text;
   if (typeof content === "string") return parseProcessNotice(content);
+  const text = singleText(row);
+  return text ? parseProcessNotice(text) : null;
+}
+
+/**
+ * A steer row's unwrapped text, or null when the row is not a steer. A row is a
+ * steer when upstream typed it `display_kind: "steer"`, or — for a build or a
+ * path that drops the type — when its whole text is exactly the marker wrapper.
+ * A typed steer whose text carries no marker keeps its text (`text: null`, the
+ * caller maps the row as usual) and is still a steer.
+ */
+function steerOf(row: Record<string, unknown>): { text: string | null } | null {
+  const raw = singleText(row);
+  const text = raw === null ? null : unwrapSteer(raw);
+  if (text !== null) return { text };
+  return row.display_kind === STEER_DISPLAY_KIND ? { text: null } : null;
+}
+
+/** A row's whole text when it is one string or a single text part, else null. */
+function singleText(row: Record<string, unknown>): string | null {
+  const content = row.display_content ?? row.content ?? row.text;
+  if (typeof content === "string") return content;
   const parts = arr(content);
   if (parts.length !== 1) return null;
   const only = parts[0];
-  const text = typeof only === "string" ? only : (str(rec(only)?.text) ?? str(rec(only)?.content));
-  return text ? parseProcessNotice(text) : null;
+  return typeof only === "string" ? only : (str(rec(only)?.text) ?? str(rec(only)?.content));
 }
 
 function messageRole(raw: string | null): ChatMessage["role"] {
@@ -537,10 +572,15 @@ function settledChoices(value: unknown): string[] {
   return arr(value).filter((choice): choice is string => typeof choice === "string" && !!choice.trim());
 }
 
+/**
+ * One durable row's blocks. `atTail` is true when no visible row other than a
+ * tool result follows this one in the rows `mapHistory` was given.
+ */
 function durableHistoryBlocks(
   row: Record<string, unknown>,
   calls: ReadonlyMap<string, Record<string, unknown>>,
   completed: ReadonlySet<string>,
+  atTail: boolean,
 ): ChatBlock[] {
   const id = str(row.tool_call_id);
   if (row.role === "tool" && (id || str(row.tool_name))) {
@@ -575,6 +615,19 @@ function durableHistoryBlocks(
     if (callId && fn && str(fn.name)) {
       // The result row owns the completed card. Pairing by ID, across the whole
       // requested transcript, keeps parallel same-name tools and page edges safe.
+      //
+      // A call with no result row is `running` when its assistant row is at the
+      // tail — nothing but tool results follows it — because the box may still
+      // be running it (a long foreground `terminal` call looks exactly like
+      // this). Read from history, `running` means only "no result yet, may
+      // still be running"; the head words it from the observed busy state. Once
+      // any other row follows (a user prompt, a steer, a notice, the bot's next
+      // reply), the turn moved on without the result, so the call was
+      // abandoned and is `warn`. The tail is the tail of the rows read, which
+      // is the transcript's own for both reads `history` makes (every page, or
+      // the newest `limit` rows, chronological). A caller handing in an older
+      // page alone ends mid-transcript, so a call whose result sits on the
+      // next page would read `running` there.
       if (!completed.has(callId))
         blocks.push(
           toolBlock(
@@ -583,7 +636,7 @@ function durableHistoryBlocks(
               name: fn.name,
               args: storedJson(fn.arguments) ?? null,
               result: null,
-              status: "warn",
+              status: atTail ? "running" : "warn",
             },
             null,
           ),

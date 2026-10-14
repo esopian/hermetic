@@ -9,7 +9,7 @@
  * never closes in the stream), and `expires_at` passing. `Message.tsx` derives
  * "waiting" and the open-approval count from `openRequests`; the store keeps
  * its no-frame timer and the composer's skip in step through the record
- * helpers below (`chat-conversations.ts` owns the hooks around them).
+ * helpers below (`chat-turn-actions.ts` owns the hooks around them).
  */
 import type { ChatActivityView, ChatBlockView, ChatFrameView, ChatMessageView } from "../api/index.ts";
 import type { Assemble, Conversation } from "./chat-conversation-record.ts";

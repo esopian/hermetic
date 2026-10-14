@@ -644,6 +644,8 @@ export function withFixtureBotMode(
         role: "user",
         at: now(),
         blocks: [{ kind: "text", markdown: text }],
+        // History reads a real box's steer row this way (`steer-marker.ts`).
+        steered: true,
       });
       return Promise.resolve("redirected" as const);
     },

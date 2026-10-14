@@ -286,6 +286,19 @@
 [data-skin="soft"] .ch-msg.me:hover .ch-msg-body {
   border-left-color: var(--fg3);
 }
+/* A steer keeps the panel's left rule, in the accent: the skin already draws
+   one, so the default skin's inset rule on the row is dropped here. */
+[data-skin="soft"] .ch-msg.me.steered {
+  box-shadow: none;
+}
+[data-skin="soft"] .ch-msg.me.steered .ch-msg-body,
+[data-skin="soft"] .ch-msg.me.steered:hover .ch-msg-body {
+  border-left-color: color-mix(in srgb, var(--acc) 55%, var(--line2));
+}
+[data-skin="soft"] .ch-msg-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
 /* The row is no longer filled, so the status square's outline goes back to the
    page colour it is actually sitting on. */
 [data-skin="soft"] .ch-msg.me .ch-ava > .st {

@@ -415,6 +415,10 @@ export function observeText(event: ChatObserveEvent, now: number, opening: boole
       return "";
     case "subagent":
       return `${blockLines(event.block).join("\n")}\n`;
+    // A live advisory, re-sent on every probe while a turn runs: a line each
+    // time would be noise. `--json` carries it for a consumer that wants it.
+    case "busy":
+      return "";
   }
 }
 
@@ -501,6 +505,7 @@ export function register(program: Command): void {
     .argument("<target>", "`<instance>` or `<instance>/<bot>`")
     .argument("[message]", "the message; omit it to send piped stdin")
     .option("--session <id>", "continue a session instead of the bot's canonical one")
+    .option("--queued", "wait behind a turn already running instead of interrupting it")
     .addHelpText(
       "after",
       "\n  hermetic chat atlas 'what is the disk at'      one turn, reply streamed\n" +
@@ -524,6 +529,7 @@ export function register(program: Command): void {
             ...parseBotRef(target),
             message: await messageFrom(message),
             session: opts["session"],
+            queued: opts["queued"],
           }),
         );
         let failure: HermeticError | null = null;

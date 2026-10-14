@@ -414,6 +414,60 @@ describe("a reader that connects late learns the observation's health", () => {
     await tab.leave();
   });
 
+  test("a late reader is handed the held busy read after the transcript, and it is not health", async () => {
+    const { upstream, pool } = harness();
+    pool.pin(ref("default"));
+    await settle();
+    const busy = (value: boolean | null): ChatObserveEvent => ({
+      type: "busy",
+      instance: "atlas",
+      bot: "default",
+      session: "default-canonical",
+      busy: value,
+      at: "2026-09-18T12:00:00.000Z",
+    });
+    upstream.push("atlas/default", snapshot("default"));
+    upstream.push("atlas/default", busy(true));
+    upstream.push("atlas/default", reconnecting("default", 2));
+    upstream.push("atlas/default", busy(false));
+    await settle();
+
+    const tab = reader(pool, "default");
+    await settle();
+    // The last busy read, not the first; and the reconnect is still the
+    // health on record, since a busy read neither raises nor clears one.
+    expect(tab.seen).toEqual([snapshot("default"), busy(false), reconnecting("default", 2)]);
+    expect(pool.snapshots().map((seed) => seed.event)).toEqual([
+      snapshot("default"),
+      busy(false),
+      reconnecting("default", 2),
+    ]);
+    await tab.leave();
+  });
+
+  test("a rollover drops the held busy read: it was about the other session", async () => {
+    const { upstream, pool } = harness();
+    pool.pin(ref("default"));
+    await settle();
+    upstream.push("atlas/default", snapshot("default", [], "session-a"));
+    upstream.push("atlas/default", {
+      type: "busy",
+      instance: "atlas",
+      bot: "default",
+      session: "session-a",
+      busy: true,
+      at: "2026-09-18T12:00:00.000Z",
+    });
+    upstream.push("atlas/default", snapshot("default", [], "session-b"));
+    await settle();
+
+    const tab = reader(pool, "default");
+    await settle();
+    expect(tab.seen).toEqual([snapshot("default", [], "session-b")]);
+    expect(pool.snapshots().map((seed) => seed.event.type)).toEqual(["snapshot"]);
+    await tab.leave();
+  });
+
   test("a recovery is not replayed", async () => {
     const { upstream, pool } = harness();
     pool.pin(ref("default"));

@@ -473,6 +473,13 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       return Promise.resolve(live ? { ...live } : null);
     },
 
+    /** A turn of this client's own in flight in one of `sessions`, read from `inflight`. */
+    busy(box: BoxAddress, bot: string, sessions: readonly string[]) {
+      if (!reachable(box.instance)) return Promise.resolve(null);
+      const flying = inflight.get(flightKey(box.instance, bot)) ?? [];
+      return Promise.resolve(flying.some((session) => session !== null && sessions.includes(session)));
+    },
+
     send(box: BoxAddress, bot: string, text: string, opts: SendOptions = {}): AsyncIterable<ChatFrame> {
       const instance = box.instance;
       return (async function* () {
@@ -813,6 +820,8 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           role: "user",
           at: mint(),
           blocks: [{ kind: "text", markdown: text }],
+          // History reads a real box's steer row this way (`steer-marker.ts`).
+          steered: true,
         });
       }
       return Promise.resolve("redirected");

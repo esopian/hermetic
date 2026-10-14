@@ -2,7 +2,7 @@
  * Steer and Stop for one delegated child (WI-14 steps 6–7), and the operator's
  * unsent steer per child.
  *
- * A separate path from the turn's own steer and stop (`chat-conversations.ts`):
+ * A separate path from the turn's own steer and stop (`chat-turn-actions.ts`):
  * it needs no running parent turn (D25 — the gateway takes a child's control
  * from a fresh socket after the turn ended), it inserts nothing into the
  * transcript, and Stop ends the one child while the turn goes on.

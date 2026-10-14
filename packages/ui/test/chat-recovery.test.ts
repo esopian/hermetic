@@ -171,6 +171,16 @@ describe("failedPrompt", () => {
     expect(failedPrompt(rows, ["failed:2026-10-12T12:00:03Z"])).toBe("do X");
   });
 
+  test("skips the box's own steer row once history has replaced the placeholder", () => {
+    const rows = [
+      msg("u1", "user", "do X"),
+      msg("b1", "bot", "Starting on X."),
+      msg("u2", "user", "actually, do Y first", { steered: true }),
+      msg("b2", "bot", "", { failure: failure() }),
+    ];
+    expect(failedPrompt(rows, ["b2"])).toBe("do X");
+  });
+
   test("is null when the failed message is not in hand", () => {
     expect(failedPrompt(messages, ["gone"])).toBe(null);
   });

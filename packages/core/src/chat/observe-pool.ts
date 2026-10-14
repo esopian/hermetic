@@ -37,6 +37,15 @@
  * leaves a bounded record behind it (`RememberedFailure`). Both are replayed to
  * whoever attaches next, under the event's own name and after the snapshot.
  *
+ * ## Busy is held the same way
+ *
+ * A `busy` event is the live "a turn is running here" read (`chat-observe.ts`).
+ * Core re-sends `true` on every probe, but a `false` or `null` goes out once,
+ * and a reader that attached after it would otherwise assume whatever it
+ * assumes by default. So the last one is kept (`Subscription.busy`) and
+ * replayed right after the snapshot, before health, to every reader that
+ * attaches. It is not health: it neither sets nor clears a complaint.
+ *
  * ## What this is not
  *
  * Stopping an observation aborts a read loop on this laptop. It sends nothing
@@ -91,6 +100,9 @@ export interface ObservePoolEntry {
  * a healthy-looking transcript of a conversation nobody is watching any more.
  */
 type ChatHealthEvent = Extract<ChatObserveEvent, { type: "reconnect" | "error" }>;
+
+/** The live "a turn is running here" read, held and replayed like health. */
+type ChatBusyEvent = Extract<ChatObserveEvent, { type: "busy" }>;
 
 /** One incremental message, the form every read after the first takes. */
 type ChatMessageEvent = Extract<ChatObserveEvent, { type: "message" }>;
@@ -291,6 +303,8 @@ interface Subscription {
    * a read that worked.
    */
   health: ChatHealthEvent | null;
+  /** The last `busy` event, replayed after `snapshot` to whoever attaches next. */
+  busy: ChatBusyEvent | null;
   pinned: boolean;
   joiners: number;
   done: Promise<void>;
@@ -386,12 +400,18 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       for await (const event of deps.observe(input, { signal: sub.controller.signal })) {
         // A snapshot replaces outright, which is also how the held read
         // follows a session rollover.
-        if (event.type === "snapshot") sub.snapshot = event;
-        else if (event.type === "message") sub.snapshot = folded(sub.snapshot, event);
+        if (event.type === "snapshot") {
+          // A busy read is about the session it was taken in. Once the held
+          // read is another session's, it would describe the wrong
+          // conversation to the next joiner; core sends a fresh one.
+          if (sub.busy !== null && sub.busy.session !== event.session) sub.busy = null;
+          sub.snapshot = event;
+        } else if (event.type === "message") sub.snapshot = folded(sub.snapshot, event);
         // A read that arrived is a read that worked, so it is also the end of
         // whatever this subscription was last complaining about.
         // A subagent update is live data arriving, so it ends a complaint too.
-        if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
+        if (event.type === "busy") sub.busy = event;
+        else if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
           sub.health = null;
         else sub.health = masked(event);
         if (event.type === "error") {
@@ -440,6 +460,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       listeners: new Set(),
       snapshot: null,
       health: null,
+      busy: null,
       pinned,
       joiners: 0,
       done: Promise.resolve(),
@@ -573,6 +594,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         // health *at attach*, and anything that has changed it since is
         // already queued behind it in `pending`.
         const health = sub.health;
+        const busy = sub.busy;
         const onAbort = (): void => {
           live = false;
           nudge();
@@ -582,6 +604,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
           // The cached authoritative read, read with no `await` since
           // `sub.listeners.add` above. See `Subscription.snapshot`.
           if (sub.snapshot !== null) yield sub.snapshot;
+          // Whether a turn is running in that transcript, read with it.
+          if (busy !== null) yield busy;
           // After the transcript, because that is the order it happened in.
           if (health !== null) yield health;
           for (;;) {
@@ -613,6 +637,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       for (const sub of subs.values()) {
         if (!sub.pinned) continue;
         if (sub.snapshot !== null) seeds.push({ conversation: sub.ref, event: sub.snapshot });
+        if (sub.busy !== null) seeds.push({ conversation: sub.ref, event: sub.busy });
         // The transcript, and then what is wrong with the watch on it.
         if (sub.health !== null) seeds.push({ conversation: sub.ref, event: sub.health });
       }

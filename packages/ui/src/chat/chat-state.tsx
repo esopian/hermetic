@@ -306,6 +306,11 @@ export interface Chat {
    */
   context: ContextReading | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running in the selected conversation, whoever
+   * started it: `true`, `false`, or `null` for not known (`chat-remote-busy.ts`).
+   */
+  remoteBusy: boolean | null;
   /** The selected conversation’s observed work, independent of its transport lock. */
   activity: TurnActivity;
   /** Active local conversations, including those in background frames. */
@@ -340,14 +345,14 @@ export interface Chat {
    * composer calls it once the box has acknowledged a declined clarify, because
    * the gateway sends no close after an ordinary answer. `target` is the
    * conversation the decline was made in, when the selection may have moved
-   * since. See `chat-conversations.ts`.
+   * since. See `chat-turn-actions.ts`.
    */
   settleRequest: (request_id: string, outcome: "skipped" | "answered", target?: ChatSelection) => void;
   /**
    * Stop counting `request_id` as one the turn is parked on, without closing
    * its card: the operator answered it from the card, which stays as its
    * settled summary. Re-arms the no-frame timer; `openRequest` no longer names
-   * it. See `chat-conversations.ts`.
+   * it. See `chat-turn-actions.ts`.
    */
   releaseRequest: (request_id: string, target?: ChatSelection) => void;
   /**
@@ -945,6 +950,7 @@ export function ChatProvider({
     live,
     context,
     sending,
+    remoteBusy,
     activity,
     turnActivities,
     turnError,
@@ -976,6 +982,7 @@ export function ChatProvider({
     useSendQueue({
       selection,
       sending,
+      remoteBusy,
       turnError,
       reconnecting,
       send,
@@ -1256,6 +1263,7 @@ export function ChatProvider({
       live,
       context,
       sending,
+      remoteBusy,
       activity,
       turnActivities,
       turnError,
@@ -1310,6 +1318,7 @@ export function ChatProvider({
       live,
       context,
       sending,
+      remoteBusy,
       activity,
       turnActivities,
       turnError,

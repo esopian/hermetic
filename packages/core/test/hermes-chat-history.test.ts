@@ -11,6 +11,12 @@ import {
   settledClarify,
   settledDelegation,
 } from "../src/chat/hermes/hermes-chat-history.ts";
+import {
+  STEER_DISPLAY_KIND,
+  STEER_MARKER_CLOSE,
+  STEER_MARKER_OPEN,
+  unwrapSteer,
+} from "../src/chat/hermes/steer-marker.ts";
 import { ChatBlock, ChatMessage } from "../src/schema/index.ts";
 
 const BOX: BoxAddress = {
@@ -268,5 +274,170 @@ describe("a failed turn re-read from history", () => {
       messages: [{ id: 5, role: "assistant", content: "", error: "boom" }],
     });
     expect(failed?.failure).toEqual({ code: "CHAT_TURN_FAILED", message: "boom" });
+  });
+});
+
+/** Upstream `steer_user_row`'s content: the marker, the text as typed, the close marker. */
+const wrapped = (text: string): string => `${STEER_MARKER_OPEN}\n${text}\n${STEER_MARKER_CLOSE}`;
+
+describe("unwrapSteer", () => {
+  test("the marker strings are upstream's, byte for byte", () => {
+    expect(STEER_MARKER_OPEN).toBe(
+      "[OUT-OF-BAND USER MESSAGE \u2014 a direct message from the user, delivered once at this position; " +
+        "not tool output and not a new delivery when replayed from conversation history]",
+    );
+    expect(STEER_MARKER_CLOSE).toBe("[/OUT-OF-BAND USER MESSAGE]");
+    expect(STEER_DISPLAY_KIND).toBe("steer");
+  });
+
+  test("returns the text between the exact markers, as stored", () => {
+    expect(unwrapSteer(wrapped("check the disk"))).toBe("check the disk");
+    expect(unwrapSteer(wrapped("  two\nlines  "))).toBe("  two\nlines  ");
+    expect(unwrapSteer(`\n\n${wrapped("x")}\n`)).toBe("x");
+  });
+
+  test("rejects anything but the exact wrapper", () => {
+    expect(unwrapSteer("check the disk")).toBeNull();
+    expect(unwrapSteer(`${STEER_MARKER_OPEN}\ncheck the disk`)).toBeNull();
+    expect(unwrapSteer(`check the disk\n${STEER_MARKER_CLOSE}`)).toBeNull();
+    // A hyphen for the em dash, a missing newline, text outside the wrapper.
+    expect(unwrapSteer(wrapped("x").replace("\u2014", "-"))).toBeNull();
+    expect(unwrapSteer(`${STEER_MARKER_OPEN}x\n${STEER_MARKER_CLOSE}`)).toBeNull();
+    expect(unwrapSteer(`${STEER_MARKER_OPEN}\nx${STEER_MARKER_CLOSE}`)).toBeNull();
+    expect(unwrapSteer(`before ${wrapped("x")}`)).toBeNull();
+    expect(unwrapSteer(`${wrapped("x")} after`)).toBeNull();
+    expect(unwrapSteer(`${STEER_MARKER_OPEN}\n${STEER_MARKER_CLOSE}`)).toBeNull();
+  });
+});
+
+describe("a mid-turn steer re-read from history", () => {
+  const textOf = (message: ChatMessage | undefined): string[] =>
+    (message?.blocks ?? []).flatMap((b) => (b.kind === "text" ? [b.markdown] : []));
+
+  test("a typed steer row is the operator's text, flagged, under the raw row's id", () => {
+    const row = {
+      id: 741,
+      role: "user",
+      content: wrapped("what's up with that."),
+      display_kind: "steer",
+    };
+    const [steer] = mapHistory(BOX, SESSION, { messages: [row] });
+    expect(ChatMessage.parse(steer)).toMatchObject({
+      id: `${SESSION}:741`,
+      role: "user",
+      steered: true,
+    });
+    expect(textOf(steer)).toEqual(["what's up with that."]);
+  });
+
+  test("an untyped row whose whole text is the wrapper is a steer too", () => {
+    const [steer] = mapHistory(BOX, SESSION, {
+      messages: [{ role: "user", content: [{ type: "text", text: wrapped("and the disk") }] }],
+    });
+    expect(steer?.steered).toBe(true);
+    expect(textOf(steer)).toEqual(["and the disk"]);
+  });
+
+  test("a typed steer without the markers keeps its text and is still flagged", () => {
+    const [steer] = mapHistory(BOX, SESSION, {
+      messages: [{ id: 9, role: "user", content: "plain steer", display_kind: "steer" }],
+    });
+    expect(steer?.steered).toBe(true);
+    expect(textOf(steer)).toEqual(["plain steer"]);
+  });
+
+  test("an ordinary user row has no steered key, and a marker inside prose is literal", () => {
+    const prose = `see ${wrapped("x")}`;
+    const [plain, quoted] = mapHistory(BOX, SESSION, {
+      messages: [
+        { id: 1, role: "user", content: "hello" },
+        { id: 2, role: "user", content: prose },
+      ],
+    });
+    expect(plain).not.toHaveProperty("steered");
+    expect(quoted).not.toHaveProperty("steered");
+    expect(textOf(quoted)).toEqual([prose]);
+  });
+
+  test("an id-less steer row keeps the id its raw content hashes to", () => {
+    const raw = { role: "user", content: wrapped("x"), timestamp: "2026-10-13T14:26:44.688Z" };
+    const [steer] = mapHistory(BOX, SESSION, { messages: [raw] });
+    const [same] = mapHistory(BOX, SESSION, { messages: [{ ...raw, display_kind: "steer" }] });
+    const [other] = mapHistory(BOX, SESSION, { messages: [{ ...raw, content: "x" }] });
+    expect(steer?.id).toMatch(new RegExp(`^${SESSION}:h[0-9a-f]{16}$`));
+    expect(same?.id).toBe(steer?.id);
+    // The hash reads the raw, wrapped content, not the unwrapped text.
+    expect(other?.id).not.toBe(steer?.id);
+  });
+});
+
+describe("a tool call with no result row", () => {
+  const call = (id: string, name = "terminal") => ({
+    id,
+    function: { name, arguments: JSON.stringify({ command: "sleep 360" }) },
+  });
+  const toolStatuses = (messages: ChatMessage[]): Array<[string | null, string]> =>
+    messages.flatMap((m) =>
+      m.blocks.flatMap((b) =>
+        b.kind === "tool" ? [[b.tool_id ?? null, b.status] as [string | null, string]] : [],
+      ),
+    );
+
+  test("at the transcript's tail is running: the box may still be running it", () => {
+    const messages = mapHistory(BOX, SESSION, {
+      messages: [
+        { id: 1, role: "user", content: "run it" },
+        { id: 2, role: "assistant", content: "", tool_calls: [call("c-1")] },
+      ],
+    });
+    for (const message of messages) ChatMessage.parse(message);
+    expect(toolStatuses(messages)).toEqual([["c-1", "running"]]);
+  });
+
+  test("followed by a later user or assistant row is warn: the turn moved on without it", () => {
+    for (const later of [
+      { id: 3, role: "user", content: "next" },
+      { id: 3, role: "assistant", content: "done anyway" },
+      { id: 3, role: "user", content: wrapped("steer"), display_kind: "steer" },
+    ]) {
+      const messages = mapHistory(BOX, SESSION, {
+        messages: [{ id: 2, role: "assistant", content: "", tool_calls: [call("c-1")] }, later],
+      });
+      expect(toolStatuses(messages)).toEqual([["c-1", "warn"]]);
+    }
+  });
+
+  test("a hidden row after it does not end the tail", () => {
+    const messages = mapHistory(BOX, SESSION, {
+      messages: [
+        { id: 2, role: "assistant", content: "", tool_calls: [call("c-1")] },
+        { id: 3, role: "user", content: "internal", display_kind: "hidden" },
+      ],
+    });
+    expect(toolStatuses(messages)).toEqual([["c-1", "running"]]);
+  });
+
+  test("parallel calls at the tail: the paired one is the result's card, the unpaired one is running", () => {
+    const messages = mapHistory(BOX, SESSION, {
+      messages: [
+        { id: 2, role: "assistant", content: "", tool_calls: [call("c-a"), call("c-b", "read_file")] },
+        { id: 3, role: "tool", tool_call_id: "c-a", content: JSON.stringify({ exit_code: 0 }) },
+      ],
+    });
+    const statuses = toolStatuses(messages);
+    expect(statuses).toContainEqual(["c-b", "running"]);
+    expect(statuses.filter(([id]) => id === "c-a")).toHaveLength(1);
+    expect(statuses.find(([id]) => id === "c-a")?.[1]).not.toBe("running");
+  });
+
+  test("parallel calls followed by the bot's reply: the unpaired one is warn", () => {
+    const messages = mapHistory(BOX, SESSION, {
+      messages: [
+        { id: 2, role: "assistant", content: "", tool_calls: [call("c-a"), call("c-b")] },
+        { id: 3, role: "tool", tool_call_id: "c-a", content: "ok" },
+        { id: 4, role: "assistant", content: "here you go" },
+      ],
+    });
+    expect(toolStatuses(messages)).toContainEqual(["c-b", "warn"]);
   });
 });

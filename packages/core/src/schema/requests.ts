@@ -1058,6 +1058,15 @@ export const ChatSendInput = z.object({
   /** Continue a session; omitted means the bot's canonical one. */
   session: z.string().min(1).optional(),
   new_session: z.boolean().optional(),
+  /**
+   * Ask the gateway to queue this message behind a turn already running in the
+   * conversation, instead of applying its busy-input mode — which defaults to
+   * interrupting the running turn and redirecting it with this text. Ignored
+   * when the conversation is idle: the message then runs at once, as without
+   * it. A head sets it when an observation's `busy` event says a turn it did
+   * not start is running.
+   */
+  queued: z.boolean().optional(),
 });
 export type ChatSendInput = z.infer<typeof ChatSendInput>;
 

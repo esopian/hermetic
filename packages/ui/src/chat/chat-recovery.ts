@@ -110,14 +110,14 @@ const SURFACE_ALIAS: Record<string, string> = {
 };
 
 /**
- * The id prefix of a steer's optimistic prompt (`chat-conversations.ts`):
+ * The id prefix of a steer's optimistic prompt (`steer`, `chat-turn-actions.ts`):
  * words said into a running turn, not the prompt that started it.
  */
 export const STEER_PREFIX = "local:steer:";
 
 /** An operator's own prompt: not another bot's delivery, not a steer into a running turn. */
 const isPrompt = (m: ChatMessageView): boolean =>
-  m.role === "user" && !m.from_bot && !m.id.startsWith(STEER_PREFIX);
+  m.role === "user" && !m.from_bot && !m.id.startsWith(STEER_PREFIX) && m.steered !== true;
 
 /**
  * The prompt a failed turn answered: the nearest operator prompt above the

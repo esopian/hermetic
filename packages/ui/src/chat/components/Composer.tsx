@@ -20,7 +20,9 @@
  *
  * While a turn runs, the footer's right end carries the one Stop control (Esc
  * does the same); the send button keeps queueing, so the two never share a key
- * or a place. The input grows with its text up to a cap and then scrolls
+ * or a place. A turn the box reports that this tab did not start (`working`
+ * without `sending`) queues and steers the same way, but offers no Stop: it is
+ * not this window's to end. The input grows with its text up to a cap and then scrolls
  * (`autosize.ts`); its border and padding sit on the box around it, so text
  * scrolled past the cap is clipped inside the padding rather than at the edge.
  * Before Stop sits the context meter (`ContextMeter.tsx`), when the gateway
@@ -62,6 +64,7 @@ export function Composer({
   enabled,
   editable = enabled,
   sending,
+  working = sending,
   /** The tailnet name this thread is talking to, for the footer. */
   where,
   onSend,
@@ -78,6 +81,8 @@ export function Composer({
   /** Drafting can continue while destination evidence refreshes; sending cannot. */
   editable?: boolean;
   sending: boolean;
+  /** A turn is running, this tab's (`sending`) or one the box reports. Enter queues while it is. */
+  working?: boolean;
   where?: string | null;
   onSend: (text: string) => void;
   onAbort: () => void;
@@ -179,7 +184,9 @@ export function Composer({
       }, proceed);
   };
   const parkedQueue = chat?.queueParked ?? false;
-  const canQueue = chat !== null && sending && enabled;
+  const canQueue = chat !== null && working && enabled;
+  // Running on the box, started somewhere else.
+  const remote = working && !sending;
   // Read each render: the open clarify moves with the frames that re-render
   // this, and a render at its expiry takes the hint down with no frame at all.
   const asking = canQueue && respond && chat ? chat.openRequest() : null;
@@ -199,7 +206,7 @@ export function Composer({
   const submit = () => {
     const body = text.trim();
     if (!enabled || body.length === 0) return;
-    if (sending) {
+    if (working) {
       if (!chat) return;
       setText("");
       chat.queueMessage(body);
@@ -322,7 +329,7 @@ export function Composer({
                   <button
                     type="button"
                     className="ch-queue-act"
-                    title={sending ? "Send now, into the running turn" : "Send now"}
+                    title={working ? "Send now, into the running turn" : "Send now"}
                     aria-label="Send queued message now"
                     // A queued row stays in its own conversation's queue if the
                     // selection moves, so there is nothing to stage.
@@ -391,7 +398,7 @@ export function Composer({
           ]
             .filter(Boolean)
             .join(" ")}
-          disabled={!enabled || text.trim().length === 0 || (sending && !chat)}
+          disabled={!enabled || text.trim().length === 0 || (working && !chat)}
           title={canQueue ? "Queue (Enter)" : "Send (Enter or ⌘↵)"}
           onClick={submit}
         >
@@ -424,10 +431,23 @@ export function Composer({
           ) : null}
         </span>
         <span className="right">
-          {sending ? "turn in flight" : where ? `over the tailnet · ${where}` : ""}
+          {sending ? (
+            "turn in flight"
+          ) : remote ? (
+            <span
+              className="ch-composer-busy"
+              title="The box reports a turn running in this conversation that this window did not start"
+            >
+              agent is working
+            </span>
+          ) : where ? (
+            `over the tailnet · ${where}`
+          ) : (
+            ""
+          )}
           {hint ? (
             <span className={`ch-composer-hint ${hint.tone}`}>
-              {sending || where ? ` · ${hint.text}` : hint.text}
+              {working || where ? ` · ${hint.text}` : hint.text}
             </span>
           ) : null}
         </span>

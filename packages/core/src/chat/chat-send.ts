@@ -202,6 +202,7 @@ export function createChatSend(ctx: ChatSendContext) {
         for await (const frame of hermes.send(box, parsed.bot, parsed.message, {
           signal: opts.signal,
           ...(targetSession !== undefined ? { session: targetSession } : {}),
+          ...(parsed.queued === true ? { queued: true } : {}),
         })) {
           // The caller's own abort ends the loop here as well as reaching the
           // adapter: a socket that has not noticed yet must not be able to

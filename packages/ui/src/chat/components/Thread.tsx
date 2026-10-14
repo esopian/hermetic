@@ -358,6 +358,7 @@ export function Thread({
   live,
   context: contextHeld = null,
   sending,
+  remoteBusy = null,
   activity = sending ? "thinking" : "idle",
   historyError,
   turnError = null,
@@ -391,6 +392,12 @@ export function Thread({
   /** The conversation's held context-window figure (`Chat.context`). */
   context?: ContextReading | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running here, whoever started it (`Chat.remoteBusy`).
+   * The composer queues behind it, and a tool call at the transcript's tail
+   * reads as running, stopped or unknown by it.
+   */
+  remoteBusy?: boolean | null;
   activity?: TurnActivity;
   historyError: string | null;
   /**
@@ -449,6 +456,11 @@ export function Thread({
   // calls that started them. One rendering, with no viewer switch: every event
   // row keeps its output collapsed, and a failure is already drawn in red.
   const items = threadItems(rows);
+  // The newest bot turn, unless it is this tab's own streaming one: the turn
+  // whose unfinished tool call the box's busy state speaks for.
+  const tail = items.findLast((item) => item.kind === "turn" && item.row.message.role !== "user");
+  const tailId = tail?.kind === "turn" && tail.row.message.id !== live?.id ? tail.row.message.id : null;
+  const working = sending || remoteBusy === true;
   const subagents = useChatIfAvailable()?.subagents ?? null;
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
   // Refused DMs a later call already sent again, and the ones Retry was asked
@@ -569,7 +581,7 @@ export function Thread({
           bot={bot}
           size={44}
           status={status}
-          activity={activity}
+          activity={activity === "idle" && remoteBusy === true ? "thinking" : activity}
           large
         />
         <div>
@@ -730,6 +742,7 @@ export function Thread({
                               live !== null && item.row.message.id === live.id ? activity : "idle"
                             }
                             inReply={item.inReply}
+                            remoteBusy={item.row.message.id === tailId ? remoteBusy : undefined}
                           />
                         )}
                       </RowBoundary>
@@ -769,6 +782,7 @@ export function Thread({
         enabled={composer.enabled}
         editable={composer.enabled || (destination.state === "pending" && composerState(state).enabled)}
         sending={sending}
+        working={working}
         where={agent?.tailscale_dns_name ?? null}
         onSend={send}
         onAbort={onAbort}
