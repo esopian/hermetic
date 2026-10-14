@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { INTERNAL_MESSAGE } from "../src/errors.ts";
 import { createUploadPort } from "../src/upload-port.ts";
 
 const ID = "up_00000000-0000-0000-0000-000000000001";
@@ -31,6 +32,20 @@ test("upload URL checks Host and expires without another upload", async () => {
     expect((await fetch(url, { headers: { host: "elsewhere.invalid" } })).status).toBe(403);
     await Bun.sleep(40);
     expect((await fetch(url, { method: "PUT", body: "late" })).status).toBe(404);
+  } finally {
+    port.stop();
+  }
+});
+
+test("upload URL hides unexpected errors from the response", async () => {
+  const port = createUploadPort();
+  try {
+    const url = port.url(ID, async () => {
+      throw new Error("private stack details");
+    });
+    const response = await fetch(url, { method: "PUT", body: "FIXTURE bytes" });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ code: "INTERNAL", message: INTERNAL_MESSAGE });
   } finally {
     port.stop();
   }

@@ -567,8 +567,11 @@ export class FakeHost implements Host {
    */
   protected unitIsKnown(unit: string): boolean {
     if (this.files.has(`/etc/systemd/system/${unit}`)) return true;
-    const template = /^(.+)@.+\.service$/.exec(unit)?.[1];
-    return template !== undefined && this.files.has(`/etc/systemd/system/${template}@.service`);
+    const suffix = ".service";
+    if (!unit.endsWith(suffix)) return false;
+    const at = unit.lastIndexOf("@", unit.length - suffix.length - 2);
+    if (at <= 0) return false;
+    return this.files.has(`/etc/systemd/system/${unit.slice(0, at)}@.service`);
   }
 
   async *execLines(argv: readonly string[], opts?: ExecOptions): AsyncIterable<string> {

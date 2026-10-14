@@ -16,6 +16,7 @@
  * `Host` check keeps a rebinding page from reaching the port by another name.
  */
 import { HermeticError } from "@hermetic/core";
+import { INTERNAL_MESSAGE } from "./errors.ts";
 
 export type UploadFeed = (body: ReadableStream<Uint8Array> | null) => Promise<void>;
 
@@ -93,10 +94,9 @@ export function createUploadPort(opts: { routeTtlMs?: number } = {}): UploadPort
           await route.feed(req.body);
           return reply(200, { code: "OK", message: "received" });
         } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
           return reply(statusOf(e), {
             code: e instanceof HermeticError ? e.code : "INTERNAL",
-            message,
+            message: e instanceof HermeticError ? e.message : INTERNAL_MESSAGE,
           });
         }
       },
