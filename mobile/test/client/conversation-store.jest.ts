@@ -737,6 +737,8 @@ describe("the Bots row, ahead of the roster", () => {
     s.store.onTurnEnd("T1", "done");
     await flush();
     expect(s.arrivals).toEqual([
+      // The operator's own words first, at once, with no stamp of this phone's clock.
+      { at: null, unread: false, preview: { preview: "hello", preview_role: "user" } },
       {
         at: "2026-10-13T10:00:05.000Z",
         unread: false,
@@ -777,5 +779,15 @@ describe("the Bots row, ahead of the roster", () => {
     await flush();
     s.observe().event({ ...event, message: { ...message, id: "x2" } });
     expect(s.arrivals.at(-1)).toEqual({ at: "2026-10-13T11:00:00.000Z", unread: false, preview: null });
+  });
+
+  test("a send quotes the operator in the Bot Chat's row; a separate session's send does not", async () => {
+    const s = setup();
+    s.store.send({ ...T, session: "s-2" }, "elsewhere");
+    expect(s.arrivals).toEqual([]);
+    s.store.send(T, "  ship it  ");
+    expect(s.arrivals).toEqual([
+      { at: null, unread: false, preview: { preview: "ship it", preview_role: "user" } },
+    ]);
   });
 });

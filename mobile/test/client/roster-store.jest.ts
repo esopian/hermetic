@@ -158,6 +158,71 @@ describe("RosterStore", () => {
     store.markSeen("atlas", "scribe");
     expect(store.getState().swarms[0]!.bots[0]!.unread).toBe(0);
   });
+
+  test("readAt is when the read started, not when the slowest box answered", async () => {
+    let clock = 100;
+    let answer!: () => void;
+    const src = {
+      ...source(),
+      swarms: () =>
+        new Promise<{ swarms: ReturnType<typeof swarm>[] }>((resolve) => {
+          answer = () => resolve({ swarms: [swarm("atlas", [bot()])] });
+        }),
+    };
+    const store = new RosterStore(src, null, () => clock);
+    const read = store.refresh();
+    clock = 9_000;
+    answer();
+    await read;
+    expect(store.getState().readAt).toBe(100);
+  });
+
+  test("a box that does not answer keeps its last-listed bots, unreachable, marks and all", async () => {
+    let up = true;
+    const src = {
+      ...source(),
+      swarms: async () => ({
+        swarms: [
+          up
+            ? swarm("atlas", [bot({ unread: 3 }), bot({ name: "ops" })])
+            : swarm("atlas", [], { reachable: false, unreachable_reason: "CHAT_UNREACHABLE: timeout" }),
+        ],
+      }),
+    };
+    const store = new RosterStore(src, null);
+    await store.refresh();
+    up = false;
+    await store.refresh();
+    const [down] = store.getState().swarms;
+    expect(down).toMatchObject({ reachable: false, unreachable_reason: "CHAT_UNREACHABLE: timeout" });
+    expect(down!.bots.map((b) => [b.name, b.unread])).toEqual([
+      ["scribe", 3],
+      ["ops", 0],
+    ]);
+    // Still down on the next read: still kept.
+    await store.refresh();
+    expect(store.getState().swarms[0]!.bots).toHaveLength(2);
+    up = true;
+    await store.refresh();
+    expect(store.getState().swarms[0]!.reachable).toBe(true);
+  });
+
+  test("a bot waiting on the operator reads needs-you until the wait is cleared", async () => {
+    const store = new RosterStore(source(), null);
+    await store.refresh();
+    let changes = 0;
+    store.subscribe(() => changes++);
+    store.setWaiting(["atlas/scribe"]);
+    expect(store.getState().swarms[0]!.bots[0]!.needs_action).toBe(true);
+    // Unchanged keys change nothing; a read keeps it; reading the thread does not clear it.
+    store.setWaiting(["atlas/scribe"]);
+    expect(changes).toBe(1);
+    await store.refresh();
+    store.markSeen("atlas", "scribe");
+    expect(store.getState().swarms[0]!.bots[0]!.needs_action).toBe(true);
+    store.setWaiting([]);
+    expect(store.getState().swarms[0]!.bots[0]!.needs_action).toBe(false);
+  });
 });
 
 describe("arrivals ahead of the roster (desktop RailBump)", () => {
@@ -215,6 +280,20 @@ describe("arrivals ahead of the roster (desktop RailBump)", () => {
       last_message_at: "2026-10-13T13:00:00.000Z",
       unread: 2,
     });
+  });
+
+  test("a separate session's arrival moves the time and quote, never the Bot Chat's count", async () => {
+    const s = store(() => [swarm("atlas", [bot({ name: "scribe", unread: 2 })])]);
+    await s.refresh();
+    s.noteArrival({
+      instance: "atlas",
+      bot: "scribe",
+      at: "2026-10-13T12:00:00.000Z",
+      unread: false,
+      preview: null,
+      elsewhere: true,
+    });
+    expect(row(s)).toMatchObject({ unread: 2, last_message_at: "2026-10-13T12:00:00.000Z" });
   });
 
   test("a roster read that started after the arrival is authoritative; one in flight keeps it", async () => {

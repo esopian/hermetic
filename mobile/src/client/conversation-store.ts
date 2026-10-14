@@ -389,6 +389,18 @@ export class ConversationStore {
     return [...this.records.values()].filter((r) => r.sending).map((r) => this.view(r.target));
   }
 
+  /**
+   * Every conversation whose followed turn waits on the operator: a request
+   * open and unanswered, whether or not the conversation is on screen. A turn
+   * running on its box unfollowed counts only while the box says `waiting`.
+   */
+  waiting(): ConversationTarget[] {
+    return [...this.records.values()]
+      .filter((r) => !!r.run && !r.run.settled && r.run.fold.openRequests.length > 0)
+      .filter((r) => r.remote === null || r.remote === "waiting")
+      .map((r) => r.target);
+  }
+
   /* ── opening and leaving ────────────────────────────────────────────── */
 
   /**
@@ -509,7 +521,11 @@ export class ConversationStore {
     record.segments = [];
     record.released = new Set();
     const localId = this.localId(LOCAL_PREFIX, at);
-    record.messages = [...record.messages, localPrompt(localId, body, at, session)];
+    const prompt = localPrompt(localId, body, at, session);
+    record.messages = [...record.messages, prompt];
+    // The row quotes the operator's words now; this phone's clock moves no time.
+    if (target.session === null)
+      this.onArrival?.(target, { at: null, unread: false, preview: quoteOf(prompt) });
     const run: TurnRun = {
       gen,
       turnId: null,

@@ -210,8 +210,8 @@ export class InboxStore {
 
   /**
    * Mark read every unread entry `live` turns down: entries no screen can show
-   * any more (an instance no longer listened to, a bot its box no longer lists),
-   * which would otherwise hold the app badge up with nothing to clear it.
+   * any more (a bot its box no longer lists), which would otherwise hold the
+   * app badge up with nothing to clear it.
    */
   markReadUnless(live: (entry: InboxEntry) => boolean): void {
     this.markRead(this.state.entries.filter((e) => !e.read_at && !live(e)).map((e) => e.id));
@@ -231,9 +231,15 @@ export class InboxStore {
     return this.unreadIndex.get(`${instance}/${bot}`) ?? 0;
   };
 
-  /** The app icon badge: everything unread. */
-  badgeCount(): number {
-    return this.state.unread;
+  /**
+   * The app icon badge: everything unread, or only what `counted` keeps (the
+   * instances this phone listens to). An instance no longer listened to keeps
+   * its entries unread, so listening again brings its marks back, but they do
+   * not hold the badge up meanwhile.
+   */
+  badgeCount(counted?: (entry: InboxEntry) => boolean): number {
+    if (!counted) return this.state.unread;
+    return this.state.entries.filter((e) => !e.read_at && counted(e)).length;
   }
 
   /** Forget everything (sign out). */
@@ -266,21 +272,19 @@ export class InboxStore {
 
 /**
  * Whether an entry can still be shown on home, judged against a roster read
- * landed at `readAt`: its instance is listened to, and its bot is listed — or
- * nothing proves it gone (the instance was not read, its box did not answer, or
- * the entry is newer than the read and may name a bot created since).
+ * that started at `readAt`: its bot is listed — or nothing proves it gone (the
+ * instance was not read, which is also what an unlistened one is; its box did
+ * not answer; or the entry is newer than the read and may name a bot created
+ * since). Listening is not judged here: an unlistened instance's entries stay
+ * unread for when it is listened again, and the badge leaves them out
+ * (`badgeCount`).
  */
 export function entryLive(
-  roster: {
-    listening: readonly string[];
-    swarms: readonly Pick<Swarm, "instance" | "reachable" | "bots">[];
-  },
+  roster: { swarms: readonly Pick<Swarm, "instance" | "reachable" | "bots">[] },
   readAt: number,
 ): (entry: Pick<InboxEntry, "instance" | "bot" | "at">) => boolean {
-  const listened = new Set(roster.listening);
   const swarms = new Map(roster.swarms.map((s) => [s.instance, s]));
   return (entry) => {
-    if (!listened.has(entry.instance)) return false;
     const swarm = swarms.get(entry.instance);
     if (!swarm?.reachable || time(entry.at) >= readAt) return true;
     return swarm.bots.some((b) => b.name === entry.bot);
@@ -296,6 +300,16 @@ function sortEntries(entries: readonly InboxEntry[]): InboxEntry[] {
 export interface WatchedThread {
   instance: string;
   bot: string;
+  /**
+   * The separate session on screen, by id; `null` for the Bot Chat (a
+   * `?session=` that turns out to be the canonical one counts as the Bot Chat).
+   */
+  session: string | null;
+  /**
+   * The session id the screen shows, once known: the Bot Chat's resolved id,
+   * or the separate session's own. What an event's `session` is matched on.
+   */
+  resolved?: string | null;
   /** The app is in the foreground and this conversation is the visible screen. */
   focused: boolean;
 }
@@ -311,10 +325,31 @@ export type AlertDecision =
   | "none";
 
 /**
- * Whether an event interrupts. An event about the conversation on screen does
- * not (and is recorded, so a later push for it stays silent); an event the
- * inbox already holds does not; anything else is a banner in the foreground
- * and a local notification otherwise.
+ * Whether an event is about the conversation the operator is looking at: the
+ * app in the foreground, that conversation focused, the same bot, and the same
+ * session. The Bot Chat and a separate session of one bot are two
+ * conversations: an event in one is not on screen while the other is. An
+ * event matching the resolved id is on screen; failing that, a separate
+ * session matches only its own id, and the Bot Chat takes an event with no
+ * session, or any event while its own id is not known yet.
+ */
+export function onScreen(
+  arrival: Pick<InboxEntry, "instance" | "bot" | "session">,
+  phase: AppPhase,
+  watched: WatchedThread | null,
+): boolean {
+  if (phase !== "active" || !watched?.focused) return false;
+  if (watched.instance !== arrival.instance || watched.bot !== arrival.bot) return false;
+  if (watched.resolved && arrival.session === watched.resolved) return true;
+  if (watched.session !== null) return arrival.session === watched.session;
+  return !watched.resolved || !arrival.session;
+}
+
+/**
+ * Whether an event interrupts. An event about the conversation on screen
+ * (`onScreen`) does not (and is recorded, so a later push for it stays
+ * silent); an event the inbox already holds does not; anything else is a
+ * banner in the foreground and a local notification otherwise.
  */
 export function alertFor(
   arrival: Pick<InboxEntry, "dedupe" | "kind" | "instance" | "bot" | "session" | "at">,
@@ -322,8 +357,7 @@ export function alertFor(
   phase: AppPhase,
   watched: WatchedThread | null,
 ): AlertDecision {
-  const focused = phase === "active" && !!watched?.focused;
-  if (focused && watched?.instance === arrival.instance && watched.bot === arrival.bot) return "none";
+  if (onScreen(arrival, phase, watched)) return "none";
   if (inbox.has(arrival)) return "none";
   return phase === "active" ? "banner" : "local";
 }

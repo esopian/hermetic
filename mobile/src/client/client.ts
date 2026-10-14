@@ -31,12 +31,14 @@ import {
   alertFor,
   type InboxArrival,
   type InboxStore,
+  onScreen,
   PHONE_DEDUPE_MARK,
   type WatchedThread,
 } from "../inbox/store.ts";
 import { failureHeadline } from "./chat-logic.ts";
 import { ConversationStore, type ConversationTarget, type TurnWhere } from "./conversation-store.ts";
-import { type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
+import { markConversationRead } from "./read.ts";
+import { botKey, type RosterPrefsStorage, RosterStore } from "./roster-store.ts";
 import { realTimers, type Timers } from "./timers.ts";
 
 /* ── alerts ─────────────────────────────────────────────────────────────── */
@@ -266,15 +268,15 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
   const previews = options.previews ?? (() => true);
   const fleetId = () => fleet.getState().link?.payload.fleet_id ?? "";
 
-  /** File an event this phone saw, and alert for it unless it should not interrupt. */
+  /**
+   * File an event this phone saw, and alert for it unless it should not
+   * interrupt. An event about the conversation on screen (`onScreen`: same
+   * bot and same session) is filed read; one about the bot's other
+   * conversation is not, and alerts as any other would.
+   */
   const raise = (arrival: InboxArrival, category: string | null) => {
     const decision = alertFor(arrival, inbox, phase, watched);
-    const onScreen =
-      phase === "active" &&
-      !!watched?.focused &&
-      watched.instance === arrival.instance &&
-      watched.bot === arrival.bot;
-    inbox.ingest(onScreen ? { ...arrival, read_at: arrival.at } : arrival);
+    inbox.ingest(onScreen(arrival, phase, watched) ? { ...arrival, read_at: arrival.at } : arrival);
     if (decision === "none") return;
     options.onAlert?.({
       decision,
@@ -336,7 +338,14 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       }
     },
     onArrival: (where, arrival) => {
-      roster.noteArrival({ instance: where.instance, bot: where.bot, ...arrival });
+      // A separate session's words move the bot's time, never its Bot Chat count.
+      const elsewhere = where.session !== null && !isBotChat(where);
+      roster.noteArrival({
+        instance: where.instance,
+        bot: where.bot,
+        ...arrival,
+        ...(elsewhere ? { elsewhere } : {}),
+      });
     },
     onRequestOpened: (where, { block }) => {
       const request_id = block.request_id;
@@ -363,7 +372,17 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     },
   });
 
+  /** A `?session=` conversation that is the bot's canonical one counts as its Bot Chat. */
+  const isBotChat = (where: ConversationTarget): boolean =>
+    where.session === null ||
+    chat.view(where).sessions.find((s) => s.id === where.session)?.kind === "canonical";
+
   const roster = new RosterStore(transport, options.rosterPrefs ?? null);
+  // A request open in a followed turn marks its bot needs-you on home until it
+  // is answered or its turn ends, whether or not its thread has been read.
+  const offWaiting = chat.subscribe(() => {
+    roster.setWaiting(chat.waiting().map((t) => botKey(t.instance, t.bot)));
+  });
   const pairedFleet = fleetId();
   if (pairedFleet) void roster.setFleet(pairedFleet);
   roster.setListening(fleet.listened());
@@ -504,11 +523,13 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     })();
   }
 
-  /** Read the thread on screen, if the app is on screen too. */
+  /**
+   * Read the conversation on screen, if the app is on screen too: the Bot Chat
+   * clears the bot, a separate session only its own entries (`read.ts`).
+   */
   const readFocused = () => {
     if (phase !== "active" || !watched?.focused) return;
-    roster.markSeen(watched.instance, watched.bot);
-    inbox.markThreadRead(watched.instance, watched.bot);
+    markConversationRead({ roster, inbox }, watched);
   };
 
   return {
@@ -553,6 +574,7 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
       for (const turnId of [...following.keys()]) stopFollowing(turnId);
       turnStarts.clear();
       offFleet();
+      offWaiting();
       transport.dispose();
       chat.reset();
       roster.reset();

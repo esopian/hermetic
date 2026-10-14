@@ -6,9 +6,10 @@
  */
 import type { Bot } from "@hermetic/core/chat-client";
 import { router } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, TextInput, View } from "react-native";
 import { HomeBotRow } from "../src/bots/HomeBotRow.tsx";
+import { quietSuffix } from "../src/bots/suffix.ts";
 import { failedBots, type HomeRow, homeRowsByKey, needsBots } from "../src/client/home-rows.ts";
 import { botKey } from "../src/client/roster-store.ts";
 import { searchBots } from "../src/client/search.ts";
@@ -30,6 +31,13 @@ export default function Search() {
   const now = useNow();
   const [query, setQuery] = useState("");
   const fleetId = fleet.link?.payload.fleet_id ?? "";
+  // Focused a frame after mount rather than with `autoFocus`: a field that is
+  // first responder before its tint lands keeps the system-blue caret on iOS.
+  const field = useRef<TextInput>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => field.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   // Every listened bot as a home row (badge, reachability, failure), so a
   // result is drawn by the home's own rules.
@@ -104,7 +112,7 @@ export default function Search() {
         >
           <Icon name="search" size={18} color={t.c.fg3} />
           <TextInput
-            autoFocus
+            ref={field}
             value={query}
             onChangeText={setQuery}
             placeholder="Search bots"
@@ -116,6 +124,7 @@ export default function Search() {
             returnKeyType="search"
             keyboardAppearance={t.scheme === "dark" ? "dark" : "light"}
             selectionColor={t.c.acc}
+            cursorColor={t.c.acc}
             style={{
               flex: 1,
               height: FIELD_HEIGHT,
@@ -176,8 +185,14 @@ export default function Search() {
             fleetId={fleetId}
             now={now}
             badge={item.badge}
-            // Results mix instances with no section headers, so the instance is said here.
-            suffix={many ? item.bot.instance : item.suffix}
+            // Results mix instances with no section headers, so the instance is said
+            // here, after the bot's name when its title is shared; neither when it
+            // only repeats the title ("atlas · atlas").
+            suffix={quietSuffix(
+              item.bot.title || item.bot.name,
+              item.suffix,
+              many ? item.bot.instance : null,
+            )}
             reachable={item.reachable}
             failed={item.failed}
             onPress={() => onOpen(item.bot)}

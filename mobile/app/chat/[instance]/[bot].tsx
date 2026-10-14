@@ -25,7 +25,6 @@ import { ChatHeader, conversationMenu } from "../../../src/chat/ChatHeader.tsx";
 import { ChatScope, type ChatScopeValue } from "../../../src/chat/ChatScope.tsx";
 import { Composer } from "../../../src/chat/Composer.tsx";
 import { isFresh } from "../../../src/chat/new-chat.ts";
-import { markConversationRead } from "../../../src/chat/read.ts";
 import { SessionSheet, sessionLabel } from "../../../src/chat/SessionSheet.tsx";
 import { type SubagentControl, SubagentSheet } from "../../../src/chat/SubagentSheet.tsx";
 import { Transcript, type TranscriptItem, transcriptItems } from "../../../src/chat/Transcript.tsx";
@@ -35,6 +34,8 @@ import { turnErrorNeedsBand } from "../../../src/client/chat-recovery.ts";
 import { questionsOf } from "../../../src/client/chat-requests.ts";
 import type { RespondResult } from "../../../src/client/chat-types.ts";
 import type { ConversationTarget, RespondInput } from "../../../src/client/conversation-store.ts";
+import { openSeparateSession } from "../../../src/client/new-session.ts";
+import { markConversationRead } from "../../../src/client/read.ts";
 import { useFleetContext } from "../../../src/fleet/FleetProvider.tsx";
 import { useConversation, useFleetAgents, useFleetState, useRoster } from "../../../src/fleet/hooks.ts";
 import { useTheme } from "../../../src/theme/theme.tsx";
@@ -111,22 +112,6 @@ export default function Conversation() {
       alive.current = false;
     };
   }, []);
-
-  // Focused: this is the watched thread (no banners for it). Not while a new
-  // session is still opening: the Bot Chat is not this screen's thread then,
-  // and a foreground re-open would watch it with nothing to leave it.
-  useFocusEffect(
-    useCallback(() => {
-      if (!client || freshPending) return;
-      client.setWatched({ instance: target.instance, bot: target.bot, focused: true });
-      // Back from the background, the provider re-opens this one.
-      focusConversation(target);
-      return () => {
-        client.setWatched(null);
-        focusConversation(null);
-      };
-    }, [client, target, focusConversation, freshPending]),
-  );
 
   const swarm = roster?.swarms.find((s) => s.instance === target.instance) ?? null;
   const botRow = swarm?.bots.find((b) => b.name === target.bot) ?? null;
@@ -215,12 +200,29 @@ export default function Conversation() {
     [target, onCanonical],
   );
 
-  // Focused, its unread clears.
+  const shownSession = view?.resolvedSession ?? target.session;
+
+  // Focused: this is the watched conversation, read at once (`setWatched`
+  // applies `markConversationRead`) and never a banner. Not while a new
+  // session is still opening: the Bot Chat is not this screen's thread then,
+  // and a foreground re-open would watch it with nothing to leave it.
   useFocusEffect(
     useCallback(() => {
       if (!client || freshPending) return;
-      markConversationRead(client, readTarget);
-    }, [client, freshPending, readTarget]),
+      client.setWatched({
+        instance: readTarget.instance,
+        bot: readTarget.bot,
+        session: readTarget.session,
+        resolved: shownSession,
+        focused: true,
+      });
+      // Back from the background, the provider re-opens this one.
+      focusConversation(target);
+      return () => {
+        client.setWatched(null);
+        focusConversation(null);
+      };
+    }, [client, target, readTarget, shownSession, focusConversation, freshPending]),
   );
 
   // A clarify still open in the running turn: "Send now" skips it before steering.
@@ -259,22 +261,15 @@ export default function Conversation() {
     [target],
   );
 
+  // A prompt goes in even when the operator left meanwhile; only the route
+  // and the haptic wait on this screen still being there.
   const openNewSession = useCallback(
     async (prompt?: string) => {
       if (!client) return;
-      const opened = await client.gateway.open({
-        instance: target.instance,
-        bot: target.bot,
-        new_session: true,
-      });
-      if (!alive.current) return;
+      const opened = await openSeparateSession(client, target, prompt, () => alive.current);
+      if (!opened) return;
       haptic.success();
       setSessionsOpen(false);
-      if (prompt) {
-        const next = { instance: opened.instance, bot: opened.bot, session: opened.session };
-        client.chat.open(next);
-        client.chat.sendMessage(next, prompt);
-      }
       router.replace(chatPath(opened.instance, opened.bot, opened.session) as never);
     },
     [client, target],

@@ -2,14 +2,17 @@
  * Home's hero: a row of big round avatars at the top. They are the bots pinned
  * on this phone (each with a small star on its lower-right edge), or, with
  * nothing pinned, the default bot of each listened instance (no star). Centred
- * when they fit, scrolling sideways when they do not. Each carries its name in
+ * when they fit. When they do not, the row starts at the list's gutter, scrolls
+ * sideways and snaps a whole bot to the left edge, so a resting row never cuts
+ * an avatar on the left; it is never centred then, so pinning or unpinning a
+ * bot does not slide the others under the finger. Each carries its name in
  * muted text underneath; a gold `!` on the upper-right edge when it needs you,
  * else an accent dot when it has unread messages; a small red mark beside the
  * name when its last turn failed; and a dimmed avatar when its box is not
  * answering. Tap opens its chat; long-press opens the bot menu.
  */
 import { memo } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import type { HomeRow } from "../client/home-rows.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Icon } from "../ui/IconButton.tsx";
@@ -21,6 +24,19 @@ export const HERO_SOLO = 112;
 export const HERO_MANY = 88;
 
 export const heroSize = (count: number): number => (count <= 1 ? HERO_SOLO : HERO_MANY);
+
+/** The horizontal room a hero takes around its blob (half each side), for its name. */
+const CELL_PAD = 24;
+/**
+ * The row's inset at either end. With `CELL_PAD / 2` inside each cell, the
+ * first blob lands 20 pt in, level with the bot rows' avatars underneath.
+ */
+const EDGE = 8;
+
+/** Whether `count` heroes of `size` fit across `width` without scrolling. Pure, so it is testable. */
+export function heroFits(count: number, size: number, width: number): boolean {
+  return count * (size + CELL_PAD) + EDGE * 2 <= width;
+}
 
 function HeroBot({
   row,
@@ -58,7 +74,7 @@ function HeroBot({
       style={({ pressed }) => ({
         alignItems: "center",
         gap: t.space.sm,
-        width: size + t.space.xl,
+        width: size + CELL_PAD,
         opacity: pressed ? 0.7 : 1,
       })}
     >
@@ -147,18 +163,28 @@ function HomeHeroImpl({
   onLongPress: (row: HomeRow) => void;
 }) {
   const t = useTheme();
+  // The hero spans the window, so the window's width is the row's, from the first frame.
+  const { width } = useWindowDimensions();
   if (rows.length === 0) return null;
   const size = heroSize(rows.length);
+  const fits = heroFits(rows.length, size, width);
   return (
     <ScrollView
       testID="home-hero"
       horizontal
       showsHorizontalScrollIndicator={false}
-      // Centred while they fit; once they overflow, the content is wider than the view and scrolls.
+      scrollEnabled={!fits}
+      // Overflowing: rest on whole bots (each snap point puts one cell at the left inset).
+      {...(fits
+        ? {}
+        : {
+            snapToInterval: size + CELL_PAD,
+            snapToAlignment: "start" as const,
+            decelerationRate: "fast" as const,
+          })}
       contentContainerStyle={{
-        flexGrow: 1,
-        justifyContent: "center",
-        paddingHorizontal: t.space.md,
+        ...(fits ? { flexGrow: 1, justifyContent: "center" as const } : {}),
+        paddingHorizontal: EDGE,
         paddingTop: t.space.lg,
         paddingBottom: t.space.xl,
       }}

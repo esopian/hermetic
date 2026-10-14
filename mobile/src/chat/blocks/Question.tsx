@@ -38,6 +38,7 @@ import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { useChatScope } from "../ChatScope.tsx";
 import { useSubmit } from "./respond.ts";
+import { NeedsDot, ROW_RADIUS, SoftCard } from "./SoftCard.tsx";
 
 function Choice({
   q,
@@ -67,15 +68,17 @@ function Choice({
         haptic.select();
         onPick?.();
       }}
+      // A soft filled row; picked, an accent ring (always 1pt wide, so a pick never shifts the text).
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
         gap: t.space.md,
         minHeight: t.touch.min,
         paddingHorizontal: t.space.md,
+        borderRadius: ROW_RADIUS,
         borderWidth: 1,
-        borderColor: checked ? t.c.acc : t.c.line2,
-        backgroundColor: pressed ? t.c.sel : checked ? t.c.bg3 : "transparent",
+        borderColor: checked ? t.c.acc : "transparent",
+        backgroundColor: pressed ? t.c.bg3 : t.c.sel,
         opacity: disabled && !checked ? 0.55 : 1,
       })}
     >
@@ -88,10 +91,10 @@ function Choice({
           borderWidth: 1,
           borderColor: checked ? t.c.acc : t.c.line2,
           backgroundColor: checked ? t.c.acc : "transparent",
-          borderRadius: q.multi_select ? 0 : 11,
+          borderRadius: q.multi_select ? 6 : 11,
         }}
       >
-        <Text mono variant="caption" weight={700} style={{ color: checked ? t.c.accFg : t.c.fg2 }}>
+        <Text variant="caption" weight={700} style={{ color: checked ? t.c.accFg : t.c.fg2 }}>
           {q.multi_select && checked ? "✓" : letter(index)}
         </Text>
       </View>
@@ -167,6 +170,7 @@ function LateChoices({ q }: { q: QuestionEntry }) {
             key={`${i}-${choice}`}
             label={bare(choice)}
             variant="secondary"
+            soft
             compact
             onPress={() => draft(lateAnswer(q.prompt, bare(choice)))}
           />
@@ -295,7 +299,7 @@ export function QuestionCard({
     body = (
       <>
         {questions.length > 1 ? (
-          <Text mono variant="caption" tone={ready ? "ok" : "fg2"}>
+          <Text variant="caption" weight={600} tone={ready ? "ok" : "fg2"}>
             {`${answered} of ${questions.length} answered`}
           </Text>
         ) : null}
@@ -308,8 +312,8 @@ export function QuestionCard({
                   {q.prompt}
                 </Text>
                 {q.multi_select && q.choices.length > 0 ? (
-                  <Text mono variant="caption" tone="fg3">
-                    choose any
+                  <Text variant="caption" tone="fg3">
+                    Choose any
                   </Text>
                 ) : null}
               </View>
@@ -339,12 +343,13 @@ export function QuestionCard({
                 style={{
                   minHeight: t.touch.min,
                   borderWidth: 1,
-                  borderColor: stage.text.trim() ? t.c.acc : t.c.line2,
+                  borderColor: stage.text.trim() ? t.c.acc : "transparent",
+                  backgroundColor: t.c.sel,
                   color: t.c.fg,
                   fontFamily: t.sans(400),
                   fontSize: 14,
                   paddingHorizontal: t.space.md,
-                  borderRadius: 0,
+                  borderRadius: ROW_RADIUS,
                 }}
               />
             </View>
@@ -359,6 +364,7 @@ export function QuestionCard({
           <Button
             label="Skip"
             variant="secondary"
+            soft
             disabled={locked}
             style={{ flex: 1 }}
             onPress={() => {
@@ -369,6 +375,7 @@ export function QuestionCard({
           />
           <Button
             label="Confirm and continue"
+            soft
             disabled={locked || !ready}
             busy={busy}
             style={{ flex: 2 }}
@@ -381,37 +388,20 @@ export function QuestionCard({
 
   const muted = recorded || done || !!shut || (answerable && stale);
   return (
-    <View
-      testID={`question-${request_id ?? "none"}`}
-      style={{
-        borderWidth: 1,
-        borderColor: t.c.line,
-        borderLeftWidth: t.border.control,
-        borderLeftColor: muted ? t.c.line2 : t.c.acc,
-        backgroundColor: t.c.bg2,
-        marginVertical: t.space.xs,
-      }}
-    >
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          paddingHorizontal: t.space.md,
-          paddingVertical: t.space.sm,
-          borderBottomWidth: 1,
-          borderBottomColor: t.c.line,
-        }}
-      >
-        <Text variant="caption" weight={700} uppercase style={{ flex: 1, letterSpacing: 1 }}>
-          question
+    <SoftCard testID={`question-${request_id ?? "none"}`}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        {/* Needs you: a small warn dot, the one loud mark on the card. */}
+        {muted ? null : <NeedsDot />}
+        <Text variant="bodySmall" weight={600} tone="fg2" style={{ flex: 1 }}>
+          Question
         </Text>
         {paused ? (
-          <Text mono variant="caption" tone="acc">
-            turn paused
+          <Text variant="caption" tone="fg3">
+            Turn paused
           </Text>
         ) : null}
       </View>
-      <View style={{ padding: t.space.md, gap: t.space.md }}>
+      <View style={{ gap: t.space.md }}>
         {body}
         {state && state !== SENT && state !== GONE ? (
           <Text accessibilityRole="alert" variant="caption" tone="bad">
@@ -419,6 +409,6 @@ export function QuestionCard({
           </Text>
         ) : null}
       </View>
-    </View>
+    </SoftCard>
   );
 }

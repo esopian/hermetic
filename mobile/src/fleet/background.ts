@@ -9,7 +9,8 @@
  *    gate, which also renews the cached snapshot);
  * 3. renews the push registration when push is on and the last renewal is
  *    `PUSH_RENEW_AFTER_MS` old (`renewIfDue`; the box keeps it 72 h);
- * 4. sets the app badge from the phone's own inbox.
+ * 4. sets the app badge from the phone's own inbox, counting only the agents
+ *    it listens to (`listenedEntry`).
  *
  * It reads no conversation (`session.active_list` or otherwise): the boxes'
  * pushes cover what happened while the app was away. Nothing here talks to a
@@ -37,7 +38,7 @@ import {
   type PushTokenResult,
   renewIfDue,
 } from "./push.ts";
-import { FleetStore, type KvStorage, type TextFile } from "./store.ts";
+import { FleetStore, type KvStorage, listenedEntry, type TextFile } from "./store.ts";
 
 export const BACKGROUND_REFRESH_TASK = "hermetic.background-refresh";
 
@@ -77,11 +78,12 @@ export async function backgroundRefresh(deps: BackgroundDeps): Promise<Backgroun
   });
   const inbox = new InboxStore(deps.inboxFile, now);
   await inbox.load();
-  const badge = inbox.badgeCount();
   if (!(await fleet.load())) {
+    const badge = inbox.badgeCount();
     await deps.setBadge(badge);
     return { paired: false, refreshed: false, tailscale: null, push: null, badge };
   }
+  const badge = inbox.badgeCount(listenedEntry(fleet));
   // The probe first: a host's 7434 calls wait on its HTTPS answer (the gate).
   const hosts = fleet
     .listened()

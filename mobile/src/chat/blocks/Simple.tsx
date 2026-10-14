@@ -3,7 +3,7 @@
  * sources, `hermetic` cards, background process events, and the `unknown`
  * fallthrough that keeps a version bump from blanking a transcript.
  */
-import { Linking, Pressable, View } from "react-native";
+import { Linking, Pressable, StyleSheet, View } from "react-native";
 import {
   fmtBytes,
   fmtCount,
@@ -23,10 +23,10 @@ import type {
   SourcesBlock as SourcesBlockType,
 } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
-import { Kicker } from "../../ui/Kicker.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { Card } from "../Card.tsx";
 import { CodePane } from "../CodePane.tsx";
+import { CARD_RADIUS, Label, NeedsDot } from "./SoftCard.tsx";
 
 /** `reasoning` — a muted card, shut by default: "thought for Xs · N tokens", or "live". */
 export function ReasoningBlock({ block }: { block: ReasoningBlockType }) {
@@ -53,17 +53,26 @@ export function ActivityNotice({ block }: { block: ActivityBlock }) {
     <View
       accessibilityRole={block.state === "error" ? "alert" : "text"}
       style={{
-        borderLeftWidth: t.border.control,
-        borderLeftColor: tone,
-        backgroundColor: t.c.bg2,
+        borderRadius: CARD_RADIUS,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: t.c.cardEdge,
+        backgroundColor: t.c.card,
         padding: t.space.md,
         gap: t.space.xs,
         marginVertical: t.space.xs,
       }}
     >
-      <Text weight={700} variant="bodySmall" tone={block.state === "error" ? "bad" : "warn"}>
-        {block.title}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <NeedsDot color={tone} />
+        <Text
+          weight={700}
+          variant="bodySmall"
+          tone={block.state === "error" ? "bad" : "warn"}
+          style={{ flexShrink: 1 }}
+        >
+          {block.title}
+        </Text>
+      </View>
       {block.detail ? (
         <Text selectable variant="bodySmall" tone="fg2">
           {block.detail}
@@ -100,9 +109,10 @@ export function AttachmentBlock({ block }: { block: AttachmentBlockType }) {
         alignItems: "center",
         gap: t.space.md,
         padding: t.space.sm,
-        borderWidth: 1,
-        borderColor: t.c.line,
-        backgroundColor: pressed ? t.c.sel : t.c.bg2,
+        borderRadius: CARD_RADIUS,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: t.c.cardEdge,
+        backgroundColor: pressed ? t.c.sel : t.c.card,
         marginVertical: t.space.xs,
       })}
     >
@@ -112,6 +122,7 @@ export function AttachmentBlock({ block }: { block: AttachmentBlockType }) {
           height: 40,
           alignItems: "center",
           justifyContent: "center",
+          borderRadius: 10,
           backgroundColor: t.c.bg3,
         }}
       >
@@ -240,9 +251,9 @@ export function UnknownBlock({ block }: { block: ChatBlock }) {
     <Card verdict="unknown" head="Additional activity" right={unknownName(block)} collapsible>
       {args !== undefined || result !== undefined ? (
         <>
-          <Kicker>Arguments</Kicker>
+          <Label>Arguments</Label>
           <CodePane text={formatPayload(args)} />
-          <Kicker>Result</Kicker>
+          <Label>Result</Label>
           <CodePane text={formatPayload(result)} />
         </>
       ) : (

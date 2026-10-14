@@ -6,6 +6,7 @@ import {
   entryLive,
   INBOX_LIMIT,
   InboxStore,
+  onScreen,
   pushBelongs,
   SAME_EVENT_MS,
 } from "../../src/inbox/store.ts";
@@ -127,7 +128,7 @@ describe("InboxStore", () => {
     const before = "2026-10-13T10:00:00.000Z";
     const after = "2026-10-13T12:30:00.000Z";
     inbox.ingest(arrival({ dedupe: "a", instance: "atlas", bot: "scribe", at: before }));
-    // Unlistened instance.
+    // Unlistened instance (not read): kept unread, only left out of the badge.
     inbox.ingest(arrival({ dedupe: "b", instance: "kestrel", bot: "x", at: before }));
     // Deleted bot: the box answered after the entry and no longer lists it.
     inbox.ingest(arrival({ dedupe: "c", instance: "atlas", bot: "gone", at: before }));
@@ -138,7 +139,6 @@ describe("InboxStore", () => {
     inbox.ingest(arrival({ dedupe: "f", instance: "heron", bot: "h", at: before }));
     expect(inbox.badgeCount()).toBe(6);
     const roster = {
-      listening: ["atlas", "corvid", "heron"],
       swarms: [
         { instance: "atlas", reachable: true, bots: [{ name: "scribe" }] },
         { instance: "corvid", reachable: false, bots: [] },
@@ -151,8 +151,11 @@ describe("InboxStore", () => {
         .entries.filter((e) => !e.read_at)
         .map((e) => e.dedupe)
         .sort(),
-    ).toEqual(["a", "d", "e", "f"]);
-    expect(inbox.badgeCount()).toBe(4);
+    ).toEqual(["a", "b", "d", "e", "f"]);
+    expect(inbox.badgeCount()).toBe(5);
+    // The badge leaves an unlistened instance's entries out; they stay unread for its return.
+    const listened = new Set(["atlas", "corvid", "heron"]);
+    expect(inbox.badgeCount((e) => listened.has(e.instance))).toBe(4);
   });
 
   test("load reads the file back, dropping anything malformed; a broken file is empty", async () => {
@@ -180,11 +183,18 @@ describe("InboxStore", () => {
 describe("alertFor", () => {
   const event = arrival({ dedupe: "x" });
 
+  const botChat = { instance: "atlas", bot: "scribe", session: null, resolved: "s-1", focused: true };
+
   test("the conversation on screen never interrupts", () => {
     const { inbox } = setup();
-    expect(alertFor(event, inbox, "active", { instance: "atlas", bot: "scribe", focused: true })).toBe(
-      "none",
-    );
+    expect(alertFor(event, inbox, "active", botChat)).toBe("none");
+  });
+
+  test("the bot's other conversation on screen does: a separate session is not its Bot Chat", () => {
+    const { inbox } = setup();
+    const separate = { ...botChat, session: "s-2", resolved: "s-2" };
+    expect(alertFor(event, inbox, "active", separate)).toBe("banner");
+    expect(alertFor(arrival({ dedupe: "y", session: "s-2" }), inbox, "active", botChat)).toBe("banner");
   });
 
   test("already in the inbox: nothing", () => {
@@ -196,9 +206,38 @@ describe("alertFor", () => {
   test("otherwise a banner in the foreground, a local notification behind", () => {
     const { inbox } = setup();
     expect(alertFor(event, inbox, "active", null)).toBe("banner");
-    expect(
-      alertFor(event, inbox, "background", { instance: "atlas", bot: "scribe", focused: true }),
-    ).toBe("local");
+    expect(alertFor(event, inbox, "background", botChat)).toBe("local");
+  });
+});
+
+describe("onScreen", () => {
+  const at = (session: string) => ({ instance: "atlas", bot: "scribe", session });
+  const watched = (session: string | null, resolved: string | null) => ({
+    instance: "atlas",
+    bot: "scribe",
+    session,
+    resolved,
+    focused: true,
+  });
+
+  test("the Bot Chat takes its own session's events, not a separate session's", () => {
+    expect(onScreen(at("s-1"), "active", watched(null, "s-1"))).toBe(true);
+    expect(onScreen(at("s-2"), "active", watched(null, "s-1"))).toBe(false);
+    // Its id not known yet (no Bot Chat before the first message): the bot's events.
+    expect(onScreen(at("s-1"), "active", watched(null, null))).toBe(true);
+  });
+
+  test("a separate session takes only its own; a ?session= that is the canonical one is the Bot Chat", () => {
+    expect(onScreen(at("s-2"), "active", watched("s-2", "s-2"))).toBe(true);
+    expect(onScreen(at("s-1"), "active", watched("s-2", "s-2"))).toBe(false);
+    expect(onScreen(at("s-1"), "active", watched(null, "s-1"))).toBe(true);
+  });
+
+  test("another bot, an unfocused screen or the app away is never on screen", () => {
+    expect(onScreen({ ...at("s-1"), bot: "other" }, "active", watched(null, "s-1"))).toBe(false);
+    expect(onScreen(at("s-1"), "active", { ...watched(null, "s-1"), focused: false })).toBe(false);
+    expect(onScreen(at("s-1"), "inactive", watched(null, "s-1"))).toBe(false);
+    expect(onScreen(at("s-1"), "active", null)).toBe(false);
   });
 });
 

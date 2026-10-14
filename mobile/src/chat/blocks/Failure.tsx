@@ -22,6 +22,7 @@ import { Button } from "../../ui/Button.tsx";
 import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { useChatScope } from "../ChatScope.tsx";
+import { NeedsDot, SoftCard } from "./SoftCard.tsx";
 
 function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly string[]; at: string }) {
   const t = useTheme();
@@ -105,6 +106,7 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
             key={b.label}
             label={b.label}
             variant="secondary"
+            soft
             compact
             disabled={!!b.disabled}
             onPress={b.onPress}
@@ -153,39 +155,17 @@ export function FailureCard({
   const copy = failureView(failure);
   const tone = copy.tone === "warn" ? t.c.warn : t.c.bad;
   return (
-    <View
-      testID="failure-card"
-      style={{
-        borderWidth: 1,
-        borderColor: t.c.line,
-        borderLeftWidth: t.border.control,
-        borderLeftColor: tone,
-        backgroundColor: t.c.bg2,
-        marginVertical: t.space.xs,
-      }}
-    >
-      <View
-        style={{
-          flexDirection: "row",
-          paddingHorizontal: t.space.md,
-          paddingVertical: t.space.sm,
-          borderBottomWidth: 1,
-          borderBottomColor: t.c.line,
-        }}
-      >
-        <Text
-          variant="caption"
-          weight={700}
-          uppercase
-          style={{ flex: 1, letterSpacing: 1, color: tone }}
-        >
-          {copy.head}
+    <SoftCard testID="failure-card">
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <NeedsDot color={tone} />
+        <Text variant="bodySmall" weight={600} style={{ flex: 1, color: tone }}>
+          {sentence(copy.head)}
         </Text>
-        <Text mono variant="caption" tone="fg3">
+        <Text variant="caption" tone="fg3">
           {copy.right}
         </Text>
       </View>
-      <View style={{ padding: t.space.md, gap: t.space.sm }}>
+      <View style={{ gap: t.space.sm }}>
         <Text variant="bodySmall" selectable>
           <Text variant="bodySmall" weight={700}>
             {copy.title}
@@ -194,6 +174,11 @@ export function FailureCard({
         </Text>
         {failure ? <Recovery failure={failure} ids={ids} at={at} /> : null}
       </View>
-    </View>
+    </SoftCard>
   );
+}
+
+/** "provider error" → "Provider error": the head reads in sentence case, not as a kicker. */
+function sentence(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }

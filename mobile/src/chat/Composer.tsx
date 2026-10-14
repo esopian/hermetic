@@ -9,9 +9,9 @@
  *   and a stop when the box will not take a steer. A line above the input says
  *   which is which (the desktop's footer hint, "Enter queues · ⌘Enter sends now").
  *   These three sit in a row under the input, so the input keeps the full
- *   width: Stop stays within reach as a square ■ on the left (the desktop's
- *   Esc stops a turn whatever is typed, so a draft never hides the way out),
- *   Send now and Queue on the right.
+ *   width: Stop stays within reach as the same round button on the left (the
+ *   desktop's Esc stops a turn whatever is typed, so a draft never hides the
+ *   way out), Send now and Queue as soft pills on the right.
  * - Stop lives here and only here: the conversation header has none.
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
@@ -81,31 +81,6 @@ export function isAutocorrectEcho(incoming: string, taken: string, elapsedMs: nu
   return changed <= Math.max(1, Math.floor(a.length / 2));
 }
 
-/** Stop as a 44pt square glyph, for the queue actions row beside Send now and Queue. */
-function StopSquare({ onPress }: { onPress(): void }) {
-  const t = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Stop turn"
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: t.touch.min,
-        height: t.touch.min,
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: t.border.control,
-        borderColor: t.c.bad,
-        backgroundColor: pressed ? t.c.bad : "transparent",
-      })}
-    >
-      {({ pressed }) => (
-        <View style={{ width: 12, height: 12, backgroundColor: pressed ? t.c.dangerText : t.c.bad }} />
-      )}
-    </Pressable>
-  );
-}
-
 /** Drawn diameter of the round Send and Stop; the tap target is 44pt. */
 const ROUND = 36;
 
@@ -119,12 +94,15 @@ function RoundAction({
   label,
   disabled = false,
   busy = false,
+  inline = false,
   onPress,
 }: {
   kind: "send" | "stop";
   label: string;
   disabled?: boolean;
   busy?: boolean;
+  /** In the queue actions row, centred on the row rather than levelled with the input's last line. */
+  inline?: boolean;
   onPress(): void;
 }) {
   const t = useTheme();
@@ -141,7 +119,7 @@ function RoundAction({
       hitSlop={(t.touch.min - ROUND) / 2}
       // Level with the input's last line, however tall it has grown.
       style={({ pressed }) => ({
-        marginBottom: (LINE + PAD_Y - ROUND) / 2,
+        marginBottom: inline ? 0 : (LINE + PAD_Y - ROUND) / 2,
         opacity: pressed ? 0.7 : 1,
       })}
     >
@@ -174,6 +152,36 @@ function RoundAction({
         )}
       </View>
     </Pressable>
+  );
+}
+
+/** A compact pill is 32pt drawn; the slop makes its tap target 44pt. */
+const PILL_SLOP = 6;
+
+/** One quiet line above the input; `warn` leads it with the needs-you dot. */
+function Hint({ warn = false, children }: { warn?: boolean; children: string }) {
+  const t = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: t.space.sm,
+        paddingHorizontal: t.space.xs,
+      }}
+    >
+      {warn ? (
+        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.c.warn }} />
+      ) : null}
+      <Text
+        variant="caption"
+        tone={warn ? "fg2" : "fg3"}
+        numberOfLines={warn ? 2 : 1}
+        style={{ flexShrink: 1 }}
+      >
+        {children}
+      </Text>
+    </View>
   );
 }
 
@@ -221,8 +229,8 @@ function QueuedRow({
         backgroundColor: t.c.bg2,
       }}
     >
-      <Text mono variant="caption" tone="fg3">
-        queued
+      <Text variant="caption" weight={600} tone="fg3">
+        Queued
       </Text>
       <Text variant="bodySmall" numberOfLines={1} style={{ flex: 1 }}>
         {row.text}
@@ -294,9 +302,9 @@ function ComposerImpl(props: ComposerProps) {
       {queue.length > 0 ? (
         <View style={{ gap: t.space.xs }}>
           {parked ? (
-            <Text mono variant="caption" tone="warn">
-              {`queue paused · ${queue.length} waiting — send one now, or send a new message to resume`}
-            </Text>
+            <Hint warn>
+              {`Queue paused · ${queue.length} waiting — send one now, or send a new message to resume`}
+            </Hint>
           ) : null}
           {queue.map((row) => (
             <QueuedRow
@@ -309,13 +317,9 @@ function ComposerImpl(props: ComposerProps) {
         </View>
       ) : null}
       {props.questionOpen ? (
-        <Text mono variant="caption" tone="warn">
-          a question is waiting above — Send now skips it, Queue waits behind it
-        </Text>
+        <Hint warn>A question is waiting above — Send now skips it, Queue waits behind it</Hint>
       ) : mode === "queue" ? (
-        <Text mono variant="caption" tone="fg3" numberOfLines={1}>
-          Queue waits for the turn · Send now steers it
-        </Text>
+        <Hint>Queue waits for the turn · Send now steers it</Hint>
       ) : null}
       {/* The input is always the first child of this row, in every mode, so
           switching modes never remounts it (focus and the keyboard stay). */}
@@ -387,20 +391,25 @@ function ComposerImpl(props: ComposerProps) {
           testID="composer-queue-actions"
           style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
         >
-          <StopSquare
+          <RoundAction
+            kind="stop"
+            label="Stop turn"
+            inline
             onPress={() => {
               haptic.warning();
               props.onStop();
             }}
           />
-          <View style={{ flexDirection: "row", gap: t.space.xs }}>
+          <View style={{ flexDirection: "row", gap: t.space.sm }}>
             <Button
               label="Send now"
               accessibilityLabel="Send now"
               accessibilityHint="Steers this message into the running turn"
               variant="secondary"
+              soft
+              compact
+              hitSlop={PILL_SLOP}
               haptic={false}
-              style={{ paddingHorizontal: t.space.md }}
               onPress={() => {
                 const text = take();
                 if (!text) return;
@@ -412,8 +421,10 @@ function ComposerImpl(props: ComposerProps) {
               label="Queue"
               accessibilityLabel="Queue"
               accessibilityHint="Sends this message when the running turn ends"
+              soft
+              compact
+              hitSlop={PILL_SLOP}
               haptic={false}
-              style={{ paddingHorizontal: t.space.md }}
               onPress={() => {
                 const text = take();
                 if (!text) return;

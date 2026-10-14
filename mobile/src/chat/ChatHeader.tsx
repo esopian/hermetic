@@ -76,28 +76,21 @@ function ChatHeaderImpl({
           opacity: pressed ? 0.6 : 1,
         })}
       >
-        {/* The button's own label says who this is; the avatar is not a second element. */}
-        <View
-          accessible={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        >
-          <Avatar
-            fleet_id={fleetId}
-            instance={instance}
-            bot={bot}
-            size={32}
-            status={status}
-            activity={activity}
-            label={title}
-          />
-        </View>
+        {/* Unlabelled: the button's own label says who this is. */}
+        <Avatar
+          fleet_id={fleetId}
+          instance={instance}
+          bot={bot}
+          size={32}
+          status={status}
+          activity={activity}
+        />
         <View style={{ flexShrink: 1 }}>
           <Text weight={600} numberOfLines={1} style={{ fontSize: 17, lineHeight: 21 }}>
             {title}
           </Text>
           {session ? (
-            <Text variant="caption" tone="acc" numberOfLines={1}>
+            <Text variant="bodySmall" tone="fg2" numberOfLines={1}>
               {session}
             </Text>
           ) : null}

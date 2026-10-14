@@ -170,7 +170,7 @@ describe("clarify card", () => {
   test("a batch is one form: N of M answered, confirm only when all are, answers keyed by id", async () => {
     await renderUi(<QuestionCard block={batch()} now={NOW} session="s-1" />, scope({ respond: ok }));
     expect(screen.getByText("0 of 3 answered")).toBeTruthy();
-    expect(screen.getByText("turn paused")).toBeTruthy();
+    expect(screen.getByText("Turn paused")).toBeTruthy();
     const confirm = screen.getByLabelText("Confirm and continue");
     expect(confirm.props.accessibilityState.disabled).toBe(true);
 
@@ -192,7 +192,7 @@ describe("clarify card", () => {
     );
     expect(await screen.findByText("Response sent.")).toBeTruthy();
     expect(screen.getByText("ios, android")).toBeTruthy();
-    expect(screen.queryByText("turn paused")).toBeNull();
+    expect(screen.queryByText("Turn paused")).toBeNull();
   });
 
   test("'Other' replaces a single-select pick", async () => {
@@ -350,6 +350,6 @@ describe("a request in a turn no longer live on this phone", () => {
     expect(screen.getByText(STALE)).toBeTruthy();
     expect(screen.getByLabelText("main").props.accessibilityState.disabled).toBe(true);
     expect(screen.queryByLabelText("Confirm and continue")).toBeNull();
-    expect(screen.queryByText("turn paused")).toBeNull();
+    expect(screen.queryByText("Turn paused")).toBeNull();
   });
 });

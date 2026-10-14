@@ -16,7 +16,10 @@
  *   `suspend`/`resume`/`endObservations` are the client's (phase, listening),
  *   as are `turnTarget`/`onTurnRemote`/`onRemoteDone`: a turn still running
  *   on its box after the app was away, shown by `view.remote` (`RemoteBand`).
- * - `roster` — `RosterStore`: home's bots, over every listened box's swarm.
+ * - `roster` — `RosterStore`: home's bots, over every listened box's swarm. A
+ *   box that does not answer keeps its last-listed bots (`keepKnownBots`), and
+ *   a bot with a request open in a turn this phone follows reads needs-you
+ *   (`chat.waiting()` → `setWaiting`) until the request is answered.
  * - `inbox` — `InboxStore` (`src/inbox/store.ts`): the phone's own last 200
  *   events (pushes and socket-delivered), unread counts and the badge.
  * - `gateway` — the transport over core's Hermes adapter, for what the
@@ -24,9 +27,14 @@
  *   `archive`, `steerSubagent`, `abortSubagent`.
  * - `tailscale` — `probe()` / `last()`: the heuristic Tailscale status
  *   (`src/gateway/tailscale.ts`), probing ready boxes first (`probeHosts`).
- * - `setPhase` / `setWatched` — what the alert decision reads. `setPhase`
- *   also detaches turns and closes observations on `"background"` and brings
- *   them back on `"active"` (`HermeticClient` in `client.ts` says how).
+ * - `setPhase` / `setWatched` — what the alert decision reads. `setWatched`
+ *   names the focused conversation: its bot, `session` (`null` for the Bot
+ *   Chat) and the `resolved` id on screen. It is read at once
+ *   (`markConversationRead`, `read.ts`), and an event about it is filed read
+ *   without alerting; an event about the bot's other conversation is neither.
+ *   `setPhase` also detaches turns and closes observations on `"background"`
+ *   and brings them back on `"active"` (`HermeticClient` in `client.ts` says
+ *   how).
  * - `dispose()` — detach every turn pump (never interrupting a turn), stop every
  *   observation, and drop the stores' state.
  *

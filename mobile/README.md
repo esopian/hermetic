@@ -79,12 +79,13 @@ from it on demand:
   the hero, the other listened bots, in one quiet section per instance: the instance's name in muted
   capitals with a status dot, and its bots under it (avatar, name, time of the last message, a
   one-line preview, and at the row's edge an accent dot when unread, a gold `!` when the bot needs
-  you, a red mark when its last turn failed). A box that does not answer says so in its header, and
-  its rows are dimmed. Inside a section, bots needing you come first, then unread, then the most
+  you, a red mark when its last turn failed). A box that does not answer says so in its header and
+  keeps the bots it last listed, dimmed, with their marks; its default bot stays in its section. Inside a section, bots needing you come first, then unread, then the most
   recent message, then name; sections that answer come before those that do not, then those with
   something needing you or unread, then the most recent. A bot in the hero is not repeated below.
-  The needs-you mark comes from this phone's unread `needs_action` inbox entries as well as the
-  roster. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
+  The needs-you mark comes from the roster, from this phone's unread `needs_action` inbox entries
+  (a box's push; reading the thread clears it), and from a request still open in a turn this phone
+  follows, which stays until it is answered, expires or its turn ends, however the thread was read. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
   The Tailscale band appears under the bar only when something is wrong.
 - **Settings** (the gear): pairing and sign-out, listened instances, notifications, appearance,
   Tailscale detail, the agent list (detail and noVNC), and the version.
@@ -98,10 +99,13 @@ from it on demand:
   session switcher, and one round overflow button for Sessions, the agent browser and Mark read), the
   transcript with the operator's words in soft rounded bubbles, and a pill-shaped composer with a
   round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread; opening a
-  separate session clears only that session's inbox entries.
+  separate session clears only that session's inbox entries. The Bot Chat and a separate session
+  are two conversations: while one is on screen, an event in the other is filed unread and alerts.
 
 The phone-local inbox store (`src/inbox/store.ts`) has no screen of its own: it feeds the unread
-and failure marks on the home rows, the app badge and notification routing. A notification tap opens
+and failure marks on the home rows, the app badge and notification routing. The badge counts only
+the instances this phone listens to; an unlistened instance's entries stay unread, so listening again
+brings its marks back. A notification tap opens
 the conversation it is about.
 
 ## Chat: a request raised while the phone was away

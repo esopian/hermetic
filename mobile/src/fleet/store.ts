@@ -513,6 +513,17 @@ export class FleetStore {
   }
 }
 
+/**
+ * What the app badge counts (`InboxStore.badgeCount`): entries about an agent
+ * this phone listens to. Shared by the provider and the background wake.
+ */
+export function listenedEntry(
+  fleet: Pick<FleetStore, "listened">,
+): (entry: { instance: string }) => boolean {
+  const listened = new Set(fleet.listened());
+  return (entry) => listened.has(entry.instance);
+}
+
 function parsePersisted(raw: string | null): Persisted | null {
   if (!raw) return null;
   try {

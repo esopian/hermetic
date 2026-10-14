@@ -9,6 +9,7 @@ import { router } from "expo-router";
 import { useMemo } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { quietSuffix, sharedTitles } from "../src/bots/suffix.ts";
 import { freshChatPath, newChatBots } from "../src/chat/new-chat.ts";
 import { useFleetState, useRoster } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
@@ -36,6 +37,7 @@ export default function NewChat() {
     [state?.swarms, state?.listening],
   );
   const many = new Set(bots.map((b) => b.instance)).size > 1;
+  const shared = useMemo(() => sharedTitles(bots), [bots]);
   const none = listening.length === 0;
 
   const addRow = (
@@ -79,7 +81,8 @@ export default function NewChat() {
   // sizes its first scroll view, and a header laid out beside it overlaps.
   return (
     <FlatList
-      style={{ flex: 1, backgroundColor: t.c.bg }}
+      // The sheet's raised surface (`contentStyle` in `_layout.tsx`), not the page colour.
+      style={{ flex: 1, backgroundColor: t.c.bg2 }}
       data={
         none
           ? []
@@ -121,10 +124,17 @@ export default function NewChat() {
         const bot = item.bot;
         if (!bot) return addRow;
         const name = bot.title || bot.name;
+        // The bot's name when another bot of its instance shares the title, the
+        // instance when the sheet spans several; neither when it repeats the title.
+        const suffix = quietSuffix(
+          name,
+          shared.has(`${bot.instance}/${bot.name}`) ? bot.name : null,
+          many ? bot.instance : null,
+        );
         return (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`New chat with ${name}${many ? ` on ${bot.instance}` : ""}`}
+            accessibilityLabel={`New chat with ${name}${suffix ? `, ${suffix}` : ""}`}
             onPress={() => {
               haptic.select();
               leaveTo(freshChatPath(bot));
@@ -138,25 +148,13 @@ export default function NewChat() {
               backgroundColor: pressed ? t.c.sel : "transparent",
             })}
           >
-            {/* The row's label says who; the avatar is not a second element. */}
-            <View
-              accessible={false}
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              <Avatar
-                fleet_id={fleetId}
-                instance={bot.instance}
-                bot={bot.name}
-                size={40}
-                label={name}
-              />
-            </View>
+            {/* Unlabelled: the row's label says who. */}
+            <Avatar fleet_id={fleetId} instance={bot.instance} bot={bot.name} size={40} />
             <Text numberOfLines={1} style={{ flex: 1, fontSize: 17 }}>
               <Text weight={600} style={{ fontSize: 17 }}>
                 {name}
               </Text>
-              {many ? <Text tone="fg3" style={{ fontSize: 15 }}>{` · ${bot.instance}`}</Text> : null}
+              {suffix ? <Text tone="fg3" style={{ fontSize: 15 }}>{` · ${suffix}`}</Text> : null}
             </Text>
           </Pressable>
         );

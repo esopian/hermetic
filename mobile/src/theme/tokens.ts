@@ -21,6 +21,14 @@ export interface Palette {
   dangerText: string;
   /** Modal backdrop (`rgba(0,0,0,.55)` on the desktop). */
   backdrop: string;
+  /**
+   * Phone-only, derived: the fill of a soft card (Settings groups, the chat's
+   * request and failure cards) and its hairline ring. Dark keeps `bg2` with no
+   * ring. Light lifts the card halfway from `bg` to white and rings it in
+   * `line`: `bg2` sat a shade under the page and the groups ran together.
+   */
+  card: string;
+  cardEdge: string;
 }
 
 export type SchemeName = "dark" | "light";
@@ -43,6 +51,8 @@ export const palettes: Record<SchemeName, Palette> = {
     sel: "#22211e",
     dangerText: "#0e0e0d",
     backdrop: "rgba(0,0,0,0.55)",
+    card: "#161614",
+    cardEdge: "transparent",
   },
   light: {
     bg: "#f1efe9",
@@ -61,6 +71,8 @@ export const palettes: Record<SchemeName, Palette> = {
     sel: "#e3e0d7",
     dangerText: "#f1efe9",
     backdrop: "rgba(0,0,0,0.55)",
+    card: "#f8f7f4",
+    cardEdge: "#cfccc3",
   },
 };
 

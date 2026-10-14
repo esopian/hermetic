@@ -49,7 +49,13 @@ import {
   PushSync,
   previewsFrom,
 } from "./push.ts";
-import { FleetStore, type KvStorage, rosterPrefsStorage, type TextFile } from "./store.ts";
+import {
+  FleetStore,
+  type KvStorage,
+  listenedEntry,
+  rosterPrefsStorage,
+  type TextFile,
+} from "./store.ts";
 
 /** How long sockets keep being treated as live after the app is backgrounded (iOS allows ~30 s). */
 export const BACKGROUND_LINGER_MS = 25_000;
@@ -305,25 +311,34 @@ export function FleetProvider({
     };
   }, [deps, fleet, inbox, pushFleet, start, open]);
 
-  // The app badge follows the inbox.
+  // The app badge follows the inbox, counting only the instances listened to:
+  // an unlistened one's entries stay unread (listening again brings them back)
+  // but do not hold the badge up.
   useEffect(() => {
     let last = -1;
     const sync = () => {
-      const count = inbox.badgeCount();
+      const count = inbox.badgeCount(listenedEntry(fleet));
       if (count === last) return;
       last = count;
       void deps.notifier.setBadge(count);
     };
-    return inbox.subscribe(sync);
-  }, [deps, inbox]);
+    const offInbox = inbox.subscribe(sync);
+    const offFleet = fleet.subscribe(sync);
+    return () => {
+      offInbox();
+      offFleet();
+    };
+  }, [deps, fleet, inbox]);
 
-  // Entries home can no longer show (an unlistened instance, a deleted bot)
-  // are marked read after each roster read, so they cannot pin the app badge.
+  // Entries about a bot its box no longer lists are marked read once per
+  // roster read (not on every roster change), so they cannot pin the badge.
   useEffect(() => {
     if (!client) return;
+    let pruned: number | null = null;
     const prune = () => {
       const roster = client.roster.getState();
-      if (roster.readAt === null) return;
+      if (roster.readAt === null || roster.readAt === pruned) return;
+      pruned = roster.readAt;
       inbox.markReadUnless(entryLive(roster, roster.readAt));
     };
     prune();

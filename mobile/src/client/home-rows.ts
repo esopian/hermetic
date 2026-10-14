@@ -85,9 +85,12 @@ export function failedBots(entries: readonly InboxEntry[]): Set<string> {
 /**
  * Bots with an unread `needs_action` entry in the phone's inbox. A real box's
  * roster always says `needs_action: false` (the gateway's session list carries
- * no such flag), so the push the box's watcher raised for a clarify or an
- * approval is the only way home learns a bot is waiting. Reading the thread
- * (opening it, or Mark read) clears it.
+ * no such flag), so home learns a bot is waiting two ways: this, for the push
+ * the box's watcher raised (reading the thread, by opening it or Mark read,
+ * clears it: the phone cannot tell when such a request is answered), and the
+ * client's own record of a request open in a turn it follows, which the roster
+ * store folds into `needs_action` (`RosterStore.setWaiting`) and only an
+ * answer, an expiry or the turn's end clears.
  */
 export function needsBots(entries: readonly InboxEntry[]): Set<string> {
   const needs = new Set<string>();
@@ -209,7 +212,17 @@ export function homeRows(input: HomeInput): HomeLayout {
   const folded = new Set(input.folded ?? []);
   const byInstance = new Map(swarms.map((s) => [s.instance, s]));
 
-  const row = (bot: Bot, reachable: boolean, suffix: string | null = null): HomeRow => {
+  // Bot titles per instance, for the suffix: two bots of one instance with one title.
+  const titles = new Map<string, Map<string, number>>();
+  for (const s of swarms) {
+    const counts = new Map<string, number>();
+    for (const b of s.bots) counts.set(displayName(b), (counts.get(displayName(b)) ?? 0) + 1);
+    titles.set(s.instance, counts);
+  }
+  const suffixOf = (bot: Bot): string | null =>
+    (titles.get(bot.instance)?.get(displayName(bot)) ?? 0) > 1 ? bot.name : null;
+
+  const row = (bot: Bot, reachable: boolean): HomeRow => {
     const key = botKey(bot.instance, bot.name);
     const extra = unreadOf(bot.instance, bot.name);
     const isFailed = failed.has(key);
@@ -217,7 +230,7 @@ export function homeRows(input: HomeInput): HomeLayout {
       key,
       bot,
       badge: unreadBadge({ ...bot, needs_action: bot.needs_action || needs.has(key) }, extra),
-      suffix,
+      suffix: suffixOf(bot),
       reachable,
       failed: isFailed,
       pinned: pinned.has(key),
@@ -226,8 +239,8 @@ export function homeRows(input: HomeInput): HomeLayout {
   };
 
   // The hero: the pins still listened to. A pin on a down box is kept and dimmed
-  // (an unreachable swarm lists no bots, so absence proves nothing); a pin its
-  // answering box no longer lists is gone.
+  // (its last-known bots, or a stub when it never answered: absence proves
+  // nothing there); a pin its answering box no longer lists is gone.
   const pinnedHero: HomeRow[] = [];
   for (const key of input.pinned) {
     const at = key.indexOf("/");
@@ -243,6 +256,8 @@ export function homeRows(input: HomeInput): HomeLayout {
   const hero = heroPinned
     ? pinnedHero
     : swarms.flatMap((s) => {
+        // Defaults only of the instances that answered; a down box's stay in its section.
+        if (!s.reachable) return [];
         const bot = s.bots.find((b) => b.is_default) ?? s.bots[0];
         return bot ? [row(bot, s.reachable)] : [];
       });
@@ -250,11 +265,9 @@ export function homeRows(input: HomeInput): HomeLayout {
 
   const sections: HomeSection[] = [];
   for (const swarm of swarms) {
-    const titles = new Map<string, number>();
-    for (const b of swarm.bots) titles.set(displayName(b), (titles.get(displayName(b)) ?? 0) + 1);
     const rows = swarm.bots
       .filter((b) => !inHero.has(botKey(b.instance, b.name)))
-      .map((b) => row(b, swarm.reachable, (titles.get(displayName(b)) ?? 0) > 1 ? b.name : null))
+      .map((b) => row(b, swarm.reachable))
       .sort(compareHomeRows);
     if (swarm.reachable && rows.length === 0) continue;
     sections.push({

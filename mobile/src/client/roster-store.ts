@@ -209,6 +209,9 @@ export function rosterFooter(layout: RosterLayout): { roster: string; attention:
  * `unread` adds one to the badge; `false` means the thread is on screen, so the
  * row's count is cleared locally (the phone's `markSeen` rule). `preview`
  * moves the quote and who wrote it together; `null` leaves the roster's.
+ * `elsewhere`: it landed in a separate session of the bot, not its Bot Chat,
+ * so it moves the time and leaves the bot's count alone (the roster counts the
+ * Bot Chat's unread, which nobody has seen).
  */
 export interface RosterArrival {
   instance: string;
@@ -217,6 +220,7 @@ export interface RosterArrival {
   at: string | null;
   unread: boolean;
   preview: { preview: string; preview_role: ChatRole | null } | null;
+  elsewhere?: boolean;
 }
 
 /**
@@ -266,6 +270,41 @@ export function withBumps(
   });
 }
 
+/**
+ * Mark the bots in `waiting` (keys from `botKey`) as needing the operator: a
+ * request is open in a turn this phone follows. The roster read never says so
+ * on a real box (`needs_action` is always `false` there).
+ */
+export function withWaiting(swarms: readonly Swarm[], waiting: ReadonlySet<string>): Swarm[] {
+  if (waiting.size === 0) return swarms as Swarm[];
+  return swarms.map((swarm) => {
+    if (!swarm.bots.some((b) => !b.needs_action && waiting.has(botKey(swarm.instance, b.name))))
+      return swarm;
+    return {
+      ...swarm,
+      bots: swarm.bots.map((b) =>
+        b.needs_action || !waiting.has(botKey(swarm.instance, b.name))
+          ? b
+          : { ...b, needs_action: true },
+      ),
+    };
+  });
+}
+
+/**
+ * A box that did not answer this read keeps the bots its last answer listed
+ * (counts, quotes and all), so home still draws them, dimmed, with their marks;
+ * the swarm itself, `reachable: false` and its reason, is this read's.
+ */
+export function keepKnownBots(swarms: readonly Swarm[], before: readonly Swarm[]): Swarm[] {
+  const known = new Map(before.map((s) => [s.instance, s]));
+  return swarms.map((swarm) => {
+    const last = known.get(swarm.instance);
+    if (swarm.reachable || swarm.bots.length > 0 || !last || last.bots.length === 0) return swarm;
+    return { ...swarm, bots: last.bots };
+  });
+}
+
 /* ── the store ──────────────────────────────────────────────────────────── */
 
 export interface RosterPrefs {
@@ -286,7 +325,11 @@ export interface RosterState {
   listening: readonly string[];
   loading: boolean;
   error: string | null;
-  /** When the last successful read landed (ms epoch). */
+  /**
+   * When the last successful read started (ms epoch): every box was asked
+   * after this, so an inbox entry older than it about a bot an answering box
+   * did not list names a bot that box no longer has (`entryLive`).
+   */
   readAt: number | null;
   filter: RailFilter;
   query: string;
@@ -317,6 +360,8 @@ export class RosterStore {
   private listed: readonly Swarm[] = [];
   private bumps = new Map<string, RailBump>();
   private bumpSeq = 0;
+  /** Bots with a request open in a turn this phone follows (`setWaiting`). */
+  private waiting: ReadonlySet<string> = new Set();
 
   constructor(
     private readonly source: RosterSource,
@@ -362,18 +407,21 @@ export class RosterStore {
     const gen = ++this.gen;
     // Every bump stamped up to here is answered for by the read below.
     const mark = this.bumpSeq;
+    // Stamped before any box is asked: the slowest box's answer must not make
+    // a faster one's look newer than it is.
+    const startedAt = this.now();
     this.set({ loading: true });
     try {
       const [swarms, listening] = await Promise.all([this.source.swarms(), this.source.listening()]);
       if (gen !== this.gen) return false;
-      this.listed = swarms.swarms;
+      this.listed = keepKnownBots(swarms.swarms, this.listed);
       this.bumps = new Map([...this.bumps].filter(([, bump]) => bump.seq > mark));
       this.set({
-        swarms: withBumps(this.listed, this.bumps),
+        swarms: this.drawn(),
         listening: listening.instances,
         loading: false,
         error: null,
-        readAt: this.now(),
+        readAt: startedAt,
       });
       return true;
     } catch (error) {
@@ -445,7 +493,7 @@ export class RosterStore {
       this.bumps.set(key, { ...held, unread: 0 });
       touched = true;
     }
-    if (touched) this.set({ swarms: withBumps(this.listed, this.bumps) });
+    if (touched) this.set({ swarms: this.drawn() });
   }
 
   /**
@@ -456,15 +504,29 @@ export class RosterStore {
   noteArrival(arrival: RosterArrival): void {
     const key = botKey(arrival.instance, arrival.bot);
     const held = this.bumps.get(key);
+    // A separate session's words neither count nor clear the bot's (Bot Chat) unread.
+    const counts = !arrival.elsewhere;
     this.bumps.set(key, {
-      unread: arrival.unread ? (held?.unread ?? 0) + 1 : 0,
-      seen: !arrival.unread || (held?.seen ?? false),
+      unread: arrival.unread ? (held?.unread ?? 0) + 1 : counts ? 0 : (held?.unread ?? 0),
+      seen: (counts && !arrival.unread) || (held?.seen ?? false),
       at: newest(held?.at, arrival.at),
       // An arrival that quotes nothing keeps whatever the last one quoted.
       preview: arrival.preview ?? held?.preview ?? null,
       seq: ++this.bumpSeq,
     });
-    this.set({ swarms: withBumps(this.listed, this.bumps) });
+    this.set({ swarms: this.drawn() });
+  }
+
+  /**
+   * The bots (`botKey`s) with a request open in a turn this phone follows:
+   * each shows needs-you until the request is answered, expires, or its turn
+   * ends, however its thread was read. Unchanged keys change nothing.
+   */
+  setWaiting(keys: Iterable<string>): void {
+    const next = new Set(keys);
+    if (next.size === this.waiting.size && [...next].every((k) => this.waiting.has(k))) return;
+    this.waiting = next;
+    this.set({ swarms: this.drawn() });
   }
 
   reset(): void {
@@ -472,6 +534,7 @@ export class RosterStore {
     this.fleetId = null;
     this.listed = [];
     this.bumps = new Map();
+    this.waiting = new Set();
     this.set({
       swarms: [],
       listening: [],
@@ -481,6 +544,11 @@ export class RosterStore {
       query: "",
       filter: "all",
     });
+  }
+
+  /** The last read with this phone's bumps and waiting requests folded in. */
+  private drawn(): Swarm[] {
+    return withWaiting(withBumps(this.listed, this.bumps), this.waiting);
   }
 
   private savePrefs(prefs: RosterPrefs): void {

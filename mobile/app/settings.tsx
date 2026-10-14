@@ -38,7 +38,15 @@ function Group({ title, note, children }: { title?: string; note?: ReactNode; ch
           {title}
         </Text>
       ) : null}
-      <View style={{ backgroundColor: t.c.bg2, borderRadius: RADIUS, overflow: "hidden" }}>
+      <View
+        style={{
+          backgroundColor: t.c.card,
+          borderRadius: RADIUS,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.c.cardEdge,
+          overflow: "hidden",
+        }}
+      >
         {rows.map((row, i) => (
           // Rows are positional and never reorder.
           <View key={i}>

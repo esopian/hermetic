@@ -1,15 +1,17 @@
-import type { ChatFrame, ChatMessage, HermesChatClient } from "@hermetic/core/chat-client";
+import type { ChatFrame, ChatMessage, HermesChatClient, Session } from "@hermetic/core/chat-client";
 import type { MobileFleetView } from "@hermetic/core/schema";
 import { encodeMobileLink } from "@hermetic/core/shared";
 import {
   type Alert,
   createHermeticClient,
+  type HermeticClient,
   REMOTE_FAILURES,
   REMOTE_MISSES,
   REMOTE_POLL_MS,
   REMOTE_UNKNOWN_MAX_MS,
   tailShowsDone,
 } from "../../src/client/client.ts";
+import { homeRowsByKey, needsBots } from "../../src/client/home-rows.ts";
 import type { Timers } from "../../src/client/timers.ts";
 import { noteTunnel, resetTunnelChecks, tunnelVerified } from "../../src/gateway/hermeticd.ts";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
@@ -25,6 +27,7 @@ import {
   errorFrame,
   fleetView,
   msg,
+  question,
   swarm,
   tool,
 } from "../helpers/fixtures.ts";
@@ -96,7 +99,11 @@ function adapter(
       swarmed.push(box.baseUrl);
       return swarm(box.instance, [bot()]);
     },
-    sessions: async () => [],
+    sessions: async (box, b) => [
+      session({ id: "s-1", instance: box.instance, bot: b, kind: "canonical" }),
+      session({ id: "s-2", instance: box.instance, bot: b, kind: "thread" }),
+    ],
+    respond: async () => ({ status: "ok" as const }),
     history: async (box) => {
       histories.push(box.instance);
       return opts.history?.() ?? [];
@@ -148,6 +155,38 @@ function adapter(
 }
 
 const live = (watches: Watch[]) => watches.filter((w) => w.signal?.aborted === false);
+
+const BOT_CHAT = { instance: "atlas", bot: "scribe", session: null, resolved: "s-1" };
+const SEPARATE = { instance: "atlas", bot: "scribe", session: "s-2", resolved: "s-2" };
+
+const session = (
+  over: Partial<Session> & Pick<Session, "id" | "instance" | "bot" | "kind">,
+): Session => ({
+  origin: "portal",
+  title: over.id,
+  unread: 0,
+  turn_count: 1,
+  ...over,
+});
+
+const unreadSessions = (inbox: InboxStore) =>
+  inbox
+    .getState()
+    .entries.filter((e) => !e.read_at)
+    .map((e) => e.session)
+    .sort();
+
+/** What home draws on a bot's row: the roster as read, the inbox's needs folded in. */
+function badgeOf(s: { client: HermeticClient; inbox: InboxStore }, key: string): string | null {
+  const roster = s.client.roster.getState();
+  const rows = homeRowsByKey({
+    swarms: roster.swarms,
+    listening: roster.listening,
+    unreadOf: s.inbox.unreadFor,
+    needs: needsBots(s.inbox.getState().entries),
+  });
+  return rows.get(key)?.badge ?? null;
+}
 
 /** The fixture fleet's view: atlas ready, corvid in error. */
 const VIEW2: MobileFleetView = fleetView({
@@ -247,11 +286,73 @@ describe("createHermeticClient", () => {
 
   test("the thread on screen is filed as read and does not alert", async () => {
     const s = await setup([delta(1, "x"), done(2)]);
-    s.client.setWatched({ instance: "atlas", bot: "scribe", focused: true });
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
     s.client.chat.send(T, "question");
     await settle();
     expect(s.alerts).toEqual([]);
     expect(s.inbox.badgeCount()).toBe(0);
+  });
+
+  test("a separate session on screen reads only itself, and the Bot Chat's events still alert", async () => {
+    const s = await setup([delta(1, "x"), done(2)]);
+    for (const [session, n] of [
+      ["s-1", 1],
+      ["s-2", 2],
+    ] as const)
+      s.inbox.ingest({
+        kind: "turn.done",
+        instance: "atlas",
+        bot: "scribe",
+        session,
+        title: "scribe · atlas",
+        body: "Reply ready",
+        // An hour back: not the same event as the reply this test sends.
+        at: "2026-10-13T09:00:00.000Z",
+        dedupe: `atlas:${session}:${n}:turn.done`,
+      });
+    await s.client.roster.refresh();
+    const markSeen = jest.spyOn(s.client.roster, "markSeen");
+    s.client.setWatched({ ...SEPARATE, focused: true });
+    expect(markSeen).not.toHaveBeenCalled();
+    expect(unreadSessions(s.inbox)).toEqual(["s-1"]);
+    // A Bot Chat reply lands while the separate session is on screen: filed unread, and alerted.
+    s.client.chat.send(T, "question");
+    await settle();
+    expect(s.alerts).toHaveLength(1);
+    expect(s.alerts[0]).toMatchObject({ decision: "banner", data: { session: "s-1" } });
+    expect(unreadSessions(s.inbox)).toEqual(["s-1", "s-1"]);
+    expect(markSeen).not.toHaveBeenCalled();
+    // The Bot Chat focused clears the bot.
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    expect(markSeen).toHaveBeenCalledWith("atlas", "scribe");
+    expect(unreadSessions(s.inbox)).toEqual([]);
+  });
+
+  test("a request still open after the operator left keeps needs-you on home until answered", async () => {
+    const s = await setup([block(1, question())], { hold: true });
+    await s.client.roster.refresh();
+    s.client.chat.open(T);
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    s.client.chat.send(T, "pick one");
+    await settle();
+    // Opened while on screen: filed read, no alert.
+    expect(s.alerts).toEqual([]);
+    expect(s.inbox.getState().entries[0]).toMatchObject({ kind: "needs_action" });
+    expect(s.inbox.badgeCount()).toBe(0);
+    // Back home: still waiting, so the row says so.
+    s.client.setWatched(null);
+    s.client.chat.leave(T);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // Reading the thread again does not clear a request nobody answered.
+    s.client.setWatched({ ...BOT_CHAT, focused: true });
+    s.client.setWatched(null);
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    // A roster read does not either.
+    await s.client.roster.refresh();
+    expect(badgeOf(s, "atlas/scribe")).toBe("!");
+    await s.client.chat.respond(T, { request_id: "q1", kind: "question", answer: "main" });
+    expect(badgeOf(s, "atlas/scribe")).toBeNull();
+    s.client.dispose();
   });
 
   test("a request opening mid-turn is a needs-you alert with its category", async () => {

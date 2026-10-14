@@ -279,7 +279,9 @@ function SectionHeader({
   return (
     <Pressable
       testID={`home-section-${section.instance}`}
-      accessibilityRole="header"
+      // A fold toggle, so a button with its state; the look stays a quiet header.
+      accessibilityRole="button"
+      accessibilityState={{ expanded: !section.folded, disabled: !section.reachable }}
       accessibilityLabel={[
         section.instance,
         word,
@@ -297,9 +299,9 @@ function SectionHeader({
         flexDirection: "row",
         alignItems: "center",
         gap: t.space.sm,
+        minHeight: t.touch.min,
         paddingHorizontal: t.space.lg + t.space.xs,
-        paddingTop: t.space.lg,
-        paddingBottom: t.space.xs,
+        paddingTop: t.space.md,
         opacity: pressed ? 0.6 : 1,
       })}
     >

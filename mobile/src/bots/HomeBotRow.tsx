@@ -71,7 +71,6 @@ export function FittedAvatar({
           size={box}
           status={reachable ? "ready" : "stopped"}
           activity={bot.muted ? "muted" : "idle"}
-          label={bot.title || bot.name}
         />
       </View>
     </View>

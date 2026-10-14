@@ -3,9 +3,10 @@
  * and turns accent when pressed; secondary is a 2px fg outline; destructive is
  * a bad outline that fills when pressed. Zero radius. 44pt tall minimum.
  *
- * `soft` is the home and Settings look (Grok-like chrome): the same colours in
- * a rounded pill with a sentence-case label, and a thin quiet outline for the
- * secondary variant. The chat surfaces keep the square slab.
+ * `soft` is the app's chrome look (home, Settings, sheets, and the chat's
+ * cards and composer): the same colours in a rounded pill with a
+ * sentence-case label, and a thin outline for the secondary and destructive
+ * variants. The square slab is the desktop's and the pairing screen's.
  *
  * A disabled primary (Send with an empty draft) is drawn in its own colours,
  * not faded: fading the fg fill left a grey block whose label fell under 3:1
@@ -99,7 +100,7 @@ export function Button({
             flexDirection: "row",
             gap: t.space.sm,
             backgroundColor: fill,
-            borderWidth: soft && variant === "secondary" ? 1 : t.border.control,
+            borderWidth: soft && variant !== "primary" ? 1 : t.border.control,
             borderColor: edge,
             borderRadius: soft ? height / 2 : 0,
             opacity: off && !quiet ? 0.45 : 1,

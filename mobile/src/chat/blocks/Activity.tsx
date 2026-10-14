@@ -14,10 +14,10 @@ import type { ChatBlock } from "@hermetic/core/chat-client";
 import type { TurnActivity } from "../../client/turn-reducer.ts";
 import { useTheme } from "../../theme/theme.tsx";
 import { haptic } from "../../ui/haptics.ts";
-import { Kicker } from "../../ui/Kicker.tsx";
 import { StatusSquare } from "../../ui/StatusSquare.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { CodePane } from "../CodePane.tsx";
+import { Label } from "./SoftCard.tsx";
 import { glyphColor, SubagentLine } from "./Subagent.tsx";
 import { ToolResult } from "./Tool.tsx";
 
@@ -27,9 +27,9 @@ function StepDetail({ block }: { block: ChatBlock }) {
     case "tool":
       return (
         <View style={{ gap: t.space.xs }}>
-          <Kicker>Arguments</Kicker>
+          <Label>Arguments</Label>
           <CodePane text={formatPayload(block.args)} lang="json" />
-          <Kicker>Result</Kicker>
+          <Label>Result</Label>
           {block.status === "running" ? (
             <Text mono variant="caption" tone="fg3">
               running on the box

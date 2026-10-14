@@ -7,14 +7,14 @@
  */
 import { router } from "expo-router";
 import { useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
 import { statusColor } from "../src/theme/tokens.ts";
-import { Button, Icon, SkeletonRow, Text, ToggleSwitch } from "../src/ui/index.ts";
+import { Button, SkeletonRow, Text, ToggleSwitch } from "../src/ui/index.ts";
 
 export default function Listening() {
   const t = useTheme();
@@ -145,28 +145,22 @@ export default function Listening() {
                   {item.status ?? "status unknown"}
                 </Text>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${item.name}`}
+              {/* The switch is the row's control; the agent's page (its browser) is
+                  a named, secondary pill, not a chevron that reads as the row's tap. */}
+              <Button
+                label="Browser"
+                accessibilityLabel={`Open ${item.name} browser`}
+                variant="secondary"
+                soft
+                compact
+                hitSlop={6}
                 onPress={() => {
                   // Close the sheet first: pushed from inside it, the browser
                   // lands in the sheet's own context with no back button.
                   router.back();
                   router.push(`/agent/${encodeURIComponent(item.name)}`);
                 }}
-                // A 44pt target around a small chevron.
-                style={({ pressed }) => ({
-                  minWidth: 44,
-                  minHeight: 44,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: pressed ? 0.5 : 1,
-                })}
-              >
-                <View style={{ transform: [{ rotate: "180deg" }] }}>
-                  <Icon name="back" size={16} color={t.c.fg3} />
-                </View>
-              </Pressable>
+              />
               <ToggleSwitch
                 accessibilityLabel={`Listen to ${item.name}`}
                 value={on}

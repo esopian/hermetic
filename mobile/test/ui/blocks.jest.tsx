@@ -179,7 +179,7 @@ describe("cards", () => {
 
   test("approval reaches its card", async () => {
     await draw(approval());
-    expect(screen.getByText("⚑ Approval required")).toBeTruthy();
+    expect(screen.getByText("Approval required")).toBeTruthy();
   });
 
   test("question reaches its card", async () => {
@@ -231,7 +231,7 @@ describe("failure card", () => {
       <FailureCard failure={failed.failure ?? null} ids={["f1"]} at={failed.at} />,
       scope({ retry, messages: [prompt, failed] }),
     );
-    expect(screen.getByText("provider error")).toBeTruthy();
+    expect(screen.getByText("Provider error")).toBeTruthy();
     expect(screen.getByText("Rate limited.")).toBeTruthy();
     await fireEvent.press(screen.getByLabelText("Retry"));
     expect(retry).toHaveBeenCalledWith("do it");

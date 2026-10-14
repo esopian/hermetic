@@ -1,10 +1,16 @@
 /**
- * What opening (or "Mark read" on) a conversation clears.
+ * What opening (or "Mark read" on) a conversation clears. The client applies
+ * it to the focused conversation (`setWatched`, and the return to the
+ * foreground); the conversation screen's "Mark read" calls it directly.
  *
  * The Bot Chat clears the bot: its roster unread and every unread inbox entry
  * about it. A separate session (`?session=`) clears only the inbox entries
  * that name that session: the roster counts unread per bot, not per session,
  * so clearing it there would wipe the Bot Chat's unread unseen.
+ *
+ * Neither clears a needs-you mark that comes from a request still open in a
+ * turn this phone follows (`RosterStore.setWaiting`): that is state, cleared by
+ * answering the request, not by reading.
  */
 import type { InboxEntry } from "../inbox/store.ts";
 

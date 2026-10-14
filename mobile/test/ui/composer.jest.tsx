@@ -103,7 +103,7 @@ describe("Composer", () => {
     expect(screen.getByText("Queue waits for the turn · Send now steers it")).toBeTruthy();
     expect(screen.getByText("Send now")).toBeTruthy();
     // A draft never hides Stop (the desktop's Esc stops whatever is typed):
-    // it stays as a square beside Send now and Queue, and leaves the draft be.
+    // it stays as a round button beside Send now and Queue, and leaves the draft be.
     await fireEvent.press(screen.getByLabelText("Stop turn"));
     expect(h.onStop).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Message").props.value).toBe("first");
@@ -153,7 +153,7 @@ describe("Composer", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/queue paused · 2 waiting/)).toBeTruthy();
+    expect(screen.getByText(/Queue paused · 2 waiting/)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText("Send now: next thing"));
     expect(h.onSendNow).toHaveBeenCalledWith("next thing", "q1");
     await fireEvent.press(screen.getByLabelText("Remove queued: after that"));
@@ -162,7 +162,7 @@ describe("Composer", () => {
 
   test("an open question is called out", async () => {
     await renderUi(<Harness {...base} {...handlers()} sending questionOpen />);
-    expect(screen.getByText(/a question is waiting above — Send now skips it/)).toBeTruthy();
+    expect(screen.getByText(/A question is waiting above — Send now skips it/)).toBeTruthy();
   });
 });
 

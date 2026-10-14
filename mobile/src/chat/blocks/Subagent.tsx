@@ -1,6 +1,6 @@
 /**
  * `subagent` — one line per delegated child (desktop `.sa-line`): glyph,
- * goal, what it is doing or what it came back with, a timer, and OPEN, which
+ * goal, what it is doing or what it came back with, a timer, and Open, which
  * shows the child's run with Steer and Stop (`SubagentSheet`).
  */
 import { memo, useEffect, useState } from "react";
@@ -62,6 +62,7 @@ function SubagentLineImpl({ block }: { block: SubagentBlock }) {
         minHeight: 36,
         paddingVertical: 4,
         paddingLeft: block.depth > 0 ? t.space.lg : 0,
+        borderRadius: 10,
         backgroundColor: pressed ? t.c.sel : "transparent",
       })}
     >
@@ -82,8 +83,8 @@ function SubagentLineImpl({ block }: { block: SubagentBlock }) {
         {timeText(block, now)}
       </Text>
       {open ? (
-        <Text mono variant="caption" weight={700} tone="fg2">
-          OPEN ↗
+        <Text variant="caption" weight={600} tone="fg2">
+          Open
         </Text>
       ) : null}
     </Pressable>

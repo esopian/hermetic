@@ -1,7 +1,7 @@
 /**
  * `approval` — the agent stopped and is waiting on you (desktop
- * `blocks/Approval.tsx` + `ApprovalActions.tsx`). The loudest card on screen:
- * warn seam, warn-filled head, never collapsed. The buttons are exactly
+ * `blocks/Approval.tsx` + `ApprovalActions.tsx`). A soft card led by a warn
+ * dot while it waits on you, never collapsed. The buttons are exactly
  * `block.choices` in the gateway's order with the desktop's labels; "Always
  * allow" persists a pattern on the box, so it takes an inline confirm naming
  * the pattern and the command. Expired, it says so; closed by the box, it says
@@ -29,6 +29,7 @@ import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { CodePane } from "../CodePane.tsx";
 import { useSubmit } from "./respond.ts";
+import { NeedsDot, SoftCard } from "./SoftCard.tsx";
 
 export function ApprovalCard({
   block,
@@ -110,6 +111,7 @@ export function ApprovalCard({
               key={choice}
               label={APPROVAL_LABEL[choice]}
               variant="secondary"
+              soft
               disabled
               style={{ flexGrow: 1, flexBasis: "45%" }}
               onPress={() => undefined}
@@ -139,10 +141,11 @@ export function ApprovalCard({
           <Button
             label="Cancel"
             variant="secondary"
+            soft
             style={{ flex: 1 }}
             onPress={() => setConfirming(false)}
           />
-          <Button label="Always allow" disabled={busy} style={{ flex: 1 }} onPress={always} />
+          <Button label="Always allow" soft disabled={busy} style={{ flex: 1 }} onPress={always} />
         </View>
       </View>
     );
@@ -150,7 +153,7 @@ export function ApprovalCard({
     foot = (
       <View style={{ gap: t.space.sm }}>
         {pending > 1 ? (
-          <Text mono variant="caption" tone="warn">{`${pending} approvals pending`}</Text>
+          <Text variant="caption" weight={600} tone="warn">{`${pending} approvals pending`}</Text>
         ) : null}
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
           {offeredChoices(block).map((choice) => (
@@ -158,6 +161,7 @@ export function ApprovalCard({
               key={choice}
               label={APPROVAL_LABEL[choice]}
               variant={choice === "deny" ? "destructive" : choice === "once" ? "primary" : "secondary"}
+              soft
               busy={busy && chosen === choice}
               disabled={busy}
               haptic={false}
@@ -177,36 +181,22 @@ export function ApprovalCard({
       </View>
     );
 
+  const waiting = !closedLine && !settled && !released && !expired;
   return (
-    <View
-      testID={`approval-${request_id ?? "none"}`}
-      style={{ borderWidth: t.border.control, borderColor: t.c.warn, marginVertical: t.space.xs }}
-    >
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          backgroundColor: t.c.warn,
-          paddingHorizontal: t.space.md,
-          paddingVertical: 6,
-        }}
-      >
-        <Text
-          weight={800}
-          variant="caption"
-          uppercase
-          style={{ color: t.c.bg, letterSpacing: 1, flex: 1 }}
-        >
-          ⚑ Approval required
+    <SoftCard testID={`approval-${request_id ?? "none"}`}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        {waiting ? <NeedsDot /> : null}
+        <Text variant="bodySmall" weight={600} tone={waiting ? "fg" : "fg2"} style={{ flex: 1 }}>
+          Approval required
         </Text>
         {block.expires_at && !closed ? (
-          <Text mono variant="caption" style={{ color: t.c.bg }}>
+          <Text variant="caption" tone="fg3">
             {`expires ${railTime(block.expires_at, now)}`}
           </Text>
         ) : null}
       </View>
-      <View style={{ padding: t.space.md, gap: t.space.sm, backgroundColor: t.c.bg2 }}>
-        <Text weight={800}>{block.tool}</Text>
+      <View style={{ gap: t.space.sm }}>
+        <Text weight={700}>{block.tool}</Text>
         <Text mono variant="bodySmall" selectable>
           {block.summary}
         </Text>
@@ -217,15 +207,7 @@ export function ApprovalCard({
           </Text>
         ) : null}
       </View>
-      <View
-        style={{
-          padding: t.space.md,
-          borderTopWidth: 1,
-          borderTopColor: t.c.line,
-          backgroundColor: t.c.bg2,
-          gap: t.space.sm,
-        }}
-      >
+      <View style={{ gap: t.space.sm }}>
         {foot}
         {state && state !== SENT && state !== GONE ? (
           <Text accessibilityRole="alert" variant="caption" tone="bad">
@@ -233,6 +215,6 @@ export function ApprovalCard({
           </Text>
         ) : null}
       </View>
-    </View>
+    </SoftCard>
   );
 }

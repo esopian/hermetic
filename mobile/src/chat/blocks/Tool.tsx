@@ -19,9 +19,9 @@ import { fmtMs, formatPayload, toolVerdict } from "../../client/chat-logic.ts";
 import { resultText, subjectOf, tableOf } from "../../client/chat-turns.ts";
 import type { ToolBlock as ToolBlockType } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
-import { Kicker } from "../../ui/Kicker.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { Card } from "../Card.tsx";
+import { Label } from "./SoftCard.tsx";
 import { CodePane } from "../CodePane.tsx";
 
 function RunningBar() {
@@ -33,7 +33,7 @@ function RunningBar() {
   }, [x]);
   const style = useAnimatedStyle(() => ({ left: `${x.value * 75}%` }));
   return (
-    <View style={{ height: 3, backgroundColor: t.c.bg3, overflow: "hidden" }}>
+    <View style={{ height: 3, borderRadius: 1.5, backgroundColor: t.c.bg3, overflow: "hidden" }}>
       <Animated.View
         style={[
           { position: "absolute", top: 0, bottom: 0, width: "25%", backgroundColor: t.c.acc },
@@ -128,7 +128,12 @@ export function ToolBlock({ block }: { block: ToolBlockType }) {
           mono
           variant="caption"
           tone="fg2"
-          style={{ borderWidth: 1, borderColor: t.c.line2, paddingHorizontal: 4 }}
+          style={{
+            backgroundColor: t.c.sel,
+            borderRadius: 6,
+            overflow: "hidden",
+            paddingHorizontal: 6,
+          }}
           numberOfLines={1}
         >
           {`mcp · ${block.server}`}
@@ -157,9 +162,9 @@ export function ToolBlock({ block }: { block: ToolBlockType }) {
         </View>
       ) : (
         <>
-          <Kicker>Arguments</Kicker>
+          <Label>Arguments</Label>
           <CodePane text={formatPayload(block.args)} lang="json" />
-          <Kicker>Result</Kicker>
+          <Label>Result</Label>
           <ToolResult block={block} />
         </>
       )}

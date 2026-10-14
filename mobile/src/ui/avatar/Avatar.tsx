@@ -34,6 +34,11 @@ export interface AvatarProps {
   activity?: AvatarActivity;
   /** Hue shared by every bot on one instance (the desktop default). */
   family?: boolean;
+  /**
+   * Makes the avatar its own VoiceOver element ("<label> — <status>"). Leave
+   * it out wherever the avatar sits inside a labelled row or button, or beside
+   * the name it would repeat: unlabelled, the avatar is decoration and hidden.
+   */
   label?: string;
 }
 
@@ -83,9 +88,17 @@ function AvatarImpl({
 
   return (
     <View
-      accessible
-      accessibilityRole="image"
-      accessibilityLabel={`${label ?? `${bot}@${instance}`} — ${status}`}
+      {...(label
+        ? {
+            accessible: true,
+            accessibilityRole: "image" as const,
+            accessibilityLabel: `${label} — ${status}`,
+          }
+        : {
+            accessible: false,
+            accessibilityElementsHidden: true,
+            importantForAccessibility: "no-hide-descendants" as const,
+          })}
       style={{ width: size, height: size, opacity: look.opacity }}
     >
       <Animated.View style={style}>

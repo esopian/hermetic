@@ -231,6 +231,42 @@ describe("homeRows: sections", () => {
     expect(suffixes).toEqual({ "atlas/x": "x", "atlas/y": "y", "atlas/z": null, "corvid/c": null });
   });
 
+  test("a hero row gets the same suffix as a section row", () => {
+    const swarms = [
+      swarm("atlas", [
+        bot({ name: "ops", title: "Clio", is_default: true }),
+        bot({ name: "x", title: "Clio" }),
+      ]),
+    ];
+    const layout = homeRows({ swarms, listening: ["atlas"], pinned: [] });
+    expect(layout.hero.map((r) => [r.key, r.suffix])).toEqual([["atlas/ops", "ops"]]);
+    expect(layout.sections[0]!.rows.map((r) => [r.key, r.suffix])).toEqual([["atlas/x", "x"]]);
+    const pinned = homeRows({ swarms, listening: ["atlas"], pinned: ["atlas/x"] });
+    expect(pinned.hero.map((r) => r.suffix)).toEqual(["x"]);
+    expect(homeRowsByKey({ swarms, listening: ["atlas"] }).get("atlas/ops")?.suffix).toBe("ops");
+  });
+
+  test("a down box's last-known bots are dimmed rows in its section with their marks; its default stays there", () => {
+    const layout = homeRows({
+      swarms: [
+        swarm("atlas", [bot({ name: "ops", is_default: true })]),
+        swarm("corvid", [bot({ name: "pilot", is_default: true, unread: 2 }), bot({ name: "wren" })], {
+          reachable: false,
+        }),
+      ],
+      listening: ["atlas", "corvid"],
+      pinned: [],
+      needs: new Set(["corvid/wren"]),
+    });
+    expect(layout.hero.map((r) => r.key)).toEqual(["atlas/ops"]);
+    const down = layout.sections.find((s) => s.instance === "corvid")!;
+    expect(down.rows.map((r) => [r.key, r.badge, r.reachable])).toEqual([
+      ["corvid/wren", "!", false],
+      ["corvid/pilot", "2", false],
+    ]);
+    expect(down).toMatchObject({ needs: true, unread: 2 });
+  });
+
   test("folded: only a reachable section folds, and homeItems drops its rows", () => {
     const layout = homeRows({
       swarms: [

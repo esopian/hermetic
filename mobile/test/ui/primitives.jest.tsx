@@ -124,13 +124,16 @@ describe("primitives render", () => {
     }
   });
 
-  test("Avatar renders with an accessible label", async () => {
+  test("Avatar is its own element only when given a label", async () => {
     await render(
       <ThemeProvider>
-        <Avatar fleet_id="fxtr0001" instance="atlas" bot="scribe" activity="thinking" />
+        <Avatar fleet_id="fxtr0001" instance="atlas" bot="scribe" activity="thinking" label="Scribe" />
+        <Avatar fleet_id="fxtr0001" instance="atlas" bot="quill" />
       </ThemeProvider>,
     );
-    expect(screen.getByLabelText("scribe@atlas — ready")).toBeTruthy();
+    expect(screen.getByLabelText("Scribe — ready")).toBeTruthy();
+    // Unlabelled (inside a row or button that names the bot), it is decoration.
+    expect(screen.queryByLabelText(/quill/)).toBeNull();
   });
 
   test("a button label stays on one centred line", async () => {

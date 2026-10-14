@@ -1,18 +1,22 @@
 /**
- * The conversation route around its own effects, with the stores faked at the
- * client seam: a `?fresh=1` open that lands after the operator left replaces
- * nothing, and what focusing a conversation marks read (the Bot Chat clears
- * the bot; a separate session only its own inbox entries).
+ * The conversation route around its own effects, over a real client (its
+ * `setWatched`, roster and inbox; the box faked at the adapter): a `?fresh=1`
+ * open that lands after the operator left replaces nothing, and what focusing
+ * a conversation marks read (the Bot Chat clears the bot; a separate session
+ * only its own inbox entries).
  */
+import type { ChatConversation, HermesChatClient, Session } from "@hermetic/core/chat-client";
+import { encodeMobileLink } from "@hermetic/core/shared";
 import { act, screen } from "@testing-library/react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import Conversation from "../../app/chat/[instance]/[bot].tsx";
-import { RosterStore } from "../../src/client/roster-store.ts";
+import { createHermeticClient } from "../../src/client/client.ts";
 import { FleetContext, type FleetContextValue } from "../../src/fleet/FleetProvider.tsx";
-import { memoryFile } from "../../src/fleet/store.ts";
+import { readPairingLink } from "../../src/fleet/pairing.ts";
+import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
 import { InboxStore } from "../../src/inbox/store.ts";
-import { flush } from "../helpers/fakes.ts";
-import { inboxEntry } from "../helpers/fixtures.ts";
+import { fakeFetch, flush, json } from "../helpers/fakes.ts";
+import { bot, inboxEntry, swarm } from "../helpers/fixtures.ts";
 import { renderUi } from "../helpers/render.tsx";
 
 jest.mock("react-native-keyboard-controller", () => require("react-native-keyboard-controller/jest"));
@@ -37,7 +41,7 @@ jest.mock("expo-router", () => {
 const mockRouter: Record<"replace" | "back" | "push" | "setParams", jest.Mock> =
   require("expo-router").router;
 
-const FLEET_STATE = { link: null };
+const NOW = "2026-10-13T12:00:00.000Z";
 
 const METRICS = {
   frame: { x: 0, y: 0, width: 393, height: 852 },
@@ -52,16 +56,65 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const session = (id: string, kind: Session["kind"]): Session => ({
+  id,
+  instance: "atlas",
+  bot: "scribe",
+  kind,
+  origin: "portal",
+  title: id,
+  unread: 0,
+  turn_count: 1,
+});
+
+/** A box with one bot whose Bot Chat is `s-1`, beside a separate session `s-2`. */
+function adapter(): HermesChatClient {
+  return {
+    token: async () => "FIXTURE",
+    swarm: async (box) => swarm(box.instance, [bot({ unread: 2 })]),
+    sessions: async () => [session("s-1", "canonical"), session("s-2", "thread")],
+    history: async () => [],
+    conversation: async (box, b, o) =>
+      ({
+        instance: box.instance,
+        bot: b,
+        root_session: "s-1",
+        session: o?.session ?? "s-1",
+        kind: o?.session && o.session !== "s-1" ? "thread" : "canonical",
+        created: false,
+      }) as ChatConversation,
+    send: () => (async function* () {})(),
+    abort: async () => true,
+    observe: (_box, _bot, o) =>
+      (async function* () {
+        await new Promise<void>((resolve) => o?.signal?.addEventListener("abort", () => resolve()));
+      })(),
+  };
+}
+
 async function setup(params: Record<string, string>) {
   mockParams = params;
-  const roster = new RosterStore({
-    swarms: async () => ({ swarms: [] }),
-    listening: async () => ({ instances: ["atlas"] }),
-    listen: async () => ({ instances: ["atlas"] }),
+  const read = readPairingLink(
+    encodeMobileLink({
+      fleet_id: "fxtr0001",
+      alias: "main",
+      account_id: "123456789012",
+      region: "us-west-2",
+      tailnet: "hermetic.ts.net",
+      agents: [{ name: "atlas" }],
+    }),
+  );
+  if (!read.ok) throw new Error("fixture link refused");
+  const f = fakeFetch(() => json({}));
+  const fleet = new FleetStore({
+    secure: memoryKv(),
+    viewCache: memoryFile(),
+    fetch: f.fetch,
+    now: () => NOW,
   });
-  const markSeen = jest.spyOn(roster, "markSeen");
-  const inbox = new InboxStore(memoryFile(), () => "2026-10-13T12:00:00.000Z");
-  for (const [session, n] of [
+  await fleet.pair(read.link);
+  const inbox = new InboxStore(memoryFile(), () => NOW);
+  for (const [s, n] of [
     ["s-1", 1],
     ["s-2", 2],
   ] as const) {
@@ -70,32 +123,27 @@ async function setup(params: Record<string, string>) {
       read_at: _read,
       ...arrival
     } = inboxEntry({
-      session,
-      dedupe: `atlas:${session}:${n}:turn.done`,
+      session: s,
+      dedupe: `atlas:${s}:${n}:turn.done`,
     });
     inbox.ingest(arrival);
   }
-  const opened = deferred<{ instance: string; bot: string; session: string }>();
-  const chat = {
-    open: jest.fn(),
-    leave: jest.fn(),
-    view: () => null,
-    subscribe: () => () => {},
-    reload: jest.fn(async () => {}),
-    sendMessage: jest.fn(() => true),
-  };
-  const client = {
-    roster,
+  const client = createHermeticClient({
+    fleet,
     inbox,
-    chat,
-    gateway: { open: jest.fn(() => opened.promise) },
-    setWatched: jest.fn(),
-  };
-  const ctx = {
-    client,
-    focusConversation: jest.fn(),
-    fleet: { subscribe: () => () => {}, getState: () => FLEET_STATE, agents: () => [] },
-  } as unknown as FleetContextValue;
+    fetch: f.fetch,
+    openSocket: () => {
+      throw new Error("no socket in this test");
+    },
+    now: () => NOW,
+    chat: adapter(),
+  });
+  await client.roster.refresh();
+  const opened = deferred<{ instance: string; bot: string; session: string }>();
+  const open = jest.spyOn(client.gateway, "open").mockImplementation(() => opened.promise as never);
+  const chatOpen = jest.spyOn(client.chat, "open");
+  const setWatched = jest.spyOn(client, "setWatched");
+  const ctx = { client, focusConversation: jest.fn(), fleet } as unknown as FleetContextValue;
   const view = await renderUi(
     <SafeAreaProvider initialMetrics={METRICS}>
       <FleetContext.Provider value={ctx}>
@@ -103,9 +151,12 @@ async function setup(params: Record<string, string>) {
       </FleetContext.Provider>
     </SafeAreaProvider>,
   );
-  await act(flush);
-  return { client, chat, inbox, markSeen, opened, view };
+  for (let i = 0; i < 5; i++) await act(flush);
+  return { client, inbox, open, chatOpen, setWatched, opened, view };
 }
+
+const rosterUnread = (client: ReturnType<typeof createHermeticClient>) =>
+  client.roster.getState().swarms[0]?.bots[0]?.unread;
 
 beforeEach(() => {
   for (const fn of [mockRouter.replace, mockRouter.back, mockRouter.push, mockRouter.setParams])
@@ -121,20 +172,17 @@ const unread = (inbox: InboxStore) =>
 
 describe("conversation: fresh=1", () => {
   test("opens one new session, never the Bot Chat, and replaces itself with it", async () => {
-    const { client, chat, opened, markSeen } = await setup({
+    const { client, open, chatOpen, setWatched, opened, inbox } = await setup({
       instance: "atlas",
       bot: "scribe",
       fresh: "1",
     });
-    expect(client.gateway.open).toHaveBeenCalledTimes(1);
-    expect(client.gateway.open).toHaveBeenCalledWith({
-      instance: "atlas",
-      bot: "scribe",
-      new_session: true,
-    });
-    expect(chat.open).not.toHaveBeenCalled();
-    expect(client.setWatched).not.toHaveBeenCalled();
-    expect(markSeen).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith({ instance: "atlas", bot: "scribe", new_session: true });
+    expect(chatOpen).not.toHaveBeenCalled();
+    expect(setWatched).not.toHaveBeenCalled();
+    expect(rosterUnread(client)).toBe(2);
+    expect(unread(inbox)).toEqual(["s-1", "s-2"]);
     expect(screen.getByLabelText("Message").props.placeholder).toBe("Opening a new session…");
     await act(async () => {
       opened.resolve({ instance: "atlas", bot: "scribe", session: "new-1" });
@@ -154,17 +202,35 @@ describe("conversation: fresh=1", () => {
   });
 });
 
-describe("conversation: what focus marks read", () => {
+describe("conversation: what focus marks read (the client's own setWatched)", () => {
   test("the Bot Chat clears the bot: roster unread and every inbox entry", async () => {
-    const { markSeen, inbox, client } = await setup({ instance: "atlas", bot: "scribe" });
-    expect(client.setWatched).toHaveBeenCalledWith({ instance: "atlas", bot: "scribe", focused: true });
-    expect(markSeen).toHaveBeenCalledWith("atlas", "scribe");
+    const { client, inbox, setWatched } = await setup({ instance: "atlas", bot: "scribe" });
+    expect(setWatched).toHaveBeenLastCalledWith({
+      instance: "atlas",
+      bot: "scribe",
+      session: null,
+      resolved: "s-1",
+      focused: true,
+    });
+    expect(rosterUnread(client)).toBe(0);
     expect(unread(inbox)).toEqual([]);
   });
 
   test("a separate session clears only its own entries and leaves the Bot Chat's unread", async () => {
-    const { markSeen, inbox } = await setup({ instance: "atlas", bot: "scribe", session: "s-2" });
-    expect(markSeen).not.toHaveBeenCalled();
+    const { client, inbox, view } = await setup({ instance: "atlas", bot: "scribe", session: "s-2" });
+    expect(rosterUnread(client)).toBe(2);
     expect(unread(inbox)).toEqual(["s-1"]);
+    // Leaving and coming back to the foreground on it reads nothing more.
+    client.setPhase("inactive");
+    client.setPhase("active");
+    expect(rosterUnread(client)).toBe(2);
+    expect(unread(inbox)).toEqual(["s-1"]);
+    await view.unmount();
+  });
+
+  test("a ?session= that is the canonical one (a notification tap) counts as the Bot Chat", async () => {
+    const { client, inbox } = await setup({ instance: "atlas", bot: "scribe", session: "s-1" });
+    expect(rosterUnread(client)).toBe(0);
+    expect(unread(inbox)).toEqual([]);
   });
 });
