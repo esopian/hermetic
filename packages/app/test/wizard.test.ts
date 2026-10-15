@@ -121,7 +121,7 @@ describe("an uninitialized head", () => {
 });
 
 describe("--uninitialized never masks an already-initialized real home", () => {
-  test("every init.* request still refuses once this home has a frozen config", async () => {
+  test("`init` still refuses to re-target once this home has a frozen config", async () => {
     const home = mkdtempSync(join(tmpdir(), "hermetic-uninit-guard-"));
     try {
       // A real, already-initialized home: `HERMETIC_UNINIT=1` exists to force
@@ -147,14 +147,20 @@ describe("--uninitialized never masks an already-initialized real home", () => {
       expect(state.initialized).toBe(true);
       expect(state.session).toBeNull();
 
+      // With a fleet open, the wizard's helpers answer for *adding* a fleet
+      // (§4.8) — that is the dashboard's "New fleet". What stays refused is
+      // everything `init` could do besides create one beside it: re-freeze the
+      // home, attach to a fleet frozen elsewhere, or let `auto` decide. Each is
+      // refused before any profile is read, so nothing here reaches AWS.
       const ctx = contextFor(state, new OpRegistry(), false);
+      const typed = FIXTURE_CONFIG.account_id;
       const calls: Array<[string, Record<string, unknown>]> = [
-        ["init.profiles", {}],
-        ["init.identity", { profile: "acme-dev" }],
-        ["init.acl", {}],
-        ["init.tailscale", {}],
-        ["init.verifyOauth", { secret: SECRET }],
-        ["init", { profile: "acme-dev", account_id_typed: FIXTURE_CONFIG.account_id }],
+        ["init", { profile: "acme-dev", account_id_typed: typed }],
+        ["init", { profile: "acme-dev", account_id_typed: typed, mode: "auto" }],
+        ["init", { profile: "acme-dev", account_id_typed: typed, mode: "create", reset: true }],
+        ["init", { profile: "acme-dev", account_id_typed: typed, mode: "attach" }],
+        ["init", { profile: "acme-dev", account_id_typed: typed, attach: true }],
+        ["init", { profile: "acme-dev", account_id_typed: typed, mode: "create", fleet: "x" }],
       ];
       for (const [name, params] of calls) {
         expect([name, (await refusal(dispatch(ctx, name, params))).code]).toEqual([name, "CONFLICT"]);
@@ -349,7 +355,7 @@ describe("step 3: init itself", () => {
     expect(state.poller).not.toBeNull();
   });
 
-  test("the wizard requests close once the home is initialized", async () => {
+  test("once the home is initialized, init only adds a fleet beside it", async () => {
     const { ctx, ops, state } = await wizard();
     const { op_id } = (await dispatch(ctx, "init", {
       profile: "acme-dev",
@@ -360,19 +366,15 @@ describe("step 3: init itself", () => {
     await ops.wait(op_id);
     for (let i = 0; i < 50 && !state.initialized; i += 1) await Bun.sleep(10);
 
-    for (const [name, params] of [
-      ["init.profiles", {}],
-      ["init.acl", {}],
-      ["init.identity", { profile: "acme-dev" }],
-      ["init", { account_id_typed: "123456789012" }],
-    ] as Array<[string, Record<string, unknown>]>) {
-      const e = await refusal(dispatch(ctx, name, params));
-      expect([name, e.code, e.message]).toEqual([
-        name,
-        "CONFLICT",
-        "already initialized; use `hermetic init --reset`",
-      ]);
-    }
+    // The helpers now answer from the adding session (§4.8)…
+    const listed = (await dispatch(ctx, "init.profiles", {})) as { profiles: unknown[] };
+    expect(listed.profiles.length).toBeGreaterThan(0);
+    // …and the init request itself is a create or nothing.
+    const e = await refusal(dispatch(ctx, "init", { account_id_typed: "123456789012" }));
+    expect([e.code, e.message]).toEqual([
+      "CONFLICT",
+      'with a fleet open, the dashboard only creates a new fleet; send mode: "create"',
+    ]);
   });
 
   test("two concurrent inits single-flight to exactly one op", async () => {
@@ -456,6 +458,70 @@ describe("the tailscale secret", () => {
  * restart. `openState({ fixture: true })` (no `uninitialized`) opens the
  * *initialized* fixture fleet, the same as `--fixture` would.
  */
+describe("adding a fleet, from the dashboard (§4.8)", () => {
+  /** A head serving the fixture's `main`, in a home of its own. */
+  async function serving() {
+    const state = await openState({ fixture: true, home: testHome("wizard-add") });
+    const ops = new OpRegistry();
+    return { state, ops, ctx: contextFor(state, ops) };
+  }
+
+  async function localIds(ctx: HandlerContext): Promise<string[]> {
+    const listed = (await dispatch(ctx, "fleets.list", {})) as {
+      fleets: Array<{ fleet_id: string; local: boolean }>;
+    };
+    return listed.fleets.filter((f) => f.local).map((f) => f.fleet_id);
+  }
+
+  test("creates a second fleet in the same account and switches to it", async () => {
+    const { state, ops, ctx } = await serving();
+    const first = state.fleetId;
+    expect(first).not.toBeNull();
+    const before = await localIds(ctx);
+
+    const identity = (await dispatch(ctx, "init.identity", { profile: "acme-dev" })) as {
+      identity: { account_id: string; region: string };
+    };
+    const { op_id } = (await dispatch(ctx, "init", {
+      profile: "acme-dev",
+      region: identity.identity.region,
+      account_id_typed: identity.identity.account_id,
+      mode: "create",
+      tailnet: "hermetic.ts.net",
+      network: "public",
+    })) as { op_id: string };
+    expect((await ops.wait(op_id))?.status).toBe("ok");
+
+    for (let i = 0; i < 100 && state.fleetId === first; i += 1) await Bun.sleep(10);
+    const added = state.fleetId;
+    expect(added).not.toBe(first);
+    expect(before).not.toContain(added);
+    // The fleet that was open is still frozen here, beside the new one.
+    const after = await localIds(ctx);
+    expect(after).toContain(first as string);
+    expect(after).toContain(added as string);
+    // The new fleet is the one being served, through the same handlers.
+    const meta = (await dispatch(ctx, "meta.get", {})) as { fleet: { id: string } | null };
+    expect(meta.fleet?.id).toBe(added as string);
+    state.poller?.stop();
+  });
+
+  test("nothing but a create starts an op", async () => {
+    const { state, ops, ctx } = await serving();
+    const typed = "123456789012";
+    for (const params of [
+      { profile: "acme-dev", account_id_typed: typed },
+      { profile: "acme-dev", account_id_typed: typed, mode: "create", reset: true, yes: true },
+      { profile: "acme-dev", account_id_typed: typed, mode: "attach" },
+    ]) {
+      expect((await refusal(dispatch(ctx, "init", params))).code).toBe("CONFLICT");
+    }
+    expect(ops.list().ops.length).toBe(0);
+    expect(state.initOpId).toBeNull();
+    state.poller?.stop();
+  });
+});
+
 describe("teardown, from the dashboard", () => {
   async function initializedFixture() {
     /**
@@ -595,7 +661,9 @@ describe("teardown, from the dashboard", () => {
     expect(meta.initialized).toBe(true);
     expect(meta.last_teardown).toBeNull();
 
-    // The wizard still refuses: this home is still initialized.
-    expect((await refusal(dispatch(ctx, "init.profiles", {}))).code).toBe("CONFLICT");
+    // Still initialized, so `init` is the adding kind (§4.8): a create or nothing.
+    expect((await refusal(dispatch(ctx, "init", { account_id_typed: "123456789012" }))).code).toBe(
+      "CONFLICT",
+    );
   });
 });

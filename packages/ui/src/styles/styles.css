@@ -3837,6 +3837,16 @@ button:focus-visible,
   cursor: default;
   color: var(--fg3);
 }
+/* Cancel beside Continue when the wizard was raised over an open fleet. */
+.wiz-actions {
+  display: flex;
+  gap: 12px;
+}
+/* The switcher's way into the wizard, under the list it would add a row to. */
+.fleet-sw-new {
+  display: block;
+  padding: 10px 16px;
+}
 .fleet-sw-btn {
   all: unset;
   cursor: pointer;

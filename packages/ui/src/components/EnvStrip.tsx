@@ -54,6 +54,7 @@ export function EnvStrip({
   meta,
   connected,
   onOpenFoundation,
+  onNewFleet,
   switcher = true,
 }: {
   meta: Meta | null;
@@ -65,6 +66,8 @@ export function EnvStrip({
    * section is already on screen.
    */
   onOpenFoundation?: () => void;
+  /** The fleet menu's "New fleet": raises the init wizard over this fleet. */
+  onNewFleet?: () => void;
   /**
    * Whether the fleet name is the switcher's button. False while the init
    * wizard is up over a bound home, where switching fleet would pull the step
@@ -90,7 +93,7 @@ export function EnvStrip({
         </span>
       ) : null}
       {switcher ? (
-        <FleetMenu meta={meta} />
+        <FleetMenu meta={meta} onNewFleet={onNewFleet} />
       ) : (
         <span className="envstrip-fleet-name">{openFleetLabel(meta)}</span>
       )}

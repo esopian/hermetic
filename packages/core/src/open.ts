@@ -144,6 +144,15 @@ export interface OpenOptions {
    */
   directoryRegion?: string | undefined;
   /**
+   * `openForInit` only (§4.8): this home already serves a fleet, and the init
+   * this session runs adds another one beside it. Real mode needs nothing
+   * different. The fixture's wizard session normally empties the shared fake
+   * account so `auto` walks the from-scratch create; adding must leave the
+   * fleets already in it alone, because the open fleet's backend stands in
+   * the same account object.
+   */
+  adding?: boolean | undefined;
+  /**
    * Overrides the §4.7 Tailscale preflight — only tests should pass this, for
    * the same reason `HermeticDeps.actor` exists: the real probe spawns a binary
    * and reaches api.tailscale.com, and a suite that walks `init` must do
@@ -1050,7 +1059,9 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
     requested === null
       ? new MemoryBackend({
           account: knobs.account
-            ? resetFixtureAccount(knobs.account, "absent")
+            ? opts.adding === true
+              ? knobs.account
+              : resetFixtureAccount(knobs.account, "absent")
             : createFixtureAccount("absent"),
         })
       : seedFixtureFleet(
