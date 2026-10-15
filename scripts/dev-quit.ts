@@ -26,6 +26,11 @@
  * "The app" is a launcher in the session's own process group, not any launcher
  * built from this checkout: a canary build left open from `build/`, or a
  * second session, must not keep this one alive.
+ *
+ * macOS only: the lock probe calls `flock` from `libSystem` and the app is
+ * found by its `.app/Contents/MacOS/launcher` path. Elsewhere (a Linux dev box
+ * driving the app over CDP) the watch is a silent no-op, and `libSystem` is
+ * never opened, so importing this module cannot fail.
  */
 import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, openSync } from "node:fs";
@@ -39,9 +44,14 @@ const LOCK_SH = 1;
 const LOCK_NB = 4;
 const LOCK_UN = 8;
 
-const libc = dlopen("/usr/lib/libSystem.B.dylib", {
-  flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-});
+/** Opened on first use, so importing this module off macOS cannot fail. */
+let libc: ReturnType<typeof openLibSystem> | undefined;
+
+function openLibSystem() {
+  return dlopen("/usr/lib/libSystem.B.dylib", {
+    flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+  });
+}
 
 /**
  * Whether another process holds `path` exclusively. A shared, non-blocking
@@ -50,6 +60,7 @@ const libc = dlopen("/usr/lib/libSystem.B.dylib", {
  */
 function heldExclusively(path: string): boolean {
   if (!existsSync(path)) return false;
+  libc ??= openLibSystem();
   const fd = openSync(path, "r");
   try {
     if (libc.symbols.flock(fd, LOCK_SH | LOCK_NB) !== 0) return true;
@@ -80,8 +91,16 @@ function appRunning(pgid: number): boolean {
  * Call `onQuit` once, the first time the app launched by the session leading
  * process group `pgid` is quit. `appDir` is `packages/app`, whose build lock
  * tells a rebuild from a quit. Returns a function that stops watching.
+ * Off macOS (`platform`, defaulting to the running one) it watches nothing and
+ * `onQuit` is never called.
  */
-export function onAppQuit(appDir: string, pgid: number, onQuit: () => void): () => void {
+export function onAppQuit(
+  appDir: string,
+  pgid: number,
+  onQuit: () => void,
+  platform: NodeJS.Platform = process.platform,
+): () => void {
+  if (platform !== "darwin") return () => {};
   const buildLock = join(appDir, ".hutch/locks/electrobun-build.lock");
   let seen = false;
   let downSince: number | null = null;
