@@ -5,6 +5,7 @@ import type {
   FleetItem,
   NetworkMode,
   RpcHealth,
+  SnapshotPolicy,
 } from "../schema/index.ts";
 import { FLEET_KEY, RPC_PROTOCOL_VERSION, browserIdentities, stackNameFor } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
@@ -278,6 +279,8 @@ export class MemoryBackend implements Backend {
    * accident, and deleting either would disarm the other.
    */
   readonly pendingNetwork = new Map<string, { network: NetworkMode; fckNatAmiId: string | null }>();
+  /** The snapshot policy each `createSnapshotChangeSet` staged, by change-set name, for the same reason. */
+  readonly pendingSnapshots = new Map<string, SnapshotPolicy>();
   /**
    * What `resolveFckNatAmi` answers. `null` makes the lookup *fail* — the state
    * a region with no published fck-nat image is in, and the one `apply` kind

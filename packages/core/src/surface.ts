@@ -79,6 +79,8 @@ import {
   PlanDestroyInput as PlanDestroyInputSchema,
   PlanFoundationInput as PlanFoundationInputSchema,
   PlanNetworkInput as PlanNetworkInputSchema,
+  PlanSnapshotsInput as PlanSnapshotsInputSchema,
+  SnapshotsStatusInput as SnapshotsStatusInputSchema,
   PlanPolicyInput as PlanPolicyInputSchema,
   PlanRolloutInput as PlanRolloutInputSchema,
   PlanRecreateInput as PlanRecreateInputSchema,
@@ -189,6 +191,7 @@ export const PUBLIC_METHODS = [
   "foundation.update",
   "policy.status",
   "network.status",
+  "snapshots.status",
   "agents.create",
   "agents.list",
   "agents.get",
@@ -230,6 +233,7 @@ export const PUBLIC_METHODS = [
   "plan.policy",
   "plan.rollout",
   "plan.network",
+  "plan.snapshots",
   "apply",
 ] as const;
 
@@ -344,6 +348,7 @@ export const REQUEST_SCHEMAS = {
   "policy.status": PolicyStatusInputSchema,
   // §5. Takes nothing: there is one fleet open at a time, and one mode on it.
   "network.status": NetworkStatusInputSchema,
+  "snapshots.status": SnapshotsStatusInputSchema,
   "agents.create": CreateAgentInputSchema,
   "agents.list": ListAgentsInputSchema,
   "agents.get": AgentRefInputSchema,
@@ -393,6 +398,8 @@ export const REQUEST_SCHEMAS = {
   // §5: the one plan that names a mode. `apply` gains a `network` kind rather
   // than a method of its own — plan then apply, like `policy` (§3.2 rule 3).
   "plan.network": PlanNetworkInputSchema,
+  // §7.1: the snapshot policy, planned and applied the same way.
+  "plan.snapshots": PlanSnapshotsInputSchema,
   apply: ApplyInputSchema,
 } as const satisfies Record<PublicMethod, unknown>;
 

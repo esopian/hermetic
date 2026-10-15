@@ -27,6 +27,9 @@ import {
   BROWSER_FOUNDATION_VERSION,
   browserBuildKey,
   DEFAULT_ROOT_GIB,
+  DEFAULT_SNAPSHOT_POLICY,
+  SNAPSHOT_POLICY_FOUNDATION_VERSION,
+  snapshotParameterValues,
   FLEET_MANIFEST_KEY,
   ROOT_GIB_MIN,
   SIZES,
@@ -489,7 +492,15 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
     // `Network` as CloudFormation records it — the authoritative copy of the
     // mode (§5). `_fleet.network` below is the cache, and the two agree here
     // exactly as they do on a fleet created by this build.
-    parameters: { FleetId: config.fleet_id, Network: fixtureNetwork(fixtureName) },
+    parameters: {
+      FleetId: config.fleet_id,
+      Network: fixtureNetwork(fixtureName),
+      // A stack on a template from v16 on carries §7.1's snapshot policy; one
+      // older predates it, so `snapshots.status` says to update first.
+      ...(fixtureFoundationVersion(fixtureName) >= SNAPSHOT_POLICY_FOUNDATION_VERSION
+        ? snapshotParameterValues(DEFAULT_SNAPSHOT_POLICY)
+        : {}),
+    },
     // The full output set the real template emits (§5): the fleet manifest's
     // `resources` is derived from these, so a fixture that carried fewer would
     // exercise only the fallbacks.

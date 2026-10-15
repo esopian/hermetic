@@ -101,6 +101,27 @@ export type {
   PresetsView,
 } from "./presets.ts";
 
+// --- Data-volume snapshot policy (§7.1) -----------------------------------
+export {
+  DEFAULT_SNAPSHOT_POLICY,
+  SNAPSHOT_INTERVAL_HOURS,
+  SNAPSHOT_RETAIN_MAX,
+  SNAPSHOT_RETAIN_MIN,
+  describeSnapshotPolicy,
+  sameSnapshotPolicy,
+  snapshotWindowDays,
+} from "./snapshots.ts";
+export type { SnapshotIntervalHours, SnapshotPolicy } from "./snapshots.ts";
+
+// --- AWS Free Tier baseline (§10) ----------------------------------------
+export { AWS_FREE_TIER, FREE_TIER_PRESET_ID, isFreeTierMachine } from "./free-tier.ts";
+export type {
+  FreeTierBaseline,
+  FreeTierPlan,
+  FreeTierResource,
+  FreeTierTreatment,
+} from "./free-tier.ts";
+
 // --- Tailscale console (§4.7) --------------------------------------------
 export {
   TAILSCALE_ADMIN_ACL_URL,

@@ -30,6 +30,7 @@ import { runDoctor, type DoctorReport } from "./fleet/doctor.ts";
 import { createPlans } from "./agents/plans.ts";
 import { createPolicy } from "./fleet/policy.ts";
 import { createNetwork } from "./fleet/network.ts";
+import { createSnapshots } from "./fleet/snapshots.ts";
 import { createTeardown } from "./fleet/teardown.ts";
 import { createLifecycle } from "./agents/lifecycle.ts";
 import { createRollout } from "./agents/rollout.ts";
@@ -387,6 +388,12 @@ export function createHermetic(deps: HermeticDeps) {
     changeSetTimeoutMs: deps.foundation?.changeSetTimeoutMs,
     heartbeatMs: deps.foundation?.heartbeatMs,
   });
+  const snapshots = createSnapshots({
+    ctx,
+    changeSetPollMs: deps.foundation?.changeSetPollMs,
+    changeSetTimeoutMs: deps.foundation?.changeSetTimeoutMs,
+    heartbeatMs: deps.foundation?.heartbeatMs,
+  });
 
   /**
    * Execute a plan produced by `plan.*` (`plan-apply.ts`). Core never asks "are
@@ -401,6 +408,7 @@ export function createHermetic(deps: HermeticDeps) {
     foundation,
     policy,
     network,
+    snapshots,
     rollout,
     teardown,
   });
@@ -599,6 +607,8 @@ export function createHermetic(deps: HermeticDeps) {
     policy: { status: policy.status },
     /** §5: which side of a NAT this fleet's agents live on, and whether reality agrees. */
     network: { status: network.status },
+    /** §7.1: the data-volume snapshot policy the stack runs, and what it has kept. */
+    snapshots: { status: snapshots.status },
     plan: {
       destroy: plans.destroy,
       recreate: plans.recreate,
@@ -607,6 +617,7 @@ export function createHermetic(deps: HermeticDeps) {
       policy: policy.plan,
       rollout: planRollout,
       network: network.plan,
+      snapshots: snapshots.plan,
     },
     apply,
     /**

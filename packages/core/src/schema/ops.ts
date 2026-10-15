@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AccountId, FleetIdSchema, Iso, Region, Version } from "./common.ts";
 import { NetworkMode } from "./fleet.ts";
+import { SnapshotPolicySchema } from "./snapshots.ts";
 
 /** One tick of a long operation's event stream (§3.2 rule 2). */
 export const OpEvent = z.object({
@@ -35,6 +36,8 @@ export const PlanKind = z.enum([
   "rollout",
   /** `plan.network`: move the fleet between `public` and `nat` egress (§5). */
   "network",
+  /** `plan.snapshots`: change the fleet's data-volume snapshot policy (§7.1). */
+  "snapshots",
 ]);
 export type PlanKind = z.infer<typeof PlanKind>;
 
@@ -115,6 +118,13 @@ export const PlanOptions = z.object({
    * own target from whatever the fleet happens to be when it runs.
    */
   network: NetworkMode.optional(),
+  /**
+   * `plan.snapshots`: the whole policy the fleet is being moved *to*, already
+   * merged with what the stack said when the plan was made — carried as data
+   * for the reason `network` is, so `apply` executes the policy the operator
+   * read rather than re-merging a patch against a stack that has moved.
+   */
+  snapshots: SnapshotPolicySchema.optional(),
 });
 export type PlanOptions = z.infer<typeof PlanOptions>;
 

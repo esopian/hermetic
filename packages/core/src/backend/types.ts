@@ -10,6 +10,7 @@ import type {
   HermesLogFile,
   NatHealth,
   RpcHealth,
+  SnapshotPolicy,
 } from "../schema/index.ts";
 import type { BedrockApi } from "../aws/bedrock.ts";
 import type { ResourceOwner } from "../agents/ownership.ts";
@@ -1015,6 +1016,17 @@ export interface FoundationApi {
     hermeticVersion: string;
     network: "public" | "nat";
     fckNatAmiId?: string;
+  }): Promise<{ name: string; id: string }>;
+  /**
+   * The third sibling (§7.1): restate the snapshot policy's three parameters
+   * and keep every other parameter's previous value. Separate for the reason
+   * the network one is — neither a foundation update nor a re-network can move
+   * the policy, because neither has an argument that would.
+   */
+  createSnapshotChangeSet(params: {
+    name: string;
+    hermeticVersion: string;
+    policy: SnapshotPolicy;
   }): Promise<{ name: string; id: string }>;
   /**
    * Today's fck-nat arm64 AMI in this region. Separate from the change set that

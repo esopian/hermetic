@@ -256,8 +256,8 @@ export function VolumesView({
               <Kicker style={{ color: "var(--fg3)" }}>Snapshots</Kicker>
               <div className="lane-n">{summary.snapshots}</div>
               <div className="lane-hint">
-                Data Lifecycle Manager, daily, keep 7 per volume. Configured in the foundation stack;
-                never deleted by destroy or teardown unless asked.
+                Data Lifecycle Manager, on the schedule set in Settings › Foundation › Snapshots; never
+                deleted by destroy or teardown unless asked.
               </div>
             </div>
             <div className="vrows">
