@@ -42,7 +42,7 @@ import type {
   LocalConfig,
   RunTarget,
 } from "@hermetic/core";
-import { type FleetPoller, getPoller } from "./poller.ts";
+import { type FleetPoller, getPoller, type PollerHooks } from "./poller.ts";
 
 /**
  * §4.8: the two ways a home with fleets in it can still fail to name one, and
@@ -170,6 +170,13 @@ export interface AppStateOptions {
   poller?: FleetPoller | null;
   /** Keys the poller singleton; see `getPoller`. */
   pollerKey?: (config: LocalConfig & { stack_id: string | null }) => string;
+  /**
+   * Handed to every poller this state installs, not only the one it was built
+   * with: a fleet switch or a post-`init` adopt builds a new poller, and one
+   * built without them would leave the chat owner deaf to the fleet the
+   * operator is now looking at.
+   */
+  pollerHooks?: PollerHooks;
 }
 
 /**
@@ -197,6 +204,7 @@ export class AppState {
   #openAddSession: (() => Promise<InitSessionLike>) | null;
   #reopen: (fleet?: string) => Promise<Hermetic>;
   #pollerKey: (config: LocalConfig & { stack_id: string | null }) => string;
+  #pollerHooks: PollerHooks;
   /**
    * Which fleet `#hermetic` was opened as (§4.8), by `fleet_id`; null while
    * uninitialized. Never the display alias: a fleet may have none, and two
@@ -258,6 +266,7 @@ export class AppState {
     this.#target = options.target ?? null;
     this.#fleetError = options.fleetError ?? null;
     this.#pollerKey = options.pollerKey ?? ((config) => pollerKeyFor(config, options.fixture));
+    this.#pollerHooks = options.pollerHooks ?? {};
   }
 
   /** True once a config row exists and core is serving from it. */
@@ -497,7 +506,7 @@ export class AppState {
     this.#hermetic = hermetic;
     this.#fleetId = config.fleet_id;
     this.#target = fleetTargetOf(config);
-    const poller = getPoller(hermetic, this.#pollerKey(config));
+    const poller = getPoller(hermetic, this.#pollerKey(config), this.#pollerHooks);
     // `getPoller` stops the singleton it replaces, but a state holding a poller
     // that was never the singleton (a test, or an app built around a bare
     // `Hermetic`) would otherwise leave it ticking against the old fleet.
@@ -688,6 +697,8 @@ export interface OpenStateOptions {
   home?: string;
   /** Injected by tests. */
   hermetic?: Hermetic;
+  /** Carried onto the state, so every poller it ever installs reports; see `AppStateOptions`. */
+  pollerHooks?: PollerHooks;
 }
 
 /**
@@ -698,6 +709,7 @@ export interface OpenStateOptions {
 export async function openState(options: OpenStateOptions = {}): Promise<AppState> {
   const fixture = options.fixture ?? process.env["HERMETIC_FIXTURE"] === "1";
   const forceUninit = options.uninitialized ?? process.env["HERMETIC_UNINIT"] === "1";
+  const pollerHooks = options.pollerHooks ?? {};
   /**
    * §4.8: one fake account for the life of this state. Every open below — the
    * boot, a fleet switch, the wizard, the post-teardown reopen — stands in it,
@@ -757,7 +769,8 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
         hermetic,
         fleetId: config.fleet_id,
         target: fleetTargetOf(config),
-        poller: getPoller(hermetic, pollerKeyFor(config, fixture)),
+        poller: getPoller(hermetic, pollerKeyFor(config, fixture), pollerHooks),
+        pollerHooks,
       });
     } catch (e) {
       /**
@@ -809,6 +822,7 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
         openAddSession,
         session: probe,
         fleetError,
+        pollerHooks,
       });
     }
   }
@@ -830,6 +844,8 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
     // §4.8: null on a fresh laptop (the wizard's case), set when this home has
     // fleets and the operator has not said which — the switcher's case.
     fleetError,
+    // No poller yet, but the one an adopt or a switch installs must report.
+    pollerHooks,
   });
 }
 

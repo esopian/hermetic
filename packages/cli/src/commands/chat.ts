@@ -490,6 +490,10 @@ export function observeText(event: ChatObserveEvent, now: number, opening: boole
       return "";
     case "subagent":
       return `${blockLines(event.block).join("\n")}\n`;
+    // A live advisory, re-sent on every probe while a turn runs: a line each
+    // time would be noise. `--json` carries it for a consumer that wants it.
+    case "busy":
+      return "";
   }
 }
 
@@ -576,6 +580,7 @@ export function register(program: Command): void {
     .argument("<target>", "`<instance>` or `<instance>/<bot>`")
     .argument("[message]", "the message; omit it to send piped stdin")
     .option("--session <id>", "continue a session instead of the bot's canonical one")
+    .option("--queued", "wait behind a turn already running instead of interrupting it")
     .option(
       "--attach <path>",
       `attach a file to the turn (repeatable, at most ${FILES_LIMITS.attachmentsPerTurn})`,
@@ -623,6 +628,7 @@ export function register(program: Command): void {
               ...ref,
               message: text,
               session: opts["session"],
+              queued: opts["queued"],
               attachments: ids.length > 0 ? ids.map((file_id) => ({ file_id })) : undefined,
             }),
           );

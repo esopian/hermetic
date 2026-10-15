@@ -95,14 +95,18 @@ export type SteerOutcome = "redirected" | "queued" | "rejected" | "idle" | "refu
 /**
  * The optimistic copy of the operator's prompt, until the box echoes it back.
  * A steer's is marked (`STEER_PREFIX`), so a failed turn's Retry binds to the
- * prompt that started the turn rather than to words steered into it.
+ * prompt that started the turn rather than to words steered into it. `steered`
+ * is set only on one the box took into the running turn (`redirected`).
  */
 function localPrompt(
   body: string,
   at: string,
   session: string | null,
-  steer = false,
-  attachments: readonly SentAttachment[] = [],
+  {
+    steer = false,
+    steered = false,
+    attachments = [],
+  }: { steer?: boolean; steered?: boolean; attachments?: readonly SentAttachment[] } = {},
 ): ChatMessageView {
   return {
     id: `${steer ? STEER_PREFIX : "local:"}${at}`,
@@ -117,6 +121,8 @@ function localPrompt(
     usage: null,
     error: null,
     incomplete: null,
+    // Drawn as the box's steer row will be, so the echo replaces it unchanged.
+    ...(steered ? { steered: true } : {}),
   } as ChatMessageView;
 }
 
@@ -564,7 +570,7 @@ export function useConversations(
       record.segments = [];
       record.segmentAt = at;
       record.openRequests.clear();
-      const echo = localPrompt(body, at, session, false, files);
+      const echo = localPrompt(body, at, session, { attachments: files });
       record.messages = [...record.messages, echo];
       // Retry and Edit on a failure card find the files by the prompt they
       // went with, whichever way the failure arrives (`failedTurnPrompt`).
@@ -599,6 +605,8 @@ export function useConversations(
         record.segments = [];
         record.openRequests.clear();
         if (!record.aborting) record.sending = false;
+        // The box's next probe says `true` again if it is still working.
+        record.remoteBusy = false;
         // The live message stops speaking for the held rows here — including on
         // the paths that never re-read the transcript, which is the whole point
         // of releasing on the settle rather than on the re-read. Only a settle
@@ -688,7 +696,12 @@ export function useConversations(
           },
           onEnd: end,
         },
-        { ...(session ? { session } : {}), ...(files.length > 0 ? { attachments: files } : {}) },
+        // Never an implicit steer: a busy session queues this behind its turn.
+        {
+          ...(session ? { session } : {}),
+          queued: true,
+          ...(files.length > 0 ? { attachments: files } : {}),
+        },
       );
       if (!settled) {
         record.cancel = () => {
@@ -727,7 +740,10 @@ export function useConversations(
       const record = get(where);
       const body = text.trim();
       if (!body) return "refused";
-      if (!record.sending || record.aborting) return "idle";
+      // A turn this tab did not start is steered the same way (`chat.steer`
+      // finds the running turn on the box), when the box says one is running.
+      const own = record.sending;
+      if (record.aborting || (!own && record.remoteBusy !== true)) return "idle";
       const ask = apiRef.current.steerTurn;
       if (!ask) return "rejected";
       const turn = record.turn;
@@ -739,6 +755,10 @@ export function useConversations(
         return "rejected";
       }
       if (!alive.current || !permits(record.target.instance)) return "refused";
+      if (status === "idle" && !record.sending && record.remoteBusy) {
+        record.remoteBusy = false;
+        changed();
+      }
       if (status !== "redirected" && status !== "queued") return status;
       const at = new Date().toISOString();
       if (record.turn === turn && record.sending && record.live && record.live.blocks.length > 0) {
@@ -748,11 +768,20 @@ export function useConversations(
         record.live = null;
       }
       record.segmentAt = at;
-      record.messages = [...record.messages, localPrompt(body, at, session, true)];
+      // Only `redirected` went into the turn; `queued` runs as a prompt of its own.
+      // Upstream records a redirect made while tools run as a marked steer row
+      // (`steered`), but one made during a model request as a plain user row
+      // (`_apply_active_turn_redirect`), so there the tag drops at the echo.
+      record.messages = [
+        ...record.messages,
+        localPrompt(body, at, session, { steer: true, steered: status === "redirected" }),
+      ];
       changed();
       // The turn ended while the box was answering: its re-read has already
-      // been asked for and may predate this prompt, so ask again.
-      if (!record.sending) void readHistory(record);
+      // been asked for and may predate this prompt, so ask again. Not for a
+      // turn another client runs: the box records the steer at its next tool
+      // result, and a read now would drop the prompt until then.
+      if (own && !record.sending) void readHistory(record);
       return status;
     },
     [changed, get, permits, readHistory],
@@ -847,6 +876,7 @@ export function useConversations(
           cancel?.();
           record.cancel = null;
           record.sending = false;
+          record.remoteBusy = false;
           record.segments = [];
           record.openRequests.clear();
           record.rearm = null;

@@ -118,7 +118,7 @@ export const STEER_PREFIX = "local:steer:";
 
 /** An operator's own prompt: not another bot's delivery, not a steer into a running turn. */
 const isPrompt = (m: ChatMessageView): boolean =>
-  m.role === "user" && !m.from_bot && !m.id.startsWith(STEER_PREFIX);
+  m.role === "user" && !m.from_bot && !m.id.startsWith(STEER_PREFIX) && m.steered !== true;
 
 /**
  * The prompt a failed turn answered: the nearest operator prompt above the

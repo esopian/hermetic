@@ -5,7 +5,12 @@
  * shown not to deliver lives here beside the stream that learns it.
  */
 import { OBSERVE_RECONNECT_ATTEMPTS, OBSERVE_WINDOW, createChatObservation } from "./chat-observe.ts";
-import type { ChatObserveHint, ChatObserveOptions, ChatObserveTarget } from "./chat-observe.ts";
+import type {
+  ChatObserveBusyOptions,
+  ChatObserveHint,
+  ChatObserveOptions,
+  ChatObserveTarget,
+} from "./chat-observe.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
 import type { ChatDeps, ChatHistoryResult, ChatOptions } from "./chat.ts";
 import type { TranscriptMask } from "./chat-redact.ts";
@@ -49,6 +54,10 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
    * the messages the service sees have already been through the redaction door;
    * `chat-observe.ts` is not a second one.
    *
+   * `busy` is passed only when the adapter has one, and goes through `address()`
+   * like everything else, so an unlistened instance is never probed. Without it
+   * an observation emits no `busy` event and a head knows only its own turns.
+   *
    * `hints` is passed only when the adapter has one, and `hintsUsable` decides
    * separately whether the one it has is working. Asking only the first
    * question was the bug behind a much worse one: every real adapter defines
@@ -76,11 +85,27 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
       return { session: result.session, messages: result.messages };
     },
     ...(hermes.observe ? { hints, hintsUsable } : {}),
+    ...(hermes.busy ? { busy } : {}),
     pollMs: deps.observeTuning?.pollMs,
     sleep: deps.observeTuning?.sleep,
     reconnect: deps.observeTuning?.reconnect,
     now,
   });
+
+  /**
+   * The adapter's busy probe, addressed. A refusal from `address()` reads as
+   * "could not tell", like any other probe failure: ending the watch is the
+   * next authoritative read's job, not the probe's.
+   */
+  async function busy(
+    target: ChatObserveTarget,
+    request: ChatObserveBusyOptions,
+  ): Promise<boolean | null> {
+    const probe = hermes.busy;
+    if (!probe) return null;
+    const box = await address(target.instance);
+    return await probe(box, target.bot, request.sessions, { signal: request.signal });
+  }
 
   /**
    * The adapter's hint stream, addressed.

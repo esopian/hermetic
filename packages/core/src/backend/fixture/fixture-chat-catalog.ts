@@ -1017,11 +1017,11 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
       incomplete: null,
     },
     {
-      id: "mx-kestrel-portal-2",
+      id: "mx-kestrel-portal-tool",
       session: "sx-kestrel-portal",
       role: "bot",
       author: { instance: "kestrel", bot: "default" },
-      at: at("08:58:41"),
+      at: at("08:58:22"),
       blocks: [
         {
           kind: "tool",
@@ -1035,6 +1035,36 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           duration_ms: 77,
           render: "terminal",
         },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    // A mid-turn steer (§9.2): the operator's correction, sent while the turn
+    // was running, lands after the tool result as its own user row. History
+    // strips upstream's out-of-band marker and flags the row `steered`
+    // (`chat/hermes/steer-marker.ts`); the turn's reply follows it.
+    {
+      id: "mx-kestrel-portal-steer",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("08:58:27"),
+      blocks: [
+        { kind: "text", markdown: "Check it picked up the new key, not just that it restarted." },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+      steered: true,
+    },
+    {
+      id: "mx-kestrel-portal-2",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("08:58:41"),
+      blocks: [
         {
           kind: "text",
           // The one credential-shaped string in this file, and it is the

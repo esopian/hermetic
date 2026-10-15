@@ -56,6 +56,7 @@ describe("a refused send keeps the message", () => {
       q = useSendQueue({
         selection: target,
         sending: false,
+        remoteBusy: null,
         turnError: null,
         reconnecting: false,
         send: () => {

@@ -75,10 +75,23 @@ export interface LifecycleDeps {
   /**
    * §6.7: drop what this machine keeps locally about a released name — called
    * by the release (`lifecycle/release-name.ts`) that ends every destroy, and
-   * by a create that releases a legacy `destroyed` row. Optional: a release is
-   * complete without it, and a failure is reported rather than raised.
+   * by a create that releases a legacy `destroyed` row, or whose rollback
+   * deleted the row it had just claimed. Optional: a release is complete
+   * without it, and a failure is reported rather than raised.
    */
   purgeLocal?: ((fleetId: string, name: string) => Promise<void>) | undefined;
+  /**
+   * §9.2: make the agent `create` has just claimed a listened instance on this
+   * laptop. Called once per incarnation, by the run whose conditional put wrote
+   * the row — never by a resume, a `rerun` or a `recreate`, which all act on a
+   * row whose listening the operator may already have turned off, and the
+   * store cannot tell "turned off" from "never set". `hermetic.ts` records the
+   * new incarnation first (`local/incarnations.ts`), so a predecessor's local
+   * state is purged before the opt-in is written rather than after it.
+   * Optional, like `purgeLocal`: a create is complete without it, and a failure
+   * is reported as a warning rather than raised.
+   */
+  listenLocal?: ((fleetId: string, agent: Agent) => Promise<void>) | undefined;
 }
 
 export function createLifecycle(deps: LifecycleDeps) {

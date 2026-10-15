@@ -180,6 +180,11 @@ export interface Chat {
    */
   context: ContextReading | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running in the selected conversation, whoever
+   * started it: `true`, `false`, or `null` for not known (`chat-remote-busy.ts`).
+   */
+  remoteBusy: boolean | null;
   /** The selected conversation’s observed work, independent of its transport lock. */
   activity: TurnActivity;
   /** Active local conversations, including those in background frames. */

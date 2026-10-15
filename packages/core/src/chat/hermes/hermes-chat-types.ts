@@ -161,6 +161,13 @@ export interface SendOptions extends HermesChatOptions {
   /** Continue an existing session; omitted means create one. */
   session?: string | undefined;
   /**
+   * Ask the gateway to queue this prompt behind a turn already running in the
+   * session (`prompt.submit`'s `queued: true`) instead of applying its
+   * `busy_input_mode`, which defaults to interrupting. Ignored by an idle
+   * session, which runs the prompt at once. Read by `send` only.
+   */
+  queued?: boolean | undefined;
+  /**
    * Files already staged on the box, to commit into its inbox and hand to
    * this turn (`hermes-chat-attach.ts`). Absent or empty is a plain turn.
    */
@@ -270,6 +277,19 @@ export interface HermesChatClient {
     session: string,
     opts?: HermesChatOptions,
   ): Promise<ChatUsage | null>;
+  /**
+   * Whether the gateway reports a turn running, or waiting on a person, in any
+   * of `sessions` (durable ids), read without resuming anything
+   * (`hermes-chat-busy.ts`): `true`/`false` as it reports, `null` when it
+   * could not be asked. Never throws. Optional: without it an observation
+   * emits no `busy` event, and a head knows only the turns it started.
+   */
+  busy?(
+    box: BoxAddress,
+    bot: string,
+    sessions: readonly string[],
+    opts?: HermesChatOptions,
+  ): Promise<boolean | null>;
   send(box: BoxAddress, bot: string, text: string, opts?: SendOptions): AsyncIterable<ChatFrame>;
   /**
    * The passive hint stream (§9.2): "something happened on this

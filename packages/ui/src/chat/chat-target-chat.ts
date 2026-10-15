@@ -48,6 +48,7 @@ export function chatForTarget(
     reloadTranscript: () => conversations.reloadTranscript(target),
     live: record.live,
     sending: record.sending,
+    remoteBusy: record.remoteBusy,
     activity: record.activity,
     turnError: record.turnError,
     released: record.released,

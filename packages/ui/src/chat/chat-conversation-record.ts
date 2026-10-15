@@ -401,7 +401,7 @@ export interface Conversation {
    * row that carries one. The box's stored rows carry none, so a re-read never
    * clears it. It belongs to the conversation, not the session id: it survives
    * the first read naming a new conversation's session, and a rollover leaves
-   * it with the retired copy (`chat-conversations.ts`). In memory only.
+   * it with the retired copy (`chat-observation.ts`). In memory only.
    */
   context: ContextReading | null;
   /**
@@ -440,6 +440,12 @@ export interface Conversation {
   subagentTrail: ReadonlyMap<string, SubagentTrail>;
   subagentDrafts: ReadonlyMap<string, string>;
   subagentControl: ReadonlyMap<string, SubagentControl>;
+  /**
+   * What the box last said about a turn running in this conversation, whoever
+   * started it (`chat-remote-busy.ts`): `true` busy, `false` idle, `null` not
+   * known. This tab's own turn is `sending`; this is the box's word.
+   */
+  remoteBusy: boolean | null;
 }
 export const key = (target: ChatSelection) =>
   JSON.stringify([target.instance, target.bot, target.session]);
@@ -489,6 +495,7 @@ export function fresh(target: ChatSelection): Conversation {
     subagentTrail: new Map(),
     subagentDrafts: new Map(),
     subagentControl: new Map(),
+    remoteBusy: null,
   };
 }
 

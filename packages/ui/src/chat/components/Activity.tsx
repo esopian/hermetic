@@ -110,7 +110,8 @@ function label(block: ChatBlockView): string {
   }
 }
 
-function detail(block: ChatBlockView) {
+/** `running`: the step reads Running, so an unfinished call is drawn as one. */
+function detail(block: ChatBlockView, running: boolean) {
   switch (block.kind) {
     case "tool":
       return (
@@ -118,7 +119,7 @@ function detail(block: ChatBlockView) {
           <div className="kicker">Arguments</div>
           <CodePane text={formatPayload(block.args)} />
           <div className="kicker">Result</div>
-          <ToolBlock block={block} inline />
+          <ToolBlock block={block} inline live={running} />
         </>
       );
     case "reasoning":
@@ -174,10 +175,20 @@ export function activityRows(blocks: ChatBlockView[]): ChatBlockView[] {
   return rows;
 }
 
-/** What a step says before it is opened: how it went, what it ran, how long. */
+/**
+ * What a step says before it is opened: how it went, what it ran, how long.
+ *
+ * `remoteBusy` is set only on the newest bot turn (`Thread`), where a tool call
+ * with no result row may still be running on the box, started by this tab or
+ * any other client. The box's busy state decides how it reads: running while
+ * the box says a turn is, stopped once it says none is, and unknown — never
+ * "needs attention" — when it cannot tell. Absent, a call that never came back
+ * is stopped, as before.
+ */
 function stepStatus(
   block: ChatBlockView,
   streaming: boolean,
+  remoteBusy?: boolean | null,
 ): { word: string; tone: "ok" | "bad" | "warn" | "run" | "idle"; glyph: string } {
   if (block.kind === "tool")
     switch (block.status) {
@@ -190,9 +201,11 @@ function stepStatus(
       default:
         // Nothing is invented for a call that never came back: a stream that
         // stopped leaves the step unknown, not done.
-        return streaming
-          ? { word: "Running", tone: "run", glyph: "\u25CF" }
-          : { word: "Stopped", tone: "idle", glyph: "\u25CB" };
+        if (streaming || (block.status === "running" && remoteBusy === true))
+          return { word: "Running", tone: "run", glyph: "\u25CF" };
+        if (block.status === "running" && remoteBusy === null)
+          return { word: "No result yet", tone: "idle", glyph: "\u25CB" };
+        return { word: "Stopped", tone: "idle", glyph: "\u25CB" };
     }
   if (block.kind === "activity") {
     if (block.state === "done") return { word: "Complete", tone: "ok", glyph: "\u2713" };
@@ -230,8 +243,16 @@ function stepStatus(
  * should not push its own prose down under that call's output. The reader
  * opens the ones they want, and nothing reopens or shuts one behind them.
  */
-function Step({ block, streaming }: { block: ChatBlockView; streaming: boolean }) {
-  const state = stepStatus(block, streaming);
+function Step({
+  block,
+  streaming,
+  remoteBusy,
+}: {
+  block: ChatBlockView;
+  streaming: boolean;
+  remoteBusy?: boolean | null;
+}) {
+  const state = stepStatus(block, streaming, remoteBusy);
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? false;
   const setOpen = (next: boolean) => setChoice(next);
@@ -268,7 +289,7 @@ function Step({ block, streaming }: { block: ChatBlockView; streaming: boolean }
           </JumpLink>
         ) : null}
       </summary>
-      <div className="ch-activity-detail">{detail(block)}</div>
+      <div className="ch-activity-detail">{detail(block, state.tone === "run")}</div>
     </details>
   );
 }
@@ -278,11 +299,14 @@ export function ActivityGroup({
   streaming,
   waiting = false,
   activity,
+  remoteBusy,
 }: {
   blocks: ChatBlockView[];
   streaming: boolean;
   waiting?: boolean;
   activity?: TurnActivity;
+  /** The box's busy state, on the newest bot turn only; see `stepStatus`. */
+  remoteBusy?: boolean | null;
 }) {
   // The run stays on screen after it finishes, collapsed: the summary carries
   // what is happening now, and the reader opens it for the steps. A failed call
@@ -325,6 +349,9 @@ export function ActivityGroup({
       ? [...snapshots].reverse().find((block) => block.kind === "activity" && block.state === "running")
       : undefined) ?? (steps.length === 0 ? snapshots[snapshots.length - 1] : undefined);
   const failed = tools.some((block) => block.kind === "tool" && block.status === "bad");
+  const unfinished = tools.some((block) => block.kind === "tool" && block.status === "running");
+  // A call at the tail with no result, on a box that says a turn is running.
+  const remoteRunning = !streaming && unfinished && remoteBusy === true;
   const warning = tools.some((block) => block.kind === "tool" && block.status === "warn");
   // A run that delegated starts open: its children's lines are the one place
   // their progress shows, live or after the turn (Option C). The reader's own
@@ -370,8 +397,12 @@ export function ActivityGroup({
                       : tools.length
                         ? "Tools complete"
                         : "Thinking…"))
-              : tools.some((block) => block.kind === "tool" && block.status === "running")
-                ? "Activity stopped"
+              : unfinished
+                ? remoteRunning
+                  ? "Working…"
+                  : remoteBusy === null
+                    ? "No result yet"
+                    : "Activity stopped"
                 : tools.length
                   ? "Tools complete"
                   : "Activity complete";
@@ -382,7 +413,7 @@ export function ActivityGroup({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span className={streaming ? "ch-activity-dot busy" : "ch-activity-dot"} />
+        <span className={streaming || remoteRunning ? "ch-activity-dot busy" : "ch-activity-dot"} />
         <span>
           <RedactedText text={status} />
         </span>
@@ -419,7 +450,7 @@ export function ActivityGroup({
             block.kind === "tool" && block.tool_id ? layout.byTool.get(block.tool_id) : undefined;
           return [
             <li key={key}>
-              <Step block={block} streaming={streaming} />
+              <Step block={block} streaming={streaming} remoteBusy={remoteBusy} />
             </li>,
             ...(children
               ? [

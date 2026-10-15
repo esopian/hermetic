@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSelection } from "./chat-state.tsx";
 import type { SteerOutcome } from "./chat-conversations.ts";
+import { isWorking } from "./chat-remote-busy.ts";
 import type { SentAttachment } from "./chat-attachments.ts";
 
 /**
@@ -52,6 +53,12 @@ const queueKeyOf = (target: ChatSelection): string =>
 export interface SendQueueDeps {
   selection: ChatSelection | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running in the conversation, whoever started it
+   * (`chat-remote-busy.ts`). `true` holds the queue like `sending` does, and
+   * makes "send now" steer a turn this tab did not start.
+   */
+  remoteBusy: boolean | null;
   turnError: unknown;
   reconnecting: boolean;
   /**
@@ -64,6 +71,7 @@ export interface SendQueueDeps {
   /** The persistent provider supplies these for independently visible dock panes. */
   stateFor?: (target: ChatSelection) => {
     sending: boolean;
+    remoteBusy: boolean | null;
     turnError: unknown;
     reconnecting: boolean;
   };
@@ -75,6 +83,7 @@ export interface SendQueueDeps {
 export function useSendQueue({
   selection,
   sending,
+  remoteBusy,
   turnError,
   reconnecting,
   send,
@@ -137,8 +146,8 @@ export function useSendQueue({
   const dispatched = useRef(new Set<string>());
   /** `sending` as of the last render, for `force`, which reads it after an await. */
   const state = useCallback(
-    (target: ChatSelection) => stateFor?.(target) ?? { sending, turnError, reconnecting },
-    [stateFor, sending, turnError, reconnecting],
+    (target: ChatSelection) => stateFor?.(target) ?? { sending, remoteBusy, turnError, reconnecting },
+    [stateFor, sending, remoteBusy, turnError, reconnecting],
   );
   const sendFor = useCallback(
     (text: string, target: ChatSelection, files: readonly SentAttachment[] = NO_FILES) =>
@@ -222,13 +231,16 @@ export function useSendQueue({
    * `sending` goes false, `turnError` stays null, and the transcript is being
    * re-read behind a band. Firing the backlog into that is how a queued message
    * lands in a conversation whose last turn nobody has read back yet.
+   *
+   * A turn the box reports from another client holds the drain the same way:
+   * the head goes out once the box says the conversation is idle.
    */
   useEffect(() => {
     const targets = new Map(watched);
     if (selection) targets.set(queueKeyOf(selection), selection);
     for (const [key, target] of targets) {
       const current = state(target);
-      if (current.sending) continue;
+      if (isWorking(current.sending, current.remoteBusy)) continue;
       if (current.turnError || current.reconnecting) {
         dispatched.current.delete(key);
         if (queues.get(key)?.length) park(key);
@@ -353,7 +365,11 @@ export function useSendQueue({
       const body = text.trim();
       if (!target || (!body && files.length === 0)) return false;
       const key = queueKeyOf(target);
-      if (!state(target).sending) {
+      // Whether the turn to get past is this tab's own. One another client
+      // started is steered too, but never stopped from here.
+      const now = state(target);
+      const own = now.sending;
+      if (!own && now.remoteBusy !== true) {
         // Nothing to get past: this is an ordinary send, and like every
         // deliberate send it releases a parked queue behind it.
         if (!sendMessage(body, target, files)) return false;
@@ -375,9 +391,10 @@ export function useSendQueue({
       if (outcome === "refused") return false;
       // The box would not take it into the running turn. Head of the queue,
       // queue released, turn stopped: the drain sends it once the stop lands.
+      // A turn this tab did not start is left running, and the message waits.
       promote(key, body, id);
       unpark(key);
-      if (state(target).sending) await abortFor(target);
+      if (own && state(target).sending) await abortFor(target);
       return true;
     },
     [selection, state, steerFor, abortFor, dropQueued, promote, unpark, sendMessage],
