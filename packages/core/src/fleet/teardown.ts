@@ -788,7 +788,7 @@ export function createTeardown(deps: TeardownDeps) {
       res("stack", "removed", "the hermetic VPC, its subnets, route tables and gateway endpoints");
       res("stack", "removed", "the sealed agent security group");
       res("stack", "removed", `the ${stackName}-agent IAM role and instance profile`);
-      res("stack", "removed", `the daily snapshot policy and its ${stackName}-dlm role`);
+      res("stack", "removed", `the data-volume snapshot policy and its ${stackName}-dlm role`);
 
       yield* sweepAddresses({ release: parsed.purge });
 

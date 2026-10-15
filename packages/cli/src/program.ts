@@ -22,6 +22,7 @@ import * as init from "./commands/init.ts";
 import * as ops from "./commands/ops.ts";
 import * as policy from "./commands/policy.ts";
 import * as network from "./commands/network.ts";
+import * as snapshots from "./commands/snapshots.ts";
 import * as secrets from "./commands/secrets.ts";
 import * as providers from "./commands/providers.ts";
 import * as presets from "./commands/presets.ts";
@@ -69,6 +70,7 @@ export function buildProgram(): Command {
   ops.register(program);
   policy.register(program);
   network.register(program);
+  snapshots.register(program);
   apply.register(program);
 
   /**

@@ -30,4 +30,4 @@ export const HERMETIC_VERSION: string = process.env.HERMETIC_VERSION ?? "0.0.0-d
  * every fleet created before this existed — and `foundation.update` is what
  * moves it forward (§6.6).
  */
-export const FOUNDATION_VERSION = 15;
+export const FOUNDATION_VERSION = 16;

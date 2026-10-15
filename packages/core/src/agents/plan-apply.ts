@@ -15,6 +15,7 @@ import type { createPlans } from "./plans.ts";
 import type { createFoundation } from "../fleet/foundation/index.ts";
 import type { createPolicy } from "../fleet/policy.ts";
 import type { createNetwork } from "../fleet/network.ts";
+import type { createSnapshots } from "../fleet/snapshots.ts";
 import type { createRollout } from "./rollout.ts";
 import type { createTeardown } from "../fleet/teardown.ts";
 import type { FilesInternal } from "../files/files.ts";
@@ -28,6 +29,7 @@ export interface ApplyDeps {
   foundation: Pick<ReturnType<typeof createFoundation>, "update">;
   policy: Pick<ReturnType<typeof createPolicy>, "apply">;
   network: Pick<ReturnType<typeof createNetwork>, "apply">;
+  snapshots: Pick<ReturnType<typeof createSnapshots>, "apply">;
   rollout: Pick<ReturnType<typeof createRollout>, "run">;
   teardown: ReturnType<typeof createTeardown>["teardown"];
   files: Pick<FilesInternal, "applyRm">;
@@ -35,7 +37,8 @@ export interface ApplyDeps {
 
 export function createApply(deps: ApplyDeps) {
   const { requireConfig } = deps.ctx;
-  const { plans, destroy, recreate, foundation, policy, network, rollout, teardown, files } = deps;
+  const { plans, destroy, recreate, foundation, policy, network, snapshots, rollout, teardown, files } =
+    deps;
 
   /**
    * Execute a plan produced by `plan.*`. Core never asks "are you sure" (§3.2
@@ -145,6 +148,14 @@ export function createApply(deps: ApplyDeps) {
          * have to delete. It takes the `_fleet` lock, like `foundation.update`.
          */
         yield* network.apply(plan, opts);
+        return;
+      case "snapshots":
+        /**
+         * §7.1: the data-volume snapshot policy. The plan carries the whole
+         * target policy; `apply` re-reads the stack and refuses if it is
+         * already there or the fleet is behind this build's foundation.
+         */
+        yield* snapshots.apply(plan, opts);
         return;
       case "rollout":
         /**

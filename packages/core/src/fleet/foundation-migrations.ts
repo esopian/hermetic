@@ -638,6 +638,21 @@ export const FOUNDATION_MIGRATIONS: ReadonlyArray<FoundationMigration> = [
      * `done` event and carries straight on to the phases that matter here.
      */
   },
+  {
+    version: 16,
+    describe:
+      "make the data-volume snapshot policy configurable (SnapshotsEnabled/RetainCount/IntervalHours)",
+    /**
+     * A template change and no state change. The DLM policy's state, interval
+     * and retention count become stack parameters (§7.1), each defaulted to
+     * the value it was hard-coded to — enabled, every 24 h, keep 7 — so the
+     * update that adds them changes no fleet's policy. From here `apply` kind
+     * `snapshots` is what moves them, and every other change set carries them
+     * forward with `UsePreviousValue` (`aws/cfn.ts`). Nothing on `_fleet` or the
+     * box records the policy — the stack is the only copy — so there is
+     * nothing to back-fill and the entry carries no hooks.
+     */
+  },
 ];
 
 /**

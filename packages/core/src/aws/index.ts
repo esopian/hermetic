@@ -313,6 +313,7 @@ export function createAwsBackend(opts: AwsBackendOptions): AwsBackend {
     },
     createChangeSet: (params) => cfnFoundation.createChangeSet(params),
     createNetworkChangeSet: (params) => cfnFoundation.createNetworkChangeSet(params),
+    createSnapshotChangeSet: (params) => cfnFoundation.createSnapshotChangeSet(params),
     describeChangeSet: (name) => cfnFoundation.describeChangeSet(name),
     executeChangeSet: async (params) => {
       const stack = await cfnFoundation.executeChangeSet(params);

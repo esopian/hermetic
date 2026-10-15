@@ -159,6 +159,7 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   FOUNDATION_UPDATE_FAILED: EXIT_FAILURE,
   /** The re-network's change set failed the same way, and is the same kind of failure (§5). */
   NETWORK_UPDATE_FAILED: EXIT_FAILURE,
+  SNAPSHOTS_UPDATE_FAILED: EXIT_FAILURE,
   ABORTED: EXIT_ABORTED,
   INTERNAL: EXIT_FAILURE,
 } as const;

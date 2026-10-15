@@ -12,6 +12,7 @@ import {
   PlanDestroyInput,
   PlanFoundationInput,
   PlanNetworkInput,
+  PlanSnapshotsInput,
   PlanPolicyInput,
   PlanRecreateInput,
   PlanRolloutInput,
@@ -32,6 +33,7 @@ export const planTeardownSchema = declareRpc("plan.teardown", PlanTeardownInput)
 export const planFoundationSchema = declareRpc("plan.foundation", PlanFoundationInput);
 export const planPolicySchema = declareRpc("plan.policy", PlanPolicyInput);
 export const planNetworkSchema = declareRpc("plan.network", PlanNetworkInput);
+export const planSnapshotsSchema = declareRpc("plan.snapshots", PlanSnapshotsInput);
 export const planRolloutSchema = declareRpc("plan.rollout", PlanRolloutInput);
 export const applySchema = declareRpc("apply", ApplyInput);
 
@@ -92,6 +94,11 @@ export async function planPolicy(ctx: HandlerContext, params: unknown) {
  */
 export async function planNetwork(ctx: HandlerContext, params: unknown) {
   return await ctx.hermetic().plan.network(parseInput(planNetworkSchema, params));
+}
+
+/** §7.1's snapshot-policy change, planned. A read: it reads the stack and writes nothing. */
+export async function planSnapshots(ctx: HandlerContext, params: unknown) {
+  return await ctx.hermetic().plan.snapshots(parseInput(planSnapshotsSchema, params));
 }
 
 /**
@@ -170,6 +177,7 @@ export const planHandlers = {
   "plan.foundation": planFoundation,
   "plan.policy": planPolicy,
   "plan.network": planNetwork,
+  "plan.snapshots": planSnapshots,
   "plan.rollout": planRollout,
   apply,
 } satisfies Record<string, Handler>;
