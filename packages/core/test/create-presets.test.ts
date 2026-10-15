@@ -44,6 +44,7 @@ describe("the built-ins", () => {
       BUILTIN_PRESETS.filter((p) => p.lane === "gpu").every((p) => p.size.startsWith("gpu-")),
     ).toBe(true);
     expect(BUILTIN_PRESETS.filter((p) => p.lane === "cpu").map((p) => p.name)).toEqual([
+      "Free tier",
       "Micro",
       "Scratch",
       "Light",
@@ -274,5 +275,23 @@ describe("resolveCreatePreset", () => {
   test("an empty loadout applies nothing", () => {
     const empty = presetsView({ loadout: [null, null, null, null], default: null, custom: [] });
     expect(resolveCreatePreset(empty, {})).toMatchObject({ preset: null, machine: {} });
+  });
+});
+
+describe("a custom preset whose id became a built-in", () => {
+  test("is renamed on read, and the loadout and default follow it", async () => {
+    const { presetsView } = await import("../src/shared/presets.ts");
+    const mine = { id: "free-tier", name: "Mine", size: "small", volume_gib: 64, root_gib: 20 };
+    const view = presetsView({
+      loadout: ["light", "free-tier", "heavy", "gpu"],
+      default: "free-tier",
+      custom: [mine, { ...mine, id: "free-tier-2", name: "Taken" }],
+    });
+    expect(view.custom.map((p) => p.id)).toEqual(["free-tier-3", "free-tier-2"]);
+    expect(view.loadout).toEqual(["light", "free-tier-3", "heavy", "gpu"]);
+    expect(view.default).toBe("free-tier-3");
+    const ids = view.presets.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(view.presets.find((p) => p.id === "free-tier-3")?.volume_gib).toBe(64);
   });
 });

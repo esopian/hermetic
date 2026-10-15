@@ -1098,3 +1098,123 @@
 .st-dim {
   opacity: 0.4;
 }
+
+/* ── AWS Free Tier drawer (Defaults) ─────────────────────────────────────── */
+
+.ft-body {
+  gap: 20px;
+}
+.ft-sec p {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+.ft-plans {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ft-plans li + li {
+  margin-top: 6px;
+}
+.ft-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ft-table th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.ft-table td {
+  padding: 7px 8px 7px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.ft-table tr.same td:nth-child(3) {
+  color: var(--fg3);
+}
+.ft-res td:first-child {
+  font-weight: 700;
+  width: 22%;
+}
+.ft-res td:nth-last-child(-n + 2) {
+  width: 1%;
+  white-space: nowrap;
+}
+.ft-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+}
+.ft-badge.acc {
+  color: var(--acc);
+}
+.ft-badge.ok {
+  color: var(--ok);
+}
+.ft-badge.warn {
+  color: var(--warn);
+}
+.ft-acts {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ft-help {
+  width: 30px;
+  padding: 0;
+  font-weight: 900;
+}
+
+/* ── Snapshot policy drawer (Foundation) ─────────────────────────────────── */
+
+.sn-copy {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+.sn-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.sn-seg button {
+  min-width: 48px;
+}
+.sn-retain {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sn-preview {
+  font-size: 12px;
+  color: var(--fg2);
+  margin: 4px 0 12px;
+}
+/* Stated rather than left to each engine's number-input defaults (AGENTS.md,
+   renderer rule 4): a fixed width and no spinner in WebKit and Chromium alike. */
+.sn-retain .key-input {
+  width: 96px;
+  appearance: textfield;
+}
+.sn-retain .key-input::-webkit-inner-spin-button,
+.sn-retain .key-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

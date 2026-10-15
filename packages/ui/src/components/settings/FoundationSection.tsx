@@ -16,6 +16,7 @@ import { NetworkDrawer } from "../NetworkDrawer.tsx";
 import { fmtDate } from "../../logic/format.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { HermeticdUpdates } from "./HermeticdUpdates.tsx";
+import { SnapshotsBlock } from "./SnapshotsBlock.tsx";
 import { Block, Callout, Facts, Row, SettingsPage, Sq, Tally, TextAction } from "./Section.tsx";
 import type { SqTone } from "./Section.tsx";
 
@@ -492,6 +493,14 @@ export function FoundationSection({
           that operation owns the fleet, and a manifest republish is not
           something to race it with.
         */}
+        {/*
+          §7.1's snapshot policy is a foundation-stack parameter like the
+          network mode, so it is held off while an update owns the stack.
+        */}
+        <SnapshotsBlock
+          disabledReason={meta?.foundation?.in_progress ? "a foundation update is running" : null}
+          behind={meta?.foundation?.update_available === true}
+        />
         <HermeticdUpdates
           settings={settings}
           onSaved={onSaved}

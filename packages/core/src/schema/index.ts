@@ -31,6 +31,7 @@ export * from "./init.ts";
 export * from "./volumes.ts";
 export * from "./policy.ts";
 export * from "./network.ts";
+export * from "./snapshots.ts";
 export * from "./requests.ts";
 export * from "./probe.ts";
 export * from "./directory.ts";

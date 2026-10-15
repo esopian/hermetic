@@ -13,6 +13,8 @@ import {
 import { STACK_NAME, isHermeticStackName, isStackDeleting, stackNameFor } from "../schema/fleet.ts";
 import { FLEET_ID_TAG, VERSION_TAG } from "../backend/constants.ts";
 import type { NatHealth } from "../schema/index.ts";
+import { SNAPSHOT_PARAMS, snapshotParameterValues } from "../shared/snapshots.ts";
+import type { SnapshotPolicy } from "../shared/snapshots.ts";
 import type {
   ChangeSetChange,
   ChangeSetInfo,
@@ -477,7 +479,8 @@ export class CfnFoundation implements FoundationApi {
     const stack = await this.requireStack();
     const usePrevious = ["FleetId", "Network"];
     if (params.bedrockModelArns === undefined) usePrevious.push("BedrockModelArns");
-    if (await this.hasParameter("FckNatAmiId")) usePrevious.push("FckNatAmiId");
+    if ("FckNatAmiId" in stack.parameters) usePrevious.push("FckNatAmiId");
+    usePrevious.push(...snapshotParametersToKeep(stack));
     return this.changeSet(stack, params.name, params.hermeticVersion, [
       ...usePrevious.map((ParameterKey) => ({ ParameterKey, UsePreviousValue: true })),
       ...(params.bedrockModelArns === undefined
@@ -517,6 +520,31 @@ export class CfnFoundation implements FoundationApi {
         : [{ ParameterKey: "FckNatAmiId", ParameterValue: params.fckNatAmiId }]),
       { ParameterKey: "FleetId", UsePreviousValue: true },
       { ParameterKey: "BedrockModelArns", UsePreviousValue: true },
+      ...snapshotParametersToKeep(stack).map((ParameterKey) => ({
+        ParameterKey,
+        UsePreviousValue: true,
+      })),
+    ]);
+  }
+
+  /**
+   * §7.1's snapshot policy: its three parameters stated, everything else kept.
+   * `FckNatAmiId` is kept only where the stack has it, for the reason
+   * `createChangeSet` gives.
+   */
+  async createSnapshotChangeSet(params: {
+    name: string;
+    hermeticVersion: string;
+    policy: SnapshotPolicy;
+  }): Promise<{ name: string; id: string }> {
+    const stack = await this.requireStack();
+    const keep = ["FleetId", "Network", "BedrockModelArns"];
+    if ("FckNatAmiId" in stack.parameters) keep.push("FckNatAmiId");
+    return this.changeSet(stack, params.name, params.hermeticVersion, [
+      ...keep.map((ParameterKey) => ({ ParameterKey, UsePreviousValue: true })),
+      ...Object.entries(snapshotParameterValues(params.policy)).map(
+        ([ParameterKey, ParameterValue]) => ({ ParameterKey, ParameterValue }),
+      ),
     ]);
   }
 
@@ -645,18 +673,6 @@ export class CfnFoundation implements FoundationApi {
       egress_ip,
       route_state: probed.route_state,
     };
-  }
-
-  /** Which parameters the live stack carries, so `UsePreviousValue` is only asked for real ones. */
-  private async hasParameter(key: string): Promise<boolean> {
-    try {
-      const found = await this.describeStack();
-      return found !== null && key in found.parameters;
-    } catch {
-      // A stack we cannot read the parameters of is one we do not ask to reuse
-      // them: omitting an optional parameter leaves it at its template default.
-      return false;
-    }
   }
 
   async describeChangeSet(name: string): Promise<ChangeSetInfo> {
@@ -859,7 +875,7 @@ export function normalizeStack(stack: {
     if (out.OutputKey && out.OutputValue !== undefined) outputs[out.OutputKey] = out.OutputValue;
   }
   // The parameters the live stack carries. `Network` is here and nowhere else
-  // authoritative (§5); `hasParameter` and the v6 migration both read it.
+  // authoritative (§5); the change sets and the v6 migration both read it.
   const parameters: Record<string, string> = {};
   for (const param of stack.Parameters ?? []) {
     if (param.ParameterKey && param.ParameterValue !== undefined) {
@@ -875,4 +891,20 @@ export function normalizeStack(stack: {
     outputs,
     parameters,
   };
+}
+
+/**
+ * The snapshot parameters a foundation update or a re-network must carry
+ * forward (§7.1). Only the ones the stack already has: on a stack from before
+ * v16 they do not exist, `UsePreviousValue` on them is an error, and omitting
+ * them leaves them at the template default — the policy that stack was
+ * already running.
+ *
+ * Read off the one `DescribeStacks` the change set was built from, never from
+ * a fresh read that could fail: a lookup that swallowed a throttle as "absent"
+ * would omit them, and CloudFormation would quietly put an operator's policy
+ * back to daily, keep 7.
+ */
+function snapshotParametersToKeep(stack: StackInfo): string[] {
+  return Object.values(SNAPSHOT_PARAMS).filter((k) => k in stack.parameters);
 }

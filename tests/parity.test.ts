@@ -240,6 +240,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // itself is `apply` of a `network` plan, not a method of its own.
   "network.status": "network status",
   "plan.network": "plan network",
+  "snapshots.status": "snapshots status",
+  "plan.snapshots": "plan snapshots",
   "plan.rollout": "plan rollout",
   apply: "apply",
 };

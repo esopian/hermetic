@@ -24,6 +24,9 @@ import type {
   NetworkMode,
   NetworkPlan,
   NetworkReport,
+  PlanSnapshotsInput,
+  SnapshotsPlan,
+  SnapshotsReport,
   NotificationListView,
   NotificationSettingsView,
   NotificationSourceView,
@@ -165,6 +168,20 @@ export function planNetwork(to: NetworkMode): Promise<NetworkPlan> {
   return transport().request<NetworkPlan>("plan.network", { to });
 }
 
+/** §7.1: the snapshot policy the stack runs, and the fleet's snapshots. A pure read. */
+export function snapshotsStatus(): Promise<SnapshotsReport> {
+  return transport().request<SnapshotsReport>("snapshots.status");
+}
+
+/**
+ * The snapshot-policy dry run: a patch over the stack's current policy. Refuses
+ * with `CONFLICT` when nothing would change, or when the foundation is behind
+ * this build and has to be updated first.
+ */
+export function planSnapshots(input: PlanSnapshotsInput): Promise<SnapshotsPlan> {
+  return transport().request<SnapshotsPlan>("plan.snapshots", input);
+}
+
 /**
  * `POST /api/apply` with a plan → 202 `{ op_id, op }`, followed like any other
  * op. `yes` is the browser saying the operator confirmed in the drawer; the
@@ -178,7 +195,9 @@ export function planNetwork(to: NetworkMode): Promise<NetworkPlan> {
  * carry the instance and volume ids the operator reviewed, so core can refuse
  * the plan whose row moved instead of terminating whatever the row names now.
  */
-export function applyPlan(plan: Plan | PolicyPlan | NetworkPlan | RolloutPlan): Promise<Accepted> {
+export function applyPlan(
+  plan: Plan | PolicyPlan | NetworkPlan | SnapshotsPlan | RolloutPlan,
+): Promise<Accepted> {
   return transport().request<Accepted>("apply", { plan, yes: true, target: target() });
 }
 

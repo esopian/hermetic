@@ -86,6 +86,13 @@ export const ERROR_CODES = [
    */
   "NETWORK_UPDATE_FAILED",
   /**
+   * The snapshot-policy change set of `apply` kind `snapshots` failed, rolled
+   * back, or could not be computed (§7.1). Its own code for the reason the one
+   * above has one: nothing here needs a template fixed, and CloudFormation's
+   * rollback leaves the previous policy running, so the recovery is to re-plan.
+   */
+  "SNAPSHOTS_UPDATE_FAILED",
+  /**
    * The named volume is attached to an instance. `agent create --volume` will
    * not steal a disk another box is reading, and `volume delete` will not
    * delete one — either would be guessing about whose memory it is (§1).
