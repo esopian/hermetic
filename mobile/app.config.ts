@@ -3,9 +3,9 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 /**
  * The phone app's Expo config.
  *
- * Push tokens need an EAS project id. Set the linked project id below or
- * override it with `EXPO_PUBLIC_PROJECT_ID` / `EAS_PROJECT_ID`. Without one the
- * app runs and pairs normally, and push registration is skipped (see README.md).
+ * The checked-in EAS project id is the default for builds and push. Forks may
+ * override it with `EXPO_PUBLIC_PROJECT_ID` / `EAS_PROJECT_ID`; it is public
+ * project identity, not a credential (see README.md).
  * `EXPO_PUBLIC_HERMETIC_FIXTURE=1` builds fixture
  * mode (`src/fixture/`); it is read in the app, not here.
  */
@@ -20,6 +20,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: "hermetic-mobile",
   version: "0.1.0",
   orientation: "portrait",
+  platforms: ["ios"],
+  // Release code and assets ship together through TestFlight / the App Store.
+  updates: { enabled: false },
   icon: "./assets/icon.png",
   scheme: "hermetic",
   userInterfaceStyle: "automatic",

@@ -7,7 +7,7 @@
 import type { Bot } from "@hermetic/core/chat-client";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, TextInput, View } from "react-native";
+import { FlatList, Pressable, TextInput, useWindowDimensions, View } from "react-native";
 import { HomeBotRow } from "../src/bots/HomeBotRow.tsx";
 import { quietSuffix } from "../src/bots/suffix.ts";
 import { failedBots, type HomeRow, homeRowsByKey, needsBots } from "../src/client/home-rows.ts";
@@ -20,10 +20,10 @@ import { haptic } from "../src/ui/haptics.ts";
 import { Icon, IconButton, Screen, Text } from "../src/ui/index.ts";
 import { useNow } from "../src/ui/useNow.ts";
 
-const FIELD_HEIGHT = 40;
-
 export default function Search() {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const fieldHeight = Math.max(t.touch.min, Math.ceil(20 + 20 * fontScale));
   const { client } = useFleetContext();
   const fleet = useFleetState();
   const { state } = useRoster();
@@ -87,11 +87,11 @@ export default function Search() {
       : null;
 
   return (
-    <Screen>
+    <Screen edges={["top", "bottom"]}>
       <View
         style={{
-          flexDirection: "row",
-          alignItems: "center",
+          flexDirection: fontScale > 1.5 ? "column" : "row",
+          alignItems: "stretch",
           gap: t.space.sm,
           paddingLeft: t.space.lg,
           paddingRight: t.space.sm,
@@ -100,11 +100,12 @@ export default function Search() {
       >
         <View
           style={{
-            flex: 1,
+            flexGrow: 1,
+            flexShrink: 1,
             flexDirection: "row",
             alignItems: "center",
-            height: FIELD_HEIGHT,
-            borderRadius: FIELD_HEIGHT / 2,
+            minHeight: fieldHeight,
+            borderRadius: 22,
             backgroundColor: t.c.bg2,
             paddingLeft: t.space.md,
             gap: t.space.sm,
@@ -116,7 +117,7 @@ export default function Search() {
             value={query}
             onChangeText={setQuery}
             placeholder="Search bots"
-            placeholderTextColor={t.c.fg3}
+            placeholderTextColor={t.c.fg2}
             accessibilityLabel="Search bots"
             autoCapitalize="none"
             autoCorrect={false}
@@ -127,7 +128,7 @@ export default function Search() {
             cursorColor={t.c.acc}
             style={{
               flex: 1,
-              height: FIELD_HEIGHT,
+              minHeight: fieldHeight,
               color: t.c.fg,
               fontFamily: t.sans(400),
               fontSize: 16,
@@ -138,7 +139,7 @@ export default function Search() {
             <IconButton
               icon="close"
               label="Clear search"
-              size={28}
+              size={44}
               ring={false}
               onPress={() => {
                 haptic.select();

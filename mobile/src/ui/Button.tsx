@@ -17,11 +17,13 @@ import {
   Pressable,
   type PressableProps,
   Text as RNText,
+  useWindowDimensions,
   type ViewStyle,
 } from "react-native";
 import { useTheme } from "../theme/theme.tsx";
 import type { Palette } from "../theme/tokens.ts";
 import { haptic as tap } from "./haptics.ts";
+import { textColor } from "./text-colors.ts";
 
 export type ButtonVariant = "primary" | "secondary" | "destructive";
 
@@ -60,6 +62,8 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const largeText = fontScale > 1;
   const off = !!disabled || busy;
   // Busy keeps the live colours (faded); only a plain disabled primary is redrawn.
   const quiet = !!disabled && !busy && variant === "primary";
@@ -90,11 +94,12 @@ export function Button({
               : soft
                 ? t.c.line2
                 : t.c.fg;
-        const height = compact ? 32 : t.touch.min;
+        const height = t.touch.min;
         return [
           {
             minHeight: height,
             paddingHorizontal: compact ? t.space.md : t.space.lg,
+            paddingVertical: t.space.xs,
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "row",
@@ -116,17 +121,16 @@ export function Button({
             : variant === "destructive"
               ? pressed
                 ? t.c.dangerText
-                : t.c.bad
+                : textColor(t.c, t.scheme, "bad")
               : t.c.fg;
         return (
           <>
             {busy ? <ActivityIndicator size="small" color={color} /> : null}
-            {/* One line, centred, shrinking a little before it would wrap: a
-                two-up row of buttons on a phone ("Approve once" beside "This
-                session") otherwise breaks one label over two ragged lines. */}
+            {/* Normal text can fit compact paired actions. Larger text wraps
+                and grows the button instead of undoing the user's text size. */}
             <RNText
-              numberOfLines={1}
-              adjustsFontSizeToFit
+              numberOfLines={largeText ? undefined : 1}
+              adjustsFontSizeToFit={!largeText}
               minimumFontScale={0.75}
               style={{
                 flexShrink: 1,

@@ -5,10 +5,10 @@
 import { Text as RNText, type TextProps as RNTextProps, type TextStyle } from "react-native";
 import type { Weight } from "../theme/fonts.ts";
 import { useTheme } from "../theme/theme.tsx";
-import type { Palette } from "../theme/tokens.ts";
+import { textColor, type TextTone } from "./text-colors.ts";
 
 export type TextVariant = "body" | "bodySmall" | "caption" | "mono" | "title" | "heading" | "display";
-export type TextTone = "fg" | "fg2" | "fg3" | "acc" | "ok" | "warn" | "bad";
+export type { TextTone } from "./text-colors.ts";
 
 export interface TextProps extends RNTextProps {
   variant?: TextVariant;
@@ -34,7 +34,7 @@ export function Text({
   const w: Weight =
     weight ?? (variant === "display" || variant === "heading" ? 800 : variant === "title" ? 700 : 400);
   const base: TextStyle = {
-    color: t.c[tone as keyof Palette],
+    color: textColor(t.c, t.scheme, tone),
     fontFamily: isMono ? t.mono(w) : t.sans(w),
     fontSize: scale.size,
     ...("lineHeight" in scale ? { lineHeight: scale.lineHeight } : {}),

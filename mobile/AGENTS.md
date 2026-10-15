@@ -42,8 +42,8 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
 - Real: the Tailscale app signed into the fleet's tailnet, then scan the QR from
   `hermetic mobile pair` (or paste the link). The link carries no secret. There is no token on the
   phone; revocation is removing it from the tailnet.
-- Push: the EAS project id comes from `EXPO_PUBLIC_PROJECT_ID` (or `EAS_PROJECT_ID`). No Expo account
-  or project id is checked in. The box sends the push; the phone only registers its token with
+- Push: `app.config.ts` owns the checked-in public EAS project UUID. `EXPO_PUBLIC_PROJECT_ID`, then
+  `EAS_PROJECT_ID`, may override it for forks. Account credentials are never checked in. The box sends the push; the phone only registers its token with
   hermeticd (`POST /push/devices`) and keys events by the `dedupe` string.
 
 ## Tailscale status
@@ -80,3 +80,11 @@ a path that gives the phone an AWS credential or a secret.
 - The ATS keys are native config. Changing them needs a rebuild (`bun run ios`), not a Metro reload.
 - Android is out of scope (the app is iOS-first). Its cleartext policy (`usesCleartextTraffic` or a
   network security config) has not been set or checked.
+
+## Release policy
+
+Read `RELEASING.md` before changing EAS profiles, update delivery, or diagnostics. Production uses
+TestFlight/App Store binaries with OTA disabled (`updates.enabled: false`). Do not add a channel or
+runtime version without explicitly changing that policy. Preview and production select their EAS
+environment and force fixture mode off. Diagnostic reports must use an explicit field allowlist,
+never raw errors, pairing links, chat content, hosts, account identifiers, or push tokens.

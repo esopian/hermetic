@@ -8,7 +8,7 @@ import { useFonts } from "expo-font";
 import { router, SplashScreen, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -19,7 +19,12 @@ import { secureKv } from "../src/fleet/persist.ts";
 import { PrefsProvider } from "../src/prefs/prefs.tsx";
 import { FONT_ASSETS } from "../src/theme/fonts.ts";
 import { ThemeProvider, useTheme } from "../src/theme/theme.tsx";
+import {
+  AccessibilityPreferencesProvider,
+  useAccessibilityPreferences,
+} from "../src/ui/AccessibilityPreferences.tsx";
 import { Banner } from "../src/ui/Banner.tsx";
+import { EntrySplash } from "../src/ui/EntrySplash.tsx";
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -30,46 +35,49 @@ const NAV: RouteNavigator = {
   dismissTo: (href) => router.dismissTo(href as never),
 };
 const openHref = (href: string) => openRoute(href, NAV);
+const hideNativeSplash = () => SplashScreen.hideAsync().catch(() => {});
 
 export default function RootLayout() {
   const [loaded, error] = useFonts(FONT_ASSETS);
-  useEffect(() => {
-    if (loaded || error) void SplashScreen.hideAsync().catch(() => {});
-  }, [loaded, error]);
   if (!loaded && !error) return null;
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <KeyboardProvider>
-          <ThemeProvider storage={secureKv}>
-            <PrefsProvider storage={secureKv}>
-              <FleetProvider deps={FLEET_DEPS} onOpen={openHref}>
-                <Shell />
-              </FleetProvider>
-            </PrefsProvider>
-          </ThemeProvider>
+          <AccessibilityPreferencesProvider>
+            <ThemeProvider storage={secureKv}>
+              <PrefsProvider storage={secureKv}>
+                <FleetProvider deps={FLEET_DEPS} onOpen={openHref}>
+                  <Shell onEntryReady={hideNativeSplash} />
+                </FleetProvider>
+              </PrefsProvider>
+            </ThemeProvider>
+          </AccessibilityPreferencesProvider>
         </KeyboardProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
 
-function Shell() {
+function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
   const t = useTheme();
+  const { reduceMotion } = useAccessibilityPreferences();
   const { banner, dismissBanner, status } = useFleetContext();
+  const [entryVisible, setEntryVisible] = useState(true);
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(t.c.bg).catch(() => {});
   }, [t.c.bg]);
   return (
-    <>
+    <EntrySplash onReady={onEntryReady} onVisibilityChange={setEntryVisible}>
       {/*
         Keyed on the pairing status: signing out (or pairing) left iOS drawing a
         light status bar over the light scheme until relaunch, and a remount
         applies the style again.
       */}
-      <StatusBar key={status} style={t.scheme === "dark" ? "light" : "dark"} />
+      <StatusBar key={status} style={entryVisible || t.scheme === "dark" ? "light" : "dark"} />
       <Stack
         screenOptions={{
+          animation: reduceMotion ? "none" : "default",
           headerStyle: { backgroundColor: t.c.bg },
           headerTintColor: t.c.fg,
           headerTitleStyle: { fontFamily: t.sans(800), fontSize: 16 },
@@ -83,7 +91,10 @@ function Shell() {
         {/* The title is what VoiceOver reads on the next screen's back button. */}
         <Stack.Screen name="home" options={{ headerShown: false, title: "Hermetic" }} />
         <Stack.Screen name="settings" options={{ headerShown: false, title: "Settings" }} />
-        <Stack.Screen name="search" options={{ headerShown: false, animation: "fade" }} />
+        <Stack.Screen
+          name="search"
+          options={{ headerShown: false, animation: reduceMotion ? "none" : "fade" }}
+        />
         <Stack.Screen name="chat/[instance]/[bot]" options={{ title: "" }} />
         <Stack.Screen name="agent/[name]" options={{ title: "Agent" }} />
         {/* A form sheet is a real UIKit modal (react-native-screens presents it
@@ -123,6 +134,6 @@ function Shell() {
           openHref(routeFor(alert.data));
         }}
       />
-    </>
+    </EntrySplash>
   );
 }

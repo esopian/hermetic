@@ -4,7 +4,7 @@
  * and the escape scrub) and home's Tailscale strip.
  */
 import { useEffect, useMemo, useRef } from "react";
-import { Linking, Pressable, StyleSheet, View } from "react-native";
+import { Linking, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   FadeInUp,
@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Alert } from "../client/client.ts";
 import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import { useTheme } from "../theme/theme.tsx";
+import { useAccessibilityPreferences } from "./AccessibilityPreferences.tsx";
 import { Avatar } from "./avatar/Avatar.tsx";
 import { Icon } from "./IconButton.tsx";
 import { Text } from "./Text.tsx";
@@ -53,6 +54,7 @@ export function Banner({
   onDismiss(): void;
 }) {
   const t = useTheme();
+  const { reduceMotion, screenReader } = useAccessibilityPreferences();
   const insets = useSafeAreaInsets();
   const sticky = alert?.data.kind === "needs_action" || alert?.data.kind === "turn.error";
   const lift = useSharedValue(0);
@@ -84,18 +86,20 @@ export function Banner({
       .onEnd((e) => {
         if (!mine()) return;
         if (e.translationY < -BANNER_SWIPE_PT || e.velocityY < -SWIPE_VELOCITY) dismiss.current();
-        else lift.value = withSpring(0);
+        else lift.value = reduceMotion ? 0 : withSpring(0);
       })
       .onFinalize(() => {
         grabbed.current = null;
       });
-  }, [lift]);
+  }, [lift, reduceMotion]);
   useEffect(() => {
     if (!alert) return;
     lift.value = 0;
+    // VoiceOver users need time to find the card and its Dismiss rotor action.
+    if (screenReader !== false) return;
     const timer = setTimeout(onDismiss, sticky ? BANNER_STICKY_DWELL_MS : BANNER_DWELL_MS);
     return () => clearTimeout(timer);
-  }, [alert, sticky, onDismiss, lift]);
+  }, [alert, sticky, onDismiss, lift, screenReader]);
   const dragged = useAnimatedStyle(() => ({ transform: [{ translateY: lift.value }] }));
   if (!alert) return null;
   const tag = alertTag(alert.data.kind);
@@ -104,8 +108,8 @@ export function Banner({
     <GestureDetector gesture={swipe}>
       <Animated.View
         testID="alert-banner"
-        entering={FadeInUp.duration(t.motion.slide)}
-        exiting={FadeOutUp.duration(t.motion.fade)}
+        entering={reduceMotion ? undefined : FadeInUp.duration(t.motion.slide)}
+        exiting={reduceMotion ? undefined : FadeOutUp.duration(t.motion.fade)}
         style={{
           position: "absolute",
           top: insets.top + t.space.xs,
@@ -139,6 +143,7 @@ export function Banner({
               (the actions rotor) and the two-finger scrub (escape). */}
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel={[alert.title, tag?.label, alert.body].filter(Boolean).join(". ")}
             accessibilityHint="Opens the conversation."
             accessibilityActions={[{ name: "activate" }, { name: "dismiss", label: "Dismiss" }]}
             onAccessibilityAction={(e) => {
@@ -164,8 +169,15 @@ export function Banner({
               size={AVATAR}
             />
             <View style={{ flex: 1, gap: t.space.xxs }}>
-              <View style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm }}>
-                <Text weight={600} numberOfLines={1} style={{ flexShrink: 1 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "baseline",
+                  gap: t.space.sm,
+                }}
+              >
+                <Text weight={600} style={{ flexShrink: 1 }}>
                   {alert.title}
                 </Text>
                 {tag ? (
@@ -237,6 +249,8 @@ export function TailscaleBanner({
   onDismiss?: () => void;
 }) {
   const t = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  const stacked = width < 390 || fontScale > 1;
   if (status !== "off" && status !== "unreachable") return null;
   const off = status === "off";
   const color = off ? t.c.bad : t.c.warn;
@@ -251,18 +265,24 @@ export function TailscaleBanner({
       }
       style={{
         flexDirection: "row",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: t.space.sm,
         marginHorizontal: t.space.lg,
         marginTop: t.space.xs,
-        paddingLeft: t.space.md,
+        paddingHorizontal: t.space.md,
+        paddingVertical: stacked ? t.space.xs : 0,
         minHeight: t.touch.min,
         borderRadius: t.touch.min / 2,
         backgroundColor: t.c.bg2,
       }}
     >
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text variant="bodySmall" weight={600} numberOfLines={1} style={{ flex: 1 }}>
+      <Text
+        variant="bodySmall"
+        weight={600}
+        style={{ flexGrow: 1, flexShrink: 1, flexBasis: stacked ? "85%" : 0 }}
+      >
         {off ? "Tailscale is off or not signed in" : "On the tailnet, but no box answers"}
       </Text>
       {off ? null : <StripAction label="Retry" busyLabel="Retrying" busy={busy} onPress={onRetry} />}
@@ -310,6 +330,8 @@ function StripAction({
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: t.touch.min,
+        maxWidth: "100%",
+        flexShrink: 1,
         paddingHorizontal: t.space.xs,
         justifyContent: "center",
         opacity: pressed || busy ? 0.6 : 1,

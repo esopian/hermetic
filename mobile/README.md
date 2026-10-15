@@ -175,16 +175,15 @@ Tailscale app is off, signed in to another tailnet, or the box is down.
 
 ## Push notifications and the EAS project id
 
-No Expo/EAS account or project is created by this repo, and none is checked in. Remote push needs an
-EAS project id, read at build time from the environment:
+The checked-in default EAS project is `4acbc5b1-ea8a-4a5a-bc3c-ce0b2d61bd1e`, linked in
+`app.config.ts`. Its UUID is public project identity, not a credential. Builds and push registration
+use this same project by default. Expo account access and Apple signing credentials stay outside the repo.
 
-```sh
-EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios     # or EAS_PROJECT_ID, which EAS sets itself
-```
+Forks can override the project at build time with `EXPO_PUBLIC_PROJECT_ID`, then `EAS_PROJECT_ID`
+(in that precedence order); otherwise the checked-in UUID wins. Use the same override for every
+build and its EAS commands. `app.config.ts` publishes the result as `extra.eas.projectId`.
 
-`app.config.ts` puts it in `extra.eas.projectId`. Without one the app still pairs and chats, and
-alerts locally while it holds its sockets (and for ~25 s after backgrounding); Settings says push is
-unavailable. With one, Settings → Notifications → "Push from the agents" registers the Expo push
+Settings → Notifications → "Push from the agents" registers the Expo push
 token with each box you listen to (and unregisters it from a box you stop listening to), and the box
 pushes turn-finished, turn-error, needs-you and new-message events. While the app is away from the
 screen it draws no local notification of its own for a box that holds its registration: that box's
@@ -203,7 +202,7 @@ whether this phone's own alerts quote the conversation.
 still fills, so the home's unread marks stay true. They do not reach the boxes: pushes still arrive during quiet hours, so use an iOS Focus (or
 turn push off) to silence those too.
 
-**Background refresh.** Every wake (iOS decides when, at most every 15 minutes) probes Tailscale,
+**Background refresh.** Every wake (iOS decides when; 15 minutes is the minimum requested interval) probes Tailscale,
 refreshes `/fleet` behind the gate, renews the push registration when it is due, and sets the badge
 from the phone's inbox store. It reads no conversation: the boxes' pushes cover what happened while the
 app was away.
@@ -304,3 +303,12 @@ test/                jest suites (client, gateway, fleet, fixture, inbox, ui) an
   with no borders or separators, a pill composer with a round Send, and rounded operator bubbles.
   Content cards and bands keep the desktop's square edges. Mobile breakpoints are in scope
   here (the desktop app's "mobile is out of scope" rule is about its own window).
+
+## Release and support
+
+[RELEASING.md](RELEASING.md) defines the preview → TestFlight → App Store path, tester group,
+release notes, store-only update policy, and crash/support diagnostics. Release builds embed all
+code and assets; OTA updates are disabled. The supported target is portrait iPhone, not iPad or Android.
+
+[ACCESSIBILITY.md](ACCESSIBILITY.md) records the accessibility audit and the device acceptance pass.
+[BRANDING.md](BRANDING.md) describes the icon and launch assets and their generation.

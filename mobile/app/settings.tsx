@@ -9,7 +9,17 @@
 import Constants from "expo-constants";
 import { router } from "expo-router";
 import { Children, type ReactNode, useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { railTime } from "../src/client/chat-logic.ts";
 import { minutesOf } from "../src/client/inbox-logic.ts";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
@@ -17,6 +27,7 @@ import { useFleetAgents, useFleetState } from "../src/fleet/hooks.ts";
 import { isForbidden, type PushStatus } from "../src/fleet/push.ts";
 import type { TailscaleStatus } from "../src/gateway/tailscale.ts";
 import { usePrefs } from "../src/prefs/prefs.tsx";
+import { supportReport } from "../src/support/diagnostics.ts";
 import { type SchemePreference, useTheme } from "../src/theme/theme.tsx";
 import { statusColor } from "../src/theme/tokens.ts";
 import { haptic } from "../src/ui/haptics.ts";
@@ -101,11 +112,13 @@ function Item({
   testID?: string;
 }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stacked = fontScale >= 1.5;
   const body = (pressed: boolean) => (
     <View
       style={{
-        flexDirection: "row",
-        alignItems: "center",
+        flexDirection: stacked ? "column" : "row",
+        alignItems: stacked ? "flex-start" : "center",
         gap: t.space.md,
         minHeight: 48,
         paddingVertical: t.space.sm,
@@ -115,18 +128,17 @@ function Item({
       }}
     >
       {leading}
-      <Text tone={tone} numberOfLines={1} style={{ flexShrink: 1 }}>
+      <Text tone={tone} style={{ flexShrink: 1 }}>
         {label}
       </Text>
-      <View style={{ flex: 1 }} />
+      {!stacked ? <View style={{ flex: 1 }} /> : null}
       {value ? (
         <Text
           tone="fg3"
           mono={mono}
           variant={mono ? "mono" : "body"}
-          numberOfLines={1}
           selectable={!onPress}
-          style={{ flexShrink: 1, textAlign: "right" }}
+          style={{ flexShrink: 1, textAlign: stacked ? "left" : "right" }}
         >
           {value}
         </Text>
@@ -168,11 +180,13 @@ function Toggle({
   disabled?: boolean;
 }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stacked = fontScale >= 1.5;
   return (
     <View
       style={{
-        flexDirection: "row",
-        alignItems: "center",
+        flexDirection: stacked ? "column" : "row",
+        alignItems: stacked ? "flex-start" : "center",
         gap: t.space.md,
         minHeight: 48,
         paddingVertical: t.space.sm,
@@ -214,11 +228,12 @@ function Segments<T extends string>({
   onChange(option: T): void;
 }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   return (
     <View
       accessibilityRole="radiogroup"
       style={{
-        flexDirection: "row",
+        flexDirection: fontScale >= 1.5 ? "column" : "row",
         margin: t.space.sm,
         padding: 3,
         borderRadius: RADIUS - 4,
@@ -238,8 +253,10 @@ function Segments<T extends string>({
               onChange(o);
             }}
             style={{
-              flex: 1,
-              minHeight: 38,
+              flex: fontScale >= 1.5 ? undefined : 1,
+              minHeight: t.touch.min,
+              paddingVertical: t.space.sm,
+              paddingHorizontal: t.space.sm,
               borderRadius: RADIUS - 6,
               alignItems: "center",
               justifyContent: "center",
@@ -285,7 +302,8 @@ function TimeField({
         keyboardType="numbers-and-punctuation"
         maxLength={5}
         style={{
-          height: t.touch.min,
+          minHeight: t.touch.min,
+          paddingVertical: t.space.sm,
           borderRadius: RADIUS - 6,
           borderWidth: bad ? 1 : 0,
           borderColor: t.c.bad,
@@ -366,6 +384,34 @@ export default function Settings() {
   const link = fleet.link;
   const listening = ctx.fleet.listened();
   const status = tailscale?.status ?? null;
+
+  const shareDiagnostics = () => {
+    const report = supportReport({
+      version: Constants.expoConfig?.version ?? "unknown",
+      build: Constants.nativeBuildVersion ?? "unknown",
+      osVersion: String(Platform.Version),
+      fixture: !!fixture,
+      paired: !!link,
+      tailnetStatus: status,
+      fleetStale: fleet.stale,
+      fleetErrorCode: fleet.error?.code ?? null,
+      listeningCount: listening.length,
+      pushState: push.state,
+      pushRegistered: push.state === "on" ? push.boxes.filter((box) => box.ok).length : 0,
+      pushFailed: push.state === "on" ? push.boxes.filter((box) => !box.ok).length : 0,
+    });
+    Alert.alert("Support report", report, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Share…",
+        onPress: () => {
+          void Share.share({ message: report, title: "Hermetic support report" }).catch(() => {
+            Alert.alert("Could not share", "Please try sharing the support report again.");
+          });
+        },
+      },
+    ]);
+  };
 
   const signOut = () => {
     haptic.warning();
@@ -624,8 +670,19 @@ export default function Settings() {
         >
           <Item
             label="Version"
-            value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"}${fixture ? " · fixture" : ""}`}
+            value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"} (${Constants.nativeBuildVersion ?? "dev"})${fixture ? " · fixture" : ""}`}
           />
+        </Group>
+        <Group
+          title="Support"
+          note={
+            <Note>
+              Review app, iOS and connection status before sharing. The report excludes messages, agent
+              names, addresses, pairing details and push tokens. Nothing is sent automatically.
+            </Note>
+          }
+        >
+          <Item label="Review support report" onPress={shareDiagnostics} />
         </Group>
       </ScrollView>
     </Screen>

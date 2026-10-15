@@ -12,6 +12,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useTheme } from "../theme/theme.tsx";
 import { statusColor } from "../theme/tokens.ts";
+import { useAccessibilityPreferences } from "./AccessibilityPreferences.tsx";
 
 export function StatusSquare({
   status,
@@ -28,19 +29,20 @@ export function StatusSquare({
   round?: boolean;
 }) {
   const t = useTheme();
+  const { reduceMotion } = useAccessibilityPreferences();
   const mapped = statusColor(t.c, status ?? "ready");
   const fill = color ?? mapped.color;
   const pulsing = pulse ?? (color ? false : mapped.pulse);
   const opacity = useSharedValue(1);
   useEffect(() => {
-    if (pulsing)
+    if (pulsing && !reduceMotion)
       opacity.value = withRepeat(withTiming(0.25, { duration: t.motion.pulse / 2 }), -1, true);
     else {
       cancelAnimation(opacity);
       opacity.value = 1;
     }
     return () => cancelAnimation(opacity);
-  }, [pulsing, opacity, t.motion.pulse]);
+  }, [pulsing, opacity, t.motion.pulse, reduceMotion]);
   const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return (
     <Animated.View

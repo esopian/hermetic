@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import * as ReactNative from "react-native";
 import { Appearance } from "react-native";
 import { buildTheme, ThemeProvider } from "../../src/theme/theme.tsx";
 import { palettes, statusColor } from "../../src/theme/tokens.ts";
@@ -136,7 +137,9 @@ describe("primitives render", () => {
     expect(screen.queryByLabelText(/quill/)).toBeNull();
   });
 
-  test("a button label stays on one centred line", async () => {
+  test("a button label stays on one centred line at the default text size", async () => {
+    const previous = ReactNative.Dimensions.get("window");
+    ReactNative.Dimensions.set({ window: { ...previous, fontScale: 1 } });
     await render(
       <ThemeProvider>
         <Button label="Approve once" onPress={() => {}} haptic={false} />
@@ -145,6 +148,8 @@ describe("primitives render", () => {
     const label = screen.getByText("Approve once");
     expect(label.props.numberOfLines).toBe(1);
     expect(label.props.adjustsFontSizeToFit).toBe(true);
+    await screen.unmount();
+    ReactNative.Dimensions.set({ window: previous });
   });
 
   test("ToggleSwitch is a themed Switch", async () => {

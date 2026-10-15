@@ -54,7 +54,11 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "check": "bun run typecheck && bun run test && bun run lint",
-    "export:ios": "expo export --platform ios --output-dir /tmp/hermetic-mobile-export"
+    "export:ios": "expo export --platform ios --output-dir /tmp/hermetic-mobile-export",
+    "build:preview": "bunx eas-cli@24.14.0 build --platform ios --profile preview",
+    "build:production": "bunx eas-cli@24.14.0 build --platform ios --profile production",
+    "submit:testflight": "bunx eas-cli@24.14.0 submit --platform ios --profile production",
+    "eas-build-pre-install": "bun install --cwd .. --frozen-lockfile --ignore-scripts"
   },
   "private": true,
   "jest": {

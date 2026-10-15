@@ -8,7 +8,14 @@
  */
 import { Stack, useLocalSearchParams } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, View } from "react-native";
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import {
@@ -38,7 +45,9 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress(): v
         onPress();
       }}
       style={{
-        height: 32,
+        minHeight: t.touch.min,
+        paddingVertical: t.space.xs,
+        flexShrink: 1,
         paddingHorizontal: t.space.md,
         justifyContent: "center",
         borderWidth: t.border.control,
@@ -69,12 +78,13 @@ export function healthLine(health: FleetAgent["health"]): string {
 
 function Fact({ label, value }: { label: string; value: string }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   return (
-    <View style={{ flexDirection: "row", gap: t.space.sm }}>
-      <Text variant="caption" tone="fg3" uppercase style={{ width: 64, letterSpacing: 0.8 }}>
+    <View style={{ flexDirection: fontScale > 1.2 ? "column" : "row", gap: t.space.sm }}>
+      <Text variant="caption" tone="fg3" uppercase style={{ minWidth: 64, letterSpacing: 0.8 }}>
         {label}
       </Text>
-      <Text mono variant="caption" selectable numberOfLines={1} style={{ flex: 1 }}>
+      <Text mono variant="caption" selectable style={{ flexShrink: 1 }}>
         {value}
       </Text>
     </View>
@@ -83,6 +93,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 export default function AgentBrowser() {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { name } = useLocalSearchParams<{ name: string }>();
   const { fleet } = useFleetContext();
@@ -150,6 +161,7 @@ export default function AgentBrowser() {
       <View
         style={{
           flexDirection: "row",
+          flexWrap: "wrap",
           alignItems: "center",
           gap: t.space.sm,
           paddingHorizontal: t.space.md,
@@ -160,7 +172,7 @@ export default function AgentBrowser() {
       >
         {status ? <StatusSquare status={status} size={8} /> : <StatusSquare size={8} color={t.c.fg3} />}
         {/* The status only: the View only chip beside it already says the mode. */}
-        <Kicker style={{ flex: 1 }} numberOfLines={1}>
+        <Kicker style={{ flexGrow: 1, flexShrink: 1, ...(fontScale > 1 ? { flexBasis: "85%" } : {}) }}>
           {status ?? "status unknown"}
         </Kicker>
         <Chip label="View only" on={viewOnly} onPress={() => setViewOnly((v) => !v)} />
@@ -172,9 +184,14 @@ export default function AgentBrowser() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Reconnect"
-          hitSlop={8}
           onPress={reconnect}
-          style={{ height: 32, paddingHorizontal: t.space.sm, justifyContent: "center" }}
+          style={{
+            minHeight: t.touch.min,
+            minWidth: t.touch.min,
+            paddingHorizontal: t.space.sm,
+            justifyContent: "center",
+            alignItems: "center",
+          }}
         >
           <Text mono weight={700}>
             ↻
@@ -182,8 +199,9 @@ export default function AgentBrowser() {
         </Pressable>
       </View>
       {agent ? (
-        <View
-          style={{
+        <ScrollView
+          style={{ maxHeight: "35%", flexGrow: 0 }}
+          contentContainerStyle={{
             gap: 2,
             paddingHorizontal: t.space.md,
             paddingVertical: t.space.sm,
@@ -200,7 +218,7 @@ export default function AgentBrowser() {
             label="Health"
             value={agent.live ? healthLine(agent.health) : "not in the last fleet list"}
           />
-        </View>
+        </ScrollView>
       ) : null}
       <View style={{ flex: 1 }}>
         {url ? (

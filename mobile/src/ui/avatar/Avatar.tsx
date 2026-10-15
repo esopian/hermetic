@@ -15,6 +15,7 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Defs, G, LinearGradient, Path, Stop } from "react-native-svg";
 import { useTheme } from "../../theme/theme.tsx";
+import { useAccessibilityPreferences } from "../AccessibilityPreferences.tsx";
 import {
   type AvatarActivity,
   type AvatarStatus,
@@ -61,6 +62,7 @@ function AvatarImpl({
   label,
 }: AvatarProps) {
   const theme = useTheme();
+  const { reduceMotion } = useAccessibilityPreferences();
   const key = avatarSeed(fleet_id, instance, bot);
   const light = theme.scheme === "light";
   const built = useMemo(() => buildBlob(key, light, family), [key, light, family]);
@@ -69,7 +71,7 @@ function AvatarImpl({
 
   const breathe = useSharedValue(1);
   useEffect(() => {
-    if (look.alive && (activity === "thinking" || activity === "streaming")) {
+    if (!reduceMotion && look.alive && (activity === "thinking" || activity === "streaming")) {
       breathe.value = withRepeat(
         withTiming(look.scale, {
           duration: activity === "streaming" ? 520 : 780,
@@ -80,10 +82,10 @@ function AvatarImpl({
       );
     } else {
       cancelAnimation(breathe);
-      breathe.value = withTiming(look.scale, { duration: 160 });
+      breathe.value = reduceMotion ? 1 : withTiming(look.scale, { duration: 160 });
     }
     return () => cancelAnimation(breathe);
-  }, [activity, look.alive, look.scale, breathe]);
+  }, [activity, look.alive, look.scale, breathe, reduceMotion]);
   const style = useAnimatedStyle(() => ({ transform: [{ scale: breathe.value }] }));
 
   return (

@@ -9,6 +9,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useTheme } from "../theme/theme.tsx";
+import { useAccessibilityPreferences } from "./AccessibilityPreferences.tsx";
 
 export function Skeleton({
   width = "100%",
@@ -20,14 +21,21 @@ export function Skeleton({
   style?: ViewStyle;
 }) {
   const t = useTheme();
+  const { reduceMotion } = useAccessibilityPreferences();
   const o = useSharedValue(1);
   useEffect(() => {
-    o.value = withRepeat(withTiming(0.45, { duration: 700 }), -1, true);
+    if (reduceMotion) {
+      cancelAnimation(o);
+      o.value = 1;
+    } else o.value = withRepeat(withTiming(0.45, { duration: 700 }), -1, true);
     return () => cancelAnimation(o);
-  }, [o]);
+  }, [o, reduceMotion]);
   const animated = useAnimatedStyle(() => ({ opacity: o.value }));
   return (
     <Animated.View
+      accessible={false}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
       style={[{ width, height, backgroundColor: t.c.bg3, borderRadius: 0 }, animated, style]}
     />
   );

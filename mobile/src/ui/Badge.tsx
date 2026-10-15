@@ -19,10 +19,12 @@ export function Badge({
   const bg = needs ? t.c.warn : t.c[tone];
   return (
     <View
+      accessible
       accessibilityLabel={needs ? "needs you" : `${label} unread`}
       style={{
         minWidth: 18,
-        height: 18,
+        minHeight: 18,
+        paddingVertical: 3,
         paddingHorizontal: 5,
         alignItems: "center",
         justifyContent: "center",
@@ -30,7 +32,21 @@ export function Badge({
         borderRadius: 0,
       }}
     >
-      <Text variant="caption" mono weight={700} style={{ color: t.c.bg, fontSize: 10, lineHeight: 12 }}>
+      <Text
+        variant="caption"
+        mono
+        weight={700}
+        style={{
+          color:
+            needs || tone === "warn" || tone === "acc"
+              ? t.c.accFg
+              : tone === "bad"
+                ? t.c.dangerText
+                : t.c.bg,
+          fontSize: 10,
+          lineHeight: 12,
+        }}
+      >
         {label}
       </Text>
     </View>
