@@ -12,8 +12,17 @@ the conventions a change is reviewed against.
 Prose to the user may be terse; artifacts — code, comments, commits, PR bodies, `docs/` — are always
 normal English. If the caveman skill is available, use full mode for prose to the user.
 
-Optional: `bun run agent-setup` installs graft (context graph) and rtk; when present, prefer graft
-queries over grep. rtk's bypasses (raw output, recovering elided lines) are in `CONTRIBUTING.md`.
+Optional: `bun run agent-setup` installs graft (context graph) and rtk. rtk's bypasses (raw output,
+recovering elided lines) are in `CONTRIBUTING.md`.
+
+**Code lookup — when `graft/` exists in the checkout, graft comes before grep or Read.** To find or
+understand code under `packages/`, `scripts/` or `tests/`, run `graft ask "<question>" --source`
+(locate and understand), `graft grep "<symbol>"` (every occurrence), `graft skeleton <file>` (a
+file's API) or `graft callers <symbol> --depth 2` (before a rename or signature change) through
+Bash first; the MCP tools `graft_find_code`/`graft_find_all`/`graft_file_api`/`graft_trace_calls` are
+the same thing. Read a file whole only to edit it, after graft named the span. Raw `grep`/`rg` is
+for what graft does not index: `docs/`, config, brand-new files. Subagents get this rule in their
+brief; they do not inherit session hooks.
 
 ## Start here
 
