@@ -75,6 +75,25 @@ describe("agents.destroy", () => {
     expect(await backend.store.agents.get("corvid")).toBeNull();
   });
 
+  test("a durable file secret and a text secret go with the agent (prefix sweep)", async () => {
+    const { backend, hermetic } = seeded();
+    const fleet = backend.boundFleetId()!;
+    const fileSlot = agentParamPath(fleet, "corvid", "file-github-app-pem");
+    const envSlot = agentParamPath(fleet, "corvid", "env-github-token");
+    // Written the way `files.put` writes them: SecureStrings under the agent's prefix.
+    await backend.secrets.put(fileSlot, "FIXTURE-envelope-file");
+    await backend.secrets.put(envSlot, "FIXTURE-envelope-env");
+    // Another agent's slot of the same name is not this destroy's to take.
+    const neighbour = agentParamPath(fleet, "atlas", "env-github-token");
+    await backend.secrets.put(neighbour, "FIXTURE-envelope-neighbour");
+
+    await drain(hermetic.agents.destroy({ name: "corvid", yes: true }));
+
+    expect(backend.params.has(fileSlot)).toBe(false);
+    expect(backend.params.has(envSlot)).toBe(false);
+    expect(backend.params.has(neighbour)).toBe(true);
+  });
+
   test("events are never deleted", async () => {
     const { backend, hermetic } = seeded();
     const before = await backend.store.events.query("ember");

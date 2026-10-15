@@ -32,6 +32,16 @@ function expected(opts: Record<string, unknown>): { expected_version?: number } 
   return n === undefined ? {} : { expected_version: n };
 }
 
+/**
+ * `on`/`off` as a boolean; anything else passes through unchanged, so the
+ * schema refuses it with its own message rather than this file guessing.
+ */
+function onOff(value: unknown): unknown {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  return value;
+}
+
 export function register(program: Command): void {
   const settings = new Cmd("settings").description(
     "the fleet's shared settings: defaults every laptop inherits",
@@ -77,6 +87,12 @@ export function register(program: Command): void {
         "--no-auto-update-hermeticd",
         "leave a newly pushed hermeticd to each box's nightly update",
       )
+      .option(
+        "--files-require-cap <on|off>",
+        "require the files capability grant of every tailnet caller (default off)",
+      )
+      .option("--files-max-bytes <n>", "per-file cap on transfers, in bytes (at most 256 MiB)")
+      .option("--files-retention-days <n>", "how long a box keeps uploaded files (1-90, default 7)")
       .option("--expected-version <n>", "refuse unless the settings are still at this version")
       .addHelpText(
         "after",
@@ -88,8 +104,9 @@ export function register(program: Command): void {
           "  hermetic settings set --size large --volume-gib 200\n" +
           "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n" +
           "  hermetic settings set --no-auto-update-hermeticd\n" +
-          "\nSwitching hermeticd auto-update republishes the fleet manifest, which is how\n" +
-          "the boxes hear about it (§6.5).\n",
+          "  hermetic settings set --files-require-cap on --files-retention-days 14\n" +
+          "\nSwitching hermeticd auto-update, or changing a files setting, republishes the\n" +
+          "fleet manifest, which is how the boxes hear about it (§6.5).\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -116,6 +133,11 @@ export function register(program: Command): void {
             : Object.keys(hermes).length > 0
               ? { agent_defaults: hermes }
               : {};
+        const files = defined({
+          require_cap: onOff(opts["filesRequireCap"]),
+          max_bytes: toInt(opts["filesMaxBytes"] as string | undefined),
+          retention_days: toInt(opts["filesRetentionDays"] as string | undefined),
+        });
         const input = validate(setSchema, {
           ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
           // §8.3: an id or a name, resolved by core — the same vocabulary
@@ -126,6 +148,7 @@ export function register(program: Command): void {
           // Both spellings are defined, so Commander leaves this undefined
           // unless one of them was given.
           ...defined({ auto_update_hermeticd: opts["autoUpdateHermeticd"] }),
+          ...(Object.keys(files).length > 0 ? { files } : {}),
           ...expected(opts),
         });
         const result = await ctx.hermetic.settings.set(input);

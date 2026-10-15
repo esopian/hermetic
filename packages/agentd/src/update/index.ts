@@ -137,6 +137,23 @@ export interface UpdateDeps {
   readonly pid?: number;
   /** See `SwapDeps.asService`: only the service's own restarts are counted. */
   readonly asService?: boolean;
+  /**
+   * Told every fleet manifest this update fetched, before anything else is
+   * done with it — how the service's files settings follow the fleet
+   * (`files/settings.ts`). Must not throw; a throw is swallowed.
+   */
+  readonly onManifest?: (fleet: FleetManifest) => void;
+}
+
+/** `getFleetManifest`, then `onManifest` — which can never fail the update. */
+async function fetchManifest(deps: UpdateDeps): Promise<FleetManifest> {
+  const fleet = await deps.aws.getFleetManifest(deps.bucket);
+  try {
+    deps.onManifest?.(fleet);
+  } catch {
+    // The listener's problem, not the update's.
+  }
+  return fleet;
 }
 
 /**
@@ -219,7 +236,7 @@ export async function stagesUpToDate(host: Host, fleet: FleetManifest): Promise<
 export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promise<UpdateResult> {
   const emit = deps.emit ?? (() => {});
   emit(opEvent("manifest", 0.1, "reading the fleet manifest", deps.host.now()));
-  const fleet = await deps.aws.getFleetManifest(deps.bucket);
+  const fleet = await fetchManifest(deps);
   return await updateTo(deps, fleet, opts, false);
 }
 
@@ -240,7 +257,7 @@ export async function update(deps: UpdateDeps, opts: UpdateOptions = {}): Promis
  * keeps a release this box rolled back from being retried every five minutes.
  */
 export async function autoUpdate(deps: UpdateDeps): Promise<UpdateResult | "off"> {
-  const fleet = await deps.aws.getFleetManifest(deps.bucket);
+  const fleet = await fetchManifest(deps);
   if (!autoUpdateHermeticd(fleet)) return "off";
   return await updateTo(deps, fleet, {}, true);
 }

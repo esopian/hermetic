@@ -13,6 +13,16 @@ import type {
   SnapshotPolicy,
 } from "../schema/index.ts";
 import type { BedrockApi } from "../aws/bedrock.ts";
+import type { FilesApi } from "./files-port.ts";
+export type {
+  FilesApi,
+  FilesCallOptions,
+  FilesContent,
+  FilesFulfilOptions,
+  FilesFulfilUpload,
+  FilesProgress,
+  FilesStageUpload,
+} from "./files-port.ts";
 import type { ResourceOwner } from "../agents/ownership.ts";
 
 /**
@@ -343,7 +353,13 @@ export interface StoreApi {
 export interface SecretsApi {
   /** Create the parameter with a placeholder value if it does not exist. Idempotent. */
   ensureSlot(path: string): Promise<void>;
-  put(path: string, value: string): Promise<void>;
+  /**
+   * Write one slot. `overwrite` defaults to true; `false` refuses a slot that
+   * already exists with `CONFLICT` (`details.already_exists`) and writes
+   * nothing, so a caller that checked first cannot lose a race to a writer
+   * that came between its check and its write.
+   */
+  put(path: string, value: string, opts?: { overwrite?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** True when the slot still holds hermetic's placeholder — `secrets verify` (§8.2). */
   isPlaceholder(path: string): Promise<boolean>;
@@ -1277,6 +1293,8 @@ export interface Backend {
   foundation: FoundationApi;
   tailscale: TailscaleApi;
   rpc: RpcApi;
+  /** hermeticd's files service on the same port as `rpc` (`files-port.ts`). */
+  files: FilesApi;
   directory: DirectoryApi;
   /**
    * §8.3's Bedrock model catalog, in the fleet's region. Optional because it is

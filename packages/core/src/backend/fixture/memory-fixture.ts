@@ -15,6 +15,8 @@
  * `from "./backend/memory.ts"` import keeps working.
  */
 import { createHash } from "node:crypto";
+import { seedFixtureChatFiles } from "./fixture-chat-files.ts";
+import { seedFixtureAgentFiles } from "./fixture-files-seed.ts";
 import type {
   Agent,
   DirectoryEntry,
@@ -329,7 +331,7 @@ export const FIXTURE_PROFILE_REVISIONS = {
 export const FIXTURE_PROFILE_KEY = "sk-profile-FIXTURE-SECRET";
 
 /** The hermeticd release the fixture fleet's manifest points at. */
-export const FIXTURE_HERMETICD_VERSION = "0.6.0";
+export const FIXTURE_HERMETICD_VERSION = "0.6.1";
 
 /**
  * The browser build the fixture fleet's manifest names (§7.3). Written out
@@ -1421,5 +1423,9 @@ export function fixtureBackend(opts: FixtureSeed & { account?: FixtureAccount | 
   // board. `staging` exists to be small, and giving it four volumes no agent
   // row explains would make the two fleets differ in the wrong dimension.
   if (fleet === "main") seedFixtureVolumes(backend);
+  // The bytes behind the canned transcripts' attachment chips.
+  seedFixtureChatFiles(backend);
+  // The Files tab: inbox, outbox, stored secrets and one open request (`fixture-files-seed.ts`).
+  if (fleet === "main") seedFixtureAgentFiles(backend);
   return { backend, config: fixtureConfigFor(fleet) };
 }

@@ -4,6 +4,7 @@ dist/
 *.db-journal
 *.db.corrupt-*
 .DS_Store
+__pycache__/
 
 # Hutch's generated devkit projection and Electrobun's build output. `.hutch/`
 # is `hutch electrobun prepare`'s work, regenerated from the pins and never

@@ -12,7 +12,7 @@ import type { ChatFrame } from "../schema/index.ts";
 import { redactText } from "./chat-redact.ts";
 import type { TranscriptMask } from "./chat-redact.ts";
 import { markChatTurn, notifyChatError, resolveChatErrors } from "./notifications.ts";
-import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
+import type { BoxAddress, HermesChatClient, TurnAttachments } from "./hermes/hermes-chat.ts";
 import { CHAT_FENCE_RENEW_MS, acquireChatFence } from "./chat-fence.ts";
 import type { ChatFenceLease, ChatFenceStore } from "./chat-fence.ts";
 import type { InstanceListeningStore } from "./instance-listening.ts";
@@ -180,8 +180,10 @@ export function createChatSend(ctx: ChatSendContext) {
           : null;
         const targetSession = conversation?.session ?? parsed.session;
         sessionOfTurn = targetSession;
+        const attachments = attachmentsFor(box, parsed.attachments);
         if (
           conversation?.kind === "canonical" &&
+          attachments === undefined &&
           /^\/(new|reset|compact)\s*$/.test(parsed.message.trim())
         ) {
           if (!hermes.compact)
@@ -202,6 +204,7 @@ export function createChatSend(ctx: ChatSendContext) {
         for await (const frame of hermes.send(box, parsed.bot, parsed.message, {
           signal: opts.signal,
           ...(targetSession !== undefined ? { session: targetSession } : {}),
+          ...(attachments !== undefined ? { attachments } : {}),
         })) {
           // The caller's own abort ends the loop here as well as reaching the
           // adapter: a socket that has not noticed yet must not be able to
@@ -245,6 +248,26 @@ export function createChatSend(ctx: ChatSendContext) {
         releaseFence();
       }
     })();
+
+    /**
+     * The turn's attachments, bound to its box: the ids in the operator's
+     * order and the files service's commit. The adapter commits once it knows
+     * the session (`hermes-chat-attach.ts`).
+     */
+    function attachmentsFor(
+      box: BoxAddress,
+      requested: ChatSendInput["attachments"],
+    ): TurnAttachments | undefined {
+      if (!requested || requested.length === 0) return undefined;
+      const commit = deps.commitFile;
+      if (!commit) {
+        throw new HermeticError("UNSUPPORTED", "this chat surface cannot attach files");
+      }
+      return {
+        ids: requested.map((a) => a.file_id),
+        commit: (id, session, signal) => commit(box.instance, id, session, signal),
+      };
+    }
 
     /**
      * What the inbox learns from a settled turn.

@@ -264,6 +264,10 @@ export function fleetManifestFrom(input: FleetManifestInput): FleetManifest {
     // on the row, as the `true` that absence means, so the box never has to
     // know the default.
     auto_update_hermeticd: autoUpdateHermeticd(input.fleet.settings),
+    // The files settings, copied from the row the same way and for the same
+    // reason. Omitted when the row has none: the box resolves absence to the
+    // defaults through the same `resolveFilesSettings` the laptop uses.
+    ...(input.fleet.settings?.files === undefined ? {} : { files: input.fleet.settings.files }),
     updated_at: input.updatedAt,
     updated_by: input.updatedBy,
   };
@@ -426,10 +430,11 @@ export async function recordHermesMirror(
 }
 
 /**
- * Republish the manifest so it carries the fleet's `auto_update_hermeticd` as
- * `_fleet` now has it, changing nothing else (§6.5). `settings.set` is the
- * caller, right after it commits the switch: the box cannot read `_fleet`, so
- * until this lands every box goes on following the old answer.
+ * Republish the manifest so it carries the fleet's `auto_update_hermeticd` —
+ * and its `files` settings — as `_fleet` now has them, changing nothing else
+ * (§6.5). `settings.set` is the caller, right after it commits a change to
+ * either: the box cannot read `_fleet`, so until this lands every box goes on
+ * following the old answer.
  *
  * There is nothing to *pass*: `fleetManifestFrom` derives the flag from the row
  * it is handed, and the row handed to it here is the one re-read under the lock

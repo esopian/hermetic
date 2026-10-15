@@ -1,0 +1,17 @@
+# Installed by hermeticd apply into $HERMES_HOME/plugins/hermetic-files/ and
+# enabled by the managed /etc/hermes/config.yaml (plugins.enabled). Edit this
+# file in packages/agentd/plugins/hermetic-files, never on the box: the next
+# apply rewrites it.
+name: hermetic-files
+version: "1.0.0"
+description: Exchange files and secrets with the hermetic operator through hermeticd
+author: hermetic
+provides_tools:
+  - request_file
+  - request_secret
+  - await_file
+  - list_files
+  - share_file
+provides_hooks:
+  - transform_tool_result
+  - transform_llm_output

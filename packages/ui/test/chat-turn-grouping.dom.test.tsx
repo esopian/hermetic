@@ -849,10 +849,18 @@ const stamped = (frame: ChatFrameView): ChatFrameView => {
  * from a seeded generator and React's `useId`, so two mounts of the same
  * transcript differ in the gradient ids and the blob's path and in nothing else.
  */
+// The transcript only: the composer draws the store's attach controls, which a
+// thread rendered without a provider has no store to offer.
 const drawn = (container: HTMLElement) =>
-  (container.querySelector(".ch-thread") ?? container).innerHTML
+  withoutComposer(container.querySelector(".ch-thread") ?? container)
     .replace(/<svg[\s\S]*?<\/svg>/g, "<svg/>")
     .replace(/hav_r_\d+/g, "hav");
+
+function withoutComposer(root: Element): string {
+  const copy = root.cloneNode(true) as Element;
+  copy.querySelector(".ch-composer")?.remove();
+  return copy.innerHTML;
+}
 
 /** Every step the group is drawing, by the name on its summary. */
 const stepNames = (container: HTMLElement) =>

@@ -168,6 +168,25 @@ describe("resolving hermeticd", () => {
   });
 
   /**
+   * agentd imports `@hermetic/core/shared` as well as `schema`, and `schema` is
+   * built from `shared`, so a shared-only edit changes the binary: it has to
+   * move the release generation, or `releaseDrift` stays quiet about it and the
+   * source-build cache ships the binary from before the edit.
+   */
+  test("the fingerprint covers core's shared module, which agentd compiles in", () => {
+    const root = checkout();
+    mkdirSync(join(root, "packages/core/src/shared"), { recursive: true });
+    writeFileSync(join(root, "packages/core/src/shared/files.ts"), "export const a = 1\n");
+    const a = sourceFingerprint(root, "0.4.1");
+    writeFileSync(join(root, "packages/core/src/shared/files.ts"), "export const a = 2\n");
+    const b = sourceFingerprint(root, "0.4.1");
+    expect(b).not.toBe(a);
+    // And `errors.ts`, the one file outside both that they import.
+    writeFileSync(join(root, "packages/core/src/errors.ts"), "export class E {}\n");
+    expect(sourceFingerprint(root, "0.4.1")).not.toBe(b);
+  });
+
+  /**
    * The stages are not compiled into the binary, which is exactly why they were
    * missing from the fingerprint — and why the omission was invisible.
    * `releaseDrift`'s warning names them ("if hermeticd *or its stages* changed,
