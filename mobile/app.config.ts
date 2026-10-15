@@ -3,14 +3,16 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 /**
  * The phone app's Expo config.
  *
- * No EAS project is created or linked from this repo. Push tokens need an EAS
- * project id, which is read from the environment so each operator can supply
- * their own (`EXPO_PUBLIC_PROJECT_ID`, or `EAS_PROJECT_ID` as EAS itself sets
- * it). Without one the app runs and pairs normally, and push registration is
- * skipped (see README.md). `EXPO_PUBLIC_HERMETIC_FIXTURE=1` builds fixture
+ * Push tokens need an EAS project id. Set the linked project id below or
+ * override it with `EXPO_PUBLIC_PROJECT_ID` / `EAS_PROJECT_ID`. Without one the
+ * app runs and pairs normally, and push registration is skipped (see README.md).
+ * `EXPO_PUBLIC_HERMETIC_FIXTURE=1` builds fixture
  * mode (`src/fixture/`); it is read in the app, not here.
  */
-const projectId = process.env.EXPO_PUBLIC_PROJECT_ID || process.env.EAS_PROJECT_ID || undefined;
+const projectId =
+  process.env.EXPO_PUBLIC_PROJECT_ID ||
+  process.env.EAS_PROJECT_ID ||
+  "4acbc5b1-ea8a-4a5a-bc3c-ce0b2d61bd1e";
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -27,6 +29,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: false,
     infoPlist: {
       UIBackgroundModes: ["remote-notification", "fetch", "processing"],
+      ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
         "Hermetic uses the camera to scan the pairing QR code shown on your laptop.",
       // The phone talks to the boxes over the tailnet (WireGuard encrypts and
