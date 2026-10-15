@@ -20,7 +20,7 @@ import {
   revokeBlobUrl,
   setBlobBudget,
 } from "../src/chat/page-blob-urls.ts";
-import { resetThumbnails, useThumbnail } from "../src/chat/thumbnails.ts";
+import { resetThumbnails, seedThumbnail, useThumbnail } from "../src/chat/thumbnails.ts";
 import type { Thumbnail } from "../src/chat/thumbnails.ts";
 import { DRAG_IDLE_MS, useFileDrop } from "../src/chat/components/AttachTray.tsx";
 import { NO_ATTACHMENTS } from "../src/chat/chat-attachments.ts";
@@ -409,6 +409,28 @@ describe("blob URLs and thumbnails", () => {
     cleanup();
     // Unmounted, the pin is gone and the over-budget registry lets it go.
     expect(isMintedBlobUrl(url)).toBe(false);
+  });
+
+  test("a staged image asks the box for nothing, and shows a picture seeded from the page's bytes", async () => {
+    let reads = 0;
+    const read = (async () => {
+      reads += 1;
+      return { mime: "image/png", data_b64: btoa("png") };
+    }) as never;
+    let thumb: Thumbnail | null = null;
+    function Chip({ readBox }: { readBox: boolean }) {
+      thumb = useThumbnail("atlas", "f_seed", "fleet1", read, readBox);
+      return null;
+    }
+    const view = render(<Chip readBox={false} />);
+    expect(thumb!.state).toBe("loading");
+    // The page's own bytes arrive; the chip draws them without a read.
+    act(() => seedThumbnail("fleet1", "atlas", "f_seed", new Blob(["png"]), "image/png"));
+    await waitFor(() => expect(thumb?.state).toBe("ready"));
+    // Once committed, the box may be read, but a seeded picture is already there.
+    view.rerender(<Chip readBox />);
+    expect(thumb!.state).toBe("ready");
+    expect(reads).toBe(0);
   });
 });
 

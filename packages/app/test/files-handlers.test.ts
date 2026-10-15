@@ -112,6 +112,13 @@ test("a drop stages by upload id and ends on a staged `done` frame", async () =>
   expect(frame.file).toMatchObject({ name: "chart.png", mime: "image/png", class: "image" });
   expect(frames.some((f) => f.event === "progress")).toBe(true);
 
+  // Like the box, a staged file has no content until a turn commits it.
+  const early = await dispatch(ctx, "files.content", { instance: "atlas", id: frame.file.id }).catch(
+    (error: unknown) => error as { code?: string },
+  );
+  expect((early as { code?: string }).code).toBe("FILE_NOT_FOUND");
+  await ctx.hermetic().files.internal.commit("atlas", frame.file.id, "s1");
+
   // The thumbnail: an image's bytes, base64, refused for anything else.
   const content = (await dispatch(ctx, "files.content", { instance: "atlas", id: frame.file.id })) as {
     mime: string;
@@ -197,6 +204,7 @@ test("files.content refuses a file that is not an image", async () => {
   const done = await until(frames, (f) => f.event === "done");
   const frame = done.data as FilesStageFrame;
   if (frame.type !== "staged") throw new Error("expected staged");
+  await ctx.hermetic().files.internal.commit("atlas", frame.file.id, "s1");
   const e = await dispatch(ctx, "files.content", { instance: "atlas", id: frame.file.id }).catch(
     (x: unknown) => x as { code?: string },
   );
