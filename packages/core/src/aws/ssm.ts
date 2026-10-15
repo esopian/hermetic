@@ -50,12 +50,29 @@ export class SsmSecrets implements SecretsApi {
     }
   }
 
-  async put(path: string, value: string): Promise<void> {
+  /**
+   * `overwrite: false` (the default is true) makes SSM itself refuse a slot
+   * that already exists, so a check-then-write cannot lose a race: that
+   * refusal is `CONFLICT` with `already_exists`, and nothing was written.
+   */
+  async put(path: string, value: string, opts: { overwrite?: boolean } = {}): Promise<void> {
+    const overwrite = opts.overwrite ?? true;
     try {
       await this.ssm.send(
-        new PutParameterCommand({ Name: path, Type: "SecureString", Value: value, Overwrite: true }),
+        new PutParameterCommand({
+          Name: path,
+          Type: "SecureString",
+          Value: value,
+          Overwrite: overwrite,
+        }),
       );
     } catch (e) {
+      if (!overwrite && isAwsError(e, "ParameterAlreadyExists")) {
+        throw new HermeticError("CONFLICT", `the SSM slot ${path} already exists`, {
+          path,
+          already_exists: true,
+        });
+      }
       /**
        * This is the one call in hermetic that has a secret in its hand, so the
        * provider's own message is dropped rather than wrapped: an SDK error can

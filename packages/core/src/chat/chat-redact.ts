@@ -379,6 +379,8 @@ export function redactBlock(block: ChatBlock): ChatBlock {
         ...block,
         args: redactDeep(block.args),
         result: block.result === undefined ? block.result : redactDeep(block.result),
+        // A share's name is free text the agent chose, like an attachment's.
+        ...(block.share ? { share: { ...block.share, name: redactText(block.share.name) } } : {}),
       };
     case "attachment":
       // `href` is a URL the box minted, and a signed one carries its credential

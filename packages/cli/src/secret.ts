@@ -41,3 +41,19 @@ export async function readOptionalSecret(prompt: string): Promise<string | undef
   const value = await readSecret(prompt);
   return value.length === 0 ? undefined : value;
 }
+
+/**
+ * A text secret for `files put --secret-stdin`: the whole of stdin when piped,
+ * kept as-is (a PEM's or a `.env` block's interior newlines are the value; the
+ * shared parser trims the one trailing newline itself), or one masked line on
+ * a TTY. Marks the run as having read a secret, like `readSecret`.
+ */
+export async function readSecretText(prompt: string): Promise<string> {
+  read = true;
+  if (isInteractive()) {
+    const value = await password({ message: prompt, output: process.stderr });
+    if (isCancel(value)) throw new HermeticError("ABORTED", "cancelled at the secret prompt");
+    return value;
+  }
+  return await Bun.stdin.text();
+}

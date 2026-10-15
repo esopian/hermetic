@@ -24,6 +24,8 @@ import { openExternal } from "../lib/open-external.ts";
 import { FleetChatButton } from "../chat/components/FleetChatButton.tsx";
 import { ListeningBand } from "./ListenButton.tsx";
 import { CopyId } from "./primitives.tsx";
+import { useOpenRequestCount } from "../state/file-requests-state.tsx";
+import { openRequestsLabel } from "./agent/files-logic.ts";
 
 interface Props {
   agent: AgentView;
@@ -187,6 +189,7 @@ export function AgentCard({
             ? `up ${uptime(a, now)}`
             : "";
   const mismatch = hostnameMismatch(a, tailnet, fleetId);
+  const fileRequests = useOpenRequestCount(a.name);
   const tags = [
     configOf(foundation, a.name) === "drifted" ? (
       <Tag key="drift" tone="warn">
@@ -207,6 +210,18 @@ export function AgentCard({
       <Tag key="update" tone="warn">
         Update
       </Tag>
+    ) : null,
+    // §8.6: file requests waiting on the operator, the fleet table's `▣ n` badge.
+    fileRequests > 0 ? (
+      <span
+        key="files"
+        className="card-tag warn"
+        role="img"
+        aria-label={openRequestsLabel(fileRequests)}
+        title={openRequestsLabel(fileRequests)}
+      >
+        ▣ {fileRequests}
+      </span>
     ) : null,
   ];
   const start = async () => {

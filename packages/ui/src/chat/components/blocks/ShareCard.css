@@ -1,0 +1,95 @@
+/*
+ * A file the agent shared (attachments plan §8.5): the attachment row with a
+ * Save… button at its right, an image above it, and one line under it for the
+ * save's progress or its refusal. Square, and drawn from the existing tokens
+ * only: `--text-ok` for saved, `--bad` for a failed save, a digest mismatch or
+ * a `bad` refusal, `--warn` for a `warn` refusal.
+ * Every control is styled here, so both engines draw it the same.
+ */
+
+.ch-share .ch-share-item {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-width: 260px;
+  max-width: min(100%, 520px);
+}
+.ch-share .ch-share-item > span {
+  min-width: 0;
+}
+
+.ch-share-save {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid var(--fg);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ch-share-save:hover:not(:disabled) {
+  background: var(--fg);
+  color: var(--bg);
+}
+.ch-share-save:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+.ch-share-save:disabled {
+  border-color: var(--line2);
+  color: var(--fg3);
+  cursor: default;
+}
+
+.ch-share-note {
+  flex-basis: 100%;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.ch-share-note.ok {
+  color: var(--text-ok);
+}
+.ch-share-note.bad {
+  color: var(--bad);
+}
+
+/* A share the box refused: the call's own words, never a card to save from.
+ * The tone follows the call's status: `bad` in --bad, `warn` in --warn. */
+.ch-share-refused {
+  border: 1px solid var(--bad);
+  background: var(--bg2);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.ch-share-refused .ch-share-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--bad);
+  margin-right: 8px;
+}
+.ch-share-refused.warn {
+  border-color: var(--warn);
+}
+.ch-share-refused.warn .ch-share-tag {
+  color: var(--text-warn, var(--warn));
+}
+.ch-share-refused code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg2);
+}
+.ch-share-refused p {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

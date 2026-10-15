@@ -10,9 +10,14 @@
  * When something needs you, the gold count is followed by a dim `+N` for the
  * other unread rows (`bellParts`): the same inbox, said quieter, not a second
  * colour.
+ *
+ * An agent's open file request (attachments plan §8.6) counts as needing you,
+ * whichever session raised it: it comes from the box's own slot list
+ * (`file-requests-state.tsx`) rather than from a core row, so it is added here.
  */
 import type { RefObject } from "react";
 import { bellParts } from "../../logic/inbox-logic.ts";
+import { useFileRequestsIfAvailable } from "../../state/file-requests-state.tsx";
 
 export function Bell({
   unread,
@@ -27,12 +32,15 @@ export function Bell({
   onToggle: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const { tone, main, more } = bellParts(unread, needsAction);
+  const files = useFileRequestsIfAvailable()?.all.length ?? 0;
+  const unreadAll = unread + files;
+  const needsAll = needsAction + files;
+  const { tone, main, more } = bellParts(unreadAll, needsAll);
   const label =
     tone === "needs_action"
-      ? `Notifications: ${needsAction} need you · ${unread} unread`
+      ? `Notifications: ${needsAll} need you · ${unreadAll} unread`
       : tone === "unread"
-        ? `Notifications: ${unread} unread`
+        ? `Notifications: ${unreadAll} unread`
         : "Notifications";
 
   return (
