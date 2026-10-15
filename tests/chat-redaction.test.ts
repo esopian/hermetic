@@ -69,7 +69,7 @@ import { join } from "node:path";
 import { MemoryInstanceListeningStore } from "../packages/core/src/chat/instance-listening.ts";
 import { createChat } from "../packages/core/src/chat/chat.ts";
 import { MemoryChatSettingsStore } from "../packages/core/src/chat/chat-settings.ts";
-import { REDACTED, SECRET_PATTERNS } from "../packages/core/src/chat/chat-redact.ts";
+import { REDACTED, SECRET_PATTERNS, redactBlock } from "../packages/core/src/chat/chat-redact.ts";
 import type { HermesChatClient } from "../packages/core/src/chat/hermes/hermes-chat.ts";
 import { openHermetic } from "../packages/core/src/open.ts";
 import type { Hermetic } from "../packages/core/src/hermetic.ts";
@@ -447,6 +447,25 @@ function poisonedHistory(instance: string): ChatMessage[] {
           duration_ms: 40,
           render: "terminal",
         },
+        // A secret request card. The plugin's result never carries a value, so
+        // one planted there is a box that misbehaved — and still redacted like
+        // any other tool result. The slot id is not a secret and survives.
+        {
+          kind: "tool",
+          tool_id: "call-secret",
+          name: "request_secret",
+          server: null,
+          args: { purpose: "deploy key", keys: ["GITHUB_TOKEN"] },
+          result: {
+            status: "fulfilled",
+            request_id: "fr_0123456789ab",
+            keys: ["GITHUB_TOKEN"],
+            value: s("github-token"),
+          },
+          status: "ok",
+          render: "secret_request",
+          request_id: "fr_0123456789ab",
+        },
         {
           kind: "attachment",
           name: `creds-${s("tailscale-oauth-secret")}.txt`,
@@ -794,6 +813,19 @@ function rawBytes(): string {
 }
 
 /* ── the tests ────────────────────────────────────────────────────────────── */
+
+describe("chat redaction, request cards", () => {
+  test("a secret request's result is redacted and its slot id kept", () => {
+    const bot = poisonedHistory(INSTANCE)[1];
+    const block = bot?.blocks.find((b) => b.kind === "tool" && b.render === "secret_request");
+    if (block?.kind !== "tool") throw new Error("no secret_request block in the fixture");
+    const out = redactBlock(block);
+    if (out.kind !== "tool") throw new Error("redaction changed the block kind");
+    expect(out.request_id).toBe("fr_0123456789ab");
+    expect(JSON.stringify(out.result)).not.toContain(s("github-token"));
+    expect(JSON.stringify(out.result)).toContain(REDACTED);
+  });
+});
 
 describe("chat redaction, from the box to the wire", () => {
   /**

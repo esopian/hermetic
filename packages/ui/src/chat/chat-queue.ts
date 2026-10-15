@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSelection } from "./chat-state.tsx";
 import type { SteerOutcome } from "./chat-conversations.ts";
+import type { SentAttachment } from "./chat-attachments.ts";
 
 /**
  * One message typed while the agent was busy, waiting its turn.
@@ -31,7 +32,15 @@ export interface QueuedMessage {
   id: string;
   text: string;
   at: string;
+  /**
+   * Files already staged on the box, sent with the message. A message with
+   * any is never steered into a running turn (`force`): Hermes takes files
+   * with a prompt, not mid-turn.
+   */
+  attachments?: readonly SentAttachment[];
 }
+
+const NO_FILES: readonly SentAttachment[] = [];
 
 /** One stable empty queue, so an idle conversation does not re-render on identity. */
 const NO_QUEUE: QueuedMessage[] = [];
@@ -49,7 +58,7 @@ export interface SendQueueDeps {
    * The conversation store's own send, abort and steer, for the selected
    * conversation. `send` answers whether it started a turn.
    */
-  send: (text: string) => boolean;
+  send: (text: string, attachments?: readonly SentAttachment[]) => boolean;
   abort: () => Promise<void>;
   steer: (text: string) => Promise<SteerOutcome>;
   /** The persistent provider supplies these for independently visible dock panes. */
@@ -58,7 +67,7 @@ export interface SendQueueDeps {
     turnError: unknown;
     reconnecting: boolean;
   };
-  sendTo?: (text: string, target: ChatSelection) => boolean;
+  sendTo?: (text: string, target: ChatSelection, attachments?: readonly SentAttachment[]) => boolean;
   abortTo?: (target: ChatSelection) => Promise<void>;
   steerTo?: (text: string, target: ChatSelection) => Promise<SteerOutcome>;
 }
@@ -132,7 +141,8 @@ export function useSendQueue({
     [stateFor, sending, turnError, reconnecting],
   );
   const sendFor = useCallback(
-    (text: string, target: ChatSelection) => sendTo?.(text, target) ?? send(text),
+    (text: string, target: ChatSelection, files: readonly SentAttachment[] = NO_FILES) =>
+      sendTo?.(text, target, files) ?? send(text, files),
     [sendTo, send],
   );
   const abortFor = useCallback(
@@ -175,15 +185,17 @@ export function useSendQueue({
   }, []);
 
   const queueMessage = useCallback(
-    (text: string, target = selection) => {
+    (text: string, target = selection, files: readonly SentAttachment[] = NO_FILES) => {
       const body = text.trim();
-      if (!body || !target) return;
+      if ((!body && files.length === 0) || !target) return;
       const id = `q${++queueSeq.current}`;
       const at = new Date().toISOString();
       const key = queueKeyOf(target);
+      const row: QueuedMessage =
+        files.length > 0 ? { id, text: body, at, attachments: files } : { id, text: body, at };
       setQueues((previous) => {
         const next = new Map(previous);
-        next.set(key, [...(previous.get(key) ?? []), { id, text: body, at }]);
+        next.set(key, [...(previous.get(key) ?? []), row]);
         return next;
       });
     },
@@ -225,7 +237,7 @@ export function useSendQueue({
       if (dispatched.current.has(key) || parked.current.has(key)) continue;
       const head = queues.get(key)?.[0];
       if (!head) continue;
-      if (!sendFor(head.text, target)) {
+      if (!sendFor(head.text, target, head.attachments)) {
         park(key);
         continue;
       }
@@ -266,12 +278,12 @@ export function useSendQueue({
    * a turn started, as the store's own `send` does.
    */
   const sendMessage = useCallback(
-    (text: string, target?: ChatSelection): boolean => {
+    (text: string, target?: ChatSelection, files: readonly SentAttachment[] = NO_FILES): boolean => {
       if (target) {
         const key = queueKeyOf(target);
         unpark(key);
         dispatched.current.delete(key);
-        return sendFor(text, target);
+        return sendFor(text, target, files);
       }
       // The full view can select and send in the same callback (failure-card
       // recovery). Its store selection ref has moved, while this hook's render
@@ -281,7 +293,7 @@ export function useSendQueue({
         unpark(key);
         dispatched.current.delete(key);
       }
-      return send(text);
+      return send(text, files);
     },
     [selection, send, sendFor, unpark],
   );
@@ -303,64 +315,90 @@ export function useSendQueue({
    * Put a message at the head of the queue — the row it already is, or a new
    * one — so it is the next thing the drain sends.
    */
-  const promote = useCallback((key: string, text: string, id: string | null) => {
-    setQueues((previous) => {
-      const held = previous.get(key) ?? [];
-      const row = (id ? held.find((r) => r.id === id) : undefined) ?? {
-        id: `q${++queueSeq.current}`,
-        text,
-        at: new Date().toISOString(),
-      };
-      const next = new Map(previous);
-      next.set(key, [row, ...held.filter((r) => r.id !== row.id)]);
-      return next;
-    });
-  }, []);
+  const promote = useCallback(
+    (key: string, text: string, id: string | null, files: readonly SentAttachment[] = NO_FILES) => {
+      setQueues((previous) => {
+        const held = previous.get(key) ?? [];
+        const row: QueuedMessage = (id ? held.find((r) => r.id === id) : undefined) ?? {
+          id: `q${++queueSeq.current}`,
+          text,
+          at: new Date().toISOString(),
+          ...(files.length > 0 ? { attachments: files } : {}),
+        };
+        const next = new Map(previous);
+        next.set(key, [row, ...held.filter((r) => r.id !== row.id)]);
+        return next;
+      });
+    },
+    [],
+  );
 
   /**
    * Send `text` now. `id` is the queued row it came from, or `null` for the
    * composer's own text. Read `sendingNow` rather than `sending`: the steer is
    * awaited, and the turn may have ended while the box was answering.
+   *
+   * Answers whether the message was taken — sent, steered, or held at the head
+   * of the queue. `false` means nothing holds it: a queued row is still in the
+   * queue (it leaves only once a send is accepted), and the composer's own
+   * text and files go back to the composer.
    */
   const force = useCallback(
-    async (text: string, id: string | null, target = selection) => {
+    async (
+      text: string,
+      id: string | null,
+      target = selection,
+      files: readonly SentAttachment[] = NO_FILES,
+    ): Promise<boolean> => {
       const body = text.trim();
-      if (!target || !body) return;
+      if (!target || (!body && files.length === 0)) return false;
       const key = queueKeyOf(target);
       if (!state(target).sending) {
         // Nothing to get past: this is an ordinary send, and like every
         // deliberate send it releases a parked queue behind it.
+        if (!sendMessage(body, target, files)) return false;
         if (id) dropQueued(key, id);
-        sendMessage(body, target);
-        return;
+        return true;
+      }
+      if (files.length > 0) {
+        // Files go with a prompt, never into a running turn: the message waits
+        // at the head of the queue, released, and goes the moment the turn ends.
+        promote(key, body, id, files);
+        unpark(key);
+        return true;
       }
       const outcome = await steerFor(body, target);
       if (outcome === "redirected" || outcome === "queued") {
         if (id) dropQueued(key, id);
-        return;
+        return true;
       }
-      if (outcome === "refused") return;
+      if (outcome === "refused") return false;
       // The box would not take it into the running turn. Head of the queue,
       // queue released, turn stopped: the drain sends it once the stop lands.
       promote(key, body, id);
       unpark(key);
       if (state(target).sending) await abortFor(target);
+      return true;
     },
     [selection, state, steerFor, abortFor, dropQueued, promote, unpark, sendMessage],
   );
 
-  /** Send what is in the composer now, past the queue and into the running turn. */
+  /**
+   * Send what is in the composer now, past the queue and into the running
+   * turn. `false` when nothing took it: the caller gives the text back.
+   */
   const sendNow = useCallback(
-    (text: string, target = selection) => void force(text, null, target),
+    (text: string, target = selection, files: readonly SentAttachment[] = NO_FILES) =>
+      force(text, null, target, files),
     [force, selection],
   );
 
-  /** Send one queued row now rather than when the turn ends. */
+  /** Send one queued row now rather than when the turn ends. A refused row stays queued. */
   const sendQueuedNow = useCallback(
-    (id: string, target = selection) => {
-      if (!target) return;
+    (id: string, target = selection): Promise<boolean> => {
+      if (!target) return Promise.resolve(false);
       const row = queues.get(queueKeyOf(target))?.find((r) => r.id === id);
-      if (row) void force(row.text, id, target);
+      return row ? force(row.text, id, target, row.attachments ?? NO_FILES) : Promise.resolve(false);
     },
     [selection, queues, force],
   );
@@ -397,11 +435,13 @@ export function useSendQueue({
       return {
         queued: rows,
         queueParked: rows.length > 0 && parked.current.has(key),
-        queueMessage: (text: string) => queueMessage(text, target),
+        queueMessage: (text: string, files?: readonly SentAttachment[]) =>
+          queueMessage(text, target, files),
         unqueue: (id: string) => unqueue(id, target),
-        sendMessage: (text: string) => sendMessage(text, target),
+        sendMessage: (text: string, files?: readonly SentAttachment[]) =>
+          sendMessage(text, target, files),
         stopTurn: () => stopTarget(target),
-        sendNow: (text: string) => sendNow(text, target),
+        sendNow: (text: string, files?: readonly SentAttachment[]) => sendNow(text, target, files),
         sendQueuedNow: (id: string) => sendQueuedNow(id, target),
       };
     },

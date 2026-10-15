@@ -1,0 +1,210 @@
+/*
+ * The request cards (attachments plan §8.3–8.4b): an agent asking for a file,
+ * a secret file or a text secret.
+ *
+ * Like `.ch-approve`, they are loud, square and never softened: every head
+ * selector below is `.ch-freq.<tone> > .ch-card-head`, which outranks the soft
+ * skin's `[data-skin="soft"] .ch-card-head` whatever the load order. A file
+ * request is drawn in the foreground ink; a secret is `--warn` because it needs
+ * attention (it is not an error, so never `--bad`). `--acc` stays the brand's.
+ */
+
+.ch-freq {
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  margin: 0 0 11px;
+  border-radius: 0;
+}
+.ch-freq.secret {
+  border-color: var(--warn);
+}
+.ch-freq.file > .ch-card-head,
+.ch-freq.secret > .ch-card-head {
+  background: var(--fg);
+  color: var(--bg);
+  border-bottom: 0;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 12px;
+  font-weight: 900;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.ch-freq.secret > .ch-card-head {
+  background: var(--warn);
+  color: #0e0e0d;
+}
+.ch-freq > .ch-card-head .right {
+  color: inherit;
+  opacity: 0.75;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-freq-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+/* The agent's words, quoted and literal: never markdown, never a link. */
+.ch-freq-purpose {
+  margin: 0;
+  padding: 0 0 0 10px;
+  border-left: 3px solid var(--line2);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ch-freq-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+.ch-freq-facts > div {
+  display: contents;
+}
+.ch-freq-facts dt {
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  line-height: 18px;
+}
+.ch-freq-facts dd {
+  margin: 0;
+  font-family: var(--mono);
+  color: var(--fg2);
+  overflow-wrap: anywhere;
+}
+.ch-freq-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.ch-freq-keys b {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.ch-freq-drop {
+  display: block;
+  width: 100%;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 0;
+  border: 2px dashed var(--line2);
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--fg2);
+  font-size: 12px;
+}
+/* The focus ring is the accent's, as everywhere (ui-brief: focus rings). */
+.ch-freq-drop:focus-visible {
+  border-color: var(--fg);
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.ch-freq.secret .ch-freq-drop:focus-visible {
+  border-color: var(--warn);
+}
+
+/* A small uppercase state label at the start of a status row. */
+.ch-freq-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  margin-right: 8px;
+}
+
+.ch-freq-progress {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content max-content;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.ch-freq-progress .bar {
+  margin: 0;
+}
+
+.ch-freq-done,
+.ch-freq-closed,
+.ch-freq-refused,
+.ch-freq-late,
+.ch-freq-keynote {
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+}
+.ch-freq-done .ch-freq-tag {
+  color: var(--text-ok);
+}
+.ch-freq-refused {
+  border-color: var(--bad);
+}
+.ch-freq-refused .ch-freq-tag {
+  color: var(--bad);
+}
+.ch-freq-late,
+.ch-freq-keynote {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-color: var(--warn);
+}
+.ch-freq-late .ch-freq-tag {
+  color: var(--text-warn);
+}
+.ch-freq-note {
+  color: var(--fg2);
+  font-size: 12px;
+}
+
+.ch-freq-untrusted {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border-bottom: 1px solid var(--warn);
+}
+.ch-freq-untrusted b {
+  color: var(--text-warn);
+}
+
+.ch-freq-actions,
+.ch-freq-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ch-freq-foot {
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg2);
+}
+.ch-freq-foot .spacer {
+  margin-left: auto;
+}
+.ch-freq-foot .btn,
+.ch-freq-actions .btn,
+.ch-freq-progress .btn {
+  height: 30px;
+  border-radius: 0;
+}
+
+/* A request id the box did not record against this conversation (§8.3). */
+.ch-freq-warn {
+  color: var(--text-warn);
+}

@@ -16,7 +16,7 @@ import type { TerminalHost } from "../terminal/host.ts";
 import type { StreamRegistry } from "./streams.ts";
 
 /**
- * The five things only a native head can do (`handlers/app.ts`).
+ * The things only a native head can do (`handlers/app.ts`).
  *
  * Declared here as plain functions rather than imported from `main/`, because
  * every module under `main/` that matters is reached through `main/index.ts`,
@@ -39,6 +39,28 @@ export interface NativeDeps {
     delivered: true;
     permission: "granted";
   };
+  /**
+   * The native open dialog (`Utils.openFileDialog`), files only, several at
+   * once. Resolves to the picked paths, `[]` when the operator cancelled. The
+   * paths stay in the main process: `files.pickNative` registers each one and
+   * answers with upload ids (`handlers/files.ts`).
+   */
+  pickFiles(): Promise<string[]>;
+  /**
+   * The native folder dialog (`Utils.openFileDialog` with directories only,
+   * one at a time): where a download is saved. Resolves to the chosen folder,
+   * `null` when the operator cancelled. The path stays in the main process:
+   * `files.saveNative` registers it and answers an opaque id
+   * (`handlers/files.ts`).
+   */
+  pickFolder(): Promise<string | null>;
+  /**
+   * Marks a file `files.get` saved as downloaded (`com.apple.quarantine` on
+   * macOS, `main/quarantine.ts`), so Gatekeeper treats it as any browser
+   * download. Best effort; never throws, never logs the path. Optional: a head
+   * without it saves the file unmarked.
+   */
+  quarantine?(path: string): Promise<void>;
 }
 
 export interface AppOptions {

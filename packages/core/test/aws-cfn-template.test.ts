@@ -354,12 +354,13 @@ describe("the foundation template", () => {
     ).toBe(true);
   });
 
-  test("daily snapshots retain 7 and select this fleet's data volumes only", () => {
+  test("snapshots follow the policy parameters and select this fleet's data volumes only", () => {
     const dlm = template.Resources["SnapshotPolicy"] as {
       Properties: {
+        State: unknown;
         PolicyDetails: {
           TargetTags: Array<{ Key: string; Value: unknown }>;
-          Schedules: Array<{ RetainRule: { Count: number }; CreateRule: { Interval: number } }>;
+          Schedules: Array<{ RetainRule: { Count: unknown }; CreateRule: { Interval: unknown } }>;
         };
       };
     };
@@ -373,8 +374,35 @@ describe("the foundation template", () => {
       { Key: ROLE_TAG, Value: ROLE_DATA },
       { Key: "hermetic:fleet_id", Value: { Ref: "FleetId" } },
     ]);
-    expect(dlm.Properties.PolicyDetails.Schedules[0]!.RetainRule.Count).toBe(7);
-    expect(dlm.Properties.PolicyDetails.Schedules[0]!.CreateRule.Interval).toBe(24);
+    // §7.1 (v16): the three knobs are parameters, and off is `DISABLED`, not a
+    // deleted policy — so turning it off keeps the snapshots already taken.
+    expect(dlm.Properties.State).toEqual({ "Fn::If": ["SnapshotsOn", "ENABLED", "DISABLED"] });
+    expect(dlm.Properties.PolicyDetails.Schedules[0]!.RetainRule.Count).toEqual({
+      Ref: "SnapshotRetainCount",
+    });
+    expect(dlm.Properties.PolicyDetails.Schedules[0]!.CreateRule.Interval).toEqual({
+      Ref: "SnapshotIntervalHours",
+    });
+    expect(template.Conditions["SnapshotsOn"]).toEqual({
+      "Fn::Equals": [{ Ref: "SnapshotsEnabled" }, "true"],
+    });
+  });
+
+  test("the snapshot parameters default to the policy every fleet ran before them", () => {
+    const p = template.Parameters;
+    expect(p["SnapshotsEnabled"]?.["Default"]).toBe("true");
+    expect(p["SnapshotRetainCount"]?.["Default"]).toBe("7");
+    expect(p["SnapshotIntervalHours"]?.["Default"]).toBe("24");
+    expect(p["SnapshotIntervalHours"]?.["AllowedValues"]).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "6",
+      "8",
+      "12",
+      "24",
+    ]);
   });
 
   test("`--network nat` is a condition, not a second template", () => {

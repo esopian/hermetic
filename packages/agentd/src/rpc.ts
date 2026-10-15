@@ -8,17 +8,28 @@
  * node — every other agent in this fleet included — is refused as well. Every
  * request, allowed or refused, leaves one audit line.
  *
- * Wire format is core's `@hermetic/core/schema` `rpc.ts`: NDJSON, one `RpcFrame`
- * per line, flushed as it happens. Two routes and no more: `GET /healthz` says
- * who this box is and what it is running, and `GET /logs` streams journald — or,
- * with `file=`, one of Hermes's own rotating logs on the data volume.
- * There is deliberately nothing here that *changes* the box — a config change
- * goes out by rerendering and rerunning the bootstrap stages (§4.2), not by an
- * operator reaching in over RPC, so this listener has no write path to abuse.
+ * Wire format for the log routes is core's `@hermetic/core/schema` `rpc.ts`:
+ * NDJSON, one `RpcFrame` per line, flushed as it happens. `GET /healthz` says
+ * who this box is and what it is running, and `GET /logs` streams journald —
+ * or, with `file=`, one of Hermes's own rotating logs on the data volume.
+ *
+ * The `/files` routes (`files/routes.ts`) are the one narrow write path: an
+ * operator handing the agent a file. Narrow by construction — bytes land only
+ * under fixed roots (the inbox, its stage, the tmpfs drop), at a name the box
+ * derives from a fresh random id plus a sanitized basename, never a path the
+ * caller chose; every create is exclusive, so nothing is overwritten; and
+ * nothing received is ever executed. It is behind the same `whois` gate as the
+ * rest, and that gate admits nobody new: the autogroup:member caller it lets
+ * through can already run a shell as `hermes` through the chat terminal tool
+ * (design §7.4), so a file it could write that way gains it nothing. A config
+ * change still goes out by rerendering and rerunning the bootstrap stages
+ * (§4.2), never over this listener.
  */
 import type { ErrorCode, HermesLogFile, RpcFrame, RpcHealth, RpcLogLine } from "@hermetic/core/schema";
 import { LogsRequest, encodeRpcFrame } from "@hermetic/core/schema";
 import {
+  FILES_CAPABILITY,
+  FILES_LIMITS,
   HERMES_DASHBOARD_UNIT,
   HERMES_HOME,
   HERMETICD_RPC_PORT,
@@ -26,7 +37,10 @@ import {
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
+  matchFilesRoute,
 } from "@hermetic/core/shared";
+import { FilesError, filesErrorResponse } from "./files/errors.ts";
+import type { FilesTailnetHandler } from "./files/routes.ts";
 import type { Host } from "./host.ts";
 import { tailscaleIpv4 } from "./tailscale.ts";
 import { AgentdError } from "./errors.ts";
@@ -38,6 +52,12 @@ export interface Whois {
   readonly login: string;
   readonly node: string;
   readonly tags: readonly string[];
+  /**
+   * The app capabilities the tailnet policy grants the caller on this node:
+   * the keys of `whois`'s `CapMap`. Read by the files routes when the fleet
+   * requires `FILES_APP_CAP`; absent reads as none.
+   */
+  readonly caps?: readonly string[];
 }
 
 export type WhoisResolver = (peerIp: string) => Promise<Whois | null>;
@@ -94,6 +114,12 @@ export interface RpcDeps {
   readonly allowedTags?: readonly string[];
   /** Where the audit line goes. `main.ts`'s `log`, which redacts, in the service. */
   readonly log?: (message: string) => void;
+  /**
+   * The files routes (`files/service.ts`). Absent, `/files/*` is a 404 and
+   * `/healthz` reports no `files` capability — how a head tells this build
+   * from one that can take an attachment.
+   */
+  readonly files?: FilesTailnetHandler;
 }
 
 /**
@@ -244,11 +270,14 @@ export function tailscaleWhois(host: Host): WhoisResolver {
       const parsed = JSON.parse(res.stdout) as {
         UserProfile?: { LoginName?: string };
         Node?: { Name?: string; Tags?: string[] };
+        CapMap?: Record<string, unknown> | null;
       };
       const node = parsed.Node?.Name;
       const login = parsed.UserProfile?.LoginName;
       if (!node && !login) return null;
-      return { login: login ?? "", node: node ?? "", tags: parsed.Node?.Tags ?? [] };
+      const capMap = parsed.CapMap;
+      const caps = capMap && typeof capMap === "object" ? Object.keys(capMap) : [];
+      return { login: login ?? "", node: node ?? "", tags: parsed.Node?.Tags ?? [], caps };
     } catch {
       return null;
     }
@@ -274,7 +303,20 @@ function auditLine(
   const login = who?.login === "" || who === null ? "-" : who.login;
   const node = who?.node === "" || who === null ? "-" : who.node;
   const tags = who && who.tags.length > 0 ? who.tags.join(",") : "-";
-  return `rpc ${request.method} ${path} from ${peerIp} node=${node} login=${login} tags=${tags} ${verdict}`;
+  return `rpc ${request.method} ${auditPath(path)} from ${peerIp} node=${node} login=${login} tags=${tags} ${verdict}`;
+}
+
+/**
+ * The path as the audit line records it. A stage upload carries its file name
+ * in the path, and a name can itself be the sensitive part — so it is cut.
+ */
+export function auditPath(path: string): string {
+  return path.startsWith("/files/stage/") ? "/files/stage/…" : path;
+}
+
+/** Whether a path is one of the files routes' (`/files` or under it). */
+function isFilesPath(path: string): boolean {
+  return path === "/files" || path.startsWith("/files/");
 }
 
 /**
@@ -349,6 +391,7 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
         // key anyway, but the type says "this build did not answer" and the
         // object should say the same thing.
         ...(browsers === undefined ? {} : { browsers }),
+        ...(deps.files ? { capabilities: [FILES_CAPABILITY] } : {}),
       };
       return Response.json(health, { headers: { [RPC_VERSION_HEADER]: String(RPC_PROTOCOL_VERSION) } });
     }
@@ -391,6 +434,30 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
       const unit = parsed.data.unit ?? HERMES_DASHBOARD_UNIT;
       return ndjson(logFrames(journal, unit, parsed.data.tail, parsed.data.follow, stop.signal), () =>
         stop.abort(),
+      );
+    }
+
+    if (isFilesPath(url.pathname)) {
+      // `rpcAccess` admits a node carrying a configured `allowedTags` tag, for
+      // the read-only routes. The files routes write to the box and stand in
+      // for a human (a request always ends with one), so they take an untagged
+      // member only, whatever the policy allows elsewhere.
+      if (who && who.tags.length > 0) {
+        return filesErrorResponse(
+          new FilesError("FORBIDDEN", "the files routes take a tailnet user, not a tagged node"),
+        );
+      }
+      // `who` is non-null here: `rpcAccess` refuses a peer `whois` cannot name.
+      const route = deps.files ? matchFilesRoute(request.method, url.pathname) : null;
+      if (deps.files && route && who) {
+        return deps.files(request, route, {
+          login: who.login,
+          node: who.node,
+          caps: who.caps ?? [],
+        });
+      }
+      return filesErrorResponse(
+        new FilesError("NOT_FOUND", `no such route: ${request.method} ${auditPath(url.pathname)}`),
       );
     }
 
@@ -571,6 +638,20 @@ export async function serveRpc(
      * so silence is the normal state rather than slack.
      */
     idleTimeout: 0,
+    /**
+     * The largest body Bun will accept, set explicitly: the default (128 MB)
+     * is below the files cap. The cap itself is enforced per upload against
+     * `Content-Length` before a byte is read; this is the backstop, with a
+     * MiB of headroom so the route's own 413 is the answer a client sees.
+     *
+     * The ceiling every fleet's `files.max_bytes` is clamped to, not the
+     * fleet's value: the listener is bound once, and the setting moves at
+     * each manifest read. Bound to a lowered value, a later raise would be
+     * refused here with Bun's bare 413 until a restart; the per-route check
+     * (`uploadHeaders` against `FilesCtx.settings`) is what applies the
+     * fleet's cap, at once.
+     */
+    maxRequestBodySize: FILES_LIMITS.fileBytes + 1024 * 1024,
     fetch(request, srv) {
       const peer = srv.requestIP(request);
       return handler(request, peer?.address ?? "");

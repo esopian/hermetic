@@ -19,6 +19,7 @@
  * `schema/presets.ts`.
  */
 import { DEFAULT_ROOT_GIB } from "./box.ts";
+import { AWS_FREE_TIER, FREE_TIER_PRESET_ID } from "./free-tier.ts";
 import { isSizeId } from "./sizes.ts";
 import type { SizeId } from "./sizes.ts";
 
@@ -61,6 +62,14 @@ export interface BuiltinPreset extends MachinePreset {
  * 40 GiB) rather than "whatever the fleet's defaults say".
  */
 export const BUILTIN_PRESETS: readonly BuiltinPreset[] = [
+  // The AWS Free Tier baseline (`free-tier.ts`): its numbers live there, so a
+  // contributor who updates the allowances moves this preset with them.
+  {
+    id: FREE_TIER_PRESET_ID,
+    name: "Free tier",
+    ...AWS_FREE_TIER.machine,
+    lane: "cpu",
+  },
   {
     id: "micro",
     name: "Micro",
@@ -143,13 +152,42 @@ export interface PresetsView {
 }
 
 /**
+ * A custom preset whose id a later build made a built-in one (`free-tier`
+ * arrived after operators could already name a preset that): renamed to the
+ * first free `<id>-2`, `<id>-3`…, and the loadout and default follow it. A
+ * row written by the older build meant *its own* preset by that id, so the
+ * slot keeps building the operator's machine rather than silently becoming the
+ * built-in — and the next write re-sends the custom list under a legal id,
+ * where it would otherwise be refused as naming a built-in.
+ */
+function healBuiltinIds(doc: CreatePresetsDoc): CreatePresetsDoc {
+  const builtin = new Set(BUILTIN_PRESETS.map((p) => p.id));
+  if (!doc.custom.some((p) => builtin.has(p.id))) return doc;
+  const taken = new Set([...builtin, ...doc.custom.map((p) => p.id)]);
+  const renamed = new Map<string, string>();
+  const custom = doc.custom.map((p) => {
+    if (!builtin.has(p.id)) return p;
+    const base = p.id.slice(0, 36);
+    let n = 2;
+    while (taken.has(`${base}-${n}`)) n++;
+    const id = `${base}-${n}`;
+    taken.add(id);
+    renamed.set(p.id, id);
+    return { ...p, id };
+  });
+  const follow = (id: string | null) => (id === null ? null : (renamed.get(id) ?? id));
+  return { loadout: doc.loadout.map(follow), default: follow(doc.default), custom };
+}
+
+/**
  * The document as it may be *read*: a loadout padded or cut to four slots,
  * slots naming nothing (or naming a preset twice) emptied, and a default that
  * is not in the loadout moved to its first filled slot. Lenient on purpose —
  * this is what heals a row written by another build; a *write* is held to the
  * strict rules in `schema/presets.ts` instead.
  */
-export function normalizePresetsDoc(doc: CreatePresetsDoc): CreatePresetsDoc {
+export function normalizePresetsDoc(stored: CreatePresetsDoc): CreatePresetsDoc {
+  const doc = healBuiltinIds(stored);
   const known = new Set([...BUILTIN_PRESETS.map((p) => p.id), ...doc.custom.map((p) => p.id)]);
   const seen = new Set<string>();
   const loadout: (string | null)[] = [];

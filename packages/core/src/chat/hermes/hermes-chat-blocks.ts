@@ -6,14 +6,16 @@
  * REST history row have to agree, and they only agree because they are the same
  * function.
  */
-import type {
-  ChatBlock,
-  ChatErrorSurface,
-  ChatFailure,
-  ChatUsage,
-  ToolRender,
+import {
+  ShareFileResult,
+  type ChatBlock,
+  type ChatErrorSurface,
+  type ChatFailure,
+  type ChatUsage,
+  type ToolRender,
 } from "../../schema/index.ts";
 import { hermesActivity } from "./hermes-chat-activity.ts";
+import { FILE_REQUEST_TOOL_RENDER, toolRequestId } from "./hermes-chat-file-requests.ts";
 import { nonNegative, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 
 /**
@@ -40,6 +42,10 @@ const TOOL_RENDER: Record<string, ToolRender> = {
   query: "table",
   // Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`).
   message_agent: "message_agent",
+  // The files plugin asking the operator for a file or a secret.
+  ...FILE_REQUEST_TOOL_RENDER,
+  // The files plugin handing the operator a file through the outbox.
+  share_file: "file_share",
 };
 
 /** The spellings upstream has used for a tool's arguments, most specific first. */
@@ -127,6 +133,7 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
     args = asObject ? { ...extra, ...asObject } : { ...extra, args: picked.value };
   }
 
+  const render = TOOL_RENDER[name.toLowerCase()] ?? null;
   return {
     kind: "tool",
     tool_id: str(payload.tool_id) ?? str(payload.call_id) ?? str(payload.id),
@@ -137,8 +144,39 @@ export function toolBlock(payload: Record<string, unknown>, force: "running" | n
     status: force ?? toolStatus(payload, exit),
     exit_code: exit,
     duration_ms: num(payload.duration_ms) ?? scaleSeconds(num(payload.duration_s)),
-    render: TOOL_RENDER[name.toLowerCase()] ?? null,
+    render,
+    // Only a request card carries the key, so every other tool block keeps the
+    // shape it always had. A live card that opened a new slot gets its id from
+    // the box later (`hermes-chat-file-requests.ts`).
+    ...(render === "file_request" || render === "secret_request"
+      ? { request_id: toolRequestId(name, args, result) }
+      : {}),
+    // Likewise only a share card, and only from the plugin's result.
+    ...(render === "file_share" ? { share: toolShare(result) } : {}),
   };
+}
+
+/**
+ * What a `share_file` call shared, read from the plugin's result alone: the
+ * JSON `POST /outbox` answered, as the plugin returned it (a string, or an
+ * object a history row already parsed). Anything that is not a whole
+ * `ShareFileResult` — a refusal (`{"status":"error",…}`), a truncated result,
+ * no result yet — is null. Never the tool's arguments: a model that writes a
+ * share id there must not point the card at some other file.
+ */
+export function toolShare(result: unknown): ShareFileResult | null {
+  let value = result;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text.startsWith("{")) return null;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  const parsed = ShareFileResult.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function toolStatus(

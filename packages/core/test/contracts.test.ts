@@ -8,6 +8,10 @@ import {
 } from "../src/hermetic.ts";
 import {
   ArtifactsPushApiInput,
+  FilesPutApiInput,
+  FilesPutInput,
+  FilesStageApiInput,
+  FilesStageInput,
   ArtifactsPushInput,
   ConfigShowInput,
   DoctorInput,
@@ -53,9 +57,45 @@ describe("REQUEST_SCHEMAS", () => {
     expect(cli.path).toBe("./hermeticd");
   });
 
-  test("the two tables differ in exactly that one place", () => {
+  /** Composer attachments: the page stages by upload id; only the CLI names a file on disk. */
+  test("the bridge's files.stage rejects a local path; the CLI's accepts it", () => {
+    expect(REQUEST_SCHEMAS["files.stage"]).toBe(FilesStageApiInput);
+    expect(CLI_REQUEST_SCHEMAS["files.stage"]).toBe(FilesStageInput);
+    const path = { instance: "atlas", source: { path: "/etc/passwd" } };
+    expect(REQUEST_SCHEMAS["files.stage"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.stage"].safeParse(path).success).toBe(true);
+    const upload = {
+      instance: "atlas",
+      source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+    };
+    expect(REQUEST_SCHEMAS["files.stage"].safeParse(upload).success).toBe(true);
+  });
+
+  /** Answering an agent's request: the same split as `files.stage`. */
+  test("the bridge's files.put rejects a local path; the CLI's accepts it", () => {
+    expect(REQUEST_SCHEMAS["files.put"]).toBe(FilesPutApiInput);
+    expect(CLI_REQUEST_SCHEMAS["files.put"]).toBe(FilesPutInput);
+    const base = { instance: "atlas", request_id: "fr_aaaaaaaaaaaa" };
+    const path = { ...base, source: { path: "/etc/passwd" } };
+    expect(REQUEST_SCHEMAS["files.put"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.put"].safeParse(path).success).toBe(true);
+    const upload = { ...base, source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" } };
+    expect(REQUEST_SCHEMAS["files.put"].safeParse(upload).success).toBe(true);
+  });
+
+  /** A download: the bridge names a save-dialog folder by id; the CLI names a path. */
+  test("the bridge's files.get rejects a local path; the CLI's accepts it", () => {
+    const base = { name: "atlas", id: "f_aaaaaaaaaaaa" };
+    const path = { ...base, dest: { path: "/tmp/out.pdf" } };
+    expect(REQUEST_SCHEMAS["files.get"].safeParse(path).success).toBe(false);
+    expect(CLI_REQUEST_SCHEMAS["files.get"].safeParse(path).success).toBe(true);
+    const folder = { ...base, dest: { dest_id: "sv_00000000-0000-4000-8000-000000000000" } };
+    expect(REQUEST_SCHEMAS["files.get"].safeParse(folder).success).toBe(true);
+  });
+
+  test("the two tables differ in exactly those four places", () => {
     const differing = PUBLIC_METHODS.filter((m) => REQUEST_SCHEMAS[m] !== CLI_REQUEST_SCHEMAS[m]);
-    expect(differing).toEqual(["artifacts.push"]);
+    expect(differing.sort()).toEqual(["artifacts.push", "files.get", "files.put", "files.stage"]);
   });
 });
 

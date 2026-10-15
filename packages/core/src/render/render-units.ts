@@ -373,7 +373,11 @@ export function secretsUnit(input: RenderInput): string {
     [
       "Type=oneshot",
       "RemainAfterExit=yes",
-      "ExecStartPre=/usr/bin/install -d -m 0700 /run/hermetic",
+      // 0711, root's: traversable but not listable, so `hermes` can open the
+      // durable file secrets under /run/hermetic/files and the files socket by
+      // path, while secrets.env (0600 root) stays unreadable and no name here
+      // is enumerable. hermeticd's apply sets the same mode (SECRETS_ENV_DIR_MODE).
+      "ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic",
       "ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600",
       ...sources,
     ],

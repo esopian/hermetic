@@ -1030,3 +1030,117 @@ describe("terminal rows never carry a secret", () => {
     for (const secret of SECRETS) expect(dump).not.toContain(secret);
   });
 });
+
+/**
+ * Agent file requests (`files.put`): a private key and a text secret pushed
+ * through every lane reach their SSM slot or the box and nowhere else — not an
+ * event, not the agent's event log, not a refusal, not the box's listing of
+ * the request.
+ */
+describe("files.put never leaks a secret it carries", () => {
+  const PEM_BODY = "FIXTUREpemBodyFIXTUREpemBodyFIXTURE";
+  const PEM = `-----BEGIN PRIVATE KEY-----\n${PEM_BODY}\n-----END PRIVATE KEY-----\n`;
+  const TEXT = "ghp_FIXTUREfilesPutTextSecret0001";
+  const OTHER = "FIXTUREunrequestedValue0001";
+
+  function assertNoFileSecret(haystack: string) {
+    for (const s of [PEM_BODY, TEXT, OTHER]) expect(haystack).not.toInclude(s);
+    assertClean(haystack);
+  }
+
+  async function putEvents(
+    hermetic: ReturnType<typeof testHermetic>,
+    input: Record<string, unknown>,
+  ): Promise<{ events: unknown[]; error: HermeticError | null }> {
+    const events: unknown[] = [];
+    try {
+      for await (const e of hermetic.files.put(input)) events.push(e);
+      return { events, error: null };
+    } catch (e) {
+      if (e instanceof HermeticError) return { events, error: e };
+      throw e;
+    }
+  }
+
+  test("a PEM to SSM, a text secret to SSM and one sent once leave no trace", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
+    const uploads = hermetic.files.internal.uploads;
+    const seen: unknown[] = [];
+
+    const pemSlot = backend.files.openRequest("atlas", {
+      purpose: "FIXTURE key",
+      sensitivity: "secret",
+    });
+    const pem = uploads.registerBytes("github-app.pem", new TextEncoder().encode(PEM));
+    const a = await putEvents(hermetic, {
+      instance: "atlas",
+      request_id: pemSlot.request_id,
+      source: { chunk_upload_id: pem.upload_id },
+    });
+    expect(a.error).toBeNull();
+    seen.push(a.events);
+
+    const textSlot = backend.files.openRequest("atlas", {
+      kind: "secret_text",
+      purpose: "FIXTURE token",
+      keys: ["GITHUB_TOKEN"],
+    });
+    const text = uploads.registerBytes("stdin", new TextEncoder().encode(`GITHUB_TOKEN=${TEXT}\n`));
+    const b = await putEvents(hermetic, {
+      instance: "atlas",
+      request_id: textSlot.request_id,
+      source: { chunk_upload_id: text.upload_id },
+    });
+    expect(b.error).toBeNull();
+    seen.push(b.events);
+
+    const onceSlot = backend.files.openRequest("atlas", {
+      kind: "secret_text",
+      purpose: "FIXTURE once",
+      keys: ["GITHUB_TOKEN"],
+      durable: false,
+    });
+    const once = uploads.registerBytes("stdin", new TextEncoder().encode(`${TEXT}\n`));
+    const c = await putEvents(hermetic, {
+      instance: "atlas",
+      request_id: onceSlot.request_id,
+      source: { chunk_upload_id: once.upload_id },
+      as: "raw",
+    });
+    expect(c.error).toBeNull();
+    seen.push(c.events);
+
+    assertNoFileSecret(JSON.stringify(seen));
+    assertNoFileSecret(JSON.stringify(await backend.files.list("atlas", {})));
+    assertNoFileSecret(JSON.stringify(await backend.store.events.query("atlas")));
+    // The slots really hold them — the test above is not vacuous.
+    const params = JSON.stringify([...backend.params.values()]);
+    expect(params).toInclude(Buffer.from(PEM).toString("base64").slice(0, 16));
+    expect(backend.params.get("/hermes/fxtr0001/atlas/env-github")).toBeDefined();
+  });
+
+  test("a refused text secret names the unrequested line and carries no value", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend());
+    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
+    const slot = backend.files.openRequest("atlas", {
+      kind: "secret_text",
+      purpose: "FIXTURE token",
+      keys: ["GITHUB_TOKEN"],
+    });
+    const up = hermetic.files.internal.uploads.registerBytes(
+      "stdin",
+      new TextEncoder().encode(`GITHUB_TOKEN=${TEXT}\nAWS_SECRET_ACCESS_KEY=${OTHER}\n`),
+    );
+    const { error } = await putEvents(hermetic, {
+      instance: "atlas",
+      request_id: slot.request_id,
+      source: { chunk_upload_id: up.upload_id },
+    });
+    expect(error?.code).toBe("VALIDATION");
+    expect(error?.message).toInclude("Line 2");
+    expect(error?.message).toInclude("not requested");
+    assertNoFileSecret(JSON.stringify({ message: error?.message, details: error?.details }));
+    assertNoFileSecret(JSON.stringify(await backend.files.list("atlas", {})));
+  });
+});

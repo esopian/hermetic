@@ -39,7 +39,7 @@ const GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   // operator's own notification list rather than anything to do with a bot, but
   // it belongs beside chat for the same reason `providers` belongs beside
   // `settings` — an operator looking for one is looking for the other.
-  ["chat", ["chat", "bots", "inbox"]],
+  ["chat", ["chat", "bots", "files", "inbox"]],
 ];
 
 function pad(text: string, width: number): string {

@@ -257,6 +257,14 @@ The app refuses `init` (and every other mutating request, including a second tea
 
 The Settings view (`,` shortcut or the header's `SETTINGS →` button, `#settings` in the URL) covers the same ground as this runbook from the app: an **Account** panel with the frozen config and a `RUN DOCTOR` button, **Fleet defaults**, **Local** (the run log), and a **DANGER** block that opens the teardown drawer. The drawer walks Review (the live plan plus the same four option checkboxes) → Confirm (both the twelve-digit account id *and* the literal word `teardown`, typed) → Progress (the same phase list, streamed), then falls back to the wizard on its own once `meta.get` reports `initialized: false`. Full visual/behavioral spec: [`docs/ui-brief.md`](ui-brief.md#settings).
 
+### Files and agent requests
+
+Publish this release with `hermetic artifacts push` before relying on file requests from an existing box. Check that the box has updated hermeticd; an older box cannot answer the new files routes. The Hermes files plugin is deployed with the agent configuration and may replace an operator's prior plugin of the same name. Review that plugin before rollout if the box has local customizations.
+
+The app's chat attachment tray and the agent's Files tab handle ordinary files. `hermetic files ls <agent> --requests` lists open requests from the CLI; answer one with `hermetic files put <agent> <path> --request <fr_id>` or decline with `hermetic files decline <agent> <fr_id>`. A text secret goes through standard input, for example `pbpaste | hermetic files put <agent> --request <fr_id> --secret-stdin`; the app sends a text secret in one bounded upload of at most 64 KiB. Secrets requested as durable are stored in SSM and materialized on the box; `--ephemeral` supplies one for an hour in tmpfs instead. `hermetic files rm <agent> <id>` plans removal and, for a durable secret, deletes its SSM slot. The agent must request it again after removal.
+
+File routes are restricted to tailnet members and may additionally require the `hermetic.dev/cap/files` capability. If you enable that gate with `hermetic settings set --files-require-cap on`, add the grant to your own tailnet policy first; hermetic does not write grants. Without the grant, all file routes return 403. To roll back the binary, run `hermetic artifacts push` from the previous committed checkout or supply its binary with `HERMETIC_HERMETICD`, then request rollout as usual. An in-flight upload must be retried after a release change.
+
 ## Recovery scenarios
 
 - **Laptop lost or replaced.** Nothing about the fleet lives only on the laptop — `hermetic init` on a fresh machine, same profile, auto-attaches to the existing foundation stack instead of creating a new one. `~/.hermetic/hermetic.db` held only local config and the run log, both reconstructable.

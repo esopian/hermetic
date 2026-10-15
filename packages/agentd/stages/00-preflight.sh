@@ -28,9 +28,12 @@ fi
 
 echo "::progress 0.1 creating the hermetic directories"
 # /run/hermetic is where `hermeticd stage secret` drops a 0600 auth key, so it
-# is created 0700 explicitly: `mkdir -p` honours the umask (0755 on a stock
-# Ubuntu) and would leave the directory listable by every account on the box.
-install -d -m 0700 /run/hermetic
+# is created with an explicit mode: `mkdir -p` honours the umask (0755 on a
+# stock Ubuntu) and would leave the directory listable by every account on the
+# box. 0711 lets the hermes account traverse to the names it is given (the files
+# socket, its materialised secrets) without being able to list the directory;
+# every secret inside stays 0600.
+install -d -m 0711 /run/hermetic
 mkdir -p /var/log/hermetic /var/lib/hermeticd /etc/hermetic
 
 # Setting it here means every later log line, on the box and on the tailnet,

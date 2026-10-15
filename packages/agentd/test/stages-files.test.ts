@@ -146,9 +146,9 @@ describe("the shipped bootstrap stages (§4.3)", () => {
    * key. `mkdir -p` honours the umask (0755 on a stock Ubuntu), which would
    * make that key enumerable by every account on the box.
    */
-  test("the tmpfs directory secrets land in is created 0700, not at the umask", () => {
+  test("the tmpfs directory secrets land in is created 0711, not at the umask", () => {
     const body = read("00-preflight.sh");
-    expect(body).toContain("install -d -m 0700 /run/hermetic");
+    expect(body).toContain("install -d -m 0711 /run/hermetic");
     expect(body).not.toMatch(/mkdir -p [^\n]*\/run\/hermetic/);
   });
 

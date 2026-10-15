@@ -22,6 +22,8 @@ import { terminalSubline } from "../../logic/terminal-logic.ts";
 import { AGENT_TABS, AGENT_TAB_LABELS } from "../../nav/agent-nav.ts";
 import type { AgentTab } from "../../nav/agent-nav.ts";
 import type { ProfilesState } from "../../state/state.tsx";
+import { useOpenRequestCount } from "../../state/file-requests-state.tsx";
+import { openRequestsLabel } from "./files-logic.ts";
 import { ListenButton } from "../ListenButton.tsx";
 import { lifecycleSubline, overviewSubline } from "./agent-summary.ts";
 import type { TerminalSessions } from "./useTerminalSession.ts";
@@ -57,6 +59,7 @@ export function AgentSectionNav({
   const model = agent.hermes?.model ?? bound?.model ?? null;
   const life = lifecycleSubline(agent, latest, rerun);
   const browsers = agent.browsers ?? [];
+  const requests = useOpenRequestCount(agent.name);
   const term = terminalSubline({
     status: agent.display_status,
     sessions: terminal?.sessions ?? [],
@@ -73,6 +76,11 @@ export function AgentSectionNav({
         ? "no browser on this box"
         : "not connected",
     terminal: term.text,
+    files: off
+      ? `instance ${agent.display_status}`
+      : requests > 0
+        ? openRequestsLabel(requests)
+        : "inbox · outbox · secrets",
     logs: "activity · journal · console",
     config: [bound?.name ?? agent.provider, model].filter(Boolean).join(" · "),
     lifecycle: life.text,
@@ -81,10 +89,12 @@ export function AgentSectionNav({
   /**
    * Entries whose sub-line is the `●` form, and its colour: Lifecycle's is a
    * recommended action, so `--warn`; Terminal's is session activity, so the
-   * accent (docs/ui-brief.md, Colour meaning).
+   * accent (docs/ui-brief.md, Colour meaning). Files' is a request waiting on
+   * the operator, so `--warn` too.
    */
   const accent: Partial<Record<AgentTab, "warn" | "acc">> = {
     ...(life.accent ? { lifecycle: "warn" as const } : {}),
+    ...(requests > 0 && !off ? { files: "warn" as const } : {}),
     ...(term.accent ? { terminal: "acc" as const } : {}),
   };
 
@@ -148,9 +158,21 @@ export function AgentSectionNav({
       ) : null}
       {/* The CLI echo: what the section is, typed. */}
       <div className="dr-snav-foot mono">
-        $ hermetic {section === "logs" ? "logs" : section === "terminal" ? "ssh" : "agent"}
+        $ hermetic{" "}
+        {section === "logs"
+          ? "logs"
+          : section === "terminal"
+            ? "ssh"
+            : section === "files"
+              ? "files"
+              : "agent"}
         <br />
-        &nbsp;&nbsp;{section === "logs" || section === "terminal" ? agent.name : `status ${agent.name}`}
+        &nbsp;&nbsp;
+        {section === "logs" || section === "terminal"
+          ? agent.name
+          : section === "files"
+            ? `ls ${agent.name}`
+            : `status ${agent.name}`}
       </div>
     </nav>
   );

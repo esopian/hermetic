@@ -1,0 +1,12 @@
+{
+  "purpose": "The GitHub App private key, so I can mint installation tokens.",
+  "name_hint": "github-app.pem",
+  "accept": ["application/x-pem-file", ".pem"],
+  "max_bytes": 4096,
+  "sensitivity": "secret",
+  "durable": true,
+  "wait_s": 240,
+  "session_id": "20261013_120000_abcdef",
+  "task_id": "task-1",
+  "model_extra": "dropped, not refused"
+}
