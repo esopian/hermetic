@@ -114,6 +114,29 @@ test("a dropped file is staged, and the turn carries its id", async () => {
   expect(pane.textContent).toContain("look at this");
 });
 
+test("a dropped image shows its picture the moment it is sent, before the box serves it", async () => {
+  const composer = await openScribe();
+  const pane = thread(composer);
+  drop(pane, [new File([PNG], "chart.png", { type: "image/png" })]);
+  await waitFor(() => expect(pane.querySelector(".ch-file.staged") !== null).toBe(true), {
+    timeout: 4_000,
+  });
+  await userEvent.type(composer, "look at this{Enter}");
+  const shot = () => pane.querySelector(".ch-msg .ch-attach img.ch-shot")?.getAttribute("src") ?? "";
+  await waitFor(() => expect(shot()).toMatch(/^blob:/), { timeout: 4_000 });
+  // The box serves only committed files; the picture is the page's own bytes,
+  // and nothing asked the box for a file it would have said it does not have.
+  expect(harness!.calls.filter((c) => c.name === "files.content")).toHaveLength(0);
+  expect(pane.textContent).not.toContain("preview expired");
+  // The box's own row, read back after the turn, keeps the same picture.
+  await waitFor(
+    () =>
+      expect(pane.textContent).toContain("I have the 1 attached file: chart.png. Reading them now."),
+    { timeout: 4_000 },
+  );
+  expect(shot()).toMatch(/^blob:/);
+});
+
 test("a message can be files alone", async () => {
   const composer = await openScribe();
   const pane = thread(composer);
