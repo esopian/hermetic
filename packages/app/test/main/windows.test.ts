@@ -10,9 +10,11 @@ import { describe, expect, test } from "bun:test";
 import {
   clampFrame,
   createWindows,
+  DEFAULT_FRAME,
   type Frame,
   MIN_FRAME,
   type OpenedWindow,
+  openingFrame,
 } from "../../src/main/windows.ts";
 
 interface Fake extends OpenedWindow {
@@ -210,5 +212,37 @@ describe("minimum size", () => {
     fake.resize({ x: 0, y: 0, width: MIN_FRAME.width, height: MIN_FRAME.height });
     fake.resize({ x: 5, y: 5, width: 1600, height: 1000 });
     expect(fake.frames).toHaveLength(1);
+  });
+});
+
+describe("opening frame", () => {
+  /**
+   * Always a position: a frame without `x`/`y` takes Electrobun's centring
+   * path, which sizes the webview from the window's outer frame and leaves the
+   * page a titlebar taller than the window — every drawer's footer under the
+   * bottom edge until the first resize.
+   */
+  test("a roomy work area gets the default size, centred under the titlebar", () => {
+    const frame = openingFrame({ x: 0, y: 30, width: 3440, height: 1410 });
+    expect(frame).toEqual({
+      x: 1000,
+      y: 269,
+      width: DEFAULT_FRAME.width,
+      height: DEFAULT_FRAME.height,
+    });
+  });
+
+  test("a short screen shrinks the content height to fit, titlebar included", () => {
+    const frame = openingFrame({ x: 0, y: 37, width: 1470, height: 919 })!;
+    expect(frame.height + 32).toBeLessThanOrEqual(919);
+    expect(frame.y).toBeGreaterThanOrEqual(37);
+    expect(frame.width).toBe(DEFAULT_FRAME.width);
+  });
+
+  test("never below the minimum, and null when the display could not be read", () => {
+    const frame = openingFrame({ x: 0, y: 0, width: 800, height: 400 })!;
+    expect([frame.width, frame.height]).toEqual([MIN_FRAME.width, MIN_FRAME.height]);
+    expect(openingFrame({ x: 0, y: 0, width: 0, height: 0 })).toBeNull();
+    expect(openingFrame(null)).toBeNull();
   });
 });

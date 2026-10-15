@@ -61,6 +61,13 @@ test("a finished foundation update clears the switcher's update-available badge"
   // the log scrolls (`op-drawer-layout.test.ts` pins the CSS behind the class).
   const body = () => drawer.querySelector<HTMLElement>(".drawer-body");
   expect(body()?.classList.contains("op-body")).toBe(false);
+  // Stage 1 lists each step by its headline, with the detail folded under it.
+  await within(drawer).findByText("Lock the fleet");
+  const stack = within(drawer)
+    .getByText(/^Update the CloudFormation stack/)
+    .closest("details");
+  expect(stack?.open).toBe(false);
+  expect(stack?.querySelector(".fu-step-details")?.textContent).toContain("AgentPolicy");
   await user.click(await within(drawer).findByRole("button", { name: "Continue →" }));
   expect(body()?.classList.contains("op-body")).toBe(false);
   await user.click(within(drawer).getByRole("button", { name: "Update the foundation" }));

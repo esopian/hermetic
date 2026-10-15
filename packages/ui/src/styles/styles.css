@@ -1253,6 +1253,11 @@ button:focus-visible,
 .drawer-foot > .btn:first-child {
   justify-self: start;
 }
+/* `.btn` carries no height of its own; without this a footer's actions are
+   as tall as their text. */
+.drawer-foot > .btn {
+  min-height: 44px;
+}
 .drawer-body {
   flex: 1;
   overflow: auto;
@@ -2956,6 +2961,15 @@ button:focus-visible,
 }
 .danger-copy b {
   color: inherit;
+}
+/* `--danger-text` is the ink for prose *on* a red block. The update and
+   network drawers use the same paragraph on the drawer's own background, where
+   that ink is the background colour and the warning was invisible. */
+.drawer-body .danger-copy {
+  color: var(--fg2);
+}
+.drawer-body .danger-copy b {
+  color: var(--fg);
 }
 .btn-teardown {
   background: var(--danger-text);
