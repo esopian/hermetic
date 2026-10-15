@@ -82,6 +82,18 @@ export const PlanStep = z.object({
   id: z.string(),
   description: z.string(),
   destructive: z.boolean(),
+  /**
+   * A one-line headline for a head that lists steps before their detail —
+   * the update drawer. `description` stays the whole sentence the CLI prints;
+   * a step without a title is shown by its `description`.
+   */
+  title: z.string().optional(),
+  /**
+   * What `description` lists, one item per entry (a stack change, a release
+   * kept or deleted, an agent), so a head can fold them away without parsing
+   * the prose.
+   */
+  details: z.array(z.string()).optional(),
 });
 export type PlanStep = z.infer<typeof PlanStep>;
 

@@ -17,6 +17,11 @@ import type { createChangeSet } from "./change-set.ts";
  */
 const NAT_EIP_VERSION = 6;
 
+/** `1 agent`, `3 agents`: the step titles count things, and `agent(s)` reads as a form. */
+function count(n: number, one: string, many = `${one}s`): string {
+  return `${String(n)} ${n === 1 ? one : many}`;
+}
+
 export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof createChangeSet>) {
   const { deps, core, backend, hermeticdVersion, versionOf, lockIsLive, foundationVersion } = ctx;
   const { grantedNow, bedrockGrant, changeSetName, computeChangeSet } = changeSet;
@@ -59,11 +64,21 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
         id: "preflight",
         description: `take the ${FLEET_KEY} lock; every agent operation refuses with LOCKED while it is held`,
         destructive: false,
+        title: "Lock the fleet",
+        details: [`every agent operation refuses with LOCKED until the update finishes`],
       },
       {
         id: "archive",
         description: `archive foundation v${from} — the fleet manifest, every config object, the ${FLEET_KEY} item, ${agents.length} agent row(s), their events and the SSM parameter names — to archive/foundation-v${from}/ (and the local archive), replacing the one previous archive`,
         destructive: false,
+        title: `Archive foundation v${from}`,
+        details: [
+          "the fleet manifest and every config object",
+          `the ${FLEET_KEY} item`,
+          `${count(agents.length, "agent row")} and their events`,
+          "the SSM parameter names",
+          `to archive/foundation-v${from}/ and the local archive, replacing the one previous archive`,
+        ],
       },
     ];
 
@@ -92,6 +107,15 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
             : `; ${requiredBefore.map((m) => `v${m.version}`).join(", ")} must finish, and the stack is not changed if it does not`
         }`,
         destructive: false,
+        title: `Run ${count(preStack.length, "pre-stack step")}`,
+        details: [
+          ...preStack.map((m) => `v${m.version} ${m.describe}`),
+          ...(requiredBefore.length === 0
+            ? []
+            : [
+                `${requiredBefore.map((m) => `v${m.version}`).join(", ")} must finish, and the stack is not changed if it does not`,
+              ]),
+        ],
       });
     }
 
@@ -111,6 +135,7 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
           id: "stack",
           description: "the foundation stack is already at this template; no CloudFormation change",
           destructive: false,
+          title: "Stack already current",
         });
       } else if (info.status !== "CREATE_COMPLETE") {
         warnings.push(
@@ -118,15 +143,17 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
         );
       } else {
         const unsafe = unsafeReplacements(info);
+        const changes = info.changes.map(
+          (c) =>
+            `${c.action} ${c.logicalId} (${c.resourceType})${c.replacement === "True" ? " — REPLACEMENT" : ""}`,
+        );
+        const replaced = info.changes.filter((c) => c.replacement === "True").length;
         steps.push({
           id: "stack",
-          description: `update the foundation stack: ${info.changes
-            .map(
-              (c) =>
-                `${c.action} ${c.logicalId} (${c.resourceType})${c.replacement === "True" ? " — REPLACEMENT" : ""}`,
-            )
-            .join(", ")}`,
+          description: `update the foundation stack: ${changes.join(", ")}`,
           destructive: unsafe.length > 0,
+          title: `Update the CloudFormation stack · ${count(changes.length, "change")}${replaced > 0 ? ` · ${String(replaced)} replaced` : ""}`,
+          details: changes,
         });
         if (unsafe.length > 0) {
           warnings.push(
@@ -163,6 +190,11 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
           ? `the fleet's Bedrock grant already covers every model its profiles and agents name (${String(grantNext.length)} model(s))`
           : `grant the agent role ${String(grantAdds.length)} further Bedrock model(s): ${grantAdds.join(", ")}`,
       destructive: false,
+      title:
+        grantAdds.length === 0
+          ? `Bedrock grant unchanged · ${count(grantNext.length, "model")}`
+          : `Grant ${count(grantAdds.length, "more Bedrock model", "more Bedrock models")}`,
+      ...(grantAdds.length === 0 ? {} : { details: grantAdds }),
     });
 
     const keep = new Set([hermeticdVersion, fleet.min_hermetic_version]);
@@ -171,6 +203,14 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
       id: "artifacts",
       description: `push hermeticd ${hermeticdVersion} to ${releaseKey(hermeticdVersion, "")}, keep ${[...keep].join(" and ")}, and delete ${pruned.length} older release directory(ies)${pruned.length > 0 ? `: ${pruned.join(", ")}` : ""}; mirror hermes ${BUILD_VERSIONS.hermes_ref}, keep it and every ref a live agent's configuration pins, and delete any other; then rewrite the fleet manifest`,
       destructive: pruned.length > 0,
+      title: `Push hermeticd ${hermeticdVersion}${pruned.length > 0 ? `, prune ${count(pruned.length, "old release")}` : ""}`,
+      details: [
+        `push hermeticd ${hermeticdVersion} to ${releaseKey(hermeticdVersion, "")}`,
+        `keep ${[...keep].join(" and ")}`,
+        ...(pruned.length > 0 ? [`delete ${pruned.join(", ")}`] : []),
+        `mirror hermes ${BUILD_VERSIONS.hermes_ref}; keep it and every ref a live agent pins, delete any other`,
+        "rewrite the fleet manifest",
+      ],
     });
 
     const migrations = migrationsBetween(from, foundationVersion, deps.migrations);
@@ -181,6 +221,13 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
           ? `no migrations between v${from} and v${foundationVersion}; stamp the ${FLEET_KEY} item`
           : `run ${migrations.length} migration(s): ${migrations.map((m) => `v${m.version} ${m.describe}`).join("; ")}; then stamp the ${FLEET_KEY} item`,
       destructive: false,
+      title:
+        migrations.length === 0
+          ? `Stamp ${FLEET_KEY} v${foundationVersion}`
+          : `Run ${count(migrations.length, "migration")}, then stamp ${FLEET_KEY}`,
+      ...(migrations.length === 0
+        ? {}
+        : { details: migrations.map((m) => `v${m.version} ${m.describe}`) }),
     });
 
     const targets = agents.filter((a) => ROLLOUT_STATUSES.includes(a.status) && a.instance_id);
@@ -189,6 +236,13 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
       id: "rollout",
       description: `ask ${targets.length} agent(s) to take hermeticd ${hermeticdVersion} now${targets.length > 0 ? ` (${targets.map((a) => a.name).join(", ")})` : ""}; ${deferred.length} deferred to their next start-up or nightly check${deferred.length > 0 ? ` (${deferred.map((a) => a.name).join(", ")})` : ""}`,
       destructive: false,
+      title: `Update ${count(targets.length, "agent")} now${deferred.length > 0 ? `, ${String(deferred.length)} at next start` : ""}`,
+      details: [
+        `now: ${targets.length > 0 ? targets.map((a) => a.name).join(", ") : "none"}`,
+        ...(deferred.length > 0
+          ? [`at their next start-up or nightly check: ${deferred.map((a) => a.name).join(", ")}`]
+          : []),
+      ],
     });
 
     /**
@@ -208,10 +262,6 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
         `this is a \`nat\` fleet on foundation v${from}, and v${NAT_EIP_VERSION} gives its NAT instance a stable Elastic IP: the fleet's egress address changes as the change set lands, and every outbound connection open across the NAT drops once. Nothing reconnects to the old address afterwards. Update any upstream allow-list to the new address, which the stack reports as its \`NatEgressIp\` output (\`hermetic network status\`) once the update finishes.`,
       );
     }
-
-    warnings.push(
-      `CloudFormation rolls a failed stack update back on its own, and the ${FLEET_KEY} stamp is the last write — a failure before it leaves the fleet exactly where it is, and the update re-runnable`,
-    );
 
     /**
      * The release comparison the drawer's `hermeticd <from> → <to>` line cannot

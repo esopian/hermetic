@@ -61,6 +61,8 @@ import "./styles/create.css";
 import "./styles/memory.css";
 import "./styles/shell.css";
 import "./styles/settings.css";
+// The foundation update drawer's review stage.
+import "./styles/foundation.css";
 
 async function boot(): Promise<Root> {
   await installRpcTransport();

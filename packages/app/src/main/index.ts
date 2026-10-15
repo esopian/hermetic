@@ -20,6 +20,7 @@ import Electrobun, {
   BrowserView,
   BuildConfig,
   BrowserWindow,
+  Screen,
   Updater,
   Utils,
 } from "electrobun/bun";
@@ -62,7 +63,7 @@ import { externalUrl } from "../external-url.ts";
 import { applyMinimumSize } from "./min-size.ts";
 import { createPageGate, openOnInbound } from "./page-gate.ts";
 import { fetchProbe, resolveViewUrl } from "./view-url.ts";
-import { createWindows, DEFAULT_FRAME, MIN_FRAME, type OpenedWindow } from "./windows.ts";
+import { createWindows, DEFAULT_FRAME, MIN_FRAME, type OpenedWindow, openingFrame } from "./windows.ts";
 
 /**
  * What a GUI launch has instead of a `PATH`: nothing useful. LaunchServices
@@ -481,7 +482,11 @@ const windows = createWindows({
      */
     const window = new BrowserWindow({
       title: "Hermetic",
-      frame: { width: DEFAULT_FRAME.width, height: DEFAULT_FRAME.height },
+      // Explicit, not centred by the devkit: see `openingFrame`.
+      frame: openingFrame(Screen.getPrimaryDisplay().workArea) ?? {
+        width: DEFAULT_FRAME.width,
+        height: DEFAULT_FRAME.height,
+      },
       url: viewUrl,
       navigationRules: JSON.stringify(navigationRules),
       rpc: binding.rpc,
