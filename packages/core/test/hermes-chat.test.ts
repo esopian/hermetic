@@ -2235,7 +2235,8 @@ describe("hermes-chat · history", () => {
         name: "new_tool",
         args: "malformed JSON",
         result: null,
-        status: "warn",
+        // The call is at the transcript's tail, so it may still be running.
+        status: "running",
         render: null,
       }),
       { kind: "unknown", name: "tool_call", payload: future },
@@ -2421,8 +2422,9 @@ describe("hermes-chat · history", () => {
           ],
         },
       ]);
+      // At the tail, so `running` (no result yet), never a settled question card.
       expect(messages[0]?.blocks).toEqual([
-        expect.objectContaining({ kind: "tool", name: "clarify", status: "warn", result: null }),
+        expect.objectContaining({ kind: "tool", name: "clarify", status: "running", result: null }),
       ]);
     });
   });
@@ -2740,6 +2742,103 @@ describe("hermes-chat · durable addressing", () => {
     expect(h.sockets[0]?.isClosed()).toBe(false);
     expect(adapter.release?.(BOX, "research", "durable-research")).toBe(true);
     expect(h.sockets[0]?.isClosed()).toBe(true);
+  });
+
+  test("queued reaches prompt.submit only when asked for", async () => {
+    const submitted = async (queued: boolean | undefined) => {
+      const h = harness({
+        results: {
+          "session.resume": {
+            session_id: "runtime-1",
+            session_key: "durable-1",
+            running: true,
+            info: {},
+          },
+          "prompt.submit": { status: "queued" },
+        },
+      });
+      const turn = createHermesChat(h.deps)
+        .send(BOX, "default", "after this", {
+          session: "durable-1",
+          ...(queued === undefined ? {} : { queued }),
+        })
+        [Symbol.asyncIterator]();
+      await turn.next();
+      await turn.next();
+      await turn.return?.();
+      return h.sockets[0]?.sent.find((call) => call.method === "prompt.submit")?.params;
+    };
+    expect(await submitted(true)).toEqual({
+      session_id: "runtime-1",
+      profile: "default",
+      text: "after this",
+      queued: true,
+    });
+    for (const queued of [undefined, false]) {
+      expect(await submitted(queued)).toEqual({
+        session_id: "runtime-1",
+        profile: "default",
+        text: "after this",
+      });
+    }
+  });
+
+  test("a box that predates queued refuses the key, and the prompt is sent once more without it", async () => {
+    const run = async (script: BoxScript) => {
+      const h = harness({
+        results: {
+          "session.resume": {
+            session_id: "runtime-1",
+            session_key: "durable-1",
+            running: true,
+            info: {},
+          },
+          "prompt.submit": { status: "interrupted" },
+        },
+        ...script,
+      });
+      const frames: ChatFrame[] = [];
+      const turn = createHermesChat(h.deps)
+        .send(BOX, "default", "after this", { session: "durable-1", queued: true })
+        [Symbol.asyncIterator]();
+      for (let i = 0; i < 3; i++) {
+        const step = await turn.next();
+        if (step.done === true) break;
+        frames.push(step.value);
+      }
+      await turn.return?.();
+      const submits = h.sockets[0]?.sent.filter((call) => call.method === "prompt.submit") ?? [];
+      return { frames, submits: submits.map((call) => call.params) };
+    };
+    // Upstream's own refusal (4000, naming the key): one retry, without it.
+    const old = await run({
+      allowedParams: { "prompt.submit": ["session_id", "profile", "text"] },
+    });
+    expect(old.submits).toEqual([
+      { session_id: "runtime-1", profile: "default", text: "after this", queued: true },
+      { session_id: "runtime-1", profile: "default", text: "after this" },
+    ]);
+    // The refusal did not end the turn: the retry's answer is its status.
+    expect(old.frames[1]?.type === "block" && old.frames[1].block.kind).toBe("activity");
+    // Upstream names every rejected key; `queued` among several still counts.
+    const several = await run({
+      errors: {
+        "prompt.submit": {
+          code: 4000,
+          message:
+            "invalid params for prompt.submit: display_kind: Extra inputs are not permitted; queued: Extra inputs are not permitted",
+        },
+      },
+    });
+    // `errors` refuses every call, so the retry is refused too and ends the turn.
+    expect(several.submits).toHaveLength(2);
+    expect(several.submits[1]).not.toHaveProperty("queued");
+    // Any other refusal is the turn's answer: nothing is resent.
+    const other = await run({
+      errors: { "prompt.submit": { code: 4009, message: "session busy" } },
+    });
+    expect(other.submits).toHaveLength(1);
+    expect(other.frames.at(-1)?.type).toBe("error");
   });
 
   test("a new nondefault bot turn creates inside its profile and supports abort before the browser knows its stored ID", async () => {

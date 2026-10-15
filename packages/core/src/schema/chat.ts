@@ -21,6 +21,7 @@
  */
 import { z } from "zod";
 import { Iso } from "./common.ts";
+import { FileRequestId, ShareFileResult } from "./files.ts";
 import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
 
 export {
@@ -243,8 +244,29 @@ export type ChatConversation = z.infer<typeof ChatConversation>;
  * `message_agent` is Bot Mode's bot-to-bot DM (`tools/bot_mode_dm.py`): a head
  * draws it as a "Messaged <bot>" marker rather than a tool step, and falls back
  * to the tool row when its arguments are not the `{target, message}` it knows.
+ *
+ * `file_request` (`request_file`, `await_file`) and `secret_request`
+ * (`request_secret`) are the files plugin asking the operator for something. A
+ * head draws a request card from hermeticd's copy of the slot named by the
+ * block's `request_id` — never from the tool's arguments, which are the
+ * model's words — and falls back to the tool row while that id is unknown.
+ *
+ * `file_share` (`share_file`) is the agent handing the operator a file through
+ * the box's outbox. A head draws a file card from the block's `share` — the
+ * plugin's result, validated — never from the tool's arguments, and falls back
+ * to the tool row when `share` is null (a refusal, or a result it cannot read).
  */
-export const ToolRender = z.enum(["diff", "terminal", "table", "image", "screenshot", "message_agent"]);
+export const ToolRender = z.enum([
+  "diff",
+  "terminal",
+  "table",
+  "image",
+  "screenshot",
+  "message_agent",
+  "file_request",
+  "secret_request",
+  "file_share",
+]);
 export type ToolRender = z.infer<typeof ToolRender>;
 
 export const ToolStatus = z.enum(["running", "ok", "warn", "bad"]);
@@ -353,15 +375,52 @@ const ToolBlock = z.object({
   exit_code: z.number().int().nullish(),
   duration_ms: z.number().int().nonnegative().nullish(),
   render: ToolRender.nullish(),
+  /**
+   * The files request slot (`fr_…`) a `file_request`/`secret_request` block is
+   * about, and the only thing core takes from such a call. Read from
+   * `await_file`'s arguments, from the plugin's result, or — for a request
+   * opened inside the running tool — looked up from the box's slot list and
+   * sent again on the same `tool_id` (`hermes-chat-file-requests.ts`). Null
+   * while unknown; a head then shows the card as waiting for the box.
+   */
+  request_id: FileRequestId.nullish(),
+  /**
+   * What a `file_share` block shared: the plugin's result (`POST /outbox`'s
+   * answer), set only when it parses as a `ShareFileResult`. Never read from
+   * the tool's arguments, which are the model's words. Null on a running call,
+   * a refusal, or a result this build cannot read; a head then draws the tool
+   * row. The bytes are fetched by `share_id` through `files.content`.
+   */
+  share: ShareFileResult.nullish(),
 });
 
+/**
+ * A file in a message: one the operator attached to a turn, or one the agent
+ * produced.
+ *
+ * `file_id` is set when the file is an entry in the box's files service
+ * (`f_…`, read from its inbox path). `href` is then the entry's path relative
+ * to `$HERMES_HOME` (`inbox/<date>/<f_id>/<name>`), *not* a URL: a head
+ * fetches the bytes through `files.content` by id and must never load `href`.
+ * Without a `file_id`, `href` is whatever the box named — a path or a URL —
+ * and a head treats it as untrusted.
+ *
+ * `bytes` is `0` when the transcript did not say (an `@image:` line from
+ * another client), and approximate when it came from the human size in the
+ * turn's attachment block. `sha256` is the full digest when core knew it, and
+ * the 12-hex prefix the attachment block carries when it was read back from
+ * history.
+ */
 const AttachmentBlock = z.object({
   kind: z.literal("attachment"),
   name: z.string().min(1),
   mime: z.string().min(1),
   bytes: z.number().int().nonnegative(),
   href: z.string().min(1),
+  file_id: z.string().nullish(),
+  sha256: z.string().nullish(),
 });
+export type AttachmentBlock = z.infer<typeof AttachmentBlock>;
 
 /** The answers an approval can take, in the gateway's order (`server.py` `_approval_request_payload`). */
 export const ApprovalChoice = z.enum(["once", "session", "always", "deny"]);
@@ -787,6 +846,14 @@ export const ChatMessage = z.object({
       connection: z.string().min(1).nullish(),
     })
     .nullish(),
+  /**
+   * Set on a `user` row the operator sent as a mid-turn steer rather than as a
+   * new prompt: Hermes stores it as its own user row after the newest tool
+   * result, typed `display_kind: "steer"` and wrapped in its out-of-band marker
+   * (`chat/hermes/steer-marker.ts`). The marker is stripped, so the row's text
+   * is what the operator typed. Omitted on every other row.
+   */
+  steered: z.boolean().nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -954,8 +1021,9 @@ const ObserveErrorEvent = z.object({
 });
 
 /**
- * A delegated child's whole block, changed (§9.2) — the one documented
- * exception to an observation carrying only durable reads.
+ * A delegated child's whole block, changed (§9.2) — the first documented
+ * exception to an observation carrying only durable reads (`busy` is the
+ * other).
  *
  * A background `delegate_task` ends the parent turn at once and its children
  * keep running, so their progress has no turn left to ride on, and nothing
@@ -974,11 +1042,43 @@ const ObserveSubagentEvent = z.object({
   block: SubagentBlock,
 });
 
+/**
+ * Whether a turn is running in the observed conversation (§9.2) — the second
+ * documented exception to an observation carrying only durable reads.
+ *
+ * `busy: true` means the box's gateway reports a turn running, or one waiting
+ * on a person (an approval, a clarify question), in this conversation;
+ * `false` means it reports none; `null` means it could not be asked (a timeout,
+ * a gateway that predates the read). It is a live advisory read of the
+ * gateway's in-memory state, not a transcript fact: it is never stored, and it
+ * can be stale by the time it arrives.
+ *
+ * It is how a head knows a turn *it did not start* is running — one Hermes
+ * began by itself (a background process's completion notice), or one another
+ * client started — which no durable read can say until the reply lands. A head
+ * that sends while it reads `true` should ask for `queued` (`ChatSendInput`)
+ * rather than let the gateway's busy-input mode interrupt that turn.
+ *
+ * Emitted after a read when the value changes, and again on every probe while
+ * it is `true`, so a head that cleared it locally is corrected within one
+ * reconcile. A joiner is handed the held value right after the held snapshot.
+ * `session` is the conversation's session as on `message`.
+ */
+const ObserveBusyEvent = z.object({
+  type: z.literal("busy"),
+  instance: z.string().min(1),
+  bot: z.string().min(1),
+  session: z.string().min(1).nullable(),
+  busy: z.boolean().nullable(),
+  at: Iso,
+});
+
 export const ChatObserveEvent = z.discriminatedUnion("type", [
   ObserveSnapshotEvent,
   ObserveMessageEvent,
   ObserveReconnectEvent,
   ObserveErrorEvent,
   ObserveSubagentEvent,
+  ObserveBusyEvent,
 ]);
 export type ChatObserveEvent = z.infer<typeof ChatObserveEvent>;

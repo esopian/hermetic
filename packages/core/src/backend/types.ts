@@ -10,8 +10,19 @@ import type {
   HermesLogFile,
   NatHealth,
   RpcHealth,
+  SnapshotPolicy,
 } from "../schema/index.ts";
 import type { BedrockApi } from "../aws/bedrock.ts";
+import type { FilesApi } from "./files-port.ts";
+export type {
+  FilesApi,
+  FilesCallOptions,
+  FilesContent,
+  FilesFulfilOptions,
+  FilesFulfilUpload,
+  FilesProgress,
+  FilesStageUpload,
+} from "./files-port.ts";
 import type { ResourceOwner } from "../agents/ownership.ts";
 
 /**
@@ -342,7 +353,13 @@ export interface StoreApi {
 export interface SecretsApi {
   /** Create the parameter with a placeholder value if it does not exist. Idempotent. */
   ensureSlot(path: string): Promise<void>;
-  put(path: string, value: string): Promise<void>;
+  /**
+   * Write one slot. `overwrite` defaults to true; `false` refuses a slot that
+   * already exists with `CONFLICT` (`details.already_exists`) and writes
+   * nothing, so a caller that checked first cannot lose a race to a writer
+   * that came between its check and its write.
+   */
+  put(path: string, value: string, opts?: { overwrite?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;
   /** True when the slot still holds hermetic's placeholder — `secrets verify` (§8.2). */
   isPlaceholder(path: string): Promise<boolean>;
@@ -1017,6 +1034,17 @@ export interface FoundationApi {
     fckNatAmiId?: string;
   }): Promise<{ name: string; id: string }>;
   /**
+   * The third sibling (§7.1): restate the snapshot policy's three parameters
+   * and keep every other parameter's previous value. Separate for the reason
+   * the network one is — neither a foundation update nor a re-network can move
+   * the policy, because neither has an argument that would.
+   */
+  createSnapshotChangeSet(params: {
+    name: string;
+    hermeticVersion: string;
+    policy: SnapshotPolicy;
+  }): Promise<{ name: string; id: string }>;
+  /**
    * Today's fck-nat arm64 AMI in this region. Separate from the change set that
    * consumes it so `apply` kind `network` can fail in preflight — before
    * anything is archived or changed — when the lookup does not answer (§5).
@@ -1265,6 +1293,8 @@ export interface Backend {
   foundation: FoundationApi;
   tailscale: TailscaleApi;
   rpc: RpcApi;
+  /** hermeticd's files service on the same port as `rpc` (`files-port.ts`). */
+  files: FilesApi;
   directory: DirectoryApi;
   /**
    * §8.3's Bedrock model catalog, in the fleet's region. Optional because it is

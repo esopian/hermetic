@@ -589,6 +589,10 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     }
 
     let agent: Agent;
+    /** The claim's listen failed: this run tries it once more at handoff. */
+    let listenAgain = false;
+    const listenFailed = (e: unknown): string =>
+      `could not listen to ${name} on this machine (${e instanceof Error ? e.message : String(e)}); turn it on with \`hermetic chat listen ${name}\``;
     if (claim.kind === "claimed") {
       /**
        * H4's other half. The gate at the top of this function was read before
@@ -609,6 +613,21 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       // The row is this run's: a rollback may delete it again (`rollback.ts`).
       ledger.claimed = true;
       await appendEvent(name, "create", `requested (${size})`, null, "creating");
+      /**
+       * §9.2: a new agent is listened to by default. Here, at the claim, rather
+       * than at handoff or `done`: the claim happens once per incarnation, so a
+       * create that fails and is finished later by `rerun` or a re-run create
+       * (the `resume` branch below, which never comes here) is still listened
+       * to, and a listen the operator turned off in between is never turned back
+       * on. A rollback that deletes this row purges it again (below). One that
+       * fails is tried once more at handoff, by this run only (`listenAgain`).
+       */
+      try {
+        await deps.listenLocal?.(fleet.fleet_id, agent);
+      } catch (e) {
+        listenAgain = true;
+        yield say("claim", 0.03, listenFailed(e), nowIso(), "warn");
+      }
     } else {
       yield say("resume", 0.05, `resuming an interrupted create of ${name}`, nowIso(), "warn");
       agent = await acquireLock(claim.agent, owner);
@@ -1159,6 +1178,17 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
         "done",
       );
 
+      // The claim's listen failed: one more try, now that the agent is real.
+      // Never on a resume, which may be finishing an agent the operator stopped
+      // listening to.
+      if (listenAgain) {
+        try {
+          await deps.listenLocal?.(fleet.fleet_id, agent);
+        } catch (e) {
+          yield say("instance", 0.93, listenFailed(e), nowIso(), "warn");
+        }
+      }
+
       /**
        * The op does not end at handoff any more (`handoff.ts`). Nothing below
        * writes the row — the lock is already released — so this is a read loop an
@@ -1217,7 +1247,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        */
       if (parsed.rollback_on_failure && !hasCode(e, "ABORTED") && !opts.signal?.aborted) {
         try {
-          yield* rollbackCreate(
+          const outcome = yield* rollbackCreate(
             rollbackDeps(owner, keepLock, (a) => {
               agent = a;
             }),
@@ -1227,6 +1257,15 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
             reached,
             { ...(opts.signal ? { signal: opts.signal } : {}) },
           );
+          /**
+           * §6.7: a deleted row is a released name, so what this laptop keeps
+           * about it goes too — above all the listen the claim turned on, which
+           * would otherwise name an instance that does not exist. Best effort,
+           * like the release's own purge.
+           */
+          if (outcome.undone.includes("row")) {
+            await deps.purgeLocal?.(fleet.fleet_id, name).catch(() => undefined);
+          }
         } catch {
           // The original failure is the one the operator needs; see below.
         }

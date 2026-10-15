@@ -79,6 +79,7 @@ import { SLOT_WAIT_MS } from "./hermes-chat-types.ts";
 import type { HermesChatClient, HermesChatDeps } from "./hermes-chat-types.ts";
 import { createChatConnection } from "./hermes-chat-connect.ts";
 import { createChatHistory } from "./hermes-chat-history.ts";
+import { createBusyProbe } from "./hermes-chat-busy.ts";
 import { createLiveUsage } from "./hermes-chat-live-usage.ts";
 import { createChatPeer } from "./hermes-chat-peer.ts";
 import { createRequestPool } from "./hermes-chat-pool.ts";
@@ -88,6 +89,7 @@ import { createChatSessions } from "./hermes-chat-sessions.ts";
 import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
 import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
+import { fileRequestLookup } from "./hermes-chat-file-requests.ts";
 import {
   createIdleBus,
   createSessionSockets,
@@ -108,6 +110,7 @@ export type {
   HistoryOptions,
   ObserveOptions,
   SendOptions,
+  TurnAttachments,
 } from "./hermes-chat-types.ts";
 export { createRequestPool, REQUEST_POOL_IDLE_MS } from "./hermes-chat-pool.ts";
 export type { RequestPool } from "./hermes-chat-pool.ts";
@@ -177,6 +180,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const history = createChatHistory({
     connection,
     conversation: canonical.conversation,
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const subagents = createSubagentLedgers({ now: deps.now });
   // Events on a conversation's idle held socket reach the observation through
@@ -189,6 +193,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   });
   const observation = createChatObserve({ connect: connection.connect, subagents, idle });
   const live = createLiveUsage({ rpc: peer.botModeRpc });
+  const probe = createBusyProbe({ rpc: peer.botModeRpc });
   const turn = createChatTurn({
     connect: connection.connect,
     now: deps.now,
@@ -197,6 +202,10 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     subagents,
     sockets,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
+    ...(deps.listFileRequests !== undefined
+      ? { fileRequests: fileRequestLookup(deps.listFileRequests, deps.now) }
+      : {}),
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const children = createSubagentControl({
     connect: connection.connect,
@@ -209,6 +218,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     sessions: sessions.sessions,
     history: history.history,
     liveUsage: live.liveUsage,
+    busy: probe.busy,
     send: turn.send,
     abort: turn.abort,
     steer: turn.steer,

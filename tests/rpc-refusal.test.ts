@@ -24,6 +24,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { fleetTargetOf, openHermetic } from "@hermetic/core";
+import { filesErrorFrom } from "../packages/core/src/aws/files-http.ts";
 import { createChatOwner, type ChatOwner } from "../packages/app/src/chat-owner.ts";
 import type { HandlerContext } from "../packages/app/src/handlers/ctx.ts";
 import { createStreamRegistry } from "../packages/app/src/handlers/streams.ts";
@@ -200,4 +201,67 @@ describe("a validation refusal", () => {
     expect(thrown).toBeInstanceOf(ApiError);
     expect(thrown.details).toHaveProperty("issues");
   });
+});
+
+/**
+ * The files refusals a composer chip renders. Each must reach
+ * the page as an `ApiError` with the box's code and a sentence an operator can
+ * act on — never the file's name, which may be sensitive.
+ */
+describe("a files refusal", () => {
+  const NAME = "FIXTURE-salary-review.xlsx";
+  /**
+   * The page's `RequestName` union is the UI's to extend when the composer
+   * learns these requests; until then the names are passed through untyped.
+   * The transport forwards an unmapped name as it is, which is what these
+   * requests are called on the bridge.
+   */
+  const bridge = (name: string): never => name as never;
+
+  test("an oversize text secret is refused without repeating its name", async () => {
+    const page = await pageOverApp();
+    const thrown = (await refusalAtThePage(
+      page.request(bridge("files.secretText.upload"), {
+        name: NAME,
+        data_b64: "A".repeat(90_000),
+      }),
+    )) as ApiError;
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect(thrown.code).toBe("VALIDATION");
+    expect(thrown.message).not.toContain(NAME);
+  });
+
+  test("a page that names a laptop path is refused before anything reads it", async () => {
+    const page = await pageOverApp();
+    const thrown = (await refusalAtThePage(
+      page.request(bridge("files.stage"), {
+        instance: "atlas",
+        source: { path: "/etc/hosts" },
+      } as never),
+    )) as ApiError;
+    expect(thrown.code).toBe("UNSUPPORTED");
+  });
+
+  const fromBox: Array<[number, string, string]> = [
+    [413, "FILE_TOO_LARGE", "size limit"],
+    [507, "DISK_FULL", "low on disk space"],
+    [410, "FILE_REQUEST_EXPIRED", "has expired"],
+  ];
+  for (const [status, code, words] of fromBox) {
+    test(`hermeticd's ${status} reaches the page as ${code}, readable`, async () => {
+      const box = new Response(JSON.stringify({ error: { code, message: `refused ${NAME}` } }), {
+        status,
+      });
+      const { refusal } = refusalFor(await filesErrorFrom(box, "atlas", NAME));
+      const page = await pageOverApp(refusal);
+      const thrown = (await refusalAtThePage(
+        page.request(bridge("files.discard"), { instance: "atlas", id: "f_aaaaaaaaaaaa" }),
+      )) as ApiError;
+      expect(thrown).toBeInstanceOf(ApiError);
+      expect(thrown.code).toBe(code);
+      expect(thrown.message).toContain(words);
+      expect(thrown.message).toContain("atlas");
+      expect(thrown.message).not.toContain(NAME);
+    });
+  }
 });

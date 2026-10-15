@@ -457,7 +457,7 @@ describe("honcho: what is not hermetic's", () => {
     for (const own of ["file", "link"] as const) {
       const host = new HonchoBox();
       if (own === "file") host.seed(HONCHO_PLUGIN_CONFIG_LINK, '{"workspace":"mine"}\n');
-      else host.symlink("/data/hermes/my-honcho.json", HONCHO_PLUGIN_CONFIG_LINK);
+      else host.symlink(HONCHO_PLUGIN_CONFIG_LINK, "/data/hermes/my-honcho.json");
       await apply(honchoManifest(), { host, providerKey: PROVIDER_KEY });
       expectNotRan(host, /\bln -s -T /);
       await apply(makeManifest(), { host });

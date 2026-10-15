@@ -13,6 +13,8 @@ export {
   autoUpdateHermeticd,
 } from "../shared/release.ts";
 export { FLEET_KEY, cloudName, legacyCloudNames } from "../shared/naming.ts";
+export { FILES_APP_CAP, FILES_RETENTION_DAYS, resolveFilesSettings } from "../shared/files.ts";
+export type { FilesSettings, FilesSettingsSource } from "../shared/files.ts";
 import { FleetIdSchema, Iso, ProfileId, Region, SecretSlug, Sha256, Version } from "./common.ts";
 import { FleetName } from "./directory.ts";
 import { StoredMemoryProviderId } from "./memory.ts";
@@ -28,6 +30,27 @@ import {
 } from "./agent.ts";
 import { HermesSettings } from "./hermes.ts";
 import { ProviderProfile } from "./profile.ts";
+
+/**
+ * The fleet's files settings as stored (`FleetSettings.files`) and as the
+ * fleet manifest carries them to the box (`FleetManifest.files`). Every field
+ * is optional and absent means the default; `resolveFilesSettings` is the one
+ * reading of it, on the laptop and on the box alike.
+ *
+ * Deliberately loose — any number, not the bounds `settings.set` enforces on
+ * a write — because hermeticd parses the manifest with this, and a value out of
+ * range must be clamped by the resolver rather than fail the whole manifest
+ * (and with it the box's release pointer).
+ */
+export const FleetFilesSettings = z.object({
+  /** hermeticd refuses a tailnet caller whose whois lacks `FILES_APP_CAP`. Absent is off. */
+  require_cap: z.boolean().optional(),
+  /** The per-file cap for ordinary files, in bytes; at most `FILES_LIMITS.fileBytes`. */
+  max_bytes: z.number().optional(),
+  /** How long an inbox file is kept, in days (`FILES_RETENTION_DAYS`). */
+  retention_days: z.number().optional(),
+});
+export type FleetFilesSettings = z.infer<typeof FleetFilesSettings>;
 
 /**
  * How a fleet's agents reach the internet (§5). `public` puts them in public
@@ -151,6 +174,15 @@ export const FleetSettings = z.object({
    * write, because the box cannot read `_fleet`.
    */
   auto_update_hermeticd: z.boolean().optional(),
+  /**
+   * The files service's fleet-wide settings: whether a tailnet caller needs
+   * the `FILES_APP_CAP` grant, the per-file cap, and how long the inbox keeps a
+   * file. Optional, and absent reads as the defaults (`resolveFilesSettings`):
+   * no capability required, 256 MiB, seven days. Copied into the fleet
+   * manifest on every manifest write, because the box cannot read `_fleet`,
+   * and `settings.set` republishes the manifest when the effective values move.
+   */
+  files: FleetFilesSettings.optional(),
   /** Slot names and timestamps — never values (§8.3). */
   secrets: z.array(SharedSecretMeta),
   updated_at: Iso,
@@ -755,6 +787,15 @@ export const FleetManifest = z.object({
    * purely additive, and an older hermeticd strips what it does not know.
    */
   auto_update_hermeticd: z.boolean().optional(),
+  /**
+   * The fleet's `settings.files`, copied here for the same reason as
+   * `auto_update_hermeticd`: hermeticd enforces them and cannot read `_fleet`.
+   * Every manifest write copies the row's (`fleetManifestFrom`), omitting the
+   * block when the row has none; hermeticd resolves absent, and anything out
+   * of range, through `resolveFilesSettings`. Additive, like the switch above:
+   * `schema_version` stays `1`.
+   */
+  files: FleetFilesSettings.optional(),
   updated_at: Iso,
   updated_by: z.string(),
 });

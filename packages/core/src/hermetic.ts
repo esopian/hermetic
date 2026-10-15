@@ -30,6 +30,7 @@ import { runDoctor, type DoctorReport } from "./fleet/doctor.ts";
 import { createPlans } from "./agents/plans.ts";
 import { createPolicy } from "./fleet/policy.ts";
 import { createNetwork } from "./fleet/network.ts";
+import { createSnapshots } from "./fleet/snapshots.ts";
 import { createTeardown } from "./fleet/teardown.ts";
 import { createLifecycle } from "./agents/lifecycle.ts";
 import { createRollout } from "./agents/rollout.ts";
@@ -60,8 +61,10 @@ import { createVolumes } from "./volumes/volumes.ts";
 import { createDesktop } from "./agents/desktop.ts";
 import { createVolumeReservation } from "./volumes/volume-claims.ts";
 import { createProbe } from "./agents/probe.ts";
+import { createFiles } from "./files/files.ts";
 import { createFoundation } from "./fleet/foundation/index.ts";
 import { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
+import { MemoryFiles } from "./backend/fixture/memory-files.ts";
 import { FOUNDATION_VERSION } from "./version.ts";
 import { foundationTemplateSha256 } from "./aws/cfn-template.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
@@ -236,6 +239,13 @@ export function createHermetic(deps: HermeticDeps) {
     volumeClaims,
     applyPending,
     purgeLocal: purgeLocalAgent,
+    // §9.2: a new agent is listened to by default. Its incarnation is recorded
+    // first, so a predecessor's local state is purged before the opt-in lands
+    // and a later read does not purge the opt-in as a predecessor's (§6.7).
+    listenLocal: async (fleet, agent) => {
+      await reconcileIncarnations([agent], { complete: false });
+      instanceListening.set(fleet, agent.name, true);
+    },
     tsKeyPath: (name) => tsKeyPath(fleetId(), name),
     providerKeyPath: (name) => providerKeyPath(fleetId(), name),
     agentSlotPath: (name, slot) => agentParamPath(fleetId(), name, slot),
@@ -387,6 +397,15 @@ export function createHermetic(deps: HermeticDeps) {
     changeSetTimeoutMs: deps.foundation?.changeSetTimeoutMs,
     heartbeatMs: deps.foundation?.heartbeatMs,
   });
+  const snapshots = createSnapshots({
+    ctx,
+    changeSetPollMs: deps.foundation?.changeSetPollMs,
+    changeSetTimeoutMs: deps.foundation?.changeSetTimeoutMs,
+    heartbeatMs: deps.foundation?.heartbeatMs,
+  });
+
+  // Files on an agent's box (§9). Built before `apply`, which executes `files.rm`'s plans.
+  const files = createFiles({ ctx });
 
   /**
    * Execute a plan produced by `plan.*` (`plan-apply.ts`). Core never asks "are
@@ -401,8 +420,10 @@ export function createHermetic(deps: HermeticDeps) {
     foundation,
     policy,
     network,
+    snapshots,
     rollout,
     teardown,
+    files: { applyRm: files.internal.applyRm },
   });
 
   // ─── reads (`reads.ts`) ────────────────────────────────────────────────────
@@ -449,8 +470,17 @@ export function createHermetic(deps: HermeticDeps) {
 
   // ─── chat, Bot Mode and Desktop share one adapter; fixture's is a stack (0014 §7) ──
 
-  const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {});
-  const hermesChat = fixtureChat.hermes ?? defaultHermesChat(nowIso);
+  const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {}, {
+    // The `E2E_FILE_REQUEST*` turns open their slots on the fixture boxes' files service.
+    ...(backend.files instanceof MemoryFiles ? { files: backend.files } : {}),
+  });
+  const hermesChat =
+    fixtureChat.hermes ??
+    defaultHermesChat(nowIso, {
+      // A running request card's slot (`hermes-chat-file-requests.ts`).
+      listFileRequests: async (name, signal) => (await backend.files.list(name, { signal })).requests,
+      listOutbox: async (name, signal) => (await backend.files.list(name, { signal })).outbox,
+    });
   // §9.2: whether transcript content is masked, read by every chat read as it starts.
   const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
   const botMode = createBotMode({
@@ -478,6 +508,9 @@ export function createHermetic(deps: HermeticDeps) {
       return rows;
     },
     hermes: hermesChat,
+    // A turn's attachments are committed through the files service (plan §8.2).
+    commitFile: (instance, id, session, signal) =>
+      files.internal.commit(instance, id, session, signal ? { signal } : {}),
     // §4.9: the roster read raises `chat.message`, a failed turn
     // raises `chat.error`. Core owns the row and its wording; no head is involved.
     notifications: notificationDeps,
@@ -592,6 +625,22 @@ export function createHermetic(deps: HermeticDeps) {
      * with them. A turn is not an op and is never registered as one.
      */
     chat,
+    /**
+     * Composer attachments and agent requests (§9): files to and from an
+     * agent's box. `files.stage`, `files.put` and `files.decline` are the
+     * public methods; `files.internal` is the desktop head's upload machinery,
+     * the request card's slot read and the chat turn's commit, none of it a
+     * §9 command.
+     */
+    files: {
+      stage: files.stage,
+      put: files.put,
+      decline: files.decline,
+      list: files.list,
+      get: files.get,
+      rm: files.rm,
+      internal: files.internal,
+    },
     ssh: agentLogs.ssh,
     logs: agentLogs.logs,
     upgrade,
@@ -599,6 +648,8 @@ export function createHermetic(deps: HermeticDeps) {
     policy: { status: policy.status },
     /** §5: which side of a NAT this fleet's agents live on, and whether reality agrees. */
     network: { status: network.status },
+    /** §7.1: the data-volume snapshot policy the stack runs, and what it has kept. */
+    snapshots: { status: snapshots.status },
     plan: {
       destroy: plans.destroy,
       recreate: plans.recreate,
@@ -607,6 +658,7 @@ export function createHermetic(deps: HermeticDeps) {
       policy: policy.plan,
       rollout: planRollout,
       network: network.plan,
+      snapshots: snapshots.plan,
     },
     apply,
     /**

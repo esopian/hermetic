@@ -286,6 +286,19 @@
 [data-skin="soft"] .ch-msg.me:hover .ch-msg-body {
   border-left-color: var(--fg3);
 }
+/* A steer keeps the panel's left rule, in the accent: the skin already draws
+   one, so the default skin's inset rule on the row is dropped here. */
+[data-skin="soft"] .ch-msg.me.steered {
+  box-shadow: none;
+}
+[data-skin="soft"] .ch-msg.me.steered .ch-msg-body,
+[data-skin="soft"] .ch-msg.me.steered:hover .ch-msg-body {
+  border-left-color: color-mix(in srgb, var(--acc) 55%, var(--line2));
+}
+[data-skin="soft"] .ch-msg-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
 /* The row is no longer filled, so the status square's outline goes back to the
    page colour it is actually sitting on. */
 [data-skin="soft"] .ch-msg.me .ch-ava > .st {
@@ -737,4 +750,26 @@
   text-transform: none;
   letter-spacing: 0;
   font-size: 12px;
+}
+
+/* Attachments: the chips take the skin's lighter hairline and paper, the same
+   softening the input gets; the drop overlay keeps its dashed rule. */
+[data-skin="soft"] .ch-file {
+  background: var(--bg);
+  border-color: var(--line);
+}
+[data-skin="soft"] .ch-file.error {
+  border-color: var(--bad);
+}
+[data-skin="soft"] .ch-attach-btn {
+  height: auto;
+  min-height: 50px;
+  border-color: var(--line2);
+}
+[data-skin="soft"] .ch-drop {
+  border-color: var(--line2);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+[data-skin="soft"] .ch-drop.off {
+  border-color: var(--warn);
 }

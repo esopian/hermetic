@@ -15,6 +15,8 @@
  * `from "./backend/memory.ts"` import keeps working.
  */
 import { createHash } from "node:crypto";
+import { seedFixtureChatFiles } from "./fixture-chat-files.ts";
+import { seedFixtureAgentFiles } from "./fixture-files-seed.ts";
 import type {
   Agent,
   DirectoryEntry,
@@ -28,6 +30,9 @@ import {
   BROWSER_FOUNDATION_VERSION,
   browserBuildKey,
   DEFAULT_ROOT_GIB,
+  DEFAULT_SNAPSHOT_POLICY,
+  SNAPSHOT_POLICY_FOUNDATION_VERSION,
+  snapshotParameterValues,
   FLEET_MANIFEST_KEY,
   ROOT_GIB_MIN,
   SIZES,
@@ -327,7 +332,7 @@ export const FIXTURE_PROFILE_REVISIONS = {
 export const FIXTURE_PROFILE_KEY = "sk-profile-FIXTURE-SECRET";
 
 /** The hermeticd release the fixture fleet's manifest points at. */
-export const FIXTURE_HERMETICD_VERSION = "0.8.1";
+export const FIXTURE_HERMETICD_VERSION = "0.8.2";
 
 /**
  * The browser build the fixture fleet's manifest names (§7.3). Written out
@@ -490,7 +495,15 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
     // `Network` as CloudFormation records it — the authoritative copy of the
     // mode (§5). `_fleet.network` below is the cache, and the two agree here
     // exactly as they do on a fleet created by this build.
-    parameters: { FleetId: config.fleet_id, Network: fixtureNetwork(fixtureName) },
+    parameters: {
+      FleetId: config.fleet_id,
+      Network: fixtureNetwork(fixtureName),
+      // A stack on a template from v16 on carries §7.1's snapshot policy; one
+      // older predates it, so `snapshots.status` says to update first.
+      ...(fixtureFoundationVersion(fixtureName) >= SNAPSHOT_POLICY_FOUNDATION_VERSION
+        ? snapshotParameterValues(DEFAULT_SNAPSHOT_POLICY)
+        : {}),
+    },
     // The full output set the real template emits (§5): the fleet manifest's
     // `resources` is derived from these, so a fixture that carried fewer would
     // exercise only the fallbacks.
@@ -1420,5 +1433,9 @@ export function fixtureBackend(opts: FixtureSeed & { account?: FixtureAccount | 
   // board. `staging` exists to be small, and giving it four volumes no agent
   // row explains would make the two fleets differ in the wrong dimension.
   if (fleet === "main") seedFixtureVolumes(backend);
+  // The bytes behind the canned transcripts' attachment chips.
+  seedFixtureChatFiles(backend);
+  // The Files tab: inbox, outbox, stored secrets and one open request (`fixture-files-seed.ts`).
+  if (fleet === "main") seedFixtureAgentFiles(backend);
   return { backend, config: fixtureConfigFor(fleet) };
 }

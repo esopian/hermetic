@@ -294,6 +294,71 @@ describe("send now", () => {
   });
 });
 
+describe("a steer on screen", () => {
+  const steerRow = (over: Partial<ChatMessageView> = {}): ChatMessageView =>
+    ({
+      ...row("u-steer", "user", "use the other branch", "2026-10-13T10:00:00Z"),
+      ...over,
+    }) as ChatMessageView;
+  const draw = (message: ChatMessageView) =>
+    render(
+      <Message
+        row={{ message, continuation: false, divider: null }}
+        fleetId="f"
+        instance="atlas"
+        bot="default"
+        status="ready"
+        now={Date.now()}
+      />,
+    );
+
+  test("a steered row is the operator's, with a quiet tag and the steer accent", () => {
+    const { container } = draw(steerRow({ steered: true }));
+    const article = container.querySelector("article.ch-msg");
+    expect(article?.classList.contains("me")).toBe(true);
+    expect(article?.classList.contains("steered")).toBe(true);
+    expect(container.querySelector(".ch-msg-who")?.textContent).toBe("You");
+    const tag = container.querySelector(".ch-msg-tag");
+    expect(tag?.textContent).toBe("Steered");
+    expect(tag?.getAttribute("title")).toContain("delivered into the running turn");
+    // Fed the text core unwrapped, the upstream marker never reaches the page.
+    expect(container.textContent).toContain("use the other branch");
+    expect(container.textContent).not.toContain("OUT-OF-BAND");
+  });
+
+  test("an ordinary prompt carries no tag", () => {
+    const { container } = draw(steerRow());
+    expect(container.querySelector(".ch-msg-tag")).toBeNull();
+    expect(container.querySelector("article.ch-msg")?.classList.contains("steered")).toBe(false);
+  });
+
+  test("a redirected steer's placeholder is drawn as a steer, before the box echoes it", async () => {
+    const h = setup({ steer: "redirected" });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    await h.speak("working on it");
+    h.sayNow("use the other branch");
+    await waitFor(() => expect(h.steered).toHaveLength(1));
+    const prompt = h.current.messages.find((m) => m.role === "user" && m.id.startsWith("local:steer:"));
+    expect(prompt?.steered).toBe(true);
+  });
+
+  test("a steer the box queued as its own prompt is not marked as one", async () => {
+    const h = setup({ steer: "queued" });
+    await h.open();
+    h.say("first");
+    await waitFor(() => expect(h.current.sending).toBe(true));
+    h.sayNow("after that");
+    await waitFor(() => expect(h.steered).toHaveLength(1));
+    await waitFor(() =>
+      expect(h.current.messages.some((m) => m.id.startsWith("local:steer:"))).toBe(true),
+    );
+    const prompt = h.current.messages.find((m) => m.id.startsWith("local:steer:"));
+    expect(prompt?.steered).toBeUndefined();
+  });
+});
+
 describe("transcript order", () => {
   test("a queued send keeps the previous reply on screen, above its prompt", async () => {
     const h = setup();

@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { STACK_NAME } from "../schema/fleet.ts";
 import { FLEET_ID_TAG, ROLE_DATA, ROLE_TAG, VERSION_TAG } from "../backend/constants.ts";
+import {
+  DEFAULT_SNAPSHOT_POLICY,
+  SNAPSHOT_INTERVAL_HOURS,
+  SNAPSHOT_PARAMS,
+  SNAPSHOT_RETAIN_MAX,
+  SNAPSHOT_RETAIN_MIN,
+} from "../shared/snapshots.ts";
 
 /**
  * The foundation stack of §5, built in code as a plain JSON object rather than
@@ -15,13 +22,20 @@ import { FLEET_ID_TAG, ROLE_DATA, ROLE_TAG, VERSION_TAG } from "../backend/const
 
 export { STACK_NAME };
 
-/** Template parameters. `init` supplies all of them. */
+/**
+ * Template parameters. `init` supplies the first five; the snapshot policy's
+ * three are left to their defaults at `init` and moved only by `apply` kind
+ * `snapshots` (§7.1).
+ */
 export const TEMPLATE_PARAMETERS = [
   "FleetId",
   "HermeticVersion",
   "Network",
   "BedrockModelArns",
   "FckNatAmiId",
+  SNAPSHOT_PARAMS.enabled,
+  SNAPSHOT_PARAMS.retain,
+  SNAPSHOT_PARAMS.interval_hours,
 ] as const;
 export type TemplateParameter = (typeof TEMPLATE_PARAMETERS)[number];
 
@@ -338,7 +352,7 @@ export function foundationTemplate(): CfnTemplate {
   return {
     AWSTemplateFormatVersion: "2010-09-09",
     Description:
-      "hermetic foundation: dedicated dual-stack VPC, sealed agent security group, fleet-scoped agent role, versioned bucket, agents/events tables, daily snapshots.",
+      "hermetic foundation: dedicated dual-stack VPC, sealed agent security group, fleet-scoped agent role, versioned bucket, agents/events tables, data-volume snapshot policy.",
 
     Metadata: {
       "cfn-lint": {
@@ -379,10 +393,36 @@ export function foundationTemplate(): CfnTemplate {
         Default: "ami-00000000000000000",
         Description: "fck-nat arm64 AMI, looked up by name at init. Unused when Network=public.",
       },
+      /**
+       * The data-volume snapshot policy (§7.1, foundation v16). Defaulted to the
+       * policy every fleet ran before these existed, so the update that adds
+       * them changes nothing; `apply` kind `snapshots` is what moves them, and
+       * every other change set passes them `UsePreviousValue` (`aws/cfn.ts`).
+       */
+      [SNAPSHOT_PARAMS.enabled]: {
+        Type: "String",
+        Default: String(DEFAULT_SNAPSHOT_POLICY.enabled),
+        AllowedValues: ["true", "false"],
+        Description: "Whether the data-volume snapshot policy runs. `false` keeps existing snapshots.",
+      },
+      [SNAPSHOT_PARAMS.retain]: {
+        Type: "Number",
+        Default: String(DEFAULT_SNAPSHOT_POLICY.retain),
+        MinValue: SNAPSHOT_RETAIN_MIN,
+        MaxValue: SNAPSHOT_RETAIN_MAX,
+        Description: "Snapshots kept per data volume; DLM deletes the oldest past this.",
+      },
+      [SNAPSHOT_PARAMS.interval_hours]: {
+        Type: "Number",
+        Default: String(DEFAULT_SNAPSHOT_POLICY.interval_hours),
+        AllowedValues: SNAPSHOT_INTERVAL_HOURS.map(String),
+        Description: "Hours between data-volume snapshots.",
+      },
     },
 
     Conditions: {
       IsNat: { "Fn::Equals": [ref("Network"), "nat"] },
+      SnapshotsOn: { "Fn::Equals": [ref(SNAPSHOT_PARAMS.enabled), "true"] },
     },
 
     Resources: {
@@ -658,7 +698,7 @@ export function foundationTemplate(): CfnTemplate {
         },
       },
 
-      // ── snapshots (§7.1: daily, keep 7) ──────────────────────────────────
+      // ── snapshots (§7.1: default daily, keep 7; see the Snapshot* parameters) ──────────────────────────────────
       SnapshotRole: {
         Type: "AWS::IAM::Role",
         Properties: {
@@ -684,8 +724,13 @@ export function foundationTemplate(): CfnTemplate {
       SnapshotPolicy: {
         Type: "AWS::DLM::LifecyclePolicy",
         Properties: {
-          Description: sub("${AWS::StackName} daily data-volume snapshots"),
-          State: "ENABLED",
+          Description: sub("${AWS::StackName} data-volume snapshots"),
+          /**
+           * `DISABLED` rather than removing the policy: DLM then creates and
+           * deletes nothing, and the snapshots already taken stay exactly where
+           * they are (§1: volumes, and their history, are precious).
+           */
+          State: { "Fn::If": ["SnapshotsOn", "ENABLED", "DISABLED"] },
           ExecutionRoleArn: getAtt("SnapshotRole", "Arn"),
           PolicyDetails: {
             PolicyType: "EBS_SNAPSHOT_MANAGEMENT",
@@ -705,9 +750,13 @@ export function foundationTemplate(): CfnTemplate {
             ],
             Schedules: [
               {
-                Name: "daily",
-                CreateRule: { Interval: 24, IntervalUnit: "HOURS", Times: ["05:00"] },
-                RetainRule: { Count: 7 },
+                Name: "scheduled",
+                CreateRule: {
+                  Interval: ref(SNAPSHOT_PARAMS.interval_hours),
+                  IntervalUnit: "HOURS",
+                  Times: ["05:00"],
+                },
+                RetainRule: { Count: ref(SNAPSHOT_PARAMS.retain) },
                 CopyTags: true,
               },
             ],

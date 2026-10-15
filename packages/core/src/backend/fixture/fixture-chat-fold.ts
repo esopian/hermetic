@@ -61,6 +61,20 @@ export function createFixtureTurnRow(): FixtureTurnRow {
       }
       if (block.kind === "subagent" || (block.kind === "tool" && block.name === "delegate_task"))
         row.full = true;
+      // A file or secret request card is read back from history (attachments
+      // plan §8.3): a late delivery is answered from it after the turn ended.
+      if (
+        block.kind === "tool" &&
+        (block.render === "file_request" || block.render === "secret_request")
+      )
+        row.full = true;
+      // A shared file's card and chip are read back from history too: the
+      // download is offered after the turn ended.
+      if (
+        (block.kind === "tool" && block.render === "file_share") ||
+        (block.kind === "attachment" && block.href.startsWith("outbox/"))
+      )
+        row.full = true;
       if (block.kind === "tool") {
         const found = blocks.findIndex((b) => b.kind === "tool" && b.tool_id === block.tool_id);
         const at = found >= 0 ? found : blocks.length;

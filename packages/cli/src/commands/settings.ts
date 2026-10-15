@@ -37,6 +37,16 @@ function expected(opts: Record<string, unknown>): { expected_version?: number } 
   return n === undefined ? {} : { expected_version: n };
 }
 
+/**
+ * `on`/`off` as a boolean; anything else passes through unchanged, so the
+ * schema refuses it with its own message rather than this file guessing.
+ */
+function onOff(value: unknown): unknown {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  return value;
+}
+
 export function register(program: Command): void {
   const settings = new Cmd("settings").description(
     "the fleet's shared settings: defaults every laptop inherits",
@@ -86,6 +96,12 @@ export function register(program: Command): void {
         "--default-memory-provider <provider|none>",
         `the Hermes external memory provider a create with no --memory gets: ${MEMORY_PROVIDER_IDS.join(" | ")} | none`,
       )
+      .option(
+        "--files-require-cap <on|off>",
+        "require the files capability grant of every tailnet caller (default off)",
+      )
+      .option("--files-max-bytes <n>", "per-file cap on transfers, in bytes (at most 256 MiB)")
+      .option("--files-retention-days <n>", "how long a box keeps uploaded files (1-90, default 7)")
       .option("--expected-version <n>", "refuse unless the settings are still at this version")
       .addHelpText(
         "after",
@@ -99,8 +115,9 @@ export function register(program: Command): void {
           "  hermetic settings set --no-auto-update-hermeticd\n" +
           "  hermetic settings set --default-memory-provider holographic\n" +
           "  hermetic settings set --default-memory-provider none\n" +
-          "\nSwitching hermeticd auto-update republishes the fleet manifest, which is how\n" +
-          "the boxes hear about it (§6.5).\n" +
+          "  hermetic settings set --files-require-cap on --files-retention-days 14\n" +
+          "\nSwitching hermeticd auto-update, or changing a files setting, republishes the\n" +
+          "fleet manifest, which is how the boxes hear about it (§6.5).\n" +
           "\nThe default memory provider is read once, when an agent is created, and\n" +
           "pinned on it: changing it moves no existing agent. A create that inherits a\n" +
           "provider whose server does not fit its size is refused (pass --memory none,\n" +
@@ -131,6 +148,11 @@ export function register(program: Command): void {
             : Object.keys(hermes).length > 0
               ? { agent_defaults: hermes }
               : {};
+        const files = defined({
+          require_cap: onOff(opts["filesRequireCap"]),
+          max_bytes: toInt(opts["filesMaxBytes"] as string | undefined),
+          retention_days: toInt(opts["filesRetentionDays"] as string | undefined),
+        });
         const input = validate(setSchema, {
           ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
           // §8.3: an id or a name, resolved by core — the same vocabulary
@@ -149,6 +171,7 @@ export function register(program: Command): void {
                 ? null
                 : opts["defaultMemoryProvider"],
           }),
+          ...(Object.keys(files).length > 0 ? { files } : {}),
           ...expected(opts),
         });
         const result = await ctx.hermetic.settings.set(input);

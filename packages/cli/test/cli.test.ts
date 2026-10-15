@@ -565,6 +565,40 @@ describe.concurrent("settings and providers", () => {
     expect(stdout).toMatch(/memory provider\s+none \(built-in only\)/);
   });
 
+  test("set --files-* writes the files settings, and refuses out of range or a typo", async () => {
+    const { code, stdout } = await run(
+      "settings",
+      "set",
+      "--files-require-cap",
+      "on",
+      "--files-max-bytes",
+      "1048576",
+      "--files-retention-days",
+      "14",
+      "--json",
+    );
+    expect(code).toBe(0);
+    const result = JSON.parse(stdout) as SettingsJson & {
+      settings: { files?: Record<string, unknown> };
+    };
+    expect(result.settings.files).toEqual({
+      require_cap: true,
+      max_bytes: 1048576,
+      retention_days: 14,
+    });
+    // Each run is a fresh fixture, so `show` draws the defaults.
+    const shown = await run("settings", "show");
+    expect(shown.stdout).toContain("no capability grant needed");
+    expect(shown.stdout).toContain("256 MiB");
+    expect(shown.stdout).toContain("7 days");
+    const days = await run("settings", "set", "--files-retention-days", "365");
+    expect(days.code).toBe(2);
+    expect(days.stderr).toContain("retention_days");
+    const cap = await run("settings", "set", "--files-require-cap", "maybe");
+    expect(cap.code).toBe(2);
+    expect(cap.stderr).toContain("require_cap");
+  });
+
   test("a profile the fleet does not have is NOT_FOUND, on stderr", async () => {
     const { code, stderr } = await run("settings", "set", "--default-profile", "nope");
     expect(code).toBe(6);
@@ -1438,15 +1472,15 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
   });
 
   test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.1", "--now", "--no-rollout");
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now", "--no-rollout");
     expect(code).toBe(2);
     expect(stderr).toContain("--now and --no-rollout contradict each other");
   });
 
   test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
-    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.1", "--now");
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now");
     expect(code).toBe(0);
-    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.1 now");
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.2 now");
   });
 
   test("`artifacts push V --no-rollout` publishes and asks no box", async () => {

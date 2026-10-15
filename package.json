@@ -23,6 +23,7 @@
     "lint:sh": "bun scripts/lint-sh.ts",
     "boundaries": "bun test tests/boundaries.test.ts",
     "audit:dependencies": "bun scripts/audit-dependencies.ts",
+    "free-tier": "bun scripts/free-tier.ts",
     "check": "bun run typecheck && bun run test && bun run lint:biome && bun run lint && bun run lint:cfn && bun run lint:sh",
     "ci": "bun run check && bun run build && bun run audit:dependencies",
     "build": "bun scripts/build.ts full",

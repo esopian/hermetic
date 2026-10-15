@@ -21,8 +21,6 @@ const CLONE = `${DIR}/.src.clone`;
 export class HonchoBox extends MemoryBox {
   /** Minor versions `uv python find --managed-python` finds. */
   readonly managedPythons = new Set<string>();
-  /** Symlink → target, for `readlink`; `lstat` sees them through `symlinks`. */
-  readonly linkTargets = new Map<string, string>();
   /** Every exec with the options it was given, for env/cwd/stdin assertions. */
   readonly execs: Array<{ command: string; opts: ExecOptions | undefined }> = [];
   /** Whether the createcluster drop-in was on disk when Postgres was installed. */
@@ -42,11 +40,13 @@ export class HonchoBox extends MemoryBox {
     return hits[0]!.opts;
   }
 
-  /** A symlink as `ln -s` leaves it. */
-  symlink(target: string, path: string): void {
+  /**
+   * A symlink as `ln -s` leaves it: the base box's link, plus a file entry so
+   * `lstat` and `test -e` see something at the path.
+   */
+  override symlink(path: string, target: string): void {
+    super.symlink(path, target);
     this.files.set(path, { content: "", mode: "0777" });
-    this.symlinks.add(path);
-    this.linkTargets.set(path, target);
   }
 
   protected override drop(path: string): void {
@@ -114,7 +114,7 @@ export class HonchoBox extends MemoryBox {
       const [target, path] = args.filter((a) => !a.startsWith("-"));
       if (!target || !path || this.files.has(path))
         return fail(1, `ln: failed to create symbolic link`);
-      this.symlink(target, path);
+      this.symlink(path, target);
       return ok();
     }
     if (bin === "readlink") {

@@ -24,6 +24,7 @@ import {
   fleetLabel,
   sortFleets,
   switchability,
+  visibleFleets,
 } from "../nav/fleet-switch.ts";
 import type { FleetListEntry } from "../nav/fleet-switch.ts";
 import { fmtDate } from "../logic/format.ts";
@@ -48,6 +49,7 @@ function messageOf(e: unknown): string {
 export function FleetSwitcher({
   meta,
   facts = true,
+  onNewFleet,
 }: {
   meta: Meta | null;
   /**
@@ -57,8 +59,15 @@ export function FleetSwitcher({
    * and every one of those rows would be an em-dash pretending to be a fact.
    */
   facts?: boolean;
+  /**
+   * Opens the init wizard to create another fleet in this account (§4.8).
+   * Absent in the pre-open picker, which carries its own way into the wizard.
+   */
+  onNewFleet?: () => void;
 }) {
-  const { fleets, fleetsError, directoryError, refreshFleets, switchTo } = useFleet();
+  const { fleets: listed, fleetsError, directoryError, refreshFleets, switchTo } = useFleet();
+  /** Torn-down fleets are history, not destinations (`visibleFleets`). */
+  const fleets = listed === null ? null : visibleFleets(listed);
   /** The row whose Switch was clicked; the confirm lives inside that row. */
   const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -278,6 +287,11 @@ export function FleetSwitcher({
         <div className="fleet-sw-note mono">
           to add a fleet frozen elsewhere: hermetic init --attach --fleet &lt;id&gt;
         </div>
+      ) : null}
+      {onNewFleet ? (
+        <button type="button" className="fleet-sw-link fleet-sw-new" onClick={onNewFleet}>
+          + New fleet
+        </button>
       ) : null}
     </div>
   );

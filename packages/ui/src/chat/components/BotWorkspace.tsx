@@ -332,6 +332,7 @@ export function BotWorkspace({
                 live={chat.live}
                 context={chat.context}
                 sending={chat.sending}
+                remoteBusy={chat.remoteBusy}
                 activity={chat.activity}
                 historyError={chat.historyError}
                 turnError={chat.turnError}

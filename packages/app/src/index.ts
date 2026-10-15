@@ -25,7 +25,13 @@ export {
   type OpStatus,
   type OpStartOptions,
 } from "./ops.ts";
-export { FleetPoller, getPoller, POLL_INTERVAL_MS, type FleetEvent } from "./poller.ts";
+export {
+  FleetPoller,
+  getPoller,
+  POLL_INTERVAL_MS,
+  type FleetEvent,
+  type PollerHooks,
+} from "./poller.ts";
 export { INTERNAL_MESSAGE, type ErrorBody, type Failure } from "./errors.ts";
 export { RequestValidationError } from "./validation.ts";
 /**

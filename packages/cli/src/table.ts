@@ -28,6 +28,7 @@ import {
   agentDesktopUrl,
   autoUpdateHermeticd,
   groupByDisposition,
+  resolveFilesSettings,
   splitHermesSettings,
 } from "@hermetic/core";
 
@@ -690,6 +691,16 @@ function defaultProfileLabel(settings: SettingsResult["settings"]): string {
   return profile === undefined ? id : `${profile.name} (${id})`;
 }
 
+function filesRows(settings: SettingsResult["settings"]): Array<[string, string]> {
+  const files = resolveFilesSettings(settings);
+  const mib = files.max_bytes / (1024 * 1024);
+  return [
+    ["files access", files.require_cap ? "capability grant required" : "no capability grant needed"],
+    ["files max size", Number.isInteger(mib) ? `${mib} MiB` : `${files.max_bytes} bytes`],
+    ["files retention", `${files.retention_days} days`],
+  ];
+}
+
 export function renderSettings(result: SettingsResult): string {
   const { settings, catalog } = result;
   const pairs: Array<[string, string]> = [
@@ -723,6 +734,8 @@ export function renderSettings(result: SettingsResult): string {
         ? "on (new releases roll out when pushed)"
         : "off (boxes update nightly)",
     ],
+    // The effective files settings, defaults included, for the same reason.
+    ...filesRows(settings),
     ["agent model", settings.agent_defaults?.model ?? "-"],
     ["agent terminal", settings.agent_defaults?.terminal_backend ?? "-"],
     ["agent max turns", settings.agent_defaults?.max_turns?.toString() ?? "-"],

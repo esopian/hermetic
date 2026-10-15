@@ -105,6 +105,24 @@ const UNSCOPED_MACHINERY: Record<string, string> = {
   "terminal.list": "reads this head's own sessions",
   "terminal.open": "logs in with core's `ssh` argv for the configured fleet; it writes nothing",
   "terminal.resize": "resizes a session this head owns",
+  // The composer's attachments. The upload registry is this
+  // process's memory, the capability probe and the thumbnail are reads.
+  "files.stage.abort": "closes a stream this head opened",
+  "files.upload.open": "reserves a streamed upload in this head's memory; nothing leaves the laptop",
+  "files.secretText.upload":
+    "holds a bounded text secret in this head's memory; nothing leaves the laptop",
+  "files.upload.discard": "frees an upload in this head's memory",
+  "files.capability": "reads a box's /healthz; it writes nothing",
+  "files.content": "reads an image's bytes (a file or a share) for a preview; it writes nothing",
+  "files.pickNative":
+    "opens the laptop's file dialog and registers the picks in memory; it touches no box",
+  // Agent requests: the put's cancel, and the card's read of the box's slot.
+  "files.put.abort": "closes a stream this head opened",
+  "files.request.get": "reads a box's request slot; it writes nothing",
+  // The Files tab: a download's cancel, and the save dialog.
+  "files.get.abort": "closes a stream this head opened",
+  "files.saveNative":
+    "opens the laptop's folder dialog and registers the folder in memory; it touches no box",
 };
 
 /**
@@ -147,6 +165,19 @@ const BODIES: Record<string, object> = {
   "chat.turn": { instance: "ember", bot: "default", message: "hello" },
   "chat.abort": { instance: "ember", bot: "default" },
   "chat.steer": { instance: "ember", bot: "default", text: "also check the logs" },
+  /* Composer attachments: both write to a box. */
+  "files.stage": {
+    instance: "ember",
+    source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+  },
+  "files.discard": { instance: "ember", id: "f_aaaaaaaaaaaa" },
+  /* Agent requests: answering one or declining it writes to a box. */
+  "files.put": {
+    instance: "ember",
+    request_id: "fr_aaaaaaaaaaaa",
+    source: { chunk_upload_id: "up_00000000-0000-4000-8000-000000000000" },
+  },
+  "files.decline": { instance: "ember", request_id: "fr_aaaaaaaaaaaa" },
   /* Bot Mode (§9.2): every one of these writes to a box. */
   "chat.open": { instance: "ember", bot: "default" },
   "chat.compact": { instance: "ember", bot: "default" },

@@ -40,7 +40,7 @@ export interface ConvergeDeps {
   readonly aws: Aws;
   readonly name: string;
   readonly bucket: string;
-  /** `/hermes/<fleet>/<agent>/`, for the two secret slots an apply may need. */
+  /** `/hermes/<fleet>/<agent>/`, for the secret slots and durable file secrets an apply reads. */
   readonly paramPrefix: string;
   readonly emit?: Emit;
   readonly log?: (message: string) => void;
@@ -154,6 +154,9 @@ export async function convergeOnce(
     // Also the memory server's credential (`memory.llm.key_env`): the agent's
     // own key under the server's names, so there is no slot of its own to read.
     ...(providerKey ? { providerKey } : {}),
+    // The durable file secrets are re-read on a converge as on any apply, with
+    // the same role and prefix; best-effort inside `apply`.
+    fileSecrets: { aws, paramPrefix: deps.paramPrefix, ...(deps.log ? { log: deps.log } : {}) },
   });
 
   /**

@@ -5,6 +5,7 @@ import type { Bot, ChatConversation, ChatFailure, ChatMessage } from "../../sche
 import { HermeticError } from "../../errors.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { settleFixtureSubagents } from "./fixture-chat-subagent.ts";
+import { chipsAsCommitted } from "./fixture-chat-files.ts";
 import { profileTitle } from "../../chat/hermes/hermes-chat-roster.ts";
 
 const rec = (v: unknown): Record<string, unknown> =>
@@ -567,14 +568,17 @@ export function withFixtureBotMode(
         const session = opts.session ?? c?.session ?? "fixture";
         const k = `${key(box, bot)}/${session}`;
         const messages = transcripts.get(k) ?? (await base.history(box, bot, { session }));
-        messages.push({
+        const asked: ChatMessage = {
           id: `user-${++serial}`,
           session,
           role: "user",
           at: now(),
           blocks: [{ kind: "text", markdown: text }],
-        });
+        };
+        messages.push(asked);
         transcripts.set(k, messages);
+        const attachments =
+          opts.attachments && chipsAsCommitted(opts.attachments, text, asked, messages);
         const turns = flying.get(key(box, bot)) ?? [];
         flying.set(key(box, bot), turns);
         const turn = { session, messages };
@@ -587,7 +591,11 @@ export function withFixtureBotMode(
           // tool cards and the settled summaries a box's history holds.
           let answer = "";
           const row = createFixtureTurnRow();
-          for await (const frame of base.send(box, bot, text, { ...opts, session })) {
+          for await (const frame of base.send(box, bot, text, {
+            ...opts,
+            session,
+            ...(attachments ? { attachments } : {}),
+          })) {
             if (frame.type === "block") row.fold(frame.block);
             if (frame.type === "delta") {
               answer += frame.text;
@@ -644,6 +652,8 @@ export function withFixtureBotMode(
         role: "user",
         at: now(),
         blocks: [{ kind: "text", markdown: text }],
+        // History reads a real box's steer row this way (`steer-marker.ts`).
+        steered: true,
       });
       return Promise.resolve("redirected" as const);
     },

@@ -5,6 +5,7 @@ import type {
   FleetItem,
   NetworkMode,
   RpcHealth,
+  SnapshotPolicy,
 } from "../schema/index.ts";
 import { FLEET_KEY, RPC_PROTOCOL_VERSION, browserIdentities, stackNameFor } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
@@ -56,6 +57,8 @@ import {
   createFixtureAccount,
 } from "./fixture/memory-fixture.ts";
 import { createMemoryCompute } from "./memory-compute.ts";
+import { MemoryFiles } from "./fixture/memory-files.ts";
+import { FILES_CAPABILITY } from "../shared/files.ts";
 import { createMemoryFoundation } from "./memory-foundation.ts";
 import { tailscaleReformat } from "./memory-simulation.ts";
 import { createMemoryStore } from "./memory-store.ts";
@@ -278,6 +281,8 @@ export class MemoryBackend implements Backend {
    * accident, and deleting either would disarm the other.
    */
   readonly pendingNetwork = new Map<string, { network: NetworkMode; fckNatAmiId: string | null }>();
+  /** The snapshot policy each `createSnapshotChangeSet` staged, by change-set name, for the same reason. */
+  readonly pendingSnapshots = new Map<string, SnapshotPolicy>();
   /**
    * What `resolveFckNatAmi` answers. `null` makes the lookup *fail* — the state
    * a region with no published fck-nat image is in, and the one `apply` kind
@@ -441,7 +446,13 @@ export class MemoryBackend implements Backend {
       this.record("secrets.ensureSlot");
       this.params.set(path, SECRET_PLACEHOLDER);
     },
-    put: async (path: string, value: string): Promise<void> => {
+    put: async (path: string, value: string, opts?: { overwrite?: boolean }): Promise<void> => {
+      if (opts?.overwrite === false && this.params.has(path)) {
+        throw new HermeticError("CONFLICT", `the SSM slot ${path} already exists`, {
+          path,
+          already_exists: true,
+        });
+      }
       this.record("secrets.put");
       this.params.set(path, value);
     },
@@ -834,6 +845,15 @@ export class MemoryBackend implements Backend {
     return `"fixture-policy-${this.policyEtagSeq}"`;
   }
 
+  /** hermeticd's files service, in memory (`fixture/memory-files.ts`). */
+  readonly files = new MemoryFiles({
+    hasAgent: (name) => this.agents.has(name),
+    now: () => this.now(),
+    // A durable secret's slot, read the way the instance role reads it.
+    readParam: (path) => this.params.get(path),
+    fleetId: () => this.boundFleetId(),
+  });
+
   readonly rpc = {
     /**
      * The fixture's `/healthz`. It answers for a row with a tailnet address and
@@ -860,6 +880,10 @@ export class MemoryBackend implements Backend {
         hermeticd_version: agent.hermeticd_version ?? FIXTURE_HERMETICD_VERSION,
         protocol: RPC_PROTOCOL_VERSION,
         config_hash: agent.config_hash ?? null,
+        // Every fixture box serves files except `FIXTURE_NO_FILES_AGENT`, whose
+        // older hermeticd predates the service, so the hidden attach control
+        // has something to render against in `bun run dev:fixture`.
+        capabilities: name === FIXTURE_NO_FILES_AGENT ? [] : [FILES_CAPABILITY],
         /**
          * One entry per browser identity the agent runs (§7.3), all of them
          * healthy — the fixture's failing layers are hermeticd and the
@@ -906,6 +930,14 @@ export class MemoryBackend implements Backend {
 }
 
 export { FLEET_KEY };
+export { E2E_FILE_DIGEST, E2E_FILE_TOO_LARGE, MemoryFiles } from "./fixture/memory-files.ts";
+export type { MemoryFileEntry } from "./fixture/memory-files.ts";
+
+/**
+ * The one fixture agent whose hermeticd reports no `files` capability: `ember`,
+ * which the fixture seeds on hermeticd 0.4.0, from before the files service.
+ */
+export const FIXTURE_NO_FILES_AGENT = "ember";
 
 /**
  * The fixture data, re-exported so this module stays the one door every test

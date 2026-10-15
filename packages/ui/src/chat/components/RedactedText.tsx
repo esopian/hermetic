@@ -14,6 +14,16 @@
  * renders, it never disappears — and an uncaught `TypeError` in a leaf is how
  * a whole thread disappears.
  */
+/**
+ * The same text as plain string, for an attribute (`alt`, `aria-label`) where
+ * no element can mark it: normalised exactly as `RedactedText` normalises it,
+ * and with core's masking markers left as they are, since core already
+ * masked what they stand for.
+ */
+export function plainText(text: string | null | undefined): string {
+  return typeof text === "string" ? text : "";
+}
+
 export function RedactedText({ text }: { text: string | null | undefined }) {
   const value = typeof text === "string" ? text : "";
   return value.split(/(\[redacted\]|‹redacted by hermetic›)/gi).map((part, index) =>

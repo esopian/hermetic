@@ -3,7 +3,7 @@
 Skills and subagents checked into this repo so they work without any
 plugin installed. Claude Code loads `.claude/skills/` and `.claude/agents/`
 automatically for anyone who clones the repo.
-Codex loads `.agents/skills/`: `caveman` and `create-pr` have small entrypoints
+Codex loads `.agents/skills/`: `caveman`, `create-pr` and `release` have small entrypoints
 that read the Claude workflows. `orchestrator-mode` has a Codex-specific entrypoint.
 `bun run agent-setup` also links the generated graft skill there.
 
@@ -11,6 +11,7 @@ that read the Claude workflows. `orchestrator-mode` has a Codex-specific entrypo
 |---|---|---|
 | `caveman/` | Compressed-response mode (`/caveman lite\|full\|ultra`) | vendored, MIT |
 | `create-pr/` | Opens every PR via `gh`, body filled from `.github/pull_request_template.md` as a review guide (`/create-pr`) | this repo |
+| `release/` | Prepares a release: recommends the semver bump from the changes since the last tag, drafts grouped notes, confirms unless `--auto`, runs `bun run release` (`/release`) | this repo |
 | `orchestrator-mode/` | Main dispatches, a depth-1 task orchestrator delegates, workers implement | this repo |
 | `../agents/task-orchestrator.md` | The depth-1 orchestrator that skill spawns | this repo |
 

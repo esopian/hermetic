@@ -1,7 +1,7 @@
 /**
  * One agent, everything about it, as a small settings app: a short header, the
  * environment strip, and a left nav of sections — Overview, Chat, Desktop,
- * Logs, Config, Lifecycle. Every action lives on Lifecycle as a card that says
+ * Terminal, Files, Logs, Config, Lifecycle. Every action lives on Lifecycle as a card that says
  * what it keeps, what it loses and how long it takes; teardown goes through
  * `plan.destroy` and a typed-name confirm there, because core will not ask
  * (§3.2 rule 3).
@@ -38,6 +38,7 @@ import {
 import { failureHints } from "../logic/op-hints.ts";
 import { AgentDesktop } from "./AgentDesktop.tsx";
 import { AgentConfig } from "./agent/AgentConfig.tsx";
+import { AgentFiles } from "./agent/AgentFiles.tsx";
 import { AgentLifecycle } from "./agent/AgentLifecycle.tsx";
 import { AgentLogs } from "./agent/AgentLogs.tsx";
 import { AgentOverview } from "./agent/AgentOverview.tsx";
@@ -562,6 +563,9 @@ export function AgentDrawer({
           covered={covered}
         />
       );
+      break;
+    case "files":
+      body = <AgentFiles agent={agent} />;
       break;
     case "logs":
       body = (

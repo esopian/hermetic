@@ -47,6 +47,8 @@ import "./chat/styles/chat-activity-status.css";
 import "./chat/styles/chat-events.css";
 // Delegated children: the inline lines and the subagent modal.
 import "./chat/styles/chat-subagent.css";
+// An agent's file and secret requests: loud, square, never softened.
+import "./chat/styles/chat-file-request.css";
 // Bot-to-bot DM markers and the exchange panel.
 import "./chat/styles/bot-dm.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.

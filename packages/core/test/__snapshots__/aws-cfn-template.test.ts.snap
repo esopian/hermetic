@@ -3,7 +3,7 @@
 exports[`the foundation template snapshot 1`] = `
 "{
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "hermetic foundation: dedicated dual-stack VPC, sealed agent security group, fleet-scoped agent role, versioned bucket, agents/events tables, daily snapshots.",
+  "Description": "hermetic foundation: dedicated dual-stack VPC, sealed agent security group, fleet-scoped agent role, versioned bucket, agents/events tables, data-volume snapshot policy.",
   "Metadata": {
     "cfn-lint": {
       "config": {
@@ -40,6 +40,37 @@ exports[`the foundation template snapshot 1`] = `
       "Type": "String",
       "Default": "ami-00000000000000000",
       "Description": "fck-nat arm64 AMI, looked up by name at init. Unused when Network=public."
+    },
+    "SnapshotsEnabled": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Whether the data-volume snapshot policy runs. \`false\` keeps existing snapshots."
+    },
+    "SnapshotRetainCount": {
+      "Type": "Number",
+      "Default": "7",
+      "MinValue": 1,
+      "MaxValue": 1000,
+      "Description": "Snapshots kept per data volume; DLM deletes the oldest past this."
+    },
+    "SnapshotIntervalHours": {
+      "Type": "Number",
+      "Default": "24",
+      "AllowedValues": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "6",
+        "8",
+        "12",
+        "24"
+      ],
+      "Description": "Hours between data-volume snapshots."
     }
   },
   "Conditions": {
@@ -49,6 +80,14 @@ exports[`the foundation template snapshot 1`] = `
           "Ref": "Network"
         },
         "nat"
+      ]
+    },
+    "SnapshotsOn": {
+      "Fn::Equals": [
+        {
+          "Ref": "SnapshotsEnabled"
+        },
+        "true"
       ]
     }
   },
@@ -922,9 +961,15 @@ exports[`the foundation template snapshot 1`] = `
       "Type": "AWS::DLM::LifecyclePolicy",
       "Properties": {
         "Description": {
-          "Fn::Sub": "\${AWS::StackName} daily data-volume snapshots"
+          "Fn::Sub": "\${AWS::StackName} data-volume snapshots"
         },
-        "State": "ENABLED",
+        "State": {
+          "Fn::If": [
+            "SnapshotsOn",
+            "ENABLED",
+            "DISABLED"
+          ]
+        },
         "ExecutionRoleArn": {
           "Fn::GetAtt": [
             "SnapshotRole",
@@ -950,16 +995,20 @@ exports[`the foundation template snapshot 1`] = `
           ],
           "Schedules": [
             {
-              "Name": "daily",
+              "Name": "scheduled",
               "CreateRule": {
-                "Interval": 24,
+                "Interval": {
+                  "Ref": "SnapshotIntervalHours"
+                },
                 "IntervalUnit": "HOURS",
                 "Times": [
                   "05:00"
                 ]
               },
               "RetainRule": {
-                "Count": 7
+                "Count": {
+                  "Ref": "SnapshotRetainCount"
+                }
               },
               "CopyTags": true
             }

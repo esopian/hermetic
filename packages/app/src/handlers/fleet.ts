@@ -20,6 +20,7 @@ import {
   FleetsListInput,
   FleetsUseInput,
   NetworkStatusInput,
+  SnapshotsStatusInput,
   PolicyStatusInput,
   SettingsGetInput,
   SettingsSetInput,
@@ -50,6 +51,7 @@ export const doctorSchema = declareRpc("doctor", DoctorInput);
 export const policyStatusSchema = declareRpc("policy.status", PolicyStatusInput);
 /** §5's read: which side of a NAT this fleet's agents live on. */
 export const networkStatusSchema = declareRpc("network.status", NetworkStatusInput);
+export const snapshotsStatusSchema = declareRpc("snapshots.status", SnapshotsStatusInput);
 /** §4.8's three. */
 export const fleetsListSchema = declareRpc("fleets.list", FleetsListInput);
 export const fleetsUseSchema = declareRpc("fleets.use", FleetsUseInput);
@@ -201,6 +203,12 @@ export async function networkStatus(ctx: HandlerContext, params: unknown) {
   return await ctx.hermetic().network.status();
 }
 
+/** §7.1, a read for the same reason: the change is `apply` with `plan.snapshots`' plan. */
+export async function snapshotsStatus(ctx: HandlerContext, params: unknown) {
+  parseInput(snapshotsStatusSchema, params ?? {});
+  return await ctx.hermetic().snapshots.status();
+}
+
 /**
  * A client that stops reading must not grow the fan-out without bound; the
  * oldest events go and the gap is announced, the same contract the op buffer
@@ -298,6 +306,7 @@ export const fleetHandlers = {
   doctor,
   "policy.status": policyStatus,
   "network.status": networkStatus,
+  "snapshots.status": snapshotsStatus,
   "fleets.list": fleetsList,
   "fleets.use": fleetsUse,
   "fleets.alias": fleetsAlias,

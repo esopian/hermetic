@@ -51,7 +51,7 @@ export const CHANGE_SET_TIMEOUT_MS = 5 * 60_000;
  */
 export type ChangeSetErrorCode = Extract<
   ErrorCode,
-  "FOUNDATION_UPDATE_FAILED" | "NETWORK_UPDATE_FAILED"
+  "FOUNDATION_UPDATE_FAILED" | "NETWORK_UPDATE_FAILED" | "SNAPSHOTS_UPDATE_FAILED"
 >;
 
 export interface StackChangeDeps {

@@ -21,6 +21,7 @@ import type {
   Host,
   MemorySample,
 } from "../src/host.ts";
+import { PATH_KIND_SCRIPT, RESOLVE_SCRIPT } from "../src/files/fs-ops.ts";
 import { stagingPathFor } from "../src/host.ts";
 
 export interface FakeFile {
@@ -113,6 +114,23 @@ export function ranInOrder(host: FakeHost, patterns: ReadonlyArray<string | RegE
 
 export class FakeHost implements Host {
   readonly files = new Map<string, FakeFile>();
+  private readonly fileLocks = new Map<string, Promise<void>>();
+
+  async withFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.fileLocks.get(path);
+    let release: () => void = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.fileLocks.set(path, current);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.fileLocks.get(path) === current) this.fileLocks.delete(path);
+    }
+  }
   /**
    * The directories an Ubuntu box already has before hermeticd touches it.
    *
@@ -187,6 +205,12 @@ export class FakeHost implements Host {
   readonly livePids = new Set<number>();
   /** Paths this box treats as symlinks. `lstat` is the only thing that sees them. */
   readonly symlinks = new Set<string>();
+  /**
+   * Where a symlink points, for the ones a test gave a target (`symlink`).
+   * Only `RESOLVE_SCRIPT` (`realpath -e`) follows them; a link in `symlinks`
+   * with no target here is dangling.
+   */
+  readonly linkTargets = new Map<string, string>();
   /** The fleet bucket: key → bytes. `getObject` is the `ObjectFetch` a test hands to `apply`. */
   readonly s3Objects = new Map<string, Uint8Array>();
   getObject = async (bucket: string, key: string): Promise<Uint8Array> => {
@@ -217,6 +241,28 @@ export class FakeHost implements Host {
   followsForever = false;
   /** Every `execLines` argv whose child was killed, joined with spaces. */
   readonly killedCommands: string[] = [];
+  /** Every `writeStreamAs`: who wrote, where, at what mode, and how many bytes landed. */
+  readonly streamWrites: Array<{ user: string; path: string; mode: string; bytes: number }> = [];
+  /** Every `readStreamAs`, as `user path`. */
+  readonly streamReads: string[] = [];
+  /** Every `readStreamAs` path whose reader was cancelled before it ended. */
+  readonly cancelledReads: string[] = [];
+  /**
+   * Hooks consulted after each chunk of a `writeStreamAs`, with the bytes
+   * written so far; the first `Error` fails the write mid-stream, leaving the
+   * partial file behind as the real one would.
+   */
+  readonly streamFaults: Array<(path: string, bytesSoFar: number) => Error | null> = [];
+  /**
+   * Every filesystem call made through a `Host` method — root's own, as
+   * opposed to a command run as an account — as `<method> <path>`. How a test
+   * proves root never touched a path under `/data` (`files/fs-ops.ts`).
+   */
+  readonly rootFsCalls: string[] = [];
+
+  private rootFs(method: string, path: string): void {
+    this.rootFsCalls.push(`${method} ${path}`);
+  }
 
   now(): Date {
     return new Date(this.clock.getTime());
@@ -248,6 +294,46 @@ export class FakeHost implements Host {
   seedBytes(path: string, content: Uint8Array, mode = "0644"): void {
     this.markDirs(path);
     this.files.set(path, { content: new TextDecoder().decode(content), bytes: content, mode });
+  }
+
+  /** A symlink at `path` pointing at `target` (absolute, or relative to the link's directory). */
+  symlink(path: string, target: string): void {
+    this.markDirs(path);
+    this.files.delete(path);
+    this.symlinks.add(path);
+    this.linkTargets.set(path, target);
+  }
+
+  /**
+   * `realpath -e`: every component followed, `.`/`..` folded, each one
+   * required to exist. `null` for a dangling link, a loop or a missing
+   * component.
+   */
+  realpath(path: string): string | null {
+    let pending = path.split("/").filter((p) => p !== "");
+    let out = "";
+    let hops = 0;
+    while (pending.length > 0) {
+      const seg = pending.shift() as string;
+      if (seg === ".") continue;
+      if (seg === "..") {
+        out = out.slice(0, Math.max(0, out.lastIndexOf("/")));
+        continue;
+      }
+      const next = `${out}/${seg}`;
+      const target = this.linkTargets.get(next);
+      if (target !== undefined) {
+        if (++hops > 40) return null;
+        if (target.startsWith("/")) out = "";
+        pending = [...target.split("/").filter((p) => p !== ""), ...pending];
+        continue;
+      }
+      if (this.symlinks.has(next)) return null;
+      const last = pending.length === 0;
+      if (!this.dirs.has(next) && !(last && this.files.has(next))) return null;
+      out = next;
+    }
+    return out === "" ? "/" : out;
   }
 
   /** Register a file's parent, and its parents, as directories that exist. */
@@ -294,7 +380,123 @@ export class FakeHost implements Host {
   /** The built-in model. Subclasses extend it; anything unmodelled exits 0 silently. */
   protected builtin(argv: readonly string[], _opts?: ExecOptions): ExecResult {
     const [bin, ...args] = argv;
-    return bin === "systemctl" ? this.systemctl(args) : ok();
+    if (bin === "systemctl") return this.systemctl(args);
+    return this.fileCommand(bin, args) ?? ok();
+  }
+
+  /**
+   * The handful of coreutils spellings the files service drives as `hermes`
+   * (`files/fs-ops.ts`): `install -d`, `mv -n -T`, `rm -f[r] --`, `chown`.
+   * `null` for anything else, which falls through to "exited 0".
+   *
+   * `mv -n` onto an existing name skips silently and exits 0, as GNU coreutils
+   * did for years — the worst case the caller has to detect for itself.
+   */
+  private fileCommand(bin: string | undefined, args: readonly string[]): ExecResult | null {
+    // `test -L|-f|-d|-e <path>`: what the account sees. `-f`, `-d` and `-e`
+    // follow a link, so a symlink with no seeded target answers no to them.
+    // `PATH_KIND_SCRIPT` (`files/fs-ops.ts`): the same three answers, on stdout.
+    // `RESOLVE_SCRIPT` (`files/fs-ops.ts`): `realpath -e` through `linkTargets`.
+    if (bin === "sh" && args[0] === "-c" && args[1] === RESOLVE_SCRIPT) {
+      const real = this.realpath(args[3] ?? "");
+      if (real === null) return ok("missing\n");
+      const file = this.files.get(real);
+      if (!file) return ok("other\n");
+      const size = file.bytes?.byteLength ?? new TextEncoder().encode(file.content).byteLength;
+      return ok(`regular ${size}\n${real}\n`);
+    }
+    if (bin === "sh" && args[0] === "-c" && args[1] === PATH_KIND_SCRIPT) {
+      const path = args[3] ?? "";
+      if (this.symlinks.has(path)) return ok("other\n");
+      if (this.files.has(path)) return ok("regular\n");
+      if (this.dirs.has(path)) return ok("other\n");
+      return ok("missing\n");
+    }
+    if (bin === "test" && args.length === 2) {
+      const [flag, path = ""] = args;
+      const yes =
+        flag === "-L"
+          ? this.symlinks.has(path)
+          : flag === "-f"
+            ? this.files.has(path)
+            : flag === "-d"
+              ? this.dirs.has(path)
+              : flag === "-e"
+                ? this.files.has(path) || this.dirs.has(path)
+                : false;
+      return yes ? ok() : fail(1);
+    }
+    if (bin === "install" && args[0] === "-d") {
+      for (let i = 1; i < args.length; i += 1) {
+        const arg = args[i] as string;
+        if (arg === "-m" || arg === "-o" || arg === "-g") i += 1;
+        else if (!arg.startsWith("-")) {
+          this.markDirs(arg);
+          this.dirs.add(arg);
+        }
+      }
+      return ok();
+    }
+    if (bin === "mv" && args[0] === "-n" && args[1] === "-T") {
+      const [from, to] = args.slice(2).filter((a) => a !== "--");
+      if (from === undefined || to === undefined) return fail(1, "mv: missing operand");
+      const file = this.files.get(from);
+      if (!file) return fail(1, `mv: cannot stat '${from}': No such file or directory`);
+      if (this.files.has(to) || this.dirs.has(to) || this.symlinks.has(to)) return ok();
+      const slash = to.lastIndexOf("/");
+      if (slash > 0 && !this.dirs.has(to.slice(0, slash))) {
+        return fail(1, `mv: cannot move '${from}' to '${to}': No such file or directory`);
+      }
+      this.fsOps.push(`rename ${from} -> ${to}`);
+      this.files.set(to, file);
+      this.files.delete(from);
+      return ok();
+    }
+    // `mv -f -T`: a rename over whatever file or symlink is at the target
+    // (`apply/plugins.ts`); a directory there is refused, as `-T` does.
+    if (bin === "mv" && args[0] === "-f" && args[1] === "-T") {
+      const [from, to] = args.slice(2).filter((a) => a !== "--");
+      if (from === undefined || to === undefined) return fail(1, "mv: missing operand");
+      const file = this.files.get(from);
+      if (!file) return fail(1, `mv: cannot stat '${from}': No such file or directory`);
+      if (this.dirs.has(to)) return fail(1, `mv: cannot overwrite directory '${to}'`);
+      this.fsOps.push(`rename ${from} -> ${to}`);
+      this.symlinks.delete(to);
+      this.files.set(to, file);
+      this.files.delete(from);
+      return ok();
+    }
+    if (bin === "rm" && (args[0] === "-f" || args[0] === "-rf") && args[1] === "--") {
+      for (const path of args.slice(2)) {
+        this.fsOps.push(`remove ${path}`);
+        this.files.delete(path);
+        if (args[0] === "-rf") {
+          const prefix = `${path}/`;
+          for (const key of [...this.files.keys()]) if (key.startsWith(prefix)) this.files.delete(key);
+          for (const dir of [...this.dirs])
+            if (dir === path || dir.startsWith(prefix)) this.dirs.delete(dir);
+        }
+      }
+      return ok();
+    }
+    if (bin === "rmdir" && args[0] === "--") {
+      const path = args[1] ?? "";
+      const prefix = `${path}/`;
+      const busy =
+        [...this.files.keys()].some((k) => k.startsWith(prefix)) ||
+        [...this.dirs].some((d) => d.startsWith(prefix));
+      if (busy) return fail(1, `rmdir: failed to remove '${path}': Directory not empty`);
+      this.dirs.delete(path);
+      return ok();
+    }
+    if (bin === "chown") {
+      const operands = args.filter((a) => !a.startsWith("-"));
+      const [ownership, path] = operands;
+      const file = path === undefined ? undefined : this.files.get(path);
+      if (ownership && path && file) this.files.set(path, { ...file, ownership });
+      return ok();
+    }
+    return null;
   }
 
   private systemctl(args: readonly string[]): ExecResult {
@@ -366,8 +568,11 @@ export class FakeHost implements Host {
    */
   protected unitIsKnown(unit: string): boolean {
     if (this.files.has(`/etc/systemd/system/${unit}`)) return true;
-    const template = /^(.+)@.+\.service$/.exec(unit)?.[1];
-    return template !== undefined && this.files.has(`/etc/systemd/system/${template}@.service`);
+    const suffix = ".service";
+    if (!unit.endsWith(suffix)) return false;
+    const at = unit.lastIndexOf("@", unit.length - suffix.length - 2);
+    if (at <= 0) return false;
+    return this.files.has(`/etc/systemd/system/${unit.slice(0, at)}@.service`);
   }
 
   async *execLines(argv: readonly string[], opts?: ExecOptions): AsyncIterable<string> {
@@ -418,11 +623,95 @@ export class FakeHost implements Host {
 
   // --- filesystem --------------------------------------------------------------
 
+  /**
+   * Exclusive, like the real `set -C` create: anything at `path` — a file, a
+   * directory, a symlink — refuses with `EEXIST` before a byte is written. The
+   * file exists from the first chunk, so a fault mid-stream leaves the partial
+   * behind for the caller to clean up, which is what the real one does.
+   */
+  async writeStreamAs(
+    user: string,
+    path: string,
+    chunks: AsyncIterable<Uint8Array>,
+    opts: { readonly mode: string },
+  ): Promise<{ bytes: number }> {
+    this.writeFault(path);
+    this.requireParent(path);
+    if (this.files.has(path) || this.dirs.has(path) || this.symlinks.has(path)) {
+      throw Object.assign(new Error(`EEXIST: file already exists, open '${path}'`), { code: "EEXIST" });
+    }
+    const record = { user, path, mode: opts.mode, bytes: 0 };
+    this.streamWrites.push(record);
+    const parts: Uint8Array[] = [];
+    const store = (): void => {
+      const bytes = Buffer.concat(parts);
+      const content = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      record.bytes = content.byteLength;
+      this.files.set(path, {
+        content: new TextDecoder().decode(content),
+        bytes: content,
+        mode: opts.mode,
+        ownership: `${user}:${user}`,
+      });
+    };
+    store();
+    for await (const chunk of chunks) {
+      parts.push(chunk);
+      store();
+      for (const fault of this.streamFaults) {
+        const error = fault(path, record.bytes);
+        if (error) throw error;
+      }
+    }
+    return { bytes: record.bytes };
+  }
+
+  /**
+   * Refuses a symlink or anything but a regular file, as `READ_STREAM_SCRIPT`
+   * does. Pull-based, like a child's stdout: the bytes on the first pull, the
+   * end on the next, so a reader nobody drains stays open — and a cancel
+   * reaches it, recorded in `cancelledReads` as the real one kills its `cat`.
+   */
+  readStreamAs(user: string, path: string): ReadableStream<Uint8Array> {
+    this.streamReads.push(`${user} ${path}`);
+    const file = this.symlinks.has(path) ? undefined : this.files.get(path);
+    const cancelled = this.cancelledReads;
+    let sent = false;
+    return new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          if (!file) {
+            controller.error(
+              Object.assign(new Error(`ENOENT: no such file or directory, open '${path}'`), {
+                code: "ENOENT",
+              }),
+            );
+          }
+        },
+        pull(controller) {
+          if (!file) return;
+          if (sent) {
+            controller.close();
+            return;
+          }
+          sent = true;
+          controller.enqueue(file.bytes ?? new TextEncoder().encode(file.content));
+        },
+        cancel() {
+          cancelled.push(path);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
   async readFile(path: string): Promise<string | null> {
+    this.rootFs("readFile", path);
     return this.files.get(path)?.content ?? null;
   }
 
   async readBytes(path: string): Promise<Uint8Array | null> {
+    this.rootFs("readBytes", path);
     const file = this.files.get(path);
     if (!file) return null;
     return file.bytes ?? new TextEncoder().encode(file.content);
@@ -449,6 +738,7 @@ export class FakeHost implements Host {
 
   /** Keeps the previous mode *and* ownership, as the real staged-and-renamed write does. */
   async writeFile(path: string, content: string, mode?: string): Promise<void> {
+    this.rootFs("writeFile", path);
     this.writeFault(path);
     this.requireParent(path);
     const existing = this.files.get(path);
@@ -461,6 +751,7 @@ export class FakeHost implements Host {
   }
 
   async appendFile(path: string, content: string, mode?: string): Promise<void> {
+    this.rootFs("appendFile", path);
     const existing = this.files.get(path);
     if (mode) this.chmods.push([path, mode]);
     this.files.set(path, {
@@ -471,6 +762,7 @@ export class FakeHost implements Host {
 
   /** Direct children, files *and* directories; the latter inferred from deeper paths and `mkdir`. */
   async readdir(path: string): Promise<string[]> {
+    this.rootFs("readdir", path);
     const prefix = path.endsWith("/") ? path : path + "/";
     const names = new Set<string>();
     for (const key of [...this.files.keys(), ...this.dirs]) {
@@ -484,6 +776,7 @@ export class FakeHost implements Host {
   }
 
   async writeBytes(path: string, content: Uint8Array, mode?: string): Promise<void> {
+    this.rootFs("writeBytes", path);
     this.writeFault(path);
     this.requireParent(path);
     const existing = this.files.get(path);
@@ -497,6 +790,11 @@ export class FakeHost implements Host {
   }
 
   async stat(path: string): Promise<FileStat | null> {
+    this.rootFs("stat", path);
+    return this.statOf(path);
+  }
+
+  private statOf(path: string): FileStat | null {
     // `/proc` is how the installation lock asks whether its holder is still there.
     const pid = /^\/proc\/(\d+)$/.exec(path);
     if (pid !== null) {
@@ -513,12 +811,14 @@ export class FakeHost implements Host {
   }
 
   async lstat(path: string): Promise<FileStat | null> {
-    const stat = await this.stat(path);
+    this.rootFs("lstat", path);
+    const stat = this.statOf(path);
     if (stat === null) return null;
     return { ...stat, isSymlink: this.symlinks.has(path) };
   }
 
   async chmod(path: string, mode: string): Promise<void> {
+    this.rootFs("chmod", path);
     this.chmods.push([path, mode]);
     const file = this.files.get(path);
     if (file) this.files.set(path, { ...file, mode });
@@ -528,12 +828,14 @@ export class FakeHost implements Host {
   // directories too, and a fake that only remembered the leaf would call a
   // write into `/a/b` parentless.
   async mkdir(path: string, _mode?: string): Promise<void> {
+    this.rootFs("mkdir", path);
     this.markDirs(path);
     this.dirs.add(path);
   }
 
   // Throws on a missing source, like the real one: silently doing nothing would hide a bug.
   async rename(path: string, to: string): Promise<void> {
+    this.rootFs("rename", path);
     this.fault("rename", path, to);
     const file = this.files.get(path);
     if (!file) {
@@ -548,6 +850,7 @@ export class FakeHost implements Host {
 
   /** A hard link, modelled as a copy: the *source* is still there afterwards (§6.5). */
   async link(path: string, to: string): Promise<void> {
+    this.rootFs("link", path);
     this.fault("link", path, to);
     const file = this.files.get(path);
     if (!file) {
@@ -579,6 +882,7 @@ export class FakeHost implements Host {
   }
 
   async remove(path: string): Promise<void> {
+    this.rootFs("remove", path);
     this.fault("remove", path);
     this.fsOps.push(`remove ${path}`);
     this.files.delete(path);

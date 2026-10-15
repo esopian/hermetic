@@ -43,12 +43,20 @@ import type {
   ChatObserveTarget,
   Hermetic,
   ObservePool,
+  ObservePoolEntry,
   PooledChatEvent,
 } from "@hermetic/core";
 import { classifyFailure } from "./errors.ts";
 import type { LogLevel, AppLog } from "./log.ts";
 
 export type { ChatConversationRef, ChatObserveTarget } from "@hermetic/core";
+
+/**
+ * One held subscription and how well it is: pinned or guest, the session its
+ * read names, and whether (and since when) it is retrying. No event body, so
+ * nothing the box said.
+ */
+export type ChatOwnedHealth = ObservePoolEntry;
 
 /** One observation event with the identity a fan-in reader needs to route it. */
 export type OwnedChatEvent = PooledChatEvent;
@@ -89,6 +97,28 @@ export interface ChatOwner {
   owned(): ChatConversationRef[];
   /** Every conversation with a live subscription, owned or guest. */
   observing(): ChatConversationRef[];
+  /** The pinned conversations whose subscription ended with a failure, oldest first. */
+  failed(): ChatConversationRef[];
+  /** Every live subscription with its health, for the coverage watchdog (`chat-watchdog.ts`). */
+  health(): ChatOwnedHealth[];
+  /**
+   * Which set of subscriptions is held now; moves on every `reset` (a §4.8
+   * fleet switch) and on `stop`, so a caller keeping per-conversation state can
+   * tell that what it kept belongs to a set that is gone.
+   */
+  epoch(): number;
+  /**
+   * End and re-open exactly one pinned conversation whose read looks wedged.
+   *
+   * The watchdog's lever, not an operator's: it applies only to a conversation
+   * that is pinned *and* on a listened instance, and declines (false) for
+   * anything else — a guest belongs to its readers, and a conversation nobody
+   * listens to is not this owner's to hold. A per-conversation reader of the
+   * old subscription sees its stream end, as on a fleet switch; the fan-in
+   * carries on and gets the new subscription's snapshot. Sends nothing to the
+   * box.
+   */
+  restart(target: ChatObserveTarget, reason: string): Promise<boolean>;
   /** Read one conversation, joining the held subscription when there is one. */
   join(target: ChatObserveTarget, signal: AbortSignal): AsyncIterable<ChatObserveEvent>;
   /**
@@ -246,6 +276,46 @@ export function createChatOwner(deps: ChatOwnerDeps): ChatOwner {
     },
     observing(): ChatConversationRef[] {
       return pool.held().map((entry) => entry.ref);
+    },
+    failed(): ChatConversationRef[] {
+      return pool.failed();
+    },
+    health(): ChatOwnedHealth[] {
+      return pool.held();
+    },
+    epoch(): number {
+      return pool.epoch();
+    },
+    /**
+     * Not queued behind the reconcile lock, for `resume`'s reason: the decision
+     * and the halt-and-pin are one synchronous run after the only await, so a
+     * reconcile cannot observe it half-done, and `epoch` refuses an answer that
+     * a drain overtook.
+     */
+    async restart(target: ChatObserveTarget, reason: string): Promise<boolean> {
+      const ref = refOf(target);
+      const epoch = pool.epoch();
+      if (pool.stopped()) return false;
+      let instances: readonly string[];
+      try {
+        instances = (await deps.hermetic().chat.listening({})).instances;
+      } catch (e) {
+        log("debug", "listening read failed", masked(e));
+        return false;
+      }
+      if (pool.stopped() || pool.epoch() !== epoch) return false;
+      const entry = pool.held().find((held) => keyOf(held.ref) === keyOf(ref));
+      if (!instances.includes(ref.instance) || entry?.pinned !== true) {
+        log("debug", "restart declined", {
+          ...where(ref),
+          reason: instances.includes(ref.instance) ? "not pinned" : "not listening",
+        });
+        return false;
+      }
+      pool.halt(ref, reason);
+      pool.pin(ref);
+      log("warn", "observation restarted", { ...where(ref), reason });
+      return true;
     },
     join(target: ChatObserveTarget, signal: AbortSignal): AsyncIterable<ChatObserveEvent> {
       return pool.join(target, signal);

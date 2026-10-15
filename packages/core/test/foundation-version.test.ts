@@ -130,6 +130,15 @@ const FOUNDATION_TEMPLATE_SHA256: Record<number, string> = {
   // the old grant says so. The stack phase takes the empty change set as the
   // no-op it is (`stack already at this template`).
   15: "e028920a3a6c0a0fc5c6f895355190d71317e07f3248f2be943bd2e186503804",
+  // v16 *is* a template change, in the DLM policy only: its `State`, its
+  // `CreateRule.Interval` and its `RetainRule.Count` read three new parameters
+  // (`SnapshotsEnabled`, `SnapshotIntervalHours`, `SnapshotRetainCount`, §7.1)
+  // instead of literals, each defaulted to the literal it replaces, so the
+  // update itself changes no fleet's policy. No state moves; the stack is the
+  // only record of the policy, so the v16 migration carries no hooks. The stack
+  // and DLM descriptions and the schedule's name stop saying "daily" in the
+  // same version, an in-place modify of the same resource.
+  16: "de25f45f69a6b60dbe38eb499e8de4a13248729fa25ddaa6fc46048297041c62",
 };
 
 describe("foundation version", () => {

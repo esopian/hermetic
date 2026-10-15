@@ -23,6 +23,20 @@ import { sha256 } from "./shared.ts";
  */
 export const SECRETS_ENV_PATH = "/run/hermetic/secrets.env";
 export const SECRETS_ENV_DIR = "/run/hermetic";
+/**
+ * `/run/hermetic` is root's and 0711: traversable, not listable, not writable.
+ *
+ * It was 0700 until hermes needed to reach paths under it — the durable file
+ * secrets in `/run/hermetic/files/`, the ephemeral drops in
+ * `/run/hermetic/drop/` and the files socket. The execute bit lets the account
+ * open a path it already knows; it does not let it list the directory, so the
+ * names of the root-only files here (`secrets.env`, a staged auth key) are not
+ * enumerable, and every one of those files stays 0600 root, which the bit on
+ * the directory above does nothing to. Nor can the account create or replace
+ * anything here: there is no write bit for it. The same mode is rendered into
+ * `hermetic-secrets.service`'s `ExecStartPre`, so boot and apply agree.
+ */
+export const SECRETS_ENV_DIR_MODE = "0711";
 
 /**
  * The boot oneshot core renders on every agent (`secretsUnit`), whose
@@ -97,7 +111,14 @@ export async function materialiseSecrets(input: {
   // the environment file would change.
   const slash = outPath.lastIndexOf("/");
   if (!input.dryRun) {
-    await host.mkdir(slash > 0 ? outPath.slice(0, slash) : SECRETS_ENV_DIR, "0700");
+    const dir = slash > 0 ? outPath.slice(0, slash) : SECRETS_ENV_DIR;
+    // `/run/hermetic` itself is 0711 (`SECRETS_ENV_DIR_MODE`); a directory an
+    // operator named with `--out` keeps the old, closed 0700. Chmod'd as well as
+    // made, because `mkdir` leaves an existing directory's mode alone — and
+    // every box booted before 0711 has a 0700 one.
+    const mode = dir === SECRETS_ENV_DIR ? SECRETS_ENV_DIR_MODE : "0700";
+    await host.mkdir(dir, mode);
+    if (dir === SECRETS_ENV_DIR) await host.chmod(dir, mode);
   }
 
   // The provider key comes first so a Bitwarden project that also carries one

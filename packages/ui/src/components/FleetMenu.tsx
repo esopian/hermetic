@@ -89,7 +89,14 @@ export function openFleetLabel(meta: Meta | null): string {
   );
 }
 
-export function FleetMenu({ meta }: { meta: Meta | null }) {
+export function FleetMenu({
+  meta,
+  onNewFleet,
+}: {
+  meta: Meta | null;
+  /** Opens the init wizard to create another fleet; the popover closes first. */
+  onNewFleet?: (() => void) | undefined;
+}) {
   const { popoverOpen: open, setPopoverOpen: setOpen, openSettings } = useNav();
   const { doctor, busy: doctorLoading, error: doctorError } = useDoctor();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -117,7 +124,17 @@ export function FleetMenu({ meta }: { meta: Meta | null }) {
       {open ? (
         <Popover anchor={trigger} onClose={() => setOpen(false)} label="Fleet switcher">
           <div className="popover-body">
-            <FleetSwitcher meta={meta} />
+            <FleetSwitcher
+              meta={meta}
+              onNewFleet={
+                onNewFleet
+                  ? () => {
+                      setOpen(false);
+                      onNewFleet();
+                    }
+                  : undefined
+              }
+            />
             <div className="popover-foot">
               <button
                 type="button"

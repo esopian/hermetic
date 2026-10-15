@@ -12,7 +12,7 @@
  * helpers below (`chat-conversations.ts` owns the hooks around them).
  */
 import type { ChatActivityView, ChatBlockView, ChatFrameView, ChatMessageView } from "../api/index.ts";
-import type { Assemble, Conversation } from "./chat-conversation-record.ts";
+import type { Assemble, Conversation, TurnPrompt } from "./chat-conversation-record.ts";
 
 /** How a request's card ended, as far as the transcript says. */
 export type ClosedKind = "skipped" | "answered" | "timeout" | "cancelled";
@@ -230,7 +230,7 @@ const RELEASED_MAX = 256;
 const TURN_PROMPTS_MAX = 32;
 
 /** Remember the prompt that started a turn this browser saw fail, by the failed message's id. */
-export function rememberTurnPrompt(record: Conversation, id: string, prompt: string): void {
+export function rememberTurnPrompt(record: Conversation, id: string, prompt: TurnPrompt): void {
   const next = new Map(record.turnPrompts);
   next.delete(id);
   next.set(id, prompt);

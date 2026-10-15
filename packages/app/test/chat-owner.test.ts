@@ -23,9 +23,11 @@
  * bounded — `openStream` gives up rather than hanging the suite.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Bot, ChatObserveEvent, Hermetic, Swarm } from "@hermetic/core";
+import type { AgentView, Bot, ChatObserveEvent, Hermetic, Swarm } from "@hermetic/core";
 import { createChatOwner, type ChatOwner, type OwnedChatEvent } from "../src/chat-owner.ts";
 import { CHAT_STREAM_MAX_QUEUED } from "../src/chat-stream.ts";
+import { createChatWatchdog } from "../src/chat-watchdog.ts";
+import { FleetPoller } from "../src/poller.ts";
 import { INTERNAL_MESSAGE } from "../src/errors.ts";
 import type { HandlerContext } from "../src/handlers/ctx.ts";
 import { dispatch } from "../src/handlers/dispatch.ts";
@@ -194,6 +196,10 @@ function chatScript(options: ScriptOptions = {}) {
     /** From now on this box's roster read fails, as an unreachable one's does. */
     blind(instance: string): void {
       unreadable.add(instance);
+    },
+    /** The box answers its roster again. */
+    sight(instance: string): void {
+      unreadable.delete(instance);
     },
   };
 }
@@ -1183,5 +1189,164 @@ describe("the fan-in seed", () => {
       (JSON.parse(second?.data ?? "null") as { conversation: { bot: string } }).conversation.bot,
     ).toBe("bot1");
     await stream.cancel();
+  });
+});
+
+/* ── the watchdog's levers and reads ─────────────────────────────────────── */
+
+describe("what the coverage watchdog reads and pulls", () => {
+  test("`failed` lists remembered failures; `health` reports a retrying read and since when", async () => {
+    const { script, owner } = harness({
+      listening: ["atlas"],
+      bots: { atlas: ["default", "granite"] },
+    });
+    await owner.sync();
+    script.push("atlas/default", snapshot("atlas", "default"));
+    script.push("atlas/granite", reconnecting("atlas", "granite", 1));
+    await settle();
+
+    const byBot = new Map(owner.health().map((entry) => [entry.ref.bot, entry]));
+    expect(byBot.get("default")).toMatchObject({ pinned: true, health: null, healthSince: null });
+    expect(byBot.get("granite")?.health).toBe("reconnect");
+    expect(typeof byBot.get("granite")?.healthSince).toBe("number");
+    expect(owner.failed()).toEqual([]);
+
+    die(script, "atlas/granite");
+    await settle();
+    expect(owner.failed()).toEqual([{ instance: "atlas", bot: "granite", session: null }]);
+  });
+
+  test("`epoch` moves on a reset", async () => {
+    const { owner } = harness({ listening: ["atlas"], bots: { atlas: ["default"] } });
+    const before = owner.epoch();
+    await owner.reset();
+    expect(owner.epoch()).toBe(before + 1);
+  });
+
+  test("`restart` ends and re-opens one pinned conversation, and nothing else", async () => {
+    const { script, owner, ctx, log } = harness({
+      listening: ["atlas"],
+      bots: { atlas: ["default", "granite"] },
+    });
+    await owner.sync();
+    script.push("atlas/default", snapshot("atlas", "default", ["hello"]));
+    await settle();
+    const tab = await openStream(ctx, "chat.observe", { instance: "atlas", bot: "default" });
+    expect((await tab.next())?.event).toBe("snapshot");
+
+    expect(
+      await owner.restart({ instance: "atlas", bot: "default" }, "watchdog: stale reconnect"),
+    ).toBe(true);
+    await settle();
+
+    expect(script.calls("atlas/default")).toBe(2);
+    expect(script.live("atlas/default")).toBe(1);
+    expect(script.calls("atlas/granite")).toBe(1);
+    expect(sorted(owner)).toEqual(["atlas/default", "atlas/granite"]);
+    // A per-conversation reader of the old subscription is told the stream
+    // ended, with no error frame, as on a fleet switch.
+    expect(await tab.next(500)).toBeNull();
+    expect(log.lines.join("")).toContain("WARN  chat observation restarted");
+  });
+
+  test("`restart` declines a box nobody listens to, a guest, and a conversation not held", async () => {
+    const { script, owner, ctx } = harness({
+      listening: ["atlas"],
+      bots: { atlas: ["default"], corvid: ["default"] },
+    });
+    await owner.sync();
+    const guest = await openStream(ctx, "chat.observe", {
+      instance: "atlas",
+      bot: "default",
+      session: "t7",
+    });
+    const unlistened = await openStream(ctx, "chat.observe", { instance: "corvid", bot: "default" });
+    await settle();
+
+    expect(await owner.restart({ instance: "corvid", bot: "default" }, "test")).toBe(false);
+    expect(await owner.restart({ instance: "atlas", bot: "default", session: "t7" }, "test")).toBe(
+      false,
+    );
+    expect(await owner.restart({ instance: "atlas", bot: "granite" }, "test")).toBe(false);
+    expect(script.calls("corvid/default")).toBe(1);
+    expect(script.calls("atlas/default#t7")).toBe(1);
+    expect(script.calls("atlas/granite")).toBe(0);
+    await guest.cancel();
+    await unlistened.cancel();
+  });
+
+  test("`restart` after shutdown starts nothing", async () => {
+    const { script, owner } = harness({ listening: ["atlas"], bots: { atlas: ["default"] } });
+    await owner.sync();
+    await owner.stop();
+    expect(await owner.restart({ instance: "atlas", bot: "default" }, "test")).toBe(false);
+    expect(script.calls("atlas/default")).toBe(1);
+  });
+});
+
+/* ── the seam: poller → watchdog → owner ─────────────────────────────────── */
+
+describe("a listened box that was down at launch", () => {
+  test("is watched once the poller sees it come up, with nobody pressing anything", async () => {
+    const { script, owner } = harness({
+      listening: ["atlas"],
+      bots: { atlas: ["default", "granite"] },
+      unreadable: ["atlas"],
+    });
+    // Launch: the box is stopped, its roster read fails, nothing is held.
+    await owner.sync();
+    expect(owner.owned()).toEqual([]);
+
+    let status: AgentView["display_status"] = "stopped";
+    const fleet = {
+      ...(script.hermetic as unknown as Record<string, unknown>),
+      agents: {
+        list: () =>
+          Promise.resolve([
+            { name: "atlas", version: 1, display_status: status } as unknown as AgentView,
+          ]),
+      },
+    } as unknown as Hermetic;
+    /** Every timer the watchdog arms, fired by hand: no real clock. */
+    const due: (() => void)[] = [];
+    let poller: FleetPoller | null = null;
+    const watchdog = createChatWatchdog({
+      owner,
+      listening: async () => (await script.hermetic.chat.listening({})).instances,
+      agents: () => poller?.snapshot().agents ?? null,
+      schedule: (run) => {
+        due.push(run);
+        return () => undefined;
+      },
+    });
+    poller = new FleetPoller(fleet, Date.now, {
+      onReachable: (names) => void watchdog.reachable(names),
+      onRoster: (swarms) => void watchdog.roster(swarms),
+    });
+
+    try {
+      await poller.poll();
+      // Stopped: the tick passes over it rather than spending a sync on it.
+      await watchdog.tick();
+      expect(watchdog.status().skipped).toBe(1);
+      expect(due).toEqual([]);
+
+      // The box boots. The next scan sees it `ready` and tells the watchdog.
+      status = "ready";
+      script.sight("atlas");
+      await poller.poll();
+      await settle();
+      expect(due.length).toBe(1);
+      due.shift()?.();
+      await watchdog.idle();
+      await settle();
+
+      expect(sorted(owner)).toEqual(["atlas/default", "atlas/granite"]);
+      expect(script.live("atlas/default")).toBe(1);
+      expect(watchdog.status().syncs).toBe(1);
+    } finally {
+      watchdog.stop();
+      poller.stop();
+    }
   });
 });

@@ -15,10 +15,18 @@
  * visit to another section and the rail can say it is waiting.
  */
 import { useContext, useId, useState } from "react";
+import { FREE_TIER_PRESET_ID } from "@hermetic/core/shared";
 import { setSettings, updateProfile } from "../../api/index.ts";
 import type { SettingsResult } from "../../api/index.ts";
 import { profileById, providerSpec, readyProfiles } from "../../logic/provider-logic.ts";
 import type { ProfilesState } from "../../state/state.tsx";
+import { currentPresets, loadPresets, savePresets, usePresets } from "../../state/presets-store.ts";
+import {
+  freeTierPresetsPlan,
+  freeTierSettingsPatch,
+  freeTierState,
+  freeTierStateText,
+} from "../../logic/free-tier.ts";
 import {
   APPROVALS_MODES,
   REASONING_EFFORTS,
@@ -31,6 +39,7 @@ import {
   toSaveError,
 } from "../../logic/settings-logic.ts";
 import type { DefaultsForm, RaisedSaveError, SaveError } from "../../logic/settings-logic.ts";
+import { FreeTierDrawer } from "./FreeTierDrawer.tsx";
 import { MemoryDefaultRows } from "./MemorySettings.tsx";
 import { SaveBar } from "./SaveBar.tsx";
 import { liveDraft, useSeededForm } from "./seeded.ts";
@@ -225,6 +234,106 @@ function DefaultProfileRow({
   );
 }
 
+/**
+ * "Set to AWS Free Tier" (§10): one instant action, outside the save bar like
+ * the default profile row, because what it writes is not on this form — the
+ * fleet's machine defaults (`settings.set`) and this laptop's default create
+ * preset (`presets.set`). Both the button and the help link open the same
+ * drawer, which explains the allowances and shows the plan before anything is
+ * written. Each half is skipped when it already holds, so a retry after a
+ * half-applied attempt sends only the half that failed.
+ */
+function FreeTierRow({
+  result,
+  onSaved,
+}: {
+  result: SettingsResult;
+  onSaved: (next: SettingsResult) => void;
+}) {
+  // The built-in fallback is not this laptop's answer: until the read lands the
+  // laptop half of the plan is unknown, and Apply waits rather than guessing.
+  const { view, loaded, error: readError } = usePresets();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<SaveError | null>(null);
+  const [ticked, flash] = useSavedTick();
+  const presets = loaded ? view : null;
+  const state = freeTierState(result, presets);
+
+  async function apply() {
+    if (presets === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!state.fleet) onSaved(await setSettings(freeTierSettingsPatch(result)));
+      // Re-read, then plan from what the store holds now rather than from the
+      // render that drew the button: the CLI on this laptop may have moved the
+      // loadout while the drawer was open, and `presets.set` has no CAS.
+      await loadPresets();
+      const now = currentPresets().view;
+      if (now.default !== FREE_TIER_PRESET_ID) {
+        const plan = freeTierPresetsPlan(now);
+        await savePresets({ loadout: plan.loadout, default: plan.default });
+      }
+      setOpen(false);
+      flash();
+    } catch (e) {
+      setError(toSaveError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <SettingRow
+        label="AWS Free Tier"
+        desc="A machine and disks inside AWS's free allowances."
+        field="free_tier"
+        state={
+          <>
+            {ticked ? null : <RowNote>{freeTierStateText(state)}</RowNote>}
+            <SavedTick on={ticked} />
+          </>
+        }
+      >
+        <div className="ft-acts st-w">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>
+            Set to AWS Free Tier…
+          </button>
+          {/* The row's description is one line and cut with an ellipsis, so the
+              help lives beside the button rather than inside the description. */}
+          <button
+            type="button"
+            className="btn btn-box btn-sm ft-help"
+            aria-label="What does the AWS Free Tier cover?"
+            title="What does the AWS Free Tier cover?"
+            onClick={() => setOpen(true)}
+          >
+            ?
+          </button>
+        </div>
+      </SettingRow>
+      {open ? (
+        <FreeTierDrawer
+          result={result}
+          presets={presets}
+          state={state}
+          busy={busy}
+          error={error}
+          readError={loaded ? null : readError}
+          onRetryRead={() => void loadPresets()}
+          onApply={() => void apply()}
+          onClose={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function DefaultsFormView({
   result,
   profiles,
@@ -317,6 +426,10 @@ function DefaultsFormView({
         </button>{" "}
         (this laptop only).
       </Callout>
+
+      <Block title="Cost baseline">
+        <FreeTierRow result={result} onSaved={onSaved} />
+      </Block>
 
       <Block title="New agents">
         <DefaultProfileRow

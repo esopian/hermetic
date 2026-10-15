@@ -24,6 +24,8 @@ import Electrobun, {
   Utils,
 } from "electrobun/bun";
 import { chmodSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   HERMETICD_ENV,
@@ -33,6 +35,7 @@ import {
   runRecorderFor,
 } from "@hermetic/core";
 import { createChatOwner } from "../chat-owner.ts";
+import { type ChatWatchdog, createChatWatchdog } from "../chat-watchdog.ts";
 import { dispatch } from "../handlers/dispatch.ts";
 import { createStreamRegistry } from "../handlers/streams.ts";
 import type { HandlerContext } from "../handlers/ctx.ts";
@@ -51,6 +54,7 @@ import { installCloseGuard } from "./close-guard.ts";
 import { installDevProbe } from "./dev-probe.ts";
 import { installMenu, type MenuItemModel } from "./menu.ts";
 import { createNotifier } from "./notify.ts";
+import { markQuarantined } from "./quarantine.ts";
 import { bundlePaths } from "./paths.ts";
 import { createUpdater } from "./updates.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
@@ -118,6 +122,15 @@ if (process.env[HERMETICD_ENV] === undefined) process.env[HERMETICD_ENV] = paths
 if (process.env[STAGES_ENV] === undefined) process.env[STAGES_ENV] = paths.stagesDir;
 
 /**
+ * The chat coverage watchdog (`chat-watchdog.ts`), built below once the chat
+ * owner exists. The poller is built inside `openState`, before either, so its
+ * hooks reach the watchdog through this binding rather than capturing it; a
+ * scan that lands before it is assigned is simply not heard, and the launch
+ * sync covers that window.
+ */
+let chatWatchdog: ChatWatchdog | null = null;
+
+/**
  * A laptop that has never run `init` still gets a window — that is what the
  * wizard is for. `NOT_INITIALIZED` is an outcome here, not a failure.
  */
@@ -125,6 +138,10 @@ const state = await openState({
   fixture,
   ...(fixture ? { fixtureOptions: fixtureOptionsFromEnv(process.env) } : {}),
   uninitialized,
+  pollerHooks: {
+    onReachable: (names) => void chatWatchdog?.reachable(names),
+    onRoster: (swarms) => void chatWatchdog?.roster(swarms),
+  },
 });
 
 // The real directory, not `state.home`: fixture state calls its home
@@ -150,6 +167,25 @@ const ops = new OpRegistry({
  * Hermes Desktop, another operator's CLI or a routine (`chat-owner.ts`).
  */
 const chatOwner = createChatOwner({ hermetic: () => state.hermetic, log });
+
+/**
+ * Insurance for that set: a listened box that was down at launch, or a
+ * conversation whose read gave up, is picked up again once the poller sees the
+ * box answering — without an operator pressing anything. It only ever asks the
+ * owner to sync, resume or restart an observation; it sends nothing.
+ */
+const watchdog = createChatWatchdog({
+  owner: chatOwner,
+  listening: async () => (await state.hermetic.chat.listening({})).instances,
+  // "No answer yet" is not "no agents": until a scan has read the fleet — one
+  // that failed read nothing — no listened box is skipped as unknown.
+  agents: () => {
+    const poller = state.poller;
+    return poller?.hasBaseline() === true ? poller.snapshot().agents : null;
+  },
+  log,
+});
+chatWatchdog = watchdog;
 
 /**
  * The in-app terminal's sessions (issue #18), one table for the process: a
@@ -391,6 +427,25 @@ const windows = createWindows({
         checkForUpdate: () => updater.check({ interactive: true }),
         installCli: runCliInstall,
         notify,
+        pickFiles: async () =>
+          await Utils.openFileDialog({
+            startingFolder: homedir(),
+            allowedFileTypes: "*",
+            canChooseFiles: true,
+            canChooseDirectory: false,
+            allowsMultipleSelection: true,
+          }),
+        pickFolder: async () => {
+          const picked = await Utils.openFileDialog({
+            startingFolder: join(homedir(), "Downloads"),
+            allowedFileTypes: "*",
+            canChooseFiles: false,
+            canChooseDirectory: true,
+            allowsMultipleSelection: false,
+          });
+          return picked.find((p) => p.length > 0) ?? null;
+        },
+        quarantine: (path) => markQuarantined(path),
       },
     };
     firstCtx ??= ctx;
@@ -469,9 +524,9 @@ const closingWindows: StoppableServer = {
   stop: () => windows.closeAll(),
 };
 
-/** Poller, chat, pools, windows — but not the process; the close guard exits. */
+/** Poller, watchdog, chat, pools, windows — but not the process; the close guard exits. */
 const teardown = (reason: string): Promise<void> =>
-  shutdown({ server: closingWindows, state, log, chat: chatOwner, terminals }, reason);
+  shutdown({ server: closingWindows, state, log, watchdog, chat: chatOwner, terminals }, reason);
 
 /**
  * Check-and-notify only (`main/updates.ts`). The devkit's updater is handed
@@ -641,6 +696,7 @@ updater.start();
  * observe" and says so in the log.
  */
 void chatOwner.sync();
+watchdog.start();
 
 /**
  * Last of all, and only on a dev build: the shell's way in

@@ -85,7 +85,7 @@ machine-wide — `~/.claude/settings.json` hooks, `~/.claude.json` MCP entries, 
 so the script passes the suppressing flag on every call, then warns if a machine-wide entry turns up
 regardless. If you want either tool globally, run its own installer yourself.
 
-Codex loads repo skills from `.agents/skills/`. Small `caveman` and `create-pr` entrypoints read
+Codex loads repo skills from `.agents/skills/`. Small `caveman`, `create-pr` and `release` entrypoints read
 the Claude workflows. Codex has a separate `orchestrator-mode` skill because subagent controls
 differ. The generated graft symlink, MCP config and rtk hook stay
 local to each checkout. Trust the project config and review the rtk hook with `/hooks` in Codex
@@ -248,6 +248,7 @@ bun run lint:cfn                   # cfn-lint over the rendered foundation templ
 bun run lint:sh                    # shellcheck over packages/agentd/stages/*.sh (needs uv)
 bun run boundaries                 # tests/boundaries.test.ts only
 bun run audit:dependencies         # bun audit over the resolved tree (needs network; not in check)
+bun run free-tier                  # check the AWS Free Tier baseline; --aws asks EC2 too (not in check)
 bun run check                      # typecheck, test, lint:biome, lint, lint:cfn, lint:sh
 bun run ci                         # check, build, audit:dependencies
 bun run build                      # hermetic (CLI) + hermeticd, into dist/
@@ -303,6 +304,17 @@ reported as a failed scan, never as a clean tree, so "no advisories" always mean
 Waive an advisory only through `IGNORED_ADVISORIES` in that script, with the ID, the reason and an
 owner beside it. Because it needs the network, `bun run ci` on a laptop cannot be green offline;
 everything except this one step can.
+
+The AWS Free Tier baseline behind Settings › Defaults' *Set to AWS Free Tier…* button, its help
+drawer and the `free-tier` built-in preset is one object: `AWS_FREE_TIER` in
+`packages/core/src/shared/free-tier.ts`. AWS moves these terms (the July 2025 plan split, a Graviton
+trial extended a year at a time), so re-read the `sources` it lists, edit the object, bump
+`reviewed_on`, and run `bun run free-tier`. It fails when the machine no longer fits the allowances or
+the Arm trial has lapsed, and warns when the review is more than `review_after_days` old.
+`bun run free-tier --aws [--profile p] [--region r]` also runs `aws ec2 describe-instance-types` with
+the `free-tier-eligible` filter against your own account and compares the answer. That answer depends
+on your account's plan, so a legacy account and a Free plan account disagree. `tests/free-tier.test.ts`
+holds the invariants with a fixed date, so CI never starts failing on its own.
 
 Every remote GitHub Action is pinned to a full commit SHA with its release in the comment beside it,
 workflows default to `permissions: contents: read`, and `.github/dependabot.yml` proposes the pin
@@ -388,6 +400,8 @@ Either one runs `scripts/app-stage.ts` first, as Electrobun's `preBuild` hook. T
 To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` holds the sidecars above, and `views/main/` holds the page — `index.html`, the emitted `index.js`, its stylesheet, and `fonts/`. The faces are vendored because the webview has no network behind `views://`; a `fonts.css` naming a file that is not there is the whole dashboard drawn in Helvetica.
 
 ## Cutting a release
+
+To have an agent walk you through it, ask for a release or run `/release` (`.claude/skills/release/`): it reads the changes since the last `v*` tag, recommends a major, minor or patch bump with the commits that decided it, drafts grouped release notes (operator actions such as `hermetic foundation update` included), and asks once before running the script below. `--auto` skips that confirmation; `--dry-run` stops after the plan.
 
 `bun run release` does steps 1–4 below: it refuses unless you are on a clean `master` in sync with `origin` and the tag is free locally and remotely, runs `bun run check`, bumps the version (`patch` by default; `minor`, `major` or an exact `x.y.z`), commits `chore: release v<version>`, asks before pushing, pushes the commit and tag in one `git push --atomic`, follows `release.yml` with `gh run watch`, and checks the published assets. `--dry-run` shows the plan and changes nothing; `--skip-check`, `--yes` and `--no-watch` skip the local check, the prompt and the watch. It needs `gh` authenticated unless `--no-watch` is given. The manual procedure, which the script follows:
 

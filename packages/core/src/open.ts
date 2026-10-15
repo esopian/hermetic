@@ -125,6 +125,12 @@ export interface FixtureOptions {
   chatCutAfter?: number | undefined;
   /** Make the fixture's change set replace the agents table, so `FOUNDATION_UNSAFE` fires. */
   foundationUnsafe?: boolean | undefined;
+  /**
+   * Test seam: handed the in-memory backend once it is built, so a flow
+   * harness can play the box's part (a request slot timing out). Never set by
+   * a head.
+   */
+  onBackend?: ((backend: MemoryBackend) => void) | undefined;
 }
 
 export interface OpenOptions {
@@ -143,6 +149,15 @@ export interface OpenOptions {
    * `HERMETIC_DIRECTORY_REGION`, then what `init` persisted, then `us-east-1`.
    */
   directoryRegion?: string | undefined;
+  /**
+   * `openForInit` only (§4.8): this home already serves a fleet, and the init
+   * this session runs adds another one beside it. Real mode needs nothing
+   * different. The fixture's wizard session normally empties the shared fake
+   * account so `auto` walks the from-scratch create; adding must leave the
+   * fleets already in it alone, because the open fleet's backend stands in
+   * the same account object.
+   */
+  adding?: boolean | undefined;
   /**
    * Overrides the §4.7 Tailscale preflight — only tests should pass this, for
    * the same reason `HermeticDeps.actor` exists: the real probe spawns a binary
@@ -329,6 +344,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     if (knobs.foundationUnsafe === true) backend.changeSetChanges = [...FIXTURE_UNSAFE_CHANGES];
     // §6.5: a box that answers `plan rollout` and `upgrade --now`; see `fixtureConverge`.
     backend.simulateConverge = true;
+    knobs.onBackend?.(backend);
     const { runs } = openRunStore(opts.home, { fixture: true });
     const { teardowns } = openTeardownStore(opts.home, { fixture: true });
     /**
@@ -758,6 +774,17 @@ function notInitializedBackend(): Backend {
       "setPolicy",
     ]),
     rpc: group("rpc", ["logs", "health"]),
+    files: group("files", [
+      "stage",
+      "commit",
+      "content",
+      "remove",
+      "request",
+      "list",
+      "fulfil",
+      "secret",
+      "decline",
+    ]),
     /**
      * §4.8. The directory is account-global rather than fleet-scoped, but it is
      * still an AWS table in an account nobody has chosen yet, so it refuses
@@ -1050,7 +1077,9 @@ function fixtureInitSession(opts: OpenOptions): InitSession {
     requested === null
       ? new MemoryBackend({
           account: knobs.account
-            ? resetFixtureAccount(knobs.account, "absent")
+            ? opts.adding === true
+              ? knobs.account
+              : resetFixtureAccount(knobs.account, "absent")
             : createFixtureAccount("absent"),
         })
       : seedFixtureFleet(

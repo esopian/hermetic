@@ -66,6 +66,54 @@
  * §4.9 gives `chat.message` one source, the `chat.swarms` roster diff.
  * Detaching removes one observer; the subscription ends only when the last one
  * leaves.
+ *
+ * ## Busy: the one live read
+ *
+ * A durable read cannot say a turn is running — the reply is not a row until
+ * it lands — so a turn this laptop did not start (one Hermes began by itself,
+ * one another client sent) looked idle, and a message typed into it reached
+ * the gateway as a plain prompt and interrupted it. `busy` is the optional dep
+ * that answers the question from the gateway's own live session list, and a
+ * `busy` event is the only thing this service emits that is not derived from
+ * the transcript. It is advisory in the same sense a hint is: it may be stale
+ * by the time a head reads it, and it is never stored.
+ *
+ * It is asked after an authoritative read, and only when the answer could have
+ * moved. Promptly — on the read itself — on the first read, on a read whose
+ * transcript changed, and when a probe is owed (below). Otherwise by the
+ * clock, never by the number of reads, because hints can drive a burst of
+ * reads inside a second and the probe is not free on the box (upstream opens
+ * the session database once per live session to answer it):
+ *
+ * - after `false`, never: an idle conversation costs one probe, then nothing
+ *   until its transcript moves;
+ * - after `true`, at most once per `pollMs` (`OBSERVE_POLL_MS`), so a running
+ *   turn is re-asked about every five seconds until it reads `false`;
+ * - after `null`, at most once per `pollMs` for `OBSERVE_BUSY_NULL_LIMIT`
+ *   answers in a row, then once per `OBSERVE_BUSY_NULL_BACKOFF × pollMs`. A
+ *   gateway that cannot answer — too old, unreachable, a session forever
+ *   `starting` — is then asked every thirty seconds rather than every five
+ *   for as long as the watch lives, and still gets asked: a remote turn that
+ *   writes no new row must not be invisible for good. Any other answer resets
+ *   the count.
+ *
+ * The spacing is measured from the last probe's start on `deps.clock`.
+ *
+ * The event goes out when the value changes, and again on every probe that
+ * reads `true`, so a head that cleared its own flag when its send finished is
+ * corrected within one probe interval.
+ *
+ * An answer is about the sessions it was asked about. One that settles after
+ * a read moved the conversation to another session (a rollover, a compression
+ * tip) is dropped rather than labelled with the new one, and the probe is owed
+ * to the next read. The rollover read itself drops the held value, so a
+ * joiner is never handed the old session's answer after the new snapshot.
+ *
+ * It must never cost the watch anything. The probe is not awaited by the loop,
+ * at most one is in flight per subscription, and a throw reads as `null`. A
+ * reason to probe that arrives while one is in flight is owed to the next read
+ * rather than dropped. A joiner is handed the held value right after the held
+ * snapshot, as it is handed the snapshot.
  */
 import { abortableSleep } from "../abort.ts";
 import { redactText } from "./chat-redact.ts";
@@ -169,6 +217,17 @@ const RETRYABLE = new Set([
  */
 export const OBSERVE_HINTS_ENDED = "CHAT_HINTS_ENDED";
 
+/**
+ * How many `null` busy answers in a row are re-asked at the poll interval
+ * before the probe backs off to `OBSERVE_BUSY_NULL_BACKOFF` times it. See
+ * "Busy: the one live read". Three is fifteen seconds on the poll floor: long
+ * enough to outlast a dashboard restart, short enough not to keep asking a
+ * gateway that will never know at the rate a running turn is asked.
+ */
+export const OBSERVE_BUSY_NULL_LIMIT = 3;
+/** The backed-off `null` re-ask interval, in poll intervals: thirty seconds. */
+export const OBSERVE_BUSY_NULL_BACKOFF = 6;
+
 /* ── the seams ────────────────────────────────────────────────────────────── */
 
 /** One conversation, named the way §9.2 addresses one. */
@@ -225,6 +284,13 @@ export interface ChatObserveOptions {
   sessions?: (() => readonly string[]) | undefined;
 }
 
+/** What a busy probe is asked about. */
+export interface ChatObserveBusyOptions {
+  signal?: AbortSignal | undefined;
+  /** The durable sessions this watch answers for: the pinned one and the read's tip. */
+  sessions: readonly string[];
+}
+
 export interface ChatObserveDeps {
   /**
    * The authoritative transcript read. Must be passive — the durable history
@@ -254,8 +320,20 @@ export interface ChatObserveDeps {
    * with no opinion wants.
    */
   hintsUsable?(target: ChatObserveTarget): boolean;
+  /**
+   * Whether the box reports a turn running, or waiting on a person, in any of
+   * `opts.sessions`: `true`/`false` as reported, `null` when it could not be
+   * asked. Optional; absent means no `busy` event is ever emitted. A throw is
+   * read as `null`. See "Busy: the one live read" above.
+   */
+  busy?(target: ChatObserveTarget, opts: ChatObserveBusyOptions): Promise<boolean | null>;
   /** ISO-8601 now, injected so a fixture's events are deterministic. */
   now(): string;
+  /**
+   * Milliseconds on a monotonic clock, for spacing busy probes. Injected so a
+   * test decides when an interval has passed. Defaults to `performance.now`.
+   */
+  clock?: (() => number) | undefined;
   /** Injected so a test asserts the backoff instead of waiting for it. */
   sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
   pollMs?: number | undefined;
@@ -338,7 +416,21 @@ interface Subscription {
   controller: AbortController;
   /** How many upstream hint streams this subscription has opened. */
   streams: number;
+  /** The last busy event emitted, handed to every observer that joins late. */
+  busy: BusyEvent | null;
+  /** The last probe's answer; `undefined` until the first one settles. */
+  probed: boolean | null | undefined;
+  /** A probe is in flight; another is not started until it settles. */
+  probing: boolean;
+  /** A reason to probe arrived while one was in flight. */
+  owed: boolean;
+  /** Consecutive `null` answers; reset by any other. */
+  nulls: number;
+  /** When the last probe started, on `deps.clock`; null before the first. */
+  probedAt: number | null;
 }
+
+type BusyEvent = Extract<ChatObserveEvent, { type: "busy" }>;
 
 /**
  * Why the loop woke.
@@ -533,6 +625,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
   const attempts = deps.reconnect?.attempts ?? OBSERVE_RECONNECT_ATTEMPTS;
   const baseMs = deps.reconnect?.baseMs ?? OBSERVE_RECONNECT_BASE_MS;
   const maxMs = deps.reconnect?.maxMs ?? OBSERVE_RECONNECT_MAX_MS;
+  const clock = deps.clock ?? (() => performance.now());
   const subscriptions = new Map<string, Subscription>();
 
   const keyOf = (target: ChatObserveTarget): string =>
@@ -561,9 +654,9 @@ export function createChatObservation(deps: ChatObserveDeps) {
    * emitted as what it is. `null` counts: a bot with no session yet acquiring
    * one is a rollover, and so is a session being retired back to none.
    */
-  async function reconcile(sub: Subscription): Promise<void> {
+  async function reconcile(sub: Subscription): Promise<boolean> {
     const snapshot = await deps.snapshot(sub.target, { signal: sub.controller.signal });
-    if (sub.controller.signal.aborted) return;
+    if (sub.controller.signal.aborted) return false;
     // Both read before `sub.snapshot` is overwritten below: the comparison is
     // against the session the *held* read came from, not the one just fetched.
     const rolled = sub.snapshot !== null && sub.snapshot.session !== snapshot.session;
@@ -588,6 +681,8 @@ export function createChatObservation(deps: ChatObserveDeps) {
     snapshot.messages = unique;
     sub.snapshot = snapshot;
     sub.window = window;
+    // The held busy answer was about the session this read rolled away from.
+    if (rolled) sub.busy = null;
     if (whole) {
       emit(sub, {
         type: "snapshot",
@@ -608,6 +703,84 @@ export function createChatObservation(deps: ChatObserveDeps) {
         });
       }
     }
+    return whole || fresh.length > 0;
+  }
+
+  /**
+   * Ask the box whether a turn is running, if the answer could have moved since
+   * it was last asked. Not awaited by the loop: see "Busy: the one live read".
+   */
+  function probeBusy(sub: Subscription, changed: boolean): void {
+    const ask = deps.busy;
+    if (ask === undefined) return;
+    if (!(changed || sub.owed || busyDue(sub))) return;
+    if (sub.probing) {
+      sub.owed = true;
+      return;
+    }
+    sub.probing = true;
+    sub.owed = false;
+    sub.probedAt = clock();
+    const signal = sub.controller.signal;
+    // What the answer will be about: the sessions asked, as of now.
+    const askedAbout = sub.snapshot?.session ?? null;
+    let asked: Promise<boolean | null>;
+    try {
+      asked = ask(sub.target, { signal, sessions: sessionsOfInterest(sub) });
+    } catch {
+      asked = Promise.resolve(null);
+    }
+    void asked
+      .catch(() => null)
+      .then((value) => {
+        sub.probing = false;
+        // Detached from the loop, so nothing here may reject: a throwing
+        // `now` or observer would otherwise be an unhandled rejection.
+        try {
+          settleBusy(sub, askedAbout, value);
+        } catch {
+          // The answer is lost; the next due probe asks again.
+        }
+      });
+  }
+
+  /**
+   * Whether the clock alone makes a probe due. See "Busy: the one live read"
+   * for the cadence this encodes.
+   */
+  function busyDue(sub: Subscription): boolean {
+    if (sub.probed === undefined || sub.probedAt === null) return true;
+    if (sub.probed === false) return false;
+    const spacing =
+      sub.probed === null && sub.nulls >= OBSERVE_BUSY_NULL_LIMIT
+        ? pollMs * OBSERVE_BUSY_NULL_BACKOFF
+        : pollMs;
+    return clock() - sub.probedAt >= spacing;
+  }
+
+  function settleBusy(sub: Subscription, askedAbout: string | null, value: boolean | null): void {
+    if (sub.controller.signal.aborted) return;
+    const session = sub.snapshot?.session ?? null;
+    if (session !== askedAbout) {
+      // The conversation moved while the probe was out: its answer is about
+      // a session this watch no longer reads. Ask again next read.
+      sub.owed = true;
+      return;
+    }
+    sub.probed = value;
+    sub.nulls = value === null ? sub.nulls + 1 : 0;
+    const held = sub.busy;
+    if (held !== null && held.busy === value && held.session === session && value !== true) return;
+    const event: BusyEvent = {
+      type: "busy",
+      instance: sub.target.instance,
+      bot: sub.target.bot,
+      session,
+      busy: value,
+      at: deps.now(),
+    };
+    sub.busy = event;
+    emit(sub, event);
   }
 
   /**
@@ -748,7 +921,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
         }
       }
       try {
-        if (!quiet) await reconcile(sub);
+        if (!quiet) probeBusy(sub, await reconcile(sub));
         quiet = false;
         readAttempt = 0;
       } catch (error) {
@@ -879,6 +1052,12 @@ export function createChatObservation(deps: ChatObserveDeps) {
         window: new Set<string>(),
         controller: new AbortController(),
         streams: 0,
+        busy: null,
+        probed: undefined,
+        probing: false,
+        owed: false,
+        nulls: 0,
+        probedAt: null,
       };
       subscriptions.set(key, sub);
       void run(sub);
@@ -895,6 +1074,9 @@ export function createChatObservation(deps: ChatObserveDeps) {
         at: deps.now(),
       });
     }
+    // After the transcript, as the live order had it: the snapshot, then
+    // whether a turn is running in it.
+    if (sub.busy !== null) box.push(sub.busy);
     return { sub, box };
   }
 
