@@ -503,6 +503,7 @@ export function toolVerdict(status: string): CardVerdict {
  */
 export const CHAT_BLOCK_KINDS = [
   "text",
+  "command",
   "reasoning",
   "activity",
   "tool",

@@ -64,6 +64,28 @@ export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "./
 // become `unknown` blocks, the UI skips any already stored.
 export { HERMES_INTERNAL_EVENTS, isHermesInternalEvent } from "./hermes-internal-events.ts";
 
+// --- Hermes slash commands (§9.2) ----------------------------------------
+// Core's send path and the composer must agree with the gateway on which
+// lines are commands and how they split, or a line meant for the command
+// layer reaches the model as a prompt.
+export {
+  DISPATCH_TYPES,
+  SLASH_COMMAND_RE,
+  looksLikeSlashCommand,
+  parseCommandDispatch,
+  parseSlashCommand,
+} from "./slash.ts";
+export type {
+  AliasCommandDispatch,
+  CommandDispatch,
+  DispatchType,
+  ExecCommandDispatch,
+  ParsedSlashCommand,
+  PrefillCommandDispatch,
+  SendCommandDispatch,
+  SkillCommandDispatch,
+} from "./slash.ts";
+
 // --- Bot handles and @-mentions (§9.2) -----------------------------------
 // The composer's mention picker and core's `message_agent` target mapping
 // must agree on which tag names which bot.

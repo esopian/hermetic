@@ -250,6 +250,15 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         },
         { kind: "text", markdown: CITED },
         { kind: "sources", items: SOURCES },
+        // A box never stores a command's answer; the page keeps the ones it
+        // ran. Here so the catalogue carries every block kind a renderer draws.
+        {
+          kind: "command",
+          command: "/usage",
+          output: "Session usage: 18,422 in · 964 out · $0.0412",
+          state: "done",
+          dispatch: "exec",
+        },
       ],
       usage: storedUsage(18422, 964, 0.0412, "claude-sonnet-5"),
       error: null,

@@ -18,6 +18,7 @@ import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
 import { blockKind } from "../../chat-logic.ts";
 import { ApprovalBlock } from "./Approval.tsx";
 import { AttachmentBlock } from "./Attachment.tsx";
+import { CommandBlock } from "./Command.tsx";
 import { FileRequestBlock } from "./FileRequest.tsx";
 import { HermeticBlock } from "./Hermetic.tsx";
 import { isRequestTool } from "../../file-request-logic.ts";
@@ -75,6 +76,8 @@ export function Block({
   switch (blockKind(block)) {
     case "text":
       return <TextBlock block={block as ChatBlockOf<"text">} streaming={streaming} plain={mine} />;
+    case "command":
+      return <CommandBlock block={block as ChatBlockOf<"command">} />;
     case "reasoning":
       return <ReasoningBlock block={block as ChatBlockOf<"reasoning">} />;
     case "activity":

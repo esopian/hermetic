@@ -6,6 +6,7 @@ import { HermeticError } from "../../errors.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { chipsAsCommitted } from "./fixture-chat-files.ts";
+import { fixtureCommand } from "./fixture-chat-command.ts";
 import { profileTitle } from "../../chat/hermes/hermes-chat-roster.ts";
 
 const rec = (v: unknown): Record<string, unknown> =>
@@ -562,8 +563,17 @@ export function withFixtureBotMode(
       }
       return found;
     },
-    send(box, bot, text, opts = {}) {
+    send(box, bot, typed, opts = {}) {
       return (async function* () {
+        // A slash command answered in full is never written down, as a box's
+        // command layer writes nothing; one that became a prompt is recorded
+        // as that prompt (`fixture-chat-command.ts`).
+        const command = fixtureCommand(typed, opts.attachments?.ids.length ?? 0);
+        if (command && command.prompt === null) {
+          yield* base.send(box, bot, typed, opts);
+          return;
+        }
+        const text = command?.prompt ?? typed;
         const c = await conversation(box, bot, { ...opts, create: true });
         const session = opts.session ?? c?.session ?? "fixture";
         const k = `${key(box, bot)}/${session}`;
@@ -591,7 +601,7 @@ export function withFixtureBotMode(
           // tool cards and the settled summaries a box's history holds.
           let answer = "";
           const row = createFixtureTurnRow();
-          for await (const frame of base.send(box, bot, text, {
+          for await (const frame of base.send(box, bot, typed, {
             ...opts,
             session,
             ...(attachments ? { attachments } : {}),

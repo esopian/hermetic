@@ -27,6 +27,7 @@ import {
   sessionOf,
   stillPending,
   takeHeld,
+  withCommandRows,
 } from "./chat-conversation-record.ts";
 import type { Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
 import { observeSubagent, reapplySubagents, takeSubagents } from "./chat-subagents.ts";
@@ -305,10 +306,10 @@ export function useObservation({
           // not lost: the copy the retired session keeps holds it. Anything
           // adopted from a merged-away record was typed into *this* session and
           // is still pending in it.
-          record.messages = [
+          record.messages = withCommandRows(record, [
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
-          ];
+          ]);
           noteRows(record, messages);
           record.historyRead = true;
           record.historyError = null;
