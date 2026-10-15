@@ -31,6 +31,8 @@ import { FailureCard, failureOf } from "./FailureCard.tsx";
 import { SILENT_LABEL, heldBlock, silentBlock, silentTitle } from "../chat-silence.ts";
 import type { MessageRow } from "../chat-logic.ts";
 import { Block } from "./blocks/index.tsx";
+import { isRequestTool, untrustedBefore } from "../file-request-logic.ts";
+import { isShareTool, shareIdOf } from "./blocks/ShareCard.tsx";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
@@ -120,6 +122,12 @@ export function Message({
    * (`threadItems`): Hermes woke the bot with that event, so this is its reply.
    */
   inReply = null,
+  /**
+   * The box's word on a turn running in the conversation, for the newest bot
+   * turn only (`Thread`): how a tool call with no result yet reads. Absent on
+   * every other row.
+   */
+  remoteBusy,
 }: {
   row: MessageRow<ChatMessageView> & { ids?: readonly string[] };
   fleetId: string;
@@ -131,6 +139,7 @@ export function Message({
   streaming?: boolean;
   activity?: TurnActivity;
   inReply?: string | null;
+  remoteBusy?: boolean | null;
 }) {
   const { message, continuation } = row;
   const dm = useBotDm();
@@ -143,6 +152,8 @@ export function Message({
   const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
   const sender = fromBot ? dmSender(fromBot, dm.teammates) : null;
   const mine = message.role === "user" && !fromBot;
+  // The operator's words, delivered into a turn that was already running.
+  const steered = mine && message.steered === true;
   const author = message.author ?? null;
   const who = fromBot
     ? dmBotName(sender, fromBot.name)
@@ -222,11 +233,27 @@ export function Message({
   // order instead is what split the turn in two.
   const sections: { activity: boolean; blocks: typeof blocks }[] = [];
   let run: { activity: boolean; blocks: typeof blocks } | null = null;
+  // A file shared once is one card, whether the turn named it by `share_file`
+  // or again on a `MEDIA:` line: the first block to draw it keeps it.
+  const shared = new Set<string>();
   for (const block of blocks) {
+    const shareId = shareIdOf(block);
+    if (shareId !== null) {
+      if (shared.has(shareId)) continue;
+      shared.add(shareId);
+    }
     const attention = needsAttention(block);
     // A DM to another bot is a line between the prose, not a step in the
     // group: it closes the run, so the turn reads in the order it happened.
     if (messageAgentCall(block)) {
+      sections.push({ activity: false, blocks: [block] });
+      run = null;
+      continue;
+    }
+    // A file or secret request is a card the operator answers, never a step
+    // folded into "Tools complete": it stands alone and closes the run.
+    // So is a file the agent shared, or the box's refusal to share it.
+    if (isRequestTool(block) || isShareTool(block)) {
       sections.push({ activity: false, blocks: [block] });
       run = null;
       continue;
@@ -276,7 +303,7 @@ export function Message({
       data-chat-message={message.id}
       data-chat-ids={ids.join(" ")}
       tabIndex={-1}
-      className={`ch-msg${mine ? " me" : ""}${continuation ? " cont" : ""}`}
+      className={`ch-msg${mine ? " me" : ""}${steered ? " steered" : ""}${continuation ? " cont" : ""}`}
     >
       {fromBot ? (
         sender ? (
@@ -312,6 +339,14 @@ export function Message({
         ) : null}
         <div className="ch-msg-head">
           <span className="ch-msg-who">{who}</span>
+          {steered ? (
+            <span
+              className="kicker ch-msg-tag"
+              title="Sent while the agent was working; delivered into the running turn"
+            >
+              Steered
+            </span>
+          ) : null}
           <span className="ch-msg-meta">{meta}</span>
         </div>
         <div className="ch-msg-body">
@@ -338,6 +373,7 @@ export function Message({
                   }
                   activity={activity}
                   waiting={waiting}
+                  remoteBusy={remoteBusy}
                 />
               </RowBoundary>
             ) : (
@@ -366,6 +402,14 @@ export function Message({
                     mine={mine}
                     closed={requestClosed(section.blocks[0], closed)}
                     pending={pending}
+                    instance={instance}
+                    fleetId={fleetId}
+                    agent={author?.instance ?? instance}
+                    at={message.at}
+                    untrusted={
+                      isRequestTool(section.blocks[0]) &&
+                      untrustedBefore(blocks, blocks.indexOf(section.blocks[0]))
+                    }
                   />
                 )}
               </RowBoundary>

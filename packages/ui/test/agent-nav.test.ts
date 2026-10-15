@@ -51,12 +51,13 @@ describe("agentHash", () => {
 
 describe("the drawer's sections", () => {
   /** The left nav's order is the mockup's, and a reader of the hash relies on the names. */
-  test("are the seven the nav lists, in its order — Terminal between Desktop and Logs", () => {
+  test("are the eight the nav lists, in its order — Terminal and Files between Desktop and Logs", () => {
     expect([...AGENT_TABS]).toEqual([
       "overview",
       "chat",
       "desktop",
       "terminal",
+      "files",
       "logs",
       "config",
       "lifecycle",

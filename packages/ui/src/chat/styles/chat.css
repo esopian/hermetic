@@ -1013,6 +1013,19 @@
   font-size: 10.5px;
   color: var(--text-muted);
 }
+/* A steer: the operator's words, delivered into a turn that was already
+   running. A quiet kicker by the name and a thin rule down the left, in the
+   accent because the words are the operator's own — never warn, since nothing
+   about a steer needs attention. */
+.ch-msg-tag {
+  padding: 0 5px;
+  border: 1px solid var(--line2);
+  line-height: 16px;
+  cursor: default;
+}
+.ch-msg.me.steered {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acc) 55%, transparent);
+}
 .ch-msg-body {
   margin-top: 8px;
   font-size: 14px;
@@ -1435,6 +1448,225 @@
   color: var(--text-muted);
 }
 
+/* A file that went through the files service: a chip, never a link. */
+.ch-attach-item.expired {
+  border-style: dashed;
+}
+.ch-attach-item.expired span {
+  color: var(--warn);
+}
+
+/* ── composer attachments (attachments plan §8.1) ─────────────────────────
+   The tray of pending files sits over the input; the ⊕ button beside Send
+   opens the native dialog. Every control here is styled explicitly, so the
+   two engines draw them the same. */
+.ch-input-wrap:has(> .ch-attach-btn) {
+  grid-template-columns: 1fr auto auto;
+}
+.ch-input-wrap > .ch-tray {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+}
+.ch-input-wrap:has(> .ch-queue) > .ch-attach-btn {
+  grid-row: 2;
+}
+.ch-input-wrap:has(> .ch-queue) > .ch-tray {
+  grid-row: 2;
+}
+.ch-input-wrap:has(> .ch-tray) > .ch-input-box,
+.ch-input-wrap:has(> .ch-tray) > .ch-attach-btn,
+.ch-input-wrap:has(> .ch-tray) > .ch-send {
+  grid-row: 2;
+}
+.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-input-box,
+.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-attach-btn,
+.ch-input-wrap:has(> .ch-queue):has(> .ch-tray) > .ch-send {
+  grid-row: 3;
+}
+.ch-tray {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ch-file {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  max-width: 340px;
+  min-width: 200px;
+  padding: 6px 4px 6px 8px;
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+  border-radius: 0;
+}
+.ch-file > i {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: var(--bg3);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  color: var(--fg2);
+}
+.ch-file-text {
+  min-width: 0;
+}
+.ch-file-text b {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-file-status {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ch-file.staged .ch-file-status {
+  color: var(--ok);
+}
+.ch-file.error {
+  border-color: var(--bad);
+}
+.ch-file.error .ch-file-status {
+  color: var(--bad);
+}
+/* Progress as a hairline along the chip's foot, not a second control. */
+.ch-file-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--line);
+}
+.ch-file-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--fg3);
+}
+.ch-file-act,
+.ch-file-x,
+.ch-attach-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.ch-file-act {
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 3px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ch-file-act:hover {
+  border-color: var(--fg3);
+}
+.ch-file-x {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--fg2);
+  font-size: 15px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+.ch-file-x:hover {
+  color: var(--fg);
+  background: var(--bg3);
+}
+.ch-attach-btn {
+  height: 46px;
+  min-width: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 18px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+.ch-attach-btn:hover:not(:disabled) {
+  border-color: var(--fg3);
+}
+.ch-attach-btn:disabled {
+  cursor: not-allowed;
+  color: var(--text-muted);
+  background: var(--bg2);
+}
+.ch-queue-files {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.ch-attach-sum {
+  font-family: var(--mono);
+}
+
+/* The drop target: the whole thread pane of one conversation, named. */
+.ch-thread {
+  position: relative;
+}
+.ch-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  border: 2px dashed var(--fg3);
+  pointer-events: none;
+  text-align: center;
+  padding: 24px;
+}
+.ch-drop b {
+  font-size: 18px;
+  font-weight: 800;
+}
+.ch-drop-to {
+  font-size: 13px;
+  color: var(--fg2);
+}
+.ch-drop-limits {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.ch-drop.off {
+  border-color: var(--warn);
+}
+.ch-drop.off .ch-drop-to {
+  color: var(--warn);
+}
+
 /* The reasoning block. A rule and a recess, not a card: it is an aside on the
    turn it belongs to, and collapsed by default. */
 .ch-think {
@@ -1749,6 +1981,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A turn the box reports that this window did not start: said, not streamed.
+   The square is the accent's one meaning, activity. */
+.ch-composer-busy {
+  color: var(--fg2);
+}
+.ch-composer-busy::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  background: var(--acc);
 }
 /* The context-window meter: a ring and a percentage, neutral until the window
    nears full (`context-usage.ts`). Its exact figures are a tooltip above it. */

@@ -47,6 +47,8 @@ import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
 import { SubagentScope } from "./blocks/SubagentModal.tsx";
 import { useChatIfAvailable } from "../chat-state.tsx";
+import type { SentAttachment } from "../chat-attachments.ts";
+import { useFileDrop } from "./AttachTray.tsx";
 
 /** The avatar status for a thread, read off the fleet row rather than guessed. */
 function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status"] {
@@ -358,6 +360,7 @@ export function Thread({
   live,
   context: contextHeld = null,
   sending,
+  remoteBusy = null,
   activity = sending ? "thinking" : "idle",
   historyError,
   turnError = null,
@@ -391,6 +394,12 @@ export function Thread({
   /** The conversation's held context-window figure (`Chat.context`). */
   context?: ContextReading | null;
   sending: boolean;
+  /**
+   * The box's word on a turn running here, whoever started it (`Chat.remoteBusy`).
+   * The composer queues behind it, and a tool call at the transcript's tail
+   * reads as running, stopped or unknown by it.
+   */
+  remoteBusy?: boolean | null;
   activity?: TurnActivity;
   historyError: string | null;
   /**
@@ -406,7 +415,7 @@ export function Thread({
   /** Ask a terminated watch back. Absent means this surface cannot, so it does not offer to. */
   onResumeObservation?: () => void;
   tailnetDetail?: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: readonly SentAttachment[]) => unknown;
   onAbort: () => void;
   actions?: ReactNode;
   /**
@@ -449,7 +458,18 @@ export function Thread({
   // calls that started them. One rendering, with no viewer switch: every event
   // row keeps its output collapsed, and a failure is already drawn in red.
   const items = threadItems(rows);
-  const subagents = useChatIfAvailable()?.subagents ?? null;
+  // The newest bot turn, unless it is this tab's own streaming one: the turn
+  // whose unfinished tool call the box's busy state speaks for.
+  const tail = items.findLast((item) => item.kind === "turn" && item.row.message.role !== "user");
+  const tailId = tail?.kind === "turn" && tail.row.message.id !== live?.id ? tail.row.message.id : null;
+  const working = sending || remoteBusy === true;
+  const scoped = useChatIfAvailable();
+  const subagents = scoped?.subagents ?? null;
+  // This pane's own drop target: a dock pane is its own scope, so a file
+  // dropped here lands on this conversation and no other.
+  // Only into a composer that can send: the same gate as its ⊕ (`Composer`).
+  const composer = composerState(state, destination);
+  const drop = useFileDrop(scoped?.selection ? scoped.attachments : null, instance, composer.enabled);
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
   // Refused DMs a later call already sent again, and the ones Retry was asked
   // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
@@ -463,7 +483,6 @@ export function Thread({
   // One predicate for the header badge and the composer band: an empty
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
-  const composer = composerState(state, destination);
   const status = faceStatus(agent);
   const processContext = {
     fleetId,
@@ -535,11 +554,11 @@ export function Thread({
 
   // Sending is the reader asking to be at the live end: their own message and
   // the reply to it land at the bottom even if they had scrolled up to quote.
-  const send = (text: string) => {
+  const send = (text: string, attachments?: readonly SentAttachment[]) => {
     pin.current.following = true;
     const node = log.current;
     if (node) pinToBottom(node, pin.current);
-    onSend(text);
+    return onSend(text, attachments);
   };
   sendRef.current = send;
 
@@ -561,7 +580,8 @@ export function Thread({
         : "unknown";
 
   return (
-    <section className="ch-thread">
+    <section className="ch-thread" {...drop.handlers}>
+      {drop.overlay}
       <div className="ch-thead">
         <Face
           fleetId={fleetId}
@@ -569,7 +589,7 @@ export function Thread({
           bot={bot}
           size={44}
           status={status}
-          activity={activity}
+          activity={activity === "idle" && remoteBusy === true ? "thinking" : activity}
           large
         />
         <div>
@@ -730,6 +750,7 @@ export function Thread({
                               live !== null && item.row.message.id === live.id ? activity : "idle"
                             }
                             inReply={item.inReply}
+                            remoteBusy={item.row.message.id === tailId ? remoteBusy : undefined}
                           />
                         )}
                       </RowBoundary>
@@ -769,6 +790,7 @@ export function Thread({
         enabled={composer.enabled}
         editable={composer.enabled || (destination.state === "pending" && composerState(state).enabled)}
         sending={sending}
+        working={working}
         where={agent?.tailscale_dns_name ?? null}
         onSend={send}
         onAbort={onAbort}

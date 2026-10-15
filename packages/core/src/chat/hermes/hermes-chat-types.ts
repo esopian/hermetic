@@ -8,6 +8,7 @@
  * behind that facade — connection, roster, sessions, history, turn, peer — can
  * share them without importing each other.
  */
+import type { FileEntry, FileRequest } from "../../schema/files.ts";
 import type { ChatObserveHint } from "../chat-observe.ts";
 import type { createCanonicalSessions, ConversationOptions } from "../../render/hermes-canonical.ts";
 import { HermeticError } from "../../errors.ts";
@@ -19,6 +20,7 @@ import type {
   ChatRespondInput,
   ChatUsage,
   ErrorCode,
+  FilesCommitResult,
   Session,
   Swarm,
 } from "../../schema/index.ts";
@@ -128,6 +130,22 @@ export interface HermesChatDeps {
       }
     | undefined;
   /**
+   * The box's files request slots (`GET /files`, requests only), by agent
+   * name. A turn reads them to give a running `request_file`/`request_secret`
+   * card the slot it opened (`hermes-chat-file-requests.ts`); absent, the card
+   * waits for the tool's result to name it.
+   */
+  listFileRequests?:
+    | ((instance: string, signal: AbortSignal) => Promise<readonly FileRequest[]>)
+    | undefined;
+  /**
+   * The box's outbox entries (`GET /files`, outbox only), by agent name. Read
+   * at most once per turn or transcript read to describe the chip a `MEDIA:`
+   * outbox line becomes (`hermes-chat-media.ts`); absent, the chip carries
+   * `bytes: 0` and no digest.
+   */
+  listOutbox?: ((instance: string, signal: AbortSignal) => Promise<readonly FileEntry[]>) | undefined;
+  /**
    * The redial budget for an idle held session socket
    * (`hermes-chat-session-socket.ts`), injected for the same reason. Defaults
    * fit inside the gateway's twenty-second orphan reap.
@@ -142,6 +160,29 @@ export interface HermesChatOptions {
 export interface SendOptions extends HermesChatOptions {
   /** Continue an existing session; omitted means create one. */
   session?: string | undefined;
+  /**
+   * Ask the gateway to queue this prompt behind a turn already running in the
+   * session (`prompt.submit`'s `queued: true`) instead of applying its
+   * `busy_input_mode`, which defaults to interrupting. Ignored by an idle
+   * session, which runs the prompt at once. Read by `send` only.
+   */
+  queued?: boolean | undefined;
+  /**
+   * Files already staged on the box, to commit into its inbox and hand to
+   * this turn (`hermes-chat-attach.ts`). Absent or empty is a plain turn.
+   */
+  attachments?: TurnAttachments | undefined;
+}
+
+/**
+ * A turn's attachments: the staged ids, in the operator's order, and the
+ * files service's commit, bound by the caller to the turn's box. The adapter
+ * calls `commit` once the turn's session is known, because the box records
+ * the session on the entry; it never reaches the files service any other way.
+ */
+export interface TurnAttachments {
+  ids: readonly string[];
+  commit(id: string, session: string, signal: AbortSignal | undefined): Promise<FilesCommitResult>;
 }
 
 export interface HistoryOptions extends HermesChatOptions {
@@ -236,6 +277,19 @@ export interface HermesChatClient {
     session: string,
     opts?: HermesChatOptions,
   ): Promise<ChatUsage | null>;
+  /**
+   * Whether the gateway reports a turn running, or waiting on a person, in any
+   * of `sessions` (durable ids), read without resuming anything
+   * (`hermes-chat-busy.ts`): `true`/`false` as it reports, `null` when it
+   * could not be asked. Never throws. Optional: without it an observation
+   * emits no `busy` event, and a head knows only the turns it started.
+   */
+  busy?(
+    box: BoxAddress,
+    bot: string,
+    sessions: readonly string[],
+    opts?: HermesChatOptions,
+  ): Promise<boolean | null>;
   send(box: BoxAddress, bot: string, text: string, opts?: SendOptions): AsyncIterable<ChatFrame>;
   /**
    * The passive hint stream (§9.2): "something happened on this

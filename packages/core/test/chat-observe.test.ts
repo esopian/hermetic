@@ -22,9 +22,13 @@
 import { describe, expect, test } from "bun:test";
 import { createChat } from "../src/chat/chat.ts";
 import type { ChatDeps } from "../src/chat/chat.ts";
-import { createChatObservation } from "../src/chat/chat-observe.ts";
+import {
+  OBSERVE_BUSY_NULL_BACKOFF,
+  OBSERVE_BUSY_NULL_LIMIT,
+  createChatObservation,
+} from "../src/chat/chat-observe.ts";
 import { createChatObserve } from "../src/chat/hermes/hermes-chat-observe.ts";
-import type { ObserveOptions } from "../src/chat/hermes/hermes-chat-types.ts";
+import type { HermesChatClient, ObserveOptions } from "../src/chat/hermes/hermes-chat-types.ts";
 import type {
   ChatObserveDeps,
   ChatObserveSnapshot,
@@ -138,10 +142,22 @@ interface Harness {
   calls: string[];
 }
 
-function harness(deps: Partial<ChatDeps> = {}): Harness {
+/**
+ * A fixture client without its busy probe. The event sequences in the fixture
+ * half were written against the durable reads alone; the probe's guarantees
+ * are pinned in "chat.observe: busy".
+ */
+function withoutBusy(client: HermesChatClient): HermesChatClient {
+  const { busy: _busy, ...rest } = client;
+  return rest;
+}
+
+function harness(deps: Partial<ChatDeps> = {}, opts: { busy?: boolean } = {}): Harness {
   const activity = createFixtureChatActivity();
   const calls: string[] = [];
-  const base = fixtureChatClient({ activity });
+  // The busy probe is left out unless a test asks for it (`withoutBusy`).
+  const full = fixtureChatClient({ activity });
+  const base = withoutBusy(full);
   const instanceListening = new MemoryInstanceListeningStore();
   for (const agent of agents) instanceListening.set(fleetItem.fleet_id, agent.name, true);
   const chat = createChat({
@@ -169,6 +185,7 @@ function harness(deps: Partial<ChatDeps> = {}): Harness {
     now: () => AT,
     hermes: {
       ...base,
+      ...(opts.busy === true && full.busy !== undefined ? { busy: full.busy } : {}),
       history: (box, bot, opts) => {
         calls.push("history");
         return base.history(box, bot, opts);
@@ -465,7 +482,7 @@ describe("chat.observe: hints are gated on what the socket did", () => {
     const opens: string[] = [];
     const { chat } = harness({
       hermes: {
-        ...fixtureChatClient({ activity: createFixtureChatActivity() }),
+        ...withoutBusy(fixtureChatClient({ activity: createFixtureChatActivity() })),
         observe: (_box, bot) => {
           opens.push(bot);
           return closes();
@@ -503,7 +520,7 @@ describe("chat.observe: hints are gated on what the socket did", () => {
     const opens: string[] = [];
     const { chat } = harness({
       hermes: {
-        ...fixtureChatClient({ activity }),
+        ...withoutBusy(fixtureChatClient({ activity })),
         observe: (box, bot, opts) => {
           opens.push(bot);
           return fixtureChatClient({ activity }).observe?.(box, bot, opts) ?? closes();
@@ -1394,7 +1411,7 @@ describe("chat.observe: subagent updates", () => {
     for (const redact of [true, false]) {
       const h = harness({
         hermes: {
-          ...fixtureChatClient(),
+          ...withoutBusy(fixtureChatClient()),
           observe: once({ session: "runtime-1", subagent: block(`export K=${SECRET}`) }),
         },
       });
@@ -1410,5 +1427,322 @@ describe("chat.observe: subagent updates", () => {
         expect(update.block.tools[0]?.preview).toContain(REDACTED);
       } else expect(update.block.tools[0]?.preview).toContain(SECRET);
     }
+  });
+});
+
+/* ── busy: the one live read ──────────────────────────────────────────────── */
+
+describe("chat.observe: busy", () => {
+  /** A probe double: answers whatever `answer` says now, and counts the asks. */
+  function probe(initial: boolean | null | Error) {
+    const state = { answer: initial, asked: 0, sessions: [] as (readonly string[])[] };
+    const busy: ChatObserveDeps["busy"] = (_target, opts) => {
+      state.asked += 1;
+      state.sessions.push(opts.sessions);
+      return state.answer instanceof Error
+        ? Promise.reject(state.answer)
+        : Promise.resolve(state.answer);
+    };
+    return { state, busy };
+  }
+  const busyOf = (events: ChatObserveEvent[]) =>
+    events.flatMap((e) => (e.type === "busy" ? [e.busy] : []));
+  /** A clock that has always moved a whole second since it was last read. */
+  const ticking = () => {
+    let t = 0;
+    return () => (t += 1_000);
+  };
+  /** A clock that moves only when the test says. */
+  const manual = () => {
+    const c = { t: 0, read: () => c.t };
+    return c;
+  };
+
+  test("the first read is followed by a busy event naming the read's session", async () => {
+    const p = probe(true);
+    const h = polling({ hints: undefined, busy: p.busy });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    const [first, second] = await watcher.take(2);
+    await watcher.stop();
+    expect(first?.type).toBe("snapshot");
+    expect(second).toEqual({
+      type: "busy",
+      instance: TARGET.instance,
+      bot: TARGET.bot,
+      session: "s1",
+      busy: true,
+      at: AT,
+    });
+    expect(p.state.sessions[0]).toEqual(["s1"]);
+  });
+
+  test("an idle conversation is probed once, and again only when its transcript changes", async () => {
+    const p = probe(false);
+    const h = polling({ hints: undefined, busy: p.busy });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    const opening = await watcher.drain(150);
+    expect(opening.map((e) => e.type)).toEqual(["snapshot", "busy"]);
+    expect(busyOf(opening)).toEqual([false]);
+    // Several reconciles on the 20ms floor, none of which asked again.
+    expect(h.reads()).toBeGreaterThan(2);
+    expect(p.state.asked).toBe(1);
+
+    h.messages.push(message("m1"));
+    const later = await watcher.drain(150);
+    await watcher.stop();
+    // The changed read asked; the answer did not move, so nothing was said.
+    expect(later.map((e) => e.type)).toEqual(["message"]);
+    expect(p.state.asked).toBe(2);
+  });
+
+  test("a running turn is re-probed each interval, re-sent while true, then cleared once", async () => {
+    const p = probe(true);
+    const h = polling({ hints: undefined, busy: p.busy, clock: ticking() });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    // Re-sent on every reconcile while it reads true, so this never drains.
+    const running = await watcher.take(4);
+    expect(running.map((e) => e.type)).toEqual(["snapshot", "busy", "busy", "busy"]);
+    expect(busyOf(running)).toEqual([true, true, true]);
+
+    p.state.answer = false;
+    const finished: ChatObserveEvent[] = [];
+    for (let i = 0; i < 50; i++) {
+      const event = await watcher.next();
+      if (event === undefined) break;
+      finished.push(event);
+      if (event.type === "busy" && event.busy === false) break;
+    }
+    // Any trues already queued, then exactly one false.
+    expect(busyOf(finished).filter((value) => value !== true)).toEqual([false]);
+    expect(busyOf(finished).at(-1)).toBe(false);
+    const asked = p.state.asked;
+    expect(await watcher.drain(100)).toEqual([]);
+    // Back to idle: no further probes on unchanged reads.
+    expect(p.state.asked).toBe(asked);
+    await watcher.stop();
+  });
+
+  test("a probe that throws reads as null and never ends or stalls the watch", async () => {
+    const p = probe(new HermeticError("CHAT_UNREACHABLE", "atlas: no answer"));
+    const h = polling({ hints: undefined, busy: p.busy, clock: ticking() });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    const opening = await watcher.drain(100);
+    expect(opening.map((e) => e.type)).toEqual(["snapshot", "busy"]);
+    expect(busyOf(opening)).toEqual([null]);
+    // `null` is "could not tell", so it is asked again; it is said only once.
+    expect(p.state.asked).toBeGreaterThan(1);
+
+    h.messages.push(message("m1"));
+    const later = await watcher.drain(100);
+    expect(later.map((e) => e.type)).toEqual(["message"]);
+    expect(later.some((e) => e.type === "error")).toBe(false);
+    await watcher.stop();
+  });
+
+  test("a probe that never settles costs the reads nothing", async () => {
+    let asked = 0;
+    const h = polling({
+      hints: undefined,
+      busy: () => {
+        asked += 1;
+        return new Promise<never>(() => {});
+      },
+    });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    expect((await watcher.next())?.type).toBe("snapshot");
+    h.messages.push(message("m1"));
+    const later = await watcher.drain(100);
+    await watcher.stop();
+    expect(later.map((e) => e.type)).toEqual(["message"]);
+    // One in flight at a time: the hung one is not stacked on.
+    expect(asked).toBe(1);
+  });
+
+  test("an answer that settles after the conversation moved is dropped and asked again", async () => {
+    let current = "s1";
+    const asked: (readonly string[])[] = [];
+    const gate: { release?: (value: boolean | null) => void } = {};
+    const h = polling({
+      hints: undefined,
+      snapshot: () => Promise.resolve({ session: current, messages: [] }),
+      busy: (_target, opts) => {
+        asked.push(opts.sessions);
+        if (asked.length === 1)
+          return new Promise<boolean | null>((resolve) => {
+            gate.release = resolve;
+          });
+        return Promise.resolve(false);
+      },
+    });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    expect((await watcher.next())?.type).toBe("snapshot");
+    current = "s2";
+    const rolled = await watcher.next();
+    expect(rolled?.type === "snapshot" && rolled.session).toBe("s2");
+    // The first probe, about s1, answers only now that the watch reads s2.
+    gate.release?.(true);
+    const events = await watcher.drain(150);
+    await watcher.stop();
+    const busy = events.filter((e) => e.type === "busy");
+    expect(busy.map((e) => (e.type === "busy" ? [e.session, e.busy] : []))).toEqual([["s2", false]]);
+    expect(asked[0]).toEqual(["s1"]);
+    expect(asked[1]).toEqual(["s2"]);
+  });
+
+  test("null is re-asked each poll interval three times, then six times slower", async () => {
+    const p = probe(null);
+    const c = manual();
+    const h = polling({ hints: undefined, busy: p.busy, clock: c.read });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    const opening = await watcher.drain(100);
+    expect(busyOf(opening)).toEqual([null]);
+    // Many reads on the 20ms floor; the clock has not moved, so one ask.
+    expect(h.reads()).toBeGreaterThan(2);
+    expect(p.state.asked).toBe(1);
+    const at = async (t: number): Promise<number> => {
+      c.t = t;
+      await Bun.sleep(60);
+      return p.state.asked;
+    };
+    expect(await at(20)).toBe(2);
+    expect(await at(40)).toBe(OBSERVE_BUSY_NULL_LIMIT);
+    // Backed off: the next ask is OBSERVE_BUSY_NULL_BACKOFF intervals on.
+    expect(await at(60)).toBe(3);
+    expect(await at(40 + 20 * OBSERVE_BUSY_NULL_BACKOFF - 1)).toBe(3);
+    expect(await at(40 + 20 * OBSERVE_BUSY_NULL_BACKOFF)).toBe(4);
+    // Nothing more was said: the value never moved from null.
+    expect(busyOf(await watcher.drain(50))).toEqual([]);
+
+    // A changed transcript asks at once, and an answer resets the count.
+    p.state.answer = true;
+    h.messages.push(message("m1"));
+    const later = await watcher.take(2);
+    await watcher.stop();
+    expect(later.map((e) => e.type)).toEqual(["message", "busy"]);
+    expect(busyOf(later)).toEqual([true]);
+  });
+
+  test("a hint burst does not re-probe back to back, nor spend the null budget", async () => {
+    const p = probe(null);
+    const c = manual();
+    const h = service(
+      { reads: [{ session: "s1", messages: [] }], failures: [] },
+      { busy: p.busy, clock: c.read },
+    );
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    expect((await watcher.take(2)).map((e) => e.type)).toEqual(["snapshot", "busy"]);
+    for (let i = 0; i < 10; i++) {
+      h.hint();
+      await settle();
+    }
+    // Ten reads, none of which changed anything, inside one interval.
+    expect(h.snapshots()).toBeGreaterThan(5);
+    expect(p.state.asked).toBe(1);
+
+    // A remote turn starts with no new row. One interval later, one hint is
+    // enough to hear about it: the burst spent nothing.
+    p.state.answer = true;
+    c.t = 60_000;
+    h.hint();
+    const [running] = await watcher.take(1);
+    expect(running?.type === "busy" && running.busy).toBe(true);
+    expect(p.state.asked).toBe(2);
+    // And while true, still at most one probe per interval.
+    for (let i = 0; i < 5; i++) {
+      h.hint();
+      await settle();
+    }
+    expect(p.state.asked).toBe(2);
+    await watcher.stop();
+  });
+
+  test("a rollover read drops the held busy, so a joiner never gets the old session's", async () => {
+    let current = "s1";
+    let asks = 0;
+    const h = polling({
+      hints: undefined,
+      snapshot: () => Promise.resolve({ session: current, messages: [] }),
+      // The first answer is true; the one about the new session never comes.
+      busy: () => (++asks === 1 ? Promise.resolve(true) : new Promise<never>(() => {})),
+    });
+    const first = watching((signal) => h.service.observe(TARGET, { signal }));
+    expect(busyOf(await first.take(2))).toEqual([true]);
+    current = "s2";
+    const rolled = await first.next();
+    expect(rolled?.type === "snapshot" && rolled.session).toBe("s2");
+    const second = watching((signal) => h.service.observe(TARGET, { signal }));
+    const seeded = await second.drain(100);
+    await first.stop();
+    await second.stop();
+    expect(seeded.map((e) => e.type)).toEqual(["snapshot"]);
+  });
+
+  test("a throw while settling an answer is not an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let broken = false;
+      const gate: { release?: (value: boolean | null) => void } = {};
+      const h = polling({
+        hints: undefined,
+        now: () => {
+          if (broken) throw new Error("clock gone");
+          return AT;
+        },
+        busy: () =>
+          new Promise<boolean | null>((resolve) => {
+            gate.release = resolve;
+          }),
+      });
+      const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+      expect((await watcher.next())?.type).toBe("snapshot");
+      broken = true;
+      gate.release?.(true);
+      await settle();
+      broken = false;
+      h.messages.push(message("m1"));
+      // The watch carries on reading.
+      expect((await watcher.next())?.type).toBe("message");
+      await watcher.stop();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("a late joiner is handed the held busy read right after the held snapshot", async () => {
+    const p = probe(false);
+    const h = polling({ hints: undefined, busy: p.busy });
+    const first = watching((signal) => h.service.observe(TARGET, { signal }));
+    await first.take(2);
+    const second = watching((signal) => h.service.observe(TARGET, { signal }));
+    const seeded = await second.take(2);
+    await first.stop();
+    await second.stop();
+    expect(seeded.map((e) => e.type)).toEqual(["snapshot", "busy"]);
+    expect(busyOf(seeded)).toEqual([false]);
+    // The joiner cost no probe of its own.
+    expect(p.state.asked).toBe(1);
+  });
+
+  test("through createChat, the adapter's probe is addressed and answers after the snapshot", async () => {
+    const { chat } = harness({}, { busy: true });
+    const watcher = watching((signal) => chat.observe(WHERE, { signal }));
+    const events = await watcher.take(2);
+    await watcher.stop();
+    expect(events.map((e) => e.type)).toEqual(["snapshot", "busy"]);
+    // The fixture has no turn in flight on this conversation.
+    expect(busyOf(events)).toEqual([false]);
+  });
+
+  test("without a busy dep nothing is emitted", async () => {
+    const h = polling({ hints: undefined });
+    const watcher = watching((signal) => h.service.observe(TARGET, { signal }));
+    const events = await watcher.drain(100);
+    await watcher.stop();
+    expect(events.map((e) => e.type)).toEqual(["snapshot"]);
   });
 });

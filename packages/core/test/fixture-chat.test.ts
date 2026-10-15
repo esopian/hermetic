@@ -663,10 +663,13 @@ describe("steer", () => {
     }
     expect(await hermes.steer(where, "default", "too late")).toBe("idle");
 
-    const texts = (await hermes.history(where, "default"))
-      .filter((m) => m.role === "user")
-      .flatMap((m) => m.blocks.flatMap((b) => (b.kind === "text" ? [b.markdown] : [])));
+    const users = (await hermes.history(where, "default")).filter((m) => m.role === "user");
+    const texts = users.flatMap((m) =>
+      m.blocks.flatMap((b) => (b.kind === "text" ? [b.markdown] : [])),
+    );
     expect(texts.slice(-2)).toEqual(["start something", "and check the disk"]);
+    // The steer is flagged as one, the way history reads a real box's steer row.
+    expect(users.slice(-2).map((m) => m.steered ?? null)).toEqual([null, true]);
     expect(texts).not.toContain("too early");
     expect(texts).not.toContain("too late");
   });

@@ -68,6 +68,15 @@ function getSnapshot(): PresetsSnapshot {
   return snapshot;
 }
 
+/**
+ * The held document right now, outside React — for an action that must build
+ * its write from what the store holds at the click, not from the render that
+ * drew the button (Defaults' AWS Free Tier apply).
+ */
+export function currentPresets(): PresetsSnapshot {
+  return snapshot;
+}
+
 function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);

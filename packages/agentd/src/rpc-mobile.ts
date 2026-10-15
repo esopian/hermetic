@@ -9,7 +9,7 @@
  * `GET /fleet` is a read: a consistent Scan of the agents table and the
  * `_fleet` row, cached for `FLEET_VIEW_CACHE_MS` so a phone refreshing its list
  * costs the table one read per ten seconds however many phones ask. A fleet
- * whose foundation predates v16 has no `dynamodb:Scan` on the agent role; the
+ * whose foundation predates v17 has no `dynamodb:Scan` on the agent role; the
  * Scan answers `AccessDenied` and the route answers 503
  * `FLEET_LIST_UNAVAILABLE`, which the phone reads as "keep the pairing
  * snapshot".
@@ -214,7 +214,7 @@ export function fleetViewSource(deps: FleetViewSourceDeps): () => Promise<Mobile
     } catch (e) {
       if (isAccessDenied(e)) {
         throw new FleetListUnavailable(
-          "this box's role may not Scan the agents table; the fleet's foundation predates version 16 (`hermetic foundation update`)",
+          "this box's role may not Scan the agents table; the fleet's foundation predates version 17 (`hermetic foundation update`)",
         );
       }
       throw new FleetListUnavailable(

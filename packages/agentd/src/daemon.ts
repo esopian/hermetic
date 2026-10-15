@@ -1,5 +1,5 @@
 /**
- * `hermeticd serve` — the systemd service and its four loops. The subcommands
+ * `hermeticd serve` — the systemd service and its five loops. The subcommands
  * that run and exit are in `cli.ts`; `main.ts` is the entrypoint.
  */
 import type { Host } from "./host.ts";
@@ -16,6 +16,8 @@ import { createWatcher } from "./push/watch.ts";
 import { tailnetLogins } from "./tailscale.ts";
 import { createHermesChat } from "@hermetic/core/chat-client";
 import { HERMES_DASHBOARD_UNIT, expoPushSender, expoReceiptFetcher } from "@hermetic/core/shared";
+import { startFiles } from "./files/service.ts";
+import { makeFilesSettings, type FilesSettingsHolder } from "./files/settings.ts";
 import {
   SWAP_SETTLE_MS,
   autoUpdate,
@@ -162,6 +164,23 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     log,
   });
 
+  // The fleet's files settings: the cached manifest's now, then every manifest
+  // the update loop fetches (`updateLoop`'s `onManifest`). A change on the
+  // laptop takes effect at this box's next manifest read (`files/settings.ts`).
+  const filesSettings = makeFilesSettings(ctx.fleet, log);
+
+  // The files service (attachments, request slots, the plugin socket). Best
+  // effort throughout: without it the box is an older hermeticd to the laptop.
+  const files = await startFiles({
+    host,
+    aws: ctx.aws,
+    paramPrefix: ctx.paramPrefix,
+    name: ctx.userData.name,
+    hermeticdVersion: HERMETICD_VERSION,
+    log,
+    settings: filesSettings.current,
+  });
+
   const listener = await serveRpc(
     {
       host,
@@ -177,18 +196,21 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
       // everything else here uses — journald is where it belongs (§8.3).
       log,
       mobile,
+      ...(files.tailnet ? { files: files.tailnet } : {}),
     },
     { log },
   );
   log(`rpc on ${listener.hostname}:${listener.port}`);
 
   const forever = new AbortController();
-  // Four loops, never awaiting each other.
+  // Five loops, never awaiting each other. The files sweeper never resolves
+  // on its own; it is in the race so it stops with the rest.
   const beats = heartbeat.run(forever.signal);
-  const updates = updateLoop(host, ctx, gate, forever.signal);
+  const updates = updateLoop(host, ctx, gate, forever.signal, filesSettings);
   const converges = convergeLoop(host, ctx, converge, forever.signal);
   const watches = pushWatchLoop(host, ctx, devices, forever.signal);
-  await Promise.race([beats, updates, converges, watches]);
+  const sweeps = files.run(forever.signal);
+  await Promise.race([beats, updates, converges, watches, sweeps]);
 }
 
 /**
@@ -337,7 +359,13 @@ export async function runConvergeLoop(deps: ConvergeLoopDeps): Promise<void> {
 export const CONVERGE_POLL_MS = 15_000;
 
 /** `serve`'s wiring of the update loop; the loop itself is `runUpdateLoop`. */
-function updateLoop(host: Host, ctx: Context, gate: UpdateGate, signal: AbortSignal): Promise<void> {
+function updateLoop(
+  host: Host,
+  ctx: Context,
+  gate: UpdateGate,
+  signal: AbortSignal,
+  filesSettings: FilesSettingsHolder,
+): Promise<void> {
   const deps = {
     host,
     aws: ctx.aws,
@@ -348,6 +376,8 @@ function updateLoop(host: Host, ctx: Context, gate: UpdateGate, signal: AbortSig
     log,
     // This loop *is* the service, so its restarts are the ones that count.
     asService: true,
+    // Every manifest this loop reads carries the fleet's files settings.
+    onManifest: filesSettings.update,
   };
   return runUpdateLoop({
     host,

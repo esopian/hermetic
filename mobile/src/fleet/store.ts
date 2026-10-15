@@ -206,13 +206,13 @@ export interface FleetStoreDeps {
   operatorTailnet?: string | null;
   /** Per-box `/fleet` timeout. */
   timeoutMs?: number;
-  /** One box's `/healthz` (the pre-v16 fallback); defaults to `fetchHealthz` over `fetch`. */
+  /** One box's `/healthz` (the pre-v17 fallback); defaults to `fetchHealthz` over `fetch`. */
   healthz?: (host: string) => Promise<{ ok: boolean; error?: { code: string } | null }>;
 }
 
 /** How many boxes one refresh asks at once. */
 export const REFRESH_FAN_OUT = 3;
-/** How many unlistened boxes one pre-v16 refresh asks for `/healthz`, beside the listened ones. */
+/** How many unlistened boxes one pre-v17 refresh asks for `/healthz`, beside the listened ones. */
 export const HEALTHZ_OTHERS = 3;
 
 const EMPTY: FleetState = {
@@ -231,7 +231,7 @@ export class FleetStore {
   private listeningDefault = false;
   private readonly listeners = new Set<() => void>();
   private gen = 0;
-  /** Where the next pre-v16 refresh starts in the unlistened boxes. */
+  /** Where the next pre-v17 refresh starts in the unlistened boxes. */
   private othersCursor = 0;
 
   constructor(private readonly deps: FleetStoreDeps) {}

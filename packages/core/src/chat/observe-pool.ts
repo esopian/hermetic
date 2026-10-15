@@ -37,6 +37,15 @@
  * leaves a bounded record behind it (`RememberedFailure`). Both are replayed to
  * whoever attaches next, under the event's own name and after the snapshot.
  *
+ * ## Busy is held the same way
+ *
+ * A `busy` event is the live "a turn is running here" read (`chat-observe.ts`).
+ * Core re-sends `true` on every probe, but a `false` or `null` goes out once,
+ * and a reader that attached after it would otherwise assume whatever it
+ * assumes by default. So the last one is kept (`Subscription.busy`) and
+ * replayed right after the snapshot, before health, to every reader that
+ * attaches. It is not health: it neither sets nor clears a complaint.
+ *
  * ## What this is not
  *
  * Stopping an observation aborts a read loop on this laptop. It sends nothing
@@ -79,6 +88,20 @@ export interface ObservePoolEntry {
   pinned: boolean;
   /** The session the held read names, or `null` before the first read. */
   session: string | null;
+  /**
+   * What the subscription last said about its own health: `reconnect` while
+   * core is retrying the upstream read, `error` in the instant between a
+   * terminal failure and the entry leaving `held()`, `null` while it is well.
+   * The kind only — the event itself, with its message, is a reader's.
+   */
+  health: "reconnect" | "error" | null;
+  /**
+   * When the current unhealthy streak began (`ObservePoolDeps.now`), or `null`
+   * while the subscription is well. A second `reconnect` in the same streak
+   * keeps the first one's time, so a watchdog can tell a read that has been
+   * retrying for ten minutes from one that started retrying just now.
+   */
+  healthSince: number | null;
 }
 
 /**
@@ -91,6 +114,9 @@ export interface ObservePoolEntry {
  * a healthy-looking transcript of a conversation nobody is watching any more.
  */
 type ChatHealthEvent = Extract<ChatObserveEvent, { type: "reconnect" | "error" }>;
+
+/** The live "a turn is running here" read, held and replayed like health. */
+type ChatBusyEvent = Extract<ChatObserveEvent, { type: "busy" }>;
 
 /** One incremental message, the form every read after the first takes. */
 type ChatMessageEvent = Extract<ChatObserveEvent, { type: "message" }>;
@@ -155,6 +181,8 @@ export interface ObservePoolDeps {
   log?: (level: ObservePoolLogLevel, message: string, fields: Record<string, unknown>) => void;
   /** Override for tests; the ceiling on `RememberedFailure` entries. */
   maxRememberedFailures?: number;
+  /** The clock `ObservePoolEntry.healthSince` is read from; `Date.now` by default. */
+  now?: () => number;
 }
 
 export interface ObservePool {
@@ -291,6 +319,10 @@ interface Subscription {
    * a read that worked.
    */
   health: ChatHealthEvent | null;
+  /** When `health` last went from `null` to a complaint; `null` while it is well. */
+  healthSince: number | null;
+  /** The last `busy` event, replayed after `snapshot` to whoever attaches next. */
+  busy: ChatBusyEvent | null;
   pinned: boolean;
   joiners: number;
   done: Promise<void>;
@@ -299,6 +331,7 @@ interface Subscription {
 export function createObservePool(deps: ObservePoolDeps): ObservePool {
   const classify = deps.classify ?? defaultClassify;
   const maxFailures = deps.maxRememberedFailures ?? OBSERVE_POOL_MAX_REMEMBERED_FAILURES;
+  const now = deps.now ?? Date.now;
   const subs = new Map<string, Subscription>();
   const failures = new Map<string, RememberedFailure>();
   const fanIn = new Set<(event: PooledChatEvent) => void>();
@@ -354,6 +387,17 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
     }
   }
 
+  /**
+   * Set or clear a subscription's complaint, keeping the time its streak
+   * began: the start of the first complaint after a healthy read, not the
+   * latest one.
+   */
+  function setHealth(sub: Subscription, health: ChatHealthEvent | null): void {
+    if (health === null) sub.healthSince = null;
+    else if (sub.health === null) sub.healthSince = now();
+    sub.health = health;
+  }
+
   function emit(sub: Subscription, event: ChatObserveEvent | null): void {
     for (const listener of [...sub.listeners]) {
       try {
@@ -386,14 +430,20 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       for await (const event of deps.observe(input, { signal: sub.controller.signal })) {
         // A snapshot replaces outright, which is also how the held read
         // follows a session rollover.
-        if (event.type === "snapshot") sub.snapshot = event;
-        else if (event.type === "message") sub.snapshot = folded(sub.snapshot, event);
+        if (event.type === "snapshot") {
+          // A busy read is about the session it was taken in. Once the held
+          // read is another session's, it would describe the wrong
+          // conversation to the next joiner; core sends a fresh one.
+          if (sub.busy !== null && sub.busy.session !== event.session) sub.busy = null;
+          sub.snapshot = event;
+        } else if (event.type === "message") sub.snapshot = folded(sub.snapshot, event);
         // A read that arrived is a read that worked, so it is also the end of
         // whatever this subscription was last complaining about.
         // A subagent update is live data arriving, so it ends a complaint too.
-        if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
-          sub.health = null;
-        else sub.health = masked(event);
+        if (event.type === "busy") sub.busy = event;
+        else if (event.type === "snapshot" || event.type === "message" || event.type === "subagent")
+          setHealth(sub, null);
+        else setHealth(sub, masked(event));
         if (event.type === "error") {
           log("error", "observation failed", {
             ...where(sub.ref),
@@ -421,7 +471,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
           code: failure.code,
           message: failure.message,
         };
-        sub.health = ended;
+        setHealth(sub, ended);
         emit(sub, ended);
       }
     } finally {
@@ -440,6 +490,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       listeners: new Set(),
       snapshot: null,
       health: null,
+      healthSince: null,
+      busy: null,
       pinned,
       joiners: 0,
       done: Promise.resolve(),
@@ -516,6 +568,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         ref: sub.ref,
         pinned: sub.pinned,
         session: sub.snapshot?.type === "snapshot" ? sub.snapshot.session : null,
+        health: sub.health?.type ?? null,
+        healthSince: sub.healthSince,
       }));
     },
     has(ref) {
@@ -573,6 +627,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
         // health *at attach*, and anything that has changed it since is
         // already queued behind it in `pending`.
         const health = sub.health;
+        const busy = sub.busy;
         const onAbort = (): void => {
           live = false;
           nudge();
@@ -582,6 +637,8 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
           // The cached authoritative read, read with no `await` since
           // `sub.listeners.add` above. See `Subscription.snapshot`.
           if (sub.snapshot !== null) yield sub.snapshot;
+          // Whether a turn is running in that transcript, read with it.
+          if (busy !== null) yield busy;
           // After the transcript, because that is the order it happened in.
           if (health !== null) yield health;
           for (;;) {
@@ -613,6 +670,7 @@ export function createObservePool(deps: ObservePoolDeps): ObservePool {
       for (const sub of subs.values()) {
         if (!sub.pinned) continue;
         if (sub.snapshot !== null) seeds.push({ conversation: sub.ref, event: sub.snapshot });
+        if (sub.busy !== null) seeds.push({ conversation: sub.ref, event: sub.busy });
         // The transcript, and then what is wrong with the watch on it.
         if (sub.health !== null) seeds.push({ conversation: sub.ref, event: sub.health });
       }

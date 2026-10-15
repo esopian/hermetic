@@ -86,6 +86,13 @@ export const ERROR_CODES = [
    */
   "NETWORK_UPDATE_FAILED",
   /**
+   * The snapshot-policy change set of `apply` kind `snapshots` failed, rolled
+   * back, or could not be computed (§7.1). Its own code for the reason the one
+   * above has one: nothing here needs a template fixed, and CloudFormation's
+   * rollback leaves the previous policy running, so the recovery is to re-plan.
+   */
+  "SNAPSHOTS_UPDATE_FAILED",
+  /**
    * The named volume is attached to an instance. `agent create --volume` will
    * not steal a disk another box is reading, and `volume delete` will not
    * delete one — either would be guessing about whose memory it is (§1).
@@ -131,7 +138,7 @@ export const ERROR_CODES = [
   "DIRECTORY_UNAVAILABLE",
   /**
    * hermeticd's `GET /fleet` could not list the fleet's agents (§9.4) — most
-   * often a foundation below version 16, whose agent role holds no
+   * often a foundation below version 17, whose agent role holds no
    * `dynamodb:Scan`. The box answers 503; a phone keeps its pairing snapshot,
    * and `hermetic foundation update` is the remedy.
    */
@@ -257,6 +264,37 @@ export const ERROR_CODES = [
   "UNAUTHORIZED",
   "RATE_LIMITED",
   "PAYLOAD_TOO_LARGE",
+  /**
+   * The files service (hermeticd's `/files` routes and the plugin socket).
+   * hermeticd answers each with the HTTP status in `FILES_HTTP_STATUS`
+   * (`shared/files.ts`); core raises the same code when it reads one back.
+   */
+  /** A file name failed `sanitizeFileName`: a path, a control character, a reserved or hidden name. */
+  "FILE_NAME_INVALID",
+  /** Over the request's or the class's byte cap (413). Checked before the first byte is written. */
+  "FILE_TOO_LARGE",
+  /** The sniffed type is not in the request's `accept` list (415). The slot stays open. */
+  "FILE_TYPE_REJECTED",
+  /** The bytes received do not hash to the `Content-Digest` sent with them (422). Nothing is kept. */
+  "FILE_DIGEST_MISMATCH",
+  /** No inbox, outbox or secret entry with that id on this box (404). */
+  "FILE_NOT_FOUND",
+  /** The request slot was already fulfilled (409): one request, one file. */
+  "FILE_REQUEST_FULFILLED",
+  /** The request slot was declined or consumed (409); the agent has moved on. */
+  "FILE_REQUEST_CLOSED",
+  /** The request slot's TTL passed (410). The agent must ask again. */
+  "FILE_REQUEST_EXPIRED",
+  /** A secret-class entry's bytes were asked for (403). Secrets never leave the box. */
+  "FILE_SECRET_FORBIDDEN",
+  /**
+   * The upload looks like private key material and was sent as a normal file
+   * (409). Resend through a secret request, or with `x-hermetic-not-secret: 1`
+   * once the operator has confirmed it is not one (D6).
+   */
+  "FILE_LOOKS_SECRET",
+  /** The write would breach the disk floor (507): `FILES_LIMITS.diskFloorBytes`/`diskFloorPct`. */
+  "DISK_FULL",
   /** Input failed schema validation at the boundary — heads map it to 400. */
   "VALIDATION",
   "UNSUPPORTED",

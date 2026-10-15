@@ -135,13 +135,13 @@ describe("GET /fleet", () => {
     expect(rig.ddb.commandCalls(ScanCommand)).toHaveLength(2);
   });
 
-  test("AccessDenied (foundation below v16) is 503 FLEET_LIST_UNAVAILABLE, cached too", async () => {
+  test("AccessDenied (foundation below v17) is 503 FLEET_LIST_UNAVAILABLE, cached too", async () => {
     const rig = mobileRig({ scanError: accessDenied() });
     const response = await rig.call("GET", RPC_PATHS.fleet);
     expect(response.status).toBe(503);
     const error = await errorOf(response);
     expect(error.code).toBe("FLEET_LIST_UNAVAILABLE");
-    expect(error.message).toContain("foundation predates version 16");
+    expect(error.message).toContain("foundation predates version 17");
     expect((await rig.call("GET", RPC_PATHS.fleet)).status).toBe(503);
     expect(rig.ddb.commandCalls(ScanCommand)).toHaveLength(1);
   });

@@ -7,8 +7,10 @@
  * Split out of `fixture-chat.ts` (AGENTS.md rule 5); the roster the sessions
  * hang off lives in `fixture-chat-roster.ts`.
  */
+import { HERMES_HOME } from "../../shared/hermes.ts";
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
+import { FIXTURE_CHAT_FILES, fixtureAttachmentBlock } from "./fixture-chat-files.ts";
 import { storedUsage, usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
@@ -286,13 +288,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           render: "diff",
         },
         { kind: "text", markdown: FENCED },
-        {
-          kind: "attachment",
-          name: "granite-iostat-2026-09-17.md",
-          mime: "text/markdown",
-          bytes: 8241,
-          href: "/api/chat/attachments/fixture/granite-iostat-2026-09-17.md",
-        },
+        fixtureAttachmentBlock(FIXTURE_CHAT_FILES.iostat),
       ],
       usage: storedUsage(21105, 612, 0.0288, "claude-sonnet-5"),
       error: null,
@@ -387,13 +383,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           duration_ms: 9820,
           render: "image",
         },
-        {
-          kind: "attachment",
-          name: "queue-depth.png",
-          mime: "image/png",
-          bytes: 421_776,
-          href: "/api/chat/attachments/fixture/queue-depth.png",
-        },
+        fixtureAttachmentBlock(FIXTURE_CHAT_FILES.queueDepth),
         // A delegated child as history re-reads it (`settledDelegation`), so
         // the catalogue carries every block kind. Live subagent scripts are
         // the fixture's own triggers, not this canned row.
@@ -1017,11 +1007,11 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
       incomplete: null,
     },
     {
-      id: "mx-kestrel-portal-2",
+      id: "mx-kestrel-portal-tool",
       session: "sx-kestrel-portal",
       role: "bot",
       author: { instance: "kestrel", bot: "default" },
-      at: at("08:58:41"),
+      at: at("08:58:22"),
       blocks: [
         {
           kind: "tool",
@@ -1035,6 +1025,36 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           duration_ms: 77,
           render: "terminal",
         },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    // A mid-turn steer (§9.2): the operator's correction, sent while the turn
+    // was running, lands after the tool result as its own user row. History
+    // strips upstream's out-of-band marker and flags the row `steered`
+    // (`chat/hermes/steer-marker.ts`); the turn's reply follows it.
+    {
+      id: "mx-kestrel-portal-steer",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("08:58:27"),
+      blocks: [
+        { kind: "text", markdown: "Check it picked up the new key, not just that it restarted." },
+      ],
+      usage: null,
+      error: null,
+      incomplete: null,
+      steered: true,
+    },
+    {
+      id: "mx-kestrel-portal-2",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("08:58:41"),
+      blocks: [
         {
           kind: "text",
           // The one credential-shaped string in this file, and it is the
@@ -1046,6 +1066,118 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
         },
       ],
       usage: usage(4400, 96, 0.0037, "claude-sonnet-5"),
+      error: null,
+      incomplete: null,
+    },
+    {
+      id: "mx-kestrel-portal-3",
+      session: "sx-kestrel-portal",
+      role: "user",
+      author: null,
+      at: at("09:02:10"),
+      blocks: [{ kind: "text", markdown: "Check last night's 502s, then open the fix as a PR." }],
+      usage: null,
+      error: null,
+      incomplete: null,
+    },
+    // Two settled request cards (`request_file`, `request_secret`). Their slots
+    // are long gone from the box, as an old request's are: a head draws them
+    // from the plugin's result. The secret's result names keys, never values.
+    {
+      id: "mx-kestrel-portal-4",
+      session: "sx-kestrel-portal",
+      role: "bot",
+      author: { instance: "kestrel", bot: "default" },
+      at: at("09:06:52"),
+      blocks: [
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0014",
+          name: "request_file",
+          server: null,
+          args: {
+            purpose: "Raw nginx access log for 01:30–02:30, to line the 502s up against the queue.",
+            accept: [".log", ".txt", ".gz"],
+            name_hint: "access.log",
+          },
+          result: {
+            status: "fulfilled",
+            request_id: "fr_kestrellog01",
+            path: `${HERMES_HOME}/inbox/2026-09-17/f_kestrelacc01/access.log`,
+            sha256: "3f9a6c1e0b7d4a2f8e5c9b1d7a3f6e2c4b8d0a9f1e7c3b5d2a6f8e0c4b9d1a7f",
+            bytes: 18_432_011,
+            by: "evan@fixture.invalid",
+            class: "file",
+            deliver_with: [],
+            expires_at: "2026-09-17T11:02:31Z",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 41_200,
+          render: "file_request",
+          request_id: "fr_kestrellog01",
+        },
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0015",
+          name: "request_secret",
+          server: null,
+          args: {
+            kind: "secret_text",
+            purpose: "A GitHub token with repo scope, to open the fix as a pull request.",
+            keys: ["GITHUB_TOKEN"],
+          },
+          result: {
+            status: "fulfilled",
+            request_id: "fr_kestrelkey02",
+            path: "/run/hermetic/files/github-token.env",
+            by: "evan@fixture.invalid",
+            class: "secret",
+            keys: ["GITHUB_TOKEN"],
+            format: "dotenv",
+            load: "set -a; . /run/hermetic/files/github-token.env; set +a",
+            deliver_with: [],
+            expires_at: "2026-09-17T11:04:02Z",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 22_870,
+          render: "secret_request",
+          request_id: "fr_kestrelkey02",
+        },
+        // A settled share card (`share_file`): drawn from the plugin's result,
+        // whose outbox copy has long expired, as an old share's has.
+        {
+          kind: "tool",
+          tool_id: "tl-fixture-0016",
+          name: "share_file",
+          server: null,
+          args: { path: "/data/hermes/work/502-timeline.csv", note: "502s against queue depth" },
+          result: {
+            share_id: "sh_kestreltime1",
+            name: "502-timeline.csv",
+            bytes: 4_812,
+            mime: "text/csv",
+            sha256: "9c1e5a7f3b2d8e4c6a0f1b9d7e3c5a2f8b4d6e0c1a9f7b3d5e2c8a4f6b0d1e9c",
+          },
+          status: "ok",
+          exit_code: null,
+          duration_ms: 310,
+          render: "file_share",
+          share: {
+            share_id: "sh_kestreltime1",
+            name: "502-timeline.csv",
+            bytes: 4_812,
+            mime: "text/csv",
+            sha256: "9c1e5a7f3b2d8e4c6a0f1b9d7e3c5a2f8b4d6e0c1a9f7b3d5e2c8a4f6b0d1e9c",
+          },
+        },
+        {
+          kind: "text",
+          markdown: "The 502s start at 01:52, when the upstream queue fills. PR is up.",
+        },
+      ],
+      usage: usage(9100, 212, 0.0081, "claude-sonnet-5"),
       error: null,
       incomplete: null,
     },

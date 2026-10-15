@@ -640,6 +640,21 @@ export const FOUNDATION_MIGRATIONS: ReadonlyArray<FoundationMigration> = [
   },
   {
     version: 16,
+    describe:
+      "make the data-volume snapshot policy configurable (SnapshotsEnabled/RetainCount/IntervalHours)",
+    /**
+     * A template change and no state change. The DLM policy's state, interval
+     * and retention count become stack parameters (§7.1), each defaulted to
+     * the value it was hard-coded to — enabled, every 24 h, keep 7 — so the
+     * update that adds them changes no fleet's policy. From here `apply` kind
+     * `snapshots` is what moves them, and every other change set carries them
+     * forward with `UsePreviousValue` (`aws/cfn.ts`). Nothing on `_fleet` or the
+     * box records the policy — the stack is the only copy — so there is
+     * nothing to back-fill and the entry carries no hooks.
+     */
+  },
+  {
+    version: 17,
     describe: "grant agents a read-only Scan of the agents table, for the phone's fleet view",
     /**
      * §9.4: hermeticd serves `GET /fleet` to a paired phone, which holds no
@@ -650,7 +665,7 @@ export const FOUNDATION_MIGRATIONS: ReadonlyArray<FoundationMigration> = [
      *
      * No hooks: no remote or local state moves. The stack update is the
      * migration, and a box running an older hermeticd simply holds a grant it
-     * does not use. A fleet still below v16 is not broken either — its boxes
+     * does not use. A fleet still below v17 is not broken either — its boxes
      * answer `GET /fleet` with `FLEET_LIST_UNAVAILABLE` and the phone keeps its
      * pairing snapshot — so nothing on the laptop refuses on its behalf.
      */

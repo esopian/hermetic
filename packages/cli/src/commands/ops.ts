@@ -48,8 +48,8 @@ export function register(program: Command): void {
           "  hermetic upgrade atlas --hermes 0.22.0             pin it; the box installs it on its next recreate\n" +
           "  hermetic upgrade atlas --hermes 0.22.0 --now       pin it and converge the running box in place\n" +
           "  hermetic upgrade --all --hermes 0.22.0 --now       the same, one agent at a time across the fleet\n" +
-          "  hermetic upgrade --hermeticd 0.6.0                 the fleet's hermeticd; rolled out now if the fleet auto-updates\n" +
-          "  hermetic upgrade --hermeticd 0.6.0 --now           rolled out now whatever the fleet's setting\n" +
+          "  hermetic upgrade --hermeticd 0.6.1                 the fleet's hermeticd; rolled out now if the fleet auto-updates\n" +
+          "  hermetic upgrade --hermeticd 0.6.1 --now           rolled out now whatever the fleet's setting\n" +
           "\n--now writes the same converge request `hermetic plan rollout` does: hermeticd\n" +
           "reinstalls Hermes and restarts its units, and this waits up to ten minutes per\n" +
           "box for it to report the new config. A box that is not up (stopped, still\n" +

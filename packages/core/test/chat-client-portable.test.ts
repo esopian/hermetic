@@ -177,6 +177,7 @@ const POLYFILLED_GLOBALS = ["AbortSignal.timeout", "AbortSignal.any", "structure
 
 const EXPECTED_GLOBAL_USES: Record<(typeof POLYFILLED_GLOBALS)[number], readonly string[]> = {
   "AbortSignal.timeout": [
+    "src/chat/hermes/hermes-chat-attach.ts",
     "src/chat/hermes/hermes-chat-resume.ts",
     "src/chat/hermes/hermes-chat-session-socket.ts",
   ],

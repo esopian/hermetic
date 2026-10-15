@@ -15,8 +15,10 @@ import type { createPlans } from "./plans.ts";
 import type { createFoundation } from "../fleet/foundation/index.ts";
 import type { createPolicy } from "../fleet/policy.ts";
 import type { createNetwork } from "../fleet/network.ts";
+import type { createSnapshots } from "../fleet/snapshots.ts";
 import type { createRollout } from "./rollout.ts";
 import type { createTeardown } from "../fleet/teardown.ts";
+import type { FilesInternal } from "../files/files.ts";
 
 export interface ApplyDeps {
   ctx: CoreContext;
@@ -27,13 +29,16 @@ export interface ApplyDeps {
   foundation: Pick<ReturnType<typeof createFoundation>, "update">;
   policy: Pick<ReturnType<typeof createPolicy>, "apply">;
   network: Pick<ReturnType<typeof createNetwork>, "apply">;
+  snapshots: Pick<ReturnType<typeof createSnapshots>, "apply">;
   rollout: Pick<ReturnType<typeof createRollout>, "run">;
   teardown: ReturnType<typeof createTeardown>["teardown"];
+  files: Pick<FilesInternal, "applyRm">;
 }
 
 export function createApply(deps: ApplyDeps) {
   const { requireConfig } = deps.ctx;
-  const { plans, destroy, recreate, foundation, policy, network, rollout, teardown } = deps;
+  const { plans, destroy, recreate, foundation, policy, network, snapshots, rollout, teardown, files } =
+    deps;
 
   /**
    * Execute a plan produced by `plan.*`. Core never asks "are you sure" (§3.2
@@ -144,6 +149,14 @@ export function createApply(deps: ApplyDeps) {
          */
         yield* network.apply(plan, opts);
         return;
+      case "snapshots":
+        /**
+         * §7.1: the data-volume snapshot policy. The plan carries the whole
+         * target policy; `apply` re-reads the stack and refuses if it is
+         * already there or the fleet is behind this build's foundation.
+         */
+        yield* snapshots.apply(plan, opts);
+        return;
       case "rollout":
         /**
          * No staleness check against the plan document: a rollout names no
@@ -163,6 +176,14 @@ export function createApply(deps: ApplyDeps) {
           },
           opts,
         );
+        return;
+      case "files-rm":
+        /**
+         * §9: one entry off an agent's box, and a durable secret's SSM slot.
+         * `applyRm` re-reads the box and refuses `PLAN_STALE` unless the entry
+         * is still the one the plan names — same id, same bytes, same slot.
+         */
+        yield* files.applyRm(plan, opts);
         return;
       case "teardown": {
         /**

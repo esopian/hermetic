@@ -395,7 +395,10 @@ export class BoxHost extends FakeHost {
       return ok();
     }
     if (args[0] === "pip" && args[1] === "install") {
-      const dir = (args[args.indexOf("-e") + 1] ?? "").replace(/\[.*\]$/, "");
+      const editable = args[args.indexOf("-e") + 1] ?? "";
+      const extrasStart = editable.indexOf("[");
+      const dir =
+        extrasStart >= 0 && editable.endsWith("]") ? editable.slice(0, extrasStart) : editable;
       if (!this.files.has(`${dir}/.git/HEAD`)) return fail(1, `no checkout at ${dir}`);
       if (!this.files.has(`${dir}/venv/bin/python`)) return fail(1, `no venv at ${dir}/venv`);
       this.hermesInstalledVersion =

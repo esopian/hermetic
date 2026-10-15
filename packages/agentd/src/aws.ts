@@ -6,14 +6,16 @@
  * it has of the rest of the fleet is a read-only Scan, for the phone (§9.4).
  *
  * Three services, nothing more:
- *   SSM      GetParameter (WithDecryption) for `${param_prefix}<name>/{ts-key,bws-token,provider-key}`
+ *   SSM      GetParameter (WithDecryption) for `${param_prefix}<name>/{ts-key,bws-token,provider-key}`,
+ *            and GetParametersByPath (WithDecryption, one level) over `${param_prefix}<name>/`
+ *            to find the durable file secrets (`file-*`, `env-*`) the laptop stored there
  *            — `/hermes/<fleet_id>/<name>/…` since foundation v3, which is why the
  *            prefix is read from the fleet manifest and never rebuilt here
  *   S3       GetObject for `manifest.json`, the config tarball and the release objects
  *            the manifest records under `artifacts/<ver>/<generation>/…` — never a
  *            key rebuilt from the version label (§3.6)
  *   DynamoDB GetItem/UpdateItem on its own row + PutItem into `events`; Scan of
- *            `agents` and GetItem of `_fleet` for `GET /fleet` (foundation v16+;
+ *            `agents` and GetItem of `_fleet` for `GET /fleet` (foundation v17+;
  *            below it the Scan is `AccessDenied`, which the route reports)
  *
  * Two rules govern every write here:
@@ -38,7 +40,7 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { GetParameterCommand, GetParametersByPathCommand, SSMClient } from "@aws-sdk/client-ssm";
 import type {
   Agent,
   AgentStatus,
@@ -107,6 +109,12 @@ export interface Aws {
   /** SecureString, decrypted. Never logged, never written to disk. */
   getParameter(path: string): Promise<string>;
   getParameterOptional(path: string): Promise<string | null>;
+  /**
+   * Every parameter directly under `path` (not recursive), decrypted, across
+   * every page. Same rule as `getParameter`: the values are never logged and
+   * never written to disk except by the caller that materialises them on tmpfs.
+   */
+  getParametersByPath(path: string): Promise<Array<{ name: string; value: string }>>;
   getObjectBytes(bucket: string, key: string): Promise<Uint8Array>;
   /**
    * The fleet manifest (§4.2 step 2). It needs S3 and nothing else — which is
@@ -120,7 +128,7 @@ export interface Aws {
    * Every item in the agents table, `_fleet` included, unparsed — the caller
    * (`GET /fleet`, `rpc-mobile.ts`) decides what is an agent. Consistent and
    * paginated. Throws the SDK's error as-is, so `AccessDeniedException` on a
-   * foundation below v16 reaches the route by name.
+   * foundation below v17 reaches the route by name.
    */
   scanAgents(): Promise<Record<string, unknown>[]>;
   /** The `_fleet` item (`FLEET_KEY`), unparsed; `null` when absent. */
@@ -324,6 +332,32 @@ export function makeAws(deps: AwsDeps): Aws {
         throw new AgentdError("INTERNAL", `SSM parameter not found: ${path}`, { path });
       }
       return value;
+    },
+
+    async getParametersByPath(path) {
+      const found: Array<{ name: string; value: string }> = [];
+      let token: string | undefined;
+      // A bound on the pages, not on the parameters: SSM answers at most ten a
+      // page, and a token that never stops coming back is a fault to surface
+      // rather than a loop to sit in.
+      for (let page = 0; page < 1000; page += 1) {
+        const out = (await deps.ssm.send(
+          new GetParametersByPathCommand({
+            Path: path,
+            Recursive: false,
+            WithDecryption: true,
+            ...(token ? { NextToken: token } : {}),
+          }),
+        )) as { Parameters?: Array<{ Name?: string; Value?: string }>; NextToken?: string };
+        for (const p of out.Parameters ?? []) {
+          if (typeof p.Name === "string" && typeof p.Value === "string") {
+            found.push({ name: p.Name, value: p.Value });
+          }
+        }
+        token = out.NextToken;
+        if (!token) return found;
+      }
+      throw new AgentdError("INTERNAL", `SSM kept paginating under ${path}`, { path });
     },
 
     async getObjectBytes(bucket, key) {

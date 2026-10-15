@@ -24,6 +24,7 @@
 
 import { SESSION_ORIGIN_NAMES } from "@hermetic/core/shared";
 import type { SessionOriginName } from "@hermetic/core/shared";
+import { isMintedBlobUrl } from "./page-blob-urls.ts";
 
 /* ── the records, as the rules see them ──────────────────────────────────── */
 
@@ -437,12 +438,15 @@ export function safeHref(href: string | null | undefined): string | null {
  * bytes in a query string and let the operator's own machine deliver them off
  * the tailnet — past every control the fleet has, because the request is not
  * the fleet's. Root-relative paths only, which in this app resolve against the
- * page's own bundle and reach no network at all; an image anywhere else is
- * drawn as its filename instead.
+ * page's own bundle and reach no network at all, plus a `blob:` URL this page
+ * minted itself; an image anywhere else is drawn as its filename instead.
  */
 export function safeImageSrc(href: string | null | undefined): string | null {
   if (typeof href !== "string") return null;
   const raw = href.trim();
+  // A thumbnail this page made from bytes the main process read for it
+  // (`page-blob-urls.ts`). Any other `blob:` is refused like any other URL.
+  if (raw.startsWith("blob:")) return isMintedBlobUrl(raw) ? raw : null;
   return raw.startsWith("/") && !raw.startsWith("//") ? raw : null;
 }
 

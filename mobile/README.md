@@ -154,7 +154,7 @@ to run the app.
 
 A fleet that predates the phone needs three things before the app is fully live: `hermetic artifacts
 push` and `hermetic agent recreate <name>` (a new hermeticd serves `/fleet` and `/push/devices` and
-runs the push watcher), and `hermetic foundation update` (foundation 16 grants the agent role
+runs the push watcher), and `hermetic foundation update` (foundation 17 grants the agent role
 `dynamodb:Scan` on the agents table). Until `/fleet` works (it answers `FLEET_LIST_UNAVAILABLE`, or
 no box answers it) the phone keeps its QR snapshot and fills each agent's status from that box's own
 `/healthz`: `ready` where hermeticd answered, `unreachable` where it did not. The listening default

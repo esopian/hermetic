@@ -18,6 +18,10 @@
 # app's preferences storage-slot name (`hermetic.prefs.v1`, once held in a
 # constant named `KEY`, which the generic-api-key rule read as a credential).
 # Each is anchored to the whole value, so nothing else slips through with it.
+#
+# One commit is excused whole: e32afb6 added `looksLikeKeyMaterial`'s tests,
+# whose PEM header strings on two adjacent lines read as one private key. The
+# lines now carry the marker; the commit, already pushed, cannot.
 title = "hermetic gitleaks config"
 
 [extend]
@@ -36,3 +40,4 @@ regexes = [
   '''^AKIAENVOVERRIDE0+$''',
   '''^hermetic\.prefs\.v1$''',
 ]
+commits = ["e32afb6591cf94bb37e9db6eeca8b93ccca5dfbe"]

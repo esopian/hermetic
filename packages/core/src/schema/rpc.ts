@@ -115,6 +115,17 @@ export const RpcHealth = z.object({
    * which on a `browser: true` agent is a failure with an `agent rerun` owing.
    */
   browsers: z.array(RpcBrowserHealth).optional(),
+  /**
+   * Services this hermeticd serves beyond the RPC itself — `files`
+   * (`FILES_CAPABILITY`) when it answers the `/files` routes and the plugin
+   * socket.
+   *
+   * Optional for the same reason as `browsers`: absent is an older hermeticd
+   * that predates the field and serves none of them, so a head hides the
+   * features rather than failing a request it cannot serve. Present, the list
+   * is the box's positive statement of what it serves.
+   */
+  capabilities: z.array(z.string()).optional(),
 });
 export type RpcHealth = z.infer<typeof RpcHealth>;
 

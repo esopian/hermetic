@@ -169,9 +169,22 @@ function Shot({ result }: { result: unknown }) {
   );
 }
 
-export function ToolBlock({ block, inline = false }: { block: ChatBlockOf<"tool">; inline?: boolean }) {
+export function ToolBlock({
+  block,
+  inline = false,
+  live = true,
+}: {
+  block: ChatBlockOf<"tool">;
+  inline?: boolean;
+  /**
+   * Whether a `running` call may still be running. False where the step above
+   * it reads Stopped or No result yet (`Activity.tsx`), so the two agree.
+   */
+  live?: boolean;
+}) {
   const verdict = toolVerdict(block.status);
-  const running = block.status === "running";
+  const running = block.status === "running" && live;
+  const unanswered = block.status === "running" && !live;
   const text = resultText(block.result);
 
   const right = running
@@ -181,7 +194,7 @@ export function ToolBlock({ block, inline = false }: { block: ChatBlockOf<"tool"
         fmtMs(block.duration_ms) || null,
       ]
         .filter(Boolean)
-        .join(" · ") || block.status;
+        .join(" · ") || (unanswered ? "no result" : block.status);
 
   const head = (
     <>
@@ -206,6 +219,15 @@ export function ToolBlock({ block, inline = false }: { block: ChatBlockOf<"tool"
           </div>
           <div className="ch-meter">
             <span>running on the box</span>
+          </div>
+        </CardBody>
+      );
+    }
+    if (unanswered) {
+      return (
+        <CardBody>
+          <div className="ch-meter">
+            <span>no result recorded</span>
           </div>
         </CardBody>
       );

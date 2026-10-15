@@ -5,6 +5,9 @@
  */
 import type { AgentConfig, RenderedFile } from "@hermetic/core/schema";
 import {
+  FILES_INBOX_DIR,
+  FILES_OUTBOX_DIR,
+  FILES_STAGE_DIR,
   HERMES_ACCOUNT,
   HERMES_ACCOUNT_HOME,
   HERMES_BIN,
@@ -255,6 +258,22 @@ export async function ensureAccounts(host: Host, dry: boolean): Promise<void> {
    * and it means the first install never races a directory root created.
    */
   await installAccountDir(host, HERMES_LAZY_TARGET, "0755");
+  /**
+   * The files service's roots: operator uploads land in `inbox/` (staged in
+   * `inbox/.stage/` until the turn that carries them is sent), and what the
+   * agent shares back is copied into `outbox/`. All under `$HERMES_HOME`,
+   * because Hermes resolves an `@file:` reference only under the session's
+   * working directory, which is the dashboard unit's `WorkingDirectory`.
+   *
+   * As the account, for the symlink reason above, and 0700: the uploads are the
+   * operator's documents and nothing but the agent reads them. hermeticd
+   * writes into them through a child started as `hermes`, never as root.
+   * The parent before the child, so `.stage` is never made by `install -d`
+   * creating its parent at whatever mode it picks.
+   */
+  await installAccountDir(host, FILES_INBOX_DIR, "0700");
+  await installAccountDir(host, FILES_STAGE_DIR, "0700");
+  await installAccountDir(host, FILES_OUTBOX_DIR, "0700");
 }
 
 /**

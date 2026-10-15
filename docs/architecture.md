@@ -30,7 +30,7 @@ flowchart LR
     core -- "one Backend interface" --> mem
 ```
 
-`cli` and `app` both import `core` in-process and call the same `Hermetic` instance methods; there is no daemon between them. `ui` never imports `core` — it is the page the app loads from a `views://` URL, and it talks to the main process over Electrobun RPC typed by the one shared contract, `HermeticRPC` (`packages/app/src/rpc/schema.ts`), so a field renamed in a core schema fails the UI's typecheck rather than its runtime. There is no socket, no port and no HTTP between the two. `agentd` is not a head over this core at all: it imports only `@hermetic/core/schema` and runs its own loop on the instance (see below).
+`cli` and `app` both import `core` in-process and call the same `Hermetic` instance methods; there is no daemon between them. `ui` never imports `core` — it is the page the app loads from a `views://` URL, and it talks to the main process over Electrobun RPC typed by the one shared contract, `HermeticRPC` (`packages/app/src/rpc/schema.ts`), so a field renamed in a core schema fails the UI's typecheck rather than its runtime. File bodies also use the app's on-demand, one-use loopback upload port. `agentd` is not a head over this core at all: it imports only `@hermetic/core/schema` and runs its own loop on the instance (see below).
 
 ## The phone
 

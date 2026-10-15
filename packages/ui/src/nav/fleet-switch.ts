@@ -42,6 +42,17 @@ export function fleetLabel(f: FleetListEntry): string {
   return f.name ?? f.fleet_id ?? "—";
 }
 
+/**
+ * The rows the switcher draws: every fleet except one that has been torn down.
+ * The directory keeps a torn-down fleet's row as history (§4.8), and `hermetic
+ * fleet ls` still prints it, but in a menu of places to go it is a row with no
+ * action on it. The open fleet is always kept, since the strip names it and the
+ * list should agree.
+ */
+export function visibleFleets(fleets: FleetListEntry[]): FleetListEntry[] {
+  return fleets.filter((f) => f.current || f.status !== "torn_down");
+}
+
 export function sortFleets(fleets: FleetListEntry[]): FleetListEntry[] {
   const rank = (f: FleetListEntry): number => {
     if (f.current) return 0;

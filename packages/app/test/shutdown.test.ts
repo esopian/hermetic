@@ -72,6 +72,24 @@ describe("shutdown", () => {
     expect(order).toEqual(["terminals", "chat", "server"]);
   });
 
+  test("the chat watchdog is stopped before the observations it watches, and a throw is ignored", async () => {
+    const order: string[] = [];
+    await shutdown(
+      {
+        server: { stop: () => void order.push("server") },
+        watchdog: {
+          stop: () => {
+            order.push("watchdog");
+            throw new Error("will not stop");
+          },
+        },
+        chat: { stop: () => Promise.resolve(void order.push("chat")) },
+      },
+      "quit",
+    );
+    expect(order).toEqual(["watchdog", "chat", "server"]);
+  });
+
   test("a terminal host that throws does not stop the shutdown", async () => {
     const server = fakeServer();
     await shutdown(
