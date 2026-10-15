@@ -10,7 +10,12 @@
  * error, because a re-run of a failed delete is the ordinary case.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { DeleteParameterCommand, GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import {
+  DeleteParameterCommand,
+  GetParameterCommand,
+  PutParameterCommand,
+  SSMClient,
+} from "@aws-sdk/client-ssm";
 import { mockClient } from "aws-sdk-client-mock";
 import { SsmSecrets } from "../src/aws/ssm.ts";
 import type { HermeticError } from "../src/errors.ts";
@@ -63,5 +68,41 @@ describe("SsmSecrets.delete", () => {
     ssm.on(DeleteParameterCommand).rejects(notFound());
     const secrets = new SsmSecrets(new SSMClient({ region: "us-west-2" }));
     await expect(secrets.delete(PATH)).resolves.toBeUndefined();
+  });
+});
+
+describe("SsmSecrets.put", () => {
+  function alreadyExists(): Error {
+    const e = new Error("ParameterAlreadyExists");
+    e.name = "ParameterAlreadyExists";
+    return e;
+  }
+
+  test("overwrites by default, as every existing caller expects", async () => {
+    ssm.on(PutParameterCommand).resolves({});
+    const secrets = new SsmSecrets(new SSMClient({ region: "us-west-2" }));
+    await secrets.put(PATH, VALUE);
+    const call = ssm.commandCalls(PutParameterCommand)[0]!.args[0].input;
+    expect(call.Overwrite).toBe(true);
+  });
+
+  test("overwrite: false asks SSM to refuse, and ParameterAlreadyExists is CONFLICT", async () => {
+    ssm.on(PutParameterCommand).rejects(alreadyExists());
+    const secrets = new SsmSecrets(new SSMClient({ region: "us-west-2" }));
+    const error = (await secrets
+      .put(PATH, VALUE, { overwrite: false })
+      .catch((e: unknown) => e)) as HermeticError;
+    expect(ssm.commandCalls(PutParameterCommand)[0]!.args[0].input.Overwrite).toBe(false);
+    expect(error.code).toBe("CONFLICT");
+    expect(error.details).toEqual({ path: PATH, already_exists: true });
+    expect(error.message.includes(VALUE)).toBe(false);
+  });
+
+  test("with overwrite on, ParameterAlreadyExists is not a conflict", async () => {
+    ssm.on(PutParameterCommand).rejects(alreadyExists());
+    const secrets = new SsmSecrets(new SSMClient({ region: "us-west-2" }));
+    const error = (await secrets.put(PATH, VALUE).catch((e: unknown) => e)) as HermeticError;
+    expect(error.code).toBe("INTERNAL");
+    expect(error.details?.["already_exists"]).toBeUndefined();
   });
 });

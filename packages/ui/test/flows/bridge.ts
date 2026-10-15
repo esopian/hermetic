@@ -160,7 +160,15 @@ export interface FlowHarness {
   poll(): Promise<void>;
   /** Everything this harness opened: the transport, the streams, the chat owner. */
   restore(): Promise<void>;
+  /**
+   * The fixture's in-memory backend, latest open first: for a flow that plays
+   * the box's part (a request slot timing out, what a put carried).
+   */
+  backend(): FixtureBackend;
 }
+
+/** The fixture's `MemoryBackend`, as `FixtureOptions.onBackend` hands it over. */
+export type FixtureBackend = Parameters<NonNullable<FixtureOptions["onBackend"]>>[0];
 
 export interface FlowHarnessOptions {
   /**
@@ -204,8 +212,12 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
    * `reopen` would fabricate a fresh world, and a flow asserting continuity
    * across a switch would be asserting against a different one.
    */
+  let latestBackend: FixtureBackend | null = null;
   const fixtureOptions: FixtureOptions = {
     account: createFixtureAccount(),
+    onBackend: (backend) => {
+      latestBackend = backend;
+    },
     ...(options.chatDelayMs === undefined ? {} : { chatDelayMs: options.chatDelayMs }),
   };
   const hermetic: Hermetic = await openHermetic({
@@ -384,6 +396,10 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
     ctx,
     target,
     calls,
+    backend() {
+      if (latestBackend === null) throw new Error("the fixture backend was never built");
+      return latestBackend;
+    },
     intercept(name, fn) {
       if (fn === null) intercepts.delete(name);
       else intercepts.set(name, fn);

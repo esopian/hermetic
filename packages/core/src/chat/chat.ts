@@ -63,6 +63,7 @@ import type {
   ChatMessage,
   ChatObserveEvent,
   ChatUsage,
+  FilesCommitResult,
   FleetItem,
   LocalConfig,
   Session,
@@ -202,6 +203,17 @@ export interface ChatDeps {
   listAgents: () => Promise<Agent[]>;
   /** The adapter. It is the only module that knows Hermes; this one never does. */
   hermes: HermesChatClient;
+  /**
+   * The files service's commit (`files.internal.commit`): a staged entry into
+   * the box's inbox, for a turn that carries attachments. Absent, such a turn
+   * is refused `UNSUPPORTED` before it is sent.
+   */
+  commitFile?: (
+    instance: string,
+    id: string,
+    session: string,
+    signal: AbortSignal | undefined,
+  ) => Promise<FilesCommitResult>;
   /**
    * The inbox, when this `Hermetic` has one.
    *

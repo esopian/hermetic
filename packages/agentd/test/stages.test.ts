@@ -33,7 +33,14 @@ import {
 import type { StagesDeps } from "../src/stages.ts";
 import { BOOTSTRAP_UNIT, BOOTSTRAP_UNIT_PATH } from "../src/bootstrap.ts";
 import { APPLIED_CONFIG_PATH, MANIFEST_PATH } from "../src/manifest.ts";
-import { assertTmpfs, isKnownSlot, parseArgv, run, writeSecretFile } from "../src/main.ts";
+import {
+  SECRET_SLOT_USAGE,
+  assertTmpfs,
+  isKnownSlot,
+  parseArgv,
+  run,
+  writeSecretFile,
+} from "../src/main.ts";
 import { EXEC_ENV_ALLOWLIST, execEnv } from "../src/host.ts";
 import { FakeHost } from "./fake-host.ts";
 import type { StreamScript } from "./fake-host.ts";
@@ -1284,7 +1291,9 @@ describe("argument parsing", () => {
     const host = new FakeHost();
     await expect(
       run(["stage", "secret", "--slot", "root-password", "--out", "/run/k"], host),
-    ).rejects.toThrow(/--slot <ts-key\|bws-token\|provider-key\|provider-key-<profile>-r<N>>/);
+    ).rejects.toThrow(
+      /--slot <ts-key\|bws-token\|provider-key\|provider-key-<profile>-r<N>\|file-<slug>\|env-<slug>>/,
+    );
     expect(host.commands).toEqual([]);
   });
 
@@ -1333,14 +1342,37 @@ describe("argument parsing", () => {
    * the box. `mkdir` honours the umask and leaves an existing directory alone,
    * so the mode is set explicitly.
    */
-  test("a secret lands 0600 in a 0700 directory, even one that already existed", async () => {
+  test("a secret lands 0600 in a directory only root can list, even one that already existed", async () => {
     const host = new FakeHost();
     host.dirs.add("/run/hermetic");
 
     await writeSecretFile(host, "/run/hermetic/ts-authkey", "tskey-auth-kFIXTURE");
 
     expect(host.files.get("/run/hermetic/ts-authkey")?.mode).toBe("0600");
-    expect(host.chmods).toContainEqual(["/run/hermetic", "0700"]);
+    // 0711: traversable so `hermes` can reach the files service's paths, but
+    // not listable, and the key itself is 0600 root.
+    expect(host.chmods).toContainEqual(["/run/hermetic", "0711"]);
+
+    // Any other tmpfs directory stays closed.
+    await writeSecretFile(host, "/run/other/k", "tskey-auth-kFIXTURE");
+    expect(host.chmods).toContainEqual(["/run/other", "0700"]);
+  });
+
+  /**
+   * The durable file secrets (`file-<slug>`, `env-<slug>`) are two more slot
+   * families the guard admits, with the slug shaped like a name — not
+   * "anything under the prefix".
+   */
+  test("the slot guard admits the durable file-secret families and nothing looser", () => {
+    expect(isKnownSlot("file-github-app-pem")).toBe(true);
+    expect(isKnownSlot("env-stripe-keys")).toBe(true);
+    expect(isKnownSlot("file-")).toBe(false);
+    expect(isKnownSlot("file-Upper")).toBe(false);
+    expect(isKnownSlot("file-a/b")).toBe(false);
+    expect(isKnownSlot("env-../x")).toBe(false);
+    expect(isKnownSlot("secret-x")).toBe(false);
+    expect(SECRET_SLOT_USAGE).toContain("file-<slug>");
+    expect(SECRET_SLOT_USAGE).toContain("env-<slug>");
   });
 
   test("`heartbeat` on a box that has never booted names the missing cache", async () => {

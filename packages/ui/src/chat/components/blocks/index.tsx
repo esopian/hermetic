@@ -18,10 +18,13 @@ import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
 import { blockKind } from "../../chat-logic.ts";
 import { ApprovalBlock } from "./Approval.tsx";
 import { AttachmentBlock } from "./Attachment.tsx";
+import { FileRequestBlock } from "./FileRequest.tsx";
 import { HermeticBlock } from "./Hermetic.tsx";
+import { isRequestTool } from "../../file-request-logic.ts";
 import { ProcessEventBlock } from "./ProcessEvent.tsx";
 import { QuestionBlock } from "./Question.tsx";
 import { ReasoningBlock } from "./Reasoning.tsx";
+import { ShareToolBlock, isShareTool } from "./ShareCard.tsx";
 import { SourcesBlock } from "./Sources.tsx";
 import { TextBlock } from "./Text.tsx";
 import { ToolBlock } from "./Tool.tsx";
@@ -47,6 +50,15 @@ export function Block({
   closed,
   /** Open approvals in the turn, for the approval card's "N pending" label. */
   pending,
+  /** The conversation's own box and fleet, for a staged file's thumbnail. */
+  instance,
+  fleetId,
+  /** Who a request card names ("sindri was told"); the box's name when absent. */
+  agent,
+  /** The turn's start, for a request card's "stopped waiting at". */
+  at,
+  /** The turn read untrusted content before this request card. */
+  untrusted = false,
 }: {
   block: ChatBlockView;
   now: number;
@@ -54,6 +66,11 @@ export function Block({
   mine?: boolean;
   closed?: ClosedRequest;
   pending?: number;
+  instance?: string;
+  fleetId?: string;
+  agent?: string;
+  at?: string;
+  untrusted?: boolean;
 }) {
   switch (blockKind(block)) {
     case "text":
@@ -67,9 +84,32 @@ export function Block({
         <ActivityGroup blocks={[block]} streaming={streaming} />
       );
     case "tool":
-      return <ToolBlock block={block as ChatBlockOf<"tool">} />;
+      // A file the agent shared is a card with Save…, or the box's refusal.
+      if (isShareTool(block)) {
+        return (
+          <ShareToolBlock block={block as ChatBlockOf<"tool">} {...(instance ? { instance } : {})} />
+        );
+      }
+      // A file or secret request draws from the box's slot, so it needs the box.
+      return isRequestTool(block) && instance ? (
+        <FileRequestBlock
+          block={block}
+          instance={instance}
+          agent={agent ?? instance}
+          untrusted={untrusted}
+          {...(at ? { at } : {})}
+        />
+      ) : (
+        <ToolBlock block={block as ChatBlockOf<"tool">} />
+      );
     case "attachment":
-      return <AttachmentBlock block={block as ChatBlockOf<"attachment">} />;
+      return (
+        <AttachmentBlock
+          block={block as ChatBlockOf<"attachment">}
+          {...(instance ? { instance } : {})}
+          {...(fleetId ? { fleetId } : {})}
+        />
+      );
     case "approval":
       return (
         <ApprovalBlock

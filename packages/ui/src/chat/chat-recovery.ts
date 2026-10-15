@@ -14,6 +14,7 @@ import type { ChatFailureView, ChatMessageView } from "../api/index.ts";
 import { failureCopy } from "./chat-logic.ts";
 import { isProcessEventMessage } from "./process-events.ts";
 import type { FailureCopy } from "./chat-logic.ts";
+import type { TurnPrompt } from "./chat-conversation-record.ts";
 
 export interface RecoveryPlan {
   /** Send the failed turn's own prompt again, into the same session. */
@@ -141,6 +142,52 @@ export function failedPrompt(
     return text || null;
   }
   return null;
+}
+
+/**
+ * The prompt a failed turn answered, with the files that went with it.
+ *
+ * `prompts` is what this browser remembered when it sent (`rememberTurnPrompt`):
+ * by the failed message's id when an `error` frame drew it, by the echo's id at
+ * send time. A failure read back from history carries the box's ids, not
+ * those, so the prompt row above it is matched to a remembered send by the
+ * staged files it shows, then by its words — only for a row that shows files,
+ * so a text-only prompt never picks up another send's files. Anything else is
+ * the prompt's text alone (`failedPrompt`).
+ */
+export function failedTurnPrompt(
+  messages: readonly ChatMessageView[],
+  ids: readonly string[],
+  prompts: ReadonlyMap<string, TurnPrompt>,
+): TurnPrompt | null {
+  for (const id of ids) {
+    const held = prompts.get(id);
+    if (held) return held;
+  }
+  const at = messages.findIndex((m) => ids.includes(m.id));
+  let prompt: ChatMessageView | null = null;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    if (isPrompt(messages[i]!)) {
+      prompt = messages[i]!;
+      break;
+    }
+  }
+  if (!prompt) return null;
+  const byEcho = prompts.get(prompt.id);
+  if (byEcho) return byEcho;
+  const text = failedPrompt(messages, ids);
+  const files = prompt.blocks.filter((b) => b.kind === "attachment");
+  if (files.length > 0) {
+    const shown = new Set(
+      files.map((b) => (b.kind === "attachment" ? b.file_id : null)).filter(Boolean),
+    );
+    const remembered = [...prompts.values()].reverse();
+    const match =
+      remembered.find((p) => p.attachments.some((a) => shown.has(a.file_id))) ??
+      remembered.find((p) => p.attachments.length === files.length && p.text === (text ?? ""));
+    if (match) return match;
+  }
+  return text ? { text, attachments: [] } : null;
 }
 
 /**

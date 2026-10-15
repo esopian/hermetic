@@ -14,6 +14,7 @@ import { assertConfirmable, confirmPlan, confirmTeardown, renderPlan } from "../
 import { declare } from "../declare.ts";
 import { planCommand as policyPlanCommand } from "./policy.ts";
 import { planCommand as networkPlanCommand } from "./network.ts";
+import { planCommand as snapshotsPlanCommand } from "./snapshots.ts";
 import { assertFleetNamedForTeardown } from "./fleets.ts";
 import { HermeticError } from "@hermetic/core";
 import type { Plan } from "@hermetic/core";
@@ -165,6 +166,7 @@ export function register(program: Command): void {
    * the read it shares a report with (`commands/network.ts`).
    */
   plan.addCommand(networkPlanCommand());
+  plan.addCommand(snapshotsPlanCommand());
 
   program.addCommand(plan);
 

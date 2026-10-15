@@ -101,6 +101,27 @@ export type {
   PresetsView,
 } from "./presets.ts";
 
+// --- Data-volume snapshot policy (§7.1) -----------------------------------
+export {
+  DEFAULT_SNAPSHOT_POLICY,
+  SNAPSHOT_INTERVAL_HOURS,
+  SNAPSHOT_RETAIN_MAX,
+  SNAPSHOT_RETAIN_MIN,
+  describeSnapshotPolicy,
+  sameSnapshotPolicy,
+  snapshotWindowDays,
+} from "./snapshots.ts";
+export type { SnapshotIntervalHours, SnapshotPolicy } from "./snapshots.ts";
+
+// --- AWS Free Tier baseline (§10) ----------------------------------------
+export { AWS_FREE_TIER, FREE_TIER_PRESET_ID, isFreeTierMachine } from "./free-tier.ts";
+export type {
+  FreeTierBaseline,
+  FreeTierPlan,
+  FreeTierResource,
+  FreeTierTreatment,
+} from "./free-tier.ts";
+
 // --- Tailscale console (§4.7) --------------------------------------------
 export {
   TAILSCALE_ADMIN_ACL_URL,
@@ -174,3 +195,120 @@ export {
   sanitizeProgramName,
 } from "./shell-markers.ts";
 export type { ShellMarker } from "./shell-markers.ts";
+
+// --- Files service (attachments, requests, shares) -----------------------
+// The routes, ids, name rules, caps and sniffer hermeticd, core and the UI
+// must agree on for every file that crosses between laptop and box.
+export {
+  CONTENT_DIGEST_HEADER,
+  ENV_SECRET_SLOT_RE,
+  FILES_CAPABILITY,
+  FILES_DROP_DIR,
+  FILES_ERROR_CODES,
+  FILES_HTTP_STATUS,
+  FILES_INBOX_DIR,
+  FILES_INDEX_PATH,
+  FILES_LIMITS,
+  FILES_NAME_HEADER,
+  FILES_NOT_SECRET_HEADER,
+  FILES_OUTBOX_DIR,
+  FILES_ROUTES,
+  FILES_SECRET_DIR,
+  FILES_SESSION_HEADER,
+  FILES_SOCKET_PATH,
+  FILES_SOCKET_ROUTES,
+  FILES_STAGE_DIR,
+  FILES_TTL,
+  FILE_CLASSES,
+  FILE_DIRS,
+  FILE_REQUEST_KINDS,
+  FILE_REQUEST_STATES,
+  FILE_SECRET_SLOT_RE,
+  FILE_SENSITIVITIES,
+  FILES_APP_CAP,
+  FILES_RETENTION_DAYS,
+  FILES_SECRET_AS_HEADER,
+  MEDIA_TAG,
+  SECRET_ENVELOPE_MAX_CHARS,
+  SECRET_TEXT_AS,
+  SECRET_TEXT_FORMATS,
+  SECRET_TEXT_INPUTS,
+  SECRET_TEXT_KEY_RE,
+  SECRET_TEXT_MAX_KEYS,
+  acceptMatches,
+  decodeSecretEnvelope,
+  encodeSecretEnvelope,
+  envSecretSlot,
+  fileSecretSlot,
+  filesHttpStatus,
+  formatContentDigest,
+  inboxRelPath,
+  isEnvSecretSlot,
+  isFileId,
+  isFileSecretSlot,
+  isImageMime,
+  isRequestId,
+  isShareId,
+  looksLikeKeyMaterial,
+  matchFilesRoute,
+  matchSocketRoute,
+  newFileId,
+  newRequestId,
+  newShareId,
+  outboxRelPath,
+  parseContentDigest,
+  parseOutboxMediaLine,
+  requestFileName,
+  sanitizeFileName,
+  secretEnvelopeFits,
+  secretSlotFileName,
+  secretTextLoad,
+  secretTextSlug,
+  shortId,
+  resolveFilesSettings,
+  sniffMime,
+} from "./files.ts";
+export type {
+  FileClass,
+  FileDir,
+  FileNameRejection,
+  FileRequestKind,
+  FileRequestState,
+  FileSensitivity,
+  FilesErrorCode,
+  FilesRoute,
+  FilesSettings,
+  FilesSettingsSource,
+  FilesSocketRoute,
+  OutboxMediaRef,
+  SanitizedFileName,
+  SecretEnvelope,
+  SecretTextAs,
+  SecretTextFormat,
+  SecretTextInput,
+} from "./files.ts";
+
+// --- Text secrets (plan §06b) ----------------------------------------------
+// The paste/drop parser the request card previews with and the box re-reads
+// the canonical form with; both must accept and refuse the same text.
+export {
+  SECRET_ENV_ERROR_CODES,
+  SECRET_ENV_WARNING_CODES,
+  SECRET_KEY_RE,
+  SECRET_TEXT_MAX_BYTES,
+  canonicalSecretEnv,
+  detectSecretFormat,
+  parseSecretEnv,
+  readCanonicalSecretEnv,
+} from "./secret-env.ts";
+export type {
+  SecretEnvChip,
+  SecretEnvEntry,
+  SecretEnvErrorCode,
+  SecretEnvIssue,
+  SecretEnvResult,
+  SecretEnvSpec,
+  SecretEnvWarningCode,
+  SecretFormat,
+  SecretInputMode,
+} from "./secret-env.ts";

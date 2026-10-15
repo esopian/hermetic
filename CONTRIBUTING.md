@@ -248,6 +248,7 @@ bun run lint:cfn                   # cfn-lint over the rendered foundation templ
 bun run lint:sh                    # shellcheck over packages/agentd/stages/*.sh (needs uv)
 bun run boundaries                 # tests/boundaries.test.ts only
 bun run audit:dependencies         # bun audit over the resolved tree (needs network; not in check)
+bun run free-tier                  # check the AWS Free Tier baseline; --aws asks EC2 too (not in check)
 bun run check                      # typecheck, test, lint:biome, lint, lint:cfn, lint:sh
 bun run ci                         # check, build, audit:dependencies
 bun run build                      # hermetic (CLI) + hermeticd, into dist/
@@ -303,6 +304,17 @@ reported as a failed scan, never as a clean tree, so "no advisories" always mean
 Waive an advisory only through `IGNORED_ADVISORIES` in that script, with the ID, the reason and an
 owner beside it. Because it needs the network, `bun run ci` on a laptop cannot be green offline;
 everything except this one step can.
+
+The AWS Free Tier baseline behind Settings › Defaults' *Set to AWS Free Tier…* button, its help
+drawer and the `free-tier` built-in preset is one object: `AWS_FREE_TIER` in
+`packages/core/src/shared/free-tier.ts`. AWS moves these terms (the July 2025 plan split, a Graviton
+trial extended a year at a time), so re-read the `sources` it lists, edit the object, bump
+`reviewed_on`, and run `bun run free-tier`. It fails when the machine no longer fits the allowances or
+the Arm trial has lapsed, and warns when the review is more than `review_after_days` old.
+`bun run free-tier --aws [--profile p] [--region r]` also runs `aws ec2 describe-instance-types` with
+the `free-tier-eligible` filter against your own account and compares the answer. That answer depends
+on your account's plan, so a legacy account and a Free plan account disagree. `tests/free-tier.test.ts`
+holds the invariants with a fixed date, so CI never starts failing on its own.
 
 Every remote GitHub Action is pinned to a full commit SHA with its release in the comment beside it,
 workflows default to `permissions: contents: read`, and `.github/dependabot.yml` proposes the pin

@@ -1,0 +1,476 @@
+[
+  {
+    "name": "raw: one value, one trailing newline trimmed",
+    "input": "FIXTURE-token-abc123\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-token-abc123" }],
+      "canonical": "API_TOKEN=\"FIXTURE-token-abc123\"\n"
+    }
+  },
+  {
+    "name": "raw: only one trailing newline is trimmed",
+    "input": "FIXTURE-token-abc123\n\n",
+    "mode": "raw",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-token-abc123\n" }],
+      "canonical": "API_TOKEN=\"FIXTURE-token-abc123\n\"\n",
+      "warnings": ["VALUE_WHITESPACE"]
+    }
+  },
+  {
+    "name": "dotenv: KEY=value",
+    "input": "API_TOKEN=FIXTURE-token-abc123\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-token-abc123" }],
+      "canonical": "API_TOKEN=\"FIXTURE-token-abc123\"\n"
+    }
+  },
+  {
+    "name": "dotenv: commented three keys with export, single and double quotes",
+    "input": "# Service credentials\n\nexport API_TOKEN=FIXTURE-token-one  # inline comment\nDB_PASSWORD='FIXTURE pass # not a comment \\n'\nWEBHOOK_SECRET=\"FIXTURE-line1\\nline2 \\\"quoted\\\" \\\\ end\"\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN", "DB_PASSWORD", "WEBHOOK_SECRET"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [
+        { "key": "API_TOKEN", "value": "FIXTURE-token-one" },
+        { "key": "DB_PASSWORD", "value": "FIXTURE pass # not a comment \\n" },
+        { "key": "WEBHOOK_SECRET", "value": "FIXTURE-line1\nline2 \"quoted\" \\ end" }
+      ],
+      "canonical": "API_TOKEN=\"FIXTURE-token-one\"\nDB_PASSWORD=\"FIXTURE pass # not a comment \\\\n\"\nWEBHOOK_SECRET=\"FIXTURE-line1\nline2 \\\"quoted\\\" \\\\ end\"\n"
+    }
+  },
+  {
+    "name": "dotenv: entries follow the spec's key order, not the paste's",
+    "input": "B_KEY=FIXTURE-b\nA_KEY=FIXTURE-a\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "A_KEY", "value": "FIXTURE-a" }, { "key": "B_KEY", "value": "FIXTURE-b" }],
+      "canonical": "A_KEY=\"FIXTURE-a\"\nB_KEY=\"FIXTURE-b\"\n"
+    }
+  },
+  {
+    "name": "raw: multi-line PEM keeps interior newlines",
+    "input": "-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTUREFIXTURE\nFIXTUREFIXTURE==\n-----END OPENSSH PRIVATE KEY-----\n",
+    "mode": "auto",
+    "keys": ["SSH_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [
+        {
+          "key": "SSH_KEY",
+          "value": "-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTUREFIXTURE\nFIXTUREFIXTURE==\n-----END OPENSSH PRIVATE KEY-----"
+        }
+      ],
+      "canonical": "SSH_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTUREFIXTURE\nFIXTUREFIXTURE==\n-----END OPENSSH PRIVATE KEY-----\"\n"
+    }
+  },
+  {
+    "name": "dotenv: PEM in a multi-line double-quoted value",
+    "input": "SSH_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTURE\n-----END OPENSSH PRIVATE KEY-----\"\n",
+    "mode": "auto",
+    "keys": ["SSH_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [
+        {
+          "key": "SSH_KEY",
+          "value": "-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTURE\n-----END OPENSSH PRIVATE KEY-----"
+        }
+      ],
+      "canonical": "SSH_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nFIXTUREFIXTURE\n-----END OPENSSH PRIVATE KEY-----\"\n"
+    }
+  },
+  {
+    "name": "raw by override: first line looks like OTHER_NAME=",
+    "input": "OTHER_NAME=FIXTURE-value\nsecond line\n",
+    "mode": "raw",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "OTHER_NAME=FIXTURE-value\nsecond line" }],
+      "canonical": "API_TOKEN=\"OTHER_NAME=FIXTURE-value\nsecond line\"\n",
+      "warnings": ["RAW_LOOKS_LIKE_OTHER_KEY"]
+    }
+  },
+  {
+    "name": "raw by override: value starts with the requested key itself",
+    "input": "API_TOKEN=FIXTURE-value\n",
+    "mode": "raw",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "API_TOKEN=FIXTURE-value" }],
+      "warnings": ["RAW_LOOKS_LIKE_ASSIGNMENT"]
+    }
+  },
+  {
+    "name": "auto, one key: mixed lines read as raw",
+    "input": "OTHER_NAME=FIXTURE-value\nnot an assignment\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "OTHER_NAME=FIXTURE-value\nnot an assignment" }],
+      "warnings": ["RAW_LOOKS_LIKE_OTHER_KEY"]
+    }
+  },
+  {
+    "name": "dotenv mode: mixed lines name the stray line",
+    "input": "A_KEY=FIXTURE-a\nB_KEY=FIXTURE-b\nnot an assignment\n",
+    "mode": "dotenv",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["NOT_DOTENV_LINE"] }
+  },
+  {
+    "name": "auto, two keys: mixed lines fall back to dotenv errors",
+    "input": "A_KEY=FIXTURE-a\nB_KEY=FIXTURE-b\nnot an assignment\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["NOT_DOTENV_LINE"] }
+  },
+  {
+    "name": "raw with a multi-key request",
+    "input": "FIXTURE-token\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "raw", "errors": ["RAW_NEEDS_ONE_KEY"] }
+  },
+  {
+    "name": "CRLF line endings",
+    "input": "A_KEY=FIXTURE-a\r\nB_KEY=\"FIXTURE-b1\r\nb2\"\r\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [
+        { "key": "A_KEY", "value": "FIXTURE-a" },
+        { "key": "B_KEY", "value": "FIXTURE-b1\nb2" }
+      ],
+      "canonical": "A_KEY=\"FIXTURE-a\"\nB_KEY=\"FIXTURE-b1\nb2\"\n"
+    }
+  },
+  {
+    "name": "lone CR line endings",
+    "input": "FIXTURE-line1\rline2\r",
+    "mode": "raw",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-line1\nline2" }]
+    }
+  },
+  {
+    "name": "leading BOM stripped",
+    "input": "\ufeffAPI_TOKEN=FIXTURE-token\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-token" }]
+    }
+  },
+  {
+    "name": "raw: base64 padding is not an assignment",
+    "input": "RklYVFVSRS1zZWNyZXQ=\n",
+    "mode": "auto",
+    "keys": ["KEY_B64"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "KEY_B64", "value": "RklYVFVSRS1zZWNyZXQ=" }]
+    }
+  },
+  {
+    "name": "raw: upper-case base64 with double padding",
+    "input": "FIXTUREABC==",
+    "mode": "auto",
+    "keys": ["KEY_B64"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "KEY_B64", "value": "FIXTUREABC==" }]
+    }
+  },
+  {
+    "name": "raw: equals signs inside a value",
+    "input": "FIXTURE+a/b=c==\n",
+    "mode": "auto",
+    "keys": ["KEY_B64"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "KEY_B64", "value": "FIXTURE+a/b=c==" }]
+    }
+  },
+  {
+    "name": "dotenv: equals signs inside an unquoted value",
+    "input": "KEY_B64=RklYVFVSRQ==\n",
+    "mode": "auto",
+    "keys": ["KEY_B64"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "KEY_B64", "value": "RklYVFVSRQ==" }]
+    }
+  },
+  {
+    "name": "dotenv: hash with no space before it is part of the value",
+    "input": "API_TOKEN=FIXTURE#token\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE#token" }]
+    }
+  },
+  {
+    "name": "dotenv: unknown escape kept literally, tab allowed",
+    "input": "API_TOKEN=\"FIXTURE\\tx\ty\"\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE\\tx\ty" }],
+      "canonical": "API_TOKEN=\"FIXTURE\\\\tx\ty\"\n"
+    }
+  },
+  {
+    "name": "optional key absent",
+    "input": "A_KEY=FIXTURE-a\n# B_KEY is optional\n",
+    "mode": "auto",
+    "keys": ["A_KEY"],
+    "optional_keys": ["B_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "A_KEY", "value": "FIXTURE-a" }]
+    }
+  },
+  {
+    "name": "optional key present",
+    "input": "B_KEY=FIXTURE-b\nA_KEY=FIXTURE-a\n",
+    "mode": "auto",
+    "keys": ["A_KEY"],
+    "optional_keys": ["B_KEY"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "A_KEY", "value": "FIXTURE-a" }, { "key": "B_KEY", "value": "FIXTURE-b" }]
+    }
+  },
+  {
+    "name": "NUL in a value",
+    "input": "API_TOKEN=FIXTURE\u0000x\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["CONTROL_CHARACTER"] }
+  },
+  {
+    "name": "escape character in a raw value",
+    "input": "FIXTURE\u001b[0m\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "raw", "errors": ["CONTROL_CHARACTER"] }
+  },
+  {
+    "name": "unrequested key blocked",
+    "input": "API_TOKEN=FIXTURE-a\nEXTRA_KEY=FIXTURE-b\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["UNREQUESTED_KEY"] }
+  },
+  {
+    "name": "required key missing",
+    "input": "A_KEY=FIXTURE-a\n",
+    "mode": "dotenv",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["MISSING_KEY"] }
+  },
+  {
+    "name": "duplicate key",
+    "input": "API_TOKEN=FIXTURE-a\nAPI_TOKEN=FIXTURE-b\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["DUPLICATE_KEY"] }
+  },
+  {
+    "name": "empty unquoted value",
+    "input": "API_TOKEN=\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["EMPTY_VALUE"] }
+  },
+  {
+    "name": "empty quoted value",
+    "input": "A_KEY=\"\"\nB_KEY=FIXTURE-b\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["EMPTY_VALUE"] }
+  },
+  {
+    "name": "whitespace-only input",
+    "input": " \n\t\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": null, "errors": ["EMPTY_INPUT"] }
+  },
+  {
+    "name": "bad key name in dotenv mode",
+    "input": "MY-KEY=FIXTURE\n",
+    "mode": "dotenv",
+    "keys": ["MY_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["BAD_KEY_NAME", "MISSING_KEY"] }
+  },
+  {
+    "name": "unterminated double quote",
+    "input": "A_KEY=\"FIXTURE-a\nB_KEY=FIXTURE-b\n",
+    "mode": "auto",
+    "keys": ["A_KEY", "B_KEY"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["UNTERMINATED_QUOTE", "MISSING_KEY"] }
+  },
+  {
+    "name": "unterminated single quote",
+    "input": "API_TOKEN='FIXTURE-a\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["UNTERMINATED_QUOTE"] }
+  },
+  {
+    "name": "text after a closing quote",
+    "input": "API_TOKEN=\"FIXTURE-a\" trailing\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": false, "format": "dotenv", "errors": ["UNEXPECTED_TEXT"] }
+  },
+  {
+    "name": "warn: placeholder value",
+    "input": "API_TOKEN=changeme\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "changeme" }],
+      "warnings": ["PLACEHOLDER_VALUE"]
+    }
+  },
+  {
+    "name": "warn: angle-bracket placeholder",
+    "input": "<token>\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": { "ok": true, "format": "raw", "warnings": ["PLACEHOLDER_VALUE"] }
+  },
+  {
+    "name": "warn: whitespace trimmed from an unquoted value",
+    "input": "API_TOKEN=  FIXTURE-a   # comment\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-a" }],
+      "warnings": ["VALUE_WHITESPACE"]
+    }
+  },
+  {
+    "name": "warn: lower-case key (and it is not the requested one)",
+    "input": "# creds\napi_token=FIXTURE-a\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": false,
+      "format": "dotenv",
+      "errors": ["UNREQUESTED_KEY", "MISSING_KEY"],
+      "warnings": ["LOWERCASE_KEY"]
+    }
+  },
+  {
+    "name": "warn: Anthropic-shaped token under a GitHub key",
+    "input": "GITHUB_TOKEN=sk-ant-FIXTURE-0000\n",
+    "mode": "auto",
+    "keys": ["GITHUB_TOKEN"],
+    "expect": { "ok": true, "format": "dotenv", "warnings": ["TOKEN_SHAPE_MISMATCH"] }
+  },
+  {
+    "name": "no warning: GitHub-shaped token under a GH key",
+    "input": "ghp_FIXTURE00000000000000000000000000000\n",
+    "mode": "auto",
+    "keys": ["GH_TOKEN"],
+    "expect": { "ok": true, "format": "raw" }
+  },
+  {
+    "name": "sh-hostile raw value: dollar, command substitution, backticks",
+    "input": "FIXTURE-$(touch /tmp/pwned)-`id`-${HOME}-$1\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-$(touch /tmp/pwned)-`id`-${HOME}-$1" }],
+      "canonical": "API_TOKEN=\"FIXTURE-\\$(touch /tmp/pwned)-\\`id\\`-\\${HOME}-\\$1\"\n"
+    }
+  },
+  {
+    "name": "dotenv double quotes take sh's dollar and backtick escapes",
+    "input": "API_TOKEN=\"FIXTURE-\\$HOME-\\`x\\`-$raw\"\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "dotenv",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-$HOME-`x`-$raw" }],
+      "canonical": "API_TOKEN=\"FIXTURE-\\$HOME-\\`x\\`-\\$raw\"\n"
+    }
+  },
+  {
+    "name": "raw value ending in a backslash",
+    "input": "FIXTURE-trailing\\",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-trailing\\" }],
+      "canonical": "API_TOKEN=\"FIXTURE-trailing\\\\\"\n"
+    }
+  },
+  {
+    "name": "raw value with both quote kinds",
+    "input": "FIXTURE-'single'-\"double\"\n",
+    "mode": "auto",
+    "keys": ["API_TOKEN"],
+    "expect": {
+      "ok": true,
+      "format": "raw",
+      "entries": [{ "key": "API_TOKEN", "value": "FIXTURE-'single'-\"double\"" }],
+      "canonical": "API_TOKEN=\"FIXTURE-'single'-\\\"double\\\"\"\n"
+    }
+  }
+]

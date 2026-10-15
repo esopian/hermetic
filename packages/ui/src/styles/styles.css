@@ -309,6 +309,23 @@ button:focus-visible,
   color: var(--acc-fg);
 }
 
+/* A fleet row's open file requests (§8.6): `▣ n`, in --warn because it needs you. */
+.tag-freq {
+  font: 700 10px / 1.2 var(--mono);
+  padding: 1px 5px;
+  border: 1px solid var(--warn);
+  color: var(--text-warn, var(--warn));
+  white-space: nowrap;
+}
+/* The bell's file-request rows: the same square glyph, in --warn. */
+.nt-freq-icon {
+  border-color: var(--warn);
+  color: var(--text-warn, var(--warn));
+}
+.nt-freq-dot {
+  background: var(--warn);
+}
+
 /**
  * §6.6's foundation pill, shaped like `.tag-new` but in the warn colour: it is
  * an advisory on the env strip, not a status of the fleet. A button, because it

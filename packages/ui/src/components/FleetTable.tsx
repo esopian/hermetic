@@ -1,6 +1,7 @@
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
 import { FleetChatButton } from "../chat/components/FleetChatButton.tsx";
 import { ListenButton, ListeningMark } from "./ListenButton.tsx";
+import { FileRequestBadge } from "./agent/FileRequestBadge.tsx";
 /** The dense layout: one 56px row per agent, scrolling horizontally on its own. */
 import type { AgentView, VolumeView } from "../api/index.ts";
 import { currentStageLabel } from "../logic/bootstrap.ts";
@@ -171,6 +172,7 @@ export function FleetTable({
                 <span className="nm">{a.name}</span>
                 <ListeningMark instance={a.name} />
                 <FleetChatButton instance={a.name} />
+                <FileRequestBadge agent={a.name} />
                 {fresh.has(a.name) ? <span className="tag-new">NEW</span> : null}
               </span>
               <StatusLabel status={a.display_status} sub={currentStageLabel(a) ?? lastSeenLabel(a)} />

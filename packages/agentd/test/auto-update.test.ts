@@ -157,6 +157,29 @@ describe("autoUpdate: one backstop check", () => {
     expect(host.restarted).toEqual(["hermeticd.service"]);
   });
 
+  test("every manifest fetched reaches onManifest — off, on, and a full update alike", async () => {
+    const { deps, publish } = rig(release(NEW_BINARY, false));
+    const seen: string[] = [];
+    const watched = {
+      ...deps,
+      onManifest: (fleet: FleetManifest) => void seen.push(fleet.hermeticd.version),
+    };
+    expect(await autoUpdate(watched)).toBe("off");
+    expect(seen).toEqual(["0.2.0"]);
+
+    // A listener that throws costs the listener, never the update.
+    publish(release(BINARY, true));
+    const throwing = {
+      ...deps,
+      onManifest: () => {
+        throw new Error("listener failed");
+      },
+    };
+    await update(throwing);
+    expect(await autoUpdate({ ...watched })).not.toBe("off");
+    expect(seen).toEqual(["0.2.0", "0.1.0"]);
+  });
+
   test("auto-update off: the manifest is read and nothing else happens", async () => {
     const { host, deps, events, keysFetched, appended } = rig(release(NEW_BINARY, false));
 

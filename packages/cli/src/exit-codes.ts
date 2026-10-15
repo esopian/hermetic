@@ -136,11 +136,30 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   TAILSCALE_STOPPED: 9,
   TAILSCALE_WRONG_TAILNET: 9,
   TERMINAL_LIMIT: 7,
+  /**
+   * The files service's refusals. A bad name is a bad name, like
+   * `NAME_INVALID`; a missing entry is a `NOT_FOUND`; refusing a secret's
+   * bytes is a `FORBIDDEN`. A cap, type or slot-state refusal is a conflict
+   * with what the box will accept, like `LOCKED`. A full disk is the
+   * environment, and a digest mismatch is a transfer that went wrong.
+   */
+  FILE_NAME_INVALID: 5,
+  FILE_NOT_FOUND: 6,
+  FILE_SECRET_FORBIDDEN: 4,
+  FILE_TOO_LARGE: 7,
+  FILE_TYPE_REJECTED: 7,
+  FILE_REQUEST_FULFILLED: 7,
+  FILE_REQUEST_CLOSED: 7,
+  FILE_REQUEST_EXPIRED: 7,
+  FILE_LOOKS_SECRET: 7,
+  DISK_FULL: 9,
+  FILE_DIGEST_MISMATCH: EXIT_FAILURE,
   UNSUPPORTED: 10,
   /** The stack update itself failed or rolled back: a plain failure (§6.6 step 3). */
   FOUNDATION_UPDATE_FAILED: EXIT_FAILURE,
   /** The re-network's change set failed the same way, and is the same kind of failure (§5). */
   NETWORK_UPDATE_FAILED: EXIT_FAILURE,
+  SNAPSHOTS_UPDATE_FAILED: EXIT_FAILURE,
   ABORTED: EXIT_ABORTED,
   INTERNAL: EXIT_FAILURE,
 } as const;

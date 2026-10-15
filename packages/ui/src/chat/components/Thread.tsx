@@ -47,6 +47,8 @@ import { RowBoundary } from "./RowBoundary.tsx";
 import { Message } from "./Message.tsx";
 import { SubagentScope } from "./blocks/SubagentModal.tsx";
 import { useChatIfAvailable } from "../chat-state.tsx";
+import type { SentAttachment } from "../chat-attachments.ts";
+import { useFileDrop } from "./AttachTray.tsx";
 
 /** The avatar status for a thread, read off the fleet row rather than guessed. */
 function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status"] {
@@ -406,7 +408,7 @@ export function Thread({
   /** Ask a terminated watch back. Absent means this surface cannot, so it does not offer to. */
   onResumeObservation?: () => void;
   tailnetDetail?: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: readonly SentAttachment[]) => unknown;
   onAbort: () => void;
   actions?: ReactNode;
   /**
@@ -449,7 +451,13 @@ export function Thread({
   // calls that started them. One rendering, with no viewer switch: every event
   // row keeps its output collapsed, and a failure is already drawn in red.
   const items = threadItems(rows);
-  const subagents = useChatIfAvailable()?.subagents ?? null;
+  const scoped = useChatIfAvailable();
+  const subagents = scoped?.subagents ?? null;
+  // This pane's own drop target: a dock pane is its own scope, so a file
+  // dropped here lands on this conversation and no other.
+  // Only into a composer that can send: the same gate as its ⊕ (`Composer`).
+  const composer = composerState(state, destination);
+  const drop = useFileDrop(scoped?.selection ? scoped.attachments : null, instance, composer.enabled);
   const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
   // Refused DMs a later call already sent again, and the ones Retry was asked
   // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
@@ -463,7 +471,6 @@ export function Thread({
   // One predicate for the header badge and the composer band: an empty
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
-  const composer = composerState(state, destination);
   const status = faceStatus(agent);
   const processContext = {
     fleetId,
@@ -535,11 +542,11 @@ export function Thread({
 
   // Sending is the reader asking to be at the live end: their own message and
   // the reply to it land at the bottom even if they had scrolled up to quote.
-  const send = (text: string) => {
+  const send = (text: string, attachments?: readonly SentAttachment[]) => {
     pin.current.following = true;
     const node = log.current;
     if (node) pinToBottom(node, pin.current);
-    onSend(text);
+    return onSend(text, attachments);
   };
   sendRef.current = send;
 
@@ -561,7 +568,8 @@ export function Thread({
         : "unknown";
 
   return (
-    <section className="ch-thread">
+    <section className="ch-thread" {...drop.handlers}>
+      {drop.overlay}
       <div className="ch-thead">
         <Face
           fleetId={fleetId}

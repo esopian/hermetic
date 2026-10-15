@@ -2,7 +2,8 @@
  * The fixture's CloudFormation: the `foundation` port of `MemoryBackend`, split
  * out of `memory.ts` (AGENTS.md rule 5).
  */
-import type { NatHealth, NetworkMode } from "../schema/index.ts";
+import type { NatHealth, NetworkMode, SnapshotPolicy } from "../schema/index.ts";
+import { DEFAULT_SNAPSHOT_POLICY, snapshotParameterValues } from "../shared/snapshots.ts";
 import { stackNameFor, tablesFor } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import type { Backend, ChangeSetInfo, StackInfo, StackSummary, StackProgress } from "./types.ts";
@@ -115,7 +116,13 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
         // The parameters a real `CreateStack` was given (§5). `Network` is the
         // authoritative record of the mode — `_fleet.network` is the cache — so
         // the fixture has to carry it here, not only as a tag.
-        parameters: { FleetId: params.fleet_id, Network: params.network },
+        // The snapshot policy's three are not given at `init`; CloudFormation
+        // records their template defaults, and so does the fixture (§7.1).
+        parameters: {
+          FleetId: params.fleet_id,
+          Network: params.network,
+          ...snapshotParameterValues(DEFAULT_SNAPSHOT_POLICY),
+        },
         // The output set the real template emits (§5). The fleet manifest's
         // `resources` is built from these and every field is required, so a
         // fixture that emitted fewer would not be a fleet `init` could publish.
@@ -246,6 +253,27 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
       });
       return { name: params.name, id: `changeset-${params.name}` };
     },
+    /** §7.1's snapshot policy: staged per change set, applied at execute. */
+    createSnapshotChangeSet: async (params: {
+      name: string;
+      hermeticVersion: string;
+      policy: SnapshotPolicy;
+    }): Promise<{ name: string; id: string }> => {
+      if (!b.stack) {
+        throw new HermeticError("NOT_FOUND", "no foundation stack to update", {});
+      }
+      b.record("foundation.createSnapshotChangeSet");
+      b.changeSets.set(params.name, {
+        name: params.name,
+        id: `arn:aws:cloudformation:us-west-2:${b.accountId}:changeSet/${params.name}/fixture`,
+        status: b.changeSetStatus,
+        statusReason: b.changeSetStatusReason,
+        changes: structuredClone(b.changeSetChanges),
+      });
+      b.pendingHermeticVersion = params.hermeticVersion;
+      b.pendingSnapshots.set(params.name, { ...params.policy });
+      return { name: params.name, id: `changeset-${params.name}` };
+    },
     /** `fckNatAmiId = null` is a region with no image: the preflight refusal (§5). */
     resolveFckNatAmi: async (): Promise<string> => {
       b.record("foundation.resolveFckNatAmi");
@@ -323,6 +351,7 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
          */
         const pending = b.pendingNetwork.get(params.name) ?? null;
         const network = pending?.network ?? null;
+        const snapshots = b.pendingSnapshots.get(params.name) ?? null;
         b.stack = {
           ...b.stack,
           status: "UPDATE_COMPLETE",
@@ -332,7 +361,14 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
             ...(network ? { network } : {}),
           },
           parameters: {
+            /**
+             * Every change set runs this build's template, which declares the
+             * snapshot policy's parameters; one the stack never had lands at its
+             * default, as CloudFormation does on the update that adds it (§7.1).
+             */
+            ...snapshotParameterValues(DEFAULT_SNAPSHOT_POLICY),
             ...b.stack.parameters,
+            ...(snapshots ? snapshotParameterValues(snapshots) : {}),
             ...(network ? { Network: network } : {}),
             ...(pending?.fckNatAmiId ? { FckNatAmiId: pending.fckNatAmiId } : {}),
           },
@@ -355,6 +391,7 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
       // Whether or not there was a stack to move: an executed change set is
       // spent, and leaving its parameters armed would apply them to the next.
       b.pendingNetwork.delete(params.name);
+      b.pendingSnapshots.delete(params.name);
       return structuredClone(b.stack as StackInfo);
     },
     deleteChangeSet: async (name: string): Promise<void> => {
@@ -368,6 +405,7 @@ export function createMemoryFoundation(b: MemoryBackend): Backend["foundation"] 
        * to execute (§5).
        */
       b.pendingNetwork.delete(name);
+      b.pendingSnapshots.delete(name);
     },
   };
 }

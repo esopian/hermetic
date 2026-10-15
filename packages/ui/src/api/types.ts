@@ -107,6 +107,16 @@ export type NetworkAgentPlacement = NetworkReport["agents"][number];
 export type NetworkPlan = BridgeResult<"plan.network">;
 
 /**
+ * §7.1's data-volume snapshot policy: what the stack runs (`null` on a
+ * foundation from before it was configurable) and how many snapshots exist.
+ */
+export type SnapshotsReport = BridgeResult<"snapshots.status">;
+export type SnapshotPolicy = NonNullable<SnapshotsReport["policy"]>;
+/** `plan.snapshots()`'s response — a core `Plan` with `kind: "snapshots"`. */
+export type SnapshotsPlan = BridgeResult<"plan.snapshots">;
+export type PlanSnapshotsInput = Omit<BridgeInput<"plan.snapshots">, "target">;
+
+/**
  * §4.6's shared fleet settings, as `settings.get` answers them: what the fleet
  * has been told, whether `_fleet` actually carries it yet (`persisted: false`
  * means these are synthesized defaults nobody has written), and the static
