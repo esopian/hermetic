@@ -85,7 +85,7 @@ machine-wide — `~/.claude/settings.json` hooks, `~/.claude.json` MCP entries, 
 so the script passes the suppressing flag on every call, then warns if a machine-wide entry turns up
 regardless. If you want either tool globally, run its own installer yourself.
 
-Codex loads repo skills from `.agents/skills/`. Small `caveman` and `create-pr` entrypoints read
+Codex loads repo skills from `.agents/skills/`. Small `caveman`, `create-pr` and `release` entrypoints read
 the Claude workflows. Codex has a separate `orchestrator-mode` skill because subagent controls
 differ. The generated graft symlink, MCP config and rtk hook stay
 local to each checkout. Trust the project config and review the rtk hook with `/hooks` in Codex
@@ -400,6 +400,8 @@ Either one runs `scripts/app-stage.ts` first, as Electrobun's `preBuild` hook. T
 To check a bundle by hand, open `Hermetic.app/Contents/Resources/app/`: `bin/` holds the sidecars above, and `views/main/` holds the page — `index.html`, the emitted `index.js`, its stylesheet, and `fonts/`. The faces are vendored because the webview has no network behind `views://`; a `fonts.css` naming a file that is not there is the whole dashboard drawn in Helvetica.
 
 ## Cutting a release
+
+To have an agent walk you through it, ask for a release or run `/release` (`.claude/skills/release/`): it reads the changes since the last `v*` tag, recommends a major, minor or patch bump with the commits that decided it, drafts grouped release notes (operator actions such as `hermetic foundation update` included), and asks once before running the script below. `--auto` skips that confirmation; `--dry-run` stops after the plan.
 
 `bun run release` does steps 1–4 below: it refuses unless you are on a clean `master` in sync with `origin` and the tag is free locally and remotely, runs `bun run check`, bumps the version (`patch` by default; `minor`, `major` or an exact `x.y.z`), commits `chore: release v<version>`, asks before pushing, pushes the commit and tag in one `git push --atomic`, follows `release.yml` with `gh run watch`, and checks the published assets. `--dry-run` shows the plan and changes nothing; `--skip-check`, `--yes` and `--no-watch` skip the local check, the prompt and the watch. It needs `gh` authenticated unless `--no-watch` is given. The manual procedure, which the script follows:
 
