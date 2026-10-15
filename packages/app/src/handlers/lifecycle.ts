@@ -56,8 +56,9 @@ export async function init(ctx: HandlerContext, params: unknown): Promise<Accept
   // server reports "teardown in progress" — the specific reason — rather than
   // whichever side of `initialized` the reset happens to be on.
   requireWritable(state);
-  requireInitAllowed(state);
+  if (!state.initialized) requireInitAllowed(state);
   const input = parseInput(initSchema, params);
+  if (state.initialized) requireAddingInit(input);
   // §4.7 step 3: the twelve digits, typed. Core compares them against what STS
   // resolved, but a client that never sends them must not get as far as
   // starting the op.
@@ -69,6 +70,25 @@ export async function init(ctx: HandlerContext, params: unknown): Promise<Accept
     );
   }
   return await startInit(state, ops, input, opts.log);
+}
+
+/**
+ * §4.8: with a fleet open, `init` from the dashboard adds a fleet beside it and
+ * does nothing else. Re-targeting the home is `hermetic init --reset` (§4.6),
+ * and attaching to a fleet frozen elsewhere is `hermetic init --attach --fleet`
+ * — both stay in the terminal, where the operator names exactly what they mean.
+ */
+function requireAddingInit(input: InitInput): void {
+  const mode = input.mode ?? (input.create ? "create" : undefined);
+  const refused =
+    input.reset === true
+      ? "re-targeting this home is `hermetic init --reset`"
+      : input.attach === true || mode === "attach" || input.fleet !== undefined
+        ? "attaching a fleet frozen elsewhere is `hermetic init --attach --fleet <id>`"
+        : mode !== "create"
+          ? 'with a fleet open, the dashboard only creates a new fleet; send mode: "create"'
+          : null;
+  if (refused !== null) throw new HermeticError("CONFLICT", refused);
 }
 
 export async function teardown(ctx: HandlerContext, params: unknown): Promise<Accepted> {

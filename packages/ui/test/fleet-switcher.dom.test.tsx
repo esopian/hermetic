@@ -116,7 +116,7 @@ const FLEETS = {
       update_available: false,
       updated_at: "2026-09-01T00:00:00.000Z",
     },
-    /* Torn down: a history entry, not a destination. */
+    /* Torn down: a history entry, not a destination, so not drawn at all. */
     {
       name: "zorro",
       fleet_id: "zor00001",
@@ -133,6 +133,9 @@ const FLEETS = {
     },
   ],
 };
+
+/** Every row but the torn-down one: the switcher does not draw history (`visibleFleets`). */
+const VISIBLE_ROWS = FLEETS.fleets.filter((f) => f.status !== "torn_down").length;
 
 function routes(over: Record<string, unknown> = {}) {
   return {
@@ -153,6 +156,10 @@ function Strip() {
 }
 function Host() {
   return withNav(<Strip />);
+}
+function NewFleetStrip({ onNewFleet }: { onNewFleet: () => void }) {
+  const fleet = useFleet();
+  return <EnvStrip meta={fleet.meta} connected={fleet.connected} onNewFleet={onNewFleet} />;
 }
 
 /** What the env strip's fleet button reads — the one place the open fleet is named. */
@@ -194,7 +201,7 @@ async function openSwitcher(user: ReturnType<typeof userEvent.setup>): Promise<v
   // The trigger only says a fleet name once `meta.get` has answered.
   await waitFor(() => expect(headerFleet()).toBe("main"));
   await user.click(switcherButton());
-  await waitFor(() => expect(rows().length).toBe(FLEETS.fleets.length));
+  await waitFor(() => expect(rows().length).toBe(VISIBLE_ROWS));
 }
 
 describe("fleet switcher", () => {
@@ -285,12 +292,7 @@ describe("fleet switcher", () => {
     server = fakeServer(routes());
     const user = userEvent.setup();
     await openSwitcher(user);
-    const [mainRow, stagingRow, sandboxRow, zorroRow] = [
-      rowFor("main"),
-      rowFor("staging"),
-      rowFor("sandbox"),
-      rowFor("zorro"),
-    ];
+    const [mainRow, stagingRow, sandboxRow] = [rowFor("main"), rowFor("staging"), rowFor("sandbox")];
 
     // Current first (`sortFleets`), and it is the one marked as such.
     expect(mainRow?.className).toContain("current");
@@ -323,12 +325,23 @@ describe("fleet switcher", () => {
     // `fleets.use` would answer NOT_FOUND, so the row does not ask (`defaultable`).
     expect(sandbox.queryByRole("button", { name: "make default" })).toBeNull();
 
-    // A torn-down fleet is history: nothing to switch to, nothing to default to.
-    const zorro = within(zorroRow as HTMLElement);
-    expect(zorro.getByRole("button", { name: "Switch" }).hasAttribute("disabled")).toBe(true);
-    expect(zorroRow?.textContent).toContain("torn down");
-    expect(zorro.queryByRole("button", { name: "make default" })).toBeNull();
-    expect(zorroRow?.querySelector(".sq.muted")).not.toBeNull();
+    // A torn-down fleet is history the directory keeps and `fleet ls` prints;
+    // in a menu of places to go it is not drawn at all.
+    expect(rows().some((r) => r.textContent?.includes("zorro"))).toBe(false);
+  });
+
+  test("New fleet raises the wizard from the fleet menu, and closes the menu", async () => {
+    server = fakeServer(routes());
+    const user = userEvent.setup();
+    let raised = 0;
+    render(
+      <FleetProvider>{withNav(<NewFleetStrip onNewFleet={() => (raised += 1)} />)}</FleetProvider>,
+    );
+    await waitFor(() => expect(headerFleet()).toBe("main"));
+    await user.click(switcherButton());
+    await user.click(await screen.findByRole("button", { name: "+ New fleet" }));
+    expect(raised).toBe(1);
+    expect(screen.queryByRole("button", { name: "+ New fleet" })).toBeNull();
   });
 
   /**
@@ -500,7 +513,7 @@ describe("fleet switch · the whole page", () => {
     const volumeReads = server.to("volumes.list").length;
 
     await user.click(switcherButton());
-    await waitFor(() => expect(rows().length).toBe(FLEETS.fleets.length));
+    await waitFor(() => expect(rows().length).toBe(VISIBLE_ROWS));
     await user.click(within(rowFor("staging")).getByRole("button", { name: "Switch" }));
     await user.click(screen.getByRole("button", { name: "Switch target" }));
 
@@ -556,7 +569,7 @@ describe("fleet picker", () => {
     // The wizard is what this state used to get, and must not be what it gets.
     expect(document.querySelector(".wizard")).toBeNull();
 
-    await waitFor(() => expect(rows().length).toBe(FLEETS.fleets.length));
+    await waitFor(() => expect(rows().length).toBe(VISIBLE_ROWS));
     await user.click(within(rowFor("staging")).getByRole("button", { name: "Switch" }));
     // No current fleet, so the confirm has no `from` clause (`confirmSwitchText`).
     await screen.findByText("Switch to staging (us-west-2)?");

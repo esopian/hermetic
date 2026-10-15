@@ -66,7 +66,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createElement } from "react";
-import { createFixtureAccount, fleetTargetOf, openHermetic } from "@hermetic/core";
+import { createFixtureAccount, fleetTargetOf, openForInit, openHermetic } from "@hermetic/core";
 import type { FixtureOptions, FleetTarget, Hermetic } from "@hermetic/core";
 import { createChatOwner, type ChatOwner } from "../../../app/src/chat-owner.ts";
 import type { HandlerContext } from "../../../app/src/handlers/ctx.ts";
@@ -248,6 +248,8 @@ export async function flowHarness(options: FlowHarnessOptions = {}): Promise<Flo
       fleet === undefined
         ? Promise.resolve(hermetic)
         : openHermetic({ fixture: true, fixtureOptions, home, fleet }),
+    /** The fleet menu's "New fleet" (§4.8), over the same home and account, as `openState` wires it. */
+    openAddSession: () => openForInit({ fixture: true, fixtureOptions, home, adding: true }),
     hermetic,
     target: hermetic.target === null ? null : fleetTargetOf(hermetic.target),
     poller,
