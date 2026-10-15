@@ -10,7 +10,7 @@ import type { TurnActivity } from "./chat-activity.ts";
 import { latestContextReading, newerReading } from "./context-usage.ts";
 import type { ContextReading } from "./context-usage.ts";
 import type { SubagentControl, SubagentTrail, SubagentView } from "./chat-subagents.ts";
-import { STEER_PREFIX } from "./chat-recovery.ts";
+import type { DraftAttachment, SentAttachment } from "./chat-attachments.ts";
 
 export type Failure = { code: string; message: string };
 
@@ -36,34 +36,6 @@ function bodyOf(message: ChatMessageView): string {
     .map((block) => (block.kind === "text" ? block.markdown : ""))
     .join("")
     .trim();
-}
-
-/**
- * The optimistic copy of the operator's prompt, until the box echoes it back.
- * A steer's is marked (`STEER_PREFIX`), so a failed turn's Retry binds to the
- * prompt that started the turn rather than to words steered into it. `steered`
- * is set only on one the box took into the running turn (`redirected`).
- */
-export function localPrompt(
-  body: string,
-  at: string,
-  session: string | null,
-  steer = false,
-  steered = false,
-): ChatMessageView {
-  return {
-    id: `${steer ? STEER_PREFIX : "local:"}${at}`,
-    session: session ?? "",
-    role: "user",
-    author: null,
-    at,
-    blocks: [{ kind: "text", markdown: body }],
-    usage: null,
-    error: null,
-    incomplete: null,
-    // Drawn as the box's steer row will be, so the echo replaces it unchanged.
-    ...(steered ? { steered: true } : {}),
-  } as ChatMessageView;
 }
 
 /**
@@ -342,9 +314,20 @@ export type Assemble = (
   frame: ChatFrameView,
   seed: { session: string; at: string },
 ) => ChatMessageView | null;
+/** What started a turn, for its Retry: the text and the files that went with it. */
+export interface TurnPrompt {
+  text: string;
+  attachments: readonly SentAttachment[];
+}
+
 export interface Conversation {
   target: ChatSelection;
   draft: string;
+  /**
+   * The composer's pending files, beside `draft` and moving with it
+   * (`chat-attachments.ts`). Replaced, never mutated. In memory only.
+   */
+  attachments: readonly DraftAttachment[];
   sessions: SessionView[];
   sessionsState: "pending" | "ready" | "failed";
   sessionsError: string | null;
@@ -404,7 +387,7 @@ export interface Conversation {
   turnSeed: { session: string; at: string } | null;
   /**
    * Ids of the parts of the streaming turn's reply that were closed off when
-   * the operator steered it (`steer` in `chat-turn-actions.ts`). Each sits in
+   * the operator steered it (`steer` in `chat-conversations.ts`). Each sits in
    * `messages` above the steering prompt, and a later frame that updates one
    * of its blocks — a tool that was running when the prompt went in — lands on
    * it rather than starting a second copy in the live message below.
@@ -418,7 +401,7 @@ export interface Conversation {
    * row that carries one. The box's stored rows carry none, so a re-read never
    * clears it. It belongs to the conversation, not the session id: it survives
    * the first read naming a new conversation's session, and a rollover leaves
-   * it with the retired copy (`applySnapshot`, `chat-observe-apply.ts`). In memory only.
+   * it with the retired copy (`chat-observation.ts`). In memory only.
    */
   context: ContextReading | null;
   /**
@@ -441,7 +424,7 @@ export interface Conversation {
    * message's id: what its Retry sends, whatever was steered into it since.
    * Replaced, never mutated, like `released`.
    */
-  turnPrompts: ReadonlyMap<string, string>;
+  turnPrompts: ReadonlyMap<string, TurnPrompt>;
   /**
    * Re-run the streaming turn's no-frame timer, for a request settled outside
    * the frame stream. `null` when no turn of this browser's is streaming.
@@ -470,6 +453,7 @@ export function fresh(target: ChatSelection): Conversation {
   return {
     target,
     draft: "",
+    attachments: [],
     sessions: [],
     sessionsState: "pending",
     sessionsError: null,

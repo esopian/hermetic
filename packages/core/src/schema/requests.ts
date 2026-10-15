@@ -12,6 +12,8 @@ import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
 import { HermesLogFile } from "./rpc.ts";
 import { MAX_ROLLOUT_WAIT_MS } from "./foundation.ts";
+import { FileId } from "./files.ts";
+import { FILES_LIMITS, FILES_RETENTION_DAYS } from "../shared/files.ts";
 
 /**
  * The twelve digits of an AWS account id, typed back by the operator (§4.7 step
@@ -502,16 +504,39 @@ export const SettingsSetInput = z
      * fleet manifest, which is how the boxes hear about it.
      */
     auto_update_hermeticd: z.boolean().optional(),
+    /**
+     * Change the files service's fleet settings (`FleetSettings.files`), key
+     * by key onto what is stored. Bounded here, on the write: `max_bytes` at
+     * most `FILES_LIMITS.fileBytes`, `retention_days` within
+     * `FILES_RETENTION_DAYS`. Changing the effective values republishes the
+     * fleet manifest, as `auto_update_hermeticd` does.
+     */
+    files: z
+      .object({
+        require_cap: z.boolean().optional(),
+        max_bytes: z.number().int().positive().max(FILES_LIMITS.fileBytes).optional(),
+        retention_days: z
+          .number()
+          .int()
+          .min(FILES_RETENTION_DAYS.min)
+          .max(FILES_RETENTION_DAYS.max)
+          .optional(),
+      })
+      .refine((f) => Object.values(f).some((v) => v !== undefined), {
+        message: "name at least one of require_cap, max_bytes or retention_days",
+      })
+      .optional(),
   })
   .refine(
     (v) =>
       v.defaults !== undefined ||
       v.agent_defaults !== undefined ||
       v.default_profile !== undefined ||
-      v.auto_update_hermeticd !== undefined,
+      v.auto_update_hermeticd !== undefined ||
+      v.files !== undefined,
     {
       message:
-        "name at least one of defaults, agent_defaults, default_profile or auto_update_hermeticd",
+        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd or files",
     },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;
@@ -1051,23 +1076,46 @@ export type ChatHistoryInput = z.infer<typeof ChatHistoryInput>;
  * field nor the head that sent it. 200,000 characters is far past any message
  * a person types or a bot composes, so nothing legitimate meets it.
  */
-export const ChatSendInput = z.object({
-  instance: AgentName,
-  bot: BotName,
-  message: z.string().min(1).max(200_000),
-  /** Continue a session; omitted means the bot's canonical one. */
-  session: z.string().min(1).optional(),
-  new_session: z.boolean().optional(),
-  /**
-   * Ask the gateway to queue this message behind a turn already running in the
-   * conversation, instead of applying its busy-input mode — which defaults to
-   * interrupting the running turn and redirecting it with this text. Ignored
-   * when the conversation is idle: the message then runs at once, as without
-   * it. A head sets it when an observation's `busy` event says a turn it did
-   * not start is running.
-   */
-  queued: z.boolean().optional(),
-});
+export const ChatSendInput = z
+  .object({
+    instance: AgentName,
+    bot: BotName,
+    /** May be empty only when the turn carries attachments: their framing is then the whole prompt. */
+    message: z.string().max(200_000),
+    /** Continue a session; omitted means the bot's canonical one. */
+    session: z.string().min(1).optional(),
+    new_session: z.boolean().optional(),
+    /**
+     * Ask the gateway to queue this message behind a turn already running in the
+     * conversation, instead of applying its busy-input mode — which defaults to
+     * interrupting the running turn and redirecting it with this text. Ignored
+     * when the conversation is idle: the message then runs at once, as without
+     * it. A head sets it when an observation's `busy` event says a turn it did
+     * not start is running.
+     */
+    queued: z.boolean().optional(),
+    /**
+     * Files already staged on the box (`files.stage`), by id, to commit and hand
+     * to this turn. Ids only — bytes never travel in a chat request.
+     */
+    attachments: z
+      .array(z.object({ file_id: FileId }))
+      .max(FILES_LIMITS.attachmentsPerTurn)
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    const ids = (input.attachments ?? []).map((a) => a.file_id);
+    if (input.message.length === 0 && ids.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["message"],
+        message: "a turn needs a message or an attachment",
+      });
+    }
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: "custom", path: ["attachments"], message: "a file is attached twice" });
+    }
+  });
 export type ChatSendInput = z.infer<typeof ChatSendInput>;
 
 export const ChatOpenInput = z.object({

@@ -41,14 +41,18 @@ export interface FixtureChatStack {
 /** The pacing knobs a head may set on the fixture adapter (`OpenOptions.fixtureOptions`). */
 export type FixtureChatPacing = Pick<FixtureChatOptions, "delayMs" | "cutAfter">;
 
+/** What the stack takes from the fixture backend, beside the pacing. */
+export type FixtureChatBackend = Pick<FixtureChatOptions, "files">;
+
 export function createFixtureChatStack(
   fixture: boolean,
   pacing: FixtureChatPacing = {},
+  backend: FixtureChatBackend = {},
 ): FixtureChatStack {
   if (!fixture) return { hermes: null, controls: null };
   const activity = createFixtureChatActivity();
   return {
-    hermes: withFixtureBotMode(fixtureChatClient({ activity, ...pacing }), { activity }),
+    hermes: withFixtureBotMode(fixtureChatClient({ activity, ...pacing, ...backend }), { activity }),
     controls: createFixtureControls({ fixture: true, activity }),
   };
 }

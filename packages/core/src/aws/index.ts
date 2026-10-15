@@ -16,6 +16,7 @@ import { createDynamoStores } from "./dynamo.ts";
 import { Ec2Compute, probeNat, type NetworkRefs } from "./ec2.ts";
 import { AwsIdentity } from "./identity.ts";
 import { HermeticdRpc } from "./rpc.ts";
+import { HermeticdFiles } from "./files-http.ts";
 import { S3Artifacts } from "./s3.ts";
 import { SsmSecrets } from "./ssm.ts";
 import { TailscaleClient } from "./tailscale.ts";
@@ -346,6 +347,7 @@ export function createAwsBackend(opts: AwsBackendOptions): AwsBackend {
       foundationVersion: async () => (await stores.fleet.get())?.foundation_version ?? null,
     }),
     rpc: new HermeticdRpc(stores.agents),
+    files: new HermeticdFiles(stores.agents),
     directory: createDynamoDirectory({
       client: directoryFactory.client(DynamoDBClient),
       region: directoryRegion,

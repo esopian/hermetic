@@ -751,3 +751,25 @@
   letter-spacing: 0;
   font-size: 12px;
 }
+
+/* Attachments: the chips take the skin's lighter hairline and paper, the same
+   softening the input gets; the drop overlay keeps its dashed rule. */
+[data-skin="soft"] .ch-file {
+  background: var(--bg);
+  border-color: var(--line);
+}
+[data-skin="soft"] .ch-file.error {
+  border-color: var(--bad);
+}
+[data-skin="soft"] .ch-attach-btn {
+  height: auto;
+  min-height: 50px;
+  border-color: var(--line2);
+}
+[data-skin="soft"] .ch-drop {
+  border-color: var(--line2);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+[data-skin="soft"] .ch-drop.off {
+  border-color: var(--warn);
+}

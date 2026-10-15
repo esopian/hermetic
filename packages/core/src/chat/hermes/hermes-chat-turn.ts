@@ -22,6 +22,19 @@ import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-ch
 import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
+import { attachToTurn, detachQueued } from "./hermes-chat-attach.ts";
+import {
+  turnFileRequests,
+  type FileRequestLookupDeps,
+  type TurnFileRequests,
+} from "./hermes-chat-file-requests.ts";
+import {
+  createMediaHold,
+  outboxOnce,
+  shareChip,
+  type ListOutbox,
+  type MediaPiece,
+} from "./hermes-chat-media.ts";
 import type { SessionLease, SessionSockets } from "./hermes-chat-session-socket.ts";
 import { isSubagentEvent } from "./hermes-chat-subagent.ts";
 import {
@@ -31,7 +44,7 @@ import {
 } from "./hermes-chat-subagent-ledgers.ts";
 import { HERMETIC_SESSION_SOURCE, describe, num, rec, scaleSeconds, str } from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
-import type { ChatBlock, ChatFrame, ChatStatusState } from "../../schema/index.ts";
+import type { ChatBlock, ChatFrame, ChatStatusState, FileEntry } from "../../schema/index.ts";
 
 /**
  * `prompt.submit`'s reply, mapped onto a status the transcript can show.
@@ -95,6 +108,18 @@ export interface ChatTurnDeps {
    * Absent gives this turn factory a private set.
    */
   subagents?: SubagentLedgers | undefined;
+  /**
+   * The box's files request slots, read to give a running `request_file` /
+   * `request_secret` card the slot it opened. Absent, such a card waits for
+   * the result to name its slot.
+   */
+  fileRequests?: FileRequestLookupDeps | undefined;
+  /**
+   * The box's outbox listing, read at most once per turn to describe the
+   * chip a `MEDIA:` outbox line becomes (`hermes-chat-media.ts`). Absent, the
+   * chip carries `bytes: 0` and no digest.
+   */
+  listOutbox?: ListOutbox | undefined;
   /**
    * The client's held session sockets (`hermes-chat-session-socket.ts`): a
    * conversation keeps one socket across turns, so the gateway never reaps the
@@ -217,8 +242,12 @@ export function createChatTurn(deps: ChatTurnDeps) {
     const rpc: Rpc = lease.rpc;
 
     let active: { runtime: string; stored: string | null } | null = null;
+    /** Images this turn queued on the session; taken back unless the prompt was accepted. */
+    const queued = new Set<string>();
+    let accepted = false;
     let pump: TurnPump | null = null;
     let delegation: ReturnType<typeof subagentTurn> | null = null;
+    let requests: TurnFileRequests | null = null;
     // Whether the box may be running this turn, and whether a frame has said
     // it is over: between the two, a turn that stops being read owes the box a
     // `session.interrupt` (see `stopBox`).
@@ -296,6 +325,20 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // session's sequence *as it was when the turn started*: a baseline taken
       // after the first events had arrived would skip them on a reconnect, and
       // one taken at zero would replay the previous turn as this one.
+      // Committed, framed and queued before the cursor is taken: nothing here
+      // writes an event to the session, and everything here can fail.
+      const prompt = opts.attachments?.ids.length
+        ? await attachToTurn({
+            rpc,
+            instance: box.instance,
+            session,
+            commitSession: stored ?? session,
+            attachments: opts.attachments,
+            message: text,
+            signal: opts.signal,
+            queued,
+          })
+        : text;
       pump = continuation.pump({ rpc, box, bot, session });
       const baseline = await pump.probe(opts.signal);
       // Checked here rather than left to the request: on a gateway that cannot
@@ -311,7 +354,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // default); an idle session ignores it (`tui_gateway/methods_prompt.py`,
       // `session_auto_continue.py`). Sent only when asked for, so a plain send
       // is byte-for-byte what it always was.
-      const params = { session_id: session, profile: bot, text };
+      const params = { session_id: session, profile: bot, text: prompt };
       let submittedRaw: unknown;
       try {
         submittedRaw = await rpc.request(
@@ -334,6 +377,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         });
       }
       const submitted = rec(submittedRaw);
+      accepted = true;
       // Everything the socket delivered before this point — `gateway.ready`,
       // `session.info` — arrived because the socket opened, not because a turn
       // started. The snapshot is what lets the deadline below distinguish "the
@@ -346,6 +390,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // which of the three happened rather than a flat "queued" that is wrong
       // two times in three.
       yield status(message, submitState(str(submitted?.status)));
+      requests = turnFileRequests(deps.fileRequests, {
+        box,
+        sessions: [session, stored],
+        signal: opts.signal,
+      });
       for await (const frame of stream(
         rpc,
         pump,
@@ -356,6 +405,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
         arrivedAtSubmit,
         baseline,
         delegation,
+        requests,
+        outboxOnce(deps.listOutbox, box.instance, opts.signal),
       )) {
         if (frame.type === "done" || frame.type === "error") ended = true;
         yield frame;
@@ -374,7 +425,21 @@ export function createChatTurn(deps: ChatTurnDeps) {
     } finally {
       // A consumer that stopped reading before the turn's last frame.
       await stopBox();
+      // Before the socket is released: upstream keeps a session's image queue
+      // across an interrupt, so an image left there rides along with the next
+      // prompt. The held socket outlives a stop, but it may have died with the
+      // turn, so the detach may need a connection of its own (`detachQueued`).
+      if (!accepted && active && queued.size > 0) {
+        await detachQueued({
+          rpc,
+          live: true,
+          reconnect: (signal) => deps.connect(box, signal),
+          session: active.runtime,
+          paths: [...queued],
+        });
+      }
       delegation?.close();
+      requests?.close();
       if (active) {
         const entries = activeTurns.get(key);
         entries?.delete(active);
@@ -411,12 +476,20 @@ export function createChatTurn(deps: ChatTurnDeps) {
     arrivedAtSubmit: number,
     baseline: number,
     delegation: ReturnType<typeof subagentTurn>,
+    requests: TurnFileRequests,
+    outbox: (refresh?: boolean) => Promise<readonly FileEntry[] | null>,
   ): AsyncIterable<ChatFrame> {
     let reasoning = "";
     let reasoningTokens: number | null = null;
     let reasoningMs: number | null = null;
     let textOpen = false;
     let delivered = "";
+    // The paragraph being streamed, with its `MEDIA:` lines held back until it
+    // ends (`hermes-chat-media.ts`).
+    const media = createMediaHold();
+    // Whether the outbox listing was read for an earlier settle, and so may
+    // predate a share the plugin made since (`emitPieces`).
+    let listedEarlier = false;
     let seenContent = false;
     // The session's sequence when the prompt was submitted, not zero: the
     // dedupe below is also the filter that keeps a replay of *this* turn from
@@ -441,8 +514,14 @@ export function createChatTurn(deps: ChatTurnDeps) {
       yield { type: "block", seq, message, block };
     }
 
-    function* flushReasoning(seq: number): Generator<ChatFrame> {
+    /**
+     * The buffered reasoning, as one block. That block closes the open
+     * paragraph, so the paragraph first lets go of what it held: otherwise
+     * the held tail would land below the reasoning that followed it.
+     */
+    async function* flushReasoning(seq: number): AsyncGenerator<ChatFrame> {
       if (!reasoning) return;
+      yield* flushMedia(seq, "cut");
       yield {
         type: "block",
         seq,
@@ -501,6 +580,53 @@ export function createChatTurn(deps: ChatTurnDeps) {
     }
 
     /**
+     * Held text and outbox shares, in order: text appended as deltas, each
+     * share as an `attachment` block described from the turn's outbox read
+     * (`shareChip`: none for a share the listing answered without). A listing
+     * read for an earlier settle may predate this one's shares, so a miss
+     * against it reads the outbox once more before the chip is dropped.
+     */
+    async function* emitPieces(seq: number, pieces: readonly MediaPiece[]): AsyncGenerator<ChatFrame> {
+      let stale = listedEarlier;
+      for (const piece of pieces) {
+        if (piece.kind === "text") {
+          if (!piece.text) continue;
+          yield* openText(seq);
+          yield { type: "delta", seq, message, text: piece.text };
+          continue;
+        }
+        // A stopped turn does not wait on the box to describe a chip.
+        if (signal?.aborted) {
+          const chip = shareChip(piece, null);
+          if (chip) yield* emit(seq, chip);
+          continue;
+        }
+        let listed = await outbox();
+        listedEarlier = true;
+        if (stale && listed && !listed.some((e) => e.id === piece.share_id)) {
+          listed = await outbox(true);
+          stale = false;
+        }
+        const chip = shareChip(piece, listed);
+        if (chip) yield* emit(seq, chip);
+      }
+    }
+
+    /**
+     * A paragraph that ended without a final lets go of what it held, read the
+     * same way a transcript is. Called before anything that closes the
+     * paragraph. `end` (the default) when the message is over — a tool call, a
+     * request, an interim message or the turn's end came next; `cut` when a
+     * block inside the same message closed it (reasoning, a subagent's event,
+     * an unknown event), so the message's final still settles against every
+     * word it already showed and never repeats one.
+     */
+    async function* flushMedia(seq: number, how: "end" | "cut" = "end"): AsyncGenerator<ChatFrame> {
+      const pieces = how === "cut" ? media.cut() : media.end();
+      if (pieces.length > 0) yield* emitPieces(seq, pieces);
+    }
+
+    /**
      * Tell the box to stop.
      *
      * Called on every path that abandons a turn, not just on an operator's
@@ -515,10 +641,22 @@ export function createChatTurn(deps: ChatTurnDeps) {
       await pump.interrupt().catch(() => null);
     }
 
+    let next: ReturnType<TurnPump["next"]> | null = null;
     for (;;) {
       // The deadline only guards the wait for the *first* content frame. After
       // that a silence is a tool thinking, and thirty seconds is nothing.
-      const step = await pump.next(signal, seenContent ? null : deadlineMs);
+      next ??= pump.next(signal, seenContent ? null : deadlineMs);
+      // A request card's slot, found on the box while its tool still runs, is
+      // the same card again with its id — sent as it is found, not when the
+      // next event happens to arrive. Not through `emit`: it updates a card
+      // already drawn, so it must not close the open paragraph.
+      const raced = await requests.race(next);
+      if ("block" in raced) {
+        yield { type: "block", seq: lastSeq, message, block: raced.block };
+        continue;
+      }
+      next = null;
+      const step = raced.step;
 
       if (step.kind === "reconnecting" || step.kind === "reconnected" || step.kind === "lost") {
         // The reconnect, made visible. `lost` is said before the `done` that
@@ -534,6 +672,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // and throwing it away is throwing away the answer to "why did I stop
         // this".
         yield* flushReasoning(lastSeq);
+        // Likewise the words a `MEDIA:` line held back.
+        yield* flushMedia(lastSeq);
         // Incomplete rather than failed: `ChatMessage.incomplete` is documented
         // for exactly this — aborted, timed out, a reconnect that ran out of
         // attempts — and an operator who pressed stop did not encounter an error.
@@ -574,6 +714,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // A lost socket by itself no longer reaches here. Everything already
         // yielded stands; the turn is incomplete, not failed.
         yield* flushReasoning(lastSeq);
+        yield* flushMedia(lastSeq);
         yield { type: "done", seq: lastSeq, message, usage: null, incomplete: true };
         return;
       }
@@ -614,6 +755,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // turn that delegated all its work renders as nothing at all. So it is
         // kept whole, addressed, and left for a head to fold or ignore.
         seenContent = true;
+        // The block closes the open paragraph, so its held tail goes first.
+        yield* flushMedia(lastSeq, "cut");
         yield* emit(lastSeq, {
           kind: "unknown",
           name: "subagent",
@@ -646,6 +789,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       if (type === "hermetic.server_request") {
         seenContent = true;
         yield* flushReasoning(seq);
+        yield* flushMedia(seq);
         for (const block of hermesRequest(
           str(payload.method) ?? "request",
           str(payload.id) ?? "unknown",
@@ -693,16 +837,23 @@ export function createChatTurn(deps: ChatTurnDeps) {
         case "message.delta": {
           seenContent = true;
           yield* flushReasoning(seq);
-          yield* openText(seq);
           const t = str(payload.text) ?? "";
-          if (!t) break;
+          if (!t) {
+            yield* openText(seq);
+            break;
+          }
           delivered += t;
-          yield { type: "delta", seq, message, text: t };
+          // A `MEDIA:` line, and the rest of its paragraph, wait for the final.
+          const shown = media.push(t);
+          if (!shown) break;
+          yield* openText(seq);
+          yield { type: "delta", seq, message, text: shown };
           break;
         }
         case "message.interim": {
           seenContent = true;
           yield* flushReasoning(seq);
+          yield* flushMedia(seq);
           const text = str(payload.text);
           if (text && payload.already_streamed !== true)
             yield* emit(seq, { kind: "text", markdown: text });
@@ -758,7 +909,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
         }
         case "message.complete": {
           seenContent = true;
-          yield* flushReasoning(seq);
+          // Reasoning still buffered here arrived after this paragraph began
+          // streaming, when there is one, so it follows the paragraph's settled
+          // tail; otherwise it leads the answer, as it always does.
+          const streamed = media.raw() !== "";
+          if (!streamed) yield* flushReasoning(seq);
           const final = str(payload.text) ?? "";
           // Upstream coalesces deltas on a 33 ms timer and flushes the buffer
           // ahead of any non-streaming frame, so a short, fast answer can arrive
@@ -772,12 +927,22 @@ export function createChatTurn(deps: ChatTurnDeps) {
           // rewrapped markdown, a stripped trailing newline. A final text that
           // is shorter than, or simply different from, what the reader already
           // has is upstream restating it, and restating is not new content.
-          if (final.length > delivered.length && final.startsWith(delivered)) {
-            yield* openText(seq);
-            yield { type: "delta", seq, message, text: final.slice(delivered.length) };
-          }
+          const extension =
+            final.length > delivered.length && final.startsWith(delivered)
+              ? final.slice(delivered.length)
+              : "";
           const statusText = str(payload.status);
           const failure = str(payload.error);
+          // A plugin's `transform_llm_output` hook may rewrite the reply after
+          // it streamed — the files plugin turns `MEDIA:/abs/path` into an
+          // outbox line — and upstream then marks this text the authoritative
+          // replacement for the message (`prompt_turn.py`). It settles against
+          // everything the message already showed, so only the held tail and
+          // anything new is emitted: its outbox lines as chips, the rest as text.
+          const transformed =
+            payload.response_transformed === true && statusText !== "error" && !failure;
+          yield* emitPieces(seq, media.settle(transformed ? final : media.raw() + extension));
+          if (streamed) yield* flushReasoning(seq);
           if (statusText === "error" || failure) {
             // Upstream's classified surface rides beside the error text
             // (`prompt_turn.py`), so a head can offer the recovery that fits.
@@ -801,7 +966,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
         case "tool.complete": {
           seenContent = true;
           yield* flushReasoning(seq);
-          const tool = toolBlock(payload, type === "tool.start" ? "running" : null);
+          yield* flushMedia(seq);
+          const mapped = toolBlock(payload, type === "tool.start" ? "running" : null);
+          const tool = mapped.kind === "tool" ? requests.tool(mapped) : mapped;
           // A `delegate_task` call is what its children are matched against.
           delegation.tool(tool);
           yield* emit(seq, tool);
@@ -809,6 +976,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         }
         case "turn.error": {
           yield* flushReasoning(seq);
+          yield* flushMedia(seq);
           yield fail(
             str(payload.code) ?? CHAT_ERROR_CODES.TURN_FAILED,
             str(payload.message) ?? str(payload.error) ?? "the turn failed on the box",
@@ -823,6 +991,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
           // rather than being dropped on the floor.
           seenContent = true;
           yield* flushReasoning(seq);
+          yield* flushMedia(seq, "cut");
           yield* emit(seq, { kind: "unknown", name: type, payload });
           break;
         }

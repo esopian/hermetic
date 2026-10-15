@@ -17,6 +17,7 @@ import type { createPolicy } from "../fleet/policy.ts";
 import type { createNetwork } from "../fleet/network.ts";
 import type { createRollout } from "./rollout.ts";
 import type { createTeardown } from "../fleet/teardown.ts";
+import type { FilesInternal } from "../files/files.ts";
 
 export interface ApplyDeps {
   ctx: CoreContext;
@@ -29,11 +30,12 @@ export interface ApplyDeps {
   network: Pick<ReturnType<typeof createNetwork>, "apply">;
   rollout: Pick<ReturnType<typeof createRollout>, "run">;
   teardown: ReturnType<typeof createTeardown>["teardown"];
+  files: Pick<FilesInternal, "applyRm">;
 }
 
 export function createApply(deps: ApplyDeps) {
   const { requireConfig } = deps.ctx;
-  const { plans, destroy, recreate, foundation, policy, network, rollout, teardown } = deps;
+  const { plans, destroy, recreate, foundation, policy, network, rollout, teardown, files } = deps;
 
   /**
    * Execute a plan produced by `plan.*`. Core never asks "are you sure" (§3.2
@@ -163,6 +165,14 @@ export function createApply(deps: ApplyDeps) {
           },
           opts,
         );
+        return;
+      case "files-rm":
+        /**
+         * §9: one entry off an agent's box, and a durable secret's SSM slot.
+         * `applyRm` re-reads the box and refuses `PLAN_STALE` unless the entry
+         * is still the one the plan names — same id, same bytes, same slot.
+         */
+        yield* files.applyRm(plan, opts);
         return;
       case "teardown": {
         /**

@@ -62,7 +62,18 @@ export const AGENTD_STAGES = "packages/agentd/stages";
  * and it is the right trade: the alternative is two fingerprints that mean
  * almost the same thing, and a later reader picking the wrong one.
  */
-const FINGERPRINT_DIRS = ["packages/agentd/src", "packages/core/src/schema", "packages/agentd/stages"];
+const FINGERPRINT_DIRS = [
+  "packages/agentd/src",
+  "packages/core/src/schema",
+  // The other door agentd may use (`@hermetic/core/shared`), and what `schema`
+  // itself is built from: a shared-only edit — a route, a limit, a parser — is
+  // compiled into the binary, so it is a new release too.
+  "packages/core/src/shared",
+  "packages/agentd/stages",
+  // The Hermes plugin hermeticd embeds as text (agentd's `apply/plugins.ts`):
+  // compiled into the binary, so an edit to it is a new release.
+  "packages/agentd/plugins",
+];
 
 /**
  * Single files that change what `bun build --compile` emits without appearing
@@ -79,7 +90,14 @@ const FINGERPRINT_DIRS = ["packages/agentd/src", "packages/core/src/schema", "pa
  * somewhere without a lockfile still gets a usable fingerprint, just a coarser
  * one.
  */
-const FINGERPRINT_FILES = [".bun-version", "bun.lock", "packages/agentd/package.json"];
+const FINGERPRINT_FILES = [
+  ".bun-version",
+  "bun.lock",
+  "packages/agentd/package.json",
+  // The one core file outside `schema` and `shared` that both of them import
+  // (`HermeticError`), and so compiled into the binary with them.
+  "packages/core/src/errors.ts",
+];
 
 export interface HermeticdCandidate {
   path: string;
@@ -130,12 +148,16 @@ export function findRepoRoot(from: string = import.meta.dir): string | null {
 
 function walk(dir: string): string[] {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .sort()
-    .flatMap((entry) => {
-      const path = join(dir, entry);
-      return statSync(path).isDirectory() ? walk(path) : [path];
-    });
+  return (
+    readdirSync(dir)
+      .sort()
+      // Python's bytecode cache: written by running the plugin's tests, never shipped.
+      .filter((entry) => entry !== "__pycache__")
+      .flatMap((entry) => {
+        const path = join(dir, entry);
+        return statSync(path).isDirectory() ? walk(path) : [path];
+      })
+  );
 }
 
 /** Changes when anything the release is built from changes, or the version does. */

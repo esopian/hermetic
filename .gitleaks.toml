@@ -16,6 +16,10 @@
 # the fixture fleet's avatar seed key, the redaction tests' made-up token and
 # Bitwarden access token, and the account guard's fake AWS key id. Each is
 # anchored to the whole value, so nothing else slips through with it.
+#
+# One commit is excused whole: e32afb6 added `looksLikeKeyMaterial`'s tests,
+# whose PEM header strings on two adjacent lines read as one private key. The
+# lines now carry the marker; the commit, already pushed, cannot.
 title = "hermetic gitleaks config"
 
 [extend]
@@ -33,3 +37,4 @@ regexes = [
   '''^0\.4b1c2d3e-1111-2222-3333-444455556666\.YWJjZGVmZ2hpamts-bW5vcHFy_c3R1dnd4eXo=$''',
   '''^AKIAENVOVERRIDE0+$''',
 ]
+commits = ["e32afb6591cf94bb37e9db6eeca8b93ccca5dfbe"]

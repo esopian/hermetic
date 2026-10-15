@@ -51,9 +51,11 @@ import {
   requireKnownUnit,
 } from "./accounts.ts";
 import { ensureAgentVenv } from "./agent-python.ts";
+import { HERMES_PLUGIN_DIR, ensureHermesPlugin } from "./plugins.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { SECRETS_ENV_PATH, materialiseSecrets } from "./secrets.ts";
+import { materialiseAllFileSecrets, type FileSecretDeps } from "../files/secrets.ts";
 import { ensureShellIntegration } from "./shell.ts";
 
 /**
@@ -94,7 +96,13 @@ export {
   nodeDir,
   shasumFor,
 } from "./node-web.ts";
-export { SECRETS_ENV_DIR, SECRETS_ENV_PATH, envLine, materialiseSecrets } from "./secrets.ts";
+export {
+  SECRETS_ENV_DIR,
+  SECRETS_ENV_DIR_MODE,
+  SECRETS_ENV_PATH,
+  envLine,
+  materialiseSecrets,
+} from "./secrets.ts";
 export {
   BASHRC_PATH,
   SHELL_HOOK_LINE,
@@ -105,7 +113,18 @@ export {
   withShellHook,
 } from "./shell.ts";
 
-export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<ApplyResult> {
+/**
+ * What re-materialising the durable file secrets needs: the instance role's
+ * SSM client and this agent's own prefix. Absent means the caller has no AWS
+ * context (a test, or a box with no fleet cache), and the step is skipped —
+ * boot and the next apply put the files back.
+ */
+export type ApplyFileSecrets = Omit<FileSecretDeps, "host">;
+
+export async function apply(
+  manifest: AgentConfig,
+  opts: ApplyOptions & { readonly fileSecrets?: ApplyFileSecrets },
+): Promise<ApplyResult> {
   const { host } = opts;
   const emit = opts.emit ?? (() => {});
   const dry = opts.dryRun === true;
@@ -237,6 +256,12 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
   // After the account exists and after `ensureHermes`, which is what puts `uv`
   // on the box.
   await ensureAgentVenv(host, emit, dry);
+  // The hermetic-files plugin (`apply/plugins.ts`). Deliberately no restart
+  // when it changes: Hermes reads plugins at start, and a restart ends every
+  // live turn on the box. The first install arrives with the managed config
+  // that enables it, which restarts Hermes anyway; a later plugin edit is
+  // picked up at the next restart.
+  if (await ensureHermesPlugin(host, emit, dry)) result.changed.push(HERMES_PLUGIN_DIR);
 
   // ─── 3. files ──────────────────────────────────────────────────────────────
   emit(opEvent("files", 0.4, `checking ${manifest.files.length} rendered file(s)`, at()));
@@ -319,6 +344,30 @@ export async function apply(manifest: AgentConfig, opts: ApplyOptions): Promise<
     result.changed.push(SECRETS_ENV_PATH);
     result.contentChanged.push(SECRETS_ENV_PATH);
     rewritten.add(SECRETS_ENV_PATH);
+  }
+
+  // ─── 3c. Durable file secrets → /run/hermetic/files (tmpfs) ────────────────
+  /**
+   * Re-read from SSM on every apply, so a slot the operator added, changed or
+   * deleted since boot is reflected without one. **Best-effort**: a file secret
+   * is something the agent asked for mid-conversation, and an SSM hiccup over
+   * one must not fail the apply that configures the whole box. A failure is
+   * reported and the next apply (or boot) tries again. Nothing restarts over
+   * it — Hermes opens these by path when it needs them.
+   */
+  if (!dry && opts.fileSecrets) {
+    const { log, ...fileSecrets } = opts.fileSecrets;
+    const say =
+      (level: "info" | "warn") =>
+      (message: string): void =>
+        log ? log(message) : emit(opEvent("secrets", 0.58, message, at(), level));
+    try {
+      const placed = await materialiseAllFileSecrets({ host, ...fileSecrets, log: say("warn") });
+      if (placed.length > 0) say("info")(`${placed.length} durable file secret(s) on tmpfs`);
+    } catch (e) {
+      const code = e instanceof AgentdError ? e.code : e instanceof Error ? e.name : "error";
+      say("warn")(`durable file secrets were not refreshed: ${code}`);
+    }
   }
 
   // ─── 4. units ──────────────────────────────────────────────────────────────

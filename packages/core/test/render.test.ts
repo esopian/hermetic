@@ -258,9 +258,7 @@ describe("renderAgentConfig", () => {
     for (const out of [browserOn(), stated]) {
       const managed = fileAt(out, "/etc/hermes/config.yaml");
       expect(managed).toMatch(/^platform_hints:\n {2}hermetic:\n {4}replace: "/m);
-      expect(managed).toContain(
-        "MEDIA:/path tags are NOT intercepted here (they print as literal text)",
-      );
+      expect(managed).toContain("write a line containing only MEDIA:/absolute/path");
       const parsed = Bun.YAML.parse(managed) as {
         platform_hints?: { hermetic?: { replace?: unknown } };
       };

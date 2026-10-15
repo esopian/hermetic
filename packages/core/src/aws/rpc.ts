@@ -36,6 +36,25 @@ export interface HermeticdRpcOptions {
  */
 export const RPC_DEFAULT_TIMEOUT_MS = 5_000;
 
+/**
+ * `http://<tailscale ip>:7434` for one agent, or a typed refusal: no such row,
+ * or a row whose hermeticd has not yet reported its tailnet address. Shared by
+ * the RPC reader here and the files client (`files-http.ts`), which talk to the
+ * same listener.
+ */
+export async function hermeticdBase(agents: AgentStore, name: string, port?: number): Promise<string> {
+  const agent = await agents.get(name);
+  if (!agent) throw new HermeticError("NOT_FOUND", `no such agent: ${name}`, { name });
+  if (!agent.tailscale_ip) {
+    throw new HermeticError(
+      "CONFLICT",
+      `${name} has no tailscale address yet; hermeticd reports it on its first heartbeat`,
+      { name, status: agent.status },
+    );
+  }
+  return `http://${agent.tailscale_ip}:${port ?? HERMETICD_RPC_PORT}`;
+}
+
 export class HermeticdRpc implements RpcApi {
   constructor(
     private readonly agents: AgentStore,
@@ -47,16 +66,7 @@ export class HermeticdRpc implements RpcApi {
   }
 
   private async base(name: string): Promise<string> {
-    const agent = await this.agents.get(name);
-    if (!agent) throw new HermeticError("NOT_FOUND", `no such agent: ${name}`, { name });
-    if (!agent.tailscale_ip) {
-      throw new HermeticError(
-        "CONFLICT",
-        `${name} has no tailscale address yet; hermeticd reports it on its first heartbeat`,
-        { name, status: agent.status },
-      );
-    }
-    return `http://${agent.tailscale_ip}:${this.opts.port ?? HERMETICD_RPC_PORT}`;
+    return await hermeticdBase(this.agents, name, this.opts.port);
   }
 
   /**

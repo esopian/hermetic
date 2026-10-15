@@ -53,7 +53,16 @@ import type {
   SendOptions,
 } from "../../chat/hermes/hermes-chat.ts";
 import type { ChatObserveHint } from "../../chat/chat-observe.ts";
-import type { ChatFailure, ChatFrame, ChatMessage, Session, Swarm } from "../../schema/index.ts";
+import type {
+  ChatFailure,
+  ChatFrame,
+  ChatMessage,
+  FileRequest,
+  FilesCommitResult,
+  Session,
+  Swarm,
+} from "../../schema/index.ts";
+import { attachedUserBlocks, attachmentTurn } from "./fixture-chat-files.ts";
 import type { FixtureChatActivity } from "./fixture-chat-activity.ts";
 import {
   FIXTURE_CHAT_REPLY,
@@ -70,6 +79,13 @@ import {
   type FixtureChatRequests,
 } from "./fixture-chat-requests.ts";
 import { fixtureApprovalScript } from "./fixture-chat-approval.ts";
+import {
+  FIXTURE_FILE_REQUEST_PENDING_MS,
+  FIXTURE_FILE_REQUEST_WAIT_MS,
+  fixtureFileRequestScript,
+  type FixtureRequestFiles,
+} from "./fixture-chat-file-request.ts";
+import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
@@ -130,6 +146,15 @@ export interface FixtureChatOptions {
    * Absent means a registry of this client's own, which `respond` answers from.
    */
   requests?: FixtureChatRequests | undefined;
+  /**
+   * The fixture boxes' files service, where the `E2E_FILE_REQUEST*` and
+   * `E2E_*SECRET*` turns open their slots (`fixture-chat-file-request.ts`),
+   * and, when it can share, where the `E2E_FILE_SHARE` turn puts its files
+   * (`fixture-chat-file-share.ts`). Absent, those prompts are ordinary turns.
+   */
+  files?: (FixtureRequestFiles & Partial<FixtureShareFiles>) | undefined;
+  /** How long a request turn waits for the operator; the timeout trigger's wait. */
+  fileRequestWaitMs?: { open?: number | undefined; pending?: number | undefined } | undefined;
 }
 
 /**
@@ -305,6 +330,9 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   const activity = opts.activity;
   const cutAfter = opts.cutAfter ?? 0;
   const requests = opts.requests ?? createFixtureChatRequests();
+  /** The fixture boxes' files service, for the request turns. */
+  const files = opts.files;
+  const fileWaits = opts.fileRequestWaitMs ?? {};
   /** Delegated children: the `E2E_SUBAGENT*` triggers and child control. */
   const subagents = createFixtureSubagents({
     delayMs,
@@ -503,6 +531,27 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          */
         const id = `mx-fixture-live-${++turns}`;
         const session = opts.session ?? canonicalOf(instance, bot) ?? null;
+        /**
+         * The turn's attachments, committed into the fixture box's inbox the
+         * way the real adapter commits them: before anything else happens, so
+         * an unknown or expired id ends the turn with the box's own refusal and
+         * leaves no row behind.
+         */
+        const attached: FilesCommitResult[] = [];
+        if (opts.attachments && opts.attachments.ids.length > 0) {
+          try {
+            for (const fileId of opts.attachments.ids) {
+              attached.push(await opts.attachments.commit(fileId, session ?? "", opts.signal));
+            }
+          } catch (e) {
+            yield {
+              type: "error",
+              code: e instanceof HermeticError ? String(e.code) : CHAT_ERROR_CODES.PROTOCOL,
+              message: e instanceof Error ? e.message : String(e),
+            } as const;
+            return;
+          }
+        }
         const flying = inflight.get(flightKey(instance, bot)) ?? [];
         inflight.set(flightKey(instance, bot), flying);
         flying.push(session);
@@ -521,7 +570,10 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             session,
             role: "user",
             at: mint(),
-            blocks: [{ kind: "text", markdown: text }],
+            blocks:
+              attached.length > 0
+                ? attachedUserBlocks(text, attached)
+                : [{ kind: "text", markdown: text }],
           });
         }
         /**
@@ -538,7 +590,14 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const clarify = fixtureClarifyScript(text);
         const approval = fixtureApprovalScript(text);
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
-        const log = clarify || approval || failing ? [] : [...turn(id)];
+        const asking = files ? fixtureFileRequestScript(text) : null;
+        const sharing = files?.share ? fixtureFileShareScript(text) : null;
+        const log =
+          clarify || approval || failing || asking || sharing
+            ? []
+            : attached.length > 0
+              ? [...attachmentTurn(id, attached)]
+              : [...turn(id)];
         /** The fixture's stand-in for `session.events.since`: everything past a cursor. */
         const eventsSince = (lastSeen: number): SequencedFrame[] =>
           log.filter((frame) => frame.seq > lastSeen);
@@ -641,6 +700,44 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
             const outcome = await parked.settled;
             if (outcome.kind !== "aborted")
               yield* deliver(approval.resume(id, outcome, cursor, parked.request_id));
+            return;
+          }
+          /**
+           * A request turn (`fixture-chat-file-request.ts`): the slot opened on
+           * the fixture box for this turn's session, the running card naming
+           * it, then a park on the slot until it is answered, declined or
+           * expires — or, past the wait, a `pending` result with the slot left
+           * open for a late delivery.
+           */
+          if (asking && files) {
+            let slot: FileRequest;
+            try {
+              slot = files.openRequest(instance, asking.body, {
+                ...(session !== null ? { session_id: session } : {}),
+              });
+            } catch (e) {
+              yield* deliver(asking.refused(id, e instanceof Error ? e.message : String(e)));
+              return;
+            }
+            yield* deliver(asking.ask(id, slot.request_id));
+            const settled = await files.waitFor(instance, slot.request_id, {
+              ...(opts.signal ? { signal: opts.signal } : {}),
+              timeoutMs: asking.timeout
+                ? (fileWaits.pending ?? Math.max(FIXTURE_FILE_REQUEST_PENDING_MS, delayMs * 20))
+                : (fileWaits.open ?? FIXTURE_FILE_REQUEST_WAIT_MS),
+            });
+            if (opts.signal?.aborted) return;
+            yield* deliver(asking.resume(id, settled, cursor, instance));
+            return;
+          }
+          /**
+           * A share turn (`fixture-chat-file-share.ts`): two `share_file` cards
+           * whose files are put into the fixture box's outbox, and a reply whose
+           * `MEDIA:` outbox line becomes an attachment chip.
+           */
+          if (sharing && files?.share) {
+            const share = files.share.bind(files);
+            yield* deliver(sharing.frames(id, { share }, instance, session));
             return;
           }
           /**

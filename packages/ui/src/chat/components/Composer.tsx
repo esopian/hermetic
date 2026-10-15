@@ -29,7 +29,10 @@
  * has reported the window.
  */
 import { useChatIfAvailable } from "../chat-state.tsx";
-import { useContext, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { summarize } from "../chat-attachments.ts";
+import type { SentAttachment } from "../chat-attachments.ts";
+import { AttachTray, NO_FILES_COPY, attachSummary } from "./AttachTray.tsx";
 import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
@@ -84,7 +87,8 @@ export function Composer({
   /** A turn is running, this tab's (`sending`) or one the box reports. Enter queues while it is. */
   working?: boolean;
   where?: string | null;
-  onSend: (text: string) => void;
+  /** `false` when nothing was sent; the files then go back to the tray. */
+  onSend: (text: string, attachments?: readonly SentAttachment[]) => unknown;
   onAbort: () => void;
   mentions?: readonly MentionBot[];
   mentionHint?: string;
@@ -128,6 +132,21 @@ export function Composer({
    * running. Nothing is silently swallowed either way.
    */
   const queued = chat?.queued ?? [];
+  /**
+   * Pending files, on the conversation's record (`chat-attachments.ts`). A
+   * composer without a store, or without a conversation, attaches nothing.
+   */
+  const files = chat?.selection ? chat.attachments : null;
+  const items = files?.items ?? [];
+  const pending = summarize(items);
+  const noFiles = files?.capability === "no";
+  // Attaching stages files on the box, so it waits for a composer that can send.
+  const canAttach = files !== null && !noFiles && enabled && editable;
+  // Uploads finish before a send, and an error chip is removed first.
+  const filesBlock = pending.uploading > 0 || pending.failed > 0;
+  const hasContent = text.trim().length > 0 || pending.ready > 0;
+  const probe = files?.probe;
+  useEffect(() => probe?.(), [probe]);
   const respond = useContext(BotResponses);
   /** The store and the send callback as of the latest render, for code resuming after an await. */
   const latest = useRef({ chat, onSend });
@@ -205,17 +224,44 @@ export function Composer({
    */
   const submit = () => {
     const body = text.trim();
-    if (!enabled || body.length === 0) return;
+    if (!enabled || filesBlock || !hasContent) return;
+    if (working && !chat) return;
+    const sent = files?.take() ?? [];
     if (working) {
-      if (!chat) return;
       setText("");
-      chat.queueMessage(body);
+      chat?.queueMessage(body, sent);
       return;
     }
     // Nothing is running, so nothing is parked on a question: a card still
-    // drawn as open is stale, and a plain send leaves it alone.
+    // drawn as open is stale, and a plain send leaves it alone. The text
+    // leaves the input only once the send is taken; a refusal keeps both.
+    if (onSend(body, sent) === false) {
+      files?.restore(sent);
+      return;
+    }
     setText("");
-    onSend(body);
+  };
+
+  /**
+   * A message nothing took — a refused send-now — back where it was typed:
+   * the files to the tray, the words ahead of anything typed since. Into the
+   * conversation it came from, even if the operator has moved on.
+   */
+  const giveBack = (body: string, sent: readonly SentAttachment[]) => {
+    const target = chat?.selection ?? null;
+    files?.restore(sent);
+    const now = latest.current.chat;
+    if (!body || !now || !target) return;
+    const same =
+      now.selection !== null &&
+      now.selection.instance === target.instance &&
+      now.selection.bot === target.bot &&
+      now.selection.session === target.session;
+    if (!same) {
+      now.stageDraft(target, body);
+      return;
+    }
+    now.setDraft(now.draft.trim() ? `${body}\n\n${now.draft}` : body);
   };
 
   /**
@@ -225,21 +271,34 @@ export function Composer({
    */
   const submitNow = () => {
     const body = text.trim();
-    if (!canQueue || !chat || body.length === 0) {
+    if (!canQueue || !chat || !hasContent || filesBlock) {
       submit();
       return;
     }
+    const sent = files?.take() ?? [];
     setText("");
-    afterOpenQuestion(() => latest.current.chat?.sendNow(body), body);
+    // Nothing took it (`force` answers `false`): the words and files go back.
+    const settle = (taken: Promise<boolean> | undefined) =>
+      void taken?.then(
+        (ok) => {
+          if (!ok) giveBack(body, sent);
+        },
+        () => giveBack(body, sent),
+      );
+    // A message with files never steers: it waits at the head of the queue
+    // (`chat-queue.ts`), so there is no question to skip on its behalf.
+    if (sent.length > 0) settle(chat.sendNow(body, sent));
+    else afterOpenQuestion(() => settle(latest.current.chat?.sendNow(body)), body);
   };
 
   /**
    * A queued row back into the input, to be reworded and sent again. Ahead of
    * anything already typed there, so nothing the operator wrote is lost.
    */
-  const editQueued = (id: string, queuedText: string) => {
+  const editQueued = (id: string, queuedText: string, sent?: readonly SentAttachment[]) => {
     if (!chat) return;
     chat.unqueue(id);
+    if (sent && sent.length > 0) files?.restore(sent);
     const next = text.trim() ? `${queuedText}\n\n${text}` : queuedText;
     setText(next);
     const el = input.current;
@@ -308,12 +367,17 @@ export function Composer({
                     {/* One line, cut by the row's width rather than at a character count. */}
                     <RedactedText text={row.text.replace(/\s*\n+\s*/g, " ")} />
                   </span>
+                  {row.attachments?.length ? (
+                    <span className="ch-queue-files">
+                      {`${row.attachments.length} ${row.attachments.length === 1 ? "file" : "files"}`}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     className="ch-queue-act"
                     title="Edit — back into the input"
                     aria-label="Edit queued message"
-                    onClick={() => editQueued(row.id, row.text)}
+                    onClick={() => editQueued(row.id, row.text, row.attachments)}
                   >
                     <Icon d={["M16 3l5 5L8 21H3v-5z", "M13 6l5 5"]} />
                   </button>
@@ -322,14 +386,24 @@ export function Composer({
                     className="ch-queue-act"
                     title="Remove from the queue"
                     aria-label="Remove queued message"
-                    onClick={() => chat?.unqueue(row.id)}
+                    onClick={() => {
+                      chat?.unqueue(row.id);
+                      // Its files were staged for it alone: delete them on the box.
+                      if (row.attachments?.length) files?.discard(row.attachments);
+                    }}
                   >
                     <Icon d={["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"]} />
                   </button>
                   <button
                     type="button"
                     className="ch-queue-act"
-                    title={working ? "Send now, into the running turn" : "Send now"}
+                    title={
+                      working && row.attachments?.length
+                        ? "Files are never steered into a running turn — this goes first when it ends"
+                        : working
+                          ? "Send now, into the running turn"
+                          : "Send now"
+                    }
                     aria-label="Send queued message now"
                     // A queued row stays in its own conversation's queue if the
                     // selection moves, so there is nothing to stage.
@@ -350,6 +424,7 @@ export function Composer({
           running into the border. A label, so a press on the padding focuses
           the input natively; the textarea's own `aria-label` still names it.
         */}
+        {files ? <AttachTray files={files} /> : null}
         <label className="ch-input-box">
           <textarea
             ref={input}
@@ -365,9 +440,23 @@ export function Composer({
               picker.track(e.target);
             }}
             onSelect={(e) => picker.track(e.currentTarget)}
+            onPaste={(e) => {
+              // Files on the clipboard become attachments; a text paste is
+              // untouched, and so is a paste that is both (`isFilePaste`).
+              const data = e.clipboardData;
+              if (!files || !canAttach || !data || !isFilePaste(data)) return;
+              e.preventDefault();
+              files.addFiles(Array.from(data.files));
+            }}
             onKeyDown={(e) => {
               if (e.defaultPrevented || e.nativeEvent.isComposing) return;
               if (picker.onKeyDown(e)) return;
+              // ⌘⇧A opens the native file dialog for this conversation.
+              if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+                e.preventDefault();
+                if (canAttach) files?.pick();
+                return;
+              }
               // Enter sends — or queues, while the agent works — and Shift+Enter
               // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
               // when idle, past the queue when not.
@@ -389,20 +478,42 @@ export function Composer({
             }}
           />
         </label>
+        {files ? (
+          <button
+            type="button"
+            className="ch-attach-btn"
+            aria-label="Attach files"
+            disabled={!canAttach}
+            title={noFiles ? NO_FILES_COPY : "Attach files (⌘⇧A)"}
+            onClick={() => files.pick()}
+          >
+            ⊕
+          </button>
+        ) : null}
         <button
           type="button"
           className={[
             "ch-send",
-            label ? `label ${label.tone}` : "",
-            text.trim() && enabled ? "ready" : "",
+            label || pending.uploading > 0 ? `label ${label?.tone ?? ""}` : "",
+            hasContent && enabled && !filesBlock ? "ready" : "",
           ]
             .filter(Boolean)
             .join(" ")}
-          disabled={!enabled || text.trim().length === 0 || (working && !chat)}
-          title={canQueue ? "Queue (Enter)" : "Send (Enter or ⌘↵)"}
+          disabled={!enabled || !hasContent || filesBlock || (working && !chat)}
+          title={
+            pending.uploading > 0
+              ? "Send waits for uploads to finish"
+              : pending.failed > 0
+                ? "Remove the failed attachments to send"
+                : canQueue
+                  ? "Queue (Enter)"
+                  : "Send (Enter or ⌘↵)"
+          }
           onClick={submit}
         >
-          {label ? (
+          {pending.uploading > 0 ? (
+            "Send · uploading…"
+          ) : label ? (
             <>
               {label.label} <span className="k">↵</span>
             </>
@@ -423,6 +534,14 @@ export function Composer({
         <span>
           <span className="ch-kbd">Enter</span> send · <span className="ch-kbd">⇧ Enter</span> newline ·{" "}
           <span className="ch-kbd">Esc</span> stop
+          {canAttach ? (
+            <>
+              {" · "}
+              <span className="ch-kbd">⌘⇧A</span> attach · paste or drop files
+            </>
+          ) : noFiles ? (
+            ` · ${NO_FILES_COPY}`
+          ) : null}
           {canQueue ? (
             <>
               {" · Enter queues while the agent works · "}
@@ -431,6 +550,9 @@ export function Composer({
           ) : null}
         </span>
         <span className="right">
+          {items.length > 0 ? (
+            <span className="ch-attach-sum">{`${attachSummary(items)} · `}</span>
+          ) : null}
           {sending ? (
             "turn in flight"
           ) : remote ? (
@@ -468,6 +590,26 @@ export function Composer({
       </div>
     </div>
   );
+}
+
+/**
+ * Whether a paste is files rather than words. A copy from a spreadsheet or a
+ * web page carries an image of the selection alongside its text, and the text
+ * is what was meant; so files win only when there is no text — or when the
+ * text is just the files' own names, which is what Finder puts beside a
+ * copied file.
+ */
+export function isFilePaste(
+  data: Pick<DataTransfer, "files" | "getData"> & { types?: readonly string[] | DOMStringList },
+): boolean {
+  const pasted = Array.from(data.files ?? []);
+  if (pasted.length === 0) return false;
+  const types = Array.from(data.types ?? []);
+  if (types.includes("text/html") && data.getData("text/html").trim()) return false;
+  const text = data.getData("text/plain").trim();
+  if (!text) return true;
+  const names = new Set(pasted.map((f) => f.name));
+  return text.split(/\r?\n/).every((line) => names.has(line.trim()));
 }
 
 /** A 14px stroked glyph, drawn like the rest of the chat's inline icons. */

@@ -89,6 +89,7 @@ import { createChatSessions } from "./hermes-chat-sessions.ts";
 import { createSubagentControl } from "./hermes-chat-subagent-control.ts";
 import { createSubagentLedgers } from "./hermes-chat-subagent-ledgers.ts";
 import { createChatTurn } from "./hermes-chat-turn.ts";
+import { fileRequestLookup } from "./hermes-chat-file-requests.ts";
 import {
   createIdleBus,
   createSessionSockets,
@@ -109,6 +110,7 @@ export type {
   HistoryOptions,
   ObserveOptions,
   SendOptions,
+  TurnAttachments,
 } from "./hermes-chat-types.ts";
 export { createRequestPool, REQUEST_POOL_IDLE_MS } from "./hermes-chat-pool.ts";
 export type { RequestPool } from "./hermes-chat-pool.ts";
@@ -178,6 +180,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const history = createChatHistory({
     connection,
     conversation: canonical.conversation,
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const subagents = createSubagentLedgers({ now: deps.now });
   // Events on a conversation's idle held socket reach the observation through
@@ -199,6 +202,10 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     subagents,
     sockets,
     ...(deps.resumeTuning !== undefined ? { resumeTuning: deps.resumeTuning } : {}),
+    ...(deps.listFileRequests !== undefined
+      ? { fileRequests: fileRequestLookup(deps.listFileRequests, deps.now) }
+      : {}),
+    ...(deps.listOutbox !== undefined ? { listOutbox: deps.listOutbox } : {}),
   });
   const children = createSubagentControl({
     connect: connection.connect,

@@ -1,27 +1,27 @@
 /**
- * The `Chat` a dock pane sees: the provider's value, re-addressed to one
- * conversation so the pane reads and acts on it without moving the full view's
- * selection (`chat-target-scope.tsx`).
+ * One conversation's view of the chat store, for a dock pane or any frame that
+ * reads a thread other than the full view's selection (`TargetScopeContext`).
+ *
+ * The store-wide fields of `Chat` are the provider's own; everything about the
+ * conversation — its transcript, turn, queue, draft and observation — is read
+ * from `target`'s record, and every action is bound to `target`. Built per
+ * call, as it was inline in `ChatProvider`.
  */
-import type { Chat, ChatSelection } from "./chat-state.tsx";
 import type { useConversations } from "./chat-conversations.ts";
 import type { useSendQueue } from "./chat-queue.ts";
 import { targetDestination } from "./chat-target-destination.ts";
-
-export interface TargetChatDeps {
-  value: Chat;
-  conversations: ReturnType<typeof useConversations>;
-  queueForTarget: ReturnType<typeof useSendQueue>["forTarget"];
-}
+import type { Chat, ChatSelection } from "./chat-types.ts";
 
 export function chatForTarget(
-  { value, conversations, queueForTarget }: TargetChatDeps,
+  value: Chat,
+  conversations: ReturnType<typeof useConversations>,
+  queueFor: ReturnType<typeof useSendQueue>["forTarget"],
   target: ChatSelection,
   onSelect?: (target: ChatSelection) => void,
 ): Chat {
   const record = conversations.view(target);
   const { session, destination } = targetDestination(record, target);
-  const queue = queueForTarget(target);
+  const queue = queueFor(target);
   return {
     ...value,
     selection: target,
@@ -75,5 +75,6 @@ export function chatForTarget(
     sendQueuedNow: queue.sendQueuedNow,
     queueParked: queue.queueParked,
     subagents: conversations.subagents.forTarget(target),
+    attachments: conversations.attachments.forTarget(target),
   };
 }

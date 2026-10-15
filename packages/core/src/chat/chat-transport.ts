@@ -4,7 +4,7 @@
  * for it. Nothing here opens anything until a chat is sent.
  */
 import { createHermesChat } from "./hermes/hermes-chat.ts";
-import type { ChatFetch, ChatSocket, HermesChatClient } from "./hermes/hermes-chat.ts";
+import type { ChatFetch, ChatSocket, HermesChatClient, HermesChatDeps } from "./hermes/hermes-chat.ts";
 
 /* ── the runtime's own transport ──────────────────────────────────────────── */
 
@@ -22,12 +22,17 @@ import type { ChatFetch, ChatSocket, HermesChatClient } from "./hermes/hermes-ch
  * same whether or not a chat is ever sent — including in fixture mode, which
  * must not construct a live client of any kind.
  */
-export function defaultHermesChat(now: () => string): HermesChatClient {
+export function defaultHermesChat(
+  now: () => string,
+  opts: Pick<HermesChatDeps, "listFileRequests" | "listOutbox"> = {},
+): HermesChatClient {
   const http: ChatFetch = (input, init) => fetch(input, init);
   return createHermesChat({
     fetch: http,
     openSocket: runtimeSocket,
     now,
+    ...(opts.listFileRequests !== undefined ? { listFileRequests: opts.listFileRequests } : {}),
+    ...(opts.listOutbox !== undefined ? { listOutbox: opts.listOutbox } : {}),
   });
 }
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AccountId, FleetIdSchema, Iso, Region, Version } from "./common.ts";
+import { AccountId, FleetIdSchema, Iso, Region, Sha256, Version } from "./common.ts";
+import { FileClass, FileDir, FileEntryId } from "./files.ts";
 import { NetworkMode } from "./fleet.ts";
 
 /** One tick of a long operation's event stream (§3.2 rule 2). */
@@ -35,6 +36,8 @@ export const PlanKind = z.enum([
   "rollout",
   /** `plan.network`: move the fleet between `public` and `nat` egress (§5). */
   "network",
+  /** `files.rm`: one entry on an agent's box, and a durable secret's SSM slot (§9). */
+  "files-rm",
 ]);
 export type PlanKind = z.infer<typeof PlanKind>;
 
@@ -43,12 +46,34 @@ export type PlanKind = z.infer<typeof PlanKind>;
  * or one of its parts (`tailnet`, a stack, a `fleet_id`), which is not an agent
  * and must not be recorded as one on a run or its notification (§4.6/§4.9).
  */
-export const AGENT_PLAN_KINDS: readonly PlanKind[] = ["destroy", "create", "recreate", "upgrade"];
+export const AGENT_PLAN_KINDS: readonly PlanKind[] = [
+  "destroy",
+  "create",
+  "recreate",
+  "upgrade",
+  "files-rm",
+];
 
 /** The agent a plan is about, or null for a fleet-level plan. */
 export function planAgent(plan: { kind: PlanKind; target: string }): string | null {
   return AGENT_PLAN_KINDS.includes(plan.kind) ? plan.target : null;
 }
+
+/**
+ * What a `files-rm` plan was made for, carried as data (`PlanOptions.file`):
+ * `apply` re-reads the box and refuses `PLAN_STALE` when the entry is no
+ * longer this one, so the thing deleted is the thing that was shown. Never the
+ * file's name, which is only in the step the operator reads.
+ */
+export const FilesRmPlanFile = z.object({
+  id: FileEntryId,
+  dir: FileDir,
+  class: FileClass,
+  sha256: Sha256,
+  /** A durable secret's SSM slot (`file-<slug>`/`env-<slug>`), deleted after the entry. */
+  slot: z.string().min(1).max(128).optional(),
+});
+export type FilesRmPlanFile = z.infer<typeof FilesRmPlanFile>;
 
 export const PlanStep = z.object({
   id: z.string(),
@@ -115,6 +140,8 @@ export const PlanOptions = z.object({
    * own target from whatever the fleet happens to be when it runs.
    */
   network: NetworkMode.optional(),
+  /** `files.rm`: the entry the plan removes (`FilesRmPlanFile`). */
+  file: FilesRmPlanFile.optional(),
 });
 export type PlanOptions = z.infer<typeof PlanOptions>;
 

@@ -18,12 +18,15 @@
  * `desktop` are the two tabs the drawer had before the nav, spelled the same,
  * so a link written then still lands where it did. `terminal` (issue #18) sits
  * between Desktop and Logs: the two ways onto the box itself, side by side.
+ * `files` (attachments plan §8.6) follows them: what is on the box, and the
+ * requests waiting on the operator.
  */
 export const AGENT_TABS = [
   "overview",
   "chat",
   "desktop",
   "terminal",
+  "files",
   "logs",
   "config",
   "lifecycle",
@@ -37,6 +40,7 @@ export const AGENT_TAB_LABELS: Record<AgentTab, string> = {
   chat: "Chat",
   desktop: "Desktop",
   terminal: "Terminal",
+  files: "Files",
   logs: "Logs",
   config: "Config",
   lifecycle: "Lifecycle",
