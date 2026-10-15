@@ -74,6 +74,67 @@ export type { BotIdentity } from "./bot-handles.ts";
 export { PROVIDERS, PROVIDERS_LIST, PROVIDER_IDS, providerNeedsKey } from "./providers.ts";
 export type { Provider, ProviderSpec } from "./providers.ts";
 
+// --- External memory providers --------------------------------------------
+// The create drawer's picker, core's render and hermeticd's install step must
+// agree on the ids, the pins, the unit name and the paths on the data volume.
+export {
+  HONCHO_APT_PACKAGES,
+  HONCHO_DB_NAME,
+  HONCHO_DB_SOCKET_DIR,
+  HONCHO_PG_BIN,
+  HONCHO_PG_MAJOR,
+  HONCHO_PLUGIN_CONFIG_LINK,
+  MEMORY_DB_UNIT,
+  MEMORY_HONCHO_CAPABILITY,
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_LLM_KEY_ENVS,
+  MEMORY_NONE_SPEC,
+  MEMORY_PROVIDERS,
+  MEMORY_PROVIDERS_LIST,
+  MEMORY_PROVIDER_CAPABILITY,
+  MEMORY_PROVIDER_IDS,
+  MEMORY_PROVIDER_NONE,
+  MEMORY_RESOURCE_ESTIMATE_NOTE,
+  MEMORY_RESOURCE_FACT_KEYS,
+  MEMORY_SERVICES,
+  MEMORY_SERVICE_CAPABILITY,
+  MEMORY_SERVICE_CONF_DIR,
+  MEMORY_SERVICE_ROOT,
+  MEMORY_SERVICE_UNIT,
+  MEMORY_SERVICE_UNITS,
+  MEMORY_WORKER_UNIT,
+  PROVIDER_EMBEDDING_DIMENSION,
+  PROVIDER_EMBEDDING_MODEL,
+  PROVIDER_EMBEDDING_VENDORS,
+  hermesPluginDir,
+  honchoClientConfPath,
+  honchoEnvPath,
+  honchoPgDataDir,
+  honchoSrcDir,
+  honchoTiktokenDir,
+  isMemoryProvider,
+  memoryProviderIsService,
+  memoryResourceFacts,
+  memoryServiceDir,
+  OPENVIKING_DATA_DIRS,
+  openvikingConfPath,
+  openvikingDataDir,
+  memoryServiceOf,
+  providerEmbeddingModel,
+} from "./memory-providers.ts";
+export type {
+  MemoryLlmKeyEnv,
+  MemoryProvider,
+  MemoryProviderSpec,
+  MemoryResourceFact,
+  MemoryResourceFactKey,
+  MemoryResources,
+  MemoryServiceId,
+  MemoryServicePlugin,
+  MemoryServiceSource,
+  MemoryServiceSpec,
+} from "./memory-providers.ts";
+
 // --- Sizes and create presets (§7.1, §4.6) --------------------------------
 export { SIZE_IDS, isSizeId } from "./sizes.ts";
 export type { SizeId } from "./sizes.ts";

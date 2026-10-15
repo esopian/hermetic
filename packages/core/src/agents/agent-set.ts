@@ -1,10 +1,11 @@
 /**
- * `agents.set`: patch the row, stage a provider change (§8.3), and re-render so
- * the row's `config_key` names a tarball that matches it. Its own module with
+ * `agents.set`: patch the row, stage a provider change (§8.3), choose or change
+ * the Hermes memory provider (§6.2), and re-render so the row's `config_key`
+ * names a tarball that matches it. Its own module with
  * an explicit deps object (AGENTS.md rule 5): the shared guards, locks and
  * render come from `agent-runtime.ts`; the binding ports from `profile-apply.ts`.
  */
-import type { AgentView, HermesSettings, SetAgentInput } from "../schema/index.ts";
+import type { Agent, AgentView, HermesSettings, Provider, SetAgentInput } from "../schema/index.ts";
 import { SIZES, SetAgentInput as SetAgentInputSchema } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import { validateName } from "../shared/naming.ts";
@@ -19,11 +20,81 @@ import {
   type BindingPorts,
 } from "../profiles/profile-binding.ts";
 import type { CoreContext } from "../context.ts";
+import {
+  assertMemoryEmbeddingsKept,
+  assertMemoryLlm,
+  assertMemoryModel,
+  assertMemorySized,
+  memoryOf,
+  renderedMemoryModel,
+  statedMemoryProvider,
+} from "./lifecycle/memory-binding.ts";
+import type { MemoryProvider } from "../shared/memory-providers.ts";
 
 /** What `agents.set` needs beyond the shared context: the slots a binding reads (§8.3). */
 export interface SetDeps {
   ctx: CoreContext;
   bindingPorts: BindingPorts;
+}
+
+/**
+ * The vendor and model a patch moves the agent onto, or null when it moves
+ * neither: a staged binding is what lands at apply (`pending`), an unstaged
+ * model write is `hermes.model` on the agent's own vendor.
+ */
+function memoryModelAfter(
+  agent: Agent,
+  patch: Record<string, unknown>,
+): { provider: Provider; model: string } | null {
+  const pending = patch["pending"] as Agent["pending"] | undefined;
+  if (pending !== undefined && pending !== null) {
+    return { provider: pending.provider, model: pending.model };
+  }
+  const hermes = patch["hermes"] as HermesSettings | undefined;
+  if (hermes?.model !== undefined && hermes.model !== agent.hermes?.model) {
+    return { provider: agent.provider, model: hermes.model };
+  }
+  return null;
+}
+
+/**
+ * The memory provider the agent has after this call — the row's, or the one
+ * the call names — still has to be callable through the vendor and model the
+ * agent moves onto (`memory-binding.ts`).
+ *
+ * And an openviking store in use has to keep its embedding width — checked
+ * against the vendor the box runs now, whose embeddings the store holds. Only
+ * when openviking runs on both sides of the call: a switch onto it has no store
+ * of this agent's in use to strand, and a switch away from it leaves the store
+ * on the volume whichever way the vendor embeds.
+ */
+function assertMemoryBinding(
+  memory: { before: MemoryProvider | null; after: MemoryProvider | null },
+  agent: Agent,
+  next: { provider: Provider; model: string },
+): void {
+  assertMemoryLlm(memory.after, next.provider);
+  assertMemoryModel(memory.after, next.provider, next.model);
+  const kept = memory.before === memory.after ? memory.after : null;
+  assertMemoryEmbeddingsKept(kept, agent.provider, next.provider);
+}
+
+/**
+ * The `instance_type` override `assertMemorySized` skips on, for the agent as
+ * it stands after the call: the one the call states; else, when the size is
+ * left alone, the row's own type if an operator once named one that is not
+ * the size's (`CreateAgentInput.instance_type`, the same escape hatch create
+ * honours); else none — a stated size resets the type to the size's.
+ */
+function memorySizeOverride(agent: Agent, parsed: SetAgentInput): string | undefined {
+  if (parsed.instance_type !== undefined) return parsed.instance_type;
+  if (parsed.size !== undefined) return undefined;
+  return agent.instance_type !== SIZES[agent.size].instance_type ? agent.instance_type : undefined;
+}
+
+/** A memory provider as an operator reads it: `none` for built-in memory only. */
+function memoryLabel(provider: MemoryProvider | null): string {
+  return provider ?? "none";
 }
 
 export function createAgentSet(deps: SetDeps) {
@@ -69,6 +140,20 @@ export function createAgentSet(deps: SetDeps) {
         { name: agent.name, expected: parsed.expected_version, actual: agent.version },
       );
     }
+
+    /**
+     * §6.2: the memory provider the agent has after this call. A stated choice
+     * replaces the row's — `none` clears it — and an absent one leaves it; it
+     * never means the fleet default, which is read once, at create. Every
+     * memory check below asks about this provider, not the row's, so a call
+     * that moves the size and the provider together is judged on the pair it
+     * leaves behind.
+     */
+    const memoryBefore = agent.memory?.provider ?? null;
+    const statedMemory = statedMemoryProvider(parsed.memory_provider);
+    const memoryAfter = statedMemory === undefined ? memoryBefore : statedMemory;
+    const memoryChanged = memoryAfter !== memoryBefore;
+    const memory = { before: memoryBefore, after: memoryAfter };
 
     const patch: Record<string, unknown> = {};
     if (parsed.secrets !== undefined) patch["secrets_mode"] = parsed.secrets;
@@ -123,13 +208,16 @@ export function createAgentSet(deps: SetDeps) {
       }
       await assertProfileUsable(bindingPorts, profile);
       assertModelGranted(pending.provider, pending.model, fleet);
+      // Before the render `assertCanApply` makes, which would otherwise be
+      // the first to trip on a vendor the memory provider cannot use.
+      assertMemoryBinding(memory, agent, pending);
       /**
        * Asked here rather than only at apply: a binding onto a revision slot is
        * a document an older hermeticd refuses, and an operator who learns that
        * from `apply` has already been told `set` succeeded. Same refusal, same
        * code — `HERMETICD_UNAVAILABLE` — one command earlier.
        */
-      await assertCanApply(pendingApplied({ ...agent, pending }), fleet);
+      await assertCanApply(pendingApplied({ ...agent, pending, memory: memoryOf(memoryAfter) }), fleet);
       patch["pending"] = pending;
     } else if (parsed.model !== undefined) {
       const staged = agent.pending;
@@ -159,6 +247,36 @@ export function createAgentSet(deps: SetDeps) {
         patch["hermes"] = { ...hermesPatch, model: parsed.model };
       }
     }
+    /**
+     * The memory provider still has to fit and still has to be callable, after
+     * the change as at create (`memory-binding.ts`) — refused before the row is
+     * written, since a render that fails on it afterwards fails every rollout
+     * the fleet plans.
+     */
+    if (memoryChanged || parsed.size !== undefined || parsed.instance_type !== undefined) {
+      assertMemorySized(memoryAfter, parsed.size ?? agent.size, memorySizeOverride(agent, parsed));
+    }
+    const nextBinding = memoryModelAfter(agent, patch);
+    if (memoryChanged) {
+      /**
+       * A provider newly chosen is checked against every vendor and model the
+       * box will run it with: the row's own as this call leaves it (what the
+       * re-render below renders), and a staged binding's (what lands at apply).
+       * Not the openviking store question: with the provider changing, no
+       * openviking store is in use on both sides (`assertMemoryBinding`).
+       */
+      const hermes = (patch["hermes"] as HermesSettings | undefined) ?? agent.hermes;
+      const pending = (patch["pending"] as Agent["pending"] | undefined) ?? agent.pending;
+      assertMemoryBinding(memory, agent, {
+        provider: agent.provider,
+        model: renderedMemoryModel({ ...agent, hermes }),
+      });
+      if (pending !== null && pending !== undefined) {
+        assertMemoryBinding(memory, agent, pending);
+      }
+    } else if (nextBinding !== null) {
+      assertMemoryBinding(memory, agent, nextBinding);
+    }
     if (parsed.size !== undefined) {
       patch["size"] = parsed.size;
       patch["instance_type"] = parsed.instance_type ?? SIZES[parsed.size].instance_type;
@@ -169,8 +287,25 @@ export function createAgentSet(deps: SetDeps) {
     // a property of an instance, and the running one already has the disk it
     // booted with (§7.1). A `rerun` will not move it.
     if (parsed.root_gib !== undefined) patch["root_gib"] = parsed.root_gib;
+    if (memoryChanged) patch["memory"] = memoryOf(memoryAfter);
     if (Object.keys(patch).length === 0) {
+      // Naming the provider the agent already has is a no-op, not a mistake:
+      // nothing is written, re-rendered or logged.
+      if (statedMemory !== undefined) return view(agent, settings);
       throw new HermeticError("UNSUPPORTED", "nothing to set", { name: parsed.name });
+    }
+    if (memoryChanged) {
+      /**
+       * A fleet whose published hermeticd cannot run the provider is refused
+       * here, as create refuses it, rather than by the render `ensureConfig`
+       * makes after the row is written. Asked of the row as written and, with
+       * a binding staged, of the row as the apply will leave it.
+       */
+      const resulting = { ...agent, ...patch } as Agent;
+      await assertCanApply(resulting, fleet);
+      if (resulting.pending !== null && resulting.pending !== undefined) {
+        await assertCanApply(pendingApplied(resulting), fleet);
+      }
     }
 
     let next = await agents.update(agent.name, agent.version, patch);
@@ -195,10 +330,31 @@ export function createAgentSet(deps: SetDeps) {
     }
 
     const staged = describePending(next);
+    const others = Object.keys(patch)
+      .filter((k) => k !== "memory")
+      .sort();
+    /**
+     * A memory switch reaches a running box live, through the rollout every
+     * other config change can take (§6.2), and never deletes the old
+     * provider's data — said in the event, so the log shows where it went.
+     */
+    const changed = [
+      ...(others.length === 0 ? [] : [`${others.join(", ")} changed`]),
+      ...(memoryChanged ? [`memory ${memoryLabel(memoryBefore)} → ${memoryLabel(memoryAfter)}`] : []),
+    ];
+    const effects = [
+      ...(others.length === 0 ? [] : ["it takes effect on the next rerun or recreate"]),
+      ...(memoryChanged
+        ? [
+            "the memory switch takes effect live on `plan rollout` + `apply`" +
+              (memoryBefore === null ? "" : ` (${memoryBefore}'s data stays on the volume)`),
+          ]
+        : []),
+    ];
     await appendEvent(
       agent.name,
       "set",
-      `${Object.keys(patch).sort().join(", ")} changed; config ${rendered.config_hash} uploaded — it takes effect on the next rerun or recreate` +
+      `${changed.join("; ")}; config ${rendered.config_hash} uploaded — ${effects.join("; ")}` +
         (staged === null ? "" : `; staged for apply: ${staged}`),
     );
     return view(next, settings);

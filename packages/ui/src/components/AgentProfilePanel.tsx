@@ -13,11 +13,17 @@
  * An offline agent is not a failure case: the staged change simply waits, and
  * the banner says so instead of offering an apply that would have nothing to
  * talk to.
+ *
+ * The memory row has its own editor (`MemoryProviderEdit.tsx`): a memory
+ * switch is written straight onto the row, not staged, so it is confirmed and
+ * rolled out in one step rather than through the pending banner.
  */
-import { useState } from "react";
-import { ApiError, applyPlan, planRollout, setAgentProfile } from "../api/index.ts";
+import { useRef, useState } from "react";
+import { applyPlan, planRollout, setAgentProfile } from "../api/index.ts";
 import type { AgentView, RolloutPlan } from "../api/index.ts";
 import { isOff } from "../logic/format.ts";
+import { memoryLabel } from "../logic/memory-logic.ts";
+import { saveErrorMessage } from "../logic/set-errors.ts";
 import {
   credentialLine,
   pendingSummary,
@@ -30,22 +36,7 @@ import type { ProfilesState } from "../state/state.tsx";
 import { ModelPicker, useModelCatalog } from "./ModelPicker.tsx";
 import { PlanSkeleton } from "./Loading.tsx";
 import { CfgGroup, CfgRow, CfgRows, Dim } from "./agent/config-parts.tsx";
-
-/**
- * A failed save, in the operator's words.
- *
- * `CONFLICT` gets its own sentence because it is the one failure that is not
- * about this laptop: the row moved between the render this form was composed
- * against and the write, so retrying the same body would only lose the same
- * race again. Reloading is the fix, and saying so is the difference between an
- * error and an instruction.
- */
-function saveErrorMessage(e: unknown): string {
-  if (e instanceof ApiError && e.code === "CONFLICT") {
-    return `CONFLICT · this agent was changed by another operator — reload before saving again (${e.message})`;
-  }
-  return e instanceof Error ? e.message : String(e);
-}
+import { MemoryProviderEdit } from "./MemoryProviderEdit.tsx";
 
 export function AgentProfilePanel({
   agent,
@@ -81,6 +72,17 @@ export function AgentProfilePanel({
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<RolloutPlan | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [memoryEditing, setMemoryEditing] = useState(false);
+  /** What a memory switch on a stopped agent left to say: saved, not yet switched. */
+  const [memoryNote, setMemoryNote] = useState<string | null>(null);
+  const memoryButton = useRef<HTMLButtonElement>(null);
+
+  function closeMemory(note: string | null) {
+    setMemoryEditing(false);
+    if (note !== null) setMemoryNote(note);
+    // Back to the control that opened the editor, which renders again now.
+    queueMicrotask(() => memoryButton.current?.focus());
+  }
 
   const chosen = profileById(list, choice === "" ? (agent.profile_id ?? null) : choice);
   const catalog = useModelCatalog(
@@ -201,7 +203,47 @@ export function AgentProfilePanel({
         <CfgRow k="credential" className={credential.mono ? undefined : "cfg-prose"}>
           {credential.text}
         </CfgRow>
+        {/* Rendered into the managed config; changed here, rolled out like any other set. */}
+        <CfgRow
+          k="memory"
+          actions={
+            memoryEditing ? null : (
+              <button
+                ref={memoryButton}
+                type="button"
+                className="btn btn-secondary btn-mini"
+                aria-label="Change memory provider"
+                disabled={busy || saving}
+                onClick={() => {
+                  setMemoryNote(null);
+                  setMemoryEditing(true);
+                }}
+              >
+                Change
+              </button>
+            )
+          }
+        >
+          {agent.memory === null || agent.memory === undefined ? (
+            <Dim>Built-in only</Dim>
+          ) : (
+            <>
+              {memoryLabel(agent.memory.provider)}
+              <Dim> ({agent.memory.provider})</Dim>
+            </>
+          )}
+        </CfgRow>
       </CfgRows>
+
+      {memoryEditing ? (
+        <MemoryProviderEdit agent={agent} busy={busy} onRunOp={onRunOp} onClose={closeMemory} />
+      ) : null}
+
+      {memoryNote !== null && !memoryEditing ? (
+        <div className="name-hint memory-note" role="status">
+          {memoryNote}
+        </div>
+      ) : null}
 
       {updateAvailable && pending === null ? (
         <div className="name-hint" style={{ color: "var(--warn)" }}>

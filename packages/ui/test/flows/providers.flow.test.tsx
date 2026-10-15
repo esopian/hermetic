@@ -66,7 +66,7 @@ async function offersDefault(user: User, el: HTMLElement): Promise<boolean> {
 
 const BEDROCK = "bdr00004";
 const ANTHROPIC = "ant00001";
-const BEDROCK_AGENTS = "atlas, ember, fathom, granite, heron, ibis, juniper, lumen";
+const BEDROCK_AGENTS = "atlas, ember, fathom, granite, heron, juniper, lumen";
 
 test("creating a second Bedrock profile leaves the first one's agents on its card", async () => {
   harness = await flowHarness();

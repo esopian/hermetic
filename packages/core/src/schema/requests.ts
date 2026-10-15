@@ -7,6 +7,7 @@ import { Plan } from "./ops.ts";
 import { Provider, ROOT_GIB_MAX, ROOT_GIB_MIN, SecretsMode, Size } from "./agent.ts";
 import { ProfileName } from "./profile.ts";
 import { HermesHold, HermesSettings } from "./hermes.ts";
+import { MemoryProviderChoice, MemoryProviderId } from "./memory.ts";
 import { FLEET_KEY, FleetDefaults, NetworkMode } from "./fleet.ts";
 import { FleetName } from "./directory.ts";
 import { VolumeId } from "./volumes.ts";
@@ -117,6 +118,15 @@ export const CreateAgentInput = z
      * dashboard can change. The model of a profile-bound agent is held anyway.
      */
     hold: HermesHold.optional(),
+    /**
+     * The Hermes external memory provider this agent runs beside its built-in
+     * memory. Absent inherits `settings.default_memory_provider`; `none`
+     * overrides that to built-in only. A provider whose server the chosen size
+     * cannot hold is refused with `MEMORY_PROVIDER_UNDERSIZED`, and one whose
+     * model calls cannot use the agent's vendor with `MEMORY_LLM_UNSUPPORTED`,
+     * both before anything exists.
+     */
+    memory_provider: MemoryProviderChoice.optional(),
   })
   .refine((v) => v.volume_id === undefined || v.volume_gib === undefined, {
     message: "--volume takes the volume as it is; --volume-gib would have to resize it",
@@ -213,6 +223,21 @@ export const SetAgentInput = z.object({
    * every setting its operator stated until this is sent.
    */
   hold: HermesHold.optional(),
+  /**
+   * Choose or change the agent's Hermes external memory provider after create
+   * (§6.2): a provider id, or `none` for built-in memory only. Absent leaves the
+   * row's provider alone; it never means "the fleet default", which is read
+   * once, at create.
+   *
+   * Checked exactly as create checks it, against the size, vendor and model
+   * the agent has after this call: `MEMORY_PROVIDER_UNDERSIZED`,
+   * `MEMORY_LLM_UNSUPPORTED`. Switching away stops the old provider's services
+   * on the box but never deletes its data, so switching back finds it again
+   * (openviking's only while the agent's vendor embeds the same way, §6.2).
+   * Like every other `set`, it reaches a running box through `plan rollout` and
+   * `apply`.
+   */
+  memory_provider: MemoryProviderChoice.optional(),
 });
 export type SetAgentInput = z.infer<typeof SetAgentInput>;
 
@@ -505,6 +530,11 @@ export const SettingsSetInput = z
      */
     auto_update_hermeticd: z.boolean().optional(),
     /**
+     * The external memory provider a create with no `memory_provider`
+     * inherits. `null` clears it back to built-in memory only.
+     */
+    default_memory_provider: MemoryProviderId.nullable().optional(),
+    /**
      * Change the files service's fleet settings (`FleetSettings.files`), key
      * by key onto what is stored. Bounded here, on the write: `max_bytes` at
      * most `FILES_LIMITS.fileBytes`, `retention_days` within
@@ -533,10 +563,11 @@ export const SettingsSetInput = z
       v.agent_defaults !== undefined ||
       v.default_profile !== undefined ||
       v.auto_update_hermeticd !== undefined ||
+      v.default_memory_provider !== undefined ||
       v.files !== undefined,
     {
       message:
-        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd or files",
+        "name at least one of defaults, agent_defaults, default_profile, auto_update_hermeticd, default_memory_provider or files",
     },
   );
 export type SettingsSetInput = z.infer<typeof SettingsSetInput>;

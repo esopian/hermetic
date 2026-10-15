@@ -1,0 +1,270 @@
+/*
+ * Memory provider resource cards (`components/MemoryProviderCard.tsx`): a
+ * choice's summary, its resource chips, the estimates note and the size fit.
+ * Used under the create drawer's and the agent drawer's Memory selects
+ * (`.mem-card-attached`) and, by chip row alone, in Settings' radio list.
+ */
+.mem-card {
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg2);
+  min-width: 0;
+}
+/* Margins, not gap: an empty fit line must take no room, yet stay rendered (a live region). */
+.mem-card > * {
+  margin: 10px 0 0;
+}
+.mem-card > :first-child {
+  margin-top: 0;
+}
+/* Joined to the select above it: the select's own border is the top edge. */
+.mem-card-attached {
+  border-top: 0;
+}
+.mem-card-label {
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--fg);
+}
+.mem-card-sum {
+  color: var(--fg);
+}
+
+/* ── chips: wrap at any width, never scroll ───────────────────────────── */
+.mem-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.mem-chip {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+  color: var(--fg);
+  padding: 3px 7px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.mem-chip-k {
+  color: var(--fg3);
+}
+.mem-chips-compact .mem-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+.mem-est {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg3);
+}
+
+/* ── fit: an amber line with a left bar, and the size switch ─────────── */
+.mem-fit {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.mem-card > .mem-fit:not(.mem-fit-warn) {
+  margin-top: 0;
+}
+.mem-fit-warn {
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+  padding-left: 10px;
+}
+.mem-fit-msg {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mem-switch {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--acc);
+  text-decoration: underline;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mem-switch:hover {
+  color: var(--fg);
+}
+.mem-switch:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* The create drawer's "fleet default: <label>" beside the Memory label. */
+.cr-fh-r {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mem-fleetdef {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Settings › Defaults: the fleet-default radio list ──────────────────
+   One bordered list, rows split by 1px rules. The picked row carries the
+   accent edge (a staged or saved selection, ui-brief `--acc`); the saved
+   default is tagged. The radio is drawn here, never left to the engine. */
+.mem-def-acts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mem-def-acts .btn-mini {
+  height: 28px;
+}
+.mem-def-unknown {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--fg2);
+}
+.mem-def-unknown code {
+  font-family: var(--mono);
+  color: var(--fg);
+}
+.mem-opts {
+  border: 1px solid var(--line2);
+  margin: 0 0 10px;
+  min-width: 0;
+}
+.mem-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px 12px 11px;
+  border-left: 3px solid transparent;
+  min-width: 0;
+}
+.mem-opt + .mem-opt {
+  border-top: 1px solid var(--line);
+}
+.mem-opt.on {
+  border-left-color: var(--acc);
+  background: var(--bg2);
+}
+.mem-opt-main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  cursor: pointer;
+}
+.mem-radio {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 2px solid var(--fg3);
+  border-radius: 50%;
+  background: transparent;
+  display: grid;
+  place-content: center;
+  cursor: pointer;
+}
+.mem-radio::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+.mem-radio:checked {
+  border-color: var(--fg);
+}
+.mem-radio:checked::before {
+  background: var(--acc);
+}
+.mem-radio:focus {
+  outline: none;
+}
+/* The ring goes round the whole row, the hit area, not the 16px dot. */
+.mem-opt:has(.mem-radio:focus-visible) {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+/* An engine without :has rings the dot instead, so focus is never invisible. */
+@supports not selector(:has(*)) {
+  .mem-radio:focus-visible {
+    outline: 2px solid var(--acc);
+    outline-offset: 2px;
+  }
+}
+.mem-radio:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mem-opt-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg2);
+}
+.mem-opt-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 14px;
+}
+.mem-opt-head b {
+  font-weight: 800;
+}
+.mem-tag-default {
+  background: var(--ok);
+  color: var(--acc-fg);
+}
+.mem-opt-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg3);
+}
+.mem-opt-note::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--warn);
+}
+.mem-opt-docs {
+  flex: none;
+  font-size: 12px;
+}

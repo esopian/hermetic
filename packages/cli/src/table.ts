@@ -22,6 +22,7 @@ import type {
 } from "@hermetic/core";
 import {
   DEFAULT_ROOT_GIB,
+  MEMORY_PROVIDERS,
   PROVIDERS,
   agentDashboardUrl,
   agentDesktopUrl,
@@ -280,6 +281,17 @@ function urlRows(a: AgentView): Array<[string, string]> {
   return rows;
 }
 
+/**
+ * The `memory` line (§6.4): the external provider the agent was created with,
+ * or `built-in only` for a row with none — including every row written before
+ * the field existed, or under a provider since removed. Hermes's own
+ * `MEMORY.md`/`USER.md` is on either way, so "none" would misdescribe it.
+ */
+export function memoryLine(memory: AgentView["memory"]): string {
+  if (memory === null || memory === undefined) return "built-in only";
+  return `${MEMORY_PROVIDERS[memory.provider].label} (${memory.provider})`;
+}
+
 /** One side of the disk line: a percentage, or why there is no percentage. */
 function diskCell(v: number | null | undefined): string {
   return v === null || v === undefined ? "not reported" : `${Math.round(v)}%`;
@@ -321,6 +333,7 @@ export function renderStatus(a: AgentView, fleetId?: string, fleetName?: string)
           ],
         ] as Array<[string, string]>)),
     ["secrets", a.secrets_mode],
+    ["memory", memoryLine(a.memory)],
     ...hermesRows(a),
     ["tailnet name", tailnetName(a, fleetId, fleetName)],
     ...urlRows(a),
@@ -705,6 +718,14 @@ export function renderSettings(result: SettingsResult): string {
     ["volume", `${settings.defaults.volume_gib} GiB`],
     ["root disk", `${settings.defaults.root_gib ?? DEFAULT_ROOT_GIB} GiB`],
     ["secrets", settings.defaults.secrets],
+    // §6.2: what a create with no `--memory` gets. Unset is Hermes's built-in
+    // memory alone, which is what `none` means on the command line too.
+    [
+      "memory provider",
+      settings.default_memory_provider === null || settings.default_memory_provider === undefined
+        ? "none (built-in only)"
+        : `${MEMORY_PROVIDERS[settings.default_memory_provider].label} (${settings.default_memory_provider})`,
+    ],
     // §6.5: the effective answer, so a fleet that predates the switch reads
     // `on` — which is what it does — rather than a blank.
     [

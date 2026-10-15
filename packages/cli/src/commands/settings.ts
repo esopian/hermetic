@@ -20,7 +20,12 @@ import { defined, toInt, validate } from "../validate.ts";
 import { err, out, outJson } from "../io.ts";
 import { renderSettings } from "../table.ts";
 import { declare } from "../declare.ts";
-import { SettingsGetInput, SettingsSetInput } from "@hermetic/core";
+import {
+  MEMORY_PROVIDER_IDS,
+  MEMORY_PROVIDER_NONE,
+  SettingsGetInput,
+  SettingsSetInput,
+} from "@hermetic/core";
 import type { HermesSettings } from "@hermetic/core";
 
 const getSchema = declare("settings.get", "settings show", SettingsGetInput);
@@ -88,6 +93,10 @@ export function register(program: Command): void {
         "leave a newly pushed hermeticd to each box's nightly update",
       )
       .option(
+        "--default-memory-provider <provider|none>",
+        `the Hermes external memory provider a create with no --memory gets: ${MEMORY_PROVIDER_IDS.join(" | ")} | none`,
+      )
+      .option(
         "--files-require-cap <on|off>",
         "require the files capability grant of every tailnet caller (default off)",
       )
@@ -104,9 +113,15 @@ export function register(program: Command): void {
           "  hermetic settings set --size large --volume-gib 200\n" +
           "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n" +
           "  hermetic settings set --no-auto-update-hermeticd\n" +
+          "  hermetic settings set --default-memory-provider holographic\n" +
+          "  hermetic settings set --default-memory-provider none\n" +
           "  hermetic settings set --files-require-cap on --files-retention-days 14\n" +
           "\nSwitching hermeticd auto-update, or changing a files setting, republishes the\n" +
-          "fleet manifest, which is how the boxes hear about it (§6.5).\n",
+          "fleet manifest, which is how the boxes hear about it (§6.5).\n" +
+          "\nThe default memory provider is read once, when an agent is created, and\n" +
+          "pinned on it: changing it moves no existing agent. A create that inherits a\n" +
+          "provider whose server does not fit its size is refused (pass --memory none,\n" +
+          "or a larger --size).\n",
       )
       .action(async (opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -148,6 +163,14 @@ export function register(program: Command): void {
           // Both spellings are defined, so Commander leaves this undefined
           // unless one of them was given.
           ...defined({ auto_update_hermeticd: opts["autoUpdateHermeticd"] }),
+          // `none` clears the default back to built-in memory only: the wire
+          // says that with `null`, which no flag value can spell directly.
+          ...defined({
+            default_memory_provider:
+              opts["defaultMemoryProvider"] === MEMORY_PROVIDER_NONE
+                ? null
+                : opts["defaultMemoryProvider"],
+          }),
           ...(Object.keys(files).length > 0 ? { files } : {}),
           ...expected(opts),
         });

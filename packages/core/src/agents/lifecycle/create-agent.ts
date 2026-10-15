@@ -49,6 +49,14 @@ import {
   type ReleaseResult,
 } from "./release-name.ts";
 import { createRecordedInstance } from "./recorded-instance.ts";
+import {
+  assertMemoryLlm,
+  assertMemoryModel,
+  assertMemorySized,
+  memoryCapabilities,
+  memoryOf,
+  resolveMemoryProvider,
+} from "./memory-binding.ts";
 import type { ReleaseLookup } from "./release.ts";
 
 export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
@@ -61,6 +69,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
     agentPrefix,
     appendEvent,
     assertFleetUnlocked,
+    assertReleaseCanApply,
     assertSealed,
     attachDeps,
     backend,
@@ -297,6 +306,12 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * of agent forever.
      */
     assertBrowserSupported(fleet);
+    /**
+     * The external memory provider: stated, else the fleet default, else none
+     * — resolved here and pinned on the row, so a later change to the fleet
+     * default moves no agent (`memory-binding.ts`).
+     */
+    const memory = memoryOf(resolveMemoryProvider(parsed.memory_provider, settings));
     const provider = binding.provider;
     const at0 = nowIso();
 
@@ -353,6 +368,30 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
      * adoption decides its retag from the disk's tags as they are now.
      */
     const legacy = await backend.store.agents.get(name);
+    /**
+     * A memory provider the box cannot run is refused while nothing exists —
+     * before a legacy row is released or the name claimed: a size too small
+     * for its server, an agent vendor its model calls cannot use
+     * (`memory-binding.ts`). Only for a create that will claim the name
+     * afresh: a resume finishes the row that exists, with the memory *it*
+     * records.
+     */
+    if (legacy === null || legacy.status === "destroyed") {
+      const memoryProvider = memory?.provider ?? null;
+      assertMemorySized(memoryProvider, size, parsed.instance_type);
+      assertMemoryLlm(memoryProvider, provider);
+      // The row's `hermes.model` is `binding.model` (below), so it is the model
+      // every render of this agent hands the memory server.
+      assertMemoryModel(memoryProvider, provider, binding.model);
+      /**
+       * And a fleet whose published hermeticd cannot apply the provider is
+       * refused here too, rather than by `ensureConfig` after the name is
+       * claimed. The same question `ensureConfig` asks of the full rendered
+       * document, narrowed to the requirements this create's choice adds.
+       */
+      const requires = memoryCapabilities(memoryProvider);
+      if (requires.length > 0) await assertReleaseCanApply({ requires });
+    }
     /** The predecessor's `incarnationEnd`, which this life must start after. */
     let floor: string | null = null;
     if (legacy?.status === "destroyed") {
@@ -432,6 +471,7 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
        * the day somebody changed it.
        */
       seed: defaults.seed,
+      memory,
       // Both halves of the tailnet identity start empty and are filled in by the
       // node's first heartbeat; they are written together everywhere, because a
       // name without an address (or the reverse) is a row that describes no node.

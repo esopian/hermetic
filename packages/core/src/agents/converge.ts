@@ -41,6 +41,7 @@
 import { abortableSleep } from "../abort.ts";
 import type { CoreContext } from "../context.ts";
 import type { Agent, AgentStatus } from "../schema/index.ts";
+import { memoryProviderIsService } from "../shared/memory-providers.ts";
 
 /** How long one box gets to pick up a configuration-only request and report the new hash. */
 export const CONVERGE_TIMEOUT_MS = 5 * 60_000;
@@ -62,6 +63,26 @@ export const CONVERGE_POLL_MS = 10_000;
  * operator for ever — and a timeout here is a warning, not a failure.
  */
 export const HERMES_CONVERGE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * How long a rollout waits for one agent: `HERMES_CONVERGE_TIMEOUT_MS` when
+ * its row names a memory provider that runs a server, `CONVERGE_TIMEOUT_MS`
+ * otherwise.
+ *
+ * The first apply after `agent set --memory` onto a server provider installs
+ * that server live (§6.2): honcho's apt packages, uv sync and initdb,
+ * hindsight's pip install, openviking's embedding-model download, then a
+ * readiness wait of up to a minute. That is the same order of work as a Hermes
+ * upgrade, so it gets the same budget. The wait ends as soon as the box
+ * reports, so the longer budget only lengthens a box that is not answering —
+ * and an unconverged box is a warning, not a failure.
+ */
+export function rolloutConvergeTimeoutMs(agent: Pick<Agent, "memory">): number {
+  const provider = agent.memory?.provider;
+  return provider !== undefined && memoryProviderIsService(provider)
+    ? HERMES_CONVERGE_TIMEOUT_MS
+    : CONVERGE_TIMEOUT_MS;
+}
 
 /**
  * Statuses a converge can be asked of. A box that is not up cannot apply

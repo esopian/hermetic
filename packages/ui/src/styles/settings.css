@@ -334,6 +334,12 @@
 .st-sc .key-input.st-num {
   max-width: 140px;
 }
+/* A key typed inline beside its Save / Cancel, rather than a full-width field. */
+.st-sc .key-input.st-key-inline {
+  flex: 1 1 180px;
+  width: auto;
+  max-width: 280px;
+}
 .st-seg button {
   height: 34px;
   font-size: 12px;

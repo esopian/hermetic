@@ -284,6 +284,19 @@ export function hermesManagedConfig(input: RenderInput): string {
   }
 
   /**
+   * Managed, not seeded: the external memory provider is chosen at create (or
+   * later with `agent set --memory`) and hermetic owns the binding — a service provider's server is one hermeticd
+   * installs and runs for exactly this choice (`render-memory.ts`), so a box
+   * that switched providers on its own would be pointing Hermes at a server
+   * that is not there. Nothing at all when there is none: Hermes's
+   * built-in memory is its default, and an agent without a provider renders
+   * the same bytes it always did.
+   */
+  if (input.memory !== undefined) {
+    lines.push("memory:", "  provider: " + yamlString(input.memory.provider));
+  }
+
+  /**
    * The `hermetic-files` plugin hermeticd installs into `$HERMES_HOME/plugins`
    * (`apply/plugins.ts` in agentd): the file and secret request tools, and the
    * hook that scrubs secret values out of tool results. Managed so a config

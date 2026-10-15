@@ -62,7 +62,11 @@ export const APT_OPTIONS: readonly string[] = [
  */
 let aptUpdated = false;
 
-/** Test seam: forget that this process has already refreshed the apt index. */
+/**
+ * Forget that this process has already refreshed the apt index. A converge
+ * calls it first (`converge.ts`), because `serve` is one process for weeks;
+ * tests call it for isolation.
+ */
 export function resetAptIndexState(): void {
   aptUpdated = false;
 }

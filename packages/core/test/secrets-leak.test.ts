@@ -125,7 +125,11 @@ describe("secrets never leak", () => {
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
 
     const events = await drain(
-      hermetic.agents.create({ name: "research-1", secrets: "bitwarden", provider: "anthropic" }),
+      hermetic.agents.create({
+        name: "research-1",
+        secrets: "bitwarden",
+        provider: "anthropic",
+      }),
     );
     expect(events.length).toBeGreaterThan(3);
     assertClean(JSON.stringify(events));

@@ -29,6 +29,9 @@ export const HERMETICD_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<Agen
   "restart-units",
   "provider-key-ref",
   "browser-stack",
+  "memory-provider",
+  "memory-service",
+  "memory-honcho",
 ]);
 
 export const MANIFEST_PATH = "/etc/hermetic/manifest.json";

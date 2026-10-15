@@ -15,6 +15,7 @@ export * from "./errors.ts";
 export * from "./agent.ts";
 export * from "./hermes.ts";
 export * from "./profile.ts";
+export * from "./memory.ts";
 export * from "./fleet.ts";
 export * from "./foundation.ts";
 export * from "./event.ts";

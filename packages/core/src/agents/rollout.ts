@@ -55,7 +55,14 @@ import type { CoreContext } from "../context.ts";
 
 import type { Agent, FleetItem, OpEvent, Plan, PlanRolloutInput } from "../schema/index.ts";
 import { configVerdict } from "../fleet/skew.ts";
-import { CONVERGE_POLL_MS, CONVERGE_TIMEOUT_MS, convergeDeferral, createConverge } from "./converge.ts";
+import {
+  CONVERGE_POLL_MS,
+  CONVERGE_TIMEOUT_MS,
+  HERMES_CONVERGE_TIMEOUT_MS,
+  convergeDeferral,
+  createConverge,
+  rolloutConvergeTimeoutMs,
+} from "./converge.ts";
 
 export interface RolloutDeps {
   readonly ctx: CoreContext;
@@ -95,12 +102,20 @@ export interface RolloutTarget {
 export function createRollout(deps: RolloutDeps) {
   const { ctx } = deps;
   const agents = ctx.backend.store.agents;
+  const pollMs = deps.convergePollMs ?? CONVERGE_POLL_MS;
+  /**
+   * Two budgets (`rolloutConvergeTimeoutMs`): an agent whose memory provider
+   * runs a server may be installing it on this apply, and gets the longer one.
+   * The test knob shrinks both, as it does `upgrade --now`'s.
+   */
+  const convergeOf = (agent: Agent) =>
+    createConverge({
+      ctx,
+      timeoutMs: deps.convergeTimeoutMs ?? rolloutConvergeTimeoutMs(agent),
+      pollMs,
+    });
+  /** The ordinary budget, for the plan's warning. */
   const timeoutMs = deps.convergeTimeoutMs ?? CONVERGE_TIMEOUT_MS;
-  const converge = createConverge({
-    ctx,
-    timeoutMs,
-    pollMs: deps.convergePollMs ?? CONVERGE_POLL_MS,
-  });
 
   /**
    * What each agent would converge to, without writing anything.
@@ -205,7 +220,11 @@ export function createRollout(deps: RolloutDeps) {
         `${converging.length} agent(s) will apply a new configuration immediately, ` +
           `${input.concurrency === undefined || input.concurrency === 1 ? "one at a time" : `${String(input.concurrency)} at a time`}; ` +
           "a box that does not report the new config within " +
-          `${String(Math.round(timeoutMs / 60_000))} minute(s) is reported unconverged, not failed`,
+          `${String(Math.round(timeoutMs / 60_000))} minute(s)` +
+          (deps.convergeTimeoutMs === undefined
+            ? ` (${String(Math.round(HERMES_CONVERGE_TIMEOUT_MS / 60_000))} for one whose memory provider runs a server)`
+            : "") +
+          " is reported unconverged, not failed",
       );
     }
 
@@ -337,7 +356,7 @@ export function createRollout(deps: RolloutDeps) {
           deferred += 1;
           continue;
         }
-        agent = await converge.request(agent, wanted_hash, owner, "rollout");
+        agent = await convergeOf(agent).request(agent, wanted_hash, owner, "rollout");
       } finally {
         const latest = await agents.get(agent!.name);
         if (latest?.lock?.owner === owner) await ctx.releaseLock(latest);
@@ -356,6 +375,7 @@ export function createRollout(deps: RolloutDeps) {
        * operator can abort it, and a second operator is not blocked behind a
        * box that is slow to answer.
        */
+      const converge = convergeOf(agent);
       const outcome = await converge.waitForConverge(agent.name, wanted_hash, opts.signal);
       if (outcome === "converged") {
         converged += 1;
