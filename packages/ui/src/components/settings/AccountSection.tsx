@@ -16,7 +16,13 @@ import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { getDirectory, setDefaultFleet, setFleetAlias } from "../../api/index.ts";
 import type { DirectoryStatus, LocalConfig, Meta } from "../../api/index.ts";
 import { fmtDate } from "../../logic/format.ts";
-import { defaultable, fleetBadge, fleetLabel, sortFleets } from "../../nav/fleet-switch.ts";
+import {
+  defaultable,
+  fleetBadge,
+  fleetLabel,
+  sortFleets,
+  visibleFleets,
+} from "../../nav/fleet-switch.ts";
 import type { FleetListEntry } from "../../nav/fleet-switch.ts";
 import { Skel } from "../Loading.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
@@ -123,7 +129,7 @@ function FleetsBlock({
   busy: boolean;
   onMakeDefault: (fleetId: string) => void;
 }) {
-  const rows = sortFleets([...fleets]);
+  const rows = sortFleets(visibleFleets([...fleets]));
   return (
     <Block title={`Fleets · ${rows.length}`} right={<span className="mono dim">in this account</span>}>
       <table className="st-list">

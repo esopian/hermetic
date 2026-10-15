@@ -19,6 +19,7 @@ export function ConnectionCheck({
   foundation,
   error,
   attaching,
+  adding = false,
   credLine,
   onRetry,
   onBack,
@@ -30,6 +31,12 @@ export function ConnectionCheck({
   foundation: InitFoundation | null;
   error: { code: string; message: string } | null;
   attaching: boolean;
+  /**
+   * §4.8: the wizard is adding a fleet to an account that already has one, so
+   * it always creates. A foundation the probe found is a neighbour, not the
+   * thing this run will attach to.
+   */
+  adding?: boolean;
   credLine: string;
   onRetry: () => void;
   onBack: () => void;
@@ -93,7 +100,9 @@ export function ConnectionCheck({
           >
             {attaching
               ? `Foundation \`hermetic\` found · fleet ${foundation?.fleet_id ?? "—"} · ${foundation?.region ?? region} → will ATTACH`
-              : `No foundation in ${region || "this region"} → will CREATE one (CloudFormation stack \`hermetic\`)`}
+              : adding
+                ? `New fleet in ${region || "this region"} → will CREATE another foundation beside the fleets already in this account`
+                : `No foundation in ${region || "this region"} → will CREATE one (CloudFormation stack \`hermetic\`)`}
           </div>
         </div>
       ) : null}

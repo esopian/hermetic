@@ -14,6 +14,7 @@ import {
   otherFleetsNeedingUpdate,
   sortFleets,
   switchability,
+  visibleFleets,
 } from "../src/nav/fleet-switch.ts";
 
 function fleet(overrides: Partial<FleetListEntry> = {}): FleetListEntry {
@@ -33,6 +34,23 @@ function fleet(overrides: Partial<FleetListEntry> = {}): FleetListEntry {
     ...overrides,
   };
 }
+
+describe("visibleFleets", () => {
+  test("drops torn-down fleets and keeps every other status", () => {
+    const shown = visibleFleets([
+      fleet({ name: "live", status: "active" }),
+      fleet({ name: "going", status: "tearing_down" }),
+      fleet({ name: "gone", status: "torn_down" }),
+      fleet({ name: "unregistered", status: null }),
+    ]);
+    expect(shown.map((f) => f.name)).toEqual(["live", "going", "unregistered"]);
+  });
+
+  test("never drops the open fleet", () => {
+    const current = fleet({ name: "here", current: true, status: "torn_down" });
+    expect(visibleFleets([current])).toEqual([current]);
+  });
+});
 
 describe("sortFleets", () => {
   test("current fleet is always first", () => {

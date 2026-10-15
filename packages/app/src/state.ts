@@ -141,6 +141,13 @@ export interface AppStateOptions {
   reopen: (fleet?: string) => Promise<Hermetic>;
   /** Absent when the state is already initialized. */
   session?: InitSessionLike | null;
+  /**
+   * §4.8: opens the pre-init session an *adding* init runs on — the wizard
+   * raised over a fleet that is already open, to create another in the same
+   * account. `openState` supplies it; a state built without it cannot add a
+   * fleet and says so.
+   */
+  openAddSession?: () => Promise<InitSessionLike>;
   hermetic?: Hermetic | null;
   /** The fleet `hermetic` was opened as (§4.8); `config.show().fleet_id`. */
   fleetId?: string | null;
@@ -185,6 +192,9 @@ export class AppState {
   #hermetic: Hermetic | null;
   #poller: FleetPoller | null;
   #session: InitSessionLike | null;
+  /** The adding init's session (§4.8), opened on first use; see `addSession`. */
+  #addSession: InitSessionLike | null = null;
+  #openAddSession: (() => Promise<InitSessionLike>) | null;
   #reopen: (fleet?: string) => Promise<Hermetic>;
   #pollerKey: (config: LocalConfig & { stack_id: string | null }) => string;
   /**
@@ -242,6 +252,7 @@ export class AppState {
     this.#hermetic = options.hermetic ?? null;
     this.#poller = options.poller ?? null;
     this.#session = options.session ?? null;
+    this.#openAddSession = options.openAddSession ?? null;
     this.#reopen = options.reopen;
     this.#fleetId = options.fleetId ?? null;
     this.#target = options.target ?? null;
@@ -267,6 +278,60 @@ export class AppState {
 
   get session(): InitSessionLike | null {
     return this.#session;
+  }
+
+  /**
+   * §4.8: the session the wizard's helpers and `init` use while a fleet is
+   * open — an `openForInit` over this same home, kept until the adding init
+   * has been installed or the wizard is abandoned. It never replaces
+   * `#hermetic`: the open fleet keeps serving the dashboard the whole time.
+   */
+  async addSession(): Promise<InitSessionLike> {
+    if (!this.initialized) {
+      throw new HermeticError(
+        "NOT_INITIALIZED",
+        "no fleet is open to add one beside; this home's wizard is the plain init",
+      );
+    }
+    if (this.#addSession !== null) return this.#addSession;
+    if (this.#openAddSession === null) {
+      throw new HermeticError("UNSUPPORTED", "this server cannot add a fleet from the dashboard");
+    }
+    this.#addSession = await this.#openAddSession();
+    return this.#addSession;
+  }
+
+  /**
+   * Called when an adding init finishes `ok` (§4.8): open the fleet it just
+   * froze and serve it, exactly as a switch would. The fleet exists whatever
+   * happens here, so a refusal (another op still in flight) leaves this server
+   * on the fleet it was on, and the switcher lists the new one.
+   */
+  async adoptAdded(fleetId: string): Promise<void> {
+    const session = this.#addSession;
+    /**
+     * The fixture's fleets share one fake account, but `openHermetic` builds
+     * only the two it seeds; the fleet this session just created is reachable
+     * through the session's own backend, the way `adopt()` reaches it. That
+     * instance keeps using the session's database, so the session is dropped
+     * rather than closed. Real mode reopens the home by id, like any switch.
+     */
+    if (this.fixture && session !== null) {
+      this.#addSession = null;
+      await this.switchFleet(fleetId, { open: () => session.reopen() });
+      return;
+    }
+    try {
+      await this.switchFleet(fleetId);
+    } finally {
+      this.#closeAddSession();
+    }
+  }
+
+  #closeAddSession(): void {
+    const session = this.#addSession;
+    this.#addSession = null;
+    session?.close();
   }
 
   /**
@@ -488,9 +553,13 @@ export class AppState {
    * `config.show()`: a fleet that is not frozen here throws `NOT_FOUND` from
    * core and this server is exactly where it was. `fleet` may be a `fleet_id`
    * or a display alias — core's one resolver decides, and what lands here is
-   * always the id.
+   * always the id. `open`, when given, builds the instance instead of
+   * reopening this home by `fleet` (`adoptAdded`'s fixture case).
    */
-  async switchFleet(fleet: string, options: { opsRunning?: boolean } = {}): Promise<void> {
+  async switchFleet(
+    fleet: string,
+    options: { opsRunning?: boolean; open?: () => Promise<Hermetic> } = {},
+  ): Promise<void> {
     const inFlight =
       options.opsRunning === true ||
       this.#switching ||
@@ -522,7 +591,7 @@ export class AppState {
     // (`switchBlocked` in `app.ts`) until the install has landed or failed.
     this.#switching = true;
     try {
-      await this.#install(await this.#reopen(fleet));
+      await this.#install(await (options.open ? options.open() : this.#reopen(fleet)));
       // Whatever was unchosen has now been chosen.
       const session = this.#session;
       this.#session = null;
@@ -655,6 +724,19 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
           });
 
   /**
+   * §4.8: the wizard raised over an open fleet runs on a pre-init session of
+   * its own, over this same home. `adding` keeps the fixture's shared account
+   * as it is rather than emptying it for a from-scratch walkthrough.
+   */
+  const openAddSession = () =>
+    openForInit({
+      fixture,
+      fixtureOptions,
+      ...(options.home !== undefined ? { home: options.home } : {}),
+      adding: true,
+    });
+
+  /**
    * Set when the open failed because no fleet was *selected* rather than
    * because none exists (§4.8). It is carried onto the state below, so the
    * server boots into a "pick a fleet" screen instead of not booting.
@@ -671,6 +753,7 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
         fixtureOptions,
         home: options.home ?? hermeticHomeHint(options.home),
         reopen,
+        openAddSession,
         hermetic,
         fleetId: config.fleet_id,
         target: fleetTargetOf(config),
@@ -723,6 +806,7 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
         fixtureOptions,
         home: probe.home,
         reopen,
+        openAddSession,
         session: probe,
         fleetError,
       });
@@ -741,6 +825,7 @@ export async function openState(options: OpenStateOptions = {}): Promise<AppStat
     fixtureOptions,
     home: session.home,
     reopen,
+    openAddSession,
     session,
     // §4.8: null on a fresh laptop (the wizard's case), set when this home has
     // fleets and the operator has not said which — the switcher's case.

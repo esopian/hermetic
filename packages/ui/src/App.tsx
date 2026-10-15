@@ -520,6 +520,13 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         <EnvStrip meta={fleet.meta} connected={fleet.connected} switcher={false} />
         <InitWizard
           meta={fleet.meta}
+          /*
+           * §4.8: raised from the fleet menu over a fleet that is already open,
+           * the wizard creates another fleet in the same account rather than
+           * binding a fresh home, and the operator can walk back out of it.
+           */
+          adding={initialized}
+          onCancel={initialized ? () => setWizardOpen(false) : undefined}
           onOpenFleet={() => {
             fleet.resync();
             setWizardOpen(false);
@@ -544,6 +551,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
           meta={fleet.meta}
           connected={fleet.connected}
           onOpenFoundation={() => nav.setFoundationUpdateOpen(true)}
+          onNewFleet={() => setWizardOpen(true)}
         />
         <Settings key={fleetIdentity} meta={fleet.meta} profiles={profiles} />
         {nav.foundationUpdateOpen ? (
@@ -630,6 +638,7 @@ function AppBody({ profiles }: { profiles: ProfilesState }) {
         meta={fleet.meta}
         connected={fleet.connected}
         onOpenFoundation={() => nav.openSettings("foundation")}
+        onNewFleet={() => setWizardOpen(true)}
       />
     </>
   );

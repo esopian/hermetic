@@ -9,16 +9,19 @@
  * command. Parity stays at one method per command; `declareMachineryRpc`
  * records them alongside the routes that wrap no core method.
  *
- * Every request here is refused once a config exists. Re-targeting a home is
- * `hermetic init --reset` and nothing else (§4.6) — a wizard that could quietly
- * re-freeze a live fleet from a browser tab would undo the whole guard.
+ * Re-targeting a home is `hermetic init --reset` and nothing else (§4.6) — a
+ * wizard that could quietly re-freeze a live fleet from a browser tab would
+ * undo the whole guard. With a fleet open, these answer from the *adding*
+ * session instead (§4.8, `wizardCore`): the wizard raised from the fleet menu
+ * creates another fleet beside the open one, which re-targets nothing, and
+ * `init` refuses anything else on that path (`lifecycle.ts`).
  *
  * These handlers need nothing from the context but `state`, so that is all
  * they ask for.
  */
 import { z } from "zod";
 import { HermeticError, acl_snippet, acl_snippet_parts } from "@hermetic/core";
-import type { ErrorCode } from "@hermetic/core";
+import type { ErrorCode, Hermetic } from "@hermetic/core";
 import { declareMachineryRpc } from "../declare.ts";
 import type { AppState } from "../state.ts";
 import { parseInput } from "../validation.ts";
@@ -99,6 +102,18 @@ export function requireInitAllowed(state: AppState): void {
 }
 
 /**
+ * The instance the wizard's helpers ask. On an unbound home it is the pre-init
+ * instance, refused once anything is frozen there; with a fleet open it is the
+ * adding session's (§4.8), which never touches the instance serving the
+ * dashboard.
+ */
+export async function wizardCore(state: AppState): Promise<Hermetic> {
+  if (state.initialized) return (await state.addSession()).hermetic;
+  requireInitAllowed(state);
+  return state.hermetic;
+}
+
+/**
  * The region every later call is made in. Core resolves an identity in the
  * region it is given and does not guess, so the wizard supplies one: the
  * operator's choice, else the profile's own default from `~/.aws/config`, else
@@ -108,33 +123,30 @@ export function requireInitAllowed(state: AppState): void {
 export const FALLBACK_REGION = "us-east-1";
 
 async function regionFor(
-  state: AppState,
+  core: Hermetic,
   profile: string,
   requested: string | undefined,
 ): Promise<string> {
   if (requested !== undefined && requested !== "") return requested;
-  const profiles = await state.hermetic.init.listProfiles();
+  const profiles = await core.init.listProfiles();
   return profiles.find((p) => p.name === profile)?.region ?? FALLBACK_REGION;
 }
 
 export async function profiles({ state }: InitContext) {
-  requireInitAllowed(state);
+  const core = await wizardCore(state);
   // §4.7 step 1: no identity is resolved here — that would trigger an SSO login
   // for every profile in the file.
-  return { profiles: await state.hermetic.init.listProfiles() };
+  return { profiles: await core.init.listProfiles() };
 }
 
 export async function identity({ state }: InitContext, params: unknown) {
-  requireInitAllowed(state);
+  const core = await wizardCore(state);
   const { profile, region } = parseInput(IdentityRequest, params);
   // §4.7 step 2, for the chosen profile only: STS, then IAM and Organizations
   // best-effort, then a read-only DescribeStacks so the wizard can say which
   // fleet the operator is about to join.
-  const resolved = await state.hermetic.init.resolveIdentity(
-    profile,
-    await regionFor(state, profile, region),
-  );
-  const foundation = await state.hermetic.init.describeFoundation(profile, resolved.region);
+  const resolved = await core.init.resolveIdentity(profile, await regionFor(core, profile, region));
+  const foundation = await core.init.describeFoundation(profile, resolved.region);
   return { identity: resolved, foundation };
 }
 
@@ -145,18 +157,18 @@ export async function identity({ state }: InitContext, params: unknown) {
  * reading, so this is the preview of a gate, not the gate.
  */
 export async function tailscale({ state }: InitContext) {
-  requireInitAllowed(state);
-  return { tailscale: await state.hermetic.init.localTailscale() };
+  const core = await wizardCore(state);
+  return { tailscale: await core.init.localTailscale() };
 }
 
 export async function verifyOauth({ state }: InitContext, params: unknown) {
-  requireInitAllowed(state);
+  const core = await wizardCore(state);
   const { secret } = parseInput(TailscaleOauthRequest, params);
-  return { oauth: await state.hermetic.init.verifyTailscaleOauth(secret) };
+  return { oauth: await core.init.verifyTailscaleOauth(secret) };
 }
 
 export async function acl({ state }: InitContext) {
-  requireInitAllowed(state);
+  await wizardCore(state);
   return { snippet: acl_snippet(), parts: acl_snippet_parts() };
 }
 
