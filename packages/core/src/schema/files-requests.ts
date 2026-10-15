@@ -136,7 +136,7 @@ export const FilesEntryRefInput = z.object({ instance: AgentName, id: FileId });
 export type FilesEntryRefInput = z.infer<typeof FilesEntryRefInput>;
 
 /**
- * An entry whose bytes a preview reads (`files.content`): a staged or inbox
+ * An entry whose bytes a preview reads (`files.content`): a committed (inbox)
  * file's thumbnail (`f_…`), or a share card's image (`sh_…`), which the box's
  * content route serves alike.
  */
