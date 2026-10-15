@@ -497,6 +497,23 @@ describe("plan.foundation", () => {
   });
 
   /**
+   * The update drawer lists each step by its `title` and folds `details` under
+   * it, so every step carries a headline, and the stack step lists one change
+   * per entry rather than one joined sentence.
+   */
+  test("every step has a title, and the stack step lists its changes one per entry", async () => {
+    const backend = outdated(seedFixtureAgents(seedFixtureFoundation(new MemoryBackend())));
+    const plan = await core(backend).plan.foundation();
+    for (const step of plan.steps) expect(step.title).toBeTruthy();
+    const stack = plan.steps.find((s) => s.id === "stack")!;
+    expect(stack.details!.length).toBeGreaterThan(0);
+    expect(stack.details!.some((d) => d.includes("AgentPolicy"))).toBe(true);
+    expect(stack.details!.every((d) => !d.includes(", Modify"))).toBe(true);
+    expect(stack.title).toContain(`${String(stack.details!.length)} change`);
+    expect(plan.steps.find((s) => s.id === "rollout")!.title).toMatch(/^Update \d+ agents? now/);
+  });
+
+  /**
    * §8.3: a fleet from before v10 records no `bedrock_model_ids` — its grant
    * lives on the stack parameter, which is exactly where the update reads it
    * from. The step has to read it the same way: taking the absent field as "the

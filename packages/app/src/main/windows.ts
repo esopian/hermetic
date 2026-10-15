@@ -41,6 +41,43 @@ export const MIN_FRAME = { width: 1101, height: 560 } as const;
 export const DEFAULT_FRAME = { width: 1440, height: 900 } as const;
 
 /**
+ * The titlebar AppKit puts above the content rect, in points. Measured on
+ * macOS 26 (a 900-tall content rect makes a 932-tall window); an older
+ * release's shorter bar only leaves a few points of margin.
+ */
+const TITLE_BAR = 32;
+
+/**
+ * Where a new window opens: `DEFAULT_FRAME`, shrunk to fit the work area,
+ * centred in it. `null` when the display could not be read, and the caller
+ * lets the devkit centre the window instead.
+ *
+ * The position is always explicit because of how Electrobun 2.0.1 builds a
+ * centred window: it reads the window's *outer* frame back and sizes the
+ * webview from that, so the page comes out a titlebar taller than the content
+ * area and its bottom 32 points — every drawer's footer buttons — sit under
+ * the window's lower edge until the first resize re-fits it. With `x` and `y`
+ * given, the webview gets the content size asked for here. The fit to the
+ * work area is the same bug's other half: on a screen too short for 900
+ * points AppKit shortens the window, and the webview keeps the height it was
+ * created with.
+ */
+export function openingFrame(workArea: Frame | null): Frame | null {
+  if (workArea === null || workArea.width <= 0 || workArea.height <= 0) return null;
+  const width = Math.max(MIN_FRAME.width, Math.min(DEFAULT_FRAME.width, workArea.width));
+  const height = Math.max(
+    MIN_FRAME.height,
+    Math.min(DEFAULT_FRAME.height, workArea.height - TITLE_BAR),
+  );
+  return {
+    x: Math.round(workArea.x + Math.max(0, (workArea.width - width) / 2)),
+    y: Math.round(workArea.y + Math.max(0, (workArea.height - height - TITLE_BAR) / 2)),
+    width,
+    height,
+  };
+}
+
+/**
  * The frame to set back when a resize went under the minimum, or `null` when
  * the resize is fine. Pure, so the test can cover the corners without a
  * window: a shrink on one axis grows only that axis, the position is kept.

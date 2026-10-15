@@ -65,6 +65,44 @@ function writeStoredOpId(opId: string | null): void {
   }
 }
 
+/**
+ * One plan step: its headline, and the things it lists folded under it. Core
+ * writes both (`PlanStep.title`/`details`), so nothing here parses the
+ * `description` prose; a step from a server that predates the two fields
+ * shows its description as the headline and folds nothing.
+ */
+function StepRow({ step }: { step: FoundationPlan["steps"][number] }) {
+  const details = step.details ?? [];
+  const head = (
+    <>
+      <span className="fu-step-title">{step.title ?? step.description}</span>
+      {step.destructive ? <span className="fu-tag-bad mono">destructive</span> : null}
+    </>
+  );
+  return (
+    <li className="fu-step">
+      {details.length > 0 ? (
+        <details>
+          <summary>
+            <span className="fu-chev mono" aria-hidden="true" />
+            {head}
+          </summary>
+          <ul className="fu-step-details mono">
+            {details.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        </details>
+      ) : (
+        <div className="fu-step-row">
+          <span className="fu-chev mono" aria-hidden="true" />
+          {head}
+        </div>
+      )}
+    </li>
+  );
+}
+
 export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; onClose: () => void }) {
   // The context value changes on every poll tick; these two functions do not.
   const { refreshMeta, refreshFleets } = useFleet();
@@ -217,12 +255,13 @@ export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; o
           <div className="td-stage">
             <div className="kicker">Stage 1 · Review</div>
 
-            <div className="td-summary mono">
-              <span className="k">foundation</span>
-              <span className="v">
+            <div className="fu-head">
+              <div className="fu-where mono">
+                {meta?.config?.account_id ?? "—"} · {meta?.config?.region ?? "—"}
+              </div>
+              <div className="fu-versions">
                 {from} → {to}
-              </span>
-              <span className="k">hermeticd</span>
+              </div>
               {/*
                 Read exactly where an operator expects: the left is the release
                 the fleet manifest in S3 names, the right is what this build
@@ -230,43 +269,33 @@ export function FoundationUpdateDrawer({ meta, onClose }: { meta: Meta | null; o
                 constant and so usually read alike; the short build fingerprint
                 beside each is the half that moves when the binary does.
               */}
-              <span className="v">
-                {hd.from}
-                {hd.fromBuild ? <span style={{ color: "var(--fg3)" }}> {hd.fromBuild}</span> : null}
+              <div className="fu-hermeticd mono">
+                hermeticd {hd.from}
+                {hd.fromBuild ? <span className="fu-build"> {hd.fromBuild}</span> : null}
                 {" → "}
                 {hd.to}
-                {hd.toBuild ? <span style={{ color: "var(--fg3)" }}> {hd.toBuild}</span> : null}
-                {hd.note ? (
-                  <span
-                    className={hd.warn ? "skew-mark" : undefined}
-                    style={hd.warn ? undefined : { color: "var(--fg3)" }}
-                  >
-                    {" "}
-                    {hd.note}
-                  </span>
-                ) : null}
-              </span>
-              <span className="k">account</span>
-              <span className="v">{meta?.config?.account_id ?? "—"}</span>
-              <span className="k">region</span>
-              <span className="v">{meta?.config?.region ?? "—"}</span>
+                {hd.toBuild ? <span className="fu-build"> {hd.toBuild}</span> : null}
+              </div>
+              {hd.note ? (
+                <div className={hd.warn ? "fu-note mono skew-mark" : "fu-note mono"}>{hd.note}</div>
+              ) : null}
             </div>
 
             <div className="td-section">
-              <div className="kicker">Steps</div>
+              <div className="kicker">
+                Steps{plan ? ` · ${stepCount}` : ""}
+                {destructiveCount > 0 ? (
+                  <span className="fu-kicker-bad"> · {destructiveCount} destructive</span>
+                ) : null}
+              </div>
               {planLoading ? (
                 <PlanSkeleton />
               ) : planError ? (
                 <div className="wiz-error mono">{planError}</div>
               ) : (
-                <ol className="td-steps">
+                <ol className="fu-steps">
                   {plan?.steps.map((s) => (
-                    <li key={s.id} className={s.destructive ? "destructive" : undefined}>
-                      <span className="td-step-body">
-                        <i className={s.destructive ? "sq bad" : "sq sq-hole"} />
-                        <b>{s.id}</b> — {s.description}
-                      </span>
-                    </li>
+                    <StepRow key={s.id} step={s} />
                   ))}
                 </ol>
               )}
