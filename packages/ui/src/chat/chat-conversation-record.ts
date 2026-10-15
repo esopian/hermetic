@@ -282,6 +282,52 @@ export function insertByStamp(
   return next;
 }
 
+/** How many command rows a conversation keeps; the oldest go first. */
+export const COMMAND_ROWS_LIMIT = 100;
+
+/**
+ * Keep the settling turn's slash-command answers (§9.2) past the transcript
+ * read that retires its live message.
+ *
+ * The gateway answers a command on its command layer and stores nothing, so
+ * the read that follows every turn holds neither the command nor its answer,
+ * and dropping the live message for that read took the answer off the screen
+ * the moment it arrived. The `command` blocks are kept as a row of their own
+ * (a new id: the box may record a reply under the turn's id when the command
+ * became a prompt), and the operator's line with them when the turn produced
+ * no reply text — a command answered in full, which the box never records
+ * either.
+ */
+export function keepCommandRows(record: Conversation, prompt: ChatMessageView): void {
+  const live = record.live;
+  if (!live) return;
+  const commands = live.blocks.filter((block) => block.kind === "command");
+  if (commands.length === 0) return;
+  const replied = live.blocks.some((block) => block.kind === "text");
+  record.commandRows = [
+    ...record.commandRows,
+    ...(replied ? [] : [prompt]),
+    { ...live, id: `command:${live.id}`, blocks: commands, usage: null },
+  ].slice(-COMMAND_ROWS_LIMIT);
+}
+
+/**
+ * A transcript read with this browser's command rows put back at their stamps:
+ * those of the session the record addresses, and any kept before it knew one.
+ */
+export function withCommandRows(
+  record: Conversation,
+  messages: readonly ChatMessageView[],
+): ChatMessageView[] {
+  if (record.commandRows.length === 0) return [...messages];
+  const session = sessionOf(record);
+  const known = new Set(messages.map((row) => row.id));
+  const rows = record.commandRows.filter(
+    (row) => !known.has(row.id) && (!row.session || !session || row.session === session),
+  );
+  return insertByStamp(messages, rows);
+}
+
 /** Add rows the transcript does not already carry, each at its own stamp. */
 export function appendMissing(record: Conversation, rows: readonly ChatMessageView[]): void {
   if (rows.length === 0) return;
@@ -383,6 +429,12 @@ export interface Conversation {
    * by `releaseHeld` the moment it stops. See `coveredByTurn`.
    */
   observedDuringTurn: HeldRow[];
+  /**
+   * Slash commands this browser ran and their answers (`keepCommandRows`):
+   * rows the box never records, put back into every transcript read so a
+   * command's output does not vanish when its turn settles. In memory only.
+   */
+  commandRows: ChatMessageView[];
   /** Session and start stamp of the streaming turn, for that same test. */
   turnSeed: { session: string; at: string } | null;
   /**
@@ -483,6 +535,7 @@ export function fresh(target: ChatSelection): Conversation {
     observeQuietTimer: null,
     observedEarly: [],
     observedDuringTurn: [],
+    commandRows: [],
     turnSeed: null,
     segments: [],
     segmentAt: null,

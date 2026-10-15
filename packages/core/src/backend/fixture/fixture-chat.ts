@@ -88,6 +88,7 @@ import {
 import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { fixtureDemoTurn } from "./fixture-chat-demo.ts";
+import { fixtureCommand } from "./fixture-chat-command.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
@@ -509,7 +510,12 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       return Promise.resolve(flying.some((session) => session !== null && sessions.includes(session)));
     },
 
-    send(box: BoxAddress, bot: string, text: string, opts: SendOptions = {}): AsyncIterable<ChatFrame> {
+    send(
+      box: BoxAddress,
+      bot: string,
+      typed: string,
+      opts: SendOptions = {},
+    ): AsyncIterable<ChatFrame> {
       const instance = box.instance;
       return (async function* () {
         if (!reachable(instance)) {
@@ -521,6 +527,21 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
           } as const;
           return;
         }
+        // A slash command is answered by the (fixture) command layer, never
+        // sent as a prompt; a `send` directive's message is the prompt instead.
+        const command = fixtureCommand(typed, opts.attachments?.ids.length ?? 0);
+        const commandId = command ? `mx-fixture-live-${++turns}` : null;
+        if (command && commandId) {
+          for (const block of command.blocks) {
+            await pace();
+            yield { type: "block", seq: 0, message: commandId, block } as const;
+          }
+          if (command.prompt === null) {
+            yield { type: "done", seq: 0, message: commandId, usage: null } as const;
+            return;
+          }
+        }
+        const text = command?.prompt ?? typed;
         /**
          * The message id counts turns rather than reading a clock, for the same
          * reason every timestamp above does: two developers streaming the same
@@ -530,7 +551,7 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
          * already seen — one constant meant a second turn never reached the
          * transcript at all.
          */
-        const id = `mx-fixture-live-${++turns}`;
+        const id = commandId ?? `mx-fixture-live-${++turns}`;
         const session = opts.session ?? canonicalOf(instance, bot) ?? null;
         /**
          * The turn's attachments, committed into the fixture box's inbox the

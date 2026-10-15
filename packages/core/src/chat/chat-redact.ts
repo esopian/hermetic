@@ -425,6 +425,16 @@ export function redactBlock(block: ChatBlock): ChatBlock {
       // A ref is an agent or op name and cannot hold a secret, but it costs
       // nothing to run and this switch is the place a future ref shape lands.
       return { ...block, ref: redactText(block.ref) };
+    case "command":
+      // A command's output is the box's own text: `/config` or a plugin
+      // command can print a credential as readily as a tool can.
+      return {
+        ...block,
+        command: redactText(block.command),
+        output: redactText(block.output),
+        warning: redactOptional(block.warning),
+        prefill: redactOptional(block.prefill),
+      };
     case "process_event":
       return redactProcessEvent(block);
     case "subagent":

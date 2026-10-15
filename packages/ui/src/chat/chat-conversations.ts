@@ -19,10 +19,12 @@ import {
   absorbEarly,
   fresh,
   isLocal,
+  keepCommandRows,
   key,
   noteContext,
   noteRows,
   releaseHeld,
+  withCommandRows,
 } from "./chat-conversation-record.ts";
 import type { Assemble, Conversation, Failure } from "./chat-conversation-record.ts";
 import { frameContext, usageContext } from "./context-usage.ts";
@@ -356,7 +358,7 @@ export function useConversations(
         // (`reuseMessages`, once the children are placed back below): a re-read
         // that says what the transcript already said re-renders none of it.
         const held = record.messages;
-        record.messages = absorbEarly(record, result.messages);
+        record.messages = withCommandRows(record, absorbEarly(record, result.messages));
         noteRows(record, record.messages);
         noteContext(record, usageContext(result.usage, asked));
         record.resolvedSession = result.session ?? record.resolvedSession;
@@ -614,6 +616,9 @@ export function useConversations(
         record.segments = [];
         record.openRequests.clear();
         if (!record.aborting) record.sending = false;
+        // Before the re-read below retires the live message: the box keeps no
+        // copy of a slash command's answer.
+        keepCommandRows(record, echo);
         // The box's next probe says `true` again if it is still working.
         record.remoteBusy = false;
         // The live message stops speaking for the held rows here — including on

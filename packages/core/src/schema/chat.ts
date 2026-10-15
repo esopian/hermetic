@@ -23,6 +23,7 @@ import { z } from "zod";
 import { Iso } from "./common.ts";
 import { FileRequestId, ShareFileResult } from "./files.ts";
 import { SESSION_ORIGIN_NAMES } from "../shared/session-origins.ts";
+import { DISPATCH_TYPES } from "../shared/slash.ts";
 
 export {
   PROCESS_COMMAND_MAX,
@@ -35,6 +36,23 @@ export { botAliasForms, botHandle, botMentionTag, resolveBotTarget } from "../sh
 export type { BotIdentity } from "../shared/bot-handles.ts";
 export { SILENCE_TOKENS, isIntentionalSilence, isPartialSilenceMarker } from "../shared/silence.ts";
 export { HERMES_INTERNAL_EVENTS, isHermesInternalEvent } from "../shared/hermes-internal-events.ts";
+export {
+  DISPATCH_TYPES,
+  SLASH_COMMAND_RE,
+  looksLikeSlashCommand,
+  parseCommandDispatch,
+  parseSlashCommand,
+} from "../shared/slash.ts";
+export type {
+  AliasCommandDispatch,
+  CommandDispatch,
+  DispatchType,
+  ExecCommandDispatch,
+  ParsedSlashCommand,
+  PrefillCommandDispatch,
+  SendCommandDispatch,
+  SkillCommandDispatch,
+} from "../shared/slash.ts";
 
 /* ── addressing ───────────────────────────────────────────────────────────── */
 
@@ -728,8 +746,36 @@ const SubagentBlock = z.object({
 });
 export type SubagentBlock = z.infer<typeof SubagentBlock>;
 
+/**
+ * A Hermes slash command the operator typed, answered by the gateway's command
+ * layer (`slash.exec` / `command.dispatch`) rather than by the model.
+ *
+ * Its own kind, so a head draws it apart from the agent's prose: the model
+ * never saw the line and never wrote the output. `state` is `done` when the
+ * command layer answered, `error` when it refused (unknown, unavailable or
+ * failed — `output` is its message), and `unsupported` when it answered with
+ * a directive this chat cannot carry out. `prefill` is the text a `prefill`
+ * directive (`/undo`) handed back for the composer, kept so the operator can
+ * copy it. Live only: the gateway does not store a command's answer in the
+ * session, so a transcript re-read does not bring it back.
+ */
+const CommandBlock = z.object({
+  kind: z.literal("command"),
+  /** The command as dispatched, slash included: `/help`. */
+  command: z.string().min(1),
+  output: z.string(),
+  /** `slash.exec`'s `warning`: a side effect the gateway could not mirror. */
+  warning: z.string().nullish(),
+  state: z.enum(["done", "error", "unsupported"]),
+  /** The directive the gateway answered with, when it answered with one. */
+  dispatch: z.enum(DISPATCH_TYPES).nullish(),
+  prefill: z.string().nullish(),
+});
+export type CommandBlock = z.infer<typeof CommandBlock>;
+
 export const ChatBlock = z.discriminatedUnion("kind", [
   TextBlock,
+  CommandBlock,
   ActivityBlock,
   ReasoningBlock,
   ToolBlock,
@@ -746,6 +792,7 @@ export type ChatBlock = z.infer<typeof ChatBlock>;
 
 export const CHAT_BLOCK_KINDS = [
   "text",
+  "command",
   "activity",
   "reasoning",
   "tool",
