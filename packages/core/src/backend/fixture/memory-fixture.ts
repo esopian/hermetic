@@ -20,6 +20,7 @@ import { seedFixtureAgentFiles } from "./fixture-files-seed.ts";
 import type {
   Agent,
   DirectoryEntry,
+  AgentMemory,
   FleetSettings,
   LocalConfig,
   NetworkMode,
@@ -331,7 +332,7 @@ export const FIXTURE_PROFILE_REVISIONS = {
 export const FIXTURE_PROFILE_KEY = "sk-profile-FIXTURE-SECRET";
 
 /** The hermeticd release the fixture fleet's manifest points at. */
-export const FIXTURE_HERMETICD_VERSION = "0.6.1";
+export const FIXTURE_HERMETICD_VERSION = "0.8.2";
 
 /**
  * The browser build the fixture fleet's manifest names (§7.3). Written out
@@ -648,6 +649,12 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
         ),
       },
       default_profile: FIXTURE_PROFILE_IDS.anthropic,
+      /**
+       * `staging` alone has a default memory provider, so inheritance is on
+       * screen there; `main` keeps none, so a create on it with no
+       * `memory_provider` still gets built-in memory only.
+       */
+      ...(fixtureName === "staging" ? { default_memory_provider: "hindsight" as const } : {}),
       secrets: [
         {
           slug: "nous-key",
@@ -969,6 +976,8 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
     if ((seed.secrets_mode ?? "none") === "bitwarden") {
       ssm_paths.push(slot(seed.name, "bws-token"));
     }
+    // The memory provider the row was created with; it owns no slot (§8.3).
+    const memory: AgentMemory | null = seed.memory === undefined ? null : { provider: seed.memory };
 
     backend.volumes.set(volume_id, {
       volume_id,
@@ -1133,6 +1142,7 @@ export function seedFixtureAgents(backend: MemoryBackend, opts: FixtureSeed = {}
             },
           }),
       secrets_mode: seed.secrets_mode ?? "none",
+      ...(memory === null ? {} : { memory }),
       // A box that is neither running nor bootstrapping holds no tailnet
       // identity at all: `stop` and `destroy` both null the address, the
       // MagicDNS name and the version together, because the next boot

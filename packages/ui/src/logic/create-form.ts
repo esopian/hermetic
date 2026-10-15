@@ -37,6 +37,8 @@
 import type { CreateAgentInput, Meta, ProfileView } from "../api/index.ts";
 import { DEFAULT_ROOT_GIB, SIZES } from "./format.ts";
 import type { SizeSpec } from "./format.ts";
+import { isMemoryChoice } from "./memory-logic.ts";
+import type { MemoryChoice } from "./memory-logic.ts";
 import { preselectedProfile } from "./provider-logic.ts";
 
 /**
@@ -170,6 +172,15 @@ export interface CreateFormState {
    */
   approvals_mode: ApprovalsMode | "";
   /**
+   * The Hermes external memory provider, `""` meaning "the operator has not
+   * touched this" — the same sentinel `approvals_mode` uses, for the same
+   * reason: the fleet's `default_memory_provider` reaches the agent by the
+   * request omitting the key. `none` is a stated answer (built-in only) and is
+   * sent. Optional so a form built before the field existed still means
+   * "inherit".
+   */
+  memory_provider?: MemoryChoice | "";
+  /**
    * The chosen profile's display name, for the `cli` preview only. Never on the
    * wire: the request pins the id, because a profile can be renamed onto
    * another one's name and the id is the thing that cannot move.
@@ -197,6 +208,8 @@ export interface CreateDraftSeed {
   profile_id: string;
   model: string;
   approvals_mode: ApprovalsMode | "";
+  /** Absent on a draft written before the memory picker existed. */
+  memory_provider?: string;
   touched: readonly CreateField[];
 }
 
@@ -223,6 +236,7 @@ export interface InitialCreateForm {
   profile_id: string;
   model: string;
   approvals_mode: ApprovalsMode | "";
+  memory_provider: MemoryChoice | "";
   touched: ReadonlySet<CreateField>;
 }
 
@@ -295,8 +309,16 @@ export function initialCreateForm(input: CreateSeedInput): InitialCreateForm {
      * to an emptied control was the form quietly discarding a choice.
      */
     approvals_mode: draft?.approvals_mode ?? "",
+    // `approvals_mode`'s rule: a stated choice survives the detour, and
+    // anything this build cannot send back reads as "chose nothing".
+    memory_provider: memoryOf(draft),
     touched,
   };
+}
+
+function memoryOf(draft: CreateDraftSeed | null): MemoryChoice | "" {
+  const v = draft?.memory_provider;
+  return isMemoryChoice(v) ? v : "";
 }
 
 /**
@@ -353,6 +375,13 @@ export function createRequestBody(form: CreateFormState): CreateAgentInput {
      * first's field on the form that set both.
      */
     ...(Object.keys(hermes).length === 0 ? {} : { hermes }),
+    /*
+     * Absent inherits the fleet's `default_memory_provider`; `none` overrides
+     * it down to built-in memory. `""` is the first, so it is never sent.
+     */
+    ...(form.memory_provider === undefined || form.memory_provider === ""
+      ? {}
+      : { memory_provider: form.memory_provider }),
   };
 }
 
@@ -380,6 +409,7 @@ export function createCliLine(form: CreateFormState): string {
     body.secrets === undefined ? "" : `--secrets ${body.secrets}`,
     body.hermes?.model === undefined ? "" : `--model ${body.hermes.model}`,
     body.hermes?.approvals_mode === undefined ? "" : `--approvals ${body.hermes.approvals_mode}`,
+    body.memory_provider === undefined ? "" : `--memory ${body.memory_provider}`,
     body.rollback_on_failure === true ? "--rollback-on-failure" : "",
   ]
     .filter(Boolean)

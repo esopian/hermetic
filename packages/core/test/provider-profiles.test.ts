@@ -97,9 +97,12 @@ describe("providers.list", () => {
     expect(bedrock.linked_agents).toContain("atlas");
     // `kestrel` runs on anthropic, which has exactly one profile.
     expect(profiles.find((p) => p.name === "anthropic-main")!.linked_agents).toEqual(["kestrel"]);
-    // `corvid` is the fixture's profile-bound openrouter agent — linked by its
-    // own `profile_id` rather than by the fleet's designation.
-    expect(profiles.find((p) => p.name === "openrouter-cheap")!.linked_agents).toEqual(["corvid"]);
+    // `corvid` and `ibis` are the fixture's profile-bound openrouter agents —
+    // linked by their own `profile_id` rather than by the fleet's designation.
+    expect(profiles.find((p) => p.name === "openrouter-cheap")!.linked_agents).toEqual([
+      "corvid",
+      "ibis",
+    ]);
     // Nothing runs on the disabled profile.
     expect(profiles.find((p) => p.name === "vercel-gw")!.linked_agents).toEqual([]);
   });

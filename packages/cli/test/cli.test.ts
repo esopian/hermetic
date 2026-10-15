@@ -11,6 +11,7 @@ import { BUILD_VERSIONS, runRecorderFor } from "@hermetic/core";
 /** The recorded row, as core hands it back — not the spawned process below. */
 import type { Run as CoreRun } from "@hermetic/core";
 import { cliBinary, seedFixtureHome } from "./cli-binary.ts";
+import { createInputFrom } from "../src/commands/agent.ts";
 
 /** Every spawned CLI writes its `runs` log here, never into the real ~/.hermetic. */
 const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-test-"));
@@ -538,6 +539,30 @@ describe.concurrent("settings and providers", () => {
     const bad = await run("settings", "set", "--approvals", "sometimes");
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("approvals_mode");
+  });
+
+  test("set --default-memory-provider writes the fleet default, and none clears it", async () => {
+    const set = await run("settings", "set", "--default-memory-provider", "holographic", "--json");
+    expect(set.code).toBe(0);
+    const written = JSON.parse(set.stdout) as { settings: { default_memory_provider?: string } };
+    expect(written.settings.default_memory_provider).toBe("holographic");
+
+    const cleared = await run("settings", "set", "--default-memory-provider", "none", "--json");
+    expect(cleared.code).toBe(0);
+    const after = JSON.parse(cleared.stdout) as {
+      settings: { default_memory_provider?: string | null };
+    };
+    expect(after.settings.default_memory_provider ?? null).toBeNull();
+
+    const bad = await run("settings", "set", "--default-memory-provider", "supermemory");
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("default_memory_provider");
+  });
+
+  test("settings show names the default memory provider, or none", async () => {
+    const { code, stdout } = await run("settings", "show");
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/memory provider\s+none \(built-in only\)/);
   });
 
   test("set --files-* writes the files settings, and refuses out of range or a typo", async () => {
@@ -1086,6 +1111,63 @@ describe.concurrent("agent create · the credential the profile already holds", 
   });
 
   /**
+   * §6.2: `--memory` picks the Hermes external memory provider. `none` is the
+   * explicit built-in-only answer, a provider outside the catalogue is a usage
+   * error, and one whose server does not fit the size is refused before
+   * anything exists.
+   */
+  test("--memory maps onto memory_provider, and an absent flag states nothing", () => {
+    expect(createInputFrom("plover", { memory: "none" }).memory_provider).toBe("none");
+    expect(createInputFrom("plover", { memory: "hindsight" }).memory_provider).toBe("hindsight");
+    // Absent inherits the fleet's default in core, so the head must not fill it.
+    expect("memory_provider" in createInputFrom("plover", {})).toBe(false);
+  });
+
+  test("--memory none creates a built-in-only agent", async () => {
+    const { code } = await run("agent", "create", "plover", "--memory", "none", "--json");
+    expect(code).toBe(0);
+  });
+
+  test("--memory hindsight on a size with room for its server creates", async () => {
+    const { code } = await run(
+      "agent",
+      "create",
+      "sandpiper",
+      "--memory",
+      "hindsight",
+      "--size",
+      "small",
+      "--json",
+    );
+    // Each `run` is a fresh fixture process, so the row cannot be read back
+    // here; the refusal below is the same create one size down.
+    expect(code).toBe(0);
+  });
+
+  test("a memory provider outside the catalogue is a usage error", async () => {
+    // `supermemory` was in an earlier catalogue; a create naming it is now
+    // rejected by the schema rather than silently mapped to built-in memory.
+    const { code, stderr } = await run("agent", "create", "dunlin", "--memory", "supermemory");
+    expect(code).toBe(2);
+    expect(stderr).toContain("memory_provider");
+  });
+
+  test("a server provider on a size too small for it is MEMORY_PROVIDER_UNDERSIZED", async () => {
+    const { code, stderr } = await run(
+      "agent",
+      "create",
+      "dunlin",
+      "--memory",
+      "hindsight",
+      "--size",
+      "xsmall",
+    );
+    expect(code).toBe(7);
+    expect(stderr).toContain("MEMORY_PROVIDER_UNDERSIZED");
+    expect(stderr).toContain("--memory none");
+  });
+
+  /**
    * §8.3: the flag is gone from `create`, and the refusal names where keys live
    * now rather than reporting an unknown option.
    */
@@ -1390,15 +1472,15 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
   });
 
   test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "--hermeticd", "0.6.1", "--now", "--no-rollout");
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now", "--no-rollout");
     expect(code).toBe(2);
     expect(stderr).toContain("--now and --no-rollout contradict each other");
   });
 
   test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
-    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.6.1", "--now");
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now");
     expect(code).toBe(0);
-    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.6.1 now");
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.2 now");
   });
 
   test("`artifacts push V --no-rollout` publishes and asks no box", async () => {

@@ -2,6 +2,15 @@
  * Runtime secrets → the tmpfs `EnvironmentFile` the rendered units read
  * (§6.4, §8.3).
  */
+import type { AgentConfig } from "@hermetic/core/schema";
+import {
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  MEMORY_LLM_ENV_PATH,
+  MEMORY_SERVICE_UNIT,
+  MEMORY_WORKER_UNIT,
+  memoryServiceOf,
+} from "@hermetic/core/shared";
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { AgentdError } from "../errors.ts";
@@ -28,6 +37,27 @@ export const SECRETS_ENV_DIR = "/run/hermetic";
  * `hermetic-secrets.service`'s `ExecStartPre`, so boot and apply agree.
  */
 export const SECRETS_ENV_DIR_MODE = "0711";
+
+/**
+ * The boot oneshot core renders on every agent (`secretsUnit`), whose
+ * `ExecStart` is `hermeticd secrets materialise`: it writes `SECRETS_ENV_PATH`
+ * and `MEMORY_LLM_ENV_PATH` from the manifest at `MANIFEST_PATH`.
+ */
+export const SECRETS_UNIT = "hermetic-secrets.service";
+
+/**
+ * Every unit core renders with `Requires=` on `SECRETS_UNIT`: both Hermes
+ * units (the gateway through its drop-in), the memory server and honcho's
+ * worker. They read the two files that unit writes, and systemd restarts them
+ * whenever it is restarted. honcho's database reads neither and is not here.
+ * `tests/seams.test.ts` holds the list against the renderer.
+ */
+export const SECRETS_DEPENDENTS: readonly string[] = [
+  HERMES_DASHBOARD_UNIT,
+  HERMES_GATEWAY_UNIT,
+  MEMORY_SERVICE_UNIT,
+  MEMORY_WORKER_UNIT,
+];
 
 /**
  * Values that need no quoting in a systemd `EnvironmentFile`. Everything else
@@ -125,5 +155,83 @@ export async function materialiseSecrets(input: {
   if (input.dryRun) return true;
   await host.writeFile(outPath, body, "0600");
   await host.chmod(outPath, "0600");
+  return true;
+}
+
+/**
+ * The credential a service memory provider's own model calls use
+ * (`MEMORY_LLM_ENV_PATH`): the agent's provider key, under each name the
+ * manifest's `memory.llm.key_env` lists. `null` when the manifest names no
+ * service provider, which is the caller's cue to remove the file.
+ *
+ * Throws when a name is listed and no key was resolved — the same refusal the
+ * provider key itself gets — rather than writing a file that starts the server
+ * with no credential. An empty `key_env` (a role-authenticated vendor) needs
+ * no key and yields an empty value.
+ */
+export function memoryLlmFor(
+  manifest: AgentConfig,
+  providerKey: string | undefined,
+): { key_env: string[]; value: string } | null {
+  const memory = manifest.memory;
+  if (!memory || memoryServiceOf(memory.provider) === null) return null;
+  const key_env = memory.llm?.key_env ?? [];
+  if (key_env.length > 0 && !providerKey) {
+    throw new AgentdError(
+      "INTERNAL",
+      `manifest sets memory.provider: ${memory.provider} with ${key_env.join(", ")} but no provider key was resolved for ${manifest.name}`,
+      { provider: memory.provider },
+    );
+  }
+  return { key_env, value: providerKey ?? "" };
+}
+
+/**
+ * Write (or remove) `MEMORY_LLM_ENV_PATH`, the memory service's own
+ * `EnvironmentFile`, beside `secrets.env` and by the same rules: tmpfs, root,
+ * 0600, rewritten only when its hash moves, and nothing on a dry run but the
+ * answer.
+ *
+ * Its own file rather than lines in `secrets.env`: the key goes in under names
+ * the memory server reads (`HINDSIGHT_API_LLM_API_KEY`, sometimes a plain
+ * `OPENAI_API_KEY`), and those must not reach Hermes's environment, which
+ * `secrets.env` is.
+ *
+ * Written whenever the manifest names a service provider, even with nothing in
+ * it: `hermetic-memory.service` names it in an unconditional `EnvironmentFile=`,
+ * and systemd fails a unit whose environment file is missing. Removed when the
+ * manifest names none, so a key copied for a provider the agent no longer has
+ * does not outlive the binding.
+ *
+ * Returns true when the file changed (or, on a dry run, would).
+ */
+export async function materialiseMemoryLlm(input: {
+  host: Host;
+  /** `memoryLlmFor`'s answer; `null` removes the file. */
+  memoryLlm: { key_env: string[]; value: string } | null;
+  dryRun?: boolean;
+}): Promise<boolean> {
+  const { host, memoryLlm } = input;
+  const existing = await host.readFile(MEMORY_LLM_ENV_PATH);
+  if (memoryLlm === null) {
+    if (existing === null) return false;
+    if (!input.dryRun) await host.remove(MEMORY_LLM_ENV_PATH);
+    return true;
+  }
+  const lines = memoryLlm.key_env.map((name) => envLine(name, memoryLlm.value));
+  const body = lines.join("\n") + "\n";
+  if (existing !== null && sha256(existing) === sha256(body)) {
+    // The bits are corrected without counting as a change: nothing reads them
+    // differently, so nothing restarts over them.
+    const stat = await host.stat(MEMORY_LLM_ENV_PATH);
+    if (!input.dryRun && stat !== null && stat.mode !== "0600") {
+      await host.chmod(MEMORY_LLM_ENV_PATH, "0600");
+    }
+    return false;
+  }
+  if (input.dryRun) return true;
+  await host.mkdir(SECRETS_ENV_DIR, "0700");
+  await host.writeFile(MEMORY_LLM_ENV_PATH, body, "0600");
+  await host.chmod(MEMORY_LLM_ENV_PATH, "0600");
   return true;
 }

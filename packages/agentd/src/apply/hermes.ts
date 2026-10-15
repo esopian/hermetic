@@ -48,7 +48,7 @@ export const HERMES_REPO = "https://github.com/NousResearch/hermes-agent.git";
 /** Upstream's `pyproject` is `requires-python = ">=3.11,<3.14"`; pin the floor. */
 const HERMES_PYTHON = "3.11";
 /** The venv the editable install goes into, and the `hermes` it produces. */
-const HERMES_VENV_DIR = `${HERMES_INSTALL_DIR}/venv`;
+export const HERMES_VENV_DIR = `${HERMES_INSTALL_DIR}/venv`;
 /**
  * The ref this box last installed, recorded by hermeticd rather than read back
  * out of git. A marker beats `git rev-parse HEAD` against `<ref>^{commit}`
@@ -104,7 +104,7 @@ const GIT_RETRY_MS = 5_000;
  * out of. Upstream's FHS branch redirects both, so the venv Hermes runs from
  * does not depend on root's dotfiles surviving.
  */
-const UV_ENV = {
+export const UV_ENV = {
   UV_PYTHON_INSTALL_DIR: "/usr/local/share/uv/python",
   UV_PYTHON_BIN_DIR: "/usr/local/share/uv/bin",
 } as const;

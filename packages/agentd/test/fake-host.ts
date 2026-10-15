@@ -75,6 +75,7 @@ const asRegExp = (pattern: string | RegExp): RegExp =>
 
 /** Whether a recorded command matches, wrapped or unwrapped. */
 function matches(command: string, re: RegExp): boolean {
+  if (command.length > 1000) throw new Error("recorded command exceeds matcher length limit");
   return re.test(command) || re.test(unwrapped(command.split(" ")).join(" "));
 }
 

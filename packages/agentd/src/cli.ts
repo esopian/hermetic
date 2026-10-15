@@ -22,7 +22,9 @@ import { normalize, resolve } from "node:path";
 import { MANIFEST_PATH, parseManifestJson, readBundleManifest } from "./manifest.ts";
 import {
   apply,
+  materialiseMemoryLlm,
   materialiseSecrets,
+  memoryLlmFor,
   SECRETS_ENV_DIR,
   SECRETS_ENV_DIR_MODE,
   SECRETS_ENV_PATH,
@@ -33,6 +35,7 @@ import { DATA_MOUNT, DEVICE_WAIT_MS, mountDataVolume } from "./disk.ts";
 import { makeHeartbeat } from "./heartbeat.ts";
 import { settleSwap, update } from "./update/index.ts";
 import {
+  MEMORY_LLM_ENV_PATH,
   PROVIDERS,
   isEnvSecretSlot,
   isFileSecretSlot,
@@ -270,7 +273,8 @@ export async function run(
       let ctx: Context | null = null;
       // Only when `apply` would rewrite `secrets.env` at all. On a box where it
       // would not, `hermetic-secrets.service` remains the file's sole author and
-      // there is nothing for apply to preserve — so no SSM call is made.
+      // there is nothing for apply to preserve — so no SSM call is made. The
+      // memory server's credential is the provider key again, so it adds no read.
       if (manifest.secrets_mode === "bitwarden" || PROVIDERS[manifest.provider].env !== null) {
         ctx = await context(host, deps);
         if (manifest.secrets_mode === "bitwarden") {
@@ -424,6 +428,9 @@ export async function run(
         keyEnv === null
           ? null
           : await ctx.aws.getParameter(paramPath(ctx.paramPrefix, providerKeyRefOf(manifest)));
+      // Before either file is written: a memory server that needs the key and
+      // has none is refused here, as `apply` refuses it.
+      const memoryLlm = memoryLlmFor(manifest, key ?? undefined);
       if (manifest.secrets_mode !== "bitwarden" && keyEnv === null) {
         process.stderr.write(
           "no provider key and no bitwarden project; writing an empty environment file\n",
@@ -440,6 +447,20 @@ export async function run(
       // the wrong bits, and that is exactly the case worth correcting.
       await host.chmod(out, mode);
       process.stderr.write(`${changed ? "wrote" : "unchanged"} ${out}\n`);
+      /**
+       * The memory server's credential file, beside `secrets.env`: this same
+       * oneshot recreates `/run/hermetic` on every boot, and
+       * `hermetic-memory.service` names the file in an unconditional
+       * `EnvironmentFile=`. Removed for an agent without a server. Only when
+       * `--out` is the real `secrets.env` — a materialise aimed elsewhere is a
+       * look at the output, and must not move the live file under the unit.
+       */
+      if (out === SECRETS_ENV_PATH) {
+        const memoryChanged = await materialiseMemoryLlm({ host, memoryLlm });
+        if (memoryChanged) {
+          process.stderr.write(`${memoryLlm === null ? "removed" : "wrote"} ${MEMORY_LLM_ENV_PATH}\n`);
+        }
+      }
       return EXIT_OK;
     }
 

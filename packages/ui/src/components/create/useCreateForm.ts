@@ -44,6 +44,9 @@ import {
 import type { MachineField, MachineState } from "../../logic/create-presets.ts";
 import { usePresets } from "../../state/presets-store.ts";
 import type { PresetView } from "@hermetic/core/shared";
+import { MEMORY_PROVIDERS, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
+import { fleetDefaultMemory, memoryFit } from "../../logic/memory-logic.ts";
+import type { MemoryChoice, MemoryFitResult } from "../../logic/memory-logic.ts";
 import { profileById, readyProfiles } from "../../logic/provider-logic.ts";
 import { suggestedName } from "../../logic/volume-logic.ts";
 import type { ProfilesState } from "../../state/state.tsx";
@@ -220,6 +223,14 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   // what it made is the safer answer for anyone who has not chosen otherwise.
   const [rollback, setRollback] = useState(seed.rollback);
   /**
+   * The external memory provider, `""` until stated — the `approvals` rule: the
+   * fleet's `default_memory_provider` is inherited by omission, so there is
+   * nothing to re-seed and no value to show but the fleet's own.
+   */
+  const [memory, setMemory] = useState<MemoryChoice | "">(seed.memory_provider);
+  /** What a create that states no memory provider gets; `undefined` is "not reported". */
+  const fleetMemory = fleetDefaultMemory(meta);
+  /**
    * The selected preset's id, `null` when the loadout offers none (the machine
    * then follows the fleet's defaults, untouched).
    */
@@ -332,7 +343,53 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    * gated on the *current* list saying this profile exists and is ready, which
    * is the same question core asks again before it creates anything.
    */
-  const disabled = !trimmed || taken || invalid || submitting || !chosenReady;
+  /**
+   * The provider this agent will actually run: the stated one, or — stated
+   * nothing — the fleet's default (`undefined` when that was not reported).
+   */
+  const memoryEffective = memory === "" ? fleetMemory : memory === MEMORY_PROVIDER_NONE ? null : memory;
+  /**
+   * The instance memory of the size this create will get, or `null` when that
+   * is the fleet's default and the portal could not read it — core then
+   * decides, and the picker marks nothing.
+   */
+  const memGib = inherits("size") ? null : sizeSpec(size).memGib;
+  /**
+   * The agent's vendor, when the chosen profile is one this create can use.
+   * Null until a ready profile is picked: nothing is held back on a guess.
+   */
+  const vendor = chosenReady ? profile.provider : null;
+  /**
+   * What the effective choice — stated or inherited — means for this create:
+   * one `memoryFit` answer that the Memory card draws and the gate below reads,
+   * so the warning on screen and Create being held cannot disagree. Undefined
+   * when the effective choice is an unread fleet default: core decides.
+   */
+  const memoryChoice: MemoryChoice | undefined =
+    memoryEffective === undefined ? undefined : (memoryEffective ?? MEMORY_PROVIDER_NONE);
+  const memoryFitResult: MemoryFitResult | null =
+    memoryChoice === undefined
+      ? null
+      : memoryFit(memoryChoice, { sizeId: memGib === null ? null : size, memGib, vendor });
+  /**
+   * A provider whose server needs more instance memory than the chosen size
+   * has (core's `MEMORY_PROVIDER_UNDERSIZED`, `memory-binding.ts`, against the
+   * same size table), or whose model calls the agent's vendor cannot carry
+   * (`MEMORY_LLM_UNSUPPORTED`, `assertMemoryLlm`): Create is held, and the
+   * drawer says what to change. Said outside Customize as well, because an
+   * inherited fleet default blocks with it folded.
+   */
+  const memoryProvider =
+    memoryChoice === undefined || memoryChoice === MEMORY_PROVIDER_NONE ? null : memoryChoice;
+  const memoryBlock =
+    memoryProvider === null || memoryFitResult === null
+      ? null
+      : memoryFitResult.state === "undersized"
+        ? `${MEMORY_PROVIDERS[memoryProvider].label} memory needs at least ${String(MEMORY_PROVIDERS[memoryProvider].min_mem_gib)} GiB of instance memory; ${size} has ${String(memGib)} GiB — pick a larger size, or another memory provider`
+        : memoryFitResult.state === "vendor-blocked"
+          ? `${MEMORY_PROVIDERS[memoryProvider].label} memory is not available on this provider profile: ${String(memoryFitResult.message)} — pick another profile, or another memory provider`
+          : null;
+  const disabled = !trimmed || taken || invalid || submitting || !chosenReady || memoryBlock !== null;
 
   /**
    * The whole form in one object, so the request and the `cli` preview are
@@ -351,6 +408,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     profile_id: chosenReady ? profileId : "",
     model,
     approvals_mode: approvals,
+    memory_provider: memory,
     profile_model: profile?.model ?? "",
     profile_name: profile?.name ?? "",
     volume_id: volumeTarget,
@@ -461,6 +519,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
    */
   function resetAll() {
     setApprovals("");
+    setMemory("");
     applyMachine(preset, { size, volume_gib: volume, root_gib: rootGib, touched: new Set() });
   }
   /**
@@ -484,6 +543,7 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
       profile_id: profileId,
       model,
       approvals_mode: approvals,
+      memory_provider: memory,
       secrets,
       rollback,
       volume_id: volumeTarget,
@@ -493,7 +553,8 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
   }
 
   /** How many Customize fields are off their preset or fleet default, for its summary line. */
-  const customized = CREATE_FIELDS.filter(fieldChanged).length + (approvals === "" ? 0 : 1);
+  const customized =
+    CREATE_FIELDS.filter(fieldChanged).length + (approvals === "" ? 0 : 1) + (memory === "" ? 0 : 1);
 
   async function submit() {
     if (disabled) return;
@@ -566,6 +627,15 @@ export function useCreateForm({ meta, names, tailnet, profiles, onVolume, onStar
     setApprovals,
     rollback,
     chooseRollback,
+    memory,
+    setMemory,
+    fleetMemory,
+    memGib,
+    memoryEffective,
+    memoryChoice,
+    memoryFit: memoryFitResult,
+    vendor,
+    memoryBlock,
     presets,
     strip: stripPresets(presets),
     preset,

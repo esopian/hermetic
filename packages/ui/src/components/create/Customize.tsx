@@ -10,17 +10,29 @@
  * (`create-form.ts`), and its reset untouches it. With no preset in the
  * loadout, the machine fields inherit the same way.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ROOT_BOOTSTRAP_GIB,
   ROOT_GIB_MAX,
   ROOT_GIB_MIN,
   SIZES,
+  providerOption,
+  sizeSpec,
   volumeMonthlyUsd,
 } from "../../logic/format.ts";
 import type { SizeSpec } from "../../logic/format.ts";
 import type { ApprovalsMode, SecretsMode } from "../../logic/create-form.ts";
 import { APPROVALS_MODES } from "../../logic/settings-logic.ts";
+import { MEMORY_PROVIDERS, MEMORY_PROVIDERS_LIST, MEMORY_PROVIDER_NONE } from "@hermetic/core/shared";
+import type { MemoryProvider } from "@hermetic/core/shared";
+import {
+  memoryLabel,
+  memoryUndersized,
+  memoryVendorBlock,
+  smallestSizeFor,
+} from "../../logic/memory-logic.ts";
+import type { MemoryChoice } from "../../logic/memory-logic.ts";
+import { MemoryProviderCard } from "../MemoryProviderCard.tsx";
 import { Field, Seg, SizeCells, Slider } from "./controls.tsx";
 import { INHERITED_HINT, INHERITED_VALUE, isPrimarySize } from "./useCreateForm.ts";
 import type { CreateFormModel } from "./useCreateForm.ts";
@@ -43,8 +55,24 @@ const ROLLBACK_OPTIONS = ["keep for re-run", "roll back"] as const;
  */
 const APPROVALS_OPTIONS = ["", ...APPROVALS_MODES] as const satisfies readonly (ApprovalsMode | "")[];
 
-export function Customize({ f, initiallyOpen }: { f: CreateFormModel; initiallyOpen: boolean }) {
+export function Customize({
+  f,
+  initiallyOpen,
+  onOpenChange,
+}: {
+  f: CreateFormModel;
+  initiallyOpen: boolean;
+  /**
+   * Told whether the panel is open, so the drawer can stop announcing the
+   * memory refusal its own line repeats while the card's fit line (a live
+   * region of its own) is on screen.
+   */
+  onOpenChange?: (open: boolean) => void;
+}) {
   const [open, setOpen] = useState(initiallyOpen);
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
   const summary =
     f.customized === 0
       ? f.preset === null
@@ -79,7 +107,7 @@ export function Customize({ f, initiallyOpen }: { f: CreateFormModel; initiallyO
         </div>
       ) : (
         <div className="cr-disc-sum mono">
-          machine · storage · behaviour (secrets, on failure, approvals)
+          machine · storage · behaviour (secrets, on failure, approvals, memory)
         </div>
       )}
     </div>
@@ -282,6 +310,97 @@ function Behaviour({ f }: { f: CreateFormModel }) {
           </div>
         )}
       />
+      <MemoryField f={f} />
     </div>
+  );
+}
+
+/**
+ * The Hermes external memory provider. `""` first, as Approvals does: the
+ * fleet's default reaches the agent by the request omitting the key, so the
+ * option naming it is the choice to inherit, not a placeholder. A provider
+ * whose server needs more instance memory than the chosen size has cannot be
+ * picked — core would refuse the create with `MEMORY_PROVIDER_UNDERSIZED` —
+ * and its option says how much it needs.
+ *
+ * Under the select, the effective choice's resource card (stated or
+ * inherited): what it costs the box, and — against the size this create gets
+ * and the chosen profile's vendor — whether it fits, with a switch to the
+ * smallest size that does. Its fit is `f.memoryFit`, the same answer the
+ * Create gate reads.
+ */
+function MemoryField({ f }: { f: CreateFormModel }) {
+  const { fleetMemory, memGib } = f;
+  const inherited =
+    fleetMemory === undefined ? "Fleet default" : `Fleet default (${memoryLabel(fleetMemory)})`;
+  const fleetDefault = fleetMemory === undefined ? undefined : memoryLabel(fleetMemory);
+  const undersized = (id: MemoryProvider) => memGib !== null && memoryUndersized(id, memGib);
+  /**
+   * An undersized option names the size it needs, as the card's fit line does
+   * (`memoryFit`): the smallest size in the selected size's family with enough
+   * memory, falling back to the bare GiB figure when no size has it.
+   */
+  const needs = (id: MemoryProvider) => {
+    const min = MEMORY_PROVIDERS[id].min_mem_gib;
+    const target = smallestSizeFor(min, sizeSpec(f.size).family);
+    return target === null ? `needs ≥ ${String(min)} GiB` : `needs ${target.id} or larger`;
+  };
+  const vendorLabel = f.vendor === null ? "" : providerOption(f.vendor).label;
+  const vendorBlocked = (id: MemoryProvider) => memoryVendorBlock(id, f.vendor) !== null;
+  return (
+    <Field
+      label="Memory"
+      changed={f.memory !== ""}
+      onReset={() => f.setMemory("")}
+      // Unchanged, the tag itself names the fleet default; changed, the tag is
+      // `changed · reset` and the default is named once beside it, muted.
+      inheritedAs={fleetDefault}
+      aside={
+        fleetDefault === undefined || f.memory === "" ? null : (
+          <span className="mem-fleetdef">fleet default: {fleetDefault}</span>
+        )
+      }
+      // An unread fleet default has no card to draw: say so instead.
+      hint={f.memoryChoice === undefined ? INHERITED_HINT : undefined}
+      control={(id) => (
+        <div>
+          <div className="select-wrap">
+            <select
+              id={id}
+              className="select-input"
+              value={f.memory}
+              aria-describedby={f.memoryChoice === undefined ? undefined : `${id}-fit`}
+              onChange={(e) => f.setMemory(e.target.value as MemoryChoice | "")}
+            >
+              <option value="">{inherited}</option>
+              <option value={MEMORY_PROVIDER_NONE}>None — built-in only</option>
+              {MEMORY_PROVIDERS_LIST.map((p) => (
+                <option
+                  key={p.id}
+                  value={p.id}
+                  disabled={(undersized(p.id) || vendorBlocked(p.id)) && f.memory !== p.id}
+                >
+                  {undersized(p.id)
+                    ? `${p.label} — ${needs(p.id)}`
+                    : vendorBlocked(p.id)
+                      ? `${p.label} — not for ${vendorLabel}`
+                      : p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {f.memoryChoice === undefined ? null : (
+            <MemoryProviderCard
+              variant="attached"
+              choice={f.memoryChoice}
+              vendor={f.vendor}
+              fit={f.memoryFit}
+              onSwitchSize={f.chooseSize}
+              fitId={`${id}-fit`}
+            />
+          )}
+        </div>
+      )}
+    />
   );
 }

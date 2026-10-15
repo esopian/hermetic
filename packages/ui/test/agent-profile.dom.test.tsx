@@ -279,3 +279,115 @@ describe("AgentProfilePanel", () => {
     });
   });
 });
+
+/**
+ * The memory row's own switch (`MemoryProviderEdit.tsx`). A memory change is
+ * written on the row, not staged, so a running agent is rolled out straight
+ * after the save and a stopped one is saved only — and told when it switches.
+ */
+describe("memory provider switch", () => {
+  test("a stopped agent is saved only, and told it switches at the next rollout or recreate", async () => {
+    server = fakeServer({ "agents.set": agent({ display_status: "stopped" }) });
+    const user = userEvent.setup();
+    const ops: string[] = [];
+    render(<Host base={{ display_status: "stopped" }} ops={ops} />);
+
+    await user.click(screen.getByRole("button", { name: "Change memory provider" }));
+    await user.selectOptions(screen.getByLabelText("Memory provider"), "holographic");
+    expect(screen.getByText(/nothing switches yet/)).toBeTruthy();
+    expect(screen.queryByText(/restarts Hermes briefly/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Switch memory" }));
+
+    await waitFor(() => expect(server?.to("agents.set")).toHaveLength(1));
+    expect(server.to("agents.set")[0]?.params).toEqual({
+      name: "lumen",
+      expected_version: 7,
+      memory_provider: "holographic",
+      target: FAKE_TARGET,
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        "switches at the next rollout or recreate",
+      ),
+    );
+    expect(ops).toEqual([]);
+  });
+
+  /*
+   * A rollout converges only ready, degraded and error agents (core's
+   * `CONVERGEABLE`); one still bootstrapping is skipped by it. Saying "applies
+   * live" and then planning a rollout that skips the agent would be a promise
+   * nothing keeps.
+   */
+  test("an agent a rollout would skip (bootstrapping) is saved only, and told it waits", async () => {
+    server = fakeServer({ "agents.set": agent({ status: "bootstrapping" } as Partial<AgentView>) });
+    const user = userEvent.setup();
+    const ops: string[] = [];
+    render(
+      <Host
+        base={{ status: "bootstrapping", display_status: "bootstrapping" } as Partial<AgentView>}
+        ops={ops}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Change memory provider" }));
+    await user.selectOptions(screen.getByLabelText("Memory provider"), "hindsight");
+    expect(screen.getByText(/This agent is bootstrapping, so nothing switches yet/)).toBeTruthy();
+    expect(screen.queryByText(/Applies live/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Switch memory" }));
+
+    await waitFor(() => expect(server?.to("agents.set")).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        "switches at the next rollout or recreate",
+      ),
+    );
+    expect(ops).toEqual([]);
+  });
+
+  test("a refusal keeps the editor open and names core's code", async () => {
+    server = fakeServer({
+      "agents.set": {
+        status: 409,
+        json: {
+          error: { code: "MEMORY_LLM_UNSUPPORTED", message: "Honcho needs an embeddings vendor" },
+        },
+      },
+    });
+    const user = userEvent.setup();
+    const ops: string[] = [];
+    render(<Host ops={ops} />);
+
+    await user.click(screen.getByRole("button", { name: "Change memory provider" }));
+    await user.selectOptions(screen.getByLabelText("Memory provider"), "hindsight");
+    await user.click(screen.getByRole("button", { name: "Switch memory" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe(
+        "MEMORY_LLM_UNSUPPORTED · Honcho needs an embeddings vendor",
+      ),
+    );
+    expect(screen.getByLabelText("Memory provider")).toBeTruthy();
+    expect(ops).toEqual([]);
+  });
+
+  test("a running agent is saved, then rolled out through the drawer's op runner", async () => {
+    server = fakeServer({
+      "agents.set": agent(),
+      "plan.rollout": ROLLOUT_PLAN,
+      apply: { op_id: "op-9", op: { id: "op-9" } },
+    });
+    const user = userEvent.setup();
+    const ops: string[] = [];
+    render(<Host ops={ops} />);
+
+    await user.click(screen.getByRole("button", { name: "Change memory provider" }));
+    await user.selectOptions(screen.getByLabelText("Memory provider"), "openviking");
+    await user.click(screen.getByRole("button", { name: "Switch memory" }));
+
+    await waitFor(() => expect(server?.to("apply")).toHaveLength(1));
+    expect(server.to("plan.rollout")[0]?.params).toMatchObject({ agents: ["lumen"] });
+    expect(ops).toEqual(["rollout"]);
+    expect(screen.queryByLabelText("Memory provider")).toBeNull();
+  });
+});

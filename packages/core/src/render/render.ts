@@ -3,6 +3,7 @@ import type {
   AgentConfig,
   HermesHold,
   HermesSettings,
+  MemoryProvider,
   Provider,
   RenderedFile,
   SecretsMode,
@@ -20,9 +21,11 @@ import {
   HERMES_PROVENANCE_PATH,
   HERMES_PROXY_PORT,
   HERMES_SEED_CONFIG,
+  MEMORY_LLM_KEY_ENVS,
   PROVIDERS,
   SIZES,
   browserIdentities,
+  openvikingConfPath,
   requiredCapabilities,
   splitHermesSettings,
 } from "../schema/index.ts";
@@ -62,6 +65,7 @@ import {
   providerKeyRef,
   secretsUnit,
 } from "./render-units.ts";
+import { renderMemory } from "./render-memory.ts";
 
 // The constants the box-side modules own, kept reachable from here for every
 // importer that always read them off `render.ts` (`index.ts` re-exports it).
@@ -124,6 +128,13 @@ export interface RenderInput {
    * created before provider profiles has and the one an older hermeticd reads.
    */
   provider_key_ref?: string | undefined;
+  /**
+   * The external memory provider the managed config selects (`Agent.memory`).
+   * A service provider also renders its server (`render-memory.ts`). Absent is
+   * built-in memory only, and renders exactly what a render before the field
+   * did.
+   */
+  memory?: { provider: MemoryProvider } | undefined;
 }
 
 export interface RenderedAgentConfig {
@@ -236,6 +247,15 @@ const SYSTEMD_ENV_REFERENCE = new RegExp("\\$\\{(?:" + BROWSER_ENV_REFS.join("|"
 const TEMPLATE_UNIT_PATH = /^\/etc\/systemd\/system\/[^/]+@\.service$/;
 
 /**
+ * The other legitimate `${…}`: openviking's `ov.conf`, which the server runs
+ * `os.path.expandvars` over, names a remote embedder's key by the variable the
+ * box materialises it under (`MEMORY_LLM_KEY_ENVS`), so the key itself is
+ * never written (`render-memory.ts`). Only those names, and only in that file
+ * (and the manifest that quotes it, for `MANIFEST_PATH`'s reason below).
+ */
+const MEMORY_KEY_REFERENCE = new RegExp("\\$\\{(?:" + MEMORY_LLM_KEY_ENVS.join("|") + ")\\}", "g");
+
+/**
  * The manifest quotes the body of every file it ships, so it carries those same
  * template units verbatim and has to be exempt too — but for a different
  * reason, and a safe one: every file embedded in it is also in the list below
@@ -248,7 +268,9 @@ const MANIFEST_PATH = "/etc/hermetic/manifest.json";
 export function assertFullyRendered(files: readonly RenderedFile[]): void {
   for (const f of files) {
     const exempt = TEMPLATE_UNIT_PATH.test(f.path) || f.path === MANIFEST_PATH;
-    const content = exempt ? f.content.replace(SYSTEMD_ENV_REFERENCE, "") : f.content;
+    const keyed = f.path === openvikingConfPath || f.path === MANIFEST_PATH;
+    let content = exempt ? f.content.replace(SYSTEMD_ENV_REFERENCE, "") : f.content;
+    if (keyed) content = content.replace(MEMORY_KEY_REFERENCE, "");
     for (const marker of TEMPLATE_MARKERS) {
       if (content.includes(marker)) {
         throw new Error(`rendered file ${f.path} still contains a template marker: ${marker}`);
@@ -293,7 +315,7 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
    * inputs, so the two agree by construction, and threading one result through
    * every renderer would couple them for no gain.
    */
-  const { seed: hermesSeed } = splitHermesSettings(
+  const { managed: hermesManaged, seed: hermesSeed } = splitHermesSettings(
     input.hermes,
     PROVIDERS[input.provider].default_model,
     input.seed,
@@ -414,6 +436,22 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
   files.push(...browserFiles(browsers, input.chrome_ref));
   units.unshift(...browserUnits(browsers));
 
+  /**
+   * A service memory provider's server and its configuration, ahead of the
+   * Hermes units for the browser's reason: Hermes's plugin connects to it at
+   * start. Its model is the agent's own, resolved the way `config.yaml`'s is
+   * (`splitHermesSettings` puts it in exactly one of the two halves).
+   */
+  const memory = renderMemory({
+    name: input.name,
+    memory: input.memory,
+    provider: input.provider,
+    model: hermesManaged.model ?? hermesSeed.model ?? PROVIDERS[input.provider].default_model,
+    region: input.region,
+  });
+  files.push(...memory.files);
+  units.unshift(...memory.units);
+
   // Unconditional: see `secretsUnit`. Every agent gets the tmpfs env file.
   files.push({
     path: "/etc/systemd/system/hermetic-secrets.service",
@@ -518,6 +556,13 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
     ...(providerKeyRef(input) === DEFAULT_PROVIDER_KEY_SLOT
       ? {}
       : { provider_key_ref: providerKeyRef(input) }),
+    /**
+     * Omitted, never null, when the agent has none: an agent without a memory
+     * provider must hash exactly as it did before the field existed. Inside
+     * the hash: the pin and the model it names are what the box installs and
+     * runs. No secret — `llm.key_env` names variables, never values.
+     */
+    ...(memory.manifestMemory === undefined ? {} : { memory: memory.manifestMemory }),
   };
 
   const config_hash = createHash("sha256").update(canonical(unhashed)).digest("hex").slice(0, 16);

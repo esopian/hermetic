@@ -134,6 +134,7 @@ export function FieldTag({
   onReset,
   label,
   source = "fleet",
+  inheritedAs,
 }: {
   changed: boolean;
   onReset: () => void;
@@ -141,12 +142,19 @@ export function FieldTag({
   label: string;
   /** What an unchanged field is reading from: the fleet's default, or the selected preset. */
   source?: "fleet" | "preset";
+  /**
+   * The fleet default's value, when the field can name it: an unchanged
+   * field's tag then reads `fleet default: <value>` rather than the bare words.
+   */
+  inheritedAs?: string;
 }) {
   if (!changed) {
     return source === "preset" ? (
       <span className="cr-fromtag">from preset</span>
     ) : (
-      <span className="cr-deftag">fleet default</span>
+      <span className="cr-deftag">
+        {inheritedAs === undefined ? "fleet default" : `fleet default: ${inheritedAs}`}
+      </span>
     );
   }
   return (
@@ -171,6 +179,8 @@ export function Field({
   onReset,
   source,
   hint,
+  aside,
+  inheritedAs,
   control,
   children,
 }: {
@@ -179,6 +189,13 @@ export function Field({
   onReset: () => void;
   source?: "fleet" | "preset";
   hint?: ReactNode;
+  /**
+   * A short fact drawn beside the tag, on the label's line (Memory's fleet
+   * default while the field is changed, so the tag need not carry it).
+   */
+  aside?: ReactNode;
+  /** `FieldTag`'s `inheritedAs`: the fleet default's value, named on the unchanged tag. */
+  inheritedAs?: string;
   /** A single form control labelled by this row, when there is one. */
   control?: (id: string) => ReactNode;
   children?: ReactNode;
@@ -194,7 +211,26 @@ export function Field({
         ) : (
           <span className="cr-fl">{label}</span>
         )}
-        <FieldTag changed={changed} onReset={onReset} label={label} source={source} />
+        {aside ? (
+          <span className="cr-fh-r">
+            {aside}
+            <FieldTag
+              changed={changed}
+              onReset={onReset}
+              label={label}
+              source={source}
+              inheritedAs={inheritedAs}
+            />
+          </span>
+        ) : (
+          <FieldTag
+            changed={changed}
+            onReset={onReset}
+            label={label}
+            source={source}
+            inheritedAs={inheritedAs}
+          />
+        )}
       </div>
       {control ? control(id) : children}
       {hint ? <div className="cr-hint">{hint}</div> : null}

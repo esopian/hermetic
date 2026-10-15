@@ -57,6 +57,8 @@ import "./chat/styles/bot-mode.css";
 import "./styles/listening.css";
 import "./styles/drawer.css";
 import "./styles/create.css";
+// Memory provider resource cards and chips (create drawer, Settings, agent drawer).
+import "./styles/memory.css";
 import "./styles/shell.css";
 import "./styles/settings.css";
 

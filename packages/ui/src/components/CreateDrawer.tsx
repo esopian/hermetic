@@ -8,6 +8,7 @@
  * state lives in `create/useCreateForm.ts`; the pieces under `create/` are
  * layout.
  */
+import { useState } from "react";
 import type { Meta, VolumeView } from "../api/index.ts";
 import { CREATE_PHASES, labelsForOp, useOp } from "../lib/useOp.ts";
 import type { ProfilesState } from "../state/state.tsx";
@@ -68,6 +69,8 @@ export function CreateDrawer({
   onClose: () => void;
 }) {
   const f = useCreateForm({ meta, names, tailnet, profiles, onVolume, onStart });
+  /** Whether Customize is open (its Memory card then carries the live fit line). */
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const op = useOp(active?.opId ?? null, CREATE_PHASES, CREATE_LABELS);
   /**
    * The catalog is read for the *chosen profile*, using the credential the
@@ -127,11 +130,26 @@ export function CreateDrawer({
               made before the detour should be visible on the way back, not
               folded away behind a summary.
             */}
-            <Customize f={f} initiallyOpen={f.customized > 0} />
+            <Customize f={f} initiallyOpen={f.customized > 0} onOpenChange={setCustomizeOpen} />
             <div className="cr-facts mono">
               <span className="sq ok" /> Tailscale only · 0 inbound rules · no SSH key · Hermes{" "}
               {latest ?? "—"} · Chromium · noVNC desktop
             </div>
+            {/*
+              Said outside Customize: an inherited default blocks with it
+              folded. Open, the Memory card's fit line is the live region, so
+              this one stays quiet rather than announce the refusal twice.
+            */}
+            {f.memoryBlock !== null ? (
+              <div
+                className="mono"
+                role={customizeOpen ? undefined : "status"}
+                data-memory-block=""
+                style={{ color: "var(--warn)", fontSize: 12 }}
+              >
+                {f.memoryBlock}
+              </div>
+            ) : null}
             {f.failure ? (
               <div className="mono" style={{ color: "var(--bad)", fontSize: 12 }}>
                 {f.failure}

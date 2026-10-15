@@ -334,6 +334,12 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       ...(parsed.auto_update_hermeticd === undefined
         ? {}
         : { auto_update_hermeticd: parsed.auto_update_hermeticd }),
+      // `null` is stored, not deleted: it is the fleet saying "built-in only"
+      // as plainly as absence does, and the store cannot remove an attribute
+      // by writing `undefined` (`dynamo.ts`).
+      ...(parsed.default_memory_provider === undefined
+        ? {}
+        : { default_memory_provider: parsed.default_memory_provider }),
       // Key by key onto what is stored, like every other patch here.
       ...(parsed.files === undefined
         ? {}
@@ -358,6 +364,13 @@ export function createSettings(deps: SettingsDeps): SettingsApi {
       ...(parsed.auto_update_hermeticd === undefined
         ? []
         : [`auto_update_hermeticd ${parsed.auto_update_hermeticd ? "on" : "off"}`]),
+      ...(parsed.default_memory_provider === undefined
+        ? []
+        : [
+            parsed.default_memory_provider === null
+              ? "default memory provider cleared"
+              : `default memory provider ${parsed.default_memory_provider}`,
+          ]),
       ...Object.keys(definedKeys(parsed.files ?? {})).map((k) => `files.${k}`),
     ];
     const result = await commit(

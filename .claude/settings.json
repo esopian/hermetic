@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" post-edit",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\"; [ -f \"$f\" ] && command -v node >/dev/null 2>&1 || exit 0; exec node \"$f\" post-edit",
             "timeout": 10000
           }
         ]
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" tool-savings",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\"; [ -f \"$f\" ] && command -v node >/dev/null 2>&1 || exit 0; exec node \"$f\" tool-savings",
             "timeout": 8000
           }
         ]
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" prompt",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\"; [ -f \"$f\" ] && command -v node >/dev/null 2>&1 || exit 0; exec node \"$f\" prompt",
             "timeout": 15000
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" session-start",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\"; [ -f \"$f\" ] && command -v node >/dev/null 2>&1 || exit 0; exec node \"$f\" session-start",
             "timeout": 8000
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" stop",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\"; [ -f \"$f\" ] && command -v node >/dev/null 2>&1 || exit 0; exec node \"$f\" stop",
             "timeout": 8000
           }
         ]

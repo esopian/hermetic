@@ -13,6 +13,11 @@ import { FIXTURE_CONFIG, MemoryBackend, seedFixtureFleet } from "../src/backend/
 import { agentParamPath } from "../src/backend/constants.ts";
 import { HermeticError } from "../src/errors.ts";
 import { pendingApplied } from "../src/profiles/profile-binding.ts";
+import {
+  CONVERGE_TIMEOUT_MS,
+  HERMES_CONVERGE_TIMEOUT_MS,
+  rolloutConvergeTimeoutMs,
+} from "../src/agents/converge.ts";
 import { drain, testHermetic } from "./helpers.ts";
 import type { Agent, OpEvent } from "../src/schema/index.ts";
 
@@ -375,10 +380,16 @@ describe("a config the fleet's published release could not apply", () => {
   });
 
   test("a release that implements everything is not refused", async () => {
-    // `atlas` is a browser agent in the fixture, so the document it renders
-    // also asks for the browser stack — "everything" is every capability this
-    // agent's configuration names, not a fixed pair.
-    const { hermetic } = await publish(["gateway-unit", "restart-units", "browser-stack"]);
+    // `atlas` is a browser agent in the fixture with a memory provider, so the
+    // document it renders also asks for the browser stack and the memory
+    // provider — "everything" is every capability this agent's configuration
+    // names, not a fixed pair.
+    const { hermetic } = await publish([
+      "gateway-unit",
+      "restart-units",
+      "browser-stack",
+      "memory-provider",
+    ]);
     await expect(hermetic.agents.set({ name: "atlas", size: "large" })).resolves.toBeTruthy();
   });
 
@@ -477,5 +488,34 @@ describe("a config the fleet's published release could not apply", () => {
         agentParamPath(FIXTURE_CONFIG.fleet_id, "corvid", before.pending!.credential_ref!),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * A converge onto a memory provider that runs a server may be installing it
+ * (`agent set --memory`, §6.2), so the rollout waits as long for that agent as
+ * `upgrade --now` waits for a Hermes install. Asserted on the pure choice and
+ * the plan's warning: the wait itself polls in real time, and exercising the
+ * ten-minute budget end to end would take ten minutes.
+ */
+describe("the converge budget for an agent with a memory server", () => {
+  test("a server provider gets the Hermes-install budget, the rest the ordinary one", () => {
+    expect(rolloutConvergeTimeoutMs({ memory: null })).toBe(CONVERGE_TIMEOUT_MS);
+    expect(rolloutConvergeTimeoutMs({})).toBe(CONVERGE_TIMEOUT_MS);
+    expect(rolloutConvergeTimeoutMs({ memory: { provider: "holographic" } })).toBe(CONVERGE_TIMEOUT_MS);
+    for (const provider of ["hindsight", "openviking", "honcho"] as const) {
+      expect(rolloutConvergeTimeoutMs({ memory: { provider } })).toBe(HERMES_CONVERGE_TIMEOUT_MS);
+    }
+    expect(HERMES_CONVERGE_TIMEOUT_MS).toBeGreaterThan(CONVERGE_TIMEOUT_MS);
+  });
+
+  test("the plan names both budgets", async () => {
+    const backend = seedFixtureFleet(new MemoryBackend({ directory: "seeded" }));
+    const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
+    behind(backend, "atlas");
+    const plan = await hermetic.plan.rollout({ agents: ["atlas"] });
+    expect(plan.warnings.join("\n")).toInclude(
+      "within 5 minute(s) (10 for one whose memory provider runs a server)",
+    );
   });
 });

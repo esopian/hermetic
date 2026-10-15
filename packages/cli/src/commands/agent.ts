@@ -20,7 +20,14 @@ import {
 import { renderOp } from "../stream.ts";
 import { assertConfirmable, confirmPlan } from "../confirm.ts";
 import { declare } from "../declare.ts";
-import { HermeticError, ROOT_GIB_MAX, ROOT_GIB_MIN, resolveCreatePreset } from "@hermetic/core";
+import { memoryHelpText } from "../memory-help.ts";
+import {
+  HermeticError,
+  MEMORY_PROVIDER_IDS,
+  ROOT_GIB_MAX,
+  ROOT_GIB_MIN,
+  resolveCreatePreset,
+} from "@hermetic/core";
 import type {
   HermesSettings,
   HoldableSetting,
@@ -185,6 +192,10 @@ export function createInputFrom(
       rollback_on_failure: opts["rollbackOnFailure"],
       hermes: hermesFrom(opts),
       hold: holdFrom(opts["hold"]),
+      // §6.2: absent inherits the fleet's default memory provider, so only a
+      // typed `--memory` reaches core; `none` is the one way to say "built-in
+      // only" over a fleet default, and core's enum takes it as written.
+      memory_provider: opts["memory"],
     }),
   });
 }
@@ -269,6 +280,10 @@ export function register(program: Command): void {
         "build on an existing data volume instead of creating one (`hermetic volume ls`)",
       )
       .option(
+        "--memory <provider|none>",
+        `Hermes external memory provider: ${MEMORY_PROVIDER_IDS.join(" | ")} | none; default: the fleet's default memory provider`,
+      )
+      .option(
         "--rollback-on-failure",
         "if the create fails, undo everything it made instead of leaving it for a re-run (an interrupt still leaves it resumable)",
       )
@@ -282,6 +297,8 @@ export function register(program: Command): void {
           "  hermetic agent create atlas --provider nous             the fleet's nous profile, if it has exactly one\n" +
           "  hermetic agent create atlas --secrets bitwarden\n" +
           "  hermetic agent create cinder-2 --volume vol-0c85d3b7f1a94e620   reuse a destroyed agent's memory\n" +
+          "  hermetic agent create atlas --memory holographic        an external memory provider beside the built-in one\n" +
+          "  hermetic agent create atlas --memory none               built-in memory only, whatever the fleet's default\n" +
           "  hermetic --fixture agent create atlas                   against the seeded fixture fleet\n" +
           "\nThe machine (size, data volume, system disk) comes from this laptop's create\n" +
           "presets unless you name it: --preset, else the default preset when no machine\n" +
@@ -289,7 +306,13 @@ export function register(program: Command): void {
           "--volume keeps the volume's own size. Everything else left out comes from the\n" +
           "fleet's defaults (`hermetic settings show`).\n" +
           "\nThere is no key to type. A credential belongs to a provider profile:\n" +
-          "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n",
+          "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n" +
+          "\nA memory provider needs no key either: it runs on the box, and one that makes\n" +
+          "model calls makes them with the agent's own provider credential. A provider\n" +
+          "that runs a server (hindsight, openviking, honcho) needs a size with room for\n" +
+          "it, or the create is refused before anything exists. honcho also needs an\n" +
+          "agent provider with an embeddings endpoint (openai, openrouter, nous, vercel).\n" +
+          memoryHelpText(),
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -474,7 +497,9 @@ export function register(program: Command): void {
 
   agent.addCommand(
     hermesOptions(globals(new Cmd("set")))
-      .description("change an agent's settings; takes effect on the next rerun or recreate")
+      .description(
+        "change an agent's settings; takes effect on the next rerun or recreate, or `plan rollout` + `apply`",
+      )
       .argument("<name>", "agent name")
       .option("--secrets <mode>", "none | bitwarden")
       .option(
@@ -500,14 +525,22 @@ export function register(program: Command): void {
       )
       .option("--hermes-version <version>", "pin a hermes version")
       .option(
+        "--memory <provider|none>",
+        `Hermes external memory provider: ${MEMORY_PROVIDER_IDS.join(" | ")} | none; switching keeps the old provider's data on the volume`,
+      )
+      .option(
         "--expected-version <n>",
         "refuse unless the agent row is still at this version (`agent status --json` prints it)",
       )
       .addHelpText(
         "after",
-        "\nA provider change is saved, not applied: `hermetic plan rollout <name>` shows\n" +
+        "\nA provider change is saved, not applied: `hermetic plan rollout --agent <name>` shows\n" +
           "what it will do and `hermetic apply` performs it — copying the credential,\n" +
-          "re-rendering the configuration and restarting Hermes on the box.\n",
+          "re-rendering the configuration and restarting Hermes on the box.\n" +
+          "\nA --memory switch reaches a running box the same way (`plan rollout`, then\n" +
+          "`apply`). The old provider's data stays on the volume, so switching back finds it —\n" +
+          "except openviking's after a rebinding that changes how the agent embeds.\n" +
+          memoryHelpText(),
       )
       .action(async (name: string, opts: Record<string, unknown>, cmd: Command) => {
         const ctx = await openCtx(cmd);
@@ -540,8 +573,18 @@ export function register(program: Command): void {
             hermes_version: opts["hermesVersion"],
             hermes: hermesFrom(opts, { omitModel: true }),
             hold: holdFrom(opts["hold"]),
+            memory_provider: opts["memory"],
           }),
         );
+        /**
+         * The provider before the call, read only to tell the operator what
+         * moved: `set` returns the row after, and a no-op returns it unchanged.
+         * Skipped under `--json`, which prints only the row.
+         */
+        const memoryBefore =
+          input.memory_provider !== undefined && !ctx.flags.json
+            ? ((await ctx.hermetic.agents.get(input.name)).memory?.provider ?? "none")
+            : null;
         const agent = await ctx.hermetic.agents.set(input);
         if (ctx.flags.json) {
           await outJson(agent);
@@ -551,7 +594,16 @@ export function register(program: Command): void {
         if (agent.pending !== null && agent.pending !== undefined) {
           await err(
             `saved — pending apply: profile ${agent.pending.profile_id} r${agent.pending.profile_revision}, model ${agent.pending.model}. ` +
-              `Run \`hermetic apply\` (\`hermetic plan rollout ${agent.name}\` first) to perform it.\n`,
+              `Run \`hermetic apply\` (\`hermetic plan rollout --agent ${agent.name}\` first) to perform it.\n`,
+          );
+        }
+        const memoryAfter = agent.memory?.provider ?? "none";
+        if (memoryBefore !== null && memoryBefore !== memoryAfter) {
+          await err(
+            `memory: ${memoryBefore} → ${memoryAfter}; run \`hermetic plan rollout --agent ${agent.name}\` then ` +
+              "`hermetic apply` to switch the running box (restarts Hermes briefly)" +
+              (memoryBefore === "none" ? "" : `; ${memoryBefore}'s data stays on the volume`) +
+              "\n",
           );
         }
       }),

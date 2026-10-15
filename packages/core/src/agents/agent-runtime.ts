@@ -584,6 +584,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
        * rotated since must not move a manifest nobody has applied yet.
        */
       provider_key_ref: credentialSlotOf(agent),
+      // Pinned on the row (at create, or by `agent set --memory`), like `seed`:
+      // a fleet default changed since must not re-render this agent.
+      ...(agent.memory ? { memory: { provider: agent.memory.provider } } : {}),
       region,
     });
   }
@@ -611,7 +614,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps) {
    * - the manifest cannot be read at all → not this guard's problem. `create`
    *   fails on the release read a moment later with a better message.
    */
-  async function assertReleaseCanApply(manifest: AgentConfig): Promise<void> {
+  async function assertReleaseCanApply(manifest: Pick<AgentConfig, "requires">): Promise<void> {
     const needs = manifest.requires ?? [];
     if (needs.length === 0) return;
     const published = (await readFleetManifest(backend.artifacts).catch(() => null))?.hermeticd;

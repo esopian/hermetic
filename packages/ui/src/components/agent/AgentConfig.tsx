@@ -109,7 +109,7 @@ export function AgentConfig({
     <div className="dr-pane dr-cfg">
       <div className="dr-say">
         <div className="kicker">Config</div>
-        <p>Only the provider profile and model change here; the rest is read-only.</p>
+        <p>Only the provider profile, model and memory provider change here; the rest is read-only.</p>
       </div>
 
       {/*

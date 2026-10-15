@@ -179,6 +179,27 @@ export const ERROR_CODES = [
    */
   "MODEL_NOT_GRANTED",
   /**
+   * A create chose (or inherited) an external memory provider whose server
+   * needs more instance memory than the chosen size has
+   * (`MEMORY_PROVIDERS[id].min_mem_gib`). Refused before anything exists
+   * rather than left to swap beside Hermes and the browser stack. The remedy
+   * is a larger size, or `--memory none`.
+   */
+  "MEMORY_PROVIDER_UNDERSIZED",
+  /**
+   * A create chose (or inherited) an external memory provider that makes model
+   * calls of its own, and the agent's bound model provider is not one it can be
+   * mapped onto (`MEMORY_PROVIDERS[id].vendors`) — honcho, for one, needs an
+   * embeddings endpoint anthropic and bedrock do not have. Refused before
+   * anything exists: the alternative is a server that starts and fails every
+   * extraction. The remedy is another profile, or another provider.
+   *
+   * `agents.set` refuses the same rebinding, and also one that would move an
+   * openviking agent between the provider's embeddings and its local model,
+   * whose stored vectors have another width.
+   */
+  "MEMORY_LLM_UNSUPPORTED",
+  /**
    * The box's Hermes dashboard could not be reached for a chat turn (§9.2):
    * the laptop is off the tailnet, the instance is stopped, or Hermes is
    * not listening. Distinguished from the codes below because it is the one an

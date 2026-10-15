@@ -17,6 +17,7 @@ export { FILES_APP_CAP, FILES_RETENTION_DAYS, resolveFilesSettings } from "../sh
 export type { FilesSettings, FilesSettingsSource } from "../shared/files.ts";
 import { FleetIdSchema, Iso, ProfileId, Region, SecretSlug, Sha256, Version } from "./common.ts";
 import { FleetName } from "./directory.ts";
+import { StoredMemoryProviderId } from "./memory.ts";
 import {
   Lock,
   PROVIDERS,
@@ -154,6 +155,13 @@ export const FleetSettings = z.object({
    * absent, which is a fleet that has not been migrated yet.
    */
   default_profile: ProfileId.nullable().optional(),
+  /**
+   * The external memory provider a create inherits when it names none. Absent
+   * or `null` is Hermes's built-in memory only; a create can still override it
+   * either way (`CreateAgentInput.memory_provider`). Read once, at create, and
+   * pinned on the row — changing it moves no existing agent.
+   */
+  default_memory_provider: StoredMemoryProviderId.optional(),
   /**
    * Whether a newly published hermeticd release reaches the fleet at once
    * (§6.5) — the laptop asking every running box to take it right after
