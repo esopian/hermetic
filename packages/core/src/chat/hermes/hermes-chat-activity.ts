@@ -119,16 +119,6 @@ export function hermesActivity(
       return text(payload.key)
         ? make("notice", `notification:${payload.key}`, "Notice dismissed", "done")
         : null;
-    case "tool.output_risk":
-      return make(
-        "notice",
-        `risk:${text(payload.tool_id) ?? text(payload.name) ?? "tool"}`,
-        payload.redacted === true ? "Tool output was redacted" : "Tool output needs review",
-        "warning",
-        Array.isArray(payload.findings)
-          ? payload.findings.filter((item): item is string => typeof item === "string").join(" · ")
-          : text(payload.risk),
-      );
     case "session.reclaimed":
       return make(
         "notice",

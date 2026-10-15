@@ -510,6 +510,25 @@ describe("hermes-chat · the recorded turn", () => {
     expect(frames.flatMap((f) => (f.type === "delta" ? [f.text] : []))).toEqual(["pong"]);
   });
 
+  test("a flagged web result keeps its tool row without a review notice", async () => {
+    const h = harness(
+      turnScript([
+        eventFrame("tool.complete", 3, { name: "web_extract", args: {}, result: "page text" }),
+        eventFrame("tool.output_risk", 4, {
+          tool_id: "call1",
+          name: "web_extract",
+          risk: "high",
+          findings: ["invisible_unicode_U+200B"],
+          redacted: false,
+        }),
+        eventFrame("message.complete", 5, { text: "done", status: "complete" }),
+      ]),
+    );
+    const content = blocks(body(await collect(createHermesChat(h.deps).send(BOX, "d", "go"))));
+    expect(content.some((block) => block.kind === "tool" && block.name === "web_extract")).toBe(true);
+    expect(content.some((block) => block.kind === "activity" || block.kind === "unknown")).toBe(false);
+  });
+
   test("a turn whose text arrives only on message.complete still renders", async () => {
     // Upstream coalesces deltas on a 33 ms timer; a short, fast answer can land
     // entirely inside `message.complete` with no delta before it.
