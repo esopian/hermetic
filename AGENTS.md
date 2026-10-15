@@ -28,6 +28,7 @@ Where to read for common tasks:
 - **Add a long operation** — a module with an explicit deps object, not another function in `hermetic.ts`. See rule 5.
 - **Bump `FOUNDATION_VERSION`** — see rule 7.
 - **Bump `chrome_ref`** — take the new Chrome for Testing zip's sha256 and byte size, edit `BUILD_VERSIONS.chrome_ref`/`chrome_sha256`/`chrome_size` (`packages/core/src/build-versions.ts`), then `hermetic artifacts push` to mirror it. A box gets the new pin when its config is rendered — `agent create` or `recreate`, not `rerun` (which only resumes an `error` agent). Same owner and cadence as `hermes_ref`; Chrome for Testing does not self-update. §7.3/§3.6.
+- **Cut a release** — use `release` (`.claude/skills/release/SKILL.md`, also exposed to Codex through `.agents/skills/release`): it recommends the version from the changes since the last tag, drafts the notes, confirms unless `--auto`, then runs `bun run release`. Must run from a clean `master` checkout. See CONTRIBUTING.md "Cutting a release".
 - **Open a PR** — use `create-pr` (`.claude/skills/create-pr/SKILL.md`, also exposed to Codex through `.agents/skills/create-pr`), every time. See Conventions.
 - **Add a second fleet** — `hermetic init --attach --fleet <id|alias>` joins an existing foundation, `init --create` makes a new one. `hermetic fleet alias <fleet-id> <alias>` labels a fleet, `--clear` unlabels it, `fleet use <fleet-id|alias>` switches the local default. `fleet_id` is the identity; the alias is display only. §4.6/§4.8.
 
