@@ -359,3 +359,45 @@
 .ch-conv-prev .ch-conv-silent {
   color: var(--fg3);
 }
+
+/* ── slash commands ──────────────────────────────────────────────────────────
+
+   The gateway's command layer answering a `/command`, not the agent speaking:
+   a ruled mono pane like a notice, `--acc` when answered, `--bad` when
+   refused and `--warn` when the directive cannot be carried out here. */
+
+.ch-command {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--acc);
+  background: var(--bg2);
+  font-size: 12px;
+}
+.ch-command.error {
+  border-color: var(--bad);
+}
+.ch-command.unsupported {
+  border-color: var(--warn);
+}
+.ch-command-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--mono);
+}
+.ch-command.error .ch-command-head .kicker {
+  color: var(--bad);
+}
+.ch-command.unsupported .ch-command-head .kicker {
+  color: var(--warn);
+}
+.ch-command-warning {
+  margin: 6px 0 0;
+  color: var(--warn);
+}
+.ch-command .ch-code {
+  margin-top: 6px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
