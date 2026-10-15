@@ -689,6 +689,7 @@ export function ChatProvider({
     live,
     context,
     sending,
+    remoteBusy,
     activity,
     turnActivities,
     turnError,
@@ -735,6 +736,7 @@ export function ChatProvider({
   } = useSendQueue({
     selection,
     sending,
+    remoteBusy,
     turnError,
     reconnecting,
     send: sendSelected,
@@ -744,6 +746,7 @@ export function ChatProvider({
       const record = conversations.view(target);
       return {
         sending: record.sending,
+        remoteBusy: record.remoteBusy,
         turnError: record.turnError,
         reconnecting: record.reconnecting,
       };
@@ -1039,6 +1042,7 @@ export function ChatProvider({
       live,
       context,
       sending,
+      remoteBusy,
       activity,
       turnActivities,
       turnError,
@@ -1096,6 +1100,7 @@ export function ChatProvider({
       live,
       context,
       sending,
+      remoteBusy,
       activity,
       turnActivities,
       turnError,

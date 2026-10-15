@@ -71,8 +71,14 @@ export async function startInit(
   input: InitInput,
   log?: AppLog,
 ): Promise<{ op_id: string; op: OpSummary }> {
-  const session = state.session;
-  if (!session) {
+  /**
+   * §4.8: with a fleet open this is an *adding* init — another fleet beside
+   * the one the dashboard is serving, on a session of its own. The handler has
+   * already refused everything but a create on that path (`lifecycle.ts`).
+   */
+  const adding = state.initialized;
+  const session = adding ? null : state.session;
+  if (!adding && !session) {
     throw new HermeticError("CONFLICT", "already initialized; use `hermetic init --reset`");
   }
   const inFlight = state.initOpId;
@@ -94,6 +100,7 @@ export async function startInit(
   // (in which case `ops.wait` releases it once the op settles).
   state.beginInit(PENDING_INIT_OP);
   try {
+    const wizard = session ?? (await state.addSession());
     // One STS call for the chosen profile, before anything is written. Core
     // compares the twelve digits the operator typed against what this returns,
     // so binding to a claimed account cannot freeze the wrong one. Core
@@ -101,9 +108,23 @@ export async function startInit(
     // region falls back to the profile's own default.
     const region =
       input.region ??
-      (await session.hermetic.init.listProfiles()).find((p) => p.name === profile)?.region ??
+      (await wizard.hermetic.init.listProfiles()).find((p) => p.name === profile)?.region ??
       FALLBACK_REGION;
-    const identity = await session.hermetic.init.resolveIdentity(profile, region);
+    const identity = await wizard.hermetic.init.resolveIdentity(profile, region);
+
+    /**
+     * §4.6: one home, one account. Core refuses a second account too, but only
+     * at the freeze — after the stack, the tables and the directory row exist.
+     * An adding init knows the account it must stay in before it starts.
+     */
+    const homeAccount = adding ? (state.target?.account_id ?? null) : null;
+    if (homeAccount !== null && identity.account_id !== homeAccount) {
+      throw new HermeticError(
+        "CONFLICT",
+        `profile ${profile} resolves to account ${identity.account_id}, but this home is frozen to ${homeAccount}; a new fleet must be in the same account`,
+        { frozen_account: homeAccount, observed_account: identity.account_id },
+      );
+    }
 
     // A mismatched `mode` fails inside core's `init` generator too, but only
     // after the op has been started and has begun mutating — the UI would see
@@ -112,8 +133,10 @@ export async function startInit(
     // `attach` or `create` is checked against what the wizard's own read-only
     // `describeFoundation` sees, so the caller gets a synchronous 409 instead.
     const mode = input.mode ?? "auto";
-    if (mode !== "auto") {
-      const foundation = await session.hermetic.init.describeFoundation(
+    // An adding create is *meant* to land beside a foundation that is already
+    // here (§4.8); the probe would only ever find a neighbour.
+    if (mode !== "auto" && !adding) {
+      const foundation = await wizard.hermetic.init.describeFoundation(
         identity.profile,
         identity.region,
       );
@@ -132,7 +155,14 @@ export async function startInit(
       }
     }
 
-    const bound = session.bind({
+    /**
+     * The fleets frozen here before this run, so the one it adds can be told
+     * apart afterwards: core's events narrate the new `fleet_id` but do not
+     * carry it as a field, and the local half of `fleets.list` always answers.
+     */
+    const before = adding ? await localFleetIds(state) : null;
+
+    const bound = wizard.bind({
       profile: identity.profile,
       region: identity.region,
       accountId: identity.account_id,
@@ -156,6 +186,15 @@ export async function startInit(
       state.endInit();
       if (summary?.status !== "ok") return;
       try {
+        if (before !== null) {
+          const added = [...(await localFleetIds(state))].find((id) => !before.has(id));
+          if (added === undefined) {
+            throw new Error("init finished but no new fleet was frozen in this home");
+          }
+          await state.adoptAdded(added);
+          log?.line("info", "init", `added fleet ${added}; serving it`);
+          return;
+        }
         await state.adopt();
         log?.line("info", "init", "adopted the new fleet; serving the dashboard");
       } catch (e) {
@@ -177,4 +216,12 @@ export async function startInit(
     state.endInit();
     throw e;
   }
+}
+
+/** The `fleet_id`s frozen in this home, read through the fleet the server is serving. */
+async function localFleetIds(state: AppState): Promise<Set<string>> {
+  const listed = await state.hermetic.fleets.list();
+  return new Set(
+    listed.fleets.filter((f) => f.local && f.fleet_id !== null).map((f) => f.fleet_id as string),
+  );
 }

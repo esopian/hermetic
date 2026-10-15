@@ -31,6 +31,7 @@ import {
 import type { Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
 import { observeSubagent, reapplySubagents, takeSubagents } from "./chat-subagents.ts";
 import { mergeAttachments } from "./chat-attachments.ts";
+import { noteBusy } from "./chat-remote-busy.ts";
 
 /**
  * How long a `reconnecting` advisory stands before it decays back to `live`.
@@ -172,6 +173,7 @@ export function useObservation({
             // made; the seed stays, because the turn itself is still streaming
             // and the rows it produces from here on belong to the new session.
             appendMissing(record, takeHeld(record, true));
+            record.remoteBusy = null;
             // The children belong to the conversation that recorded them.
             const children = takeSubagents(record);
             if (retiredSession) {
@@ -431,6 +433,12 @@ export function useObservation({
             observeSubagent(owner, event.block, Date.now());
           break;
         }
+        case "busy": {
+          // The box's word on a turn running here, whoever started it
+          // (`chat-remote-busy.ts`). A probe repeating what is held re-renders nothing.
+          if (!noteBusy(record, event)) return;
+          break;
+        }
         case "reconnect": {
           // Advisory. The server is retrying its own upstream read; the
           // transcript on screen is still the last thing the box said.
@@ -462,6 +470,8 @@ export function useObservation({
           record.observe = "failed";
           record.observeAttempt = 0;
           record.observeError = { code: event.code, message: event.message };
+          // No more probes will come, so the last one says nothing now.
+          record.remoteBusy = null;
           break;
         }
       }
@@ -557,6 +567,8 @@ export function useObservation({
         record.observeQuietTimer = null;
         record.observe = connected ? "live" : "reconnecting";
         if (connected) record.observeAttempt = 0;
+        // Unknown while the feed is down; the replayed snapshot and probes say again.
+        else record.remoteBusy = null;
       }
       changed();
     },

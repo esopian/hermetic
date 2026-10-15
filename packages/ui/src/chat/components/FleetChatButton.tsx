@@ -4,8 +4,10 @@ import { useListeningIfAvailable } from "../../state/listening-state.tsx";
 /**
  * Keep the card's details action separate from its direct conversation entry.
  *
- * **Chat on an unwatched box is disabled, not automatic.** Listening is opt-in,
- * local and per fleet (§4.9): a click here starting it would turn a button that
+ * **Chat on an unwatched box is disabled, not automatic.** Listening is the
+ * operator's choice, local and per fleet (§4.9) — on by default only for an
+ * agent this laptop created, and off once they turn it off: a click here
+ * starting it would turn a button that
  * reads one conversation into a standing preference change, and the operator
  * who wanted the one conversation would not be told. So the button is disabled
  * and says what to do instead.

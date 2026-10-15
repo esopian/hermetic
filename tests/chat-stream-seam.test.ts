@@ -430,6 +430,10 @@ describe("seam: the envelope the fan-in writes is the one the UI reads", () => {
       sync: () => Promise.resolve(),
       owned: () => [],
       observing: () => [],
+      failed: () => [],
+      health: () => [],
+      epoch: () => 0,
+      restart: () => Promise.resolve(false),
       join: () => (async function* () {})(),
       resume: (target) =>
         Promise.resolve({

@@ -239,6 +239,13 @@ export function createHermetic(deps: HermeticDeps) {
     volumeClaims,
     applyPending,
     purgeLocal: purgeLocalAgent,
+    // §9.2: a new agent is listened to by default. Its incarnation is recorded
+    // first, so a predecessor's local state is purged before the opt-in lands
+    // and a later read does not purge the opt-in as a predecessor's (§6.7).
+    listenLocal: async (fleet, agent) => {
+      await reconcileIncarnations([agent], { complete: false });
+      instanceListening.set(fleet, agent.name, true);
+    },
     tsKeyPath: (name) => tsKeyPath(fleetId(), name),
     providerKeyPath: (name) => providerKeyPath(fleetId(), name),
     agentSlotPath: (name, slot) => agentParamPath(fleetId(), name, slot),

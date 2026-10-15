@@ -106,10 +106,18 @@ export function initRequestBody(input: {
   };
 }
 
-function Rail({ step, skipFoundation }: { step: StepId; skipFoundation: boolean }) {
+function Rail({
+  step,
+  skipFoundation,
+  adding,
+}: {
+  step: StepId;
+  skipFoundation: boolean;
+  adding: boolean;
+}) {
   return (
     <div className="wiz-rail">
-      <div className="kicker">Bind this home</div>
+      <div className="kicker">{adding ? "Add a fleet" : "Bind this home"}</div>
       <div className="steps" style={{ margin: "14px 0 0" }}>
         {STEP_LABELS.map((s) => {
           const skipped = s.id === 3 && skipFoundation;
@@ -227,13 +235,33 @@ export function InitWizard({
   meta,
   onOpenFleet,
   onOpenReceipt,
+  adding = false,
+  onCancel,
 }: {
   meta: Meta | null;
   onOpenFleet: () => void;
   /** Reopen the receipt of the teardown that returned this home here (§4.6). */
   onOpenReceipt?: () => void;
+  /**
+   * §4.8: a fleet is already open and this run adds another to the same
+   * account. Always the create branch, whatever the probe finds — a foundation
+   * already in the account is a neighbour, not the target — and the account
+   * must be the one this home is frozen to. The server switches to the new
+   * fleet when the op lands.
+   */
+  adding?: boolean;
+  /** Leave the wizard without doing anything; offered only while `adding`. */
+  onCancel?: (() => void) | undefined;
 }) {
   const fleet = useFleet();
+  /**
+   * The fleet open when the wizard was raised. An adding run is finished from
+   * the dashboard's point of view only once the server serves a *different*
+   * fleet — `initialized` was true before anything happened.
+   */
+  const startFleetId = useRef(meta?.fleet?.id ?? meta?.config?.fleet_id ?? null).current;
+  /** The account this home is frozen to; an adding run may not leave it (§4.6). */
+  const homeAccount = adding ? (meta?.config?.account_id ?? null) : null;
   // An init op the engine is still running outlives this tab. Read before
   // anything else so the first paint of a reloaded page is the progress view
   // rather than step 1 — see `INIT_OPID_KEY`.
@@ -320,7 +348,11 @@ export function InitWizard({
    * the op was never going to run. The stored branch is what that op actually
    * asked for, so it wins until a probe of this tab's own says otherwise.
    */
-  const attaching = foundation === null && resumed ? resumed.attaching : foundation?.found === true;
+  const attaching = adding
+    ? false
+    : foundation === null && resumed
+      ? resumed.attaching
+      : foundation?.found === true;
   // One reading of the OAuth check, shared by the verdict line and the note.
   const oauthSays = oauthVerdict(oauthStatus, secret, oauth, oauthError);
   const tailnet = ts?.tailnet ?? resumed?.tailnet ?? "";
@@ -597,7 +629,10 @@ export function InitWizard({
       if (!alive) return;
       const next = await refreshMeta();
       if (!alive) return;
-      if (next && isInitialized(next)) {
+      const landed = adding
+        ? next !== null && isInitialized(next) && (next.fleet?.id ?? null) !== startFleetId
+        : next !== null && isInitialized(next);
+      if (landed) {
         setReady(true);
         setWaiting(false);
         return;
@@ -605,7 +640,11 @@ export function InitWizard({
       tries += 1;
       if (tries > 10) {
         setWaiting(false);
-        setFailure("the engine finished but this home still reports no fleet; reload to retry");
+        setFailure(
+          adding
+            ? "the fleet was created, but the dashboard is still on the previous one; pick the new fleet in the fleet menu"
+            : "the engine finished but this home still reports no fleet; reload to retry",
+        );
         return;
       }
       timer = setTimeout(() => void poll(), 500);
@@ -615,7 +654,14 @@ export function InitWizard({
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [op.finished, op.ok, refreshMeta]);
+  }, [op.finished, op.ok, refreshMeta, adding, startFleetId]);
+
+  /**
+   * §4.6: one home, one account. Core refuses a second account at the freeze,
+   * which is after the stack exists; the server refuses it before the op
+   * starts, and this says so before the operator gets as far as asking.
+   */
+  const wrongAccount = homeAccount !== null && identity !== null && identity.account_id !== homeAccount;
 
   const chosen = useMemo(() => profiles.find((p) => p.name === profile) ?? null, [profiles, profile]);
 
@@ -672,7 +718,7 @@ export function InitWizard({
   return (
     <div className="wizard">
       <div className="wiz-col">
-        <Rail step={step} skipFoundation={attaching} />
+        <Rail step={step} skipFoundation={attaching} adding={adding} />
 
         <div className="wiz-panel">
           {step === 1 ? (
@@ -738,8 +784,11 @@ export function InitWizard({
                 </div>
               ) : null}
               <div className="kicker">Step 01</div>
-              <h2 className="wiz-title">Choose a profile</h2>
+              <h2 className="wiz-title">{adding ? "Add a fleet" : "Choose a profile"}</h2>
               <p className="wiz-copy">
+                {adding
+                  ? `Pick a profile for account ${homeAccount ?? "—"}. The new fleet gets its own foundation; the fleets already here are untouched. `
+                  : ""}
                 No identity is resolved until you pick — SSO profiles won&apos;t prompt yet.
               </p>
               {profilesError ? (
@@ -780,18 +829,25 @@ export function InitWizard({
 
               <div className="wiz-foot">
                 <span className="wiz-note">Reads ~/.aws/config only; nothing is written yet.</span>
-                <button
-                  type="button"
-                  className="btn btn-primary wiz-cta"
-                  disabled={!profile}
-                  style={{ opacity: profile ? 1 : 0.35 }}
-                  onClick={() => {
-                    if (checkStatus === "idle" && profile) runCheck(profile, region);
-                    setStep(2);
-                  }}
-                >
-                  Continue →
-                </button>
+                <span className="wiz-actions">
+                  {onCancel ? (
+                    <button type="button" className="btn btn-secondary wiz-cta" onClick={onCancel}>
+                      Cancel
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-primary wiz-cta"
+                    disabled={!profile}
+                    style={{ opacity: profile ? 1 : 0.35 }}
+                    onClick={() => {
+                      if (checkStatus === "idle" && profile) runCheck(profile, region);
+                      setStep(2);
+                    }}
+                  >
+                    Continue →
+                  </button>
+                </span>
               </div>
             </>
           ) : null}
@@ -815,12 +871,20 @@ export function InitWizard({
                 foundation={foundation}
                 error={checkError}
                 attaching={attaching}
+                adding={adding}
                 credLine={`${profile} · ${chosen ? credentialTypeOf(chosen) : "unknown"}`}
                 onRetry={() => profile && runCheck(profile, region)}
                 onBack={() => back(1)}
               />
 
-              {checkStatus === "confirmed" && identity ? (
+              {checkStatus === "confirmed" && identity && wrongAccount ? (
+                <div className="wiz-error mono" role="alert">
+                  This profile resolves to account {identity.account_id}, but this home is frozen to{" "}
+                  {homeAccount}. A new fleet must be in the same account; pick another profile.
+                </div>
+              ) : null}
+
+              {checkStatus === "confirmed" && identity && !wrongAccount ? (
                 <>
                   <label className="verify-row check-fade">
                     <input
@@ -836,8 +900,9 @@ export function InitWizard({
                     </span>
                   </label>
                   <div className="verify-sub mono check-fade">
-                    hermetic freezes this home to this account. Every create, upgrade and teardown will
-                    run here.
+                    {adding
+                      ? "The new fleet is frozen into this home beside the ones already here, and the dashboard switches to it when it is ready."
+                      : "hermetic freezes this home to this account. Every create, upgrade and teardown will run here."}
                   </div>
                 </>
               ) : null}
@@ -852,8 +917,8 @@ export function InitWizard({
                   <button
                     type="button"
                     className="btn btn-primary wiz-cta"
-                    disabled={!verified}
-                    style={{ opacity: verified ? 1 : 0.35 }}
+                    disabled={!verified || wrongAccount}
+                    style={{ opacity: verified && !wrongAccount ? 1 : 0.35 }}
                     onClick={() => (attaching ? void run() : setStep(3))}
                   >
                     {attaching ? "Attach →" : "Continue →"}
@@ -963,7 +1028,9 @@ export function InitWizard({
                   ? "Init failed"
                   : op.finished
                     ? op.ok
-                      ? "Home bound"
+                      ? adding
+                        ? "Fleet created"
+                        : "Home bound"
                       : "Init failed"
                     : "Initializing…"}
               </h2>
@@ -1001,8 +1068,13 @@ export function InitWizard({
                   {op.finished && op.ok ? (
                     <div className="wiz-foot">
                       <span className="wiz-done">
-                        Bound to {identity?.alias ?? shownProfile} · {shownAccountId} · {shownRegion}
-                        {waiting ? " · waiting for the local config…" : ""}
+                        {adding ? "Created in" : "Bound to"} {identity?.alias ?? shownProfile} ·{" "}
+                        {shownAccountId} · {shownRegion}
+                        {waiting
+                          ? adding
+                            ? " · switching to the new fleet…"
+                            : " · waiting for the local config…"
+                          : ""}
                       </span>
                       <button
                         type="button"

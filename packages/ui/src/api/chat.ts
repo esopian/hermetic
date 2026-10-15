@@ -253,7 +253,15 @@ export function sendTurn(
   bot: string,
   message: string,
   handlers: ChatTurnHandlers,
-  opts: { session?: string; attachments?: readonly { file_id: string }[] } = {},
+  /**
+   * `queued`: wait behind a turn already running in the session rather than
+   * redirect it (upstream `prompt.submit`'s busy mode). An idle session ignores it.
+   */
+  opts: {
+    session?: string;
+    queued?: boolean;
+    attachments?: readonly { file_id: string }[];
+  } = {},
 ): () => void {
   let fleet: FleetTarget;
   try {
@@ -277,6 +285,7 @@ export function sendTurn(
       bot,
       message,
       session: opts.session,
+      ...(opts.queued ? { queued: true } : {}),
       // Ids only: the bytes are already staged on the box (`api/files.ts`).
       ...(opts.attachments && opts.attachments.length > 0
         ? { attachments: opts.attachments.map((a) => ({ file_id: a.file_id })) }

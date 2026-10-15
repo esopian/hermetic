@@ -12,7 +12,10 @@
  * 3. **Queue** each image with `image.attach`, by absolute path: upstream
  *    resolves a relative one against the gateway process's cwd, not the
  *    session's.
- * 4. `prompt.submit` (the caller), which consumes the queue.
+ * 4. `prompt.submit` (the caller), which consumes the queue. Sent `queued`
+ *    to a session another client keeps busy, upstream moves the queue into
+ *    the waiting prompt; a different client's own busy submit landing between
+ *    3 and 4 would claim these images instead, a window of milliseconds.
  *
  * Upstream's per-session image queue survives an interrupt and a closed
  * socket, and `prompt.submit` is the only thing that empties it. A turn that

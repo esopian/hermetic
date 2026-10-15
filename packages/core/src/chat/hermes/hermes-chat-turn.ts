@@ -70,6 +70,18 @@ const SUBMIT_TITLES: Record<ChatStatusState, string> = {
 /** Upstream's "agent does not support active-turn redirect" (`methods_session.py`). */
 const REDIRECT_UNSUPPORTED = 4010;
 
+/** Upstream's "params carry a key this method's contract forbids" (`contracts/registry.py`). */
+const INVALID_PARAMS = 4000;
+
+/** `prompt.submit` refused because this gateway does not know `queued`. */
+function rejectedQueued(e: unknown): boolean {
+  return (
+    e instanceof HermeticError &&
+    e.details?.code === INVALID_PARAMS &&
+    /invalid params for prompt\.submit:[^\n]*\bqueued\b/.test(e.message)
+  );
+}
+
 /** An error frame, with `failure` always filled (and its surface when upstream sent one). */
 function fail(code: string, message: string, surface?: unknown): ChatFrame {
   return { type: "error", code, message, failure: chatFailure(code, message, surface) };
@@ -337,16 +349,34 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // the gateway's own reply to a finished background process.
       checkAbort(opts.signal, "prompt.submit");
       prompted = true;
-      const submitted = rec(
-        await rpc.request(
+      // `queued: true` asks upstream to run this prompt after the turn already
+      // in flight instead of applying `busy_input_mode` (interrupt, by
+      // default); an idle session ignores it (`tui_gateway/methods_prompt.py`,
+      // `session_auto_continue.py`). Sent only when asked for, so a plain send
+      // is byte-for-byte what it always was.
+      const params = { session_id: session, profile: bot, text: prompt };
+      let submittedRaw: unknown;
+      try {
+        submittedRaw = await rpc.request(
           "prompt.submit",
-          { session_id: session, profile: bot, text: prompt },
+          opts.queued === true ? { ...params, queued: true } : params,
           undefined,
-          {
-            signal: opts.signal,
-          },
-        ),
-      );
+          { signal: opts.signal },
+        );
+      } catch (e) {
+        // A box pinned to a Hermes that predates `queued` refuses it before
+        // the handler runs: dispatch validates params against a contract that
+        // forbids unknown keys and answers 4000 naming the key
+        // (`tui_gateway/rpc_dispatch.py`, `contracts/registry.py`
+        // `validate_params`). A request refused there never ran, so sending
+        // it once more without the flag cannot double the prompt; that box
+        // then applies its busy-input mode, which is all it ever could.
+        if (opts.queued !== true || !rejectedQueued(e)) throw e;
+        submittedRaw = await rpc.request("prompt.submit", params, undefined, {
+          signal: opts.signal,
+        });
+      }
+      const submitted = rec(submittedRaw);
       accepted = true;
       // Everything the socket delivered before this point — `gateway.ready`,
       // `session.info` — arrived because the socket opened, not because a turn
