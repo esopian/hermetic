@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   routinesList,
   routinesCreate,
@@ -7,21 +7,41 @@ import {
   routinesRun,
   routinesHistory,
 } from "../../api/index.ts";
-import type { BotRoutineView } from "../../api/index.ts";
+import type { BotRoutineView, ChatMessageView } from "../../api/index.ts";
+import { isVisible } from "../../lib/visibility.ts";
 import { gateFor, useBotCapabilities } from "../bot-capabilities.ts";
+import { useCronCallFinished } from "../cron-tools.ts";
 import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { CapabilityNote, gateControl } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
+
+/** How often an open rail re-reads the registry, for jobs changed anywhere else. */
+export const ROUTINES_POLL_MS = 60_000;
+
+/** The platform interval, returning its cancel like `ChatTiming.setInterval`. */
+const platformInterval = (fn: () => void, ms: number): (() => void) => {
+  const id = setInterval(fn, ms);
+  return () => clearInterval(id);
+};
+
 export function ScheduledJobs({
   instance,
   bot,
   title,
   fleetId,
+  live = null,
+  pollMs = ROUTINES_POLL_MS,
+  setInterval: every = platformInterval,
 }: {
   instance: string;
   bot: string;
   title: string;
   fleetId: string;
+  /** This bot's turn in flight; a cron call finishing in it re-reads the registry. */
+  live?: ChatMessageView | null;
+  pollMs?: number;
+  /** The scheduler behind the poll, for a test that steps its own clock. */
+  setInterval?: (fn: () => void, ms: number) => () => void;
 }) {
   const [jobs, setJobs] = useState<BotRoutineView[]>([]),
     [error, setError] = useState(""),
@@ -40,6 +60,40 @@ export function ScheduledJobs({
    */
   const capabilities = useBotCapabilities(instance);
   const gate = gateFor(capabilities, "routines");
+  /**
+   * Set by a re-read nobody asked for — the poll, or a cron call in chat — so
+   * the list stays on screen through it instead of flashing "Reading…" once a
+   * minute.
+   */
+  const quiet = useRef(false);
+  const reread = () => {
+    quiet.current = true;
+    setVersion((v) => v + 1);
+  };
+  useCronCallFinished(live, reread);
+  /**
+   * The poll runs only while the page is on screen: a hidden page cancels it,
+   * and coming back re-arms it rather than reading at once, since the operator
+   * returning is not news about the registry.
+   */
+  useEffect(() => {
+    if (!gate.allowed) return;
+    let cancel: (() => void) | null = null;
+    const track = () => {
+      const visible = isVisible();
+      if (visible && !cancel) cancel = every(reread, pollMs);
+      else if (!visible && cancel) {
+        cancel();
+        cancel = null;
+      }
+    };
+    track();
+    document.addEventListener("visibilitychange", track);
+    return () => {
+      document.removeEventListener("visibilitychange", track);
+      cancel?.();
+    };
+  }, [gate.allowed, pollMs, every]);
   useEffect(() => {
     if (!gate.allowed) {
       setJobs([]);
@@ -47,7 +101,8 @@ export function ScheduledJobs({
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
+    if (!quiet.current) setLoading(true);
+    quiet.current = false;
     setError("");
     routinesList({ instance, bot }, controller.signal)
       .then((r) => {
