@@ -907,19 +907,72 @@ describe("held and seeded settings", () => {
     expect(markerFor(out, "terminal_backend")).toBeUndefined();
   });
 
-  /** The model of a profile-bound agent is held whatever `hold` says (§8.3). */
-  test("a stated model is managed under an empty hold", () => {
+  /**
+   * A profile-bound agent's model is where it starts, not a hold (#53): seeded,
+   * so `hermes config set model.default` works on the box, and re-asserted
+   * behind a marker when the stated model changes.
+   */
+  test("a stated model is seeded and re-asserted under an empty hold", () => {
     const out = render({ ...base, hermes: { model: "stated-model" }, hermes_hold: [] });
-    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain('default: "stated-model"');
-    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).not.toContain("stated-model");
+    expect(fileAt(out, "/etc/hermes/config.yaml")).not.toContain("stated-model");
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).toContain('default: "stated-model"');
+    expect(markerFor(out, "model")).toContain("config set model.default 'stated-model'");
   });
 
-  /** A default create renders the same bytes whether or not the row has a list. */
-  test("an empty hold with nothing stated but the model renders as a legacy row does", () => {
-    const hermes = { model: "stated-model" } as const;
-    expect(render({ ...base, hermes, hermes_hold: [] }).config_hash).toBe(
-      render({ ...base, hermes }).config_hash,
+  test("--hold model puts the model in the managed scope, with no marker", () => {
+    const out = render({ ...base, hermes: { model: "stated-model" }, hermes_hold: ["model"] });
+    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain('default: "stated-model"');
+    expect(fileAt(out, "/etc/hermes/config.seed.yaml")).not.toContain("stated-model");
+    expect(markerFor(out, "model")).toBeUndefined();
+  });
+
+  /** A row from before `--hold` keeps its managed model and its `config_hash`. */
+  test("a legacy row still holds its stated model", () => {
+    const out = render({ ...base, hermes: { model: "stated-model" } });
+    expect(fileAt(out, "/etc/hermes/config.yaml")).toContain('default: "stated-model"');
+    expect(markerFor(out, "model")).toBeUndefined();
+  });
+
+  /**
+   * A model id is free text, and it reaches a root `/bin/sh` line three times.
+   * Every one of them is single-quoted, so a quote in the id is a literal.
+   */
+  test("a model id with shell metacharacters is quoted in the marker command", () => {
+    const model = "us.anthropic.claude:0'; rm -rf / #";
+    const out = render({ ...base, hermes: { model }, hermes_hold: [] });
+    const quoted = `'us.anthropic.claude:0'\\''; rm -rf / #'`;
+    expect(markerFor(out, "model")).toBe(
+      `test "$(cat /etc/hermetic/asserted/model 2>/dev/null)" = ${quoted} || { ` +
+        "runuser -u hermes -- env HERMES_HOME=/data/hermes/.hermes /usr/local/bin/hermes " +
+        `config set model.default ${quoted} >/dev/null && ` +
+        "systemctl try-restart hermes-dashboard.service hermes-gateway.service && " +
+        "install -d -m 0755 /etc/hermetic/asserted && " +
+        `printf '%s' ${quoted} > /etc/hermetic/asserted/model; }`,
     );
+  });
+
+  /**
+   * #53's acceptance, as far as a render can show it: an agent that set its own
+   * model has nothing to fight. The key is not in the managed scope (so `hermes
+   * config set` accepts it), and the only command that writes it is guarded by
+   * the marker of the last stated value, so a re-apply with the same answer
+   * leaves the agent's edit standing.
+   */
+  test("an agent's own model edit survives a re-apply with the same stated model", () => {
+    const input = { ...base, hermes: { model: "stated-model" }, hermes_hold: [] };
+    const first = render(input);
+    const again = render(input);
+    expect(again.config_hash).toBe(first.config_hash);
+    expect(fileAt(again, "/etc/hermes/config.yaml")).not.toMatch(/^\s+default:/m);
+    const writes = again.manifest.commands.filter((c) => c.includes("config set model.default"));
+    for (const command of writes) {
+      // Either the first-boot repair (runs only when no model resolves) or the
+      // marker-guarded re-assertion (runs only when the stated value moved).
+      expect(
+        command.startsWith('test "$(cat /etc/hermetic/asserted/model') ||
+          command.includes("config get model.default --json >/dev/null 2>&1 ||"),
+      ).toBe(true);
+    }
   });
 
   test("changing a stated, unheld value moves the config_hash", () => {

@@ -15,6 +15,7 @@ import {
   PROVIDERS,
   browserIdentities,
   hermesConfigGetArgv,
+  hermesConfigLeaves,
   hermesConfigSetArgv,
   splitHermesSettings,
 } from "../schema/index.ts";
@@ -64,6 +65,7 @@ const ASSERTED_DIR = "/etc/hermetic/asserted";
  * because it is re-asserted whether or not it was stated — see its own note.
  */
 const REASSERTED_LEAVES = {
+  model: "model.default",
   terminal_backend: "terminal.backend",
   max_turns: "agent.max_turns",
   reasoning_effort: "agent.reasoning_effort",
@@ -75,11 +77,13 @@ const REASSERTED_LEAVES = {
  * `ASSERTED_DIR/<key>`; the approvals note in `seedCommands` says why a marker
  * rather than a probe, and why it is written last.
  *
- * `value` is embedded raw in the `test` and the `printf`, so it is held to a
- * closed alphabet here rather than trusted to stay one: every caller today
- * passes an enum member or an integer, and a value with a quote in it would be
- * a shell injection into a root post-step. The `config set` argv is shell-quoted
- * as well, as the one place the rule must not depend on the caller.
+ * `value` reaches `/bin/sh` three times, in the `test`, the `config set` and
+ * the `printf`, and it is quoted every time: a model id is free text an
+ * operator chose, and a quote in it must not become a shell injection into a
+ * root post-step. A plain word (an enum member, an integer) keeps the spelling
+ * it has always had, `"off"` in the `test`, so adding the model to this list
+ * moved no other command and no other agent's `config_hash`. Anything else is
+ * single-quoted (`shellQuote`) in all three places.
  */
 function assertOnChange(
   key: keyof HermesSettings,
@@ -87,19 +91,16 @@ function assertOnChange(
   value: string,
   restart: string,
 ): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
-    throw new HermeticError("INTERNAL", `refusing to re-assert ${key}: value is not a plain word`, {
-      key,
-    });
-  }
+  const quoted = shellQuote(value);
+  const expected = /^[A-Za-z0-9._-]+$/.test(value) ? `"${value}"` : quoted;
   const marker = `${ASSERTED_DIR}/${key}`;
-  const sets = hermesConfigSetArgv(leaf, shellQuote(value)).join(" ");
+  const sets = hermesConfigSetArgv(leaf, quoted).join(" ");
   return (
-    `test "$(cat ${marker} 2>/dev/null)" = "${value}" || { ` +
+    `test "$(cat ${marker} 2>/dev/null)" = ${expected} || { ` +
     `${sets} >/dev/null && ` +
     `${restart} && ` +
     `install -d -m 0755 ${ASSERTED_DIR} && ` +
-    `printf '%s' '${value}' > ${marker}; }`
+    `printf '%s' ${quoted} > ${marker}; }`
   );
 }
 
@@ -340,6 +341,21 @@ export function hermesManagedConfig(input: RenderInput): string {
 }
 
 /**
+ * The keys hermetic owns on this agent, each with the value it renders (§6.4):
+ * every leaf of `hermesManagedConfig`, and nothing else.
+ *
+ * The boundary is the managed file because that is the one place hermetic
+ * *holds* a value: the provider wiring, the settings named in `--hold`, and
+ * hermetic's own infrastructure keys. A seeded key is not owned, even one
+ * hermetic re-asserts when the operator's stated answer changes: between those
+ * changes it is the agent's, and an agent that moved it is not drift. Recorded
+ * in the manifest (`AgentConfig.hermes_owned`), where the heartbeat reads it.
+ */
+export function hermesOwnedKeys(input: RenderInput): Record<string, string> {
+  return hermesConfigLeaves(hermesManagedConfig(input));
+}
+
+/**
  * The seeded half: what a new agent starts with and its operator then owns.
  *
  * This file is not Hermes's config — it is the *content* of one, parked in
@@ -494,8 +510,8 @@ export function hermesSeedConfig(input: RenderInput): string {
  * and a post-step that reported success would only move the report.
  *
  * Step 2 runs only when hermetic is not managing the model itself; when the
- * operator stated one, the managed config carries it and the agent's own file
- * is not involved.
+ * model is held, the managed config carries it and the agent's own file is not
+ * involved.
  *
  * `try-restart` rather than `restart` throughout: this list also runs on a box
  * where `hermes-dashboard.service` is deliberately stopped, and a post-step is not the
@@ -585,6 +601,11 @@ export function seedCommands(input: RenderInput): string[] {
    * `config_hash`, and nothing the agent reads. So the stated value is
    * re-asserted the way `approvals.mode` is — through Hermes, behind a marker,
    * on change only — and between changes the key is the box's.
+   *
+   * The model is one of them (§8.3): a profile-bound agent states the profile's
+   * model, so a profile refresh or `agent set --model` reaches the box through
+   * this step, while a model the agent picked for itself in between is left
+   * standing.
    *
    * Only a *stated* value. An unstated key is the fleet's default, which the
    * seed file already carried at first boot, and asserting it here would

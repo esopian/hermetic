@@ -194,7 +194,7 @@ function tailnetName(a: AgentView, fleetId?: string, fleetName?: string): string
  * The value is always knowable — an unstated setting is not unset, it is the
  * fleet default (or the provider's default model) that hermetic seeded — so all
  * of them are printed, and what varies is the owner. `managed` means hermetic
- * holds it (`--hold`, or the profile's model): it is in `/etc/hermes/config.yaml`,
+ * holds it (`--hold`, or any stated key on a row from before it): it is in `/etc/hermes/config.yaml`,
  * rewritten on every apply, and `agent set` is what moves it. `seeded` means it was written into the agent's
  * own config once and belongs to whoever is driving the agent since; the row
  * records what was asked for at create time, not what the box currently reads,
