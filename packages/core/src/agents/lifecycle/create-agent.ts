@@ -450,12 +450,10 @@ export function createCreateOp(deps: LifecycleDeps, release: ReleaseLookup) {
       /**
        * What the operator said, plus the one thing the profile says: the model.
        *
-       * The model is *managed* on every profile-bound agent, and deliberately
-       * so — a profile exists to answer "which model does this credential run",
-       * and an agent that could drift off it on the box would make the answer a
-       * suggestion. Everything else here is still only what was actually
-       * stated, and stated is not held: the rest is seeded, and only what
-       * `hold` names joins the model in the managed scope (`splitHermesSettings`).
+       * The model is stated on every profile-bound agent, so it is the agent's
+       * starting model and is re-asserted when the binding moves it (§8.3).
+       * Stated is not held: like everything else here it is seeded, and only
+       * what `hold` names goes into the managed scope (`splitHermesSettings`).
        */
       hermes: { ...(parsed.hermes ?? {}), model: binding.model },
       /**

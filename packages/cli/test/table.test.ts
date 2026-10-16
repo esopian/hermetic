@@ -83,15 +83,17 @@ describe("agent status · the Hermes settings", () => {
 
   /**
    * `--hold` (§6.4): with a list on the row, a stated value is seeded and
-   * re-asserted on change, a listed one is managed, and the model is managed
-   * either way.
+   * re-asserted on change and a listed one is managed. The model is no
+   * exception (#53).
    */
-  test("with a hold list, only a held setting and the model are managed", () => {
+  test("with a hold list, only a held setting is managed", () => {
     const a = agent({
       hermes: { model: "claude-sonnet-5", max_turns: 42, reasoning_effort: "high" },
       hermes_hold: ["reasoning_effort"],
     });
-    expect(line(a, "model")).toBe("claude-sonnet-5 (managed)");
+    expect(line(a, "model")).toBe(
+      "claude-sonnet-5 (seeded — the agent's to change; re-asserted when `agent set` moves it)",
+    );
     expect(line(a, "reasoning")).toBe("high (managed)");
     expect(line(a, "max turns")).toBe(
       "42 (seeded — the agent's to change; re-asserted when `agent set` moves it)",

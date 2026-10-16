@@ -267,8 +267,8 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
 
   /**
    * Either file may carry the model, and which one does is not this stage's
-   * business: hermetic manages the model when the operator named one and seeds
-   * it otherwise, and both spellings are correct (`splitHermesSettings`). What
+   * business: hermetic manages the model when it is held and seeds it
+   * otherwise, and both spellings are correct (`splitHermesSettings`). What
    * would not be correct is neither.
    */
   const hasModel = namesKey(managed, "model", "default") || namesKey(user, "model", "default");

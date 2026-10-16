@@ -54,6 +54,7 @@ import {
 } from "./render-system.ts";
 import {
   hermesManagedConfig,
+  hermesOwnedKeys,
   hermesSeedConfig,
   imageProvenance,
   seedCommands,
@@ -578,6 +579,9 @@ export function renderAgentConfig(input: RenderInput): RenderedAgentConfig {
     ...unhashed,
     config_hash,
     ...(requires.length === 0 ? {} : { requires }),
+    // Derived from the managed file in `files`, so outside the hash for the
+    // same reason `requires` is (`AgentConfig.hermes_owned`).
+    hermes_owned: hermesOwnedKeys(input),
   });
 
   const manifestFile: RenderedFile = {

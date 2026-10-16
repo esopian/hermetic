@@ -4,7 +4,10 @@ import {
   HERMES_DASHBOARD_PORT,
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
+  HERMES_MANAGED_CONFIG,
+  HERMES_USER_CONFIG,
 } from "@hermetic/core/schema";
+import { APPLIED_CONFIG_PATH, MANIFEST_PATH } from "../src/manifest.ts";
 import type { Agent, UpdateRequest } from "@hermetic/core/schema";
 import { makeAws } from "../src/aws.ts";
 import { runningBinarySha256 } from "../src/main.ts";
@@ -29,7 +32,7 @@ import {
   shortReason,
 } from "../src/heartbeat.ts";
 import { FakeHost } from "./fake-host.ts";
-import { RecordingSink, TEST_NAME, conditionalCheckFailed } from "./fixtures.ts";
+import { RecordingSink, TEST_NAME, conditionalCheckFailed, makeManifest } from "./fixtures.ts";
 import { captureOutput } from "./quiet.ts";
 
 // The commands these tests drive write their progress and log lines to the
@@ -1461,5 +1464,67 @@ describe("which Hermes this box says it is running (§6.6)", () => {
     const tick = await h.heartbeat.once();
     expect(tick.health.hermes).toBe(true);
     expect(h.updates().at(-1)?.input.ExpressionAttributeValues?.[":hv"]).toBeUndefined();
+  });
+});
+
+/**
+ * Drift on the keys hermetic owns (#53, `owned-drift.ts`): an event when the
+ * set of drifted keys changes, one more when it clears, and never a status
+ * change. The agent editing its own config is not watched at all.
+ */
+describe("owned-key drift", () => {
+  const MANAGED = 'model:\n  provider: "bedrock"\n';
+
+  function driftBox(): FakeHost {
+    const host = new FakeHost();
+    const manifest = makeManifest({ hermesConfigBody: MANAGED });
+    host.seed(
+      MANIFEST_PATH,
+      JSON.stringify({ ...manifest, hermes_owned: { "model.provider": "bedrock" } }),
+    );
+    host.seed(
+      APPLIED_CONFIG_PATH,
+      JSON.stringify({ config_hash: manifest.config_hash, applied_at: "x" }),
+    );
+    host.seed(HERMES_MANAGED_CONFIG, MANAGED);
+    return host;
+  }
+
+  const actions = (h: Harness): unknown[] =>
+    h.ddb.commandCalls(PutCommand).map((c) => c.input.Item?.["action"]);
+
+  test("a clean box says nothing", async () => {
+    const h = harness({ status: "ready", host: driftBox() });
+    await h.heartbeat.once();
+    await h.heartbeat.once();
+    expect(actions(h)).toEqual([]);
+  });
+
+  test("an owned key that moves is reported once, then cleared once", async () => {
+    const host = driftBox();
+    const h = harness({ status: "ready", host });
+    await h.heartbeat.once();
+    host.seed(HERMES_MANAGED_CONFIG, 'model:\n  provider: "openrouter"\n');
+    const tick = await h.heartbeat.once();
+    await h.heartbeat.once();
+    expect(actions(h)).toEqual(["config-drift"]);
+    const detail = String(h.ddb.commandCalls(PutCommand)[0]?.input.Item?.["detail"]);
+    expect(detail).toContain('model.provider (expected "bedrock", found "openrouter")');
+    // Report-only: the box keeps its status, and the file is not rewritten.
+    expect(tick.transitioned).toBeNull();
+    expect(await host.readFile(HERMES_MANAGED_CONFIG)).toContain("openrouter");
+
+    host.seed(HERMES_MANAGED_CONFIG, MANAGED);
+    await h.heartbeat.once();
+    expect(actions(h)).toEqual(["config-drift", "config-drift-cleared"]);
+  });
+
+  test("the agent changing a key hermetic did not set is never reported", async () => {
+    const host = driftBox();
+    const h = harness({ status: "ready", host });
+    await h.heartbeat.once();
+    host.seed(HERMES_USER_CONFIG, 'model:\n  default: "agent-chosen"\n');
+    await h.heartbeat.once();
+    expect(actions(h)).toEqual([]);
   });
 });
