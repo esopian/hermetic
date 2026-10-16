@@ -170,6 +170,8 @@ const SURFACE: Record<PublicMethod, string> = {
   "chat.swarms": "bots ls",
   "chat.sessions": "chat ls",
   "chat.history": "chat log",
+  // §9.2: the gateway's slash-command catalog, which the composer's picker lists.
+  "chat.commands": "chat commands",
   // The turn itself. It answers with the turn rather than an `op_id`, because a
   // turn is not an op and is never registered as one (§9.2).
   "chat.send": "chat",

@@ -88,7 +88,7 @@ import {
 import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
 import { fixtureDemoTurn } from "./fixture-chat-demo.ts";
-import { fixtureCommand } from "./fixture-chat-command.ts";
+import { fixtureCommand, fixtureCommandCatalog } from "./fixture-chat-command.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
@@ -411,21 +411,22 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
   /** Steers delivered, so each one's user row has an id of its own. */
   let steers = 0;
 
+  /** The refusal the real adapter raises for a box whose dashboard does not answer. */
+  const unanswered = (instance: string): HermeticError => {
+    const why = specFor(instance).unreachable_reason ?? "the box did not answer";
+    return new HermeticError(
+      CHAT_ERROR_CODES.UNREACHABLE,
+      `${instance}: dashboard did not answer (${why})`,
+      { instance },
+    );
+  };
+
   return {
     token(box: BoxAddress, _opts?: HermesChatOptions): Promise<string> {
       // A box the roster calls unreachable refuses here too, with the code the
       // real adapter raises for the same box: `agent desktop --fixture` is worth
       // having only if the failure it shows is the failure an operator will meet.
-      if (!reachable(box.instance)) {
-        const why = specFor(box.instance).unreachable_reason ?? "the box did not answer";
-        return Promise.reject(
-          new HermeticError(
-            CHAT_ERROR_CODES.UNREACHABLE,
-            `${box.instance}: dashboard did not answer (${why})`,
-            { instance: box.instance },
-          ),
-        );
-      }
+      if (!reachable(box.instance)) return Promise.reject(unanswered(box.instance));
       // Per box, so a fixture that shows two boxes never shows one token twice,
       // and a `FIXTURE` sentinel, because §8.3's leak grep is entitled to assume
       // every credential-shaped string a fixture prints is one of these.
@@ -508,6 +509,12 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
       if (!reachable(box.instance)) return Promise.resolve(null);
       const flying = inflight.get(flightKey(box.instance, bot)) ?? [];
       return Promise.resolve(flying.some((session) => session !== null && sessions.includes(session)));
+    },
+
+    /** The fixture box's slash-command catalog (`fixture-chat-command.ts`), the same for every bot. */
+    commands(box: BoxAddress) {
+      if (!reachable(box.instance)) return Promise.reject(unanswered(box.instance));
+      return Promise.resolve(fixtureCommandCatalog());
     },
 
     send(

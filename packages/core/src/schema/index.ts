@@ -47,3 +47,4 @@ export * from "./mobile.ts";
 export * from "./files.ts";
 export * from "./files-requests.ts";
 export * from "./devtools.ts";
+export * from "./chat-commands.ts";

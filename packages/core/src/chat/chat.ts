@@ -48,6 +48,7 @@ import {
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
+  ChatCommandsInput,
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
@@ -58,6 +59,7 @@ import {
 } from "../schema/index.ts";
 import type {
   Agent,
+  ChatCommandsResult,
   ChatConversation,
   ChatFrame,
   ChatMessage,
@@ -701,6 +703,26 @@ export function createChat(deps: ChatDeps) {
   }
 
   /**
+   * The slash commands the bot's gateway offers (`commands.catalog`), for a
+   * head's command picker. Masked like every other read: a quick command's
+   * description is the shell line it runs unless the profile wrote one.
+   */
+  async function commands(input: unknown, opts: ChatOptions = {}): Promise<ChatCommandsResult> {
+    const parsed = parse(ChatCommandsInput, input, "chat commands");
+    validateName(parsed.instance);
+    const view = mask();
+    const box = await address(parsed.instance);
+    if (!hermes.commands)
+      throw new HermeticError("CHAT_PROTOCOL", "This gateway does not list its commands");
+    opts.signal?.throwIfAborted();
+    const catalog = await hermes.commands(box, parsed.bot, {
+      signal: opts.signal,
+      ...(parsed.session !== undefined ? { session: parsed.session } : {}),
+    });
+    return view.deep({ instance: parsed.instance, bot: parsed.bot, ...catalog });
+  }
+
+  /**
    * Steer or stop one delegated child (`subagent_id` on `chat.steer` /
    * `chat.abort`). A separate path from the turn's: it needs no running parent
    * turn and inserts nothing into the transcript (`subagent.steer` /
@@ -878,6 +900,12 @@ export function createChat(deps: ChatDeps) {
       sealed(() =>
         watched(parse(ChatHistoryInput, input, "chat log").instance, opts, (request) =>
           history(input, request),
+        ),
+      ),
+    commands: (input: unknown, opts: ChatOptions = {}) =>
+      sealed(() =>
+        watched(parse(ChatCommandsInput, input, "chat commands").instance, opts, (request) =>
+          commands(input, request),
         ),
       ),
     send: (input: unknown, opts: ChatOptions = {}): AsyncIterable<ChatFrame> => {

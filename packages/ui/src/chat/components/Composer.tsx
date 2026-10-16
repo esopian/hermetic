@@ -37,6 +37,9 @@ import { botCandidate } from "../chat-mentions.ts";
 import type { MentionBot } from "../chat-mentions.ts";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { MentionList, useMentionPicker } from "./MentionPicker.tsx";
+import { SlashList, useSlashPicker } from "./SlashPicker.tsx";
+import { slashQuery } from "../chat-slash.ts";
+import { useSlashCatalog } from "../use-slash-catalog.ts";
 import { composerHint, destinationNotice, originClass, sendLabel } from "../chat-logic.ts";
 import { RedactedText } from "./RedactedText.tsx";
 import { BotResponses } from "./BotResponses.tsx";
@@ -121,6 +124,23 @@ export function Composer({
     setText,
     input,
     candidates: mentions.map(botCandidate),
+  });
+  /**
+   * The bot's slash commands, read on the first `/` typed into this
+   * conversation (`use-slash-catalog.ts`). A composer with no conversation
+   * — a demo shell — has no gateway to ask, and lists none.
+   */
+  const selection = chat?.selection ?? null;
+  const commands = useSlashCatalog(
+    selection ? { fleet: fleetId, ...selection } : null,
+    editable && slashQuery(text) !== null,
+  );
+  const slash = useSlashPicker({
+    text,
+    setText,
+    input,
+    commands,
+    onRun: (line) => submit(line),
   });
 
   /**
@@ -220,10 +240,11 @@ export function Composer({
    * the operator's to answer or to skip (⌘Enter), not the queue's (D4a). It
    * leaves the input either way: an operator who pressed Enter is done with
    * that text, and finding it still in the box is how the same message gets
-   * sent twice.
+   * sent twice. `line` stands in for the input's text: a command the slash
+   * picker sends on Enter (`SlashPicker.tsx`).
    */
-  const submit = () => {
-    const body = text.trim();
+  const submit = (line?: string) => {
+    const body = (line ?? text).trim();
     if (!enabled || filesBlock || !hasContent) return;
     if (working && !chat) return;
     const sent = files?.take() ?? [];
@@ -346,6 +367,7 @@ export function Composer({
 
       <div className="ch-input-wrap bm-input-wrap">
         <MentionList picker={picker} fleetId={fleetId} label="Mention a bot" />
+        <SlashList picker={slash} />
         {queued.length > 0 ? (
           // Above the input and joined to it, in order, drained from the top —
           // the shape Conductor uses. Each row is the operator's own words, so it
@@ -431,6 +453,12 @@ export function Composer({
             className="ch-input"
             aria-label={placeholder}
             {...picker.inputProps}
+            {...slash.inputProps}
+            // Focus gone elsewhere: a list left open would float over whatever took it.
+            onBlur={() => {
+              picker.inputProps.onBlur?.();
+              slash.close();
+            }}
             rows={1}
             disabled={!editable}
             placeholder={placeholder}
@@ -450,7 +478,7 @@ export function Composer({
             }}
             onKeyDown={(e) => {
               if (e.defaultPrevented || e.nativeEvent.isComposing) return;
-              if (picker.onKeyDown(e)) return;
+              if (slash.onKeyDown(e) || picker.onKeyDown(e)) return;
               // ⌘⇧A opens the native file dialog for this conversation.
               if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
                 e.preventDefault();
@@ -509,7 +537,7 @@ export function Composer({
                   ? "Queue (Enter)"
                   : "Send (Enter or ⌘↵)"
           }
-          onClick={submit}
+          onClick={() => submit()}
         >
           {pending.uploading > 0 ? (
             "Send · uploading…"

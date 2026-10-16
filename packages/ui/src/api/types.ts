@@ -162,6 +162,8 @@ export type RoomView = SwarmView["rooms"][number];
 export type ChatSessionsResult = BridgeResult<"chat.sessions">;
 export type SessionView = ChatSessionsResult["sessions"][number];
 export type ChatHistoryResult = BridgeResult<"chat.history">;
+export type ChatCommandsResult = BridgeResult<"chat.commands">;
+export type ChatCommandView = ChatCommandsResult["commands"][number];
 export type ChatMessageView = ChatHistoryResult["messages"][number];
 export type ChatBlockView = ChatMessageView["blocks"][number];
 /** Stable progress semantics are inferred from core's own contract, never upstream event names. */
