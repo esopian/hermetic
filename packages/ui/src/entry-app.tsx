@@ -54,6 +54,8 @@ import "./chat/styles/bot-dm.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.
 import "./chat/styles/chat-markdown.css";
 import "./chat/styles/bot-mode.css";
+// The composer's slash-command list.
+import "./chat/styles/chat-slash.css";
 import "./styles/listening.css";
 import "./styles/drawer.css";
 import "./styles/create.css";

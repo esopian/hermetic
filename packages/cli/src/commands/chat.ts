@@ -25,6 +25,7 @@ import {
   ChatListeningInput,
   ChatListenInput,
   ChatHistoryInput,
+  ChatCommandsInput,
   ChatObserveInput,
   ChatSendInput,
   ChatSessionsInput,
@@ -61,6 +62,7 @@ const settingsSchema = declare("chat.settings", "chat settings", ChatSettingsInp
 const swarmsSchema = declare("chat.swarms", "bots ls", ChatSwarmsInput);
 const sessionsSchema = declare("chat.sessions", "chat ls", ChatSessionsInput);
 const historySchema = declare("chat.history", "chat log", ChatHistoryInput);
+const commandsSchema = declare("chat.commands", "chat commands", ChatCommandsInput);
 const sendSchema = declare("chat.send", "chat", ChatSendInput);
 const abortSchema = declare("chat.abort", "chat abort", ChatAbortInput);
 const steerSchema = declare("chat.steer", "chat steer", ChatSteerInput);
@@ -746,6 +748,43 @@ export function register(program: Command): void {
             `${messageLines(message, now, botAddress(result.instance, result.bot), result.instance).join("\n")}\n`,
           );
         }
+      }),
+  );
+
+  chat.addCommand(
+    globals(new Cmd("commands"))
+      .description("the slash commands a bot's gateway offers")
+      .argument("<target>", "`<instance>` or `<instance>/<bot>`")
+      .option("--session <id>", "read skills against this conversation while it is live")
+      .addHelpText(
+        "after",
+        "\nDESKTOP is upstream's desktop disposition: `-` when a desktop composer offers\n" +
+          "the command, otherwise why it does not (`terminal`, `hidden`, …).\n",
+      )
+      .action(async (target: string, opts: Record<string, unknown>, cmd: Command) => {
+        const ctx = await openCtx(cmd);
+        const input = validate(
+          commandsSchema,
+          defined({ ...parseBotRef(target), session: opts["session"] }),
+        );
+        const result = await ctx.hermetic.chat.commands(input, { signal: ctx.signal });
+        if (ctx.flags.json) {
+          await outJson(result);
+          return;
+        }
+        if (result.warning) await err(`warning: ${result.warning}\n`);
+        if (result.commands.length === 0) {
+          await out(`no commands on ${botAddress(result.instance, result.bot)}\n`);
+          return;
+        }
+        const rows = result.commands.map((c) => [
+          c.name,
+          c.argument_mode ?? "-",
+          c.skill ? `skill${c.skill.origin ? ` (${c.skill.origin})` : ""}` : (c.category ?? "-"),
+          c.desktop ?? "-",
+          c.description,
+        ]);
+        await out(`${renderTable(rows, ["COMMAND", "ARGS", "CATEGORY", "DESKTOP", "DESCRIPTION"])}\n`);
       }),
   );
 
