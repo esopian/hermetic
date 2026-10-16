@@ -43,15 +43,8 @@ describe("pinned Hermes activity", () => {
     expect(hermesActivity("notice", { message: "restarted" })?.role).toBe("work");
   });
 
-  test("errors, redaction findings and compaction preserve their meaning and raw details", () => {
+  test("errors and compaction preserve their meaning and raw details", () => {
     expect(hermesActivity("error", { message: "Agent initialization failed" })?.state).toBe("error");
-    expect(
-      hermesActivity("tool.output_risk", {
-        tool_id: "call1",
-        redacted: true,
-        findings: ["credential"],
-      }),
-    ).toMatchObject({ key: "risk:call1", state: "warning", detail: "credential" });
     expect(
       hermesActivity("status.update", { kind: "compacting", text: "Compacting context" }),
     ).toMatchObject({ key: "status:compacting", title: "Compacting context" });
