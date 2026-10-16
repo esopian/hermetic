@@ -5,8 +5,8 @@ fleet **directly over the tailnet**, with no laptop in the path:
 
 - chat goes to the Hermes gateway on each box (HTTPS and WSS on 443), through the same adapter the
   desktop uses, imported from core as `@hermetic/core/chat-client`;
-- the fleet list (`GET /fleet`) and push-token registration (`POST /push/devices`) go to hermeticd
-  on any reachable box (port 7434);
+- the fleet list (`GET /fleet`), push-token registration (`POST /push/devices`) and file staging for
+  attachments (`/files/…`) go to hermeticd on any reachable box (port 7434);
 - push notifications are sent by hermeticd's own watcher on the box, through Expo;
 - the agent browser's noVNC page loads from the box.
 
@@ -47,10 +47,15 @@ all: `src/fleet/deps.ts` requires it only behind the inlined flag, which Metro f
 
 Real use: install the Tailscale app on the phone and sign in to the fleet's tailnet. On the laptop
 run `hermetic mobile pair` (or open Settings → Pair a phone in the desktop app) and scan the QR from
-the app's pairing screen, or paste the `hermetic://fleet?v=2&…` link. The link names the fleet and a
-snapshot of its agents and carries no secret; the phone shows a confirm screen, then stores it in the
-iOS keychain (`expo-secure-store`, this-device-only) as `hermetic.fleet.v2`. Pairing again replaces
-it, and Settings → Sign out forgets it. To cut a phone off, remove it from the tailnet.
+the app's pairing screen, or paste the `hermetic://fleet?v=3&…` link. The link names the fleet and a
+snapshot of its agents (and any viewer prefs, such as the avatar style) and carries no secret; the
+phone shows a confirm screen, then stores it in the iOS keychain (`expo-secure-store`,
+this-device-only) as `hermetic.fleet.v2`, a record of `{link, listening, primary}`. A new pairing
+listens to nothing: the **Primary instance** screen (`/primary`) comes before home and cannot be
+dismissed the first time, and the instance you pick becomes primary and is listened to. Other
+instances are opted in later (Settings → Bots → Listening, the `+` sheet's "Add instance…", or a
+long-press "Make primary" on the listening screen). Pairing again replaces the record, and Settings →
+Sign out forgets it. To cut a phone off, remove it from the tailnet.
 
 A push registration on a box belongs to the tailnet login that made it: another member cannot update
 or delete it, and two logins never collide on a `device_id`. The phone mints its `device_id` once and
@@ -72,17 +77,19 @@ it needs a development build (`bun run ios`), not Expo Go.
 There is no tab bar and no inbox screen. Everything lives on one home screen, and the rest opens
 from it on demand:
 
-- **Home**: a bare bar with three round buttons (the gear on the left, search and `+` on the
+- **Home**: a bare bar with three square buttons (the gear on the left, search and `+` on the
   right). Under it, the hero: a row of large avatars, each with its name and its unread or needs-you
   state. The hero holds every bot pinned on this phone (a star marks a pin); with nothing pinned, it
-  holds the default bot of each listened instance. A few sit centred; more scroll sideways. Below
-  the hero, the other listened bots, in one quiet section per instance: the instance's name in muted
+  holds the primary instance's bots, under a "Primary · <name>" kicker. A few sit centred; more
+  scroll sideways. Avatars are drawn from core's shared seed in the style chosen in Settings →
+  Appearance → Avatar style, so a bot looks the same on desktop. Below
+  the hero, the other listened bots, in one quiet section per instance, the primary's first: the instance's name in muted
   capitals with a status dot, and its bots under it (avatar, name, time of the last message, a
   one-line preview, and at the row's edge an accent dot when unread, a gold `!` when the bot needs
   you, a red mark when its last turn failed). A box that does not answer says so in its header and
   keeps the bots it last listed, dimmed, with their marks; its default bot stays in its section. Inside a section, bots needing you come first, then unread, then the most
-  recent message, then name; sections that answer come before those that do not, then those with
-  something needing you or unread, then the most recent. A bot in the hero is not repeated below.
+  recent message, then name; after the primary's section, those that answer come before those that
+  do not, then those with something needing you or unread, then the most recent. A bot in the hero is not repeated below.
   The needs-you mark comes from the roster, from this phone's unread `needs_action` inbox entries
   (a box's push; reading the thread clears it), and from a request still open in a turn this phone
   follows, which stays until it is answered, expires or its turn ends, however the thread was read.
@@ -97,18 +104,26 @@ from it on demand:
   in any session. The failed mark is an unread `turn.error`: a failure seen with its chat on screen
   is filed read and leaves no mark. Long-press a bot (in the hero or a row) for Pin or Unpin, the agent browser and Mark read.
   The Tailscale band appears under the bar only when something is wrong.
-- **Settings** (the gear): pairing and sign-out, listened instances, notifications, appearance,
-  Tailscale detail, the agent list (detail and noVNC), and the version.
+- **Settings** (the gear): pairing and sign-out, listened instances and the primary instance,
+  notifications, appearance (scheme, avatar style, haptics), Tailscale detail, the agent list
+  (detail and noVNC), and the version.
 - **Search** (the magnifier): an autofocused field over the listened bots, matching name, title,
   description, instance and the last message's preview, ignoring case and spaces
   (`src/client/search.ts`). A result opens the bot's chat; Cancel returns home.
 - **New chat** (`+`): a sheet listing the listened bots. A pick opens a new, separate session with
   that bot (`/chat/<instance>/<bot>?fresh=1`, opened once with `new_session`), leaving its Bot Chat
-  as it was. Its last row, "Add instance…", opens the instance picker.
-- **Conversation**: a slim bar (a round back button, the bot's avatar and name, which opens the
-  session switcher, and one round overflow button for Sessions, the agent browser and Mark read), the
-  transcript with the operator's words in soft rounded bubbles, and a pill-shaped composer with a
-  round Send (or Stop while a turn runs). Opening the Bot Chat clears the bot's unread and its inbox
+  as it was. Its last two rows are "New bot…" and "Add instance…" (the instance picker).
+- **New bot** (`/new-bot`): a form for the instance (defaulting to the primary), a lowercase name,
+  a title and a description. It creates a bot on that box through the Hermes gateway with the
+  desktop's two calls (`profiles.create`, then `profiles.configure` with the `hermes-bots` marker;
+  `createBotOverRpc` in core, `createBot` in `src/gateway/transport.ts`), using only the gateway
+  session token the phone already holds, and opens its chat. Creating or destroying instances still
+  needs the laptop.
+- **Conversation**: a slim bar (a square back button, the bot's avatar and name, which opens the
+  session switcher, and one square overflow button for Sessions, the agent browser and Mark read;
+  fixture builds add "Demo prompts…"), the transcript with the operator's words as plain blocks (no
+  bubbles), and a square composer with an attach button (photo library, camera or file), a Send
+  (or Stop while a turn runs). Picked files sit as chips above the field; see Attachments below. Opening the Bot Chat clears the bot's unread and its inbox
   entries, except those naming one of its listed separate sessions (the list is asked for again on
   every open, and an entry naming a session it does not have, filed after it was asked for, waits
   for the next list); opening a separate session
@@ -125,6 +140,21 @@ opens the conversation it is about. An alert this phone raises is titled with th
 title, followed by its instance only when the phone listens to more than one and the bot is not
 named, or shown, as its instance (the box's push title has the same rule: `corvid`, not
 `corvid · corvid`).
+
+## Attachments
+
+The composer's attach button stages files on the box through hermeticd's existing files routes on
+port 7434, the ones the desktop uses (`src/gateway/files.ts`, `createPhoneFiles`): `PUT
+/files/stage/<name>` with a `Content-Digest`, then `POST /files/<id>/commit` once the turn's session
+is known; the adapter's `send` carries them as `attachments`. The phone checks the name, size and
+private-key rules first with core's shared helpers, and picks with expo-image-picker (library,
+camera) and expo-document-picker. A box that reports no `files` capability (the fixture's `ember`)
+hides the button. When an agent asks for a file or secret, a card answers over `PUT
+/files/requests/<id>` (or `/decline`); a text secret goes "just this once", since the phone cannot
+write SSM, so a durable secret still needs the desktop. The text secret card is one masked
+multi-line field, read `auto` (no "Treat as" or input-mode controls). No new route, no credential: the routes are
+whois-gated like `/fleet`. `tests/mobile-files-seam.test.ts` runs the client against hermeticd's
+real routes.
 
 ## Chat: a request raised while the phone was away
 
@@ -157,8 +187,8 @@ push` and `hermetic agent recreate <name>` (a new hermeticd serves `/fleet` and 
 runs the push watcher), and `hermetic foundation update` (foundation 17 grants the agent role
 `dynamodb:Scan` on the agents table). Until `/fleet` works (it answers `FLEET_LIST_UNAVAILABLE`, or
 no box answers it) the phone keeps its QR snapshot and fills each agent's status from that box's own
-`/healthz`: `ready` where hermeticd answered, `unreachable` where it did not. The listening default
-narrows on those answers, and Settings says "Fleet view: from boxes (foundation update pending)".
+`/healthz`: `ready` where hermeticd answered, `unreachable` where it did not. Those answers change
+nothing about listening or the primary, which are the operator's choice, and Settings says "Fleet view: from boxes (foundation update pending)".
 
 ## The off-tunnel gate
 
@@ -217,9 +247,10 @@ success is `ok`, and no listened boxes is `unknown`. The home screen shows a ban
 
 ## What admin remains
 
-Agent list with status, per-agent detail (status, version, host, health), the listening toggle
-(phone-local), the agent browser (noVNC), Tailscale status, push on or off, and sign out. Fleet
-switching, volumes, runs, create and destroy stay on the laptop. All of it sits behind the home's gear
+Agent list with status, per-agent detail (status, version, host, health), which instances to listen
+to and which is primary (phone-local), the agent browser (noVNC), Tailscale status, push on or off,
+and sign out. Beyond that the phone can create a bot on a listened instance and attach files to a
+message. Fleet switching, volumes, runs, and creating or destroying an instance stay on the laptop. All of it sits behind the home's gear
 (Settings). The phone's inbox store is its own: the last 200 pushes and socket-delivered events, kept
 on the device (`src/inbox/store.ts`), with no screen; it drives the home's unread marks.
 
@@ -234,6 +265,11 @@ Coding agents drive Metro and the simulator without anything interactive:
   build with `bunx expo run:ios --no-bundler`.
 - Read logs from Metro's stdout, or from the simulator:
   `xcrun simctl spawn booted log stream --predicate 'process == "Hermetic"'`.
+- In fixture mode, stage a screen by URL instead of a tap (`xcrun simctl openurl booted "<url>"`):
+  `hermetic://fixture?pair=1&primary=atlas&avatar=pixel&theme=light&to=%2Fhome` pairs, sets the
+  state and opens the route (`src/fixture/drive.ts`), and the chat link takes `?demo=<prompt>`,
+  `?attach=image,file`, `&send=<text>` and `?attachSheet=1`. A build without the fixture ignores
+  them all.
 - Bundle checks need no simulator: `CI=1 npx expo export --platform ios --output-dir /tmp/mobile-export`.
 
 ## Tests and checks
@@ -252,32 +288,35 @@ file under the repo, and these are Jest suites.
 ## Layout
 
 ```
-app/                 expo-router screens: pair, home (hero + bot list), settings, search, new-chat
-                     (sheet), chat/[instance]/[bot], agent/[name] (detail + noVNC), listening
-                     (instance picker sheet); +native-intent.tsx turns a hermetic://fleet link
+app/                 expo-router screens: pair, primary (first pick), home (hero + bot list),
+                     settings, search, new-chat (sheet), new-bot (form), chat/[instance]/[bot],
+                     agent/[name] (detail + noVNC), listening (instance picker sheet), fixture
+                     (the fixture-only drive link); +native-intent.tsx turns a hermetic://fleet link
                      into /pair
 src/client/          the client layer, no React: createHermeticClient (client.ts), the
                      conversation and roster stores, turn reducer, chat and inbox logic, home rows
                      and bot search (home-rows.ts, search.ts), errors, the noVNC URL (vnc.ts)
 src/gateway/         transport over @hermetic/core/chat-client: client, socket opener, polyfills
                      (AbortSignal.timeout/any, structuredClone), hermeticd calls (/fleet,
-                     /push/devices), tailscale status; no React, React Native or Expo
+                     /push/devices), files (files.ts: attachments, requests), tailscale status; no React, React Native or Expo
 src/fleet/           FleetProvider.tsx (client, AppState, alerts, push, Tailscale) and hooks.ts;
-                     store.ts (pairing, /fleet view, listening), pairing.ts, persist.ts
+                     store.ts (pairing, /fleet view, listening, primary), pairing.ts, persist.ts
                      (SecureStore, document files), push.ts (registration), alerts.ts and
                      notifications.ts (expo-notifications), background.ts, deps.ts (real or fixture)
 src/fixture/         fixture mode: fixtureChatClient, canned fleet view and pairing link, canned
-                     Tailscale status, memory push registry (the only importer of chat-client-fixture)
+                     Tailscale status, memory push registry, fixture files box and demo prompts,
+                     sample attachments (sample-files.ts) and the hermetic://fixture drive link
+                     (drive.ts) (the only importer of chat-client-fixture)
 src/inbox/           store.ts, the phone-local inbox store (last 200 entries, JSON in the document
                      directory): unread and failure marks, badge, no screen
 src/chat/            the conversation: block renderers (blocks/), markdown → native, turn rows,
                      transcript list, composer, bands, session and subagent sheets, the
                      conversation bar (ChatHeader.tsx), new-chat helpers, ChatScope
 src/bots/            home rows and hero;  src/pair/  paste form and confirm card
-src/prefs/           phone-only preferences (haptics, local alerts, quiet hours)
+src/prefs/           phone-only preferences (haptics, local alerts, quiet hours, avatar style)
 src/theme/           desktop tokens (both schemes), fonts, scale, useTheme()
-src/ui/              primitives: Text, Kicker, Button, IconButton (round 44pt chrome button), Avatar
-                     (seeded blob), StatusSquare, Skeleton, Badge,
+src/ui/              primitives: Text, Kicker, Button, IconButton (square 44pt chrome button), Avatar
+                     (react-native-svg: sigil, pixel or blob from core's shared seed), StatusSquare, Skeleton, Badge,
                      Banner (in-app alert, Tailscale band), haptics (one switch for every tap), useNow
 assets/fonts/        Archivo + JetBrains Mono static TTFs (OFL)
 test/                jest suites (client, gateway, fleet, fixture, inbox, ui) and helpers/
@@ -298,10 +337,9 @@ test/                jest suites (client, gateway, fleet, fixture, inbox, ui) an
   `tests/mobile-gateway-e2e.test.ts` can drive the real gateway client under bun against a scripted
   Hermes-wire server.
 - Visual language is the desktop's palette and type (`docs/ui-brief.md`): Archivo + JetBrains Mono,
-  the accent and warn colours, dark by default. The chrome is softer than the desktop's: round 44pt
-  icon buttons with a hairline ring (`IconButton`), round avatars, a rounded search field, list rows
-  with no borders or separators, a pill composer with a round Send, and rounded operator bubbles.
-  Content cards and bands keep the desktop's square edges. Mobile breakpoints are in scope
+  the accent and warn colours, dark by default. The phone follows the desktop's square look: zero
+  radius, 44pt square icon buttons (`IconButton`), borders as structure, no bubbles. The one
+  exception is the avatar, whose `blob` style is a curve, as on the desktop. Mobile breakpoints are in scope
   here (the desktop app's "mobile is out of scope" rule is about its own window).
 
 ## Release and support

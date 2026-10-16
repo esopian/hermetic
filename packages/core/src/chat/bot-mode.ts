@@ -10,6 +10,7 @@ import { botHandle } from "../shared/bot-handles.ts";
 import { redactText } from "./chat-redact.ts";
 import { MemoryChatSettingsStore, maskFor } from "./chat-settings.ts";
 import { isoOrNull, record, records, str } from "./hermes/hermes-chat-wire.ts";
+import { botProfileOf, createBotOverRpc } from "./hermes/hermes-bot-create.ts";
 
 /**
  * The adapter's one local read: every string in the Bot Mode schemas is
@@ -445,52 +446,23 @@ export function createBotMode(
       return value;
     },
   );
-  const get = operation(S.BotProfileInput, async (p, opts): Promise<S.BotProfile> => {
-    const r = record(await rpc(p.instance, "profiles.describe", { name: p.bot }, opts));
-    return S.BotProfile.parse({
-      instance: p.instance,
-      bot: p.bot,
-      description: text(r.description),
-      soul: text(r.soul),
-      model: { provider: text(record(r.model).provider), default: text(record(r.model).default) },
-      skills: records(r.skills),
-      toolsets: records(r.toolsets),
-      mcp_servers: records(r.mcp_servers),
-    });
-  });
-  /**
-   * `profiles.create`, then the Bot Mode namespace the way Desktop's create
-   * dialog writes it (`apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:451-486`
-   * at v2026.9.24): the friendly `title` and `created` in epoch milliseconds,
-   * beside the `version` marker that makes the profile Bot Mode managed. The
-   * look keys (`shape`, `color`, `imageKind`) are Desktop's to choose; Hermetic
-   * seeds its avatars itself and invents none.
-   *
-   * Desktop also sends `profiles.create` a description of `"title — description"`.
-   * That is not copied: the teammate roster already joins the two
-   * (`_role_line`, `tools/bot_mode_probe.py:132-155`), so the title would read
-   * twice there, and `bots.get` would hand the prefix back as part of a
-   * description the operator never typed.
-   */
-  const create = operation(S.BotCreateInput, async (p, opts) => {
-    const { instance, title, ...input } = p;
-    const created = record(await rpc(instance, "profiles.create", input, opts));
-    if (created.ok !== true) return unsupported("Gateway did not create the profile");
-    const meta = { version: 1, ...(title ? { title } : {}), created: Date.now() };
-    const configured = record(
-      await rpc(
-        instance,
-        "profiles.configure",
-        { name: p.name, ui_meta: { "hermes-bots": meta } },
-        opts,
+  const get = operation(
+    S.BotProfileInput,
+    async (p, opts): Promise<S.BotProfile> =>
+      botProfileOf(
+        p.instance,
+        p.bot,
+        await rpc(p.instance, "profiles.describe", { name: p.bot }, opts),
       ),
-    );
-    if (configured.ok !== true || record(configured.applied).ui_meta !== true)
-      return unsupported(
-        "Profile was created but Bot Mode metadata could not be saved; inspect the profile before retrying",
-      );
-    return get({ instance, bot: p.name }, opts);
-  });
+  );
+  /**
+   * `profiles.create`, the Bot Mode marker, then `profiles.describe`: the one
+   * sequence the phone runs too (`createBotOverRpc`, `hermes-bot-create.ts`,
+   * which says what is written and why).
+   */
+  const create = operation(S.BotCreateInput, (p, opts) =>
+    createBotOverRpc((method, params) => rpc(p.instance, method, params, opts), p),
+  );
   /**
    * The `ui_meta` half of a title change: the profile's current `hermes-bots`
    * namespace with `title` merged in (an empty string, for a reset), sent with

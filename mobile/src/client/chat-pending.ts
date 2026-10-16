@@ -3,7 +3,7 @@
  * optimistic placeholder to the recorded row that echoes it, inserting rows by
  * stamp, and what the rail quotes for a message. Pure TypeScript.
  */
-import type { ChatMessage, ChatRole } from "@hermetic/core/chat-client";
+import type { AttachmentBlock, ChatMessage, ChatRole } from "@hermetic/core/chat-client";
 import { previewOf } from "./chat-logic.ts";
 
 /** A recorded row may land this long *before* the placeholder it accounts for (clock skew). */
@@ -97,14 +97,27 @@ export function answered(messages: readonly ChatMessage[], live: ChatMessage): b
   );
 }
 
-export function localPrompt(id: string, body: string, at: string, session: string | null): ChatMessage {
+/**
+ * The optimistic row for a prompt this phone sent: its words, then one chip per
+ * attached file (`attachments`). A prompt that is only files has no text block.
+ */
+export function localPrompt(
+  id: string,
+  body: string,
+  at: string,
+  session: string | null,
+  attachments: readonly AttachmentBlock[] = [],
+): ChatMessage {
   return {
     id,
     session: session ?? "",
     role: "user",
     author: null,
     at,
-    blocks: [{ kind: "text", markdown: body }],
+    blocks: [
+      ...(body || attachments.length === 0 ? [{ kind: "text" as const, markdown: body }] : []),
+      ...attachments,
+    ],
     usage: null,
     error: null,
     incomplete: null,

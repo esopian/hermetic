@@ -1,6 +1,6 @@
 /**
- * The phone's own preferences — haptics, notification delivery, quiet hours —
- * persisted in the same store as the theme. Nothing here leaves the phone:
+ * The phone's own preferences — haptics, notification delivery, quiet hours,
+ * the avatar style — persisted in the same store as the theme. Nothing here leaves the phone:
  * they decide whether this phone interrupts for an event its own sockets saw.
  * Push from the boxes is switched on and off separately (Settings → Push).
  */
@@ -13,6 +13,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { type AvatarStyle, DEFAULT_AVATAR_STYLE, isAvatarStyle } from "@hermetic/core/shared";
 import type { KvStorage as PrefStorage } from "../fleet/store.ts";
 import { inQuietHours, type QuietHours } from "../client/inbox-logic.ts";
 import { setHapticsEnabled } from "../ui/haptics.ts";
@@ -22,12 +23,18 @@ export interface Prefs {
   /** Local alerts (system notifications and in-app banners) for socket-delivered events. */
   notifications: boolean;
   quiet: QuietHours;
+  /**
+   * How bot faces are drawn (§9.2): the same three styles as the desktop, from
+   * the same seed. Pairing may seed it from the desktop's choice.
+   */
+  avatarStyle: AvatarStyle;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   haptics: true,
   notifications: true,
   quiet: { enabled: false, start: "22:00", end: "07:00" },
+  avatarStyle: DEFAULT_AVATAR_STYLE,
 };
 
 const PREFS_SLOT = "hermetic.prefs.v1";
@@ -45,6 +52,7 @@ export function parsePrefs(raw: string | null): Prefs {
         start: typeof v.quiet?.start === "string" ? v.quiet.start : DEFAULT_PREFS.quiet.start,
         end: typeof v.quiet?.end === "string" ? v.quiet.end : DEFAULT_PREFS.quiet.end,
       },
+      avatarStyle: isAvatarStyle(v.avatarStyle) ? v.avatarStyle : DEFAULT_PREFS.avatarStyle,
     };
   } catch {
     return DEFAULT_PREFS;

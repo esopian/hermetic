@@ -61,9 +61,14 @@ function SubagentLineImpl({ block }: { block: SubagentBlock }) {
         gap: t.space.sm,
         minHeight: 36,
         paddingVertical: 4,
-        paddingLeft: block.depth > 0 ? t.space.lg : 0,
-        borderRadius: 10,
-        backgroundColor: pressed ? t.c.sel : "transparent",
+        paddingLeft: (block.depth > 0 ? t.space.lg : t.space.xs) - t.border.control,
+        paddingRight: t.space.xs,
+        marginVertical: 1,
+        // The desktop's `.sa-line`: a recessed strip whose 2px left rule shows
+        // only for a verdict worth a glance (accent while live, bad on error).
+        backgroundColor: pressed ? t.c.sel : t.c.bg2,
+        borderLeftWidth: t.border.control,
+        borderLeftColor: live ? t.c.acc : glyph.tone === "bad" ? t.c.bad : "transparent",
       })}
     >
       <Text mono weight={700} style={{ color: glyphColor(t.c, glyph.tone), width: 14 }}>
@@ -83,9 +88,11 @@ function SubagentLineImpl({ block }: { block: SubagentBlock }) {
         {timeText(block, now)}
       </Text>
       {open ? (
-        <Text variant="caption" weight={600} tone="fg2">
-          Open
-        </Text>
+        <View style={{ borderWidth: t.border.row, borderColor: t.c.line2, paddingHorizontal: 6 }}>
+          <Text mono variant="caption" weight={700} tone="fg2" uppercase style={{ fontSize: 10 }}>
+            Open
+          </Text>
+        </View>
       ) : null}
     </Pressable>
   );

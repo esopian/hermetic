@@ -16,12 +16,14 @@ import {
 import { FleetStore, memoryFile, memoryKv } from "../../src/fleet/store.ts";
 import { resetTunnelChecks } from "../../src/gateway/hermeticd.ts";
 import { fakeFetch, json } from "../helpers/fakes.ts";
+import { fleetView } from "../helpers/fixtures.ts";
 
 beforeEach(() => resetTunnelChecks());
 
 const TOKEN = "ExponentPushToken[FIXTURE-token]";
 
-async function pairedFleet() {
+/** Paired, every named agent listened; `/fleet` answers `view` (or `{}`, which no refresh takes). */
+async function pairedFleet(view: unknown = {}) {
   const read = readPairingLink(
     encodeMobileLink({
       fleet_id: "fxtr0001",
@@ -36,10 +38,14 @@ async function pairedFleet() {
   const fleet = new FleetStore({
     secure: memoryKv(),
     viewCache: memoryFile(),
-    fetch: fakeFetch(() => json({})).fetch,
+    fetch: fakeFetch(() => json(view)).fetch,
     now: () => "2026-10-13T10:00:00.000Z",
   });
   await fleet.pair(read.link);
+  // Every agent the link names listened: atlas the primary, the others opted into.
+  await fleet.setPrimary("atlas");
+  await fleet.setListening("corvid", true);
+  await fleet.setListening("ember", true);
   return fleet;
 }
 
@@ -139,6 +145,37 @@ describe("PushSync", () => {
     };
     await sync(fleet, partial, undefined, { onRenewed: renewed }).enable();
     expect(renewed).toHaveBeenCalledTimes(1);
+  });
+
+  test("once a fresh /fleet view drops an agent, its box is neither asked nor waited on", async () => {
+    const live = (name: string, status: "ready" | "destroyed" = "ready") => ({
+      name,
+      status,
+      tailscale_dns_name: `fxtr0001-${name}.hermetic.ts.net`,
+      tailscale_ip: null,
+      version: null,
+    });
+    // ember was destroyed after pairing: the view names corvid destroyed and leaves ember out.
+    const fleet = await pairedFleet(
+      fleetView({ agents: [live("atlas"), live("corvid", "destroyed")] }),
+    );
+    const reg = recorder();
+    const renewed = jest.fn();
+    // Before any refresh answered: every listened box, as the link names them.
+    const push = sync(fleet, reg, undefined, { onRenewed: renewed });
+    await push.enable();
+    expect(reg.registered[0]?.boxes).toEqual(["atlas", "corvid", "ember"]);
+    expect(await fleet.refresh()).toBe(true);
+    expect(fleet.isGone("ember")).toBe(true);
+    expect(fleet.isGone("corvid")).toBe(true);
+    expect(fleet.isGone("atlas")).toBe(false);
+    await push.sync();
+    expect(reg.registered[1]?.boxes).toEqual(["atlas"]);
+    // A gone box is not asked to forget the phone: nothing answers there.
+    expect(reg.unregistered).toEqual([]);
+    // Every live box answered: the renewal counts.
+    expect(renewed).toHaveBeenCalledTimes(2);
+    expect(push.covers("atlas")).toBe(true);
   });
 
   test("forbidden: the device id stays put, nothing is retried, and the box is reported", async () => {

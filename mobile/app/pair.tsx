@@ -1,6 +1,6 @@
 /**
  * Pair: scan the QR the laptop shows (`hermetic mobile pair`, or Settings →
- * Pair a phone in the desktop app), follow the same `hermetic://fleet?v=2&…`
+ * Pair a phone in the desktop app), follow the same `hermetic://fleet?v=3&…`
  * link opened as a deep link (`+native-intent.tsx` hands it here as `link`),
  * or paste it. The link carries no secret: it names the fleet, its tailnet and
  * its agents, and the phone reaches them over Tailscale.
@@ -8,24 +8,34 @@
  * Nothing pairs on its own. Every way in lands on a confirmation naming the
  * fleet, the tailnet and the agent count, and only a link `readPairingLink`
  * accepts gets that far. Replacing an existing pairing asks once more, and a
- * code for a different tailnet says so (`tailnetChange`).
+ * code for a different tailnet says so (`tailnetChange`). A link's `prefs`
+ * (the desktop's avatar style, say) are applied once the pairing is kept,
+ * never before, and Settings changes them afterwards like any other choice.
  *
- * After pairing the stack is dismissed before home replaces it, so a deep
- * link that opened Pair over another screen leaves nothing to swipe back to.
+ * A new pairing listens to nothing and has no primary instance, so the next
+ * screen is the primary picker (`/primary`), which leads on to home. The stack
+ * is dismissed before it replaces Pair, so a deep link that opened Pair over
+ * another screen leaves nothing to swipe back to.
  */
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { Alert, View } from "react-native";
 import {
   KeyboardAwareScrollView,
   type KeyboardAwareScrollViewRef,
 } from "react-native-keyboard-controller";
 import { useFleetContext } from "../src/fleet/FleetProvider.tsx";
 import { useFleetState } from "../src/fleet/hooks.ts";
-import { type PairedLink, type PairErrorCopy, readPairingLink } from "../src/fleet/pairing.ts";
+import {
+  type PairedLink,
+  type PairErrorCopy,
+  pairPrefsPatch,
+  readPairingLink,
+} from "../src/fleet/pairing.ts";
 import { PairConfirm, PairConfirmActions, tailnetChange } from "../src/pair/PairConfirm.tsx";
 import { PairForm } from "../src/pair/PairForm.tsx";
+import { usePrefs } from "../src/prefs/prefs.tsx";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
 import { Button, Kicker, Screen, Text } from "../src/ui/index.ts";
@@ -34,6 +44,7 @@ export default function Pair() {
   const t = useTheme();
   const { pair, status, operatorTailnet, fixture } = useFleetContext();
   const current = useFleetState().link;
+  const { update: updatePrefs } = usePrefs();
   const params = useLocalSearchParams<{ link?: string }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PairErrorCopy | null>(null);
@@ -51,12 +62,15 @@ export default function Pair() {
       setError(null);
       try {
         await pair(link);
+        const patch = pairPrefsPatch(link);
+        if (Object.keys(patch).length > 0) updatePrefs(patch);
         haptic.success();
         setPending(null);
         // Drop whatever is under Pair (a deep link pushes it over home or a
         // conversation), so swipe-back cannot return to it.
         if (router.canDismiss()) router.dismissAll();
-        router.replace("/home");
+        // A pairing starts with no primary instance: pick one before home.
+        router.replace("/primary");
       } catch (e) {
         haptic.error();
         setError({
@@ -67,7 +81,7 @@ export default function Pair() {
         setBusy(false);
       }
     },
-    [busy, pair],
+    [busy, pair, updatePrefs],
   );
 
   /** Every way in stops here: refuse what is not a pairing link, else ask before keeping it. */
@@ -249,7 +263,7 @@ export default function Pair() {
           style={{
             paddingHorizontal: t.space.xl,
             paddingVertical: t.space.md,
-            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopWidth: t.border.row,
             borderTopColor: t.c.line2,
             backgroundColor: t.c.bg,
           }}

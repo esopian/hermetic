@@ -38,7 +38,8 @@ import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { useChatScope } from "../ChatScope.tsx";
 import { useSubmit } from "./respond.ts";
-import { NeedsDot, ROW_RADIUS, SoftCard } from "./SoftCard.tsx";
+import { Kicker } from "../../ui/Kicker.tsx";
+import { NeedsDot, SoftCard } from "./SoftCard.tsx";
 
 function Choice({
   q,
@@ -68,17 +69,17 @@ function Choice({
         haptic.select();
         onPick?.();
       }}
-      // A soft filled row; picked, an accent ring (always 1pt wide, so a pick never shifts the text).
+      // A square bordered row; picked, the border takes the accent (always 1pt
+      // wide, so a pick never shifts the text).
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
         gap: t.space.md,
         minHeight: t.touch.min,
         paddingHorizontal: t.space.md,
-        borderRadius: ROW_RADIUS,
-        borderWidth: 1,
-        borderColor: checked ? t.c.acc : "transparent",
-        backgroundColor: pressed ? t.c.bg3 : t.c.sel,
+        borderWidth: t.border.row,
+        borderColor: checked ? t.c.acc : t.c.line,
+        backgroundColor: pressed ? t.c.bg3 : t.c.bg,
         opacity: disabled && !checked ? 0.55 : 1,
       })}
     >
@@ -91,10 +92,9 @@ function Choice({
           borderWidth: 1,
           borderColor: checked ? t.c.acc : t.c.line2,
           backgroundColor: checked ? t.c.acc : "transparent",
-          borderRadius: q.multi_select ? 6 : 11,
         }}
       >
-        <Text variant="caption" weight={700} style={{ color: checked ? t.c.accFg : t.c.fg2 }}>
+        <Text mono variant="caption" weight={700} style={{ color: checked ? t.c.accFg : t.c.fg2 }}>
           {q.multi_select && checked ? "✓" : letter(index)}
         </Text>
       </View>
@@ -170,7 +170,6 @@ function LateChoices({ q }: { q: QuestionEntry }) {
             key={`${i}-${choice}`}
             label={bare(choice)}
             variant="secondary"
-            soft
             compact
             onPress={() => draft(lateAnswer(q.prompt, bare(choice)))}
           />
@@ -342,14 +341,13 @@ export function QuestionCard({
                 returnKeyType="done"
                 style={{
                   minHeight: t.touch.min,
-                  borderWidth: 1,
-                  borderColor: stage.text.trim() ? t.c.acc : "transparent",
-                  backgroundColor: t.c.sel,
+                  borderWidth: t.border.row,
+                  borderColor: stage.text.trim() ? t.c.acc : t.c.line2,
+                  backgroundColor: t.c.bg,
                   color: t.c.fg,
                   fontFamily: t.sans(400),
                   fontSize: 14,
                   paddingHorizontal: t.space.md,
-                  borderRadius: ROW_RADIUS,
                 }}
               />
             </View>
@@ -364,7 +362,6 @@ export function QuestionCard({
           <Button
             label="Skip"
             variant="secondary"
-            soft
             disabled={locked}
             style={{ flex: 1 }}
             onPress={() => {
@@ -375,7 +372,6 @@ export function QuestionCard({
           />
           <Button
             label="Confirm and continue"
-            soft
             disabled={locked || !ready}
             busy={busy}
             style={{ flex: 2 }}
@@ -388,13 +384,13 @@ export function QuestionCard({
 
   const muted = recorded || done || !!shut || (answerable && stale);
   return (
-    <SoftCard testID={`question-${request_id ?? "none"}`}>
+    <SoftCard testID={`question-${request_id ?? "none"}`} edge={muted ? undefined : t.c.warn}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-        {/* Needs you: a small warn dot, the one loud mark on the card. */}
+        {/* Needs you: a small warn square and the warn rule, the loud marks on the card. */}
         {muted ? null : <NeedsDot />}
-        <Text variant="bodySmall" weight={600} tone="fg2" style={{ flex: 1 }}>
+        <Kicker tone="fg2" style={{ flex: 1 }}>
           Question
-        </Text>
+        </Kicker>
         {paused ? (
           <Text variant="caption" tone="fg3">
             Turn paused

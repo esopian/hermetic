@@ -1,6 +1,5 @@
 /**
- * Status dot = square, 8–14px, no radius; busy states pulse (1.2 s). `round`
- * draws the same mark as a circle, for the chat's soft surfaces.
+ * Status dot = square, 8–14px, no radius; busy states pulse (1.2 s).
  */
 import { useEffect } from "react";
 import Animated, {
@@ -19,14 +18,12 @@ export function StatusSquare({
   size = 10,
   color,
   pulse,
-  round = false,
 }: {
   status?: string;
   size?: number;
   /** Override the status mapping. */
   color?: string;
   pulse?: boolean;
-  round?: boolean;
 }) {
   const t = useTheme();
   const { reduceMotion } = useAccessibilityPreferences();
@@ -47,10 +44,7 @@ export function StatusSquare({
   return (
     <Animated.View
       accessibilityLabel={status}
-      style={[
-        { width: size, height: size, backgroundColor: fill, borderRadius: round ? size / 2 : 0 },
-        style,
-      ]}
+      style={[{ width: size, height: size, backgroundColor: fill }, style]}
     />
   );
 }

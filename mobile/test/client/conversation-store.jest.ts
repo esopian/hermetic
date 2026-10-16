@@ -10,6 +10,7 @@ import {
 } from "../../src/client/conversation-store.ts";
 import { HermeticError } from "@hermetic/core/chat-client";
 import type { ChatMessage, ChatObserveEvent, Session } from "@hermetic/core/chat-client";
+import type { FilesStageResult } from "@hermetic/core/schema";
 import type { HistoryResult, SteerStatus, TurnRequest } from "../../src/client/chat-types.ts";
 import { FakeTimers, flush } from "../helpers/fakes.ts";
 import { approval, block, delta, done, errorFrame, msg, subagent, tool } from "../helpers/fixtures.ts";
@@ -142,6 +143,18 @@ async function started(s: ReturnType<typeof setup>, text = "hello", turn_id = "T
   await flush();
 }
 
+function stagedFile(id: string, name: string, mime: string): FilesStageResult {
+  return {
+    id,
+    name,
+    mime,
+    bytes: 12,
+    sha256: "0".repeat(64),
+    class: "file",
+    expires_at: "2026-10-13T11:00:00.000Z",
+  } as FilesStageResult;
+}
+
 describe("pure helpers", () => {
   test("reconnectDelayMs: 0, 1, 2, 4, 8 s", () => {
     expect([1, 2, 3, 4, 5, 6].map(reconnectDelayMs)).toEqual([0, 1000, 2000, 4000, 8000, 8000]);
@@ -215,6 +228,83 @@ describe("sending and streaming", () => {
     expect(v.live).toBeNull();
     expect(v.messages.map((m) => m.id)).toEqual(["u1", "m1"]);
     expect(s.settled).toEqual([expect.objectContaining({ ok: true, turnId: "T1" })]);
+  });
+
+  test("a send with staged files hands them to the turn and draws their chips", async () => {
+    const s = setup();
+    const commit = jest.fn();
+    const staged = [stagedFile("f1", "notes.txt", "text/plain")];
+    expect(s.store.sendMessage(T, " see these ", { ids: ["f1"], commit, staged })).toBe(true);
+    const turn = s.method("turn.start")[0]!.input as TurnRequest;
+    expect(turn.message).toBe("see these");
+    expect(turn.attachments).toMatchObject({ ids: ["f1"], commit });
+    expect(s.view().messages.at(-1)!.blocks).toEqual([
+      { kind: "text", markdown: "see these" },
+      expect.objectContaining({ kind: "attachment", name: "notes.txt", file_id: "f1", href: "f1" }),
+    ]);
+  });
+
+  test("the store remembers each file it sent, and a resend draws the chips it was given", async () => {
+    const s = setup();
+    const staged = [stagedFile("f1", "notes.txt", "text/plain")];
+    expect(s.store.sendMessage(T, "x", { ids: ["f1"], commit: jest.fn(), staged })).toBe(true);
+    expect(s.store.sentFile("f1")).toEqual(staged[0]);
+    expect(s.store.sentFile("nope")).toBeUndefined();
+    s.starts.at(-1)!.d.resolve({ turn_id: "T1" });
+    await flush();
+    s.store.onTurnEnd("T1", "error");
+    await flush();
+    const chip = {
+      kind: "attachment" as const,
+      name: "notes.txt",
+      mime: "text/plain",
+      bytes: 12,
+      href: "inbox/f1/notes.txt",
+      file_id: "f1",
+    };
+    expect(s.store.sendMessage(T, "", { ids: ["f1"], commit: jest.fn(), chips: [chip] })).toBe(true);
+    expect(s.view().messages.at(-1)!.blocks).toEqual([chip]);
+  });
+
+  test("a sent file is forgotten a day past its expiry, at the next send", async () => {
+    const s = setup();
+    const old = {
+      ...stagedFile("f0", "old.txt", "text/plain"),
+      expires_at: "2000-01-01T00:00:00.000Z",
+    };
+    expect(s.store.sendMessage(T, "x", { ids: ["f0"], commit: jest.fn(), staged: [old] })).toBe(true);
+    expect(s.store.sentFile("f0")).toEqual(old);
+    s.starts.at(-1)!.d.resolve({ turn_id: "T1" });
+    await flush();
+    s.store.onTurnEnd("T1", "done");
+    await flush();
+    const fresh = stagedFile("f1", "new.txt", "text/plain");
+    expect(s.store.sendMessage(T, "y", { ids: ["f1"], commit: jest.fn(), staged: [fresh] })).toBe(true);
+    expect(s.store.sentFile("f0")).toBeUndefined();
+    expect(s.store.sentFile("f1")).toEqual(fresh);
+  });
+
+  test("files alone send; nothing at all does not", async () => {
+    const s = setup();
+    expect(s.store.sendMessage(T, "  ")).toBe(false);
+    expect(s.store.sendMessage(T, "", { ids: [], commit: jest.fn() })).toBe(false);
+    const staged = [stagedFile("f1", "a.png", "image/png")];
+    expect(s.store.sendMessage(T, "", { ids: ["f1"], commit: jest.fn(), staged })).toBe(true);
+    const turn = s.method("turn.start")[0]!.input as TurnRequest;
+    expect(turn.message).toBe("");
+    expect(turn.attachments?.ids).toEqual(["f1"]);
+    expect(
+      s
+        .view()
+        .messages.at(-1)!
+        .blocks.map((b) => b.kind),
+    ).toEqual(["attachment"]);
+  });
+
+  test("a plain send carries no attachments", async () => {
+    const s = setup();
+    await started(s, "hello");
+    expect((s.method("turn.start")[0]!.input as TurnRequest).attachments).toBeUndefined();
   });
 
   test("a second send while a turn runs is refused", async () => {

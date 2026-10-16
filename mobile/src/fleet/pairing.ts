@@ -1,6 +1,9 @@
 /**
- * Pairing: a `hermetic://fleet?v=2&…` link (scanned, deep-linked or pasted)
- * read into the fleet the phone will keep, or the reason it will not.
+ * Pairing: a `hermetic://fleet?v=3&…` link (scanned, deep-linked or pasted)
+ * read into the fleet the phone will keep, or the reason it will not. Core's
+ * parser reads `v=2` links too; the only difference is that a v3 link may
+ * carry `prefs`, the viewer preferences the laptop asks the phone to start
+ * with, which the Pair screen applies on confirm (`pairPrefsPatch`).
  *
  * The link format is core's (`parseMobileLink` through `@hermetic/core/shared`,
  * the same parser `mobile.pair` is checked against in
@@ -12,7 +15,13 @@
  * operator's, because the phone will dial names under it. Labels from outside
  * the app are cleaned before a screen shows them. Pure.
  */
-import { MOBILE_LINK_PREFIX, type MobileLinkPayload, parseMobileLink } from "@hermetic/core/shared";
+import {
+  type AvatarStyle,
+  MOBILE_LINK_PREFIX,
+  MOBILE_LINK_VERSION,
+  type MobileLinkPayload,
+  parseMobileLink,
+} from "@hermetic/core/shared";
 
 export interface PairErrorCopy {
   title: string;
@@ -73,6 +82,7 @@ export function tailnetAllowed(tailnet: string, operatorTailnet?: string | null)
 export interface PairedLink {
   /** The link as scanned, trimmed: what is kept, so a re-parse gives the same answer. */
   link: string;
+  /** What the link names, `prefs` included (`{}` for a v2 link or one that carries none). */
   payload: MobileLinkPayload;
   /** `alias` cleaned for display, else the fleet id. */
   label: string;
@@ -88,8 +98,14 @@ export interface PairOptions {
 const NOT_A_LINK: PairErrorCopy = {
   title: "That is not a Hermetic pairing link.",
   detail:
-    "Scan the QR from `hermetic mobile pair` on the laptop (or Settings → Pair a phone in the desktop app), or paste the `hermetic://fleet?v=2&…` link it prints.",
+    "Scan the QR from `hermetic mobile pair` on the laptop (or Settings → Pair a phone in the desktop app), or paste the `hermetic://fleet?…` link it prints.",
 };
+
+/** The `v` a link claims, as a number, or `null` when it names none readable. */
+function claimedVersion(link: string): number | null {
+  const m = /[?&]v=(\d{1,6})(?:&|$)/.exec(link);
+  return m ? Number(m[1]) : null;
+}
 
 /**
  * The one gate between a link and the confirmation screen: core's parser, then
@@ -110,12 +126,21 @@ export function readPairingLink(text: unknown, opts: PairOptions = {}): PairProp
     };
   const payload = parseMobileLink(link);
   if (payload === null) {
-    if (/[?&]v=1(&|$)/.test(link))
+    const version = claimedVersion(link);
+    if (version === 1)
       return {
         ok: false,
         error: {
           title: "That link is from an older Hermetic.",
           detail: "Update hermetic on the laptop and run `hermetic mobile pair` again.",
+        },
+      };
+    if (version !== null && version > MOBILE_LINK_VERSION)
+      return {
+        ok: false,
+        error: {
+          title: "That link is from a newer Hermetic.",
+          detail: "Update the Hermetic app on this phone, then scan the code again.",
         },
       };
     return { ok: false, error: NOT_A_LINK };
@@ -151,6 +176,31 @@ export function pairConfirmLines(paired: PairedLink): {
     tailnet: cleanLabel(payload.tailnet),
     agents: `${n} agent${n === 1 ? "" : "s"}`,
   };
+}
+
+/** The labels the confirm screen shows for a link's prefs, in a stable order; empty when none. */
+const PREF_LABELS: { key: "avatar_style"; label: string }[] = [
+  { key: "avatar_style", label: "Avatar style" },
+];
+
+/** The confirm screen's pref lines: one per pref the link carries. */
+export function pairPrefLines(paired: PairedLink): { label: string; value: string }[] {
+  const prefs = paired.payload.prefs;
+  return PREF_LABELS.flatMap(({ key, label }) => {
+    const value = prefs[key];
+    return value === undefined ? [] : [{ label, value: cleanLabel(value, 32) }];
+  });
+}
+
+/**
+ * What confirming a pairing changes in the phone's own preferences: each pref
+ * the link carries, renamed to the phone's field. Empty when the link carries
+ * none, so a v2 link leaves every preference as it was. A starting point only:
+ * Settings changes it afterwards like any other choice.
+ */
+export function pairPrefsPatch(paired: PairedLink): { avatarStyle?: AvatarStyle } {
+  const { avatar_style } = paired.payload.prefs;
+  return avatar_style === undefined ? {} : { avatarStyle: avatar_style };
 }
 
 /**

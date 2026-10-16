@@ -10,7 +10,11 @@
 import { HERMES_HOME } from "../../shared/hermes.ts";
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
-import { FIXTURE_CHAT_FILES, fixtureAttachmentBlock } from "./fixture-chat-files.ts";
+import {
+  FIXTURE_CHAT_FILES,
+  FIXTURE_CHAT_SCREENSHOT,
+  fixtureAttachmentBlock,
+} from "./fixture-chat-files.ts";
 import { storedUsage, usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
@@ -358,8 +362,11 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           name: "browser.screenshot",
           server: "playwright",
           args: { url: "https://grafana.fixture.invalid/d/ebs/granite", width: 1280, height: 720 },
+          // `file_id` names the bytes on the box (the phone's fixture box
+          // serves them); `href` is the portal path the desktop draws from.
           result: {
             href: "/api/chat/attachments/fixture/granite-grafana.png",
+            file_id: FIXTURE_CHAT_SCREENSHOT.id,
             width: 1280,
             height: 720,
           },
@@ -374,7 +381,12 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           name: "image.generate",
           server: "pencil",
           args: { prompt: "queue depth over time, one line, no legend" },
-          result: { href: "/api/chat/attachments/fixture/queue-depth.png", width: 1024, height: 1024 },
+          result: {
+            href: "/api/chat/attachments/fixture/queue-depth.png",
+            file_id: FIXTURE_CHAT_FILES.queueDepth.id,
+            width: 1024,
+            height: 1024,
+          },
           // Warn rather than ok: it produced an image and then told us the
           // palette it was asked for was not available. A tool that half worked
           // is the status nobody seeds and every renderer has to draw.

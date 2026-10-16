@@ -1,5 +1,4 @@
 export { Avatar, type AvatarProps } from "./avatar/Avatar.tsx";
-export { avatarSeed } from "./avatar/avatar-seed.ts";
 export { Badge } from "./Badge.tsx";
 export { Button, type ButtonVariant } from "./Button.tsx";
 export { Kicker } from "./Kicker.tsx";

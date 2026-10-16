@@ -9,12 +9,22 @@
  *   and a stop when the box will not take a steer. A line above the input says
  *   which is which (the desktop's footer hint, "Enter queues · ⌘Enter sends now").
  *   These three sit in a row under the input, so the input keeps the full
- *   width: Stop stays within reach as the same round button on the left (the
+ *   width: Stop stays within reach as the same square button on the left (the
  *   desktop's Esc stops a turn whatever is typed, so a draft never hides the
- *   way out), Send now and Queue as soft pills on the right.
+ *   way out), Send now and Queue as square buttons on the right.
+ * - The input row is the desktop's `.ch-input-box`: one square box in `bg2`
+ *   with a `line2` border, the text field flush inside it and the square
+ *   Send (accent fill) or Stop at its trailing edge. It is a horizontal row
+ *   so a leading square `IconButton` (attach) can sit before the field.
  * - Stop lives here and only here: the conversation header has none.
  * - Queued messages sit above the input, each with Send now and remove.
  * - Disabled, the placeholder says why (`composerState`).
+ * - Attach: a leading square button opens a sheet (Photo library, Take photo,
+ *   Choose file). Picked files sit as chips above the input (`AttachTray`).
+ *   A message with files and no text sends; while a file uploads, Send says
+ *   "Uploading…" and waits; a failed file blocks Send until it is retried or
+ *   removed. A box without a file service shows the button disabled, with a
+ *   line saying why.
  *
  * The input grows to six lines, then scrolls. It sizes itself: a multiline
  * input on iOS grows with its content between `minHeight` and `maxHeight`.
@@ -23,14 +33,26 @@
  * the padding again and an empty input opens several lines tall.
  */
 import { memo, useRef } from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import {
+  ActionSheetIOS,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  TextInput,
+  View,
+} from "react-native";
 import Svg, { Path } from "react-native-svg";
+import { attachmentsSummary, type PendingAttachment } from "../client/attachments.ts";
 import type { QueuedMessage } from "../client/conversation-store.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { haptic } from "../ui/haptics.ts";
+import { IconButton } from "../ui/IconButton.tsx";
+import { Kicker } from "../ui/Kicker.tsx";
 import { multilineTint } from "../ui/tint.ts";
 import { Text } from "../ui/Text.tsx";
+import { AttachTray } from "./AttachTray.tsx";
 
 export type ComposerMode = "disabled" | "send" | "queue" | "stop" | "stopping";
 
@@ -82,19 +104,21 @@ export function isAutocorrectEcho(incoming: string, taken: string, elapsedMs: nu
   return changed <= Math.max(1, Math.floor(a.length / 2));
 }
 
-/** Drawn diameter of the round Send and Stop; the tap target is 44pt. */
-const ROUND = 36;
+/** Side of the square Send and Stop: the 44pt tap target, drawn whole. */
+const ACTION = 44;
 
 /**
- * Send (accent, an up arrow) or Stop (a red square) as a round button at the
- * end of the input row, the shape of the app's other icon buttons. Disabled,
- * Send goes flat; stopping, Stop dims and says it is busy.
+ * Send (accent fill, an up arrow) or Stop (a red square glyph) as a square
+ * button at the trailing edge of the input box, like the desktop's `.ch-send`.
+ * Disabled, Send goes flat; stopping, Stop dims and says it is busy. `inline`
+ * (the queue actions row) stands alone, so it draws its own border.
  */
-function RoundAction({
+function ActionButton({
   kind,
   label,
   disabled = false,
   busy = false,
+  uploading = false,
   inline = false,
   onPress,
 }: {
@@ -102,13 +126,15 @@ function RoundAction({
   label: string;
   disabled?: boolean;
   busy?: boolean;
-  /** In the queue actions row, centred on the row rather than levelled with the input's last line. */
+  /** Send, waiting on a file to reach the box: a spinner in place of the arrow. */
+  uploading?: boolean;
+  /** In the queue actions row, outside the input box: drawn with its own border. */
   inline?: boolean;
   onPress(): void;
 }) {
   const t = useTheme();
   const send = kind === "send";
-  const fill = send ? (disabled ? t.c.bg3 : t.c.acc) : t.c.bg2;
+  const fill = send ? (disabled ? t.c.bg3 : t.c.acc) : "transparent";
   const glyph = send ? (disabled ? t.c.fg3 : t.c.accFg) : t.c.bad;
   return (
     <Pressable
@@ -117,47 +143,43 @@ function RoundAction({
       accessibilityState={{ disabled: disabled || busy, busy }}
       disabled={disabled || busy}
       onPress={onPress}
-      hitSlop={(t.touch.min - ROUND) / 2}
-      // Level with the input's last line, however tall it has grown.
-      style={({ pressed }) => ({
-        marginBottom: inline ? 0 : (LINE + PAD_Y - ROUND) / 2,
-        opacity: pressed ? 0.7 : 1,
-      })}
+      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
     >
       <View
         style={{
-          width: ROUND,
-          height: ROUND,
-          borderRadius: ROUND / 2,
+          width: ACTION,
+          height: ACTION,
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: fill,
-          borderWidth: send ? 0 : StyleSheet.hairlineWidth,
+          // In the box, Stop is parted from the field by the box's own rule;
+          // standing alone, it is a bordered square like any control.
+          borderWidth: inline ? t.border.row : 0,
+          borderLeftWidth: inline || !send ? t.border.row : 0,
           borderColor: t.c.line2,
           opacity: busy ? 0.5 : 1,
         }}
       >
-        {send ? (
+        {send && uploading ? (
+          <ActivityIndicator size="small" color={t.c.fg2} />
+        ) : send ? (
           <Svg width={18} height={18} viewBox="0 0 24 24">
             <Path
               d="M12 19.5V5M5.5 11.5 12 5l6.5 6.5"
               stroke={glyph}
               strokeWidth={2.4}
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              strokeLinecap="square"
+              strokeLinejoin="miter"
               fill="none"
             />
           </Svg>
         ) : (
-          <View style={{ width: 12, height: 12, borderRadius: 2, backgroundColor: glyph }} />
+          <View style={{ width: 12, height: 12, backgroundColor: glyph }} />
         )}
       </View>
     </Pressable>
   );
 }
-
-/** A compact pill is 32pt drawn; the slop makes its tap target 44pt. */
-const PILL_SLOP = 6;
 
 /** One quiet line above the input; `warn` leads it with the needs-you dot. */
 function Hint({ warn = false, children }: { warn?: boolean; children: string }) {
@@ -171,9 +193,7 @@ function Hint({ warn = false, children }: { warn?: boolean; children: string }) 
         paddingHorizontal: t.space.xs,
       }}
     >
-      {warn ? (
-        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.c.warn }} />
-      ) : null}
+      {warn ? <View style={{ width: 6, height: 6, backgroundColor: t.c.warn }} /> : null}
       <Text
         variant="caption"
         tone={warn ? "fg2" : "fg3"}
@@ -220,6 +240,45 @@ export interface ComposerProps {
   onSendNow(text: string, queuedId?: string): void;
   onStop(): void;
   onUnqueue(id: string): void;
+  /** The files picked for the next message (`attachmentsReducer`'s state). */
+  attachments?: readonly PendingAttachment[];
+  /** Open a picker; the screen adds what comes back. */
+  onAttach?(kind: AttachKind): void;
+  onRemoveAttachment?(local_id: string): void;
+  onRetryAttachment?(local_id: string): void;
+  /**
+   * Whether the attach button shows: `true` (enabled), `false` (hidden), or
+   * `"no-service"` (the box answered that it serves no files: disabled, with a
+   * line saying so).
+   */
+  canAttach?: boolean | "no-service";
+}
+
+export type AttachKind = "library" | "camera" | "file";
+
+const ATTACH_OPTIONS: readonly { label: string; kind: AttachKind }[] = [
+  { label: "Photo library", kind: "library" },
+  { label: "Take photo", kind: "camera" },
+  { label: "Choose file", kind: "file" },
+];
+
+/** The attach sheet: the iOS action sheet, or an alert with the same choices elsewhere. */
+export function openAttachSheet(onPick: (kind: AttachKind) => void): void {
+  const labels = [...ATTACH_OPTIONS.map((o) => o.label), "Cancel"];
+  if (Platform.OS === "ios") {
+    ActionSheetIOS.showActionSheetWithOptions(
+      { title: "Attach", options: labels, cancelButtonIndex: labels.length - 1 },
+      (index) => {
+        const option = ATTACH_OPTIONS[index];
+        if (option) onPick(option.kind);
+      },
+    );
+    return;
+  }
+  Alert.alert("Attach", undefined, [
+    ...ATTACH_OPTIONS.map((o) => ({ text: o.label, onPress: () => onPick(o.kind) })),
+    { text: "Cancel", style: "cancel" as const },
+  ]);
 }
 
 function QueuedRow({
@@ -239,13 +298,12 @@ function QueuedRow({
         alignItems: "center",
         gap: t.space.sm,
         paddingLeft: t.space.md,
-        borderRadius: 14,
         backgroundColor: t.c.bg2,
+        borderWidth: t.border.row,
+        borderColor: t.c.line,
       }}
     >
-      <Text variant="caption" weight={600} tone="fg3">
-        Queued
-      </Text>
+      <Kicker>Queued</Kicker>
       <Text variant="bodySmall" numberOfLines={1} style={{ flex: 1 }}>
         {row.text}
       </Text>
@@ -289,6 +347,10 @@ function QueuedRow({
 function ComposerImpl(props: ComposerProps) {
   const t = useTheme();
   const { draft, onDraft, enabled, placeholder, sending, aborting, queue, parked } = props;
+  const attachments = props.attachments ?? [];
+  const canAttach = props.canAttach ?? false;
+  const files = attachmentsSummary(attachments);
+  const hasFiles = attachments.length > 0;
   const mode = composerMode({ enabled, sending, aborting, draft });
   const editable = enabled || sending;
   const input = useRef<TextInput>(null);
@@ -335,14 +397,50 @@ function ComposerImpl(props: ComposerProps) {
       {props.questionOpen ? (
         <Hint warn>{questionHint(queue.length, parked)}</Hint>
       ) : mode === "queue" ? (
-        <Hint>Queue waits for the turn · Send now steers it</Hint>
+        <Hint>
+          {hasFiles
+            ? "Files wait for the running turn to finish · Send now steers with the text only"
+            : "Queue waits for the turn · Send now steers it"}
+        </Hint>
+      ) : files.failed > 0 ? (
+        <Hint warn>Retry or remove the file that did not upload</Hint>
+      ) : canAttach === "no-service" ? (
+        <Hint>This instance has no file service</Hint>
       ) : null}
+      <AttachTray
+        items={attachments}
+        onRemove={(id) => props.onRemoveAttachment?.(id)}
+        onRetry={(id) => props.onRetryAttachment?.(id)}
+      />
       {/* The input is always the first child of this row, in every mode, so
           switching modes never remounts it (focus and the keyboard stay). */}
       <View
         testID="composer-input-row"
-        style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.sm }}
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-end",
+          borderWidth: t.border.row,
+          borderColor: t.c.line2,
+          backgroundColor: t.c.bg2,
+          opacity: editable ? 1 : 0.6,
+        }}
       >
+        {canAttach ? (
+          // The leading slot: parted from the field by the box's own rule.
+          <View style={{ borderRightWidth: t.border.row, borderColor: t.c.line2 }}>
+            <IconButton
+              icon="plus"
+              label="Attach"
+              ring={false}
+              testID="composer-attach"
+              disabled={canAttach === "no-service" || !editable || files.staging > 0}
+              onPress={() => {
+                haptic.select();
+                openAttachSheet((kind) => props.onAttach?.(kind));
+              }}
+            />
+          </View>
+        ) : null}
         <TextInput
           keyboardAppearance={t.scheme}
           ref={input}
@@ -357,7 +455,7 @@ function ComposerImpl(props: ComposerProps) {
           cursorColor={t.c.acc}
           style={{
             flex: 1,
-            minHeight: LINE + PAD_Y,
+            minHeight: ACTION,
             maxHeight: LINE * MAX_LINES + PAD_Y,
             color: t.c.fg,
             fontFamily: t.sans(400),
@@ -366,29 +464,31 @@ function ComposerImpl(props: ComposerProps) {
             paddingHorizontal: t.space.md,
             paddingTop: PAD_Y / 2,
             paddingBottom: PAD_Y / 2,
-            // A soft pill, filled rather than boxed.
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: t.c.line,
-            backgroundColor: t.c.bg2,
-            opacity: editable ? 1 : 0.6,
-            borderRadius: (LINE + PAD_Y) / 2,
+            // The box around it draws the border and fill; the field is flush.
             textAlignVertical: "top",
           }}
         />
         {mode === "send" || mode === "disabled" ? (
-          <RoundAction
+          <ActionButton
             kind="send"
-            label="Send"
-            disabled={mode === "disabled" || !draft.trim()}
+            label={files.staging > 0 ? "Uploading…" : "Send"}
+            uploading={files.staging > 0}
+            disabled={
+              mode === "disabled" ||
+              (!draft.trim() && !hasFiles) ||
+              files.staging > 0 ||
+              files.failed > 0
+            }
             onPress={() => {
-              const text = take();
-              if (!text) return;
+              // Files with no text still send: the message is the files.
+              const text = take() ?? "";
+              if (!text && !hasFiles) return;
               haptic.medium();
               props.onSend(text);
             }}
           />
         ) : mode === "stop" || mode === "stopping" ? (
-          <RoundAction
+          <ActionButton
             kind="stop"
             label="Stop turn"
             busy={mode === "stopping"}
@@ -407,7 +507,7 @@ function ComposerImpl(props: ComposerProps) {
           testID="composer-queue-actions"
           style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
         >
-          <RoundAction
+          <ActionButton
             kind="stop"
             label="Stop turn"
             inline
@@ -422,9 +522,7 @@ function ComposerImpl(props: ComposerProps) {
               accessibilityLabel="Send now"
               accessibilityHint="Steers this message into the running turn"
               variant="secondary"
-              soft
               compact
-              hitSlop={PILL_SLOP}
               haptic={false}
               onPress={() => {
                 const text = take();
@@ -437,9 +535,7 @@ function ComposerImpl(props: ComposerProps) {
               label="Queue"
               accessibilityLabel="Queue"
               accessibilityHint="Sends this message when the running turn ends"
-              soft
               compact
-              hitSlop={PILL_SLOP}
               haptic={false}
               onPress={() => {
                 const text = take();

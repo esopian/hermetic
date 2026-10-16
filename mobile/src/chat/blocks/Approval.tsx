@@ -1,7 +1,7 @@
 /**
  * `approval` — the agent stopped and is waiting on you (desktop
- * `blocks/Approval.tsx` + `ApprovalActions.tsx`). A soft card led by a warn
- * dot while it waits on you, never collapsed. The buttons are exactly
+ * `blocks/Approval.tsx` + `ApprovalActions.tsx`). A square card with a warn
+ * rule and mark while it waits on you, never collapsed. The buttons are exactly
  * `block.choices` in the gateway's order with the desktop's labels; "Always
  * allow" persists a pattern on the box, so it takes an inline confirm naming
  * the pattern and the command. Expired, it says so; closed by the box, it says
@@ -29,6 +29,7 @@ import { haptic } from "../../ui/haptics.ts";
 import { Text } from "../../ui/Text.tsx";
 import { CodePane } from "../CodePane.tsx";
 import { useSubmit } from "./respond.ts";
+import { Kicker } from "../../ui/Kicker.tsx";
 import { NeedsDot, SoftCard } from "./SoftCard.tsx";
 
 export function ApprovalCard({
@@ -111,7 +112,6 @@ export function ApprovalCard({
               key={choice}
               label={APPROVAL_LABEL[choice]}
               variant="secondary"
-              soft
               disabled
               style={{ flexGrow: 1, flexBasis: "45%" }}
               onPress={() => undefined}
@@ -141,11 +141,10 @@ export function ApprovalCard({
           <Button
             label="Cancel"
             variant="secondary"
-            soft
             style={{ flex: 1 }}
             onPress={() => setConfirming(false)}
           />
-          <Button label="Always allow" soft disabled={busy} style={{ flex: 1 }} onPress={always} />
+          <Button label="Always allow" disabled={busy} style={{ flex: 1 }} onPress={always} />
         </View>
       </View>
     );
@@ -161,7 +160,6 @@ export function ApprovalCard({
               key={choice}
               label={APPROVAL_LABEL[choice]}
               variant={choice === "deny" ? "destructive" : choice === "once" ? "primary" : "secondary"}
-              soft
               busy={busy && chosen === choice}
               disabled={busy}
               haptic={false}
@@ -183,14 +181,14 @@ export function ApprovalCard({
 
   const waiting = !closedLine && !settled && !released && !expired;
   return (
-    <SoftCard testID={`approval-${request_id ?? "none"}`}>
+    <SoftCard testID={`approval-${request_id ?? "none"}`} edge={waiting ? t.c.warn : undefined}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
         {waiting ? <NeedsDot /> : null}
-        <Text variant="bodySmall" weight={600} tone={waiting ? "fg" : "fg2"} style={{ flex: 1 }}>
+        <Kicker tone={waiting ? "warn" : "fg2"} style={{ flex: 1 }}>
           Approval required
-        </Text>
+        </Kicker>
         {block.expires_at && !closed ? (
-          <Text variant="caption" tone="fg3">
+          <Text mono variant="caption" tone="fg3">
             {`expires ${railTime(block.expires_at, now)}`}
           </Text>
         ) : null}

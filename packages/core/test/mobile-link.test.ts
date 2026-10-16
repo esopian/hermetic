@@ -2,7 +2,8 @@
  * The phone's pairing link (`shared/mobile-link.ts`): it roundtrips, carries a
  * host only where the box's name is not the derived one, degrades to names
  * past `MOBILE_LINK_MAX_AGENTS`, stays drawable, and the parser refuses
- * anything else without throwing.
+ * anything else without throwing. Its `prefs` field is forgiving: a pref
+ * this build cannot read is dropped, never a reason to refuse the link.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -29,11 +30,12 @@ const BASE: MobileLinkPayload = {
   region: "us-west-2",
   tailnet: "hermetic.ts.net",
   agents: [{ name: "atlas" }, { name: "corvid", host: "fxtr0001-corvid-2.hermetic.ts.net" }],
+  prefs: {},
 };
 
 const linkWith = (fields: Record<string, string>): string => {
   const all: Record<string, string> = {
-    v: "2",
+    v: "3",
     fleet: "fxtr0001",
     alias: "main",
     account: "123456789012",
@@ -51,7 +53,7 @@ describe("encodeMobileLink / parseMobileLink", () => {
   test("roundtrips a payload", () => {
     const link = encodeMobileLink(BASE);
     expect(link).toBe(
-      "hermetic://fleet?v=2&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2" +
+      "hermetic://fleet?v=3&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2" +
         "&tailnet=hermetic.ts.net&agents=atlas,corvid:fxtr0001-corvid-2.hermetic.ts.net",
     );
     expect(parseMobileLink(link)).toEqual(BASE);
@@ -98,7 +100,27 @@ describe("encodeMobileLink / parseMobileLink", () => {
     expect(kept).toBeGreaterThan(0);
     expect(kept).toBeLessThan(200);
     expect(parsed?.agents.map((a) => a.name)).toEqual(agents.slice(0, kept).map((a) => a.name));
+    // The link says it was trimmed, and from how many.
+    expect(parsed?.agents_total).toBe(200);
+    expect(link).toContain("&n=200&");
     expect(() => encodeQr(link)).not.toThrow();
+  });
+
+  test("a link that names every agent carries no count", () => {
+    const parsed = parseMobileLink(encodeMobileLink({ ...BASE, agents: [{ name: "atlas" }] }));
+    expect(parsed?.agents_total).toBeUndefined();
+    expect(parsed && "agents_total" in parsed).toBe(false);
+  });
+
+  test("a count that is malformed or not above the list is dropped, never refusing the link", () => {
+    const base = encodeMobileLink({ ...BASE, agents: [{ name: "atlas" }, { name: "corvid" }] });
+    const withN = (n: string) => base.replace("&agents=", `&n=${n}&agents=`);
+    expect(parseMobileLink(withN("5"))?.agents_total).toBe(5);
+    for (const n of ["2", "1", "0", "-3", "x", "1e3", "", "9999999"]) {
+      const parsed = parseMobileLink(withN(n));
+      expect(parsed).not.toBeNull();
+      expect(parsed?.agents_total).toBeUndefined();
+    }
   });
 
   test("past the length limit, host overrides go (from the end) before any agent does", () => {
@@ -112,8 +134,9 @@ describe("encodeMobileLink / parseMobileLink", () => {
     const link = encodeMobileLink({ ...BASE, agents });
     expect(link.length).toBeLessThanOrEqual(MOBILE_LINK_MAX_LENGTH);
     const parsed = parseMobileLink(link);
-    // Every agent is still named.
+    // Every agent is still named, so the link carries no count.
     expect(parsed?.agents.map((a) => a.name)).toEqual(agents.map((a) => a.name));
+    expect(parsed?.agents_total).toBeUndefined();
     // The hosts kept are a prefix: the first agents keep theirs, the last lose them.
     const kept = parsed?.agents.filter((a) => a.host !== undefined).length ?? 0;
     expect(kept).toBeGreaterThan(0);
@@ -148,7 +171,8 @@ describe("encodeMobileLink / parseMobileLink", () => {
       "hermetic://fleet",
       "hermetic://fleet?",
       linkWith({ v: "1" }),
-      linkWith({ v: "3" }),
+      linkWith({ v: "4" }),
+      linkWith({ v: "" }),
       linkWith({ account: "12345" }),
       linkWith({ account: "12345678901a" }),
       linkWith({ fleet: "FXTR0001" }),
@@ -166,9 +190,10 @@ describe("encodeMobileLink / parseMobileLink", () => {
       linkWith({ agents: "atlas,,ember" }),
       linkWith({ agents: "%E0%A4%A" }),
       `${linkWith({})}&fleet=fxtr0002`,
+      `${linkWith({ prefs: "avatar_style:pixel" })}&prefs=avatar_style:blob`,
       `${linkWith({})}#frag`,
       `${linkWith({})}&noequals`,
-      "hermetic://fleet?v=2&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2&tailnet=hermetic.ts.net",
+      "hermetic://fleet?v=3&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2&tailnet=hermetic.ts.net",
       `${linkWith({})}${"a".repeat(10_240)}`,
       "x".repeat(10_240),
       `hermetic://fleet?${"&".repeat(10_000)}`,
@@ -184,8 +209,73 @@ describe("encodeMobileLink / parseMobileLink", () => {
     expect(parseMobileLink(linkWith({}))).not.toBeNull();
   });
 
-  test("unknown parameters are ignored, so a later v2 field does not break an older phone", () => {
+  test("unknown parameters are ignored, so a later field does not break an older phone", () => {
     expect(parseMobileLink(`${linkWith({})}&extra=1`)).not.toBeNull();
+  });
+
+  test("a v2 link, which has no prefs, still parses, with empty prefs", () => {
+    const v2 = linkWith({ v: "2" });
+    expect(parseMobileLink(v2)).toEqual({
+      fleet_id: "fxtr0001",
+      alias: "main",
+      account_id: "123456789012",
+      region: "us-west-2",
+      tailnet: "hermetic.ts.net",
+      agents: [{ name: "atlas" }],
+      prefs: {},
+    });
+  });
+
+  test("prefs roundtrip, and an empty prefs writes no parameter", () => {
+    const link = encodeMobileLink({ ...BASE, prefs: { avatar_style: "pixel" } });
+    expect(link).toContain("&prefs=avatar_style:pixel&");
+    expect(parseMobileLink(link)?.prefs).toEqual({ avatar_style: "pixel" });
+    expect(encodeMobileLink({ ...BASE, prefs: {} })).not.toContain("prefs=");
+    expect(encodeMobileLink({ ...BASE, prefs: undefined })).toBe(encodeMobileLink(BASE));
+  });
+
+  test("an unknown pref key, a bad value or a repeated key is dropped; the rest is kept", () => {
+    const prefs = (raw: string) => parseMobileLink(linkWith({ prefs: raw }))?.prefs;
+    expect(prefs("avatar_style:sigil;theme:dark")).toEqual({ avatar_style: "sigil" });
+    expect(prefs("theme:dark;avatar_style:blob")).toEqual({ avatar_style: "blob" });
+    expect(prefs("avatar_style:emoji")).toEqual({});
+    expect(prefs("avatar_style:pixel;avatar_style:blob")).toEqual({});
+    expect(prefs("")).toEqual({});
+  });
+
+  test("a malformed prefs string reads as no prefs, never as a refused link", () => {
+    for (const raw of [
+      "avatar_style",
+      "avatar_style:pixel;",
+      ";",
+      "avatar_style=pixel",
+      "Avatar_Style:pixel",
+      "avatar_style:pixel;theme:%3Cscript%3E",
+      "avatar_style:<b>",
+      `avatar_style:${"a".repeat(40)}`,
+    ]) {
+      const parsed = parseMobileLink(linkWith({ prefs: raw }));
+      expect([raw, parsed?.prefs]).toEqual([raw, {}]);
+    }
+  });
+
+  test("the encoder refuses a pref this build's parser would drop", () => {
+    const bad = [
+      { avatar_style: "emoji" },
+      { theme: "dark" },
+    ] as unknown as MobileLinkPayload["prefs"][];
+    for (const prefs of bad) {
+      expect(() => encodeMobileLink({ ...BASE, prefs })).toThrow(/invalid pref/);
+    }
+  });
+
+  test("prefs survive the length budget: hosts and agents go first", () => {
+    const agents = Array.from({ length: 400 }, (_, i) => ({ name: `agent-number-${i}` }));
+    const link = encodeMobileLink({ ...BASE, agents, prefs: { avatar_style: "pixel" } });
+    expect(link.length).toBeLessThanOrEqual(MOBILE_LINK_MAX_LENGTH);
+    const parsed = parseMobileLink(link);
+    expect(parsed?.agents.length).toBeLessThan(400);
+    expect(parsed?.prefs).toEqual({ avatar_style: "pixel" });
   });
 
   /** The module restates the schemas' character rules; these keep the two in step. */
@@ -262,6 +352,23 @@ describe("mobile.pair in fixture mode", () => {
       tailnet: "hermetic.ts.net",
     });
     expect(() => encodeQr(result.link)).not.toThrow();
+    expect(result.prefs).toEqual({});
+  });
+
+  test("carries the prefs it is asked to, and answers what the link holds", async () => {
+    const h = await openHermetic({
+      fixture: true,
+      home: mkdtempSync(join(tmpdir(), "hermetic-mobile-link-")),
+    });
+    const result = MobilePairResult.parse(await h.mobile.pair({ prefs: { avatar_style: "sigil" } }));
+    expect(result.prefs).toEqual({ avatar_style: "sigil" });
+    expect(parseMobileLink(result.link)?.prefs).toEqual({ avatar_style: "sigil" });
+    await expect(h.mobile.pair({ prefs: { avatar_style: "emoji" } })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    await expect(h.mobile.pair({ prefs: { theme: "dark" } })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
   });
 
   test("refuses an option it does not take", async () => {

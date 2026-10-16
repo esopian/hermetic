@@ -9,6 +9,7 @@
  * route replace, the haptic) waits on it being shown; a screen that is gone
  * does not watch the new session either, so nothing is left observing it.
  */
+import type { SendAttachments } from "./chat-types.ts";
 import type { ConversationTarget } from "./conversation-store.ts";
 
 export interface NewSessionClient {
@@ -21,12 +22,17 @@ export interface NewSessionClient {
   };
   chat: {
     open(target: ConversationTarget): void;
-    sendMessage(target: ConversationTarget, text: string): boolean;
+    sendMessage(
+      target: ConversationTarget,
+      text: string,
+      attachments?: SendAttachments | null,
+    ): boolean;
   };
 }
 
 /**
- * Open a new session of `target`'s bot and send `prompt` into it. Answers the
+ * Open a new session of `target`'s bot and send `prompt` (and `attachments`,
+ * files already staged on the box) into it. Answers the
  * new session's target while `shown()` still holds, else `null` (the screen
  * left: it replaces nothing). A refusal to open throws.
  */
@@ -35,6 +41,7 @@ export async function openSeparateSession(
   target: { instance: string; bot: string },
   prompt: string | undefined,
   shown: () => boolean,
+  attachments?: SendAttachments | null,
 ): Promise<{ instance: string; bot: string; session: string } | null> {
   const opened = await client.gateway.open({
     instance: target.instance,
@@ -43,9 +50,9 @@ export async function openSeparateSession(
   });
   const next = { instance: opened.instance, bot: opened.bot, session: opened.session };
   const onScreen = shown();
-  if (prompt) {
+  if (prompt || attachments) {
     if (onScreen) client.chat.open(next);
-    client.chat.sendMessage(next, prompt);
+    client.chat.sendMessage(next, prompt ?? "", attachments ?? null);
   }
   return onScreen ? next : null;
 }

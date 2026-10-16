@@ -105,8 +105,9 @@ export default function Search() {
             flexDirection: "row",
             alignItems: "center",
             minHeight: fieldHeight,
-            borderRadius: 22,
             backgroundColor: t.c.bg2,
+            borderWidth: t.border.row,
+            borderColor: t.c.line2,
             paddingLeft: t.space.md,
             gap: t.space.sm,
           }}

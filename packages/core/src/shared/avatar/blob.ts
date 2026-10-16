@@ -1,13 +1,27 @@
 /**
- * Blob geometry — a port of the desktop's `avatar/blob.ts` (pure parts only).
- * Two counter-rotating layers of seeded spline points; the still pose is
- * `blobFrame(shape, 0)`. Same draws in the same order, so the same face.
+ * Blob — two counter-rotating layers of seeded spline points (§9.2).
+ *
+ * The one style with a curve in it, and therefore the **stated, documented
+ * exception** to `* { border-radius: 0 }` in `styles.css`. That law is real and
+ * this is the only thing allowed through it: everything else in hermetic is
+ * infrastructure — squares, hairlines, 900-weight caps — and the blob marks the
+ * one row in the system that is a *running agent* rather than a resource. It
+ * carries liveness in peripheral vision, where a status word cannot reach.
+ *
+ * Geometry only: no DOM, no React. The desktop renders the still pose from
+ * `blobFrame(shape, 0, frozen)` and its ticker only ever rewrites `d` and
+ * `transform` on paths that already exist; the phone draws the same still pose.
  */
-import type { Rng } from "./avatar-seed.ts";
+import type { AvatarMotion, Rng } from "./seed.ts";
 
 const TAU = Math.PI * 2;
 export const BLOB_VIEWBOX = "0 0 100 100";
 
+/**
+ * One control point on a circle. Each has its own radius amplitude, angular
+ * wobble, phase and speed, all seeded — so the shape never returns to a pose
+ * you have already seen and there is no loop to notice.
+ */
 export interface BlobPoint {
   readonly a: number;
   readonly base: number;
@@ -20,6 +34,7 @@ export interface BlobPoint {
 }
 
 export interface BlobShape {
+  /** 7–10 points behind, 8–12 in front. The counts are part of the identity. */
   readonly back: readonly BlobPoint[];
   readonly front: readonly BlobPoint[];
   readonly rot0: number;
@@ -54,6 +69,10 @@ export function blobShape(rnd: Rng): BlobShape {
   };
 }
 
+/**
+ * A closed Catmull-Rom emitted as cubic Béziers. A plain polygon reads as a gem
+ * and a circle reads as a dot; this is the cheapest curve that is neither.
+ */
 function spline(p: readonly (readonly [number, number])[]): string {
   const n = p.length;
   const first = p[0]!;
@@ -74,6 +93,7 @@ function spline(p: readonly (readonly [number, number])[]): string {
   return `${d}Z`;
 }
 
+/** The path one layer traces at time `t`. Pure, and the only geometry worth testing. */
 export function blobPath(set: readonly BlobPoint[], t: number, r: number, amp: number): string {
   return spline(
     set.map((p) => {
@@ -87,14 +107,25 @@ export function blobPath(set: readonly BlobPoint[], t: number, r: number, amp: n
 export interface BlobFrame {
   readonly front: string;
   readonly back: string;
+  /** Degrees. The back layer counter-rotates at 0.55× and is applied from this. */
   readonly rotation: number;
 }
 
-/** One instant of both layers; `amp` 0 is the frozen pose. */
-export function blobFrame(shape: BlobShape, t: number, amp = 0, alive = false): BlobFrame {
+/**
+ * One instant of both layers.
+ *
+ * Note what is *not* here: an earlier prototype swelled the whole SVG while
+ * thinking, and that job now belongs to `AvatarMotion.scale`, which every
+ * style reads and which each head's avatar component applies once. The
+ * numbers land in the same place — the prototype's swell ran 1.000/1.030/1.054
+ * against the shared table's 1.00/1.04/1.06 — and one owner of the transform
+ * is worth more than the third decimal.
+ */
+export function blobFrame(shape: BlobShape, t: number, motion: AvatarMotion): BlobFrame {
+  const amp = motion.alive ? motion.amp : 0;
   return {
     front: blobPath(shape.front, t, 46, amp),
     back: blobPath(shape.back, t * 0.62 + 11, 48, amp * 0.8),
-    rotation: alive ? shape.rot0 + t * shape.rotSpeed : shape.rot0,
+    rotation: motion.alive ? shape.rot0 + t * shape.rotSpeed : shape.rot0,
   };
 }

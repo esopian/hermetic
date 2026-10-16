@@ -70,6 +70,42 @@ describe("PairConfirm", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  test("a link's prefs show as their own lines", async () => {
+    const withPrefs = encodeMobileLink({
+      fleet_id: "fxtr0001",
+      alias: "main",
+      account_id: "123456789012",
+      region: "us-west-2",
+      tailnet: "hermetic.ts.net",
+      agents: [{ name: "atlas" }],
+      prefs: { avatar_style: "pixel" },
+    });
+    await renderUi(
+      <PairConfirm
+        link={paired(withPrefs)}
+        replacing={false}
+        busy={false}
+        onConfirm={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.getByText("Avatar style")).toBeTruthy();
+    expect(screen.getByText("pixel")).toBeTruthy();
+  });
+
+  test("a link without prefs shows no pref line", async () => {
+    await renderUi(
+      <PairConfirm
+        link={paired()}
+        replacing={false}
+        busy={false}
+        onConfirm={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.queryByText("Avatar style")).toBeNull();
+  });
+
   test("replacing says it will ask again", async () => {
     await renderUi(
       <PairConfirm link={paired()} replacing busy={false} onConfirm={jest.fn()} onCancel={jest.fn()} />,

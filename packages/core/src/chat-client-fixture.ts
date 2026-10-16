@@ -24,3 +24,23 @@ export type { FixtureChatOptions } from "./backend/fixture/fixture-chat.ts";
  */
 export { createFixtureChatStack } from "./backend/fixture/fixture-chat-stack.ts";
 export type { FixtureChatStack, FixtureChatPacing } from "./backend/fixture/fixture-chat-stack.ts";
+/**
+ * hermeticd's files routes on a fixture box (`/healthz`'s capability, stage,
+ * commit, the request routes, and an entry's content), as plain data for a
+ * fake `fetch` to wrap; it is also the `E2E_FILE_SHARE` turn's outbox. The
+ * phone's real files client runs against it. The stage checks and the `E2E_FILE_TOO_LARGE` /
+ * `E2E_FILE_DIGEST` name triggers are the desktop fixture's own, and
+ * `FIXTURE_NO_FILES_AGENT` serves no files, as on the desktop.
+ */
+export {
+  E2E_FILE_DIGEST,
+  E2E_FILE_TOO_LARGE,
+  FIXTURE_NO_FILES_AGENT,
+  createFixtureFilesBox,
+} from "./backend/fixture/fixture-files-box.ts";
+export type {
+  FixtureBoxAnswer,
+  FixtureBoxRequest,
+  FixtureFilesBox,
+  FixtureFilesBoxOptions,
+} from "./backend/fixture/fixture-files-box.ts";

@@ -349,15 +349,23 @@ export function qrToTerminal(qr: QrMatrix, margin = 2): string {
 
 /** The matrix as a standalone SVG, dark modules on white, with a 4-module quiet zone. */
 export function qrToSvg(qr: QrMatrix, margin = 4): string {
-  const span = qr.size + margin * 2;
+  // Every interpolated value is a non-negative integer: nothing here can carry markup.
+  const size = wholeNumber(qr.size);
+  const pad = wholeNumber(margin);
+  const span = size + pad * 2;
   let path = "";
-  for (let y = 0; y < qr.size; y++) {
-    for (let x = 0; x < qr.size; x++) {
-      if ((qr.modules[y] as boolean[])[x]) path += `M${x + margin},${y + margin}h1v1h-1z`;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if ((qr.modules[y] as boolean[])[x]) path += `M${x + pad},${y + pad}h1v1h-1z`;
     }
   }
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${span} ${span}" shape-rendering="crispEdges">` +
     `<rect width="${span}" height="${span}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`
   );
+}
+
+/** `n` as a non-negative integer (NaN and negatives become 0). */
+function wholeNumber(n: number): number {
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }

@@ -262,6 +262,9 @@ async function setup(
     now: () => NOW,
   });
   await fleet.pair(read.link);
+  // Both agents listened: atlas picked as the primary, corvid opted into.
+  await fleet.setPrimary("atlas");
+  await fleet.setListening("corvid", true);
   const inbox = new InboxStore(memoryFile(), () => NOW);
   const alerts: Alert[] = [];
   const chat = adapter(frames, opts);
@@ -642,6 +645,58 @@ describe("createHermeticClient", () => {
     s.client.setPhase("inactive");
     expect(tunnelVerified(host)).toBe(true);
     resetTunnelChecks();
+    s.client.dispose();
+  });
+
+  test("createBot runs the bots.create sequence, then reads the roster again", async () => {
+    const bots = [bot()];
+    const s = await setup([], {
+      bots,
+      rpc: (method) => {
+        if (method === "profiles.create") {
+          bots.push(bot({ name: "scout", title: "Scout" }));
+          return { ok: true, name: "scout" };
+        }
+        if (method === "profiles.configure") return { ok: true, applied: { ui_meta: true } };
+        if (method === "profiles.describe") return { name: "scout", description: "Finds things" };
+        return {};
+      },
+    });
+    await s.client.roster.refresh();
+    const listed = () =>
+      s.client.roster
+        .getState()
+        .swarms.find((w) => w.instance === "atlas")
+        ?.bots.map((b) => b.name);
+    expect(listed()).toEqual(["scribe"]);
+    const profile = await s.client.createBot("atlas", { name: "scout", title: "Scout" });
+    expect(s.chat.rpcs).toEqual(["profiles.create", "profiles.configure", "profiles.describe"]);
+    expect(profile).toMatchObject({ instance: "atlas", bot: "scout", description: "Finds things" });
+    expect(listed()).toEqual(expect.arrayContaining(["scribe", "scout"]));
+    s.client.dispose();
+  });
+
+  test("createBot refuses bad input and a gateway without Bot Mode RPC, before any call", async () => {
+    const s = await setup([], { rpc: () => ({}) });
+    await expect(s.client.createBot("atlas", { name: "Not A Name!" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(s.chat.rpcs).toEqual([]);
+    s.client.dispose();
+    const bare = await setup([]);
+    await expect(bare.client.createBot("atlas", { name: "scout" })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    bare.client.dispose();
+  });
+
+  test("createBot reaches only a listened agent", async () => {
+    const s = await setup([], { rpc: () => ({ ok: true }) });
+    await s.fleet.setListening("corvid", false);
+    await expect(s.client.createBot("corvid", { name: "scout" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(s.chat.rpcs).toEqual([]);
     s.client.dispose();
   });
 });

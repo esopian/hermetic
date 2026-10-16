@@ -153,6 +153,20 @@ export const FIXTURE_CHAT_FILES = {
   },
 } as const satisfies Record<string, SeededFile>;
 
+/**
+ * The Grafana screenshot the catalogue's `browser.screenshot` call names by
+ * `file_id`. Not in `FIXTURE_CHAT_FILES`: the desktop's fixture backend never
+ * reads a tool result's file by id, so only the phone's fixture box
+ * (`createFixtureFilesBox`) holds it, beside the canned files above.
+ */
+export const FIXTURE_CHAT_SCREENSHOT = {
+  id: "f_fxgrafana001",
+  agent: "atlas",
+  name: "granite-grafana.png",
+  mime: "image/png",
+  bytes: fixturePng(96),
+} as const satisfies SeededFile;
+
 const SEEDED_DAY = "2026-09-17";
 
 function relOf(file: SeededFile): string {

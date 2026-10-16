@@ -140,6 +140,14 @@ async function setup(
   return { kit, note, appState, secure, background, opened, value, link };
 }
 
+/** Pair, then pick `primary` (so it alone is listened), and let it settle. */
+async function pairPrimary(s: Awaited<ReturnType<typeof setup>>, primary = "atlas") {
+  await act(() => s.value().pair(s.link()));
+  await settle();
+  await act(() => s.value().setPrimary(primary));
+  await settle();
+}
+
 const ATLAS = "fxtr0001-atlas.hermetic.ts.net";
 const JUNIPER = "fxtr0001-juniper.hermetic.ts.net";
 
@@ -149,11 +157,21 @@ describe("FleetProvider", () => {
     await settle();
     expect(s.value().status).toBe("unpaired");
     expect(s.value().client).toBeNull();
+    expect(s.value().needsPrimary).toBe(false);
     await act(() => s.value().pair(s.link()));
     await settle();
     expect(s.value().status).toBe("paired");
     expect(s.value().client).not.toBeNull();
     expect(s.value().fleet.getState().view?.agents).toHaveLength(11);
+    // Nothing is listened until a primary is picked.
+    expect(s.value().needsPrimary).toBe(true);
+    expect(s.value().primary).toBeNull();
+    expect(s.value().fleet.listened()).toEqual([]);
+    await act(() => s.value().setPrimary("atlas"));
+    await settle();
+    expect(s.value().needsPrimary).toBe(false);
+    expect(s.value().primary).toBe("atlas");
+    expect(s.value().fleet.listened()).toEqual(["atlas"]);
     expect(s.value().tailscale?.status).toBe("ok");
     expect(s.background.register).toHaveBeenCalled();
     expect(s.value().fixture?.link).toBe(s.kit.link);
@@ -162,8 +180,7 @@ describe("FleetProvider", () => {
   test("an unlistened instance's unread entries stop holding the badge up", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     const client = s.value().client!;
     await act(async () => {
       client.inbox.ingest({
@@ -197,8 +214,7 @@ describe("FleetProvider", () => {
   test("an optimistic unlisten marks nothing read before the box confirms", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     const client = s.value().client!;
     await act(async () => {
       client.inbox.ingest({
@@ -223,8 +239,7 @@ describe("FleetProvider", () => {
     const s = await setup();
     await settle();
     const before = s.value().dismissBanner;
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     expect(s.value().status).toBe("paired");
     expect(s.value().dismissBanner).toBe(before);
   });
@@ -232,8 +247,7 @@ describe("FleetProvider", () => {
   test("a stored pairing is restored on boot", async () => {
     const first = await setup();
     await settle();
-    await act(() => first.value().pair(first.link()));
-    await settle();
+    await pairPrimary(first);
     const stored = Object.fromEntries((first.secure as ReturnType<typeof memoryKv>).map);
     const second = await setup(stored);
     await settle();
@@ -244,8 +258,7 @@ describe("FleetProvider", () => {
   test("boot never zeroes the badge before the pairing has loaded", async () => {
     const first = await setup();
     await settle();
-    await act(() => first.value().pair(first.link()));
-    await settle();
+    await pairPrimary(first);
     const stored = Object.fromEntries((first.secure as ReturnType<typeof memoryKv>).map);
     const entry = {
       id: "i1",
@@ -269,8 +282,7 @@ describe("FleetProvider", () => {
   test("push: enabling registers with listened boxes; a listening change follows; sign out unregisters", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     await act(async () => {
       await s.value().setPushEnabled(true);
     });
@@ -278,7 +290,7 @@ describe("FleetProvider", () => {
     expect(s.value().push.state).toBe("on");
     await expect(s.secure.get(PUSH_KEY)).resolves.toBe("on");
     expect(s.kit.registry.devicesOn(ATLAS)).toHaveLength(1);
-    // A stopped agent is not listened by default, so it holds nothing.
+    // Only the primary is listened, so an agent not opted into holds nothing.
     expect(s.kit.registry.devicesOn(JUNIPER)).toHaveLength(0);
 
     await act(async () => {
@@ -300,13 +312,30 @@ describe("FleetProvider", () => {
     expect(s.note.badges.at(-1)).toBe(0);
   });
 
+  test("re-pairing the same fleet keeps the primary and the push registration", async () => {
+    const s = await setup();
+    await settle();
+    await pairPrimary(s);
+    await act(async () => {
+      await s.value().setPushEnabled(true);
+    });
+    await settle();
+    expect(s.kit.registry.devicesOn(ATLAS)).toHaveLength(1);
+    await act(() => s.value().pair(s.link()));
+    await settle();
+    expect(s.value().primary).toBe("atlas");
+    expect(s.value().needsPrimary).toBe(false);
+    expect(s.value().fleet.listened()).toEqual(["atlas"]);
+    expect(s.value().push.state).toBe("on");
+    expect(s.kit.registry.devicesOn(ATLAS)).toHaveLength(1);
+  });
+
   test("background: alerts go local at once, and the phase settles after the linger", async () => {
     jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] });
     try {
       const s = await setup();
       await settle();
-      await act(() => s.value().pair(s.link()));
-      await settle();
+      await pairPrimary(s);
       const client = s.value().client;
       if (!client) throw new Error("no client");
       const phases: string[] = [];
@@ -329,8 +358,7 @@ describe("FleetProvider", () => {
   test("foreground: pushes delivered while away are filed, and the badge follows", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     s.note.presented.push({
       title: "scribe · atlas",
       body: "done",
@@ -366,8 +394,7 @@ describe("FleetProvider", () => {
     let now = NOW;
     const s = await setup({}, () => now);
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     const inbox = s.value().client?.inbox;
     if (!inbox) throw new Error("no client");
     const before = inbox.getState().entries.length;
@@ -405,8 +432,7 @@ describe("FleetProvider", () => {
   test("a tapped push opens its conversation", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     await act(async () =>
       s.note.tap({
         data: {
@@ -426,8 +452,7 @@ describe("FleetProvider", () => {
   test("a tap before the pairing loads opens once the client is up", async () => {
     const first = await setup();
     await settle();
-    await act(() => first.value().pair(first.link()));
-    await settle();
+    await pairPrimary(first);
     const stored = Object.fromEntries((first.secure as ReturnType<typeof memoryKv>).map);
     const s = await setup(stored);
     // Before the boot finished: no client yet.
@@ -439,8 +464,7 @@ describe("FleetProvider", () => {
   test("fixture: switching Tailscale off re-probes, and the status follows", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     await act(async () => s.value().fixture?.setTailscale("off"));
     await settle();
     expect(s.value().tailscale?.status).toBe("off");
@@ -453,8 +477,7 @@ describe("FleetProvider", () => {
     // The fixture stamps its rows with the wall clock; the store matches the turn against it.
     const s = await setup({}, () => new Date().toISOString());
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     await act(async () => {
       await s.value().setPushEnabled(true);
     });
@@ -478,8 +501,7 @@ describe("FleetProvider", () => {
   test("backgrounded with push off: this phone alerts locally", async () => {
     const s = await setup({}, () => new Date().toISOString());
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     const client = s.value().client;
     if (!client) throw new Error("no client");
     // Away from the screen but inside the linger (the sockets still live).
@@ -497,8 +519,7 @@ describe("FleetProvider", () => {
   test("previews: off by default, sent in every registration, and a change re-registers", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     expect(s.value().previews).toBe(false);
     await act(async () => {
       await s.value().setPushEnabled(true);
@@ -516,8 +537,7 @@ describe("FleetProvider", () => {
     try {
       const s = await setup();
       await settle();
-      await act(() => s.value().pair(s.link()));
-      await settle();
+      await pairPrimary(s);
       const client = s.value().client;
       if (!client) throw new Error("no client");
       const reopened: unknown[] = [];
@@ -544,8 +564,7 @@ describe("FleetProvider", () => {
   test("a push for another fleet is not filed", async () => {
     const s = await setup();
     await settle();
-    await act(() => s.value().pair(s.link()));
-    await settle();
+    await pairPrimary(s);
     s.note.presented.push({
       title: "scribe · atlas",
       body: "done",

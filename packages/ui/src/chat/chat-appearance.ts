@@ -1,7 +1,7 @@
 /** Viewer appearance belongs to this browser, independently of the selected fleet. */
 import { useSyncExternalStore } from "react";
-import { AVATAR_STYLES, DEFAULT_AVATAR_STYLE } from "./components/avatar/avatar-seed.ts";
-import type { AvatarStyle } from "./components/avatar/avatar-seed.ts";
+import { AVATAR_STYLES, DEFAULT_AVATAR_STYLE } from "@hermetic/core/shared";
+import type { AvatarStyle } from "@hermetic/core/shared";
 
 export const CHAT_AVATAR_STYLE_KEY = "hermetic.chat.avatar-style";
 const CHANGED = "hermetic:chat-appearance";

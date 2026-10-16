@@ -2,7 +2,8 @@
  * The home screen over real roster and inbox stores (a canned roster source,
  * an in-memory inbox file): the empty state with nothing listened, the hero of
  * per-instance defaults, quiet sections per instance, needs-you raised by an
- * inbox entry while the roster says false, and pins taking over the hero.
+ * inbox entry while the roster says false, pins taking over the hero, and the
+ * hero built around the primary instance.
  */
 import type { Swarm } from "@hermetic/core/chat-client";
 import { act, fireEvent, screen } from "@testing-library/react-native";
@@ -25,7 +26,12 @@ jest.mock("expo-router", () => {
   };
 });
 
-async function setup(swarms: Swarm[], listening: string[], pinned: string[] = []) {
+async function setup(
+  swarms: Swarm[],
+  listening: string[],
+  pinned: string[] = [],
+  primary: string | null = null,
+) {
   const roster = new RosterStore(
     {
       swarms: async () => ({ swarms }),
@@ -40,6 +46,8 @@ async function setup(swarms: Swarm[], listening: string[], pinned: string[] = []
   const ctx = {
     client: { roster, inbox },
     status: "paired",
+    primary,
+    needsPrimary: false,
     tailscale: null,
     probing: false,
     probeTailscale: async () => {},
@@ -117,4 +125,26 @@ test("pins take over the hero, starred; the defaults go back to their sections",
   expect(screen.queryByLabelText("Default bot: Ops")).toBeNull();
   expect(screen.getByLabelText("Ops")).toBeTruthy();
   expect(screen.getByLabelText("Pilot")).toBeTruthy();
+});
+
+test("a primary: the hero is its bots under a kicker; the others' defaults go to their sections", async () => {
+  await setup(SWARMS, ["atlas", "corvid", "heron"], [], "corvid");
+  expect(screen.getByTestId("home-hero-kicker").props.children).toBe("Primary · corvid");
+  expect(screen.getByLabelText("Default bot: Pilot")).toBeTruthy();
+  // Not the default: the kicker says whose it is.
+  expect(screen.getByTestId("home-hero-corvid/wren")).toBeTruthy();
+  expect(screen.getByLabelText("Wren")).toBeTruthy();
+  // atlas's default is a plain row in its own section now; corvid has no section left.
+  expect(screen.queryByLabelText("Default bot: Ops")).toBeNull();
+  expect(screen.getByLabelText("Ops")).toBeTruthy();
+  expect(screen.getByTestId("home-section-atlas")).toBeTruthy();
+  expect(screen.queryByTestId("home-section-corvid")).toBeNull();
+});
+
+test("pins still win the hero over the primary; the primary's section sorts first", async () => {
+  await setup(SWARMS, ["atlas", "corvid"], ["atlas/scribe"], "corvid");
+  expect(screen.getByTestId("home-hero-kicker").props.children).toBe("Pinned");
+  expect(screen.getByLabelText("Pinned bot: Scribe")).toBeTruthy();
+  const sections = screen.getAllByTestId(/^home-section-/).map((n) => n.props.testID);
+  expect(sections).toEqual(["home-section-corvid", "home-section-atlas"]);
 });

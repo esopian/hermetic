@@ -130,37 +130,84 @@ async function refusalOf(response: Response, host: string): Promise<HermeticErro
   });
 }
 
+/** One hermeticd request: its method, body, headers, the caller's signal and the header timeout. */
+export interface HermeticdInit {
+  method?: string;
+  /** A string is sent as JSON; bytes as the caller's `headers` describe them. */
+  body?: string | Uint8Array;
+  /** Extra request headers (a files upload's length, digest and session). */
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 /**
  * One call to one box's hermeticd, bounded by `timeoutMs` and the caller's
  * signal, behind the tunnel gate. A box whose HTTPS name did not answer is
  * `TUNNEL_UNVERIFIED` (nothing was sent); a box that never answered on 7434 is
  * `HERMETICD_UNAVAILABLE`; one that refused is its own code
  * (`FLEET_LIST_UNAVAILABLE`, `VALIDATION`, `FORBIDDEN`, …).
+ *
+ * The timeout and the caller's signal stop waiting for the headers only; a
+ * caller that reads a large body uses `callHermeticdBody`.
  */
 export async function callHermeticd(
   fetch: FetchLike,
   host: string,
   path: string,
-  init: { method?: string; body?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+  init: HermeticdInit = {},
 ): Promise<Response> {
+  return await callWith(fetch, host, path, init, null);
+}
+
+/**
+ * `callHermeticd`, with the body read inside the call: the caller's signal
+ * stays linked to the request, and `bodyTimeoutMs` bounds the read, until
+ * `read` settles (desktop `readVerified`). Stopping either aborts the
+ * transfer itself, so an abandoned download does not run on.
+ */
+export async function callHermeticdBody<T>(
+  fetch: FetchLike,
+  host: string,
+  path: string,
+  init: HermeticdInit & { bodyTimeoutMs: number },
+  read: (response: Response, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return await callWith(fetch, host, path, init, { read, timeoutMs: init.bodyTimeoutMs });
+}
+
+async function callWith<T>(
+  fetch: FetchLike,
+  host: string,
+  path: string,
+  init: HermeticdInit,
+  body: { read: (response: Response, signal: AbortSignal) => Promise<T>; timeoutMs: number } | null,
+): Promise<T> {
   await ensureTunnel(fetch, host, init.signal);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? HERMETICD_TIMEOUT_MS);
+  let timer = setTimeout(() => controller.abort(), init.timeoutMs ?? HERMETICD_TIMEOUT_MS);
   const onAbort = (): void => controller.abort();
   if (init.signal?.aborted) controller.abort();
   else init.signal?.addEventListener("abort", onAbort, { once: true });
+  const release = (): void => {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", onAbort);
+  };
   let response: Response;
   try {
     response = await fetch(hermeticdUrl(host, path), {
       method: init.method ?? "GET",
       headers: {
+        ...(typeof init.body === "string" ? { "content-type": "application/json" } : {}),
+        ...init.headers,
         [RPC_VERSION_HEADER]: String(RPC_PROTOCOL_VERSION),
-        ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
       },
-      ...(init.body !== undefined ? { body: init.body } : {}),
+      // The cast narrows the buffer type only: a body here is never a shared buffer.
+      ...(init.body !== undefined ? { body: init.body as string | Uint8Array<ArrayBuffer> } : {}),
       signal: controller.signal,
     });
   } catch (error) {
+    release();
     // The route that worked a moment ago may be gone: the next call re-proves it.
     noteTunnel(host, false);
     const { message } = reasonOf(error);
@@ -171,12 +218,21 @@ export async function callHermeticd(
         host,
       },
     );
-  } finally {
-    clearTimeout(timer);
-    init.signal?.removeEventListener("abort", onAbort);
   }
-  if (!response.ok) throw await refusalOf(response, host);
-  return response;
+  if (!body) {
+    release();
+    if (!response.ok) throw await refusalOf(response, host);
+    return response as T;
+  }
+  // The headers are in: the body gets its own deadline, the signal stays linked.
+  clearTimeout(timer);
+  timer = setTimeout(() => controller.abort(), body.timeoutMs);
+  try {
+    if (!response.ok) throw await refusalOf(response, host);
+    return await body.read(response, controller.signal);
+  } finally {
+    release();
+  }
 }
 
 /** `GET /fleet` on one box, parsed with `MobileFleetView`. */

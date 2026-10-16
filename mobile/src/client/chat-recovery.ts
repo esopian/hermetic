@@ -6,8 +6,9 @@
  * pure half of `components/FailureCard.tsx` (`splitError`, `failureOf`).
  * Pure TypeScript.
  */
-import type { ChatFailure, ChatMessage } from "@hermetic/core/chat-client";
+import type { AttachmentBlock, ChatFailure, ChatMessage } from "@hermetic/core/chat-client";
 import { type FailureCopy, failureCopy } from "./chat-logic.ts";
+import { LOCAL_PREFIX } from "./chat-pending.ts";
 import { STEER_PREFIX } from "./conversation-store.ts";
 
 const CODED = /^([A-Z][A-Z0-9_]{2,})(?:\s*[·:—-]\s*([\s\S]*))?$/;
@@ -99,8 +100,24 @@ export function failureView(failure: ChatFailure | null): FailureCopy {
 const isPrompt = (m: ChatMessage): boolean =>
   m.role === "user" && !m.from_bot && !m.id.startsWith(STEER_PREFIX);
 
-/** The prompt a failed turn answered: the operator's message above it. */
-export function failedPrompt(messages: readonly ChatMessage[], ids: readonly string[]): string | null {
+/**
+ * What started a failed turn, for its Retry (desktop `TurnPrompt`): the
+ * operator's words and the files that went with them, as chips carrying each
+ * file's id. `recorded` is whether the row is the box's own (its files were
+ * committed, so the stage area's expiry no longer applies) rather than this
+ * phone's optimistic echo.
+ */
+export interface TurnPrompt {
+  text: string;
+  files: AttachmentBlock[];
+  recorded: boolean;
+}
+
+/** The prompt a failed turn answered, words and files: the operator's message above it. */
+export function failedTurnPrompt(
+  messages: readonly ChatMessage[],
+  ids: readonly string[],
+): TurnPrompt | null {
   const at = messages.findIndex((m) => ids.includes(m.id));
   for (let i = at - 1; i >= 0; i -= 1) {
     const m = messages[i] as ChatMessage;
@@ -109,9 +126,16 @@ export function failedPrompt(messages: readonly ChatMessage[], ids: readonly str
       .map((b) => (b.kind === "text" ? b.markdown : ""))
       .join("")
       .trim();
-    return text || null;
+    const files = m.blocks.filter((b): b is AttachmentBlock => b.kind === "attachment");
+    if (!text && files.length === 0) return null;
+    return { text, files, recorded: !m.id.startsWith(LOCAL_PREFIX) };
   }
   return null;
+}
+
+/** The words of the prompt a failed turn answered (Edit message), or `null` when it had none. */
+export function failedPrompt(messages: readonly ChatMessage[], ids: readonly string[]): string | null {
+  return failedTurnPrompt(messages, ids)?.text || null;
 }
 
 /** Sending again is the latest failure's to offer: nothing the bot said since. */

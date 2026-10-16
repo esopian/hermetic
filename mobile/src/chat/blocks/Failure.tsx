@@ -9,7 +9,7 @@ import * as Clipboard from "expo-clipboard";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 import {
-  failedPrompt,
+  failedTurnPrompt,
   failureDetails,
   failureView,
   isLatestFailure,
@@ -40,7 +40,9 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
   }, [plan.retryAt]);
   const waiting = plan.retryAt !== null && plan.retryAt > Date.now() ? plan.retryAt : null;
   const all = scope?.messages ?? [];
-  const prompt = failedPrompt(all, ids);
+  // What Retry sends: the words and the files that went with them.
+  const turn = failedTurnPrompt(all, ids);
+  const prompt = turn?.text || null;
   const idle = !!scope && !scope.sending && !busy;
   const resend = !!scope && isLatestFailure(all, ids);
 
@@ -61,8 +63,8 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
   if (plan.retry && resend && scope?.retry)
     buttons.push({
       label: "Retry",
-      disabled: !idle || !prompt || waiting !== null,
-      onPress: () => prompt && scope.retry?.(prompt),
+      disabled: !idle || !turn || waiting !== null,
+      onPress: () => turn && scope.retry?.(turn),
     });
   if (plan.editMessage && scope?.draft)
     buttons.push({
@@ -79,8 +81,9 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
   if (plan.newSession && resend && scope?.newSession)
     buttons.push({
       label: "Start new session",
-      disabled: !idle || !prompt,
-      onPress: () => void run(async () => (prompt ? scope.newSession?.(prompt) : undefined)),
+      // Words and files together, as Retry sends them.
+      disabled: !idle || !turn,
+      onPress: () => void run(async () => (turn ? scope.newSession?.(turn) : undefined)),
     });
   buttons.push({
     label: "Copy details",
@@ -106,7 +109,6 @@ function Recovery({ failure, ids, at }: { failure: ChatFailure; ids: readonly st
             key={b.label}
             label={b.label}
             variant="secondary"
-            soft
             compact
             disabled={!!b.disabled}
             onPress={b.onPress}
@@ -155,13 +157,13 @@ export function FailureCard({
   const copy = failureView(failure);
   const tone = copy.tone === "warn" ? t.c.warn : t.c.bad;
   return (
-    <SoftCard testID="failure-card">
+    <SoftCard testID="failure-card" edge={tone}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
         <NeedsDot color={tone} />
         <Text variant="bodySmall" weight={600} style={{ flex: 1, color: tone }}>
           {sentence(copy.head)}
         </Text>
-        <Text variant="caption" tone="fg3">
+        <Text mono variant="caption" tone="fg3">
           {copy.right}
         </Text>
       </View>

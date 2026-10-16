@@ -235,7 +235,57 @@ describe("failure card", () => {
     expect(screen.getByText("Provider error")).toBeTruthy();
     expect(screen.getByText("Rate limited.")).toBeTruthy();
     await fireEvent.press(screen.getByLabelText("Retry"));
-    expect(retry).toHaveBeenCalledWith("do it");
+    expect(retry).toHaveBeenCalledWith({ text: "do it", files: [], recorded: true });
+  });
+
+  test("a prompt of files alone still offers Retry, with its files", async () => {
+    const retry = jest.fn(() => true);
+    const chip = {
+      kind: "attachment" as const,
+      name: "a.png",
+      mime: "image/png",
+      bytes: 3,
+      href: "f_1",
+      file_id: "f_1",
+    };
+    const prompt = { ...msg({ id: "local:1", role: "user", text: "" }), blocks: [chip] };
+    const failed = msg({
+      id: "f1",
+      blocks: [],
+      failure: { code: "RATE_LIMITED", message: "slow down" },
+    });
+    await renderUi(
+      <FailureCard failure={failed.failure ?? null} ids={["f1"]} at={failed.at} />,
+      scope({ retry, messages: [prompt, failed] }),
+    );
+    await fireEvent.press(screen.getByLabelText("Retry"));
+    expect(retry).toHaveBeenCalledWith({ text: "", files: [chip], recorded: false });
+  });
+
+  test("Start new session takes the failed turn's files with its words", async () => {
+    const newSession = jest.fn(async () => {});
+    const chip = {
+      kind: "attachment" as const,
+      name: "a.png",
+      mime: "image/png",
+      bytes: 3,
+      href: "f_1",
+      file_id: "f_1",
+    };
+    const prompt = { ...msg({ id: "local:1", role: "user", text: "" }), blocks: [chip] };
+    const failed = msg({
+      id: "f1",
+      blocks: [],
+      failure: { code: "loop_error", message: "looping" },
+    });
+    await renderUi(
+      <FailureCard failure={failed.failure ?? null} ids={["f1"]} at={failed.at} />,
+      scope({ newSession, messages: [prompt, failed] }),
+    );
+    const button = screen.getByLabelText("Start new session");
+    expect(button.props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(button);
+    expect(newSession).toHaveBeenCalledWith({ text: "", files: [chip], recorded: false });
   });
 
   test("no failure at all is the cut-off card", async () => {

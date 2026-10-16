@@ -1,6 +1,6 @@
 import { fireEvent, screen } from "@testing-library/react-native";
 import { botMenuItems } from "../../src/bots/botMenu.ts";
-import { edgeBadge, HomeBotRow } from "../../src/bots/HomeBotRow.tsx";
+import { badgeAt, edgeBadge, fittedBox, HomeBotRow } from "../../src/bots/HomeBotRow.tsx";
 import { HERO_MANY, HERO_SOLO, HomeHero, heroSize } from "../../src/bots/HomeHero.tsx";
 import type { HomeRow } from "../../src/client/home-rows.ts";
 import { inQuietHours } from "../../src/client/inbox-logic.ts";
@@ -181,6 +181,18 @@ describe("HomeHero", () => {
     expect(left + 10).toBeCloseTo(85.36, 1);
     expect(top + 10).toBeCloseTo(14.64, 1);
     expect(edgeBadge(100, 20, "bottom").top + 10).toBeCloseTo(85.36, 1);
+  });
+
+  test("sigil and pixel draw inset in the frame; their badges sit on the frame's corner", () => {
+    expect(fittedBox("blob", 100)).toBe(125);
+    expect(fittedBox("sigil", 100)).toBe(84);
+    expect(fittedBox("pixel", 100)).toBe(84);
+    expect(badgeAt("blob", 100, 20, "top")).toEqual(edgeBadge(100, 20, "top"));
+    expect(badgeAt("sigil", 100, 26, "bottom")).toEqual({ left: 74, top: 74 });
+    expect(badgeAt("pixel", 100, 20, "top")).toEqual({ left: 80, top: 0 });
+    // The badge's outer edge clears the inset face's corner, so no cell shows past its ring.
+    const face = (100 + fittedBox("sigil", 100)) / 2;
+    expect(badgeAt("sigil", 100, 26, "bottom").left + 26).toBeGreaterThan(face);
   });
 });
 

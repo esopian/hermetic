@@ -57,10 +57,11 @@ export type PushStatus =
   | { state: "unavailable"; reason: Exclude<PushTokenResult, { ok: true }>["reason"]; message?: string }
   | { state: "on"; boxes: PushBoxResult[] };
 
-/** The listened boxes, with their hosts. */
+/** The listened boxes, with their hosts, less any a fresh `/fleet` view says is gone (`isGone`). */
 export function listenedBoxes(fleet: FleetStore): PushBox[] {
   return fleet
     .listened()
+    .filter((instance) => !fleet.isGone(instance))
     .map((instance) => ({ instance, host: fleet.hostOf(instance) }))
     .filter((b): b is PushBox => b.host !== null);
 }
@@ -174,7 +175,10 @@ export class PushSync {
     if (!token) return this.status;
     const boxes = listenedBoxes(this.deps.fleet);
     const keep = new Set(boxes.map((b) => b.instance));
-    const dropped = [...this.registered.values()].filter((b) => !keep.has(b.instance));
+    // A box the fleet no longer has is not asked to forget: nothing answers there.
+    const dropped = [...this.registered.values()].filter(
+      (b) => !keep.has(b.instance) && !this.deps.fleet.isGone(b.instance),
+    );
     const id = await this.deps.deviceId();
     const device: MobilePushDevice = {
       device_id: id,

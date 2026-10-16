@@ -1,6 +1,7 @@
 /**
  * The step between "a pairing link arrived" and "this phone keeps it": which
- * fleet, which tailnet, how many agents. Nothing pairs without a tap here,
+ * fleet, which tailnet, how many agents, and the preferences the link asks the
+ * phone to start with (applied on confirm, changeable in Settings). Nothing pairs without a tap here,
  * whether the link came from a QR code, a deep link or a paste.
  *
  * The Pair screen pins the buttons (`PairConfirmActions`) to the bottom of the
@@ -8,7 +9,7 @@
  * Pair stay in view however long the facts above them run.
  */
 import { View } from "react-native";
-import { cleanLabel, type PairedLink, pairConfirmLines } from "../fleet/pairing.ts";
+import { cleanLabel, type PairedLink, pairConfirmLines, pairPrefLines } from "../fleet/pairing.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
@@ -112,6 +113,9 @@ export function PairConfirm({
         </Text>
       ) : null}
       <Line label="Agents" value={lines.agents} />
+      {pairPrefLines(link).map((pref) => (
+        <Line key={pref.label} label={pref.label} value={pref.value} />
+      ))}
       <Text variant="bodySmall" tone="fg2">
         There is no secret in this code: it names the fleet and its agents. This phone reaches them only
         through Tailscale, signed in to that tailnet.

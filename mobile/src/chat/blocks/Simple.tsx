@@ -3,7 +3,7 @@
  * sources, `hermetic` cards, background process events, and the `unknown`
  * fallthrough that keeps a version bump from blanking a transcript.
  */
-import { Linking, Pressable, StyleSheet, View } from "react-native";
+import { Linking, Pressable, View } from "react-native";
 import {
   fmtBytes,
   fmtCount,
@@ -26,7 +26,9 @@ import { useTheme } from "../../theme/theme.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { Card } from "../Card.tsx";
 import { CodePane } from "../CodePane.tsx";
-import { CARD_RADIUS, Label, NeedsDot } from "./SoftCard.tsx";
+import { imageSourceOf, isBoxFileId, type ImageSource } from "../../client/file-urls.ts";
+import { Picture } from "./Picture.tsx";
+import { Label, NeedsDot } from "./SoftCard.tsx";
 
 /** `reasoning` — a muted card, shut by default: "thought for Xs · N tokens", or "live". */
 export function ReasoningBlock({ block }: { block: ReasoningBlockType }) {
@@ -53,9 +55,10 @@ export function ActivityNotice({ block }: { block: ActivityBlock }) {
     <View
       accessibilityRole={block.state === "error" ? "alert" : "text"}
       style={{
-        borderRadius: CARD_RADIUS,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: t.border.row,
         borderColor: t.c.cardEdge,
+        borderLeftWidth: t.border.seam,
+        borderLeftColor: tone,
         backgroundColor: t.c.card,
         padding: t.space.md,
         gap: t.space.xs,
@@ -95,8 +98,35 @@ export function typeTag(mime: string, name: string): string {
   return (ext || cleaned || "file").slice(0, 4).toUpperCase();
 }
 
-/** `attachment` — the file's tag, name, size and type; opens only an absolute https link. */
+/**
+ * Where an attachment's picture comes from: the entry on the box when the
+ * block names one (an upload, the operator's or the agent's), else its link
+ * when that is an `https:` image; `null` for a file that is not an image.
+ */
+export function attachmentImage(block: AttachmentBlockType): ImageSource | null {
+  const mime = typeof block.mime === "string" ? block.mime : "";
+  if (!mime.startsWith("image/")) return null;
+  if (typeof block.file_id === "string" && isBoxFileId(block.file_id))
+    return { kind: "box", id: block.file_id };
+  const linked = imageSourceOf(block.href);
+  return linked?.kind === "external" ? linked : null;
+}
+
+/**
+ * `attachment` — an image's picture above the chip (tap → full screen), then
+ * the file's tag, name, size and type; the chip opens only an absolute https link.
+ */
 export function AttachmentBlock({ block }: { block: AttachmentBlockType }) {
+  const picture = attachmentImage(block);
+  return (
+    <View>
+      {picture ? <Picture source={picture} alt={block.name} sha256={block.sha256 || null} /> : null}
+      <AttachmentChip block={block} />
+    </View>
+  );
+}
+
+function AttachmentChip({ block }: { block: AttachmentBlockType }) {
   const t = useTheme();
   const href = openableHref(block.href);
   return (
@@ -109,8 +139,7 @@ export function AttachmentBlock({ block }: { block: AttachmentBlockType }) {
         alignItems: "center",
         gap: t.space.md,
         padding: t.space.sm,
-        borderRadius: CARD_RADIUS,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: t.border.row,
         borderColor: t.c.cardEdge,
         backgroundColor: pressed ? t.c.sel : t.c.card,
         marginVertical: t.space.xs,
@@ -122,7 +151,8 @@ export function AttachmentBlock({ block }: { block: AttachmentBlockType }) {
           height: 40,
           alignItems: "center",
           justifyContent: "center",
-          borderRadius: 10,
+          borderWidth: t.border.row,
+          borderColor: t.c.line2,
           backgroundColor: t.c.bg3,
         }}
       >

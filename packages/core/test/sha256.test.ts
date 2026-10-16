@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { sha256Hex, utf8Bytes } from "../src/shared/sha256.ts";
+import { createSha256, sha256Hex, utf8Bytes } from "../src/shared/sha256.ts";
 import { mapHistory } from "../src/chat/hermes/hermes-chat-history.ts";
 
 const node = (input: string | Uint8Array): string => createHash("sha256").update(input).digest("hex");
@@ -101,5 +101,65 @@ describe("sha256Hex", () => {
     const content = '[{"text":"réponse 😀","type":"text"}]';
     const expected = node([session, "assistant", "", content, at].join("\u0000")).slice(0, 16);
     expect(message!.id).toBe(`${session}:h${expected}`);
+  });
+});
+
+describe("createSha256", () => {
+  /** Deterministic bytes: a 32-bit LCG's low byte. */
+  const bytesOf = (n: number, seed = 1): Uint8Array => {
+    const out = new Uint8Array(n);
+    let x = seed;
+    for (let i = 0; i < n; i++) {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      out[i] = x >>> 24;
+    }
+    return out;
+  };
+  const inPieces = (bytes: Uint8Array, sizes: readonly number[]): string => {
+    const hasher = createSha256();
+    let at = 0;
+    for (let i = 0; at < bytes.length; i++) {
+      const size = sizes[i % sizes.length]!;
+      hasher.update(bytes.subarray(at, at + size));
+      at += size;
+    }
+    return hasher.digestHex();
+  };
+
+  test("no update is the empty digest", () => {
+    expect(createSha256().digestHex()).toBe(node(""));
+  });
+
+  test("matches node:crypto and the one-shot for every length to 200, in every chunk size", () => {
+    const all = bytesOf(200);
+    for (let n = 0; n <= 200; n++) {
+      const bytes = all.subarray(0, n);
+      const want = node(bytes);
+      expect(sha256Hex(bytes), `one-shot ${n}`).toBe(want);
+      for (const sizes of [[1], [3], [63], [64], [65], [7, 64, 1], [128]]) {
+        expect(inPieces(bytes, sizes), `length ${n} in ${sizes.join(",")}`).toBe(want);
+      }
+    }
+  });
+
+  test("matches node:crypto for 3 MB fed in uneven chunks", () => {
+    const bytes = bytesOf(3 * 1024 * 1024 + 17, 7);
+    const want = node(bytes);
+    expect(inPieces(bytes, [1_000_003, 64, 5, 777_777])).toBe(want);
+    expect(sha256Hex(bytes)).toBe(want);
+  });
+
+  test("strings are hashed as UTF-8, split anywhere", () => {
+    const text = "naïve café 日本語 😀";
+    expect(createSha256().update("naïve ").update("café 日本語 ").update("😀").digestHex()).toBe(
+      node(text),
+    );
+  });
+
+  test("a spent hasher refuses more input", () => {
+    const hasher = createSha256().update("abc");
+    hasher.digestHex();
+    expect(() => hasher.update("d")).toThrow();
+    expect(() => hasher.digestHex()).toThrow();
   });
 });

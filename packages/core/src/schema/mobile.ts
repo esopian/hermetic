@@ -15,6 +15,7 @@
  * Imports only `shared/*`, zod and sibling schema modules.
  */
 import { z } from "zod";
+import { AVATAR_STYLES, type AvatarStyle } from "../shared/avatar/style.ts";
 import { AGENT_NAME_RE } from "../shared/naming.ts";
 import { AccountId, FleetIdSchema, Iso, Region } from "./common.ts";
 import { AgentStatus, Health } from "./agent.ts";
@@ -24,14 +25,18 @@ import { AgentName, BotName } from "./requests.ts";
 // The pairing link's QR and its codec, so this door opens onto them like `shared` does.
 export { encodeQr, qrToSvg, qrToTerminal, type QrMatrix } from "../shared/qr.ts";
 export {
+  MOBILE_LINK_ACCEPTED_VERSIONS,
   MOBILE_LINK_MAX_AGENTS,
   MOBILE_LINK_MAX_LENGTH,
   MOBILE_LINK_PREFIX,
+  MOBILE_LINK_PREF_KEYS,
   MOBILE_LINK_VERSION,
   encodeMobileLink,
   parseMobileLink,
   type MobileLinkAgentEntry,
+  type MobileLinkInput,
   type MobileLinkPayload,
+  type MobileLinkPrefs,
 } from "../shared/mobile-link.ts";
 
 /** A MagicDNS name: dotted labels, no scheme, no port, no trailing dot. */
@@ -59,12 +64,29 @@ export const MobileLinkAgent = z
   .strict();
 export type MobileLinkAgent = z.infer<typeof MobileLinkAgent>;
 
-/** `hermetic mobile pair` takes nothing but the global options (`--fleet` among them). */
-export const MobilePairInput = z.object({}).strict();
+/**
+ * The viewer preferences a pairing link may carry (`MobileLinkPrefs`), so the
+ * phone starts where the desktop (or the CLI's flags) left off. Each is
+ * optional; the phone applies them on confirming the pairing and may change
+ * them in its own Settings afterwards.
+ */
+export const MobilePairPrefs = z
+  .object({
+    avatar_style: z.enum(AVATAR_STYLES as [AvatarStyle, ...AvatarStyle[]]).optional(),
+  })
+  .strict();
+export type MobilePairPrefs = z.infer<typeof MobilePairPrefs>;
+
+/**
+ * `hermetic mobile pair` takes the global options (`--fleet` among them) and,
+ * optionally, the preferences to carry (`--avatar-style`; the desktop sends
+ * its own Settings › Chat choice).
+ */
+export const MobilePairInput = z.object({ prefs: MobilePairPrefs.optional() }).strict();
 export type MobilePairInput = z.infer<typeof MobilePairInput>;
 
 export const MobilePairResult = z.object({
-  /** `hermetic://fleet?v=2&…` — what the QR draws. Not a secret. */
+  /** `hermetic://fleet?v=3&…` — what the QR draws. Not a secret. */
   link: z.string(),
   fleet: z.object({
     fleet_id: FleetIdSchema,
@@ -81,6 +103,8 @@ export const MobilePairResult = z.object({
    * phone fills the rest from `GET /fleet`.
    */
   agents_in_link: z.number().int().nonnegative(),
+  /** The preferences the link carries: `{}` when none was asked for. */
+  prefs: MobilePairPrefs,
 });
 export type MobilePairResult = z.infer<typeof MobilePairResult>;
 

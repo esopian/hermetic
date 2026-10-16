@@ -1,10 +1,12 @@
 /**
- * Home: one open screen. A top bar of round buttons (Settings on the left,
+ * Home: one open screen. A top bar of square buttons (Settings on the left,
  * Search and New chat on the right), a slim Tailscale strip only when the
  * probe says something is wrong, the hero (every bot pinned on this phone, or
- * with none pinned the default bot of each listened instance), then one quiet
- * section per listened instance with the rest of its bots — needs-you, unread,
- * most recent, name (`homeRows`). Unread and needs-you live on the bots
+ * with none pinned the primary instance's bots, under a "Primary · <name>"
+ * kicker), then one quiet section per listened instance with the rest of its
+ * bots, the primary's first — needs-you, unread, most recent, name
+ * (`primaryHomeRows` over `homeRows`). Paired with no primary picked yet, it
+ * sends the operator to the picker instead. Unread and needs-you live on the bots
  * themselves; there is no inbox screen. Long-press any bot for its menu; tap a
  * section header to fold it. Pull to refresh; polled every 60 s while in front.
  */
@@ -17,19 +19,18 @@ import {
   type NativeSyntheticEvent,
   Pressable,
   RefreshControl,
-  StyleSheet,
   View,
 } from "react-native";
 import { showBotMenu } from "../src/bots/botMenu.ts";
 import { HOME_ROW_HEIGHT, HomeBotRow, ROW_AVATAR } from "../src/bots/HomeBotRow.tsx";
 import { HERO_SOLO, HomeHero } from "../src/bots/HomeHero.tsx";
+import { primaryHomeRows } from "../src/bots/primary-home.ts";
 import {
   failedBots,
   type HomeItem,
   type HomeRow,
   type HomeSection,
   homeItems,
-  homeRows,
   needsBots,
   sectionState,
 } from "../src/client/home-rows.ts";
@@ -39,7 +40,7 @@ import { useTheme } from "../src/theme/theme.tsx";
 import { statusColor } from "../src/theme/tokens.ts";
 import { TailscaleBanner } from "../src/ui/Banner.tsx";
 import { haptic } from "../src/ui/haptics.ts";
-import { Button, Icon, IconButton, Screen, Skeleton, Text } from "../src/ui/index.ts";
+import { Button, Icon, IconButton, Kicker, Screen, Skeleton, Text } from "../src/ui/index.ts";
 import { useNow } from "../src/ui/useNow.ts";
 import { usePullRefresh } from "../src/ui/usePullRefresh.ts";
 
@@ -50,7 +51,16 @@ const chatHref = (bot: Pick<Bot, "instance" | "name">) =>
 
 export default function Home() {
   const t = useTheme();
-  const { client, status: pairing, tailscale, probing, probeTailscale, refresh } = useFleetContext();
+  const {
+    client,
+    status: pairing,
+    tailscale,
+    probing,
+    probeTailscale,
+    refresh,
+    primary = null,
+    needsPrimary,
+  } = useFleetContext();
   const fleet = useFleetState();
   const agents = useFleetAgents();
   const { state } = useRoster();
@@ -69,16 +79,19 @@ export default function Home() {
 
   const layout = useMemo(() => {
     const entries = inbox?.entries ?? [];
-    return homeRows({
-      swarms: state?.swarms ?? [],
-      listening: state?.listening ?? [],
-      pinned: state?.prefs.pinned ?? [],
-      folded: state?.prefs.folded ?? [],
-      ...(client ? { unreadOf: client.inbox.unreadFor } : {}),
-      failed: failedBots(entries),
-      needs: needsBots(entries),
-    });
-  }, [state, inbox, client]);
+    return primaryHomeRows(
+      {
+        swarms: state?.swarms ?? [],
+        listening: state?.listening ?? [],
+        pinned: state?.prefs.pinned ?? [],
+        folded: state?.prefs.folded ?? [],
+        ...(client ? { unreadOf: client.inbox.unreadFor } : {}),
+        failed: failedBots(entries),
+        needs: needsBots(entries),
+      },
+      primary,
+    );
+  }, [state, inbox, client, primary]);
   const items = useMemo(() => homeItems(layout.sections), [layout]);
   const agentStatus = useMemo(() => new Map(agents.map((a) => [a.name, a.status ?? null])), [agents]);
 
@@ -145,7 +158,7 @@ export default function Home() {
   }, []);
 
   const renderItem = useCallback(
-    ({ item }: { item: HomeItem }) =>
+    ({ item, index }: { item: HomeItem; index: number }) =>
       item.type === "section" ? (
         <SectionHeader
           section={item.section}
@@ -161,14 +174,17 @@ export default function Home() {
           suffix={item.row.suffix}
           reachable={item.row.reachable}
           failed={item.row.failed}
+          lastInSection={items[index + 1]?.type !== "row"}
           onPress={() => open(item.row.bot)}
           onLongPress={() => menu(item.row)}
         />
       ),
-    [fleetId, now, open, menu, fold, agentStatus],
+    [fleetId, now, open, menu, fold, agentStatus, items],
   );
 
   if (pairing === "unpaired") return <Redirect href="/pair" />;
+  // A stale route (a notification, a deep link) can land here before a primary is picked.
+  if (needsPrimary) return <Redirect href="/primary" />;
 
   const listening = state?.listening.length ?? 0;
   // Never read yet (and not failed) is loading, so the empty state never flashes before the first read.
@@ -177,11 +193,20 @@ export default function Home() {
   // The strip explains a failed read only while it is on screen; once dismissed, the error does.
   const banded = (probe === "off" || probe === "unreachable") && dismissed !== probe;
 
+  // Whose bots the hero shows: the pins, or the primary instance's.
+  const heroIsPrimary =
+    !layout.heroPinned &&
+    !!primary &&
+    layout.hero.length > 0 &&
+    layout.hero.every((r) => r.bot.instance === primary);
+  const heroKicker = layout.heroPinned ? "Pinned" : heroIsPrimary ? `Primary · ${primary}` : null;
   const header =
     layout.hero.length > 0 ? (
       <HomeHero
         rows={layout.hero}
         starred={layout.heroPinned}
+        primary={heroIsPrimary}
+        kicker={heroKicker}
         fleetId={fleetId}
         onPress={(row) => open(row.bot)}
         onLongPress={menu}
@@ -198,7 +223,7 @@ export default function Home() {
       <Text variant="bodySmall" tone="fg2">
         {error}
       </Text>
-      <Button label="Try again" variant="secondary" soft onPress={onRefresh} />
+      <Button label="Try again" variant="secondary" onPress={onRefresh} />
     </View>
   ) : null;
 
@@ -212,7 +237,7 @@ export default function Home() {
           paddingHorizontal: t.space.lg,
           paddingTop: t.space.sm,
           paddingBottom: t.space.sm,
-          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomWidth: t.border.row,
           borderBottomColor: scrolled ? t.c.line : "transparent",
         }}
       >
@@ -260,9 +285,9 @@ export default function Home() {
 }
 
 /**
- * A quiet header over one instance's bots: a status dot, the instance name in
- * small muted capitals, its state when its box is not answering, and (folded)
- * a dot when something inside is unread. Tap folds a reachable instance.
+ * A quiet band over one instance's bots: a status square, the instance name as
+ * a kicker, its state when its box is not answering, and (folded) a dot when
+ * something inside is unread. Tap folds a reachable instance.
  */
 function SectionHeader({
   section,
@@ -300,43 +325,24 @@ function SectionHeader({
         alignItems: "center",
         gap: t.space.sm,
         minHeight: t.touch.min,
+        marginTop: t.space.md,
         paddingHorizontal: t.space.lg + t.space.xs,
-        paddingTop: t.space.md,
+        backgroundColor: t.c.bg2,
         opacity: pressed ? 0.6 : 1,
       })}
     >
-      <View
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          backgroundColor: statusColor(t.c, status).color,
-        }}
-      />
-      <Text
-        variant="caption"
-        weight={600}
-        tone="fg3"
-        numberOfLines={1}
-        style={{ textTransform: "uppercase", letterSpacing: 0.8, flexShrink: 1 }}
-      >
+      <View style={{ width: 8, height: 8, backgroundColor: statusColor(t.c, status).color }} />
+      <Kicker numberOfLines={1} style={{ flexShrink: 1 }}>
         {section.instance}
-      </Text>
+      </Kicker>
       {word ? (
-        <Text variant="caption" tone="fg3" numberOfLines={1}>
+        <Text mono variant="caption" tone="fg3" numberOfLines={1}>
           {`· ${word}`}
         </Text>
       ) : null}
       <View style={{ flex: 1 }} />
       {hidden ? (
-        <View
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: 3.5,
-            backgroundColor: section.needs ? t.c.warn : t.c.acc,
-          }}
-        />
+        <View style={{ width: 8, height: 8, backgroundColor: section.needs ? t.c.warn : t.c.acc }} />
       ) : null}
       {section.reachable ? (
         <View style={{ transform: [{ rotate: section.folded ? "180deg" : "-90deg" }] }}>
@@ -370,7 +376,6 @@ function EmptyHome() {
       </Text>
       <Button
         label="Choose instances"
-        soft
         onPress={() => {
           haptic.select();
           router.push("/listening");
@@ -381,14 +386,14 @@ function EmptyHome() {
   );
 }
 
-/** The first read is still out: a hero circle and a few row shapes. */
+/** The first read is still out: a hero square and a few row shapes. */
 function HomeSkeleton() {
   const t = useTheme();
   return (
     <View testID="home-loading">
       <View style={{ alignItems: "center", paddingVertical: t.space.xl, gap: t.space.sm }}>
-        <Skeleton width={HERO_SOLO} height={HERO_SOLO} style={{ borderRadius: HERO_SOLO / 2 }} />
-        <Skeleton width={90} height={12} style={{ borderRadius: 6 }} />
+        <Skeleton width={HERO_SOLO} height={HERO_SOLO} />
+        <Skeleton width={90} height={12} />
       </View>
       {[0, 1, 2, 3].map((i) => (
         <View
@@ -401,10 +406,10 @@ function HomeSkeleton() {
             height: HOME_ROW_HEIGHT,
           }}
         >
-          <Skeleton width={ROW_AVATAR} height={ROW_AVATAR} style={{ borderRadius: ROW_AVATAR / 2 }} />
+          <Skeleton width={ROW_AVATAR} height={ROW_AVATAR} />
           <View style={{ flex: 1, gap: t.space.sm }}>
-            <Skeleton width="40%" height={12} style={{ borderRadius: 6 }} />
-            <Skeleton width="80%" height={10} style={{ borderRadius: 5 }} />
+            <Skeleton width="40%" height={12} />
+            <Skeleton width="80%" height={10} />
           </View>
         </View>
       ))}

@@ -19,6 +19,13 @@ export const border = {
   row: 1,
 } as const;
 
+/**
+ * The one corner radius: none. Controls, surfaces, cards, the composer and
+ * buttons are square, as on the desktop (`docs/ui-brief.md`, "Look"). The blob
+ * avatar is the single documented curve and lives in `src/ui/avatar/`.
+ */
+export const radius = 0 as const;
+
 export const touch = {
   min: 44,
 } as const;

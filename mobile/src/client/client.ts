@@ -18,7 +18,7 @@ import {
   type QuestionBlock,
   type Swarm,
 } from "@hermetic/core/chat-client";
-import type { MobilePushData, MobilePushKind } from "@hermetic/core/schema";
+import type { BotCreateInput, BotProfile, MobilePushData, MobilePushKind } from "@hermetic/core/schema";
 import type { FleetStore } from "../fleet/store.ts";
 import { isRunning, type LiveRow } from "../gateway/active-list.ts";
 import { boxAddress, createGatewayClient } from "../gateway/client.ts";
@@ -243,6 +243,12 @@ export interface HermeticClient {
   readonly inbox: InboxStore;
   /** Bot Mode lifecycle and subagent control beside the store (`open`, `compact`, `steerSubagent`, …). */
   readonly gateway: GatewayTransport;
+  /**
+   * Create a Bot Mode bot on `instance` (`gateway.createBot`, the desktop's
+   * `bots.create` sequence), then re-read the roster so home lists it. The
+   * roster read is best effort: the created profile is answered either way.
+   */
+  createBot(instance: string, input: Omit<BotCreateInput, "instance">): Promise<BotProfile>;
   readonly tailscale: {
     /** Probe up to three listened boxes, ready ones first; the answer is also kept as `last`. */
     probe(): Promise<TailscaleProbe>;
@@ -634,6 +640,11 @@ export function createHermeticClient(options: HermeticClientOptions): HermeticCl
     roster,
     inbox,
     gateway: transport,
+    createBot: async (instance, input) => {
+      const profile = await transport.createBot(instance, input);
+      await roster.refresh().catch(() => false);
+      return profile;
+    },
     tailscale,
     setPhase: (next) => {
       const was = phase;

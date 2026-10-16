@@ -1,17 +1,19 @@
 /**
- * One bot on the home list (and in search results): a round blob avatar, the
+ * One bot on the home list (and in search results): its avatar, the
  * name (with a quiet suffix only when it is needed to tell two bots apart),
  * the time of the last message on the right, and a one-line preview under it.
  * The operator's own last word carries the outgoing glyph instead of a "You:"
- * prefix. At the row's right edge: a gold `!` pill when the bot needs you, an
- * accent dot when it has unread messages, and a small red mark when its last
- * turn failed. With no preview the name sits centred and the marks move up
- * beside the time. No borders and no separators: whitespace does the separating.
+ * prefix. At the row's right edge: a warn `!` badge when the bot needs you, an
+ * accent square when it has unread messages, and a small red square when its
+ * last turn failed. With no preview the name sits centred and the marks move up
+ * beside the time. Rows within a section are parted by a 1px `line` rule.
  */
 import type { Bot } from "@hermetic/core/chat-client";
+import type { AvatarStyle } from "@hermetic/core/shared";
 import { memo } from "react";
 import { Pressable, View } from "react-native";
 import { homePreview, homeTime } from "../client/home-rows.ts";
+import { usePrefs } from "../prefs/prefs.tsx";
 import { useTheme } from "../theme/theme.tsx";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
 import { Icon } from "../ui/IconButton.tsx";
@@ -21,12 +23,14 @@ export interface HomeBotRowProps {
   bot: Bot;
   fleetId: string;
   now: number;
-  /** `!` needs you (gold pill), a numeric string when unread (accent dot), null for nothing. */
+  /** `!` needs you (warn badge), a numeric string when unread (accent square), null for nothing. */
   badge: string | null;
   /** Said quietly after the name when the list needs it to tell bots apart. */
   suffix: string | null;
   reachable: boolean;
   failed?: boolean;
+  /** The home section band supplies the edge after this row. */
+  lastInSection?: boolean;
   onPress: () => void;
   onLongPress?: () => void;
 }
@@ -37,15 +41,28 @@ export const ROW_AVATAR = 56;
 
 /**
  * How much of its box the blob fills: its points sit at 0.78–0.88 of the box's
- * half-width (`src/ui/avatar/blob.ts`), so a box this much larger than the
- * wanted blob draws a blob of about that size.
+ * half-width (`blobShape` in `@hermetic/core/shared`), so a box this much
+ * larger than the wanted blob draws a blob of about that size.
  */
 const BLOB_FILL = 0.8;
+/**
+ * How much of the frame a sigil or pixel face takes. They fill their own box
+ * edge to edge, so drawn at the frame's size a corner badge would sit on a cell
+ * and leave a sliver of it outside the badge's ring. Inset by about 8% per
+ * side, the face leaves the frame's corners free for the badges.
+ */
+const FRAMED_FILL = 0.84;
+
+/** The drawing box for an avatar seen in a `visible`-point frame. Pure, so it is testable. */
+export function fittedBox(style: AvatarStyle, visible: number): number {
+  return style === "blob" ? Math.round(visible / BLOB_FILL) : Math.round(visible * FRAMED_FILL);
+}
 
 /**
- * An avatar whose visible blob is `visible` points across, laid out in a
- * `visible`-sized square: the larger drawing box overflows it evenly, so
- * badges placed on the square sit on the blob's edge.
+ * An avatar in a `visible`-sized square frame. A blob's larger drawing box
+ * overflows the frame evenly, so its visible blob is the frame's size; a sigil
+ * or pixel face is drawn inset, centred. Either way badges placed on the frame
+ * by `badgeAt` clear the drawing.
  */
 export function FittedAvatar({
   bot,
@@ -58,11 +75,12 @@ export function FittedAvatar({
   visible: number;
   reachable: boolean;
 }) {
-  const box = Math.round(visible / BLOB_FILL);
-  const inset = (box - visible) / 2;
+  const { prefs } = usePrefs();
+  const box = fittedBox(prefs.avatarStyle, visible);
+  const offset = (visible - box) / 2;
   return (
     <View style={{ width: visible, height: visible }}>
-      <View style={{ position: "absolute", left: -inset, top: -inset }}>
+      <View style={{ position: "absolute", left: offset, top: offset }}>
         {/* `stopped` is the avatar's own dim look for a box that is not answering. */}
         <Avatar
           fleet_id={fleetId}
@@ -94,7 +112,22 @@ export function edgeBadge(
   };
 }
 
-/** The gold `!` pill: the bot is waiting on the operator. */
+/**
+ * Where a badge of `size` sits on a `visible`-point avatar frame drawn in
+ * `style`: on a blob's edge at 45°, or flush with the frame's corner for the
+ * inset square faces, so its ring covers the face's corner with no sliver past it.
+ */
+export function badgeAt(
+  style: AvatarStyle,
+  visible: number,
+  size: number,
+  corner: "top" | "bottom",
+): { left: number; top: number } {
+  if (style === "blob") return edgeBadge(visible, size, corner);
+  return { left: visible - size, top: corner === "top" ? 0 : visible - size };
+}
+
+/** The warn `!` badge, square: the bot is waiting on the operator. */
 export function NeedsPill({ size = 20 }: { size?: number }) {
   const t = useTheme();
   return (
@@ -102,7 +135,6 @@ export function NeedsPill({ size = 20 }: { size?: number }) {
       style={{
         minWidth: size,
         height: size,
-        borderRadius: size / 2,
         paddingHorizontal: 5,
         alignItems: "center",
         justifyContent: "center",
@@ -132,27 +164,21 @@ export function homeRowLabel(input: {
   return parts.join(", ");
 }
 
-/** The row's marks, right to left: needs-you pill or unread dot, then the failed mark. */
+/** The row's marks, right to left: needs-you badge or unread square, then the failed mark. */
 function Marks({ needs, unread, failed }: { needs: boolean; unread: boolean; failed: boolean }) {
   const t = useTheme();
   if (!needs && !unread && !failed) return null;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
       {failed ? (
-        <View
-          testID="row-failed"
-          style={{ width: 8, height: 8, borderRadius: 1, backgroundColor: t.c.bad }}
-        />
+        <View testID="row-failed" style={{ width: 8, height: 8, backgroundColor: t.c.bad }} />
       ) : null}
       {needs ? (
         <View testID="row-needs">
           <NeedsPill />
         </View>
       ) : unread ? (
-        <View
-          testID="row-unread"
-          style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: t.c.acc }}
-        />
+        <View testID="row-unread" style={{ width: 10, height: 10, backgroundColor: t.c.acc }} />
       ) : null}
     </View>
   );
@@ -166,6 +192,7 @@ function HomeBotRowImpl({
   suffix,
   reachable,
   failed = false,
+  lastInSection = false,
   onPress,
   onLongPress,
 }: HomeBotRowProps) {
@@ -190,6 +217,8 @@ function HomeBotRowImpl({
         gap: t.space.lg,
         paddingHorizontal: t.space.lg + t.space.xs,
         minHeight: HOME_ROW_HEIGHT,
+        borderBottomWidth: lastInSection ? 0 : t.border.row,
+        borderBottomColor: t.c.line,
         opacity: reachable ? 1 : 0.6,
         backgroundColor: pressed ? t.c.sel : "transparent",
       })}
@@ -207,7 +236,7 @@ function HomeBotRowImpl({
           </Text>
           <View style={{ flex: 1 }} />
           {time ? (
-            <Text variant="bodySmall" tone={hot ? "fg2" : "fg3"}>
+            <Text mono variant="caption" tone={hot ? "fg2" : "fg3"}>
               {time}
             </Text>
           ) : null}

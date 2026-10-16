@@ -4,7 +4,7 @@
  * `FleetProvider.tsx` subscribes to it.
  *
  * What is persisted, and where (§9.4):
- * - the link and the listening choice, in the keychain (`hermetic.fleet.v2`,
+ * - the link, the listening choice and the primary instance, in the keychain (`hermetic.fleet.v2`,
  *   SecureStore). SecureStore values are capped near 2 KB and a link may be up
  *   to 2,900 characters, so the record is split across numbered keys;
  * - the last fleet view, as a JSON file in the document directory. It is a
@@ -19,9 +19,11 @@
  * swept on every refresh. A box answers `ready` where hermeticd answered ok,
  * `unreachable` where it did not, and nothing where the off-tunnel gate refused
  * to ask (`TUNNEL_UNVERIFIED`); a box not asked this time keeps its last answer.
- * Once some box answers ready, the listening default drops the boxes that
- * answered `unreachable` and keeps the rest, gate refusals included: the gate
- * says nothing about the box. The link's agent list
+ *
+ * Listening starts empty. A new pairing listens to nothing until the operator
+ * picks one primary instance (`setPrimary`, `needsPrimary`); from then on the
+ * phone listens to that one, and to any other the operator opts into. No
+ * answer from a box widens or narrows the choice. The link's agent list
  * is the floor: an agent the link names and `/fleet` does not is still listed
  * (with no status), and where both name it the view wins, except that a fresher
  * `/healthz` answer wins over a cached view.
@@ -155,6 +157,11 @@ export interface FleetState {
   /** The last `GET /fleet` answer, or `null` when no box has answered yet. */
   view: MobileFleetView | null;
   listening: Listening;
+  /**
+   * The instance home is built around, chosen after pairing; `null` until the
+   * operator picks one. It stays primary when its listening is switched off.
+   */
+  primary: string | null;
   /** When the view was last refreshed from a box (ISO), else `null`. */
   refreshed_at: string | null;
   /** The last refresh failed: what is shown is the snapshot. */
@@ -192,8 +199,11 @@ interface Persisted {
   link: string;
   /** `"all"`, or the agent names. */
   listening: string[] | "all";
-  /** Still the pairing's default (every ready agent): the first view may narrow it. */
-  listening_default: boolean;
+  /**
+   * The primary instance, or `null` before one is picked. A record from before
+   * the field takes its listened list's first name (sorted), else `null`.
+   */
+  primary: string | null;
 }
 
 export interface FleetStoreDeps {
@@ -219,6 +229,7 @@ const EMPTY: FleetState = {
   link: null,
   view: null,
   listening: new Set(),
+  primary: null,
   refreshed_at: null,
   stale: false,
   refreshing: false,
@@ -228,7 +239,8 @@ const EMPTY: FleetState = {
 
 export class FleetStore {
   private state: FleetState = EMPTY;
-  private listeningDefault = false;
+  /** `state.view` is a `/fleet` answer read by this store's own refresh, not a cache or nothing. */
+  private viewFresh = false;
   private readonly listeners = new Set<() => void>();
   private gen = 0;
   /** Where the next pre-v17 refresh starts in the unlistened boxes. */
@@ -258,39 +270,61 @@ export class FleetStore {
     }
     const link = proposal.link;
     const view = await this.readCache(link.payload.fleet_id);
-    this.listeningDefault = stored.listening_default;
+    this.viewFresh = false;
     this.set({
       ...EMPTY,
       link,
       view,
       listening: stored.listening === "all" ? "all" : new Set(stored.listening),
+      primary: stored.primary,
       refreshed_at: view?.read_at ?? null,
     });
     return true;
   }
 
   /**
-   * Keep a confirmed pairing, replacing any before it. Listening starts as
-   * every agent the link names (`mobile.pair` lists live agents only), and the
-   * first view narrows it to the `ready` ones unless the operator chose first.
+   * Keep a confirmed pairing, replacing any before it. Another fleet listens to
+   * nothing and has no primary: the operator picks one (`setPrimary`) before
+   * home. The same fleet again (a re-scanned QR) keeps the listening choice,
+   * the primary and the cached view, less any agent the new link no longer
+   * names: the link lists every live agent, so one it leaves out was destroyed.
+   * A dropped primary leaves `needsPrimary` true, and the picker shows again.
+   *
+   * A link may be trimmed: `encodeMobileLink` drops agents off the end to stay
+   * under `MOBILE_LINK_MAX_LENGTH`, and then says how many the fleet has
+   * (`agents_total`). A trimmed link drops nothing; the next `/fleet` answer is
+   * what lists the fleet.
    */
   async pair(link: PairedLink): Promise<void> {
     this.gen += 1;
-    const replacing = this.state.link?.payload.fleet_id !== link.payload.fleet_id;
-    if (replacing) await this.deps.viewCache.remove().catch(() => {});
-    this.listeningDefault = true;
-    this.set({
-      ...EMPTY,
-      link,
-      listening: new Set(link.payload.agents.map((a) => a.name)),
-    });
+    const fleetId = link.payload.fleet_id;
+    const replacing = this.state.link?.payload.fleet_id !== fleetId;
+    this.viewFresh = false;
+    if (replacing) {
+      await this.deps.viewCache.remove().catch(() => {});
+      this.set({ ...EMPTY, link });
+    } else {
+      const { listening, primary } = this.state;
+      const view = this.state.view ?? (await this.readCache(fleetId));
+      const named = new Set(link.payload.agents.map((a) => a.name));
+      const trimmed = (link.payload.agents_total ?? 0) > named.size;
+      const kept = (name: string) => trimmed || named.has(name);
+      this.set({
+        ...EMPTY,
+        link,
+        view,
+        refreshed_at: this.state.refreshed_at ?? view?.read_at ?? null,
+        listening: listening === "all" ? "all" : new Set([...listening].filter(kept)),
+        primary: primary !== null && kept(primary) ? primary : null,
+      });
+    }
     await this.persist();
   }
 
   /** Forget the pairing, the cache and the listening choice. */
   async signOut(): Promise<void> {
     this.gen += 1;
-    this.listeningDefault = false;
+    this.viewFresh = false;
     this.set(EMPTY);
     await removeChunked(this.deps.secure, FLEET_KEY_PREFIX).catch(() => {});
     await this.deps.viewCache.remove().catch(() => {});
@@ -308,14 +342,9 @@ export class FleetStore {
         ...(this.deps.timeoutMs !== undefined ? { timeoutMs: this.deps.timeoutMs } : {}),
       });
       if (gen !== this.gen) return false;
-      let listening = this.state.listening;
-      if (this.listeningDefault) {
-        listening = new Set(view.agents.filter((a) => a.status === "ready").map((a) => a.name));
-        this.listeningDefault = false;
-      }
+      this.viewFresh = true;
       this.set({
         view,
-        listening,
         refreshed_at: this.deps.now(),
         stale: false,
         refreshing: false,
@@ -323,7 +352,6 @@ export class FleetStore {
         fromBoxes: null,
       });
       await this.deps.viewCache.write(JSON.stringify(view)).catch(() => {});
-      await this.persist();
       return true;
     } catch (error) {
       if (gen !== this.gen) return false;
@@ -331,25 +359,7 @@ export class FleetStore {
       // No box served `/fleet`: ask each one about itself instead.
       const fromBoxes = await this.readBoxes();
       if (gen !== this.gen) return false;
-      let listening = this.state.listening;
-      // Narrow the default only once some box answered ready: with every box
-      // silent (the tunnel down) the pairing's own list is the better guess.
-      // Only a box that answered `unreachable` is dropped; one the gate would
-      // not ask stays.
-      const narrowed =
-        this.listeningDefault &&
-        fromBoxes !== null &&
-        Object.values(fromBoxes).some((status) => status === "ready");
-      if (narrowed) {
-        listening = new Set(
-          this.agents()
-            .map((a) => a.name)
-            .filter((name) => fromBoxes[name] !== "unreachable"),
-        );
-        this.listeningDefault = false;
-      }
-      this.set({ stale: true, refreshing: false, error: reason, fromBoxes, listening });
-      if (narrowed) await this.persist();
+      this.set({ stale: true, refreshing: false, error: reason, fromBoxes });
       return false;
     }
   }
@@ -442,25 +452,55 @@ export class FleetStore {
     return listening === "all" ? names : names.filter((n) => listening.has(n));
   }
 
+  /** Paired, and no primary instance picked yet: the picker comes before home. */
+  needsPrimary(): boolean {
+    return this.state.link !== null && this.state.primary === null;
+  }
+
+  /**
+   * Make `name` the primary instance and listen to it (others stay as they
+   * are). Throws for a name this fleet does not list.
+   */
+  async setPrimary(name: string): Promise<void> {
+    if (!this.agents().some((a) => a.name === name))
+      throw new Error(`${name} is not an agent in this fleet`);
+    const current = this.state.listening;
+    const listening = current === "all" ? "all" : new Set([...current, name]);
+    this.set({ primary: name, listening });
+    await this.persist();
+  }
+
+  /**
+   * `name` is gone by this store's own `/fleet` answer: the view a refresh read
+   * does not name it, or names it `destroyed`. Always `false` before a refresh
+   * answered, since a cached view may predate an agent the link names.
+   */
+  isGone(name: string): boolean {
+    if (!this.viewFresh || !this.state.view) return false;
+    const agent = this.state.view.agents.find((a) => a.name === name);
+    return agent === undefined || agent.status === "destroyed";
+  }
+
   isListening(name: string): boolean {
     const listening = this.state.listening;
     return listening === "all" || listening.has(name);
   }
 
-  /** Listen to one agent or stop; answers the new listened list. */
+  /**
+   * Listen to one agent or stop; answers the new listened list. Stopping the
+   * primary is allowed: it stays primary (home still shows it).
+   */
   async setListening(name: string, on: boolean): Promise<string[]> {
     const current = this.state.listening;
     const base = current === "all" ? new Set(this.agents().map((a) => a.name)) : new Set(current);
     if (on) base.add(name);
     else base.delete(name);
-    this.listeningDefault = false;
     this.set({ listening: base });
     await this.persist();
     return this.listened();
   }
 
   async setListeningAll(): Promise<void> {
-    this.listeningDefault = false;
     this.set({ listening: "all" });
     await this.persist();
   }
@@ -496,7 +536,7 @@ export class FleetStore {
     const record: Persisted = {
       link: link.link,
       listening: listening === "all" ? "all" : [...listening].sort(),
-      listening_default: this.listeningDefault,
+      primary: this.state.primary,
     };
     await saveChunked(this.deps.secure, FLEET_KEY_PREFIX, JSON.stringify(record));
   }
@@ -535,7 +575,13 @@ function parsePersisted(raw: string | null): Persisted | null {
         : Array.isArray(v.listening)
           ? v.listening.filter((x): x is string => typeof x === "string")
           : [];
-    return { link: v.link, listening, listening_default: v.listening_default === true };
+    const primary =
+      typeof v.primary === "string"
+        ? v.primary
+        : v.primary === undefined && Array.isArray(listening)
+          ? ([...listening].sort()[0] ?? null)
+          : null;
+    return { link: v.link, listening, primary };
   } catch {
     return null;
   }

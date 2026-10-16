@@ -799,13 +799,19 @@ const SLUG_MAX = 48;
 
 /** Lowercase, non-alphanumerics to single dashes, trimmed, ≤ 48; `secret` if nothing is left. */
 function slotSlug(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, SLUG_MAX)
-    .replace(/-+$/, "");
+  const slug = trimDashes(
+    trimDashes(name.toLowerCase().replace(/[^a-z0-9]+/g, "-")).slice(0, SLUG_MAX),
+  );
   return slug === "" ? "secret" : slug;
+}
+
+/** Strips leading and trailing `-` in one linear pass (a `-+$` regex backtracks quadratically on a long dash run). */
+function trimDashes(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s.charCodeAt(start) === 45) start++;
+  while (end > start && s.charCodeAt(end - 1) === 45) end--;
+  return s.slice(start, end);
 }
 
 /** The SSM slot for a durable file secret named `name`: `github-app.pem` → `file-github-app-pem`. */

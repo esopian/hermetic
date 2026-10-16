@@ -2,8 +2,9 @@
  * The avatar, as a component (§9.2).
  *
  * One component, three styles, one seed. Everything that decides what an avatar
- * *is* lives in `avatar-seed.ts` and the three renderers; this file is the only
- * one that knows about React, the DOM, the theme or GSAP.
+ * *is* lives in `@hermetic/core/shared` (seed, palette, geometry), and the
+ * three DOM writers beside this file put it on screen; this file is the only
+ * one that knows about React, the theme or GSAP.
  *
  * Three rules shaped the whole file and none of them is negotiable:
  *
@@ -34,24 +35,31 @@ import type {
   AvatarPalette,
   AvatarStatus,
   AvatarStyle,
-} from "./avatar-seed.ts";
-import { avatarMotion, avatarPalette, avatarSeed, avatarSeeds } from "./avatar-seed.ts";
-import type { BlobShape } from "./blob.ts";
-import { BLOB_VIEWBOX, blobApply, blobFrame, blobShape, blobTick } from "./blob.ts";
-import type { PixelParts } from "./pixel.ts";
+  BlobShape,
+  PixelParts,
+  SigilCell,
+} from "@hermetic/core/shared";
 import {
+  BLOB_VIEWBOX,
   PIXEL_STILL,
   PIXEL_STOPPED,
   PIXEL_VIEWBOX,
-  pixelApply,
+  SIGIL_VIEWBOX,
+  avatarMotion,
+  avatarPalette,
+  avatarSeed,
+  avatarSeeds,
+  blobFrame,
+  blobShape,
   pixelParts,
-  pixelTick,
-} from "./pixel.ts";
-import type { SigilCell } from "./sigil.ts";
-import { SIGIL_VIEWBOX, sigilCells, sigilStill, sigilTick } from "./sigil.ts";
+  sigilCells,
+} from "@hermetic/core/shared";
+import { blobApply, blobTick } from "./blob.ts";
+import { pixelApply, pixelTick } from "./pixel.ts";
+import { sigilStill, sigilTick } from "./sigil.ts";
 
-export type { AvatarActivity, AvatarStatus, AvatarStyle } from "./avatar-seed.ts";
-export { avatarSeed } from "./avatar-seed.ts";
+export type { AvatarActivity, AvatarStatus, AvatarStyle } from "@hermetic/core/shared";
+export { avatarSeed } from "@hermetic/core/shared";
 
 export interface AvatarProps {
   /** The identity key's three parts. Never the display name — renaming must not change a face. */

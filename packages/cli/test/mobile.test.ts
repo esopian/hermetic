@@ -1,15 +1,17 @@
 /**
  * `hermetic mobile pair` rendering (`commands/mobile.ts`): the pair screen
  * carries the QR, the link and the fleet it names, and says when the link
- * could not carry every agent.
+ * could not carry every agent; `--avatar-style` becomes the request's
+ * `prefs`, validated against the declared schema.
  */
 import { describe, expect, test } from "bun:test";
-import type { MobilePairResult } from "@hermetic/core";
-import { renderPair } from "../src/commands/mobile.ts";
+import { MobilePairInput, type MobilePairResult } from "@hermetic/core";
+import { pairRequest, renderPair } from "../src/commands/mobile.ts";
+import { ValidationFailure, validate } from "../src/validate.ts";
 
 const PAIR: MobilePairResult = {
   link:
-    "hermetic://fleet?v=2&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2" +
+    "hermetic://fleet?v=3&fleet=fxtr0001&alias=main&account=123456789012&region=us-west-2" +
     "&tailnet=hermetic.ts.net&agents=atlas,corvid:fxtr0001-corvid-2.hermetic.ts.net",
   fleet: {
     fleet_id: "fxtr0001",
@@ -20,6 +22,7 @@ const PAIR: MobilePairResult = {
   },
   agents: [{ name: "atlas" }, { name: "corvid", host: "fxtr0001-corvid-2.hermetic.ts.net" }],
   agents_in_link: 2,
+  prefs: {},
 };
 
 describe("mobile pair rendering", () => {
@@ -41,5 +44,29 @@ describe("mobile pair rendering", () => {
   test("says when the link carries fewer agents than the fleet has", () => {
     const text = renderPair({ ...PAIR, agents_in_link: 1 }, { qr: false });
     expect(text).toContain("1 of 2 agents in the link");
+  });
+});
+
+describe("mobile pair --avatar-style", () => {
+  test("no flag asks for no prefs", () => {
+    expect(validate(MobilePairInput, pairRequest({}))).toEqual({});
+  });
+
+  test("the flag becomes prefs.avatar_style", () => {
+    expect(validate(MobilePairInput, pairRequest({ avatarStyle: "pixel" }))).toEqual({
+      prefs: { avatar_style: "pixel" },
+    });
+  });
+
+  test("a style outside the list fails validation", () => {
+    expect(() => validate(MobilePairInput, pairRequest({ avatarStyle: "emoji" }))).toThrow(
+      ValidationFailure,
+    );
+  });
+
+  test("the pair screen names the prefs the link carries, and only then", () => {
+    expect(renderPair(PAIR, { qr: false })).not.toContain("prefs");
+    const text = renderPair({ ...PAIR, prefs: { avatar_style: "pixel" } }, { qr: false });
+    expect(text).toContain("prefs    avatar style pixel\n");
   });
 });

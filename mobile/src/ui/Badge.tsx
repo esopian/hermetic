@@ -1,5 +1,5 @@
 /**
- * The unread pill. `!` (warn fill) when a bot needs the operator, else the
+ * The unread badge, a square. `!` (warn fill) when a bot needs the operator, else the
  * count (fg fill). Mirrors the desktop's `.ch-unread` / `.needs-action`.
  */
 import { View } from "react-native";
@@ -29,7 +29,6 @@ export function Badge({
         alignItems: "center",
         justifyContent: "center",
         backgroundColor: bg,
-        borderRadius: 0,
       }}
     >
       <Text

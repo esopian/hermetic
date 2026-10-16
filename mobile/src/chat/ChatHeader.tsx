@@ -1,15 +1,15 @@
 /**
- * The conversation's bar, in the home's soft chrome: a round back button, the
- * bot's round avatar and name (a tap opens the session switcher; a separate session
+ * The conversation's bar, in the home's square chrome: a bordered back button,
+ * the bot's avatar and name (a tap opens the session switcher; a separate session
  * names itself under the name), and one overflow button for the rest
  * (`conversationMenu`). Drawn in the screen, not by the native header, so a
  * streamed delta re-renders this memoised bar and never resets screen options.
  */
 import { memo } from "react";
-import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from "react-native";
+import { ActionSheetIOS, Alert, Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../theme/theme.tsx";
-import type { AvatarActivity, AvatarStatus } from "../ui/avatar/avatar-seed.ts";
+import type { AvatarActivity, AvatarStatus } from "@hermetic/core/shared";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
 import { haptic } from "../ui/haptics.ts";
 import { IconButton } from "../ui/IconButton.tsx";
@@ -54,11 +54,11 @@ function ChatHeaderImpl({
         paddingHorizontal: t.space.md,
         backgroundColor: t.c.bg,
         // The transcript scrolls up to this rule, not under the bar.
-        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomWidth: t.border.row,
         borderBottomColor: t.c.line,
       }}
     >
-      {/* 36pt drawn, the round buttons of the home bar; the tap target stays 44pt. */}
+      {/* 36pt drawn, the square buttons of the home bar; the tap target stays 44pt. */}
       <IconButton icon="back" label="Back" size={BUTTON} onPress={onBack} />
       <Pressable
         accessibilityRole="button"
@@ -109,15 +109,21 @@ export interface ConversationMenu {
   sessions(): void;
   browser(): void;
   markRead(): void;
+  /** Fixture builds only: open the demo prompts sheet. Absent, the entry is not offered. */
+  demo?: (() => void) | undefined;
 }
 
-/** The overflow menu: Sessions, Agent browser, Mark read, Cancel. `tint` colours its buttons. */
+/**
+ * The overflow menu: Sessions, Agent browser, Mark read, (in a fixture build)
+ * Demo prompts…, Cancel. `tint` colours its buttons.
+ */
 export function conversationMenu(title: string, tint: string, actions: ConversationMenu): void {
   haptic.light();
   const items: [string, () => void][] = [
     ["Sessions", actions.sessions],
     ["Agent browser", actions.browser],
     ["Mark read", actions.markRead],
+    ...(actions.demo ? ([["Demo prompts…", actions.demo]] as [string, () => void][]) : []),
   ];
   if (Platform.OS === "ios") {
     ActionSheetIOS.showActionSheetWithOptions(

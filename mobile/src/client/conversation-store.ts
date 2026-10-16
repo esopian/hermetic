@@ -28,6 +28,7 @@ import type {
   Session,
   SubagentBlock,
 } from "@hermetic/core/chat-client";
+import type { FilesStageResult } from "@hermetic/core/schema";
 import { type RemoteTurnView, remoteTurnView } from "./chat-logic.ts";
 import {
   accountsFor,
@@ -40,11 +41,13 @@ import {
   quoteOf,
   stillPending,
 } from "./chat-pending.ts";
+import { attachmentChips } from "./attachments.ts";
 import type {
   AbortResult,
   HistoryResult,
   RemoteStatus,
   RespondResult,
+  SendAttachments,
   SessionsResult,
   SteerResult,
   SteerStatus,
@@ -345,6 +348,9 @@ type Listener = (key: string) => void;
 
 const ORPHAN_LIMIT = 2_000;
 
+/** How long past its expiry a sent file is still remembered (`sentFile`). */
+export const SENT_FILE_GRACE_MS = 24 * 60 * 60_000;
+
 export class ConversationStore {
   private readonly transport: ConversationTransport;
   private readonly timers: Timers;
@@ -354,6 +360,8 @@ export class ConversationStore {
   private readonly onRemoteShown: ConversationStoreOptions["onRemoteShown"];
   private readonly records = new Map<string, Rec>();
   private readonly owners = new Map<string, string>();
+  /** Every file this phone sent, by its staged id: what a Retry checks for expiry. */
+  private readonly sentFiles = new Map<string, FilesStageResult>();
   /** Frames that arrived for a turn before `turn.start` answered with its id. */
   private readonly orphans = new Map<
     string,
@@ -501,11 +509,15 @@ export class ConversationStore {
 
   /* ── sending ────────────────────────────────────────────────────────── */
 
-  /** Start a turn. `false` when there is nothing to send or a turn is already running. */
-  send(target: ConversationTarget, text: string): boolean {
+  /**
+   * Start a turn. `false` when there is nothing to send or a turn is already
+   * running. A turn of files alone (no words) still sends: the adapter frames them.
+   */
+  send(target: ConversationTarget, text: string, attachments?: SendAttachments | null): boolean {
     const record = this.record(target);
     const body = text.trim();
-    if (!body || record.sending || record.aborting) return false;
+    const files = attachments && attachments.ids.length > 0 ? attachments : null;
+    if ((!body && !files) || record.sending || record.aborting) return false;
     this.clearReconnect(record);
     const gen = ++record.gen;
     record.dropped = false;
@@ -525,7 +537,9 @@ export class ConversationStore {
     record.segments = [];
     record.released = new Set();
     const localId = this.localId(LOCAL_PREFIX, at);
-    const prompt = localPrompt(localId, body, at, session);
+    this.rememberSent(files?.staged ?? []);
+    const chips = files?.chips ?? attachmentChips(files?.staged ?? []);
+    const prompt = localPrompt(localId, body, at, session, chips);
     record.messages = [...record.messages, prompt];
     // The row quotes the operator's words now; this phone's clock moves no time.
     if (target.session === null)
@@ -548,6 +562,7 @@ export class ConversationStore {
       message: body,
       client_ref: localId,
       ...(session ? { session } : {}),
+      ...(files ? { attachments: files } : {}),
     };
     this.transport.startTurn(turn).then(
       (result) => {
@@ -659,11 +674,31 @@ export class ConversationStore {
     this.changed(record);
   }
 
-  /** A deliberate send: unparks the queue, then sends. */
-  sendMessage(target: ConversationTarget, text: string): boolean {
+  /** A file this phone sent in a turn, as the box staged it (`undefined` when not this phone's). */
+  sentFile(id: string): FilesStageResult | undefined {
+    return this.sentFiles.get(id);
+  }
+
+  /**
+   * Remember `staged`, and forget files a day past their expiry: by then their
+   * echo has long been replaced by the box's row, whose Retry needs no record.
+   */
+  private rememberSent(staged: readonly FilesStageResult[]): void {
+    const horizon = this.timers.now() - SENT_FILE_GRACE_MS;
+    for (const [id, file] of this.sentFiles)
+      if (Date.parse(file.expires_at) < horizon) this.sentFiles.delete(id);
+    for (const file of staged) this.sentFiles.set(file.id, file);
+  }
+
+  /**
+   * A deliberate send: unparks the queue, then sends. `attachments` are files
+   * already staged on the box (`outgoingAttachments`); the queue carries text
+   * only, so a composer holding files keeps them when this answers `false`.
+   */
+  sendMessage(target: ConversationTarget, text: string, attachments?: SendAttachments | null): boolean {
     const record = this.record(target);
     record.parked = false;
-    const sent = this.send(target, text);
+    const sent = this.send(target, text, attachments);
     this.changed(record);
     return sent;
   }

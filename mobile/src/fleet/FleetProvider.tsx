@@ -22,6 +22,7 @@ import {
 } from "react";
 import { type Alert, createHermeticClient, type HermeticClient } from "../client/client.ts";
 import type { ConversationTarget } from "../client/conversation-store.ts";
+import type { PhoneFilesFactory } from "../gateway/files.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { OpenSocket } from "../gateway/socket.ts";
 import type { TailscaleProbe, TailscaleStatus } from "../gateway/tailscale.ts";
@@ -36,6 +37,7 @@ import {
   presentsLocally,
   routeFor,
 } from "./alerts.ts";
+import type { FixtureControls } from "./fixture-types.ts";
 import type { PairedLink } from "./pairing.ts";
 import {
   allBoxes,
@@ -68,14 +70,13 @@ export interface AppStateLike {
   subscribe(listener: (state: string) => void): () => void;
 }
 
-/** Fixture builds only: the canned pairing link and the switchable Tailscale status. */
-export interface FixtureControls {
-  link: string;
-  tailscale: {
-    get(): Exclude<TailscaleStatus, "unknown">;
-    set(s: Exclude<TailscaleStatus, "unknown">): void;
-  };
-}
+export type {
+  DemoPrompt,
+  FixtureControls,
+  FixtureDriveActions,
+  FixtureDriveParams,
+  SchemePreferenceName,
+} from "./fixture-types.ts";
 
 export interface FleetDeps {
   /** The keychain (pairing, device id, the phone's own switches). */
@@ -86,6 +87,11 @@ export interface FleetDeps {
   openSocket: OpenSocket;
   /** The adapter to use instead of a live one (fixture mode). */
   chat?: HermesChatClient;
+  /**
+   * The files client for one box (`gateway/files.ts`): stage an attachment and
+   * commit it into a turn. The live one over `fetch`, or the fixture kit's.
+   */
+  files?: PhoneFilesFactory;
   notifier: Notifier;
   registrar: PushRegistrar;
   /** Background refresh registration; `null` where there is none (fixture mode, tests). */
@@ -103,6 +109,8 @@ export interface FleetDeps {
 export interface FleetContextValue {
   status: FleetStatus;
   client: HermeticClient | null;
+  /** The files client for one box (`deps.files`), or `null` in a build without one. */
+  files: PhoneFilesFactory | null;
   /** The paired fleet's store (present before pairing too: `getState().link` is `null`). */
   fleet: FleetStore;
   /** The last Tailscale probe, or `null` before the first. */
@@ -114,6 +122,15 @@ export interface FleetContextValue {
   dismissBanner(): void;
   /** Keep a confirmed pairing (replacing any before it) and connect. */
   pair(link: PairedLink): Promise<void>;
+  /**
+   * The primary instance (`FleetState.primary`): the one home is built around.
+   * `null` before the operator picks one, and while unpaired.
+   */
+  primary: string | null;
+  /** Paired with no primary picked yet: show the picker before home. */
+  needsPrimary: boolean;
+  /** Pick the primary instance, listen to it, and read home's bots again. */
+  setPrimary(name: string): Promise<void>;
   /** Unregister push on the listened boxes (best effort), then forget the pairing. */
   signOut(): Promise<void>;
   /** Fleet view, Tailscale and home's bots, again. */
@@ -256,13 +273,8 @@ export function FleetProvider({
     setClient(next);
     setStatus("paired");
     next.setPhase(deps.appState.current() === "active" ? "active" : "background");
-    const before = fleet.listened().join("\n");
     void next.roster.refresh();
-    void probeThenRefresh().then(() => {
-      // The first view (or the boxes' /healthz) may narrow the listening default: read the roster again.
-      if (clientRef.current === next && fleet.listened().join("\n") !== before)
-        void next.roster.refresh();
-    });
+    void probeThenRefresh();
     void deps.background?.register();
     if (pushWantedRef.current) void pushSync.enable().then(setPush);
     const route = pendingRoute.current;
@@ -444,6 +456,27 @@ export function FleetProvider({
     setStatus("unpaired");
   }, [deps, fleet, inbox, pushSync]);
 
+  const [primary, setPrimaryState] = useState<string | null>(() => fleet.getState().primary);
+  const [needsPrimary, setNeedsPrimary] = useState(() => fleet.needsPrimary());
+  useEffect(() => {
+    const sync = () => {
+      setPrimaryState(fleet.getState().primary);
+      setNeedsPrimary(fleet.needsPrimary());
+    };
+    sync();
+    return fleet.subscribe(sync);
+  }, [fleet]);
+
+  // The first box listened: home's bots, and a Tailscale probe that now has a host to ask.
+  const setPrimary = useCallback(
+    async (name: string) => {
+      await fleet.setPrimary(name);
+      const c = clientRef.current;
+      if (c) await Promise.all([probe(), c.roster.refresh()]);
+    },
+    [fleet, probe],
+  );
+
   const refresh = useCallback(async () => {
     const c = clientRef.current;
     if (!c) return;
@@ -501,6 +534,7 @@ export function FleetProvider({
     () => ({
       status,
       client,
+      files: deps.files ?? null,
       fleet,
       tailscale,
       probing,
@@ -508,6 +542,9 @@ export function FleetProvider({
       banner,
       dismissBanner,
       pair,
+      primary,
+      needsPrimary,
+      setPrimary,
       signOut,
       refresh,
       push,
@@ -529,6 +566,9 @@ export function FleetProvider({
       banner,
       dismissBanner,
       pair,
+      primary,
+      needsPrimary,
+      setPrimary,
       signOut,
       refresh,
       push,

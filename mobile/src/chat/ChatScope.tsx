@@ -9,6 +9,8 @@ import { createContext, useContext } from "react";
 import type { RespondInput } from "../client/conversation-store.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import type { RespondResult } from "../client/chat-types.ts";
+import type { TurnPrompt } from "../client/chat-recovery.ts";
+import type { PhoneFiles } from "../gateway/files.ts";
 
 export interface ChatScopeValue {
   fleetId: string;
@@ -25,13 +27,22 @@ export interface ChatScopeValue {
   openSubagent?: (subagentId: string) => void;
   /** Put text in the composer (a late answer, "Edit message"). */
   draft?: (text: string) => void;
-  /** Send a prompt again (a failed turn's Retry). */
-  retry?: (prompt: string) => boolean;
+  /**
+   * Send a prompt: a failed turn's again, words and files (Retry), or bare
+   * words (a late answer's "Tell … & continue"). `false` when not sent.
+   */
+  retry?: (prompt: string | TurnPrompt) => boolean;
   compact?: () => Promise<void>;
   /** Open a new session and send `prompt` into it. */
-  newSession?: (prompt: string) => Promise<void>;
+  newSession?: (prompt: string | TurnPrompt) => Promise<void>;
   /** Every message in the conversation, for a failure card to find its prompt. */
   messages?: readonly ChatMessage[];
+  /**
+   * The files client for this conversation's box, for a file or secret
+   * request card to read and answer its slot (`useFiles(instance)`). Absent,
+   * the card finds it through the fleet itself; `null` draws it read-only.
+   */
+  files?: PhoneFiles | null;
 }
 
 export const ChatScope = createContext<ChatScopeValue | null>(null);

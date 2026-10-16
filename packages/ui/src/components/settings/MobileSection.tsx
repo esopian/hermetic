@@ -5,11 +5,13 @@
  * `mobile.pair` answers the fleet, its live agents and a `hermetic://fleet?…`
  * link, drawn as a QR beside the link itself. The phone talks to the boxes
  * directly over the tailnet, so the link carries no secret and the page holds
- * nothing back: it is a read, like Diagnostics.
+ * nothing back: it is a read, like Diagnostics. The link also carries this
+ * page's avatar style (Settings › Chat), which the phone starts with.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { pairMobile } from "../../api/mobile.ts";
 import { ApiError } from "../../api/errors.ts";
+import { useChatAvatarStyle } from "../../chat/chat-appearance.ts";
 import type { MobilePairView } from "../../api/types.ts";
 import {
   agentsInLinkLine,
@@ -123,6 +125,11 @@ function PairPanel({ pairing }: { pairing: MobilePairView }) {
             {agentsInLinkLine(agents_in_link, agents.length)}
           </p>
           {leftOut === null ? null : <p className="st-hint">{leftOut}</p>}
+          {pairing.prefs.avatar_style === undefined ? null : (
+            <p className="st-hint" data-testid="pair-prefs">
+              {`The phone will start with your avatar style (${pairing.prefs.avatar_style}).`}
+            </p>
+          )}
           <p className="mob-help">{pairHelp(fleet.tailnet)}</p>
           <p className="st-hint">
             The code carries no secret: the phone is trusted by its tailnet membership.
@@ -134,6 +141,7 @@ function PairPanel({ pairing }: { pairing: MobilePairView }) {
 }
 
 export function MobileSection() {
+  const avatarStyle = useChatAvatarStyle();
   const [pairing, setPairing] = useState<MobilePairView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +160,7 @@ export function MobileSection() {
     setBusy(true);
     setError(null);
     try {
-      const read = await pairMobile();
+      const read = await pairMobile({ avatar_style: avatarStyle });
       if (live.current) setPairing(read);
     } catch (e) {
       // A failed re-read keeps the last good code on screen, under the error.

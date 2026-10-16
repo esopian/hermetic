@@ -1,14 +1,24 @@
 /**
- * The round chrome button of the home and conversation bars: a 44pt circle
- * with a thin ring (no fill) and one line-drawn glyph. Every icon button in the app
- * goes through here, so each one carries an accessibility label and a 44pt
- * tap target.
+ * The chrome button of the home and conversation bars: a square with a 1px
+ * `line` border (no fill) and one line-drawn glyph, square like every other
+ * control. Every icon button in the app goes through here, so each one carries
+ * an accessibility label and a 44pt tap target.
  */
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, View } from "react-native";
 import Svg, { Circle, Line, Path } from "react-native-svg";
 import { useTheme } from "../theme/theme.tsx";
 
-export type IconName = "gear" | "search" | "plus" | "back" | "more" | "close" | "sent" | "star";
+export type IconName =
+  | "gear"
+  | "search"
+  | "plus"
+  | "back"
+  | "more"
+  | "close"
+  | "sent"
+  | "star"
+  | "eye"
+  | "eyeOff";
 
 /** One line-drawn glyph on a 24-unit grid, stroked in `color`. */
 export function Icon({
@@ -59,6 +69,13 @@ export function Icon({
       ) : name === "sent" ? (
         // The reference's outgoing glyph: a paper plane, point to the upper right.
         <Path d="M21 3 3 10.5l7.5 3L13.5 21 21 3zM10.5 13.5 21 3" {...stroke} />
+      ) : name === "eye" || name === "eyeOff" ? (
+        // Show or hide a masked value: an open eye, struck through once it is shown.
+        <>
+          <Path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" {...stroke} />
+          <Circle cx={12} cy={12} r={3} {...stroke} />
+          {name === "eyeOff" ? <Line x1={4} y1={20} x2={20} y2={4} {...stroke} /> : null}
+        </>
       ) : name === "star" ? (
         <Path
           d="m12 3.5 2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.8l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"
@@ -83,9 +100,9 @@ export interface IconButtonProps {
   /** What VoiceOver reads; required, since the button has no text. */
   label: string;
   onPress: () => void;
-  /** Drawn diameter; the tap target is never under 44pt. */
+  /** Drawn side; the tap target is never under 44pt. */
   size?: number;
-  /** Draw the hairline ring (the home bar) or a bare glyph (inline). */
+  /** Draw the 1px border (the home bar) or a bare glyph (inline). */
   ring?: boolean;
   disabled?: boolean;
   testID?: string;
@@ -118,12 +135,11 @@ export function IconButton({
           style={{
             width: size,
             height: size,
-            borderRadius: size / 2,
             alignItems: "center",
             justifyContent: "center",
-            // A ring only, in the quieter line colour: a filled disc inside a ring read heavy,
-            // in the light scheme above all. The press shows as a soft fill.
-            borderWidth: ring ? StyleSheet.hairlineWidth * 2 : 0,
+            // A border only, in the quieter line colour (the desktop's row rule);
+            // the press shows as the selection fill.
+            borderWidth: ring ? t.border.row : 0,
             borderColor: t.c.line,
             backgroundColor: pressed ? t.c.sel : "transparent",
           }}

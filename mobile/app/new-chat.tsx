@@ -2,8 +2,8 @@
  * New chat (the home bar's `+`, a form sheet): every listened bot; a tap
  * starts a separate session with it (`/chat/<instance>/<bot>?fresh=1`, which
  * the conversation opens with `new_session`), leaving its Bot Chat as it was.
- * The last row opens the instance picker. Listening to nothing, the sheet
- * says so and offers only that.
+ * The last two rows open the New bot form (`/new-bot`) and the instance
+ * picker. Listening to nothing, the sheet says so and offers only the picker.
  */
 import { router } from "expo-router";
 import { useMemo } from "react";
@@ -14,7 +14,7 @@ import { freshChatPath, newChatBots } from "../src/chat/new-chat.ts";
 import { useFleetState, useRoster } from "../src/fleet/hooks.ts";
 import { useTheme } from "../src/theme/theme.tsx";
 import { haptic } from "../src/ui/haptics.ts";
-import { Avatar, Icon, Text } from "../src/ui/index.ts";
+import { Avatar, Icon, Screen, Text } from "../src/ui/index.ts";
 
 /** Close the sheet, then go: pushed from inside it, a screen lands in the sheet's context. */
 function leaveTo(href: string) {
@@ -24,6 +24,7 @@ function leaveTo(href: string) {
 
 const ROW_HEIGHT = 60;
 const ADD = "add-instance";
+const NEW_BOT = "new-bot";
 
 export default function NewChat() {
   const t = useTheme();
@@ -40,14 +41,15 @@ export default function NewChat() {
   const shared = useMemo(() => sharedTitles(bots), [bots]);
   const none = listening.length === 0;
 
-  const addRow = (
+  /** A row that leaves the sheet for another screen: a square plus mark and a quiet label. */
+  const actionRow = (label: string, hint: string, href: string) => (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Add instance"
-      accessibilityHint="Choose which instances this phone listens to"
+      accessibilityLabel={label}
+      accessibilityHint={hint}
       onPress={() => {
         haptic.select();
-        leaveTo("/listening");
+        leaveTo(href);
       }}
       style={({ pressed }) => ({
         flexDirection: "row",
@@ -55,6 +57,8 @@ export default function NewChat() {
         gap: t.space.lg,
         minHeight: ROW_HEIGHT,
         paddingHorizontal: t.space.lg + t.space.xs,
+        borderBottomWidth: t.border.row,
+        borderBottomColor: t.c.line,
         backgroundColor: pressed ? t.c.sel : "transparent",
       })}
     >
@@ -62,7 +66,6 @@ export default function NewChat() {
         style={{
           width: 40,
           height: 40,
-          borderRadius: 20,
           alignItems: "center",
           justifyContent: "center",
           borderWidth: 1,
@@ -72,93 +75,108 @@ export default function NewChat() {
         <Icon name="plus" size={18} color={t.c.fg2} />
       </View>
       <Text tone="fg2" style={{ fontSize: 17 }}>
-        Add instance…
+        {`${label}…`}
       </Text>
     </Pressable>
   );
+  const addRow = actionRow(
+    "Add instance",
+    "Choose which instances this phone listens to",
+    "/listening",
+  );
+  const newBotRow = actionRow("New bot", "Create a bot on a listened instance", "/new-bot");
 
   // The list is the sheet's root view (see `listening.tsx`): a form sheet
   // sizes its first scroll view, and a header laid out beside it overlaps.
   return (
-    <FlatList
-      // The sheet's raised surface (`contentStyle` in `_layout.tsx`), not the page colour.
-      style={{ flex: 1, backgroundColor: t.c.bg2 }}
-      data={
-        none
-          ? []
-          : [...bots.map((b) => ({ key: `${b.instance}/${b.name}`, bot: b })), { key: ADD, bot: null }]
-      }
-      keyExtractor={(r) => r.key}
-      contentContainerStyle={{ paddingBottom: insets.bottom + t.space.xl }}
-      ListHeaderComponent={
-        <View
-          style={{
-            paddingHorizontal: t.space.lg + t.space.xs,
-            paddingTop: t.space.xl,
-            paddingBottom: t.space.md,
-            gap: 4,
-          }}
-        >
-          <Text variant="heading" accessibilityRole="header">
-            New chat
-          </Text>
-          {none ? null : (
-            <Text variant="bodySmall" tone="fg3">
-              A separate session. The Bot Chat stays as it is.
-            </Text>
-          )}
-        </View>
-      }
-      ListEmptyComponent={
-        <View style={{ gap: t.space.md }}>
-          <Text
-            tone="fg3"
-            style={{ paddingHorizontal: t.space.lg + t.space.xs, paddingVertical: t.space.sm }}
-          >
-            This phone listens to no instance yet. Add one to chat with its bots.
-          </Text>
-          {addRow}
-        </View>
-      }
-      renderItem={({ item }) => {
-        const bot = item.bot;
-        if (!bot) return addRow;
-        const name = bot.title || bot.name;
-        // The bot's name when another bot of its instance shares the title, the
-        // instance when the sheet spans several; neither when it repeats the title.
-        const suffix = quietSuffix(
-          name,
-          shared.has(`${bot.instance}/${bot.name}`) ? bot.name : null,
-          many ? bot.instance : null,
-        );
-        return (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`New chat with ${name}${suffix ? `, ${suffix}` : ""}`}
-            onPress={() => {
-              haptic.select();
-              leaveTo(freshChatPath(bot));
-            }}
-            style={({ pressed }) => ({
-              flexDirection: "row",
-              alignItems: "center",
-              gap: t.space.lg,
-              minHeight: ROW_HEIGHT,
+    // Clears the status bar when pushed full-screen; a form sheet measures no top inset.
+    <Screen edges={["top"]} background={t.c.bg2}>
+      <FlatList
+        // The sheet's raised surface (`contentStyle` in `_layout.tsx`), not the page colour.
+        style={{ flex: 1, backgroundColor: t.c.bg2 }}
+        data={
+          none
+            ? []
+            : [
+                ...bots.map((b) => ({ key: `${b.instance}/${b.name}`, bot: b })),
+                { key: NEW_BOT, bot: null },
+                { key: ADD, bot: null },
+              ]
+        }
+        keyExtractor={(r) => r.key}
+        contentContainerStyle={{ paddingBottom: insets.bottom + t.space.xl }}
+        ListHeaderComponent={
+          <View
+            style={{
               paddingHorizontal: t.space.lg + t.space.xs,
-              backgroundColor: pressed ? t.c.sel : "transparent",
-            })}
+              paddingTop: t.space.xl,
+              paddingBottom: t.space.md,
+              gap: 4,
+            }}
           >
-            {/* Unlabelled: the row's label says who. */}
-            <Avatar fleet_id={fleetId} instance={bot.instance} bot={bot.name} size={40} />
-            <Text numberOfLines={1} style={{ flex: 1, fontSize: 17 }}>
-              <Text weight={600} style={{ fontSize: 17 }}>
-                {name}
-              </Text>
-              {suffix ? <Text tone="fg3" style={{ fontSize: 15 }}>{` · ${suffix}`}</Text> : null}
+            <Text variant="heading" accessibilityRole="header">
+              New chat
             </Text>
-          </Pressable>
-        );
-      }}
-    />
+            {none ? null : (
+              <Text variant="bodySmall" tone="fg3">
+                A separate session. The Bot Chat stays as it is.
+              </Text>
+            )}
+          </View>
+        }
+        ListEmptyComponent={
+          <View style={{ gap: t.space.md }}>
+            <Text
+              tone="fg3"
+              style={{ paddingHorizontal: t.space.lg + t.space.xs, paddingVertical: t.space.sm }}
+            >
+              This phone listens to no instance yet. Add one to chat with its bots.
+            </Text>
+            {addRow}
+          </View>
+        }
+        renderItem={({ item }) => {
+          const bot = item.bot;
+          if (!bot) return item.key === NEW_BOT ? newBotRow : addRow;
+          const name = bot.title || bot.name;
+          // The bot's name when another bot of its instance shares the title, the
+          // instance when the sheet spans several; neither when it repeats the title.
+          const suffix = quietSuffix(
+            name,
+            shared.has(`${bot.instance}/${bot.name}`) ? bot.name : null,
+            many ? bot.instance : null,
+          );
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`New chat with ${name}${suffix ? `, ${suffix}` : ""}`}
+              onPress={() => {
+                haptic.select();
+                leaveTo(freshChatPath(bot));
+              }}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: t.space.lg,
+                minHeight: ROW_HEIGHT,
+                paddingHorizontal: t.space.lg + t.space.xs,
+                borderBottomWidth: t.border.row,
+                borderBottomColor: t.c.line,
+                backgroundColor: pressed ? t.c.sel : "transparent",
+              })}
+            >
+              {/* Unlabelled: the row's label says who. */}
+              <Avatar fleet_id={fleetId} instance={bot.instance} bot={bot.name} size={40} />
+              <Text numberOfLines={1} style={{ flex: 1, fontSize: 17 }}>
+                <Text weight={600} style={{ fontSize: 17 }}>
+                  {name}
+                </Text>
+                {suffix ? <Text tone="fg3" style={{ fontSize: 15 }}>{` · ${suffix}`}</Text> : null}
+              </Text>
+            </Pressable>
+          );
+        }}
+      />
+    </Screen>
   );
 }

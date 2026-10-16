@@ -6,12 +6,18 @@
 import { memo } from "react";
 import { blockKind } from "../../client/chat-logic.ts";
 import type { ClosedRequest } from "../../client/chat-requests.ts";
+import { isRequestTool } from "../../client/file-request-logic.ts";
+import { isDmTool, messageAgentLine } from "../../client/message-agent.ts";
+import { isShareAttachment, isShareTool } from "../../client/share-logic.ts";
 import type { ChatBlock } from "@hermetic/core/chat-client";
 import { Markdown } from "../Markdown.tsx";
 import { PlainText } from "../PlainText.tsx";
 import { ActivityGroup } from "./Activity.tsx";
 import { ApprovalCard } from "./Approval.tsx";
+import { DmLine } from "./DmLine.tsx";
+import { FileRequestBlock } from "./FileRequest.tsx";
 import { QuestionCard } from "./Question.tsx";
+import { ShareAttachment, ShareToolBlock } from "./ShareCard.tsx";
 import {
   ActivityNotice,
   AttachmentBlock,
@@ -70,9 +76,22 @@ function BlockImpl({
         <ActivityGroup blocks={[block]} streaming={streaming} />
       );
     case "tool":
-      return block.kind === "tool" ? <ToolBlock block={block} /> : null;
+      // A file or secret request is a card the operator answers, not a tool row.
+      if (isRequestTool(block)) return <FileRequestBlock block={block} now={now} session={session} />;
+      if (block.kind !== "tool") return null;
+      // A file the agent shared is a card with Save, not a tool row.
+      if (isShareTool(block)) return <ShareToolBlock block={block} />;
+      // A bot-to-bot DM is one line between the prose.
+      if (isDmTool(block)) return <DmLine line={messageAgentLine(block)} block={block} />;
+      return <ToolBlock block={block} />;
     case "attachment":
-      return block.kind === "attachment" ? <AttachmentBlock block={block} /> : null;
+      if (block.kind !== "attachment") return null;
+      // A `MEDIA:` line naming the outbox is a share card, like `share_file`.
+      return isShareAttachment(block) ? (
+        <ShareAttachment block={block} />
+      ) : (
+        <AttachmentBlock block={block} />
+      );
     case "approval":
       return block.kind === "approval" ? (
         <ApprovalCard

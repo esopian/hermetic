@@ -1,30 +1,36 @@
 /**
- * The soft shell the chat's request and failure cards share, in the app's
- * Grok-like chrome: a rounded `card` fill, a hairline ring only where the
- * scheme needs one (`cardEdge`), no boxed head or seam. What a card is about
- * is said by its first row; what needs the operator is a small dot.
+ * The shell the chat's request and failure cards share, drawn like the
+ * desktop's `.ch-card`: square, a `bg2` fill, a 1px `line` border, and a 3px
+ * left rule in the card's tone (warn while it needs the operator). What a card
+ * is about is said by its first row, a kicker; what needs the operator is a
+ * small square mark.
  */
 import type { ReactNode } from "react";
-import { StyleSheet, View } from "react-native";
+import { View } from "react-native";
 import { useTheme } from "../../theme/theme.tsx";
-import { Text } from "../../ui/Text.tsx";
+import { Kicker } from "../../ui/Kicker.tsx";
 
-/** The card's corner radius. */
-export const CARD_RADIUS = 16;
-/** The radius of a row or field inside a card (choices, the "Other" input). */
-export const ROW_RADIUS = 12;
-
-export function SoftCard({ testID, children }: { testID?: string; children: ReactNode }) {
+export function SoftCard({
+  testID,
+  edge,
+  children,
+}: {
+  testID?: string;
+  /** The left rule's colour; the card's border colour when absent. */
+  edge?: string;
+  children: ReactNode;
+}) {
   const t = useTheme();
   return (
     <View
       testID={testID}
       style={{
         backgroundColor: t.c.card,
-        borderRadius: CARD_RADIUS,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: t.border.row,
         borderColor: t.c.cardEdge,
-        padding: t.space.md + t.space.xs,
+        borderLeftWidth: edge ? t.border.seam : t.border.row,
+        borderLeftColor: edge ?? t.c.cardEdge,
+        padding: t.space.md,
         gap: t.space.md,
         marginVertical: t.space.xs,
       }}
@@ -34,22 +40,15 @@ export function SoftCard({ testID, children }: { testID?: string; children: Reac
   );
 }
 
-/** A small round mark leading a card's first row: warn gold for "needs you" unless told otherwise. */
+/** A small square mark leading a card's first row: warn for "needs you" unless told otherwise. */
 export function NeedsDot({ color }: { color?: string }) {
   const t = useTheme();
   return (
-    <View
-      accessible={false}
-      style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color ?? t.c.warn }}
-    />
+    <View accessible={false} style={{ width: 8, height: 8, backgroundColor: color ?? t.c.warn }} />
   );
 }
 
-/** A section label inside an opened card ("Arguments", "Result"): quiet sentence case, not a kicker. */
+/** A section label inside an opened card ("Arguments", "Result"): a kicker, as on the desktop. */
 export function Label({ children }: { children: ReactNode }) {
-  return (
-    <Text variant="caption" weight={600} tone="fg3">
-      {children}
-    </Text>
-  );
+  return <Kicker>{children}</Kicker>;
 }

@@ -11,6 +11,19 @@
  * refused action. Pure.
  */
 import { HermeticError, isHermeticError, redactText } from "@hermetic/core/chat-client";
+import { FILES_LIMITS } from "@hermetic/core/shared";
+
+/**
+ * Phone-local: more attachments were picked than one message may carry
+ * (`FILES_LIMITS.attachmentsPerTurn`). The phone refuses the extra ones itself.
+ */
+export const ATTACHMENT_LIMIT = "ATTACHMENT_LIMIT";
+
+/** Phone-local: iOS refused the app a device permission (the camera, for a photo). */
+export const PERMISSION_DENIED = "PERMISSION_DENIED";
+
+/** A whole-MiB cap for the attachment copy. */
+const mib = (bytes: number): string => `${Math.round(bytes / (1024 * 1024))} MiB`;
 
 /**
  * Phone-local: a plain-HTTP call to hermeticd was not sent because HTTPS to the
@@ -109,6 +122,50 @@ export function errorCopy(error: unknown): ErrorCopy {
       return { title: "That conflicts with the box's state.", detail: message };
     case "ABORTED":
       return { title: "Stopped.", detail: "The request was cancelled." };
+    // Attachments (`gateway/files.ts`): the phone's own checks and the box's refusals.
+    case "FILE_TOO_LARGE":
+      return {
+        title: "That file is too large to attach.",
+        detail: `Images can be at most ${mib(FILES_LIMITS.imageBytes)} and other files ${mib(FILES_LIMITS.fileBytes)}; the fleet may set a lower cap.`,
+      };
+    case "FILE_DIGEST_MISMATCH":
+      return {
+        title: "The upload was corrupted on the way.",
+        detail: "The box received different bytes from the ones sent. Try attaching it again.",
+      };
+    case "FILE_NAME_INVALID":
+      return {
+        title: "That file name is not allowed.",
+        detail: "Rename the file, then attach it again.",
+      };
+    case "FILE_LOOKS_SECRET":
+      return {
+        title: "That file looks like a private key.",
+        detail: "Keys and credentials are not sent as attachments. Use a secret instead.",
+      };
+    case "FILE_TYPE_REJECTED":
+      return { title: "The box refuses this kind of file.", detail: message };
+    case "FILE_NOT_FOUND":
+      return {
+        title: "The attachment expired on the box.",
+        detail: "Staged files are kept for a limited time. Attach it again.",
+      };
+    case "DISK_FULL":
+      return {
+        title: "The box's disk is full.",
+        detail: "Free space on the agent's volume, then attach the file again.",
+      };
+    case ATTACHMENT_LIMIT:
+      return {
+        title: `At most ${FILES_LIMITS.attachmentsPerTurn} attachments per message.`,
+        detail: "Send these first, or remove some.",
+      };
+    case PERMISSION_DENIED:
+      return { title: "Hermetic does not have permission.", detail: message };
+    case "UNSUPPORTED":
+      return { title: "This box cannot do that yet.", detail: message };
+    case "FORBIDDEN":
+      return { title: "The box refused this phone.", detail: message };
     default:
       return { title: "Something went wrong.", detail: message || code };
   }

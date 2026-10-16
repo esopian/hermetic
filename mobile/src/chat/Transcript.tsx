@@ -24,7 +24,6 @@ import {
   Pressable,
   type ScrollView,
   type ScrollViewProps,
-  StyleSheet,
   View,
 } from "react-native";
 import { KeyboardChatScrollView } from "react-native-keyboard-controller";
@@ -34,7 +33,7 @@ import { type TurnRow as TurnRowType, turnRows } from "../client/chat-turns.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
-import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
+import type { AvatarStatus } from "@hermetic/core/shared";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
 import { PinController } from "./follow.ts";
@@ -179,7 +178,6 @@ function TranscriptImpl({
   pinSignal?: number;
 }) {
   const t = useTheme();
-  const dark = t.scheme === "dark";
   const list = useRef<FlashListRef<TranscriptItem>>(null);
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(false);
@@ -347,19 +345,13 @@ function TranscriptImpl({
               gap: t.space.xs,
               paddingHorizontal: t.space.md,
               paddingVertical: t.space.sm,
-              borderRadius: 999,
-              // A quiet round pill over the page: bg3 lifts it a step in dark,
-              // light keeps its card fill; a hairline and a soft shadow give the
-              // edge. Unseen messages ring the pill in the accent; the label
-              // stays fg, since accent text on the light card is too faint.
-              backgroundColor: dark ? t.c.bg3 : t.c.card,
+              // A square chip over the page (the desktop's `.ch-chip`): bg2 with a
+              // `line2` border, flat. Unseen messages draw the border in the
+              // accent; the label stays fg, since accent text on bg2 is too faint.
+              backgroundColor: t.c.bg2,
               opacity: pressed ? 0.7 : 1,
-              borderWidth: unseen ? 1 : StyleSheet.hairlineWidth,
+              borderWidth: t.border.row,
               borderColor: unseen ? t.c.acc : t.c.line2,
-              shadowColor: "#000",
-              shadowOpacity: dark ? 0.4 : 0.12,
-              shadowRadius: 8,
-              shadowOffset: { width: 0, height: 2 },
             })}
           >
             <Text variant="caption" weight={600} tone="fg" style={{ fontSize: 13 }}>

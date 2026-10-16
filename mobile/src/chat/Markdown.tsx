@@ -4,13 +4,19 @@
  * nodes. Links open in the system browser only when `openableHref` allows
  * them — anything else is drawn as `text (href)`, as the desktop draws a link
  * it refuses. Math is shown as its TeX source in mono (no KaTeX on a phone).
+ * An image (`![alt](url)`) is drawn as a picture between the paragraph's words,
+ * with its alt text as a mono caption, when `file-urls.ts` lets the phone load
+ * it (a file on the conversation's box, or `https:`); otherwise as its alt text.
  */
 import { memo, type ReactNode, useMemo } from "react";
 import { Linking, ScrollView, type TextStyle, View } from "react-native";
 import { openableHref } from "../client/chat-logic.ts";
+import { imageSourceOf } from "../client/file-urls.ts";
+import { hasImage, splitImages } from "../client/markdown-images.ts";
 import { type MdList, type MdNode, type MdSpan, parseMarkdown } from "../client/markdown.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Text } from "../ui/Text.tsx";
+import { Picture } from "./blocks/Picture.tsx";
 import { CodePane } from "./CodePane.tsx";
 import { collapseSpaces } from "./text-layout.ts";
 
@@ -222,12 +228,35 @@ function Node({ node }: { node: MdNode }) {
         </ScrollView>
       );
     default:
-      return (
+      return hasImage(node.spans) ? (
+        <View style={{ gap: t.space.xs }}>
+          {splitImages(node.spans).map((piece, i) =>
+            piece.kind === "image" ? (
+              <MarkdownImage key={`i${i}`} alt={piece.alt} href={piece.href} />
+            ) : (
+              <Text key={`s${i}`} selectable>
+                <Spans spans={piece.spans} />
+              </Text>
+            ),
+          )}
+        </View>
+      ) : (
         <Text selectable>
           <Spans spans={node.spans} />
         </Text>
       );
   }
+}
+
+function MarkdownImage({ alt, href }: { alt: string; href: string }) {
+  const source = imageSourceOf(href);
+  if (!source)
+    return (
+      <Text mono variant="caption" tone="fg3" testID="markdown-image-refused">
+        {`image not loaded · ${alt || href}`}
+      </Text>
+    );
+  return <Picture source={source} alt={alt} caption />;
 }
 
 function MarkdownImpl({ markdown, streaming = false }: { markdown: string; streaming?: boolean }) {

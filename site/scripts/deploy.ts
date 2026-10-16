@@ -420,6 +420,7 @@ const REQUIRED = [
   "explainer/index.html",
   "explainer/engine.js",
   "cost/index.html",
+  "mobile/index.html",
 ];
 
 /** The footer stamp the landing page prints (src/components/Footer.astro, src/data/release.ts). */
@@ -551,6 +552,7 @@ const CHECKS = (short: string): Check[] => [
   { path: "/explainer/", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
   { path: "/explainer/engine.js", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
   { path: "/cost/", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
+  { path: "/mobile/", test: (res) => (res.status === 200 ? null : `HTTP ${res.status}`) },
   {
     // The link-preview image every page's og:image names (layouts/Shell.astro).
     path: "/og.png",

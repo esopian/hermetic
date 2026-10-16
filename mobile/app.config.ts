@@ -34,7 +34,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       UIBackgroundModes: ["remote-notification", "fetch", "processing"],
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
-        "Hermetic uses the camera to scan the pairing QR code shown on your laptop.",
+        "Hermetic uses the camera to scan the pairing QR code shown on your laptop, and to take a photo you attach to a chat.",
+      NSPhotoLibraryUsageDescription:
+        "Hermetic opens your photo library so you can attach a photo to a chat with an agent.",
       // The phone talks to the boxes over the tailnet (WireGuard encrypts and
       // authenticates every link; see mobile/AGENTS.md, "Transport security").
       // The Hermes gateway, noVNC and the Tailscale probe are HTTPS through
@@ -110,11 +112,27 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "expo-camera",
       {
-        cameraPermission: "Hermetic uses the camera to scan the pairing QR code shown on your laptop.",
+        cameraPermission:
+          "Hermetic uses the camera to scan the pairing QR code shown on your laptop, and to take a photo you attach to a chat.",
         microphonePermission: false,
         recordAudioAndroid: false,
       },
     ],
+    // Attachments: a photo from the library or the camera (`src/client/pick-attachment.ts`).
+    // The camera string matches expo-camera's above; whichever plugin runs last writes it.
+    // No microphone: the picker takes still images only.
+    [
+      "expo-image-picker",
+      {
+        photosPermission:
+          "Hermetic opens your photo library so you can attach a photo to a chat with an agent.",
+        cameraPermission:
+          "Hermetic uses the camera to scan the pairing QR code shown on your laptop, and to take a photo you attach to a chat.",
+        microphonePermission: false,
+      },
+    ],
+    // expo-document-picker needs no plugin: its plugin only adds the iCloud
+    // entitlements, and the app does not use iCloud containers.
   ],
   experiments: { typedRoutes: false },
   extra: {

@@ -1,18 +1,17 @@
 /**
  * The transcript's card shell (desktop `Card.tsx`, `.ch-card`): a head with a
- * label, an optional subject line and a right-hand note, a verdict-coloured
- * dot (none for a muted card), and a body that a settled card keeps shut until
- * tapped. Drawn soft, like the request cards: a rounded fill, no seam or box.
+ * label, an optional subject line and a right-hand note, a body that a settled
+ * card keeps shut until tapped. Drawn like the desktop: square, a `bg2` fill
+ * and a 1px `line` border, a mono uppercase head, and the verdict as a 3px
+ * left rule ("the card's verdict in peripheral vision").
  */
 import { type ReactNode, useState } from "react";
-import { Pressable, StyleSheet, View, type ViewStyle } from "react-native";
+import { Pressable, View, type ViewStyle } from "react-native";
 import { type CardVerdict, startsCollapsed } from "../client/chat-logic.ts";
 import { useTheme } from "../theme/theme.tsx";
 import type { Palette } from "../theme/tokens.ts";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
-
-const RADIUS = 14;
 
 export function verdictColor(c: Palette, verdict: CardVerdict | "warn" | "bad"): string {
   switch (verdict) {
@@ -72,12 +71,17 @@ export function Card({
           {open ? "▾" : "▸"}
         </Text>
       ) : null}
-      {verdict === "muted" ? null : (
-        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: edge }} />
-      )}
       <View style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
         {typeof head === "string" ? (
-          <Text variant="bodySmall" weight={600} tone="fg2" numberOfLines={1}>
+          <Text
+            mono
+            variant="caption"
+            weight={700}
+            tone="fg2"
+            uppercase
+            numberOfLines={1}
+            style={{ letterSpacing: 0.4 }}
+          >
             {head}
           </Text>
         ) : (
@@ -101,9 +105,10 @@ export function Card({
       testID={testID}
       style={[
         {
-          borderRadius: RADIUS,
-          borderWidth: StyleSheet.hairlineWidth,
+          borderWidth: t.border.row,
           borderColor: t.c.cardEdge,
+          borderLeftWidth: t.border.seam,
+          borderLeftColor: edge,
           backgroundColor: t.c.card,
           overflow: "hidden",
           marginVertical: t.space.xs,
@@ -140,8 +145,9 @@ export function Card({
       {open && children ? (
         <View
           style={{
-            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopWidth: t.border.row,
             borderTopColor: t.c.line,
+            backgroundColor: t.c.bg,
             padding: t.space.md,
             gap: t.space.sm,
           }}

@@ -24,7 +24,8 @@
  *   events (pushes and socket-delivered), unread counts and the badge.
  * - `gateway` — the transport over core's Hermes adapter, for what the
  *   screens call beside the store: `open` (a new thread), `compact`,
- *   `archive`, `steerSubagent`, `abortSubagent`.
+ *   `archive`, `steerSubagent`, `abortSubagent`, `createBot`.
+ * - `createBot` — `gateway.createBot`, then a roster re-read so home lists the new bot.
  * - `tailscale` — `probe()` / `last()`: the heuristic Tailscale status
  *   (`src/gateway/tailscale.ts`), probing ready boxes first (`probeHosts`).
  * - `setPhase` / `setWatched` — what the alert decision reads. `setWatched`

@@ -3,7 +3,8 @@
  *
  * Reads the fleet's identity (the frozen config plus the `_fleet` row's
  * tailnet) and its live agents, and encodes them with `encodeMobileLink`
- * (`shared/mobile-link.ts`). A read: it mints nothing, stores nothing and
+ * (`shared/mobile-link.ts`), with the viewer preferences the caller asks the
+ * phone to start with (`prefs`). A read: it mints nothing, stores nothing and
  * carries no secret — the phone's authentication to the fleet is tailnet
  * membership, so the link is safe to print, log and screenshot.
  */
@@ -50,7 +51,7 @@ export function createMobilePair(deps: MobilePairDeps) {
   const { ctx } = deps;
 
   async function pair(input: unknown = {}): Promise<MobilePairResult> {
-    parse(MobilePairInput, input ?? {}, "mobile pair");
+    const { prefs = {} } = parse(MobilePairInput, input ?? {}, "mobile pair");
     const config = ctx.requireConfig();
     await ctx.guardAccount();
     const fleetItem = await ctx.backend.store.fleet.get();
@@ -72,12 +73,12 @@ export function createMobilePair(deps: MobilePairDeps) {
       tailnet: fleetItem.tailnet,
     };
     const agents = mobileLinkAgents(await deps.listAgents({}), fleet.fleet_id, fleet.tailnet);
-    const link = encodeMobileLink({ ...fleet, agents });
+    const link = encodeMobileLink({ ...fleet, agents, prefs });
     const carried = parseMobileLink(link);
     if (carried === null) {
       throw new HermeticError("INTERNAL", "the pairing link does not parse back");
     }
-    return { link, fleet, agents, agents_in_link: carried.agents.length };
+    return { link, fleet, agents, agents_in_link: carried.agents.length, prefs: carried.prefs };
   }
 
   return { pair };

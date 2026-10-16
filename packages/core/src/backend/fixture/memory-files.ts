@@ -41,6 +41,12 @@ import {
 import { HERMES_HOME } from "../../shared/hermes.ts";
 import { canonicalSecretEnv, parseSecretEnv } from "../../shared/secret-env.ts";
 import { agentParamPath } from "../constants.ts";
+import {
+  E2E_FILE_DIGEST,
+  E2E_FILE_TOO_LARGE,
+  fixtureStageChecks,
+  fixtureStageName,
+} from "./fixture-files-box.ts";
 import type {
   FilesApi,
   FilesCallOptions,
@@ -65,8 +71,7 @@ import type {
  * - `E2E_FILE_DIGEST` anywhere in the name → `FILE_DIGEST_MISMATCH` (422).
  */
 
-export const E2E_FILE_TOO_LARGE = "E2E_FILE_TOO_LARGE";
-export const E2E_FILE_DIGEST = "E2E_FILE_DIGEST";
+export { E2E_FILE_DIGEST, E2E_FILE_TOO_LARGE };
 
 /** One entry of the fixture store: what hermeticd's index would hold, plus the bytes. */
 export interface MemoryFileEntry {
@@ -190,26 +195,10 @@ export class MemoryFiles implements FilesApi {
   ): Promise<FilesStageResult> {
     this.requireAgent(agent);
     if (opts.signal?.aborted) throw new HermeticError("ABORTED", "the file transfer was stopped");
-    const clean = sanitizeFileName(upload.fileName);
-    if (!clean.ok) throw filesRefusal("FILE_NAME_INVALID", agent, undefined, { reason: clean.reason });
-    const name = clean.name;
-    if (name.includes(E2E_FILE_TOO_LARGE)) throw filesRefusal("FILE_TOO_LARGE", agent);
-
+    // The box's checks, shared with the phone's fixture box (`fixture-files-box.ts`).
+    const name = fixtureStageName(agent, upload.fileName);
     const bytes = await readAll(upload.body, opts.onProgress, opts.signal);
-    if (bytes.byteLength !== upload.size) throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    if ((upload.sha256 && sha256 !== upload.sha256.toLowerCase()) || name.includes(E2E_FILE_DIGEST)) {
-      throw filesRefusal("FILE_DIGEST_MISMATCH", agent);
-    }
-    const head = bytes.subarray(0, FILES_LIMITS.sniffBytes);
-    const mime = sniffMime(head, name);
-    const image = isImageMime(mime);
-    if (bytes.byteLength > (image ? FILES_LIMITS.imageBytes : FILES_LIMITS.fileBytes)) {
-      throw filesRefusal("FILE_TOO_LARGE", agent);
-    }
-    if (!upload.notSecret && looksLikeKeyMaterial(head, name)) {
-      throw filesRefusal("FILE_LOOKS_SECRET", agent);
-    }
+    const { mime, sha256, class: fileClass } = fixtureStageChecks(agent, name, bytes, upload);
 
     const now = this.host.now();
     const entry: MemoryFileEntry = {
@@ -219,7 +208,7 @@ export class MemoryFiles implements FilesApi {
       bytes,
       mime,
       sha256,
-      class: image ? "image" : "file",
+      class: fileClass,
       state: "staged",
       created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + FILES_TTL.stage * 1000).toISOString(),

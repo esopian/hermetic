@@ -11,6 +11,9 @@
  * `controllable`). Pure TypeScript.
  */
 import type { ChatBlock, SubagentBlock } from "@hermetic/core/chat-client";
+import { isRequestTool } from "./file-request-logic.ts";
+import { isDmTool } from "./message-agent.ts";
+import { isShareTool } from "./share-logic.ts";
 import type { TurnActivity } from "./turn-reducer.ts";
 
 /* ── which blocks are run machinery ──────────────────────────────────────── */
@@ -74,6 +77,15 @@ export function sections(blocks: readonly ChatBlock[]): Section[] {
   const out: Section[] = [];
   let run: Section | null = null;
   for (const block of blocks) {
+    // A file or secret request is a card the operator answers, a shared file
+    // is a card with Save, and a bot-to-bot DM is a line between the prose:
+    // none is a step folded into "Tools complete". Each stands alone and
+    // closes the run.
+    if (isRequestTool(block) || isShareTool(block) || isDmTool(block)) {
+      out.push({ activity: false, blocks: [block] });
+      run = null;
+      continue;
+    }
     const attention = needsAttention(block);
     if (isActivity(block) && !attention) {
       if (run) run.blocks.push(block);

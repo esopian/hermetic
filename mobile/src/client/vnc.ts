@@ -149,6 +149,6 @@ export type VncScale = "fit" | "actual";
  * (1:1, pan and pinch). Sets the settings control and the live client both.
  */
 export function vncScaleScript(scale: VncScale): string {
-  const mode = scale === "fit" ? "scale" : "off";
-  return `(function(){try{var m=${JSON.stringify(mode)};var s=document.getElementById('noVNC_setting_resize');if(s){s.value=m;s.dispatchEvent(new Event('change'));}if(window.UI&&UI.rfb){UI.rfb.scaleViewport=(m==='scale');UI.rfb.clipViewport=(m!=='scale');}}catch(e){}})();true;`;
+  const mode = scale === "fit" ? "'scale'" : "'off'";
+  return `(function(){try{var m=${mode};var s=document.getElementById('noVNC_setting_resize');if(s){s.value=m;s.dispatchEvent(new Event('change'));}if(window.UI&&UI.rfb){UI.rfb.scaleViewport=(m==='scale');UI.rfb.clipViewport=(m!=='scale');}}catch(e){}})();true;`;
 }

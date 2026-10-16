@@ -12,6 +12,7 @@ import {
 } from "../../src/client/chat-logic.ts";
 import {
   failedPrompt,
+  failedTurnPrompt,
   failureOf,
   isLatestFailure,
   recoveryPlan,
@@ -136,6 +137,34 @@ describe("failures", () => {
     expect(isLatestFailure(list, ["f"])).toBe(true);
     expect(isLatestFailure([...list, msg({ id: "later" })], ["f"])).toBe(false);
   });
+
+  test("the failed turn's prompt carries its files; a files-only prompt still has one", () => {
+    const chip = {
+      kind: "attachment" as const,
+      name: "a.png",
+      mime: "image/png",
+      bytes: 3,
+      href: "f_1",
+      file_id: "f_1",
+    };
+    const echo = { ...msg({ id: "local:1", role: "user", text: "" }), blocks: [chip] };
+    const failed = msg({ id: "f", error: "X" });
+    expect(failedTurnPrompt([echo, failed], ["f"])).toEqual({
+      text: "",
+      files: [chip],
+      recorded: false,
+    });
+    expect(failedPrompt([echo, failed], ["f"])).toBeNull();
+    const recorded = {
+      ...msg({ id: "u", role: "user", text: "look" }),
+      blocks: [{ kind: "text" as const, markdown: "look" }, chip],
+    };
+    expect(failedTurnPrompt([recorded, failed], ["f"])).toEqual({
+      text: "look",
+      files: [chip],
+      recorded: true,
+    });
+  });
 });
 
 describe("turn error band", () => {
@@ -222,6 +251,6 @@ describe("activity", () => {
 });
 
 test("noVNC scaling script sets the resize mode", () => {
-  expect(vncScaleScript("fit")).toContain('"scale"');
-  expect(vncScaleScript("actual")).toContain('"off"');
+  expect(vncScaleScript("fit")).toContain("var m='scale';");
+  expect(vncScaleScript("actual")).toContain("var m='off';");
 });

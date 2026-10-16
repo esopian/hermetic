@@ -20,7 +20,7 @@
 import { REDUCED_MOTION_DEFAULT, cleanup, render, setPageHidden, setReducedMotion } from "./dom.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Avatar } from "../src/chat/components/avatar/Avatar.tsx";
-import type { AvatarStyle } from "../src/chat/components/avatar/avatar-seed.ts";
+import type { AvatarStyle } from "@hermetic/core/shared";
 
 const STYLES: AvatarStyle[] = ["sigil", "pixel", "blob"];
 

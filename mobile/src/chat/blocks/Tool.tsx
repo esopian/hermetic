@@ -3,8 +3,8 @@
  * (desktop `blocks/Tool.tsx`). Running: an accent card with a moving bar.
  * Settled: a collapsed card whose seam says the verdict; opened, the
  * arguments and the result, drawn per hint (diff, table, terminal, image).
- * Images are never fetched — a phone fetching a URL a model wrote is the
- * same off-tailnet request the desktop refuses to make.
+ * An image or screenshot is drawn when its result names a file on the box or
+ * an `https:` image (`toolImageSource`); anything else is named, not fetched.
  */
 import { useEffect } from "react";
 import { View } from "react-native";
@@ -17,12 +17,14 @@ import Animated, {
 } from "react-native-reanimated";
 import { fmtMs, formatPayload, toolVerdict } from "../../client/chat-logic.ts";
 import { resultText, subjectOf, tableOf } from "../../client/chat-turns.ts";
+import { toolImageHref, toolImageSource } from "../../client/file-urls.ts";
 import type { ToolBlock as ToolBlockType } from "@hermetic/core/chat-client";
 import { useTheme } from "../../theme/theme.tsx";
 import { Text } from "../../ui/Text.tsx";
 import { Card } from "../Card.tsx";
 import { Label } from "./SoftCard.tsx";
 import { CodePane } from "../CodePane.tsx";
+import { MissingPicture, Picture } from "./Picture.tsx";
 
 function RunningBar() {
   const t = useTheme();
@@ -33,7 +35,7 @@ function RunningBar() {
   }, [x]);
   const style = useAnimatedStyle(() => ({ left: `${x.value * 75}%` }));
   return (
-    <View style={{ height: 3, borderRadius: 1.5, backgroundColor: t.c.bg3, overflow: "hidden" }}>
+    <View style={{ height: 3, backgroundColor: t.c.bg3, overflow: "hidden" }}>
       <Animated.View
         style={[
           { position: "absolute", top: 0, bottom: 0, width: "25%", backgroundColor: t.c.acc },
@@ -61,19 +63,14 @@ function TableResult({ result }: { result: unknown }) {
   );
 }
 
-function ShotResult({ result }: { result: unknown }) {
-  const href =
-    typeof result === "string"
-      ? result
-      : result && typeof result === "object"
-        ? ((result as { href?: unknown }).href ?? (result as { url?: unknown }).url)
-        : null;
+function ShotResult({ result, name }: { result: unknown; name: string }) {
+  const source = toolImageSource(result);
+  if (source) return <Picture source={source} alt={name} />;
+  const href = toolImageHref(result);
   return (
-    <Text mono variant="caption" tone="fg3">
-      {typeof href === "string" && href.length > 0
-        ? `image not fetched — ${href} is not loaded on the phone`
-        : "image · not fetched"}
-    </Text>
+    <MissingPicture
+      text={href ? `image not fetched — ${href} is not loaded on the phone` : "image · not fetched"}
+    />
   );
 }
 
@@ -101,7 +98,7 @@ export function ToolResult({ block }: { block: ToolBlockType }) {
       return <TableResult result={block.result} />;
     case "image":
     case "screenshot":
-      return <ShotResult result={block.result} />;
+      return <ShotResult result={block.result} name={block.name} />;
     case "terminal":
       return <CodePane text={text || "(no output)"} lang="terminal" />;
     default:
@@ -129,9 +126,8 @@ export function ToolBlock({ block }: { block: ToolBlockType }) {
           variant="caption"
           tone="fg2"
           style={{
-            backgroundColor: t.c.sel,
-            borderRadius: 6,
-            overflow: "hidden",
+            borderWidth: t.border.row,
+            borderColor: t.c.line2,
             paddingHorizontal: 6,
           }}
           numberOfLines={1}

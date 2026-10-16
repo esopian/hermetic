@@ -43,6 +43,11 @@ export type {
   SubagentSteerStatus,
 } from "./chat/hermes/hermes-chat-types.ts";
 
+// --- Creating a Bot Mode bot ---------------------------------------------
+// The sequence `bots.create` runs, over a caller's bound `botModeRpc`.
+export { botProfileOf, createBotOverRpc } from "./chat/hermes/hermes-bot-create.ts";
+export type { BotModeCall } from "./chat/hermes/hermes-bot-create.ts";
+
 // --- Following a transcript ----------------------------------------------
 export {
   OBSERVE_HINTS_ENDED,

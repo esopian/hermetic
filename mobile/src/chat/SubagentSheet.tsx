@@ -234,7 +234,6 @@ export function SubagentSheet({
                   paddingTop: 11,
                   borderWidth: t.border.control,
                   borderColor: t.c.line2,
-                  borderRadius: 0,
                 }}
               />
               <Button

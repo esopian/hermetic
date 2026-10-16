@@ -8,11 +8,14 @@
  * read the same fields either way.
  */
 import type {
+  AttachmentBlock,
   ChatConversation,
   ChatMessage,
   ChatSteerStatus,
+  SendOptions,
   Session,
 } from "@hermetic/core/chat-client";
+import type { FilesStageResult } from "@hermetic/core/schema";
 
 export interface HistoryResult {
   /** The conversation `conversation()` resolved, when the gateway has Bot Mode. */
@@ -60,7 +63,21 @@ export interface TurnRequest {
   message: string;
   /** The optimistic prompt's local id, for correlation in logs and tests. */
   client_ref?: string;
+  /** Files staged on the box for this turn; the adapter commits and frames them. */
+  attachments?: SendAttachments;
 }
+
+/**
+ * A turn's attachments: what the Hermes adapter takes (`SendOptions.attachments`:
+ * the staged ids and the box's commit), plus the staged files themselves, which
+ * the optimistic prompt draws as chips until the box's transcript has the row.
+ * Build it with `outgoingAttachments` (`attachments.ts`).
+ */
+export type SendAttachments = NonNullable<SendOptions["attachments"]> & {
+  readonly staged?: readonly FilesStageResult[];
+  /** The chips to draw instead, when resending files known only by their chips (Retry). */
+  readonly chips?: readonly AttachmentBlock[];
+};
 
 export interface TurnStartResult {
   /** Minted on the phone: the gateway names no turn. */

@@ -22,10 +22,10 @@ export interface Palette {
   /** Modal backdrop (`rgba(0,0,0,.55)` on the desktop). */
   backdrop: string;
   /**
-   * Phone-only, derived: the fill of a soft card (Settings groups, the chat's
-   * request and failure cards) and its hairline ring. Dark keeps `bg2` with no
-   * ring. Light lifts the card halfway from `bg` to white and rings it in
-   * `line`: `bg2` sat a shade under the page and the groups ran together.
+   * Phone-only aliases: the fill of a card (Settings groups, the chat's tool,
+   * request and failure cards) and its 1px border. Both schemes use the
+   * desktop's card look, `bg2` with a `line` border, so the border carries the
+   * structure rather than a lifted fill.
    */
   card: string;
   cardEdge: string;
@@ -52,7 +52,7 @@ export const palettes: Record<SchemeName, Palette> = {
     dangerText: "#0e0e0d",
     backdrop: "rgba(0,0,0,0.55)",
     card: "#161614",
-    cardEdge: "transparent",
+    cardEdge: "#2c2b27",
   },
   light: {
     bg: "#f1efe9",
@@ -71,7 +71,7 @@ export const palettes: Record<SchemeName, Palette> = {
     sel: "#e3e0d7",
     dangerText: "#f1efe9",
     backdrop: "rgba(0,0,0,0.55)",
-    card: "#f8f7f4",
+    card: "#e8e6df",
     cardEdge: "#cfccc3",
   },
 };

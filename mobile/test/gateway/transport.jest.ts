@@ -5,6 +5,7 @@ import {
   type ChatObserveHint,
   HermeticError,
   type HermesChatClient,
+  type SendOptions,
   type Swarm,
 } from "@hermetic/core/chat-client";
 import type { TurnState } from "../../src/client/chat-types.ts";
@@ -38,8 +39,12 @@ function fakeAdapter(script: {
 }) {
   const calls: { method: string; args: unknown[] }[] = [];
   let release: (() => void) | null = null;
-  /** Each send's signal, and whether its stream was closed (its `finally` ran). */
-  const streams: { signal: AbortSignal | undefined; closed: boolean }[] = [];
+  /** Each send's signal and attachments, and whether its stream was closed (its `finally` ran). */
+  const streams: {
+    signal: AbortSignal | undefined;
+    attachments: SendOptions["attachments"];
+    closed: boolean;
+  }[] = [];
   const client: HermesChatClient = {
     token: async () => "FIXTURE",
     swarm: async (box) => {
@@ -75,7 +80,7 @@ function fakeAdapter(script: {
     },
     send: (box, b, text, opts) => {
       calls.push({ method: "send", args: [box.instance, b, text, opts?.session] });
-      const stream = { signal: opts?.signal, closed: false };
+      const stream = { signal: opts?.signal, attachments: opts?.attachments, closed: false };
       streams.push(stream);
       return (async function* () {
         try {
@@ -282,6 +287,35 @@ describe("turns", () => {
       { type: "done", seq: 1, message: "compact" },
     ]);
     expect(s.events.at(-1)).toMatchObject({ state: "done" });
+  });
+
+  test("a turn's attachments reach the adapter's send, even with no words", async () => {
+    const s = setup({ frames: [done(1)] });
+    const commit = jest.fn();
+    await s.transport.startTurn({ ...ATLAS, message: "", attachments: { ids: ["f1", "f2"], commit } });
+    await flush();
+    expect(s.calls.map((c) => c.method)).toEqual(["conversation", "send"]);
+    expect(s.calls[1]!.args).toEqual(["atlas", "scribe", "", "s-1"]);
+    expect(s.streams[0]!.attachments).toMatchObject({ ids: ["f1", "f2"], commit });
+    expect(s.events.at(-1)).toMatchObject({ state: "done" });
+  });
+
+  test("a plain turn sends no attachments", async () => {
+    const s = setup({ frames: [done(1)] });
+    await s.transport.startTurn({ ...ATLAS, message: "hello" });
+    await flush();
+    expect(s.streams[0]!.attachments).toBeUndefined();
+  });
+
+  test("/compact with files attached is a turn, not a compaction", async () => {
+    const s = setup({ frames: [done(1)] });
+    await s.transport.startTurn({
+      ...ATLAS,
+      message: "/compact",
+      attachments: { ids: ["f1"], commit: jest.fn() },
+    });
+    await flush();
+    expect(s.calls.map((c) => c.method)).toEqual(["conversation", "send"]);
   });
 
   test("a start for an instance this phone does not know is refused at once", async () => {

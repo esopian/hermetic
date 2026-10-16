@@ -1,12 +1,12 @@
 /**
- * One row of the transcript (desktop `Message.tsx`): the operator's bubble
- * (`.me`, plain text, right-aligned), a bot turn (avatar, name, meta, then its
+ * One row of the transcript (desktop `Message.tsx`): the operator's turn
+ * (`.me`: the `ME` mark, "You", the words on a recessed panel), a bot turn (avatar, name, meta, then its
  * sections — one activity group per run of steps and one block per thing
  * addressed to the reader — then the failure card and the turn meter), or the
  * box speaking for itself (a system row).
  */
 import { memo } from "react";
-import { StyleSheet, View } from "react-native";
+import { View } from "react-native";
 import { activeGroup, sections } from "../client/chat-activity.ts";
 import { fmtCount } from "../client/chat-logic.ts";
 import { failureOf } from "../client/chat-recovery.ts";
@@ -16,8 +16,9 @@ import { isLocal } from "../client/conversation-store.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
-import type { AvatarStatus } from "../ui/avatar/avatar-seed.ts";
+import type { AvatarStatus } from "@hermetic/core/shared";
 import { Avatar } from "../ui/avatar/Avatar.tsx";
+import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
 import { ActivityGroup } from "./blocks/Activity.tsx";
 import { Block } from "./blocks/Block.tsx";
@@ -26,7 +27,6 @@ import { PlainText } from "./PlainText.tsx";
 import { chatTime } from "./time.ts";
 
 const GUTTER = 36;
-const BUBBLE_RADIUS = 18;
 
 function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   const t = useTheme();
@@ -44,7 +44,16 @@ function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   );
 }
 
-function OperatorBubble({
+/**
+ * The operator's turn, laid out the desktop's way (`.ch-msg.me` in the soft
+ * skin): the square `ME` mark in the avatar gutter, a "You" head row with the
+ * time, and the words flush in the content column on a recessed panel with a
+ * 2px left rule. No bubble and no right alignment: every turn reads from the
+ * same left edge. A steer takes the accent on its rule and a `Steered` tag.
+ * The files the operator sent go under the words, through the same `Block`
+ * switch as any other turn's attachments.
+ */
+function OperatorTurn({
   message,
   now,
   answered,
@@ -58,39 +67,67 @@ function OperatorBubble({
   const pending = isLocal(message) && !answered;
   const text = message.blocks.map((b) => (b.kind === "text" ? b.markdown : "")).join("");
   const steer = message.id.startsWith("local:steer:");
+  const attached = message.blocks.filter((b) => b.kind === "attachment");
   return (
-    // The same top margin an agent turn opens with, so a reply and the next
-    // message read as two turns rather than one block.
-    <View
-      style={{
-        alignItems: "flex-end",
-        paddingLeft: 48,
-        marginTop: t.space.md,
-        marginBottom: t.space.xs,
-      }}
-    >
-      {/* A soft filled bubble, its corner nearest the operator's edge tucked in;
-          a steer keeps a hairline of accent. */}
+    <View style={{ flexDirection: "row", gap: t.space.sm, marginTop: t.space.md }}>
       <View
         style={{
-          backgroundColor: t.c.sel,
-          borderRadius: BUBBLE_RADIUS,
-          borderBottomRightRadius: 6,
-          borderWidth: steer ? StyleSheet.hairlineWidth : 0,
-          borderColor: t.c.acc,
-          paddingHorizontal: t.space.md,
-          paddingVertical: t.space.sm,
-          maxWidth: "100%",
-          opacity: pending ? 0.7 : 1,
+          width: GUTTER,
+          height: GUTTER,
+          alignItems: "center",
+          justifyContent: "center",
+          borderWidth: t.border.control,
+          borderColor: t.c.fg,
         }}
       >
-        <PlainText text={text} />
+        <Text mono weight={700} variant="caption" style={{ fontSize: 11 }}>
+          ME
+        </Text>
       </View>
-      <Text variant="caption" tone="fg3" style={{ marginTop: 2 }}>
-        {[steer ? "steered" : null, pending ? "sending…" : chatTime(message.at, now)]
-          .filter(Boolean)
-          .join(" · ")}
-      </Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+          <Text weight={800} variant="bodySmall">
+            You
+          </Text>
+          {steer ? (
+            <View
+              style={{
+                borderWidth: t.border.row,
+                borderColor: t.c.line2,
+                paddingHorizontal: t.space.xs,
+              }}
+            >
+              <Kicker style={{ fontSize: 9, lineHeight: 14 }}>Steered</Kicker>
+            </View>
+          ) : null}
+          <Text variant="caption" mono tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {pending ? "sending…" : chatTime(message.at, now)}
+          </Text>
+        </View>
+        {/* Files sent alone have no words: no empty panel above their chips. */}
+        {text || attached.length === 0 ? (
+          <View
+            style={{
+              marginTop: t.space.xs,
+              backgroundColor: t.c.sel,
+              borderLeftWidth: t.border.control,
+              borderLeftColor: steer ? t.c.acc : t.c.line2,
+              paddingHorizontal: t.space.md,
+              paddingVertical: t.space.sm,
+              opacity: pending ? 0.7 : 1,
+            }}
+          >
+            <PlainText text={text} />
+          </View>
+        ) : null}
+        {attached.length > 0 ? (
+          <View style={{ marginTop: t.space.xs, gap: t.space.xs, opacity: pending ? 0.7 : 1 }}>
+            {attached.map((block, i) => (
+              <Block key={`f${i}`} block={block} now={now} mine />
+            ))}
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -133,7 +170,7 @@ function TurnRowImpl({
   const { message, continuation } = row;
   const fromBot = message.role === "user" ? (message.from_bot ?? null) : null;
   if (message.role === "user" && !fromBot)
-    return <OperatorBubble message={message} now={now} answered={answered} />;
+    return <OperatorTurn message={message} now={now} answered={answered} />;
 
   const failure = failureOf(message);
   const broken = !!failure || !!message.incomplete;
@@ -212,7 +249,7 @@ function TurnRowImpl({
             <Text weight={800} variant="bodySmall" numberOfLines={1} style={{ flexShrink: 1 }}>
               {who}
             </Text>
-            <Text variant="caption" tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
+            <Text variant="caption" mono tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
               {meta}
             </Text>
           </View>

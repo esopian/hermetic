@@ -14,6 +14,7 @@
  */
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
+import { createPhoneFiles } from "../gateway/files.ts";
 import { createSocketOpener, type WebSocketCtor } from "../gateway/socket.ts";
 import { registerBackgroundRefresh, unregisterBackgroundRefresh } from "./background.ts";
 import type { AppStateLike, FleetDeps } from "./FleetProvider.tsx";
@@ -58,7 +59,9 @@ export function appFleetDeps(
   load: () => FixtureModule | null = () => fixtureModule,
   dev: boolean = __DEV__,
 ): FleetDeps {
-  const kit = fixtureSelected(flag, dev) ? (load()?.fixtureKit(flag) ?? null) : null;
+  const kit = fixtureSelected(flag, dev)
+    ? (load()?.fixtureKit(flag, undefined, { seed: true }) ?? null)
+    : null;
   const appVersion = Constants.expoConfig?.version ?? "0.0.0";
   const platform = Platform.OS === "android" ? "android" : "ios";
   const operatorTailnet = process.env.EXPO_PUBLIC_HERMETIC_TAILNET || null;
@@ -71,6 +74,7 @@ export function appFleetDeps(
       fetch: kit.fetch,
       openSocket,
       chat: kit.chat,
+      files: kit.files,
       // A canned token, so the push switch registers with the memory registry.
       notifier: { ...expoNotifier, pushToken: async () => ({ ok: true, token: kit.pushToken }) },
       registrar: hermeticdRegistrar(kit.fetch),
@@ -79,7 +83,13 @@ export function appFleetDeps(
       platform,
       appVersion,
       operatorTailnet,
-      fixture: { link: kit.link, tailscale: kit.tailscale },
+      fixture: {
+        link: kit.link,
+        tailscale: kit.tailscale,
+        demoPrompts: kit.demoPrompts,
+        drive: kit.drive,
+        sampleFiles: kit.sampleFiles,
+      },
     };
   }
   const fetchFn = (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init);
@@ -89,6 +99,7 @@ export function appFleetDeps(
     inboxFile: documentFile(INBOX_FILE),
     fetch: fetchFn,
     openSocket,
+    files: (host) => createPhoneFiles({ fetch: fetchFn, host }),
     notifier: expoNotifier,
     registrar: hermeticdRegistrar(fetchFn),
     background: { register: registerBackgroundRefresh, unregister: unregisterBackgroundRefresh },

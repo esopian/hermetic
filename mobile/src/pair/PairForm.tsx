@@ -1,5 +1,5 @@
 /**
- * The Pair screen's typed half: paste the `hermetic://fleet?v=2&…` link that
+ * The Pair screen's typed half: paste the `hermetic://fleet?v=3&…` link that
  * `hermetic mobile pair` prints. A whole link is read as soon as it lands;
  * what comes back (a refusal from `readPairingLink`) is shown as `error`.
  */
@@ -38,7 +38,6 @@ export function PairForm({
     paddingHorizontal: t.space.md,
     paddingVertical: t.space.sm,
     minHeight: t.touch.min + 4,
-    borderRadius: 0,
   } as const;
 
   return (
@@ -53,7 +52,7 @@ export function PairForm({
           // A pasted link arrives in one change: read it at once.
           if (looksWhole(v) && v.length - link.length > 8) onSubmit(v);
         }}
-        placeholder="hermetic://fleet?v=2&…"
+        placeholder="hermetic://fleet?v=3&…"
         selectionColor={multilineTint(t.c.acc)}
         cursorColor={t.c.acc}
         placeholderTextColor={t.c.fg3}

@@ -16,7 +16,9 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChatFrame } from "@hermetic/core/chat-client";
+import { createBotMode } from "../packages/core/src/chat/bot-mode.ts";
 import { defaultHermesChat } from "../packages/core/src/chat/chat-transport.ts";
+import { MemoryInstanceListeningStore } from "../packages/core/src/chat/instance-listening.ts";
 import {
   DASHBOARD_HTML,
   FIXTURE_SESSION_TOKEN,
@@ -44,12 +46,25 @@ const RESULTS: Record<string, unknown> = {
   "session.create": SESSION_CREATE_RESULT,
   "session.resume": { session_id: SESSION_ID, stored_session_id: STORED },
   "prompt.submit": PROMPT_SUBMIT_RESULT,
+  "profiles.create": { ok: true, name: "scout" },
+  "profiles.configure": { ok: true, applied: { ui_meta: true } },
+  "profiles.describe": {
+    name: "scout",
+    description: "Finds things",
+    soul: "",
+    model: { provider: "anthropic", default: "claude" },
+    skills: [],
+    toolsets: [],
+    mcp_servers: [],
+  },
   ping: {},
 };
 
 interface Gateway {
   url: string;
   methods: string[];
+  /** Every JSON-RPC request as `method` and its `params` re-serialised, in arrival order. */
+  calls: { method: string; params: string }[];
   /**
    * While set, a prompt gets only the turn's opening frames (no completion):
    * a turn still running on the box. `push` sends it the next frame.
@@ -65,6 +80,7 @@ const NEXT_FRAME = RECORDED_TURN[6] as string;
 
 function startGateway(): Gateway {
   const methods: string[] = [];
+  const calls: { method: string; params: string }[] = [];
   const sockets = new Set<{ send(data: string): unknown }>();
   const state = { hold: false };
   const server = Bun.serve<{ token: string }>({
@@ -102,8 +118,9 @@ function startGateway(): Gateway {
       message(ws, raw) {
         for (const line of String(raw).split("\n")) {
           if (!line.trim()) continue;
-          const doc = JSON.parse(line) as { id: number; method: string };
+          const doc = JSON.parse(line) as { id: number; method: string; params?: unknown };
           methods.push(doc.method);
+          calls.push({ method: doc.method, params: JSON.stringify(doc.params ?? null) });
           ws.send(JSON.stringify({ jsonrpc: "2.0", id: doc.id, result: RESULTS[doc.method] ?? {} }));
           if (doc.method === "prompt.submit")
             for (const frame of state.hold ? OPENING : RECORDED_TURN) ws.send(frame);
@@ -114,6 +131,7 @@ function startGateway(): Gateway {
   return {
     url: `http://127.0.0.1:${server.port}/`,
     methods,
+    calls,
     get hold() {
       return state.hold;
     },
@@ -267,6 +285,65 @@ describe("phone gateway ↔ scripted Hermes gateway", () => {
     } finally {
       gateway.hold = false;
     }
+  });
+
+  test("createBot sends the desktop's bots.create sequence, the same bytes", async () => {
+    // Core's `bots.create` over the real adapter, its box pointed at this gateway.
+    const hermes = defaultHermesChat(() => NOW);
+    const botModeRpc = hermes.botModeRpc;
+    if (!botModeRpc) throw new Error("the desktop adapter has Bot Mode RPC");
+    const listening = new MemoryInstanceListeningStore();
+    listening.set("fxtr0001", "atlas", true);
+    type Deps = Parameters<typeof createBotMode>[0];
+    const desktop = createBotMode({
+      guardFleet: async () =>
+        ({ fleet: { fleet_id: "fxtr0001", tailnet: "example.ts.net" } }) as unknown as Awaited<
+          ReturnType<Deps["guardFleet"]>
+        >,
+      getAgent: async (name: string) =>
+        ({ name, tailscale_dns_name: null }) as unknown as Awaited<ReturnType<Deps["getAgent"]>>,
+      instanceListening: listening,
+      hermes: {
+        ...hermes,
+        botModeRpc: (_box, method, params, opts) => botModeRpc(box(), method, params, opts),
+      },
+    });
+    const input = { name: "scout", title: "Scout", description: "Finds things", model: "claude" };
+    const sent = (from: number) =>
+      gateway.calls
+        .slice(from)
+        .filter((c) => c.method.startsWith("profiles."))
+        // `created` is each side's own clock: equal in shape, not in value.
+        .map((c) => ({ method: c.method, params: c.params.replace(/"created":\d+/, '"created":0') }));
+
+    const before = Date.now();
+    const desktopFrom = gateway.calls.length;
+    const desktopProfile = await desktop.bots.create({ instance: "atlas", ...input });
+    const desktopSent = sent(desktopFrom);
+
+    const phoneFrom = gateway.calls.length;
+    const phoneProfile = await phone().transport.createBot("atlas", input);
+    const phoneSent = sent(phoneFrom);
+
+    expect(desktopSent.map((c) => c.method)).toEqual([
+      "profiles.create",
+      "profiles.configure",
+      "profiles.describe",
+    ]);
+    expect(desktopSent[1]?.params).toBe(
+      '{"name":"scout","ui_meta":{"hermes-bots":{"version":1,"title":"Scout","created":0}}}',
+    );
+    expect(phoneSent).toEqual(desktopSent);
+    const created = /"created":(\d+)/.exec(
+      gateway.calls.slice(phoneFrom).find((c) => c.method === "profiles.configure")?.params ?? "",
+    );
+    expect(Number(created?.[1])).toBeGreaterThanOrEqual(before);
+    expect(phoneProfile).toEqual(desktopProfile);
+    expect(phoneProfile).toMatchObject({
+      instance: "atlas",
+      bot: "scout",
+      description: "Finds things",
+    });
   });
 
   test("history composes conversation and the durable route over HTTP", async () => {

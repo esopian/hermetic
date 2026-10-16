@@ -1,6 +1,7 @@
 /** Screen-facing hooks over the client layer's stores (`useSyncExternalStore`). */
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ConversationTarget, ConversationView } from "../client/conversation-store.ts";
+import type { PhoneFiles } from "../gateway/files.ts";
 import type { RosterLayout, RosterState } from "../client/roster-store.ts";
 import type { InboxState } from "../inbox/store.ts";
 import { useFleetContext } from "./FleetProvider.tsx";
@@ -125,4 +126,44 @@ export function useFleetAgents(): FleetAgent[] {
 export function useFleetLabel(): string {
   const state = useFleetState();
   return state.link?.label ?? "";
+}
+
+/**
+ * The files client for `instance`'s box (stage an attachment, commit it into
+ * a turn), or `null` when the build has no files client, the instance is not
+ * in the paired fleet, or its host is not known yet. The host is the one every
+ * hermeticd call uses (`FleetStore.hostOf`), so it follows a `/fleet` refresh.
+ */
+export function useFiles(instance: string | null): PhoneFiles | null {
+  const { files, fleet } = useFleetContext();
+  const state = useFleetState();
+  const host = useMemo(() => (instance ? fleet.hostOf(instance) : null), [fleet, instance, state]);
+  return useMemo(() => (files && host ? files(host) : null), [files, host]);
+}
+
+/** Whether a box serves files: `unknown` until it answered (or when it could not be asked). */
+export type FilesCapability = "unknown" | "yes" | "no";
+
+/**
+ * Ask `files` once whether its box serves files (`GET /healthz`). A box that
+ * did not answer stays `unknown`: the composer may still offer attaching, and
+ * a stage then reports the real failure.
+ */
+export function useFilesCapability(files: PhoneFiles | null): FilesCapability {
+  const [answer, setAnswer] = useState<{ of: PhoneFiles | null; value: FilesCapability }>({
+    of: null,
+    value: "unknown",
+  });
+  useEffect(() => {
+    if (!files) return;
+    const controller = new AbortController();
+    files.capability({ signal: controller.signal }).then(
+      (yes) => {
+        if (!controller.signal.aborted) setAnswer({ of: files, value: yes ? "yes" : "no" });
+      },
+      () => undefined,
+    );
+    return () => controller.abort();
+  }, [files]);
+  return answer.of === files ? answer.value : "unknown";
 }

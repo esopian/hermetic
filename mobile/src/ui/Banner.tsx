@@ -1,10 +1,10 @@
 /**
- * Banners: the in-app alert (a soft card at the top while the app is in front;
+ * Banners: the in-app alert (a square bordered card at the top while the app is in front;
  * tap opens, close or a swipe up dismisses; under VoiceOver a Dismiss action
  * and the escape scrub) and home's Tailscale strip.
  */
 import { useEffect, useMemo, useRef } from "react";
-import { Linking, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Linking, Pressable, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   FadeInUp,
@@ -34,7 +34,6 @@ export const BANNER_STICKY_DWELL_MS = 10000;
 export const BANNER_SWIPE_PT = 24;
 const SWIPE_VELOCITY = 500;
 
-const RADIUS = 18;
 const AVATAR = 40;
 
 /** The small coloured word beside the title, for the alerts that are not plain arrivals. */
@@ -103,7 +102,6 @@ export function Banner({
   const dragged = useAnimatedStyle(() => ({ transform: [{ translateY: lift.value }] }));
   if (!alert) return null;
   const tag = alertTag(alert.data.kind);
-  const dark = t.scheme === "dark";
   return (
     <GestureDetector gesture={swipe}>
       <Animated.View
@@ -123,17 +121,14 @@ export function Banner({
         <Animated.View
           style={[
             {
-              borderRadius: RADIUS,
-              // Dark lifts the card a step (bg3) over the page it floats on,
-              // and a hairline gives it the edge a shadow cannot on black;
-              // light keeps its own card fill and ring.
-              backgroundColor: dark ? t.c.bg3 : t.c.card,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: dark ? t.c.line : t.c.cardEdge,
-              shadowColor: "#000",
-              shadowOpacity: dark ? 0.45 : 0.12,
-              shadowRadius: 18,
-              shadowOffset: { width: 0, height: 8 },
+              // Flat and square: a step up from the page (bg2) with a `line2`
+              // border doing the structure, and a 3px left rule in the alert's
+              // tone when it needs the operator (the desktop card's verdict edge).
+              backgroundColor: t.c.bg2,
+              borderWidth: t.border.row,
+              borderColor: t.c.line2,
+              borderLeftWidth: tag ? t.border.seam : t.border.row,
+              borderLeftColor: tag ? t.c[tag.tone] : t.c.line2,
             },
             dragged,
           ]}
@@ -158,7 +153,6 @@ export function Banner({
               gap: t.space.md,
               paddingLeft: t.space.md,
               paddingVertical: t.space.md,
-              borderRadius: RADIUS,
               opacity: pressed ? 0.75 : 1,
             })}
           >
@@ -273,11 +267,14 @@ export function TailscaleBanner({
         paddingHorizontal: t.space.md,
         paddingVertical: stacked ? t.space.xs : 0,
         minHeight: t.touch.min,
-        borderRadius: t.touch.min / 2,
         backgroundColor: t.c.bg2,
+        borderWidth: t.border.row,
+        borderColor: t.c.line,
+        borderLeftWidth: t.border.seam,
+        borderLeftColor: color,
       }}
     >
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+      <View style={{ width: 8, height: 8, backgroundColor: color }} />
       <Text
         variant="bodySmall"
         weight={600}

@@ -2,7 +2,8 @@
  * Settings › Mobile end to end: the real page against the real `bind` and
  * `dispatch` over the fixture backend. `mobile.pair` is a read of the open
  * fleet, so the code the page draws is the fixture fleet's own link — parsed
- * back here with the same `parseMobileLink` the phone uses.
+ * back here with the same `parseMobileLink` the phone uses. The request
+ * carries this page's avatar style as `prefs`, so the phone starts with it.
  */
 import { cleanup, render, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -10,6 +11,7 @@ import { StrictMode, createElement } from "react";
 import { HermeticError } from "@hermetic/core";
 import { parseMobileLink } from "@hermetic/core/shared";
 import { dispatch } from "../../../app/src/handlers/dispatch.ts";
+import { CHAT_AVATAR_STYLE_KEY, setChatAvatarStyle } from "../../src/chat/chat-appearance.ts";
 import { MobileSection } from "../../src/components/settings/MobileSection.tsx";
 import { type FlowHarness, flowHarness, gotoHash, mountPortal } from "./bridge.ts";
 
@@ -17,6 +19,7 @@ let harness: FlowHarness | null = null;
 
 beforeEach(() => {
   window.localStorage.removeItem("hermetic.layout");
+  window.localStorage.removeItem(CHAT_AVATAR_STYLE_KEY);
   window.sessionStorage.clear();
   gotoHash("");
 });
@@ -33,6 +36,7 @@ interface PairAnswer {
   fleet: { fleet_id: string; alias: string | null; tailnet: string };
   agents: { name: string }[];
   agents_in_link: number;
+  prefs: { avatar_style?: string };
 }
 
 function pairCalls(h: FlowHarness): unknown[] {
@@ -46,7 +50,9 @@ function linkField(): HTMLInputElement {
 test("nothing is read until asked; then the QR, the link, the count and the fleet", async () => {
   harness = await flowHarness();
   const h = harness;
-  const expected = (await dispatch(h.ctx, "mobile.pair", {})) as PairAnswer;
+  // No choice made in Settings › Chat: the page sends the default style.
+  const request = { prefs: { avatar_style: "blob" } };
+  const expected = (await dispatch(h.ctx, "mobile.pair", request)) as PairAnswer;
   const before = pairCalls(h).length;
   gotoHash("#settings/mobile");
   mountPortal();
@@ -60,7 +66,7 @@ test("nothing is read until asked; then the QR, the link, the count and the flee
   await user.click(screen.getByRole("button", { name: "Show pairing code" }));
   const qr = await screen.findByRole("img", { name: "Pairing QR code" });
   expect(qr.querySelector("svg path")).not.toBeNull();
-  expect(pairCalls(h)).toEqual([{}]);
+  expect(pairCalls(h)).toEqual([request]);
 
   // The link is the fleet's own, and the phone's parser reads all 11 agents back.
   const link = linkField().value;
@@ -70,6 +76,8 @@ test("nothing is read until asked; then the QR, the link, the count and the flee
   const parsed = parseMobileLink(link);
   expect(parsed?.fleet_id).toBe("fxtr0001");
   expect(parsed?.agents.length).toBe(11);
+  expect(parsed?.prefs).toEqual({ avatar_style: "blob" });
+  expect(screen.getByText("The phone will start with your avatar style (blob).")).toBeDefined();
 
   expect(screen.getByText("11 of 11 agents in the code")).toBeDefined();
   expect(screen.queryByText(/reads the other/)).toBeNull();
@@ -176,4 +184,24 @@ test("under StrictMode, as the app mounts it, the answer still lands", async () 
   await screen.findByRole("img", { name: "Pairing QR code" });
   expect(screen.getByText("11 of 11 agents in the code")).toBeDefined();
   expect(screen.queryByText("reading the fleet…")).toBeNull();
+});
+
+test("the avatar style chosen in Settings › Chat rides the link to the phone", async () => {
+  harness = await flowHarness();
+  const h = harness;
+  setChatAvatarStyle("pixel");
+  gotoHash("#settings/mobile");
+  mountPortal();
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "Show pairing code" }));
+  await screen.findByRole("img", { name: "Pairing QR code" });
+  expect(pairCalls(h)).toEqual([{ prefs: { avatar_style: "pixel" } }]);
+  const link = linkField().value;
+  expect(link).toContain("v=3&");
+  expect(link).toContain("prefs=avatar_style:pixel");
+  expect(parseMobileLink(link)?.prefs).toEqual({ avatar_style: "pixel" });
+  expect(screen.getByTestId("pair-prefs").textContent).toBe(
+    "The phone will start with your avatar style (pixel).",
+  );
 });

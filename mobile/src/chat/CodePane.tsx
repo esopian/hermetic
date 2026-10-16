@@ -1,8 +1,8 @@
 /**
  * Monospace text that keeps its lines: horizontal scroll rather than wrap,
  * selectable, and a Copy button that says it copied. Fenced code blocks, tool
- * output and payloads all draw through this. Drawn soft: a rounded fill with
- * no border or inner rules, so it sits in a card or on the page alike.
+ * output and payloads all draw through this. Square, a `bg3` fill and a 1px
+ * `line` border, with a mono head row (language, Copy) over a hairline.
  */
 import * as Clipboard from "expo-clipboard";
 import { memo, useEffect, useState } from "react";
@@ -13,8 +13,6 @@ import { Text } from "../ui/Text.tsx";
 
 /** Past this many lines a pane starts clipped, with "Show all N lines". */
 const CLIP_LINES = 40;
-
-const RADIUS = 10;
 
 function CodePaneImpl({
   text,
@@ -31,7 +29,7 @@ function CodePaneImpl({
   wrap?: boolean;
   /** Per-line colour (a diff's adds and dels). */
   lineTone?: (line: string) => string | null;
-  /** The pane's fill, where `bg3` would not stand off its surface (an operator bubble is `sel`). */
+  /** The pane's fill, where `bg3` would not stand off its surface (the operator's panel is `sel`). */
   fill?: string;
 }) {
   const t = useTheme();
@@ -73,7 +71,14 @@ function CodePaneImpl({
     </View>
   );
   return (
-    <View style={{ backgroundColor: fill ?? t.c.bg3, borderRadius: RADIUS, overflow: "hidden" }}>
+    <View
+      style={{
+        backgroundColor: fill ?? t.c.bg3,
+        borderWidth: t.border.row,
+        borderColor: t.c.line,
+        overflow: "hidden",
+      }}
+    >
       {lang || copy ? (
         <View
           style={{
@@ -81,9 +86,12 @@ function CodePaneImpl({
             alignItems: "center",
             paddingLeft: t.space.md,
             minHeight: 30,
+            borderBottomWidth: t.border.row,
+            borderBottomColor: t.c.line,
+            marginBottom: t.space.sm,
           }}
         >
-          <Text variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
+          <Text mono variant="caption" tone="fg3" style={{ flex: 1 }} numberOfLines={1}>
             {lang ?? ""}
           </Text>
           {copy ? (

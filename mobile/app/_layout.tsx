@@ -87,7 +87,12 @@ function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
+        {/* The fixture's drive link (`hermetic://fixture?…`); a blank pass-through. */}
+        <Stack.Screen name="fixture" options={{ headerShown: false, animation: "none" }} />
         <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
+        {/* Right after pairing it stands before home and cannot be swiped away;
+            opened again from Settings it offers its own Cancel. */}
+        <Stack.Screen name="primary" options={{ headerShown: false, gestureEnabled: false }} />
         {/* The title is what VoiceOver reads on the next screen's back button. */}
         <Stack.Screen name="home" options={{ headerShown: false, title: "Hermetic" }} />
         <Stack.Screen name="settings" options={{ headerShown: false, title: "Settings" }} />
@@ -122,6 +127,17 @@ function Shell({ onEntryReady }: { onEntryReady(): Promise<void> }) {
             sheetAllowedDetents: [0.6, 1],
             sheetGrabberVisible: true,
             // A raised surface, so the sheet reads apart from the screen under it.
+            contentStyle: { backgroundColor: t.c.bg2 },
+          }}
+        />
+        <Stack.Screen
+          name="new-bot"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            // A form with a keyboard: the full height, so the fields stay above it.
+            sheetAllowedDetents: [1],
+            sheetGrabberVisible: true,
             contentStyle: { backgroundColor: t.c.bg2 },
           }}
         />

@@ -12,6 +12,20 @@ jest.mock("expo-haptics", () => ({
   ImpactFeedbackStyle: { Light: "light", Medium: "medium", Heavy: "heavy" },
 }));
 jest.mock("expo-clipboard", () => ({ setStringAsync: jest.fn(async () => true) }));
+// The attachment pickers (`src/client/pick-attachment.ts`): cancelled unless a test says otherwise.
+jest.mock("expo-image-picker", () => ({
+  launchImageLibraryAsync: jest.fn(async () => ({ canceled: true, assets: null })),
+  launchCameraAsync: jest.fn(async () => ({ canceled: true, assets: null })),
+  requestCameraPermissionsAsync: jest.fn(async () => ({ granted: true })),
+  UIImagePickerPreferredAssetRepresentationMode: {
+    Automatic: "automatic",
+    Compatible: "compatible",
+    Current: "current",
+  },
+}));
+jest.mock("expo-document-picker", () => ({
+  getDocumentAsync: jest.fn(async () => ({ canceled: true, assets: null })),
+}));
 require("react-native-gesture-handler/jestSetup");
 // The swipeable's gestures need real worklets; in jest it is a plain wrapper.
 jest.mock("react-native-gesture-handler/ReanimatedSwipeable", () => {

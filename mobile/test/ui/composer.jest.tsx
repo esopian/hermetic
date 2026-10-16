@@ -1,5 +1,6 @@
 import { fireEvent, screen, within } from "@testing-library/react-native";
 import { useState } from "react";
+import { ActionSheetIOS } from "react-native";
 import {
   Composer,
   type ComposerProps,
@@ -8,6 +9,7 @@ import {
   isAutocorrectEcho,
   questionHint,
 } from "../../src/chat/Composer.tsx";
+import { type PendingAttachment, pendingAttachment } from "../../src/client/attachments.ts";
 import { composerState, threadState } from "../../src/client/chat-logic.ts";
 import { renderUi } from "../helpers/render.tsx";
 
@@ -213,5 +215,120 @@ describe("isAutocorrectEcho", () => {
     expect(screen.getByLabelText("Message").props.value).toBe("");
     await fireEvent.changeText(screen.getByLabelText("Message"), "n");
     expect(screen.getByLabelText("Message").props.value).toBe("n");
+  });
+});
+
+describe("Composer: attachments", () => {
+  const photo = (over: Partial<PendingAttachment> = {}): PendingAttachment => ({
+    ...pendingAttachment(
+      { name: "cat.jpg", uri: "file:///tmp/cat.jpg", mime: "image/jpeg", size: 2048, kind: "image" },
+      "a1",
+    ),
+    ...over,
+  });
+  const doc = (over: Partial<PendingAttachment> = {}): PendingAttachment => ({
+    ...pendingAttachment(
+      { name: "notes.pdf", uri: "file:///tmp/notes.pdf", size: 3 * 1024 * 1024, kind: "file" },
+      "a2",
+    ),
+    ...over,
+  });
+  const attach = () => ({
+    onAttach: jest.fn(),
+    onRemoveAttachment: jest.fn(),
+    onRetryAttachment: jest.fn(),
+  });
+
+  test("the attach button shows by capability: hidden, enabled, or disabled with a line", async () => {
+    const h = handlers();
+    const view = await renderUi(<Harness {...base} {...h} />);
+    expect(screen.queryByLabelText("Attach")).toBeNull();
+    await view.rerender(<Harness {...base} {...h} {...attach()} canAttach />);
+    expect(screen.getByLabelText("Attach").props.accessibilityState.disabled).toBe(false);
+    expect(screen.queryByText("This instance has no file service")).toBeNull();
+    await view.rerender(<Harness {...base} {...h} {...attach()} canAttach="no-service" />);
+    expect(screen.getByLabelText("Attach").props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByText("This instance has no file service")).toBeTruthy();
+  });
+
+  test("attach opens the sheet and hands back the chosen kind", async () => {
+    const sheet = jest
+      .spyOn(ActionSheetIOS, "showActionSheetWithOptions")
+      .mockImplementation((options, pick) => {
+        expect(options.options).toEqual(["Photo library", "Take photo", "Choose file", "Cancel"]);
+        pick(2);
+      });
+    const a = attach();
+    await renderUi(<Harness {...base} {...handlers()} {...a} canAttach />);
+    await fireEvent.press(screen.getByLabelText("Attach"));
+    expect(a.onAttach).toHaveBeenCalledWith("file");
+    sheet.mockRestore();
+  });
+
+  test("chips: a thumbnail for an image, name and size for a file; remove", async () => {
+    const a = attach();
+    await renderUi(
+      <Harness {...base} {...handlers()} {...a} canAttach attachments={[photo(), doc()]} />,
+    );
+    const tray = screen.getByTestId("attach-tray");
+    expect(within(tray).getByLabelText("cat.jpg")).toBeTruthy();
+    expect(within(tray).getByText("notes.pdf")).toBeTruthy();
+    expect(within(tray).getByText("3.0 MB")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Remove notes.pdf"));
+    expect(a.onRemoveAttachment).toHaveBeenCalledWith("a2");
+  });
+
+  test("files with no text send; Send is disabled while a file uploads", async () => {
+    const h = handlers();
+    const view = await renderUi(
+      <Harness {...base} {...h} {...attach()} canAttach attachments={[photo()]} />,
+    );
+    const send = screen.getByLabelText("Send");
+    expect(send.props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(send);
+    expect(h.onSend).toHaveBeenCalledWith("");
+    await view.rerender(
+      <Harness {...base} {...h} {...attach()} canAttach attachments={[photo({ status: "staging" })]} />,
+    );
+    expect(screen.queryByLabelText("Send")).toBeNull();
+    expect(screen.getByLabelText("Uploading…").props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByLabelText("Uploading cat.jpg")).toBeTruthy();
+  });
+
+  test("while any file uploads, no file leaves the tray and none joins it", async () => {
+    const a = attach();
+    await renderUi(
+      <Harness
+        {...base}
+        {...handlers()}
+        {...a}
+        canAttach
+        attachments={[photo({ status: "staging" }), doc({ status: "staged" })]}
+      />,
+    );
+    expect(screen.getByLabelText("Remove notes.pdf").props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByLabelText("Remove cat.jpg").props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByLabelText("Attach").props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText("Remove notes.pdf"));
+    expect(a.onRemoveAttachment).not.toHaveBeenCalled();
+  });
+
+  test("a failed file shows its copy, blocks Send, and retries", async () => {
+    const h = handlers();
+    const a = attach();
+    await renderUi(
+      <Harness
+        {...base}
+        {...h}
+        {...a}
+        canAttach
+        initial="look at this"
+        attachments={[doc({ status: "failed", error: { code: "FILE_TOO_LARGE", message: "too big" } })]}
+      />,
+    );
+    expect(screen.getByText("That file is too large to attach.")).toBeTruthy();
+    expect(screen.getByLabelText("Send").props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText("Retry notes.pdf"));
+    expect(a.onRetryAttachment).toHaveBeenCalledWith("a2");
   });
 });

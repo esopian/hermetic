@@ -3,8 +3,9 @@ import * as ReactNative from "react-native";
 import { Appearance } from "react-native";
 import { buildTheme, ThemeProvider } from "../../src/theme/theme.tsx";
 import { palettes, statusColor } from "../../src/theme/tokens.ts";
-import { buildBlob } from "../../src/ui/avatar/Avatar.tsx";
-import { avatarPalette, avatarSeed, hslHex, rngFor } from "../../src/ui/avatar/avatar-seed.ts";
+import { avatarPalette, avatarSeed, rngFor } from "@hermetic/core/shared";
+import { buildAvatar } from "../../src/ui/avatar/Avatar.tsx";
+import { hslHex, svgColor } from "../../src/ui/avatar/color.ts";
 import { primaryColors } from "../../src/ui/Button.tsx";
 import { codeSpans } from "../../src/ui/codeSpans.tsx";
 import { Avatar, Badge, Button, Kicker, Text, ToggleSwitch } from "../../src/ui/index.ts";
@@ -54,9 +55,14 @@ describe("avatar identity", () => {
   });
 
   test("deterministic: the same key builds the same face; another key does not", () => {
-    const a = buildBlob("fxtr0001/atlas/scribe", false, true);
-    expect(buildBlob("fxtr0001/atlas/scribe", false, true)).toEqual(a);
-    expect(buildBlob("fxtr0001/atlas/other", false, true).frame.front).not.toBe(a.frame.front);
+    const blob = (key: string) => {
+      const built = buildAvatar(key, "blob", false, true);
+      if (built.style !== "blob") throw new Error("expected a blob");
+      return built;
+    };
+    const a = blob("fxtr0001/atlas/scribe");
+    expect(blob("fxtr0001/atlas/scribe")).toEqual(a);
+    expect(blob("fxtr0001/atlas/other").frame.front).not.toBe(a.frame.front);
     expect(a.frame.front.startsWith("M")).toBe(true);
   });
 
@@ -71,6 +77,8 @@ describe("avatar identity", () => {
     expect(hslHex(0, 100, 50)).toBe("#ff0000");
     expect(hslHex(120, 100, 25)).toBe("#008000");
     expect(hslHex(0, 0, 100)).toBe("#ffffff");
+    expect(svgColor("hsl(120.0 100.0% 25.0%)")).toBe("#008000");
+    expect(svgColor("#0e0e0d")).toBe("#0e0e0d");
   });
 });
 
@@ -152,7 +160,7 @@ describe("primitives render", () => {
     ReactNative.Dimensions.set({ window: previous });
   });
 
-  test("ToggleSwitch is a themed Switch", async () => {
+  test("ToggleSwitch is a square switch that flips its value on press", async () => {
     const onValueChange = jest.fn();
     await render(
       <ThemeProvider>
@@ -163,7 +171,10 @@ describe("primitives render", () => {
         />
       </ThemeProvider>,
     );
-    await fireEvent(screen.getByLabelText("Listen to atlas"), "valueChange", true);
+    const toggle = screen.getByLabelText("Listen to atlas");
+    expect(toggle.props.accessibilityRole).toBe("switch");
+    expect(toggle.props.accessibilityState).toMatchObject({ checked: false });
+    await fireEvent.press(toggle);
     expect(onValueChange).toHaveBeenCalledWith(true);
   });
 

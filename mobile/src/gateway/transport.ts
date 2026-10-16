@@ -28,6 +28,7 @@ import {
   type ChatObserveHint,
   type ChatObserveOptions,
   type ChatObserveTarget,
+  createBotOverRpc,
   createChatObservation,
   DEFAULT_CHAT_SETTINGS,
   HermeticError,
@@ -40,6 +41,7 @@ import {
   type TranscriptMask,
   transcriptMask,
 } from "@hermetic/core/chat-client";
+import { BotCreateInput, type BotProfile } from "@hermetic/core/schema";
 import type {
   AbortResult,
   HistoryResult,
@@ -119,6 +121,14 @@ export interface GatewayOps {
     session?: string | null;
     subagent_id: string;
   }): Promise<AbortResult>;
+  /**
+   * Bot Mode's `bots.create` on `instance`'s box: `profiles.create`, the
+   * `hermes-bots` marker, then `profiles.describe` — core's own sequence
+   * (`createBotOverRpc`), over the gateway session the phone already holds.
+   * `VALIDATION` for input `BotCreateInput` refuses, `UNSUPPORTED` for a
+   * gateway without Bot Mode RPC.
+   */
+  createBot(instance: string, input: Omit<BotCreateInput, "instance">): Promise<BotProfile>;
 }
 
 export interface GatewayTransport extends ConversationTransport, RosterSource, GatewayOps {
@@ -292,7 +302,12 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
       const session = conversation?.session ?? turn.session;
       run.session = session ?? null;
       if (session && !run.forgotten) deps.turns().session?.(turn_id, session);
-      if (conversation?.kind === "canonical" && BOT_CHAT_RESET.test(turn.message.trim())) {
+      // A reset with files attached is a turn, not a reset: the files would be dropped.
+      if (
+        conversation?.kind === "canonical" &&
+        !turn.attachments &&
+        BOT_CHAT_RESET.test(turn.message.trim())
+      ) {
         if (!client.compact)
           throw new HermeticError("CHAT_PROTOCOL", "Compaction is unavailable on this gateway");
         const result = await client.compact(run.box, run.bot, {
@@ -310,6 +325,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
         for await (const frame of client.send(run.box, run.bot, turn.message, {
           signal,
           ...(session !== undefined ? { session } : {}),
+          ...(turn.attachments ? { attachments: turn.attachments } : {}),
         })) {
           if (signal.aborted) break;
           // Drained, not left: see `TurnRun.forgotten`.
@@ -631,6 +647,26 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     return { instance: input.instance, bot: input.bot, aborted };
   }
 
+  async function createBot(
+    instance: string,
+    input: Omit<BotCreateInput, "instance">,
+  ): Promise<BotProfile> {
+    const parsed = BotCreateInput.safeParse({ ...input, instance });
+    if (!parsed.success)
+      throw new HermeticError(
+        "VALIDATION",
+        parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      );
+    const rpc = client.botModeRpc;
+    if (!rpc) throw new HermeticError("UNSUPPORTED", "This gateway does not support creating a bot");
+    const box = deps.address(parsed.data.instance);
+    const profile = await createBotOverRpc(
+      (method, params) => rpc.call(client, box, method, params),
+      parsed.data,
+    );
+    return mask.deep(profile);
+  }
+
   return {
     history: (input) => history(input),
     sessions,
@@ -651,6 +687,7 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
     archive,
     steerSubagent,
     abortSubagent,
+    createBot,
     detachTurns,
     detachTurnsSince,
     liveStatus,

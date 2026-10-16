@@ -15,7 +15,10 @@
  * `TextEncoder`) do with a JavaScript string that is not well-formed UTF-16.
  *
  * Synchronous and unhurried: the adapter hashes a few hundred bytes per row.
+ * `createSha256` takes its input in pieces, for an upload too large to copy.
  */
+
+import { HermeticError } from "../errors.ts";
 
 const K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -67,17 +70,56 @@ export function utf8Bytes(text: string): Uint8Array {
   return out.subarray(0, n);
 }
 
-/** The lowercase hex SHA-256 digest of `input` (a string is hashed as UTF-8). */
-export function sha256Hex(input: string | Uint8Array): string {
-  const bytes = typeof input === "string" ? utf8Bytes(input) : input;
-  const length = bytes.length;
+/**
+ * One 64-byte block of `data` at `offset` folded into the state `h`. `w` is the
+ * message schedule, reused across blocks so a long input allocates nothing.
+ */
+function compress(h: number[], w: Uint32Array, data: Uint8Array, offset: number): void {
+  for (let t = 0; t < 16; t++) {
+    const j = offset + t * 4;
+    w[t] = ((data[j]! << 24) | (data[j + 1]! << 16) | (data[j + 2]! << 8) | data[j + 3]!) >>> 0;
+  }
+  for (let t = 16; t < 64; t++) {
+    const a = w[t - 15]!;
+    const b = w[t - 2]!;
+    const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+    const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
+    w[t] = (w[t - 16]! + s0 + w[t - 7]! + s1) >>> 0;
+  }
 
-  // Message, a 0x80 byte, zero padding, then the bit length as a 64-bit
-  // big-endian integer, to a multiple of 64 bytes.
-  const blocks = Math.ceil((length + 9) / 64);
+  let [a, b, c, d, e, f, g, hh] = h as [number, number, number, number, number, number, number, number];
+  for (let t = 0; t < 64; t++) {
+    const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+    const ch = (e & f) ^ (~e & g);
+    const t1 = (hh + S1 + ch + K[t]! + w[t]!) >>> 0;
+    const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+    const maj = (a & b) ^ (a & c) ^ (b & c);
+    const t2 = (S0 + maj) >>> 0;
+    hh = g;
+    g = f;
+    f = e;
+    e = (d + t1) >>> 0;
+    d = c;
+    c = b;
+    b = a;
+    a = (t1 + t2) >>> 0;
+  }
+  h[0] = (h[0]! + a) >>> 0;
+  h[1] = (h[1]! + b) >>> 0;
+  h[2] = (h[2]! + c) >>> 0;
+  h[3] = (h[3]! + d) >>> 0;
+  h[4] = (h[4]! + e) >>> 0;
+  h[5] = (h[5]! + f) >>> 0;
+  h[6] = (h[6]! + g) >>> 0;
+  h[7] = (h[7]! + hh) >>> 0;
+}
+
+/** The final block(s): a 0x80 byte, zero padding, then the length in bits, big-endian. */
+function lengthTail(tail: Uint8Array, length: number): Uint8Array {
+  const blocks = Math.ceil((tail.length + 9) / 64);
   const padded = new Uint8Array(blocks * 64);
-  padded.set(bytes);
-  padded[length] = 0x80;
+  padded.set(tail);
+  padded[tail.length] = 0x80;
   const bitsHigh = Math.floor(length / 0x20000000);
   const bitsLow = (length * 8) >>> 0;
   const end = padded.length;
@@ -89,60 +131,69 @@ export function sha256Hex(input: string | Uint8Array): string {
   padded[end - 3] = bitsLow >>> 16;
   padded[end - 2] = bitsLow >>> 8;
   padded[end - 1] = bitsLow;
+  return padded;
+}
 
-  const h = H0.slice();
-  const w = new Uint32Array(64);
-  for (let offset = 0; offset < padded.length; offset += 64) {
-    for (let t = 0; t < 16; t++) {
-      const j = offset + t * 4;
-      w[t] =
-        ((padded[j]! << 24) | (padded[j + 1]! << 16) | (padded[j + 2]! << 8) | padded[j + 3]!) >>> 0;
-    }
-    for (let t = 16; t < 64; t++) {
-      const a = w[t - 15]!;
-      const b = w[t - 2]!;
-      const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
-      const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
-      w[t] = (w[t - 16]! + s0 + w[t - 7]! + s1) >>> 0;
-    }
-
-    let [a, b, c, d, e, f, g, hh] = h as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ];
-    for (let t = 0; t < 64; t++) {
-      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
-      const ch = (e & f) ^ (~e & g);
-      const t1 = (hh + S1 + ch + K[t]! + w[t]!) >>> 0;
-      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
-      const maj = (a & b) ^ (a & c) ^ (b & c);
-      const t2 = (S0 + maj) >>> 0;
-      hh = g;
-      g = f;
-      f = e;
-      e = (d + t1) >>> 0;
-      d = c;
-      c = b;
-      b = a;
-      a = (t1 + t2) >>> 0;
-    }
-    h[0] = (h[0]! + a) >>> 0;
-    h[1] = (h[1]! + b) >>> 0;
-    h[2] = (h[2]! + c) >>> 0;
-    h[3] = (h[3]! + d) >>> 0;
-    h[4] = (h[4]! + e) >>> 0;
-    h[5] = (h[5]! + f) >>> 0;
-    h[6] = (h[6]! + g) >>> 0;
-    h[7] = (h[7]! + hh) >>> 0;
-  }
-
+function hexOf(h: readonly number[]): string {
   let hex = "";
   for (const word of h) hex += word.toString(16).padStart(8, "0");
   return hex;
+}
+
+/** The lowercase hex SHA-256 digest of `input` (a string is hashed as UTF-8). */
+export function sha256Hex(input: string | Uint8Array): string {
+  return createSha256().update(input).digestHex();
+}
+
+/** A SHA-256 fed in pieces: the same digest as `sha256Hex` of the pieces joined. */
+export interface Sha256 {
+  /** Hash `chunk` next (a string as UTF-8). Answers the hasher, for chaining. */
+  update(chunk: string | Uint8Array): Sha256;
+  /** The lowercase hex digest of everything fed so far. The hasher is spent after. */
+  digestHex(): string;
+}
+
+/**
+ * A streaming SHA-256. Whole blocks are hashed in place from each chunk, and
+ * only a partial block (under 64 bytes) is carried over, so hashing a large
+ * upload makes no second copy of it.
+ */
+export function createSha256(): Sha256 {
+  const h = H0.slice();
+  const w = new Uint32Array(64);
+  const carry = new Uint8Array(64);
+  let carried = 0;
+  let length = 0;
+  let done = false;
+  const hasher: Sha256 = {
+    update(chunk) {
+      if (done) throw new HermeticError("INTERNAL", "sha256: update after digest");
+      const bytes = typeof chunk === "string" ? utf8Bytes(chunk) : chunk;
+      length += bytes.length;
+      let at = 0;
+      if (carried > 0) {
+        const take = Math.min(64 - carried, bytes.length);
+        carry.set(bytes.subarray(0, take), carried);
+        carried += take;
+        at = take;
+        if (carried < 64) return hasher;
+        compress(h, w, carry, 0);
+        carried = 0;
+      }
+      for (; at + 64 <= bytes.length; at += 64) compress(h, w, bytes, at);
+      if (at < bytes.length) {
+        carry.set(bytes.subarray(at), 0);
+        carried = bytes.length - at;
+      }
+      return hasher;
+    },
+    digestHex() {
+      if (done) throw new HermeticError("INTERNAL", "sha256: digest taken twice");
+      done = true;
+      const tail = lengthTail(carry.subarray(0, carried), length);
+      for (let offset = 0; offset < tail.length; offset += 64) compress(h, w, tail, offset);
+      return hexOf(h);
+    },
+  };
+  return hasher;
 }

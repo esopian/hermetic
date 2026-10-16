@@ -51,7 +51,9 @@ test("paired: refreshes the fleet view into the cache, probes Tailscale, sets th
   const viewCache = memoryFile();
   const read = readPairingLink(kit.link);
   if (!read.ok) throw new Error(read.error.title);
-  await new FleetStore({ secure, viewCache, fetch: kit.fetch, now: () => NOW }).pair(read.link);
+  const pairing = new FleetStore({ secure, viewCache, fetch: kit.fetch, now: () => NOW });
+  await pairing.pair(read.link);
+  await pairing.setPrimary("atlas");
   const saved = JSON.stringify([inboxEntry(), inboxEntry({ id: "i2", read_at: NOW })]);
   const inboxFile = memoryFile(saved);
   const badges: number[] = [];
@@ -103,6 +105,7 @@ async function pairedWake(seed: Record<string, string>) {
   if (!read.ok) throw new Error(read.error.title);
   const pairing = new FleetStore({ secure, viewCache, fetch: kit.fetch, now: () => NOW });
   await pairing.pair(read.link);
+  await pairing.setPrimary("atlas");
   await pairing.refresh();
   const run = () =>
     backgroundRefresh({

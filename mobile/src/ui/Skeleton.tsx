@@ -36,7 +36,7 @@ export function Skeleton({
       accessible={false}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[{ width, height, backgroundColor: t.c.bg3, borderRadius: 0 }, animated, style]}
+      style={[{ width, height, backgroundColor: t.c.bg3 }, animated, style]}
     />
   );
 }

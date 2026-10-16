@@ -66,6 +66,8 @@ export default defineConfig({
         { label: "Explainer", link: "/explainer/" },
         // The cost page (src/pages/cost.astro), also outside the docs collection.
         { label: "Cost", link: "/cost/" },
+        // The iPhone companion page (src/pages/mobile.astro), also outside the docs collection.
+        { label: "iPhone app", link: "/mobile/" },
         {
           label: "Start here",
           items: ["docs/start/install", "docs/start/first-fleet"],

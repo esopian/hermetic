@@ -86,15 +86,13 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
           alignItems: "center",
           gap: t.space.sm,
           minHeight: 34,
-          borderRadius: 10,
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
-        {/* A small round mark in the step's tone, centred in the same 14pt
-            column the head's marker sits over; the name is sans, and only the
-            command or argument text beside it is mono. */}
+        {/* A small square mark in the step's tone, in a 14pt column; the
+            name is sans, and only the command or argument text beside it is mono. */}
         <View style={{ width: 14, alignItems: "center" }}>
-          <StatusSquare size={6} round color={toneColor(t, state.tone)} pulse={state.tone === "run"} />
+          <StatusSquare size={6} color={toneColor(t, state.tone)} pulse={state.tone === "run"} />
         </View>
         <Text
           variant="caption"
@@ -107,7 +105,7 @@ function Step({ block, streaming }: { block: ChatBlock; streaming: boolean }) {
         <Text mono variant="caption" tone="fg3" numberOfLines={1} style={{ flex: 1 }}>
           {target}
         </Text>
-        <Text variant="caption" tone="fg3">
+        <Text mono variant="caption" tone="fg3">
           {[state.word, duration].filter(Boolean).join(" · ")}
         </Text>
       </Pressable>
@@ -139,7 +137,8 @@ export function ActivityGroup({
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? summary.kids.length > 0;
   if (summary.steps.length === 0 && summary.kids.length === 0 && !streaming) return null;
-  // The group's tone rides on its round marker; there is no rule down the side.
+  // The group's tone rides on its square marker; the open steps hang off a
+  // 1px rule down the left, the desktop's tool-row gutter.
   const marker = streaming
     ? t.c.acc
     : summary.tone === "bad"
@@ -162,11 +161,10 @@ export function ActivityGroup({
           alignItems: "center",
           gap: t.space.sm,
           minHeight: 36,
-          borderRadius: 10,
           backgroundColor: pressed ? t.c.sel : "transparent",
         })}
       >
-        <StatusSquare size={8} round color={marker} pulse={streaming} />
+        <StatusSquare size={8} color={marker} pulse={streaming} />
         <Text
           variant="bodySmall"
           weight={700}
@@ -189,9 +187,15 @@ export function ActivityGroup({
         </Text>
       </Pressable>
       {open ? (
-        // Steps indent to the head's text (marker plus gap), which reads as
-        // nesting without the rule the group used to carry.
-        <View style={{ paddingLeft: 8 + t.space.sm }}>
+        // Steps hang off a rule under the head's marker, indented to its text.
+        <View
+          style={{
+            marginLeft: 3,
+            paddingLeft: 5 + t.space.sm - t.border.row,
+            borderLeftWidth: t.border.row,
+            borderLeftColor: t.c.line,
+          }}
+        >
           {summary.steps.map((block, i) => (
             <Step key={`${block.kind}:${i}`} block={block} streaming={streaming} />
           ))}

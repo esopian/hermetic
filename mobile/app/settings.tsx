@@ -2,20 +2,34 @@
  * Settings, behind home's gear: a grouped list of everything admin. Bots (the
  * listened instances), the fleet's agents (each opens its
  * detail and browser), the Tailscale status, notification delivery (push from
- * the boxes, previews, alerts on this phone, quiet hours), appearance and
- * haptics, the paired fleet, re-pairing and signing out, and about. Nothing
+ * the boxes, previews, alerts on this phone, quiet hours), appearance (theme
+ * and avatar style) and haptics, the paired fleet, re-pairing and signing out, and about. Nothing
  * bridge-shaped: the phone talks to the boxes.
+ *
+ * `/settings?section=<id>` opens it scrolled to one group, the id being the
+ * group's title kebab-cased (`bots`, `agents`, `tailscale`, `notifications`,
+ * `appearance`, `fleet`, `this-phone`, `about`, `support`); an unknown id
+ * leaves it at the top.
  */
+import { AVATAR_STYLES, type AvatarStyle } from "@hermetic/core/shared";
 import Constants from "expo-constants";
-import { router } from "expo-router";
-import { Children, type ReactNode, useEffect, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import {
+  Children,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Platform,
   Pressable,
   ScrollView,
   Share,
-  StyleSheet,
   TextInput,
   useWindowDimensions,
   View,
@@ -31,29 +45,43 @@ import { supportReport } from "../src/support/diagnostics.ts";
 import { type SchemePreference, useTheme } from "../src/theme/theme.tsx";
 import { statusColor } from "../src/theme/tokens.ts";
 import { haptic } from "../src/ui/haptics.ts";
-import { Icon, IconButton, Screen, Text, ToggleSwitch } from "../src/ui/index.ts";
+import { Avatar, Icon, IconButton, Kicker, Screen, Text, ToggleSwitch } from "../src/ui/index.ts";
 import { useNow } from "../src/ui/useNow.ts";
 
 /* ── the grouped list ───────────────────────────────────────────────────── */
 
-const RADIUS = 14;
+/**
+ * A group's anchor for `/settings?section=<id>`: its title, kebab-cased
+ * ("This phone" is `this-phone`). Pure, so it is testable.
+ */
+export function sectionId(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
-/** One group: a quiet title, a soft card of rows (inset hairlines between), an optional note. */
+/** Told each titled group's y in the scroll content, so the screen can open at one. */
+const SectionLayout = createContext<((id: string, y: number) => void) | null>(null);
+
+/** One group: a kicker title, a square bordered card of rows (1px rules between), an optional note. */
 function Group({ title, note, children }: { title?: string; note?: ReactNode; children: ReactNode }) {
   const t = useTheme();
+  const onSection = useContext(SectionLayout);
   const rows = Children.toArray(children).filter(Boolean);
+  const id = title ? sectionId(title) : null;
   return (
-    <View style={{ paddingHorizontal: t.space.lg, marginTop: t.space.xl, gap: t.space.sm }}>
-      {title ? (
-        <Text variant="bodySmall" weight={600} tone="fg3" style={{ paddingHorizontal: t.space.lg }}>
-          {title}
-        </Text>
-      ) : null}
+    <View
+      testID={id ? `settings-section-${id}` : undefined}
+      onLayout={id && onSection ? (e) => onSection(id, e.nativeEvent.layout.y) : undefined}
+      style={{ paddingHorizontal: t.space.lg, marginTop: t.space.xl, gap: t.space.sm }}
+    >
+      {title ? <Kicker style={{ paddingHorizontal: t.space.xs }}>{title}</Kicker> : null}
       <View
         style={{
           backgroundColor: t.c.card,
-          borderRadius: RADIUS,
-          borderWidth: StyleSheet.hairlineWidth,
+          borderWidth: t.border.row,
           borderColor: t.c.cardEdge,
           overflow: "hidden",
         }}
@@ -61,21 +89,13 @@ function Group({ title, note, children }: { title?: string; note?: ReactNode; ch
         {rows.map((row, i) => (
           // Rows are positional and never reorder.
           <View key={i}>
-            {/* Only the hairline is inset; the row itself spans the card, so every label lines up. */}
-            {i === 0 ? null : (
-              <View
-                style={{
-                  height: StyleSheet.hairlineWidth,
-                  backgroundColor: t.c.line,
-                  marginLeft: t.space.lg,
-                }}
-              />
-            )}
+            {/* A full-width 1px rule between rows, the desktop's row border. */}
+            {i === 0 ? null : <View style={{ height: t.border.row, backgroundColor: t.c.line }} />}
             {row}
           </View>
         ))}
       </View>
-      {note ? <View style={{ paddingHorizontal: t.space.lg }}>{note}</View> : null}
+      {note ? <View style={{ paddingHorizontal: t.space.xs }}>{note}</View> : null}
     </View>
   );
 }
@@ -215,7 +235,7 @@ function Toggle({
   );
 }
 
-/** A soft segmented choice (appearance, the fixture's Tailscale). */
+/** A segmented choice like the desktop's `.switch` (appearance, the fixture's Tailscale). */
 function Segments<T extends string>({
   options,
   value,
@@ -235,9 +255,8 @@ function Segments<T extends string>({
       style={{
         flexDirection: fontScale >= 1.5 ? "column" : "row",
         margin: t.space.sm,
-        padding: 3,
-        borderRadius: RADIUS - 4,
-        backgroundColor: t.c.bg3,
+        borderWidth: t.border.control,
+        borderColor: t.c.fg,
       }}
     >
       {options.map((o) => {
@@ -257,13 +276,17 @@ function Segments<T extends string>({
               minHeight: t.touch.min,
               paddingVertical: t.space.sm,
               paddingHorizontal: t.space.sm,
-              borderRadius: RADIUS - 6,
               alignItems: "center",
               justifyContent: "center",
-              backgroundColor: on ? t.c.bg : "transparent",
+              backgroundColor: on ? t.c.fg : "transparent",
             }}
           >
-            <Text variant="bodySmall" weight={on ? 700 : 500} tone={on ? "fg" : "fg2"}>
+            <Text
+              variant="caption"
+              weight={800}
+              uppercase
+              style={{ color: on ? t.c.bg : t.c.fg2, letterSpacing: 0.5 }}
+            >
               {o.charAt(0).toUpperCase() + o.slice(1)}
             </Text>
           </Pressable>
@@ -288,9 +311,7 @@ function TimeField({
   const bad = minutesOf(text) === null;
   return (
     <View style={{ flex: 1, gap: 4 }}>
-      <Text variant="caption" tone="fg3">
-        {label}
-      </Text>
+      <Kicker>{label}</Kicker>
       <TextInput
         keyboardAppearance={t.scheme}
         accessibilityLabel={`Quiet hours ${label}`}
@@ -304,10 +325,9 @@ function TimeField({
         style={{
           minHeight: t.touch.min,
           paddingVertical: t.space.sm,
-          borderRadius: RADIUS - 6,
-          borderWidth: bad ? 1 : 0,
-          borderColor: t.c.bad,
-          backgroundColor: t.c.bg3,
+          borderWidth: t.border.row,
+          borderColor: bad ? t.c.bad : t.c.line2,
+          backgroundColor: t.c.bg,
           color: t.c.fg,
           fontFamily: t.mono(400),
           fontSize: 16,
@@ -318,9 +338,67 @@ function TimeField({
   );
 }
 
-/** A round status dot for a row's leading edge. */
+const AVATAR_STYLE_WORDS: Record<AvatarStyle, string> = {
+  sigil: "Sigil",
+  pixel: "Pixel",
+  blob: "Blob",
+};
+
+/**
+ * The avatar style: one square cell per style, each showing the same face in
+ * that style, so the choice is made by looking. Square on purpose; the blob
+ * inside is the only curve.
+ */
+function AvatarStyles({ value, onChange }: { value: AvatarStyle; onChange(style: AvatarStyle): void }) {
+  const t = useTheme();
+  return (
+    <View style={{ paddingVertical: t.space.sm, paddingHorizontal: t.space.lg, gap: t.space.sm }}>
+      <Text>Avatar style</Text>
+      <View
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Avatar style"
+        style={{ flexDirection: "row", gap: t.space.sm }}
+      >
+        {AVATAR_STYLES.map((style) => {
+          const on = style === value;
+          return (
+            <Pressable
+              key={style}
+              testID={`avatar-style-${style}`}
+              accessibilityRole="radio"
+              accessibilityLabel={`${AVATAR_STYLE_WORDS[style]} avatar style`}
+              accessibilityState={{ checked: on }}
+              onPress={() => {
+                haptic.select();
+                onChange(style);
+              }}
+              style={({ pressed }) => ({
+                flex: 1,
+                aspectRatio: 1,
+                minHeight: t.touch.min,
+                alignItems: "center",
+                justifyContent: "center",
+                gap: t.space.xs,
+                borderWidth: on ? t.border.control : t.border.row,
+                borderColor: on ? t.c.fg : t.c.line,
+                backgroundColor: pressed ? t.c.sel : on ? t.c.bg : t.c.bg3,
+              })}
+            >
+              <Avatar fleet_id="preview" instance="hermetic" bot="" size={40} avatarStyle={style} />
+              <Text variant="bodySmall" weight={on ? 700 : 500} tone={on ? "fg" : "fg2"}>
+                {AVATAR_STYLE_WORDS[style]}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+/** A status square for a row's leading edge. */
 function Dot({ color }: { color: string }) {
-  return <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />;
+  return <View style={{ width: 8, height: 8, backgroundColor: color }} />;
 }
 
 /* ── words ──────────────────────────────────────────────────────────────── */
@@ -381,6 +459,18 @@ export default function Settings() {
   const { prefs, update } = usePrefs();
   const now = useNow();
   const [pushBusy, setPushBusy] = useState(false);
+  // `?section=<id>` opens the screen at that group, once; an unknown id leaves it at the top.
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  const scroll = useRef<ScrollView>(null);
+  const anchored = useRef(false);
+  const onSection = useCallback(
+    (id: string, y: number) => {
+      if (anchored.current || !section || id !== section) return;
+      anchored.current = true;
+      scroll.current?.scrollTo({ y, animated: false });
+    },
+    [section],
+  );
   const link = fleet.link;
   const listening = ctx.fleet.listened();
   const status = tailscale?.status ?? null;
@@ -459,232 +549,250 @@ export default function Settings() {
         {/* Balances the back button so the title sits centred. */}
         <View style={{ width: 44 }} />
       </View>
-      <ScrollView contentContainerStyle={{ paddingBottom: t.space.xxl * 2 }}>
-        <Group
-          title="Bots"
-          note={<Note>Listened instances show their bots on home and raise notifications.</Note>}
-        >
-          <Item
-            label="Listening"
-            value={
-              listening.length === 0
-                ? "None"
-                : `${listening.length} instance${listening.length === 1 ? "" : "s"}`
-            }
-            onPress={() => router.push("/listening")}
-          />
-        </Group>
-
-        <Group title="Agents">
-          {agents.length === 0 ? (
-            <Item label="No agents in this fleet" />
-          ) : (
-            agents.map((a) => (
-              <Item
-                key={a.name}
-                label={a.name}
-                value={a.status ?? "unknown"}
-                leading={<Dot color={a.status ? statusColor(t.c, a.status).color : t.c.fg3} />}
-                accessibilityLabel={`Open ${a.name}, ${a.status ?? "status unknown"}`}
-                onPress={() => router.push(`/agent/${encodeURIComponent(a.name)}`)}
-              />
-            ))
-          )}
-        </Group>
-
-        <Group
-          title="Tailscale"
-          note={
-            <View style={{ gap: t.space.xs }}>
-              {tailscale && tailscale.failing.length > 0 && status === "ok" ? (
-                <Note tone="warn">{`Did not answer: ${tailscale.failing.join(", ")}`}</Note>
-              ) : null}
+      <SectionLayout.Provider value={onSection}>
+        <ScrollView ref={scroll} contentContainerStyle={{ paddingBottom: t.space.xxl * 2 }}>
+          <Group
+            title="Bots"
+            note={
               <Note>
-                A guess from asking up to three listened agents: iOS does not let an app ask the
-                Tailscale app directly.
+                Listened instances show their bots on home and raise notifications. Home is built around
+                the primary instance.
               </Note>
-            </View>
-          }
-        >
-          <Item
-            label={status ? TAILSCALE_WORDS[status] : "Checking…"}
-            leading={<Dot color={tailscaleColor} />}
-          />
-          <Item
-            label={probing ? "Checking…" : "Check again"}
-            tone="acc"
-            chevron={false}
-            onPress={() => void ctx.probeTailscale()}
-          />
-          {fixture ? (
-            <View style={{ paddingTop: t.space.sm }}>
-              <Text variant="caption" tone="acc" style={{ paddingHorizontal: t.space.lg }}>
-                Fixture build: pick what the probe sees.
-              </Text>
-              <Segments
-                options={FIXTURE_TAILSCALE}
-                value={fixture.tailscale.get()}
-                label={(s) => `Fixture Tailscale ${s}`}
-                onChange={(s) => fixture.setTailscale(s)}
-              />
-            </View>
-          ) : null}
-        </Group>
+            }
+          >
+            <Item
+              label="Listening"
+              value={
+                listening.length === 0
+                  ? "None"
+                  : `${listening.length} instance${listening.length === 1 ? "" : "s"}`
+              }
+              onPress={() => router.push("/listening")}
+            />
+            <Item
+              label="Primary instance"
+              value={ctx.primary ?? "None"}
+              mono={!!ctx.primary}
+              testID="settings-primary"
+              onPress={() => router.push("/primary")}
+            />
+          </Group>
 
-        <Group
-          title="Notifications"
-          note={
-            <Note tone={push.state === "unavailable" ? "warn" : "fg3"}>
-              {pushLine(push, pushWanted)}
-            </Note>
-          }
-        >
-          <Toggle
-            label="Push from the agents"
-            hint="Each listened agent sends turn-finished, failed, needs-you and new-message pushes to this phone."
-            value={pushWanted}
-            disabled={pushBusy}
-            onChange={(v) => {
-              setPushBusy(true);
-              void ctx
-                .setPushEnabled(v)
-                .then((r) => (r.state === "unavailable" ? haptic.warning() : haptic.success()))
-                .finally(() => setPushBusy(false));
-            }}
-          />
-          <Toggle
-            label="Alerts on this phone"
-            hint="Banners and notifications for what this phone sees on its own connections."
-            value={prefs.notifications}
-            onChange={(v) => update({ notifications: v })}
-          />
-          <Toggle
-            label="Show message previews"
-            hint="On: notifications quote the reply or question, and the agents' pushes carry that text through Apple's and Expo's push services. Off: they say “Reply ready” or “Needs you” and nothing more."
-            value={previews}
-            onChange={(v) => void ctx.setPreviews(v)}
-          />
-          <Toggle
-            label="Quiet hours"
-            hint="No alerts from this phone's own connections in this window; unread still shows on home. Pushes from the agents still arrive: silence them with iOS Focus, or turn push off."
-            value={prefs.quiet.enabled}
-            onChange={(v) => update({ quiet: { ...prefs.quiet, enabled: v } })}
-          />
-          {prefs.quiet.enabled ? (
-            <View
-              style={{
-                flexDirection: "row",
-                gap: t.space.md,
-                paddingHorizontal: t.space.lg,
-                paddingVertical: t.space.md,
-              }}
-            >
-              <TimeField
-                label="from"
-                value={prefs.quiet.start}
-                onCommit={(v) => update({ quiet: { ...prefs.quiet, start: v } })}
-              />
-              <TimeField
-                label="until"
-                value={prefs.quiet.end}
-                onCommit={(v) => update({ quiet: { ...prefs.quiet, end: v } })}
-              />
-            </View>
-          ) : null}
-        </Group>
+          <Group title="Agents">
+            {agents.length === 0 ? (
+              <Item label="No agents in this fleet" />
+            ) : (
+              agents.map((a) => (
+                <Item
+                  key={a.name}
+                  label={a.name}
+                  value={a.status ?? "unknown"}
+                  leading={<Dot color={a.status ? statusColor(t.c, a.status).color : t.c.fg3} />}
+                  accessibilityLabel={`Open ${a.name}, ${a.status ?? "status unknown"}`}
+                  onPress={() => router.push(`/agent/${encodeURIComponent(a.name)}`)}
+                />
+              ))
+            )}
+          </Group>
 
-        <Group title="Appearance">
-          <Segments
-            options={SCHEMES}
-            value={t.preference}
-            label={(p) => p}
-            onChange={(p) => t.setPreference(p)}
-          />
-          <Toggle label="Haptics" value={prefs.haptics} onChange={(v) => update({ haptics: v })} />
-        </Group>
-
-        <Group
-          title="Fleet"
-          note={
-            fleet.fromBoxes || fleet.error ? (
+          <Group
+            title="Tailscale"
+            note={
               <View style={{ gap: t.space.xs }}>
-                {fleet.fromBoxes ? (
-                  <Text variant="caption" tone="warn" testID="fleet-view-source">
-                    {fleetViewLine(fleet.error?.code ?? null)}
-                  </Text>
+                {tailscale && tailscale.failing.length > 0 && status === "ok" ? (
+                  <Note tone="warn">{`Did not answer: ${tailscale.failing.join(", ")}`}</Note>
                 ) : null}
-                {fleet.error ? <Note tone="warn">{fleet.error.message}</Note> : null}
+                <Note>
+                  A guess from asking up to three listened agents: iOS does not let an app ask the
+                  Tailscale app directly.
+                </Note>
               </View>
-            ) : null
-          }
-        >
-          <Item
-            label="Fleet"
-            mono
-            value={
-              link
-                ? link.payload.alias && link.payload.alias !== link.payload.fleet_id
-                  ? `${link.label} · ${link.payload.fleet_id}`
-                  : link.payload.fleet_id
-                : null
             }
-          />
-          <Item label="Tailnet" mono value={link?.payload.tailnet} />
-          <Item
-            label="Region"
-            mono
-            value={link ? `${link.payload.region} · ${link.payload.account_id}` : null}
-          />
-          <Item
-            label="Fleet list"
-            value={
-              fleet.refreshed_at
-                ? `read ${railTime(fleet.refreshed_at, now)}${fleet.stale ? " · from pairing" : ""}`
-                : "not read yet"
+          >
+            <Item
+              label={status ? TAILSCALE_WORDS[status] : "Checking…"}
+              leading={<Dot color={tailscaleColor} />}
+            />
+            <Item
+              label={probing ? "Checking…" : "Check again"}
+              tone="acc"
+              chevron={false}
+              onPress={() => void ctx.probeTailscale()}
+            />
+            {fixture ? (
+              <View style={{ paddingTop: t.space.sm }}>
+                <Text variant="caption" tone="acc" style={{ paddingHorizontal: t.space.lg }}>
+                  Fixture build: pick what the probe sees.
+                </Text>
+                <Segments
+                  options={FIXTURE_TAILSCALE}
+                  value={fixture.tailscale.get()}
+                  label={(s) => `Fixture Tailscale ${s}`}
+                  onChange={(s) => fixture.setTailscale(s)}
+                />
+              </View>
+            ) : null}
+          </Group>
+
+          <Group
+            title="Notifications"
+            note={
+              <Note tone={push.state === "unavailable" ? "warn" : "fg3"}>
+                {pushLine(push, pushWanted)}
+              </Note>
             }
-          />
-        </Group>
+          >
+            <Toggle
+              label="Push from the agents"
+              hint="Each listened agent sends turn-finished, failed, needs-you and new-message pushes to this phone."
+              value={pushWanted}
+              disabled={pushBusy}
+              onChange={(v) => {
+                setPushBusy(true);
+                void ctx
+                  .setPushEnabled(v)
+                  .then((r) => (r.state === "unavailable" ? haptic.warning() : haptic.success()))
+                  .finally(() => setPushBusy(false));
+              }}
+            />
+            <Toggle
+              label="Alerts on this phone"
+              hint="Banners and notifications for what this phone sees on its own connections."
+              value={prefs.notifications}
+              onChange={(v) => update({ notifications: v })}
+            />
+            <Toggle
+              label="Show message previews"
+              hint="On: notifications quote the reply or question, and the agents' pushes carry that text through Apple's and Expo's push services. Off: they say “Reply ready” or “Needs you” and nothing more."
+              value={previews}
+              onChange={(v) => void ctx.setPreviews(v)}
+            />
+            <Toggle
+              label="Quiet hours"
+              hint="No alerts from this phone's own connections in this window; unread still shows on home. Pushes from the agents still arrive: silence them with iOS Focus, or turn push off."
+              value={prefs.quiet.enabled}
+              onChange={(v) => update({ quiet: { ...prefs.quiet, enabled: v } })}
+            />
+            {prefs.quiet.enabled ? (
+              <View
+                style={{
+                  flexDirection: "row",
+                  gap: t.space.md,
+                  paddingHorizontal: t.space.lg,
+                  paddingVertical: t.space.md,
+                }}
+              >
+                <TimeField
+                  label="from"
+                  value={prefs.quiet.start}
+                  onCommit={(v) => update({ quiet: { ...prefs.quiet, start: v } })}
+                />
+                <TimeField
+                  label="until"
+                  value={prefs.quiet.end}
+                  onCommit={(v) => update({ quiet: { ...prefs.quiet, end: v } })}
+                />
+              </View>
+            ) : null}
+          </Group>
 
-        <Group
-          title="This phone"
-          note={
-            <Note>
-              Signing out forgets the pairing on this phone. Nothing on the laptop or the boxes changes
-              beyond this phone's push registration.
-            </Note>
-          }
-        >
-          <Item label="Re-pair (scan again)" onPress={() => router.push("/pair")} />
-          <Item label="Sign out" tone="bad" chevron={false} onPress={signOut} />
-        </Group>
+          <Group title="Appearance">
+            <Segments
+              options={SCHEMES}
+              value={t.preference}
+              label={(p) => p}
+              onChange={(p) => t.setPreference(p)}
+            />
+            <AvatarStyles
+              value={prefs.avatarStyle}
+              onChange={(avatarStyle) => update({ avatarStyle })}
+            />
+            <Toggle label="Haptics" value={prefs.haptics} onChange={(v) => update({ haptics: v })} />
+          </Group>
 
-        <Group
-          title="About"
-          note={
-            <Note>
-              A remote head for a Hermetic fleet. It talks to the agents directly over your tailnet:
-              chat with each box's Hermes gateway, the fleet list and push registration with hermeticd,
-              and the agent browser from the box.
-            </Note>
-          }
-        >
-          <Item
-            label="Version"
-            value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"} (${Constants.nativeBuildVersion ?? "dev"})${fixture ? " · fixture" : ""}`}
-          />
-        </Group>
-        <Group
-          title="Support"
-          note={
-            <Note>
-              Review app, iOS and connection status before sharing. The report excludes messages, agent
-              names, addresses, pairing details and push tokens. Nothing is sent automatically.
-            </Note>
-          }
-        >
-          <Item label="Review support report" onPress={shareDiagnostics} />
-        </Group>
-      </ScrollView>
+          <Group
+            title="Fleet"
+            note={
+              fleet.fromBoxes || fleet.error ? (
+                <View style={{ gap: t.space.xs }}>
+                  {fleet.fromBoxes ? (
+                    <Text variant="caption" tone="warn" testID="fleet-view-source">
+                      {fleetViewLine(fleet.error?.code ?? null)}
+                    </Text>
+                  ) : null}
+                  {fleet.error ? <Note tone="warn">{fleet.error.message}</Note> : null}
+                </View>
+              ) : null
+            }
+          >
+            <Item
+              label="Fleet"
+              mono
+              value={
+                link
+                  ? link.payload.alias && link.payload.alias !== link.payload.fleet_id
+                    ? `${link.label} · ${link.payload.fleet_id}`
+                    : link.payload.fleet_id
+                  : null
+              }
+            />
+            <Item label="Tailnet" mono value={link?.payload.tailnet} />
+            <Item
+              label="Region"
+              mono
+              value={link ? `${link.payload.region} · ${link.payload.account_id}` : null}
+            />
+            <Item
+              label="Fleet list"
+              value={
+                fleet.refreshed_at
+                  ? `read ${railTime(fleet.refreshed_at, now)}${fleet.stale ? " · from pairing" : ""}`
+                  : "not read yet"
+              }
+            />
+          </Group>
+
+          <Group
+            title="This phone"
+            note={
+              <Note>
+                Signing out forgets the pairing on this phone. Nothing on the laptop or the boxes
+                changes beyond this phone's push registration.
+              </Note>
+            }
+          >
+            <Item label="Re-pair (scan again)" onPress={() => router.push("/pair")} />
+            <Item label="Sign out" tone="bad" chevron={false} onPress={signOut} />
+          </Group>
+
+          <Group
+            title="About"
+            note={
+              <Note>
+                A remote head for a Hermetic fleet. It talks to the agents directly over your tailnet:
+                chat with each box's Hermes gateway, the fleet list and push registration with
+                hermeticd, and the agent browser from the box.
+              </Note>
+            }
+          >
+            <Item
+              label="Version"
+              value={`Hermetic ${Constants.expoConfig?.version ?? "0.0.0"} (${Constants.nativeBuildVersion ?? "dev"})${fixture ? " · fixture" : ""}`}
+            />
+          </Group>
+          <Group
+            title="Support"
+            note={
+              <Note>
+                Review app, iOS and connection status before sharing. The report excludes messages,
+                agent names, addresses, pairing details and push tokens. Nothing is sent automatically.
+              </Note>
+            }
+          >
+            <Item label="Review support report" onPress={shareDiagnostics} />
+          </Group>
+        </ScrollView>
+      </SectionLayout.Provider>
     </Screen>
   );
 }
