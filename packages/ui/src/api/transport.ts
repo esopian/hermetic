@@ -120,6 +120,7 @@ export type RequestName =
   | "chat.swarms"
   | "chat.sessions"
   | "chat.history"
+  | "chat.commands"
   | "chat.abort"
   | "chat.steer"
   // Machinery, listed with the core methods it sits between: the one-shot

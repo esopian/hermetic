@@ -1,0 +1,62 @@
+/**
+ * The composer's slash-command list (`SlashPicker.tsx`): one compact row per
+ * command above the input, the name first with the typed part bold, then its
+ * description muted and cut by the row's width. Laid over the input the way
+ * the mention list is (`.bm-mentions`), and sharing its frame.
+ */
+.ch-slash {
+  position: absolute;
+  bottom: 100%;
+  left: 20px;
+  right: 20px;
+  /* Eight rows fit; the scroll is for a long catalog and short windows. */
+  max-height: 258px;
+  overflow-y: auto;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  z-index: 20;
+  box-shadow: 0 -10px 25px #0005;
+}
+.ch-slash button {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.ch-slash button[aria-selected="true"] {
+  background: var(--sel);
+  box-shadow: inset 2px 0 var(--acc);
+}
+.ch-slash-name {
+  flex: none;
+  font: 12px var(--mono);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.ch-slash-name b {
+  font-weight: 700;
+  color: var(--acc);
+}
+.ch-slash-desc {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg2);
+  font-size: 12px;
+}
+.ch-slash-tag {
+  flex: none;
+  margin-left: auto;
+  font: 11px var(--mono);
+  color: var(--fg2);
+  white-space: nowrap;
+}

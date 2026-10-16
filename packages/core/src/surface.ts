@@ -46,6 +46,7 @@ import {
   ChatAbortInput as ChatAbortInputSchema,
   ChatSteerInput as ChatSteerInputSchema,
   ChatHistoryInput as ChatHistoryInputSchema,
+  ChatCommandsInput as ChatCommandsInputSchema,
   ChatObserveInput as ChatObserveInputSchema,
   ChatSendInput as ChatSendInputSchema,
   FilesDeclineInput as FilesDeclineInputSchema,
@@ -189,6 +190,8 @@ export const PUBLIC_METHODS = [
   "chat.swarms",
   "chat.sessions",
   "chat.history",
+  // §9.2: the gateway's slash-command catalog, for the composer's picker.
+  "chat.commands",
   "chat.send",
   "chat.abort",
   // §9.2: a message into the running turn, without stopping it.
@@ -348,6 +351,7 @@ export const REQUEST_SCHEMAS = {
   "chat.swarms": ChatSwarmsInputSchema,
   "chat.sessions": ChatSessionsInputSchema,
   "chat.history": ChatHistoryInputSchema,
+  "chat.commands": ChatCommandsInputSchema,
   "chat.send": ChatSendInputSchema,
   "chat.abort": ChatAbortInputSchema,
   "chat.steer": ChatSteerInputSchema,

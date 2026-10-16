@@ -13,6 +13,7 @@ import type { ChatObserveHint } from "../chat-observe.ts";
 import type { createCanonicalSessions, ConversationOptions } from "../../render/hermes-canonical.ts";
 import { HermeticError } from "../../errors.ts";
 import type { SessionSocketTuning } from "./hermes-chat-session-socket.ts";
+import type { CommandCatalog } from "./hermes-chat-commands.ts";
 import type {
   ChatConversation,
   ChatFrame,
@@ -290,6 +291,16 @@ export interface HermesChatClient {
     sessions: readonly string[],
     opts?: HermesChatOptions,
   ): Promise<boolean | null>;
+  /**
+   * The slash commands the gateway offers this bot (`hermes-chat-commands.ts`),
+   * read against `session` while that conversation is live there. Optional: a
+   * client without it has no catalog to give, and `chat.commands` says so.
+   */
+  commands?(
+    box: BoxAddress,
+    bot: string,
+    opts?: HermesChatOptions & { session?: string },
+  ): Promise<CommandCatalog>;
   send(box: BoxAddress, bot: string, text: string, opts?: SendOptions): AsyncIterable<ChatFrame>;
   /**
    * The passive hint stream (§9.2): "something happened on this
