@@ -35,14 +35,20 @@ export function hermesConfigLeaves(yaml: string): Record<string, string> {
   const stack: Array<{ indent: number; key: string }> = [];
   for (const line of yaml.split("\n")) {
     if (/^\s*(#|$)/.test(line) || /^\s*-(\s|$)/.test(line)) continue;
-    const m = /^(\s*)([^\s:#][^:]*?)\s*:(?:\s+(.*))?$/.exec(line);
+    // Each character has one way to match (ReDoS): the key runs to the first
+    // colon and is trimmed here, and the rest of the line is checked in code.
+    const m = /^(\s*)([^\s:#][^:]*):([\s\S]*)$/.exec(line);
     if (m === null) continue;
+    // After the colon: nothing, or whitespace and then a value with no line
+    // terminator in it (a CRLF line's `\r` reads as no match, as it always has).
+    const rest = m[3] ?? "";
+    if (rest !== "" && (!/^\s/.test(rest) || !/^.*$/.test(rest.trimStart()))) continue;
     const indent = (m[1] ?? "").length;
-    const key = m[2] ?? "";
+    const key = (m[2] ?? "").trimEnd();
     while (stack.length > 0 && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
     const path = [...stack.map((s) => s.key), key].join(".");
-    const value = m[3]?.trim();
-    if (value === undefined || value === "") stack.push({ indent, key });
+    const value = rest.trim();
+    if (value === "") stack.push({ indent, key });
     else leaves[path] = unquote(value);
   }
   return leaves;

@@ -47,6 +47,19 @@ describe("hermesConfigLeaves", () => {
       quoted: 'a "b" \\ c',
     });
   });
+
+  test("reads a long run of whitespace in linear time", () => {
+    const tabs = "\t".repeat(50_000);
+    for (const line of [`${tabs}!`, `a${tabs}!`]) {
+      const start = performance.now();
+      expect(hermesConfigLeaves(line)).toEqual({});
+      expect(performance.now() - start).toBeLessThan(200);
+    }
+  });
+
+  test("keeps a key's trailing whitespace and a CRLF value out of the leaves", () => {
+    expect(hermesConfigLeaves("a :  b  \nc:d\ne:\r\n  f: g\r\nh: i")).toEqual({ a: "b", h: "i" });
+  });
 });
 
 describe("hermesOwnedDrift", () => {
