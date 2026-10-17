@@ -44,7 +44,7 @@ describe("the app log", () => {
     expect(line).toBe('1970-01-01T00:00:00.000Z ERROR op:init error INTERNAL: boom op="abc"\n');
   });
 
-  test("writes to stderr at info and above, and everything to the file", () => {
+  test("writes to stderr at info and above, and everything to the file", async () => {
     const home = mkdtempSync(join(tmpdir(), "hermetic-log-"));
     tmp.push(home);
     const stderr: string[] = [];
@@ -55,6 +55,7 @@ describe("the app log", () => {
     expect(stderr.join("")).not.toContain("quiet");
     expect(stderr.join("")).toContain("listening");
     expect(stderr.join("")).toContain("could not create the hermetic stack");
+    await log.flush();
     const file = readFileSync(logPathFor(home, false)!, "utf8");
     expect(file).toContain("quiet");
     expect(file).toContain("could not create the hermetic stack");
@@ -74,7 +75,7 @@ describe("the app log", () => {
     expect(existsSync(":memory:")).toBe(false);
   });
 
-  test("an unwritable home silences the file half without throwing", () => {
+  test("an unwritable home silences the file half without throwing", async () => {
     const home = mkdtempSync(join(tmpdir(), "hermetic-log-"));
     tmp.push(home);
     // A *file* where the home directory should be: mkdir and append both fail.
@@ -82,6 +83,7 @@ describe("the app log", () => {
     writeFileSync(blocker, "");
     const log = createAppLog({ home: blocker, fixture: false, stderr: () => {} });
     expect(() => log.line("info", "portal", "listening")).not.toThrow();
+    await log.flush();
     expect(log.path).toBeNull();
     expect(existsSync(join(blocker, "app.log"))).toBe(false);
   });
@@ -168,19 +170,20 @@ describe("the app log", () => {
   describe("permissions", () => {
     const modeOf = (path: string): number => statSync(path).mode & 0o777;
 
-    test("a directory the log creates is owner-only, and so is the file", () => {
+    test("a directory the log creates is owner-only, and so is the file", async () => {
       const root = mkdtempSync(join(tmpdir(), "hermetic-log-"));
       tmp.push(root);
       const home = join(root, "fresh", "home");
       const log = createAppLog({ home, fixture: false, stderr: () => {} });
       log.line("info", "app", "starting");
+      await log.flush();
       expect(modeOf(home)).toBe(LOG_DIR_MODE);
       expect(modeOf(join(home, "app.log"))).toBe(LOG_FILE_MODE);
       expect(LOG_DIR_MODE).toBe(0o700);
       expect(LOG_FILE_MODE).toBe(0o600);
     });
 
-    test("a log left world-readable by an older build is tightened on the first write", () => {
+    test("a log left world-readable by an older build is tightened on the first write", async () => {
       const home = mkdtempSync(join(tmpdir(), "hermetic-log-"));
       tmp.push(home);
       const file = join(home, "app.log");
@@ -188,15 +191,18 @@ describe("the app log", () => {
       chmodSync(file, 0o644);
       const log = createAppLog({ home, fixture: false, stderr: () => {} });
       log.line("info", "app", "starting");
+      await log.flush();
       expect(modeOf(file)).toBe(LOG_FILE_MODE);
       expect(readFileSync(file, "utf8")).toStartWith("old line\n");
     });
 
-    test("an existing home keeps the mode the operator gave it", () => {
+    test("an existing home keeps the mode the operator gave it", async () => {
       const home = mkdtempSync(join(tmpdir(), "hermetic-log-"));
       tmp.push(home);
       chmodSync(home, 0o755);
-      createAppLog({ home, fixture: false, stderr: () => {} }).line("info", "app", "starting");
+      const log = createAppLog({ home, fixture: false, stderr: () => {} });
+      log.line("info", "app", "starting");
+      await log.flush();
       expect(modeOf(home)).toBe(0o755);
     });
   });

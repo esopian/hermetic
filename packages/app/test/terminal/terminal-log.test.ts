@@ -47,6 +47,7 @@ test("a sentinel typed and echoed never appears in the app log", async () => {
   await b.request("terminal.close", { session_id: SENTINEL.repeat(4) }).catch(() => {});
   await b.request("terminal.close", { session_id });
 
+  await log.flush();
   const path = log.path;
   if (path === null) throw new Error("the log has no file");
   const text = readFileSync(path, "utf8");

@@ -1154,7 +1154,7 @@ describe("the shared secrets methods", () => {
       // the line printing `input=[object Object]` when the redacted input was
       // nested under one `input` key instead of spread as fields.
       log: {
-        path: null,
+        ...memoryLog(),
         line: (level, scope, message, fields) => lines.push(formatLine(level, scope, message, fields)),
       },
     });
@@ -1227,7 +1227,7 @@ describe("the provider profile methods", () => {
     const hermetic = await openHermetic({ fixture: true, home: testHome() });
     const ctx = contextFor(hermetic, {
       log: {
-        path: null,
+        ...memoryLog(),
         line: (level, scope, message, fields) => lines.push(formatLine(level, scope, message, fields)),
       },
     });
