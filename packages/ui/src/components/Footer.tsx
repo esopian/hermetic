@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useChatEntry } from "../chat/chat-entry-state.tsx";
 import { fmtClock } from "../logic/format.ts";
+import { usePageActive } from "../lib/visibility.ts";
 import { fleetTick, streamHealth, streamLabel, tickColor, volumeTick } from "../logic/loading.ts";
 import { VOLUME_POLL_MS } from "../state/state.tsx";
 
@@ -58,10 +59,16 @@ export function Footer({
 }) {
   const entry = useChatEntry();
   const [now, setNow] = useState(() => Date.now());
+  // Ticks only while the window is in front (`usePageActive`): the lag and
+  // retry counters are a stopwatch nobody reads behind another app, and a
+  // return catches them up at once. The data they describe keeps arriving.
+  const active = usePageActive();
   useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [active]);
 
   const health = streamHealth({ connected, everConnected, lastPollAt, now });
   const fleet = fleetTick(health, scanError);

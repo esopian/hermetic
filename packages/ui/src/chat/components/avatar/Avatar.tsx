@@ -26,6 +26,7 @@
  *   `IntersectionObserver` and every tween are killed with the component.
  */
 import { useChatAvatarStyle } from "../../chat-appearance.ts";
+import { isPageActive, subscribePageActive } from "../../../lib/visibility.ts";
 import type { RefObject } from "react";
 import { useCallback, useId, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type {
@@ -204,14 +205,71 @@ function step(deltaMS: number): void {
 function startLoop(): void {
   if (stopLoop || typeof requestAnimationFrame !== "function") return;
   let handle = 0;
-  let last = typeof performance === "undefined" ? 0 : performance.now();
+  let running = false;
+  let last = 0;
   const loop = (now: number): void => {
     step(now - last);
     last = now;
     handle = requestAnimationFrame(loop);
   };
-  handle = requestAnimationFrame(loop);
-  stopLoop = () => cancelAnimationFrame(handle);
+  const run = (): void => {
+    if (running) return;
+    running = true;
+    // Reseeded on every resume, so the first frame back is one frame's delta
+    // rather than the whole time the window spent in the background.
+    last = typeof performance === "undefined" ? 0 : performance.now();
+    handle = requestAnimationFrame(loop);
+    releaseGsap();
+  };
+  const pause = (): void => {
+    if (!running) return;
+    running = false;
+    cancelAnimationFrame(handle);
+    holdGsap();
+  };
+  // A window nobody is looking at — hidden, minimised, or simply not the one in
+  // front (`isPageActive`) — draws nothing anyone sees, and a dev build's CEF is
+  // launched with backgrounding disabled, so its frames would keep coming: every
+  // face rewriting its paths sixty times a second behind another app. One
+  // subscription for the whole page, held exactly as long as the loop.
+  const off = subscribePageActive((active) => (active ? run() : pause()));
+  if (isPageActive()) run();
+  stopLoop = () => {
+    pause();
+    off();
+  };
+}
+
+/**
+ * Whether `holdGsap` paused GSAP's global timeline, so that only a hold is ever
+ * released — resuming wakes GSAP's own ticker, which a return with nothing in
+ * flight has no reason to do.
+ */
+let gsapHeld = false;
+
+/**
+ * Stop GSAP's own frames while the page is inactive. The ticker is put to
+ * sleep in any case (a new tween wakes it); a tween in flight — an entrance,
+ * an eased state change — is paused with the global timeline, so that it
+ * finishes on return instead of keeping the ticker awake behind another app.
+ * New tweens are not started while inactive at all (`queueEntrance`, the
+ * state-change effect), so nothing wakes it until the page comes back.
+ */
+function holdGsap(): void {
+  if (gsapHeld) return;
+  gsapHeld =
+    tryGsap((gsap) => {
+      const inFlight = gsap.globalTimeline.getChildren(false, true, true).length > 0;
+      if (inFlight) gsap.globalTimeline.pause();
+      gsap.ticker.sleep();
+      return inFlight;
+    }) === true;
+}
+
+function releaseGsap(): void {
+  if (!gsapHeld) return;
+  gsapHeld = false;
+  tryGsap((gsap) => gsap.globalTimeline.resume());
 }
 
 function register(entry: Entry): () => void {
@@ -261,9 +319,10 @@ function watch(host: Element | null, entry: Entry): () => void {
    before paint, so the avatars never flash in at full opacity and then
    restart from zero.
 
-   Skipped entirely without GSAP, under reduced motion, in a hidden tab (a
-   background tab throttles rAF, so a tween started there freezes part-way and
-   the avatars sit at 60% opacity until somebody looks), and for a lone avatar,
+   Skipped entirely without GSAP, under reduced motion, in an inactive window
+   (`isPageActive`: GSAP is held while inactive, so a tween started there
+   freezes part-way and the avatars sit at 60% opacity until somebody looks —
+   and a background tab throttles rAF to the same end), and for a lone avatar,
    because a stagger of one is just a fade nobody asked for. */
 
 const ENTERING: HTMLElement[] = [];
@@ -304,7 +363,7 @@ function flushEntrance(): void {
 
 function queueEntrance(host: HTMLElement | null, reduced: boolean): void {
   if (!host || !gsapReady() || reduced) return;
-  if (typeof document !== "undefined" && document.hidden) return;
+  if (!isPageActive()) return;
   ENTERING.push(host);
   if (entranceScheduled) return;
   entranceScheduled = true;
@@ -512,7 +571,9 @@ export function Avatar({
     const next = { sat: motion.sat, opacity: motion.opacity, scale: motion.scale };
     look.current = next;
     const svg = svgRef.current;
-    if (!svg || reduced) return;
+    // Inactive: the change snaps, as it does with no GSAP. Easing a face nobody
+    // is looking at would only wake GSAP's ticker behind another app.
+    if (!svg || reduced || !isPageActive()) return;
     if (
       previous.sat === next.sat &&
       previous.opacity === next.opacity &&
