@@ -240,9 +240,9 @@ describe("configHashView", () => {
     expect(view.value).toBe("—");
     expect(view.warn).toBe(false);
     expect(view.note).toContain("not reported");
-    // The rendered hash is still named — as what this build would apply.
+    // The stored hash is still named as the fleet's last render.
     expect(view.note).toContain("a".repeat(64));
-    expect(view.note).toContain("this build renders");
+    expect(view.note).toContain("fleet last rendered");
   });
 
   test("with neither hash there is nothing to name", () => {
@@ -261,7 +261,7 @@ describe("configHashView", () => {
     expect(view.warn).toBe(false);
   });
 
-  test("drift shows what the box has and warns with what this build renders", () => {
+  test("drift shows what the box has and warns that this build differs", () => {
     const view = configHashView(
       { config_hash: "b".repeat(64), applied_config_hash: "a".repeat(64) },
       "drifted",
@@ -269,7 +269,16 @@ describe("configHashView", () => {
     // The box's own hash, not the fleet's — the value is what is true of the box.
     expect(view.value).toBe("a".repeat(64));
     expect(view.warn).toBe(true);
-    expect(view.note).toContain("b".repeat(64));
+    expect(view.note).toContain("this build would apply a different config");
+    expect(view.note).not.toContain("b".repeat(64));
+  });
+
+  test("a new render never presents the old stored hash as this build's render", () => {
+    const old = "a".repeat(64);
+    const view = configHashView({ config_hash: old, applied_config_hash: old }, "drifted");
+    expect(view.value).toBe(old);
+    expect(view.note).toContain("a different config");
+    expect(view.note).not.toContain(old);
   });
 });
 

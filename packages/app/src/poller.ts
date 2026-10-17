@@ -457,7 +457,7 @@ export class FleetPoller {
     this.advisoriesAt = now;
     try {
       // `hermes: false`: the upstream release check is a GitHub request, it is
-      // not one of the four conditions, and nothing here would render it.
+      // not one of the fleet advisory conditions, and nothing here would render it.
       await this.hermetic.foundation.status({}, { hermes: false });
     } catch {
       /* an advisory is a courtesy; an unreadable foundation never fails a poll */

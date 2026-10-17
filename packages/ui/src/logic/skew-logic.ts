@@ -293,8 +293,8 @@ export function configLabel(verdict: ConfigVerdict | null | undefined): {
  * invent a fact, and the display then invented one anyway.
  *
  * So: show a hash only when a box has reported one. Otherwise show nothing in
- * the value slot and name the rendered hash in the note, where it reads as what
- * it is — what this build would apply, not what any box has applied.
+ * the value slot and name the row's last rendered hash in the note, where it
+ * reads as what it is, not what any box has applied.
  */
 export function configHashView(
   agent: { config_hash?: string | null; applied_config_hash?: string | null },
@@ -305,14 +305,14 @@ export function configHashView(
   if (verdict === "drifted" && applied !== null) {
     return {
       value: applied,
-      note: `⚠ this build renders ${desired ?? "a different config"}`,
+      note: "⚠ this build would apply a different config",
       warn: true,
     };
   }
   if (applied !== null) return { value: applied, note: `· ${configLabel(verdict).label}`, warn: false };
   return {
     value: "—",
-    note: desired === null ? "· not reported" : `· not reported; this build renders ${desired}`,
+    note: desired === null ? "· not reported" : `· not reported; fleet last rendered ${desired}`,
     warn: false,
   };
 }
