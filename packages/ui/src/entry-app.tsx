@@ -26,6 +26,7 @@
 import { StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { installRpcTransport, sendPageReady } from "./api/transport-rpc.ts";
+import { dropUserTimingMeasures } from "./lib/user-timing.ts";
 import { Portal } from "./Portal.tsx";
 import { FleetProvider } from "./state/state.tsx";
 // KaTeX's own stylesheet, first so the app's rules win where they overlap. The
@@ -69,6 +70,12 @@ async function boot(): Promise<Root> {
 
   const el = document.getElementById("root");
   if (!el) throw new Error("no #root in index.html");
+
+  // React's development build would otherwise grow the page without bound
+  // (`lib/user-timing.ts`). A release has the production React, which records
+  // nothing, and this branch is compiled out of it. Never stopped: it lives as
+  // long as the page.
+  if (process.env.NODE_ENV !== "production") dropUserTimingMeasures();
 
   const root = createRoot(el);
   root.render(

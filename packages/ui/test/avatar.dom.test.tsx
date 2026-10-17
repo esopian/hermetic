@@ -17,9 +17,17 @@
  * way to assert "the loop stopped": the real one would simply never call back
  * again and the test would pass whether or not it had been cancelled.
  */
-import { REDUCED_MOTION_DEFAULT, cleanup, render, setPageHidden, setReducedMotion } from "./dom.ts";
+import {
+  REDUCED_MOTION_DEFAULT,
+  cleanup,
+  flipPageHidden,
+  render as mountInDom,
+  setPageHidden,
+  setReducedMotion,
+} from "./dom.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Avatar } from "../src/chat/components/avatar/Avatar.tsx";
+import { clearPageVisible, setPageVisible } from "../src/lib/visibility.ts";
 import type { AvatarStyle } from "../src/chat/components/avatar/avatar-seed.ts";
 
 const STYLES: AvatarStyle[] = ["sigil", "pixel", "blob"];
@@ -87,6 +95,21 @@ afterEach(() => {
   // writing to a flag nothing reads.
   setReducedMotion(REDUCED_MOTION_DEFAULT);
 });
+
+/**
+ * Mount, then show the page if it was hidden.
+ *
+ * Hidden at mount is what keeps the entrance tween out (`beforeEach`): the
+ * entrance is decided as an avatar mounts. Shown straight after, the way a
+ * browser would report it, because the draw loop itself sleeps while the page
+ * is hidden, and a test counting its frames needs it awake.
+ */
+function render(ui: React.ReactElement) {
+  const hidden = document.hidden;
+  const view = mountInDom(ui);
+  if (hidden) flipPageHidden(false);
+  return view;
+}
 
 function avatar(over: Partial<React.ComponentProps<typeof Avatar>> = {}) {
   return (
@@ -254,6 +277,76 @@ describe("prefers-reduced-motion: reduce", () => {
       "none",
       "inline",
     ]);
+  });
+});
+
+describe("a hidden page", () => {
+  test("stops the loop, and showing the page again starts it", () => {
+    const view = render(avatar({ style: "sigil" }));
+    const rect = view.container.querySelector("rect")!;
+    advance(2);
+    expect(frames.size).toBe(1);
+
+    flipPageHidden(true);
+    expect(frames.size).toBe(0);
+    const frozen = rect.getAttribute("opacity");
+    advance(6);
+    expect(rect.getAttribute("opacity")).toBe(frozen);
+
+    flipPageHidden(false);
+    expect(frames.size).toBe(1);
+    advance(6);
+    expect(rect.getAttribute("opacity")).not.toBe(frozen);
+  });
+
+  test("an avatar mounted while hidden waits for the page to be shown", () => {
+    mountInDom(avatar({ style: "sigil" }));
+    expect(frames.size).toBe(0);
+    flipPageHidden(false);
+    expect(frames.size).toBe(1);
+  });
+});
+
+describe("a window in the background", () => {
+  const hadFocus = document.hasFocus.bind(document);
+  let focused = true;
+  function setFocus(on: boolean): void {
+    focused = on;
+    document.hasFocus = () => focused;
+    window.dispatchEvent(new Event(on ? "focus" : "blur"));
+  }
+  afterEach(() => {
+    document.hasFocus = hadFocus;
+    focused = true;
+    clearPageVisible();
+  });
+
+  test("losing focus stops the loop, and focus starts it again", () => {
+    const view = render(avatar({ style: "sigil" }));
+    const rect = view.container.querySelector("rect")!;
+    advance(2);
+    expect(frames.size).toBe(1);
+
+    setFocus(false);
+    expect(frames.size).toBe(0);
+    const frozen = rect.getAttribute("opacity");
+    advance(6);
+    expect(rect.getAttribute("opacity")).toBe(frozen);
+
+    setFocus(true);
+    expect(frames.size).toBe(1);
+    advance(6);
+    expect(rect.getAttribute("opacity")).not.toBe(frozen);
+  });
+
+  test("the head's answer is what the app goes by", () => {
+    render(avatar({ style: "sigil" }));
+    advance(1);
+    expect(frames.size).toBe(1);
+    setPageVisible(false);
+    expect(frames.size).toBe(0);
+    setPageVisible(true);
+    expect(frames.size).toBe(1);
   });
 });
 

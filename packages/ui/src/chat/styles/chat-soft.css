@@ -247,6 +247,7 @@
   padding: 16px 26px;
   grid-template-columns: 36px minmax(0, 1fr);
   gap: 14px;
+  /* Fresh rows only in a virtualized log: see `[data-vrow]` in chat.css. */
   animation: chrise 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 [data-skin="soft"] .ch-msg:hover {

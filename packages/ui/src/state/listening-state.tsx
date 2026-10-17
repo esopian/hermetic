@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchListening, setInstanceListening } from "../api/index.ts";
-import { onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../lib/visibility.ts";
+import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../lib/visibility.ts";
 
 export interface Listening {
   instances: string[];
@@ -66,7 +66,9 @@ export function ListeningProvider({
     alive.current = true;
     void refresh();
     const timer = setInterval(() => {
-      if (!document.hidden) void refresh();
+      // `isVisible()`, not `document.hidden`: the app's webview reports hidden
+      // for its whole life, so that test never let this poll run in the app.
+      if (isVisible()) void refresh();
     }, pollMs);
     const unsubscribe = onReturnVisible(() => void refresh(), {
       minAgeMs: returnReadMinAgeMs,

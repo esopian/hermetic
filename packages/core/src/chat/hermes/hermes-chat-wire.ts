@@ -158,3 +158,19 @@ export function describe(e: unknown): string {
   if (e instanceof Error && e.message) return e.message;
   return typeof e === "string" && e ? e : "unknown failure";
 }
+
+/**
+ * Release a response whose body nobody will read: an error status about to be
+ * thrown, or a 401 about to be retried. An unread body holds its connection
+ * (and, under Bun, its socket) until the stream is garbage collected, so a
+ * caller that fails every few seconds against a box would otherwise pile them
+ * up. Never throws: a body already read or locked has nothing left to release.
+ */
+export function discardBody(response: Response): void {
+  try {
+    // Not awaited: a slow cancel must never delay the throw or the retry.
+    response.body?.cancel().catch(() => {});
+  } catch {
+    // Already consumed, locked, or errored: nothing is held.
+  }
+}

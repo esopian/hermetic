@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect } from "react";
 import type { ReactNode } from "react";
 import { ChatContext } from "./chat-state.tsx";
+import { ChatStoreProvider } from "./chat-select.tsx";
 import type { Chat, ChatSelection } from "./chat-state.tsx";
 
 export interface TargetScope {
@@ -29,5 +30,9 @@ export function ChatTargetScope({
     [scope.showThread, target.instance, target.bot, target.session],
   );
   const chat = { ...scope.chat(target, onSelect), showThread: showScopedThread };
-  return <ChatContext.Provider value={chat}>{children}</ChatContext.Provider>;
+  return (
+    <ChatContext.Provider value={chat}>
+      <ChatStoreProvider value={chat}>{children}</ChatStoreProvider>
+    </ChatContext.Provider>
+  );
 }

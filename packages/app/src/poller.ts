@@ -176,13 +176,29 @@ function fingerprint(a: AgentView): string {
     a.name,
     a.version,
     a.display_status,
-    a.heartbeat_age_ms ?? "null",
+    heartbeatPrint(a.heartbeat_age_ms),
     a.update_available === true ? "update" : "current",
     a.profile_revision ?? "null",
     a.pending?.profile_id ?? "null",
     a.pending?.profile_revision ?? "null",
     bootstrapPrint(a),
   ].join("|");
+}
+
+/**
+ * `heartbeat_age_ms` at the resolution a page draws it (`heartbeatAge` in the
+ * UI's `logic/format.ts`): "just now" under a minute, then whole minutes.
+ *
+ * The raw value is `now - last_heartbeat`, which is different on every scan, so
+ * fingerprinting it pushed every agent's full view to every page once a minute
+ * whether or not anything had changed. A healthy box beats every 30 s and so
+ * sits in the first bucket; a silent one still moves once a minute, which is
+ * when its "Nm ago" changes.
+ */
+export function heartbeatPrint(ageMs: number | null): string {
+  if (ageMs === null) return "null";
+  if (ageMs < 60_000) return "fresh";
+  return `${Math.floor(ageMs / 60_000)}m`;
 }
 
 /**

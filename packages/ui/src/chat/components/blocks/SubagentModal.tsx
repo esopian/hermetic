@@ -26,6 +26,8 @@ import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import type { ChatBlockView } from "../../../api/index.ts";
 import { Dialog } from "../../../components/Dialog.tsx";
 import type { SubagentControls } from "../../chat-subagent-control.ts";
+import { sameMap } from "../../chat-message-identity.ts";
+import { useStable } from "../../use-stable.ts";
 import {
   clockText,
   controllable,
@@ -452,6 +454,19 @@ export function SubagentModal({
   );
 }
 
+type Places = ReturnType<typeof subagentPlaces>;
+type Place = Places extends ReadonlyMap<string, infer P> ? P : never;
+
+/** One child's place, unchanged: the same block, turn and siblings. */
+const samePlace = (a: Place, b: Place): boolean =>
+  a.block === b.block &&
+  a.message === b.message &&
+  a.siblings.length === b.siblings.length &&
+  a.siblings.every((sibling, i) => sibling === b.siblings[i]);
+const samePlaces = (a: Places, b: Places): boolean => sameMap(a, b, samePlace);
+const sameResults = (a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean =>
+  sameMap(a, b);
+
 /**
  * The thread's subagent scope: the context the inline lines read (how to open
  * a child, the results turns), and the modal when one is open.
@@ -475,8 +490,17 @@ export function SubagentScope({
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const returnTo = useRef<string | null>(null);
-  const places = useMemo(() => subagentPlaces(groups), [groups]);
-  const results = useMemo(() => delegationResults(messages), [messages]);
+  // Both are rebuilt whenever the transcript moves — every streaming delta —
+  // and held while they say the same thing: `results` rides the context every
+  // inline line reads, so a fresh map would re-render each of them per delta.
+  const places = useStable(
+    useMemo(() => subagentPlaces(groups), [groups]),
+    samePlaces,
+  );
+  const results = useStable(
+    useMemo(() => delegationResults(messages), [messages]),
+    sameResults,
+  );
   const shown = useRef(openId);
   shown.current = openId;
   const open = useCallback((id: string) => setOpenId(id), []);

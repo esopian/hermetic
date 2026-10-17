@@ -51,30 +51,43 @@ export function pinToBottom(node: HTMLElement, pin: Pin): void {
 }
 
 /**
+ * Keep `pin.following` true to the reader's scrolling on `node`: the one place
+ * the scroll-event half of the rule lives, shared by `useStickToBottom` and the
+ * virtualized log (`virtual/VirtualLog.tsx`). Returns the detach.
+ */
+export function trackFollowing(node: HTMLElement, pin: RefObject<Pin>): () => void {
+  const onScroll = () => {
+    const state = pin.current;
+    state.following = nextFollowing({
+      following: state.following,
+      atBottom: isAtBottom(node),
+      scrollTop: node.scrollTop,
+      pinnedTop: state.pinnedTop,
+    });
+    // The reader left the live end: the old pin offset means nothing now,
+    // and a later scroll back past it is not a return to following.
+    if (!state.following) state.pinnedTop = null;
+  };
+  node.addEventListener("scroll", onScroll, { passive: true });
+  return () => node.removeEventListener("scroll", onScroll);
+}
+
+/**
  * Tracks the reader's scrolling and re-pins the log whenever its content
  * resizes while they are following. `pin` is a ref the caller also writes: an
  * open or an own send sets `following` back to true.
+ *
+ * For a log that is not virtualized. A `VirtualLog` owns this behaviour for
+ * its scroller; using both on one scroller makes two owners fight.
  */
 export function useStickToBottom(log: RefObject<HTMLElement | null>, pin: RefObject<Pin>): void {
   useEffect(() => {
     const node = log.current;
     if (!node) return;
-    const onScroll = () => {
-      const state = pin.current;
-      state.following = nextFollowing({
-        following: state.following,
-        atBottom: isAtBottom(node),
-        scrollTop: node.scrollTop,
-        pinnedTop: state.pinnedTop,
-      });
-      // The reader left the live end: the old pin offset means nothing now,
-      // and a later scroll back past it is not a return to following.
-      if (!state.following) state.pinnedTop = null;
-    };
+    const stopTracking = trackFollowing(node, pin);
     const repin = () => {
       if (pin.current.following) pinToBottom(node, pin.current);
     };
-    node.addEventListener("scroll", onScroll, { passive: true });
     // `load`/`error` do not bubble, but they do capture: an image settling its
     // size is the commonest late layout shift, and this catches it even where
     // there is no ResizeObserver.
@@ -101,7 +114,7 @@ export function useStickToBottom(log: RefObject<HTMLElement | null>, pin: RefObj
     if (resize) for (const child of Array.from(node.children)) resize.observe(child);
     rows?.observe(node, { childList: true });
     return () => {
-      node.removeEventListener("scroll", onScroll);
+      stopTracking();
       node.removeEventListener("load", repin, true);
       node.removeEventListener("error", repin, true);
       resize?.disconnect();
