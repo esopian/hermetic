@@ -4,7 +4,7 @@
  * `log.ts` used to `mkdirSync` + `appendFileSync` for every line, DEBUG lines
  * and op events included, so each line cost two synchronous filesystem calls on
  * the main process's loop. This is the replacement: lines go onto an in-memory
- * queue and one long-lived handle appends them in batches.
+ * queue and are appended in batches.
  *
  * - **Batching.** A line schedules a flush after `flushMs` (a burst becomes one
  *   write); a queue that reaches `flushBytes` flushes at once. Only one write is
@@ -17,14 +17,14 @@
  *   app calls it from `process.on("exit")` and from a crash. The one cost: a
  *   batch whose write was in flight at that instant can appear twice. A
  *   duplicate in a debugging log is better than a gap.
- * - **A file that disappears comes back.** Before each batch the open handle is
- *   compared with what the path names now; a rotated or deleted file (or
- *   directory) is recreated, which is what per-line `appendFileSync` did.
+ * - **A file that disappears comes back.** Every batch opens the path afresh, so
+ *   a rotated or deleted file (or directory) is recreated, which is what
+ *   per-line `appendFileSync` did.
  *
  * Nothing here knows what a line says; §8.3 is `log.ts`'s concern.
  */
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
-import { type FileHandle, mkdir, open, stat } from "node:fs/promises";
+import { appendFile, chmod, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /** Where batches go. The default is a file; tests inject one that stalls or counts. */
@@ -41,40 +41,34 @@ export interface FileSinkOptions {
 }
 
 /**
- * One long-lived append handle on `path`. The directory is created when the
- * handle is opened (once, and again only if the file went missing), not per
- * line. A file left by an older build with a looser mode is tightened on the
- * first open.
+ * Appends each batch to `path` with a call that opens and closes the file
+ * itself. No handle is held between batches: a batch is at most one per
+ * `flushMs`, so an open per batch costs nothing measurable, and a handle held
+ * by a log nobody closed is one the runtime closes during garbage collection,
+ * which Bun 1.4 treats as an error. It also makes a rotated or deleted file
+ * come back by construction, as per-line `appendFileSync` did. The directory is
+ * created only when the append finds it missing. A file left by an older build
+ * with a looser mode is tightened on the first write.
  */
 export function fileSink(path: string, options: FileSinkOptions): LogSink {
-  let handle: FileHandle | null = null;
   let tightened = false;
 
-  async function current(): Promise<FileHandle> {
-    if (handle !== null) {
-      try {
-        const [named, held] = await Promise.all([stat(path), handle.stat()]);
-        if (named.ino === held.ino && named.dev === held.dev) return handle;
-      } catch {
-        // The path is gone (or the handle is): fall through and reopen.
-      }
-      const stale = handle;
-      handle = null;
-      await stale.close().catch(() => {});
-    }
-    await mkdir(dirname(path), { recursive: true, mode: options.dirMode });
-    const opened = await open(path, "a", options.fileMode);
-    if (!tightened) {
-      await opened.chmod(options.fileMode);
-      tightened = true;
-    }
-    handle = opened;
-    return opened;
+  async function tighten(): Promise<void> {
+    if (tightened) return;
+    tightened = true;
+    await chmod(path, options.fileMode).catch(() => {});
   }
 
   return {
     async append(text) {
-      await (await current()).appendFile(text);
+      try {
+        await appendFile(path, text, { mode: options.fileMode });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await mkdir(dirname(path), { recursive: true, mode: options.dirMode });
+        await appendFile(path, text, { mode: options.fileMode });
+      }
+      await tighten();
     },
     appendSync(text) {
       mkdirSync(dirname(path), { recursive: true, mode: options.dirMode });
@@ -85,9 +79,7 @@ export function fileSink(path: string, options: FileSinkOptions): LogSink {
       }
     },
     async close() {
-      const held = handle;
-      handle = null;
-      await held?.close().catch(() => {});
+      // Nothing is held open between batches.
     },
   };
 }
