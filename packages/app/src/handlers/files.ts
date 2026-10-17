@@ -434,7 +434,7 @@ export async function discard(ctx: HandlerContext, params: unknown) {
 }
 
 /**
- * An image's bytes, for a preview: a staged or inbox file's thumbnail (`f_…`)
+ * An image's bytes, for a preview: a committed (inbox) file's thumbnail (`f_…`)
  * or a share card's image (`sh_…`). Images only, and no larger than Hermes
  * takes one: anything else is refused from the box's response headers
  * (`Content-Type`, `Content-Length`), before its body is read.

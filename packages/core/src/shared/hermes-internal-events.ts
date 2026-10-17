@@ -1,12 +1,13 @@
 /**
  * The Hermes gateway's internal signals (§9.2): event types the gateway
- * broadcasts on the chat socket that Hermes Desktop consumes without drawing
+ * broadcasts on the chat socket that Hermes Desktop handles or ignores without drawing
  * anything in the transcript.
  *
  * The chat adapter turns any event it has no mapping for into an `unknown`
  * block, so that a `hermes_ref` bump can never blank a transcript. These are
  * the exception: change-watcher broadcasts, desktop-surface commands, and the
- * voice/display/pet side channels. Most arrive as global broadcasts with
+ * voice/display/pet side channels, and advisory tool-output risk reports.
+ * Most arrive as global broadcasts with
  * `session_id: ""` (upstream `tui_gateway/server.py`), so no session check
  * filters them either. Drawn, each one is an activity row for something the
  * operator never did.
@@ -48,6 +49,9 @@ export const HERMES_INTERNAL_EVENTS: readonly string[] = Object.freeze([
   "message.reaction",
   // message-stream.ts:207 — a heart burst, no row.
   "reaction",
+  // tools.ts handles the completed tool, while Desktop draws no row for the
+  // gateway's advisory output-risk event.
+  "tool.output_risk",
   // plugins/hermes-bots/screen-*.tsx — the virtual display's side channel.
   "display.install.done",
   "display.install.log",

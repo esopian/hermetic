@@ -280,6 +280,9 @@ export class MemoryFiles implements FilesApi {
       throw filesRefusal("FILE_SECRET_FORBIDDEN", agent);
     }
     const entry = this.live(agent, id);
+    // As on the box (`entryContent`): only inbox and outbox files are served;
+    // a staged file has no content until a turn commits it.
+    if (entry.state === "staged") throw filesRefusal("FILE_NOT_FOUND", agent);
     if (opts.imagesOnly && !isImageMime(entry.mime)) {
       throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: only images have a preview`, {
         name: agent,

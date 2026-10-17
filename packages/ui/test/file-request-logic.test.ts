@@ -89,7 +89,7 @@ describe("request card logic", () => {
     );
   });
 
-  test("untrusted: a risk notice or a web/browser tool earlier in the turn", () => {
+  test("untrusted: a legacy risk notice or a web/browser tool earlier in the turn", () => {
     const risk = {
       kind: "activity",
       category: "notice",

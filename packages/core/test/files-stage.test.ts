@@ -328,11 +328,14 @@ describe("files.internal", () => {
     const staged = events.at(-1);
     if (staged?.type !== "staged") throw new Error("expected a staged event");
     const id = staged.file.id;
-    const content = await hermetic.files.internal.content("atlas", id, FILES_LIMITS.imageBytes);
-    expect(content.mime).toBe("image/png");
+    // Like the box: a staged file has no content until a turn commits it.
+    const early = await refusal(hermetic.files.internal.content("atlas", id, FILES_LIMITS.imageBytes));
+    expect(early.code).toBe("FILE_NOT_FOUND");
     const committed = await hermetic.files.internal.commit("atlas", id, "s1");
     expect(committed.rel).toMatch(new RegExp(`^inbox/\\d{4}-\\d{2}-\\d{2}/${id}/chart\\.png$`));
     expect(backend.files.committed("atlas").map((e) => e.id)).toEqual([id]);
+    const content = await hermetic.files.internal.content("atlas", id, FILES_LIMITS.imageBytes);
+    expect(content.mime).toBe("image/png");
     expect(await hermetic.files.internal.discard("atlas", id)).toEqual({ discarded: true });
     expect((await refusal(hermetic.files.internal.discard("atlas", id))).code).toBe("FILE_NOT_FOUND");
   });
@@ -367,6 +370,7 @@ describe("files.internal", () => {
     );
     const last = events.at(-1);
     if (last?.type !== "staged") throw new Error("expected a staged event");
+    await hermetic.files.internal.commit("atlas", last.file.id, "s1");
     const e = await refusal(
       hermetic.files.internal.content("atlas", last.file.id, FILES_LIMITS.imageBytes, {
         imagesOnly: true,

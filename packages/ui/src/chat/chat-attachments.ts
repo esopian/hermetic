@@ -30,6 +30,7 @@ import type { Conversation } from "./chat-conversation-record.ts";
 import { key } from "./chat-conversation-record.ts";
 import { fmtBytes } from "./chat-logic.ts";
 import type { ChatSelection } from "./chat-types.ts";
+import { seedThumbnail } from "./thumbnails.ts";
 import { putStream } from "./upload.ts";
 
 /** One chip in the composer's tray. Replaced, never mutated, so a render sees it move. */
@@ -317,6 +318,17 @@ export function useDraftAttachments({ get, changed, permits, api }: DraftAttachm
             return;
           }
           if (frame.type === "staged") {
+            // A drop or paste still holds its bytes: its message can show the
+            // picture at once, before the box has a committed copy to serve.
+            if (job.file !== null && isImageMime(frame.file.mime)) {
+              seedThumbnail(
+                fleetTarget()?.fleet_id ?? "",
+                target.instance,
+                frame.file.id,
+                job.file,
+                frame.file.mime,
+              );
+            }
             patch(target, local_id, {
               state: "staged",
               progress: 1,

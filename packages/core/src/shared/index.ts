@@ -214,6 +214,8 @@ export {
   HERMES_WEB_DIST_DIR,
   hermesConfigGetArgv,
 } from "./hermes.ts";
+export { hermesConfigLeaves, hermesOwnedDrift } from "./hermes-owned.ts";
+export type { OwnedKeyDrift } from "./hermes-owned.ts";
 export {
   AGENT_CONFIG_SCHEMA_VERSION,
   APT_LOCK_TIMEOUT_SECONDS,

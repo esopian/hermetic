@@ -16,6 +16,18 @@ describe("hermes internal events", () => {
     expect(HERMES_INTERNAL_EVENTS).toContain("platforms.changed");
   });
 
+  test("advisory tool-output risk reports are internal", () => {
+    expect(isHermesInternalEvent("tool.output_risk")).toBe(true);
+    expect(
+      hermesActivity("tool.output_risk", {
+        tool_id: "call1",
+        risk: "high",
+        findings: ["invisible_unicode_U+200B"],
+        redacted: false,
+      }),
+    ).toBeNull();
+  });
+
   test("an event this build cannot read is not internal, so it still renders", () => {
     expect(isHermesInternalEvent("workspace.checkpoint")).toBe(false);
     // Mapped or deliberately left to render: dropping any of these blanks a row.

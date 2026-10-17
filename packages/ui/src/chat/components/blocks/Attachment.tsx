@@ -48,9 +48,23 @@ function StagedAttachment({
   const fleet = ownFleet ?? current ?? "";
   const mime = typeof block.mime === "string" ? block.mime : "";
   const image = mime.startsWith("image/");
-  const thumb = useThumbnail(image ? instance : null, image ? file_id : null, fleet);
+  // A message still sending holds a staged file, which the box does not serve
+  // until the turn commits it: only a picture seeded from the page's own bytes
+  // shows until then, and an early read would only be told "no such file".
+  const thumb = useThumbnail(
+    image ? instance : null,
+    image ? file_id : null,
+    fleet,
+    undefined,
+    delivery !== "sending" && delivery !== "failed",
+  );
   const src = thumb?.state === "ready" ? safeImageSrc(thumb.url) : null;
   const expired = thumb?.state === "expired";
+  const missing = expired
+    ? "preview expired"
+    : thumb?.state === "loading"
+      ? "loading preview…"
+      : "preview unavailable";
   const status = expired
     ? "expired on box"
     : delivery === "sending"
@@ -61,9 +75,7 @@ function StagedAttachment({
   return (
     <div className="ch-attach">
       {src ? <img className="ch-shot" src={src} alt={plainText(block.name)} /> : null}
-      {image && !src ? (
-        <div className="ch-shot-missing">{expired ? "preview expired" : "preview unavailable"}</div>
-      ) : null}
+      {image && !src ? <div className="ch-shot-missing">{missing}</div> : null}
       <span className={`ch-attach-item${expired ? " expired" : ""}`} data-file-id={file_id}>
         <i>{typeTag(mime, block.name)}</i>
         <span>

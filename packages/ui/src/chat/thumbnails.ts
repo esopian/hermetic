@@ -9,6 +9,11 @@
  * tells every chip still subscribed, which reads it again. `expired` (the box
  * no longer has the file) is final; `failed` is retried after
  * `FAILED_RETRY_MS`, since the box may only have been unreachable.
+ *
+ * A file the operator dropped or pasted is seeded from the page's own bytes
+ * when it is staged (`seedThumbnail`), so its message shows the picture the
+ * moment it is sent. The box serves only committed files, and a staged file
+ * is committed by the turn that sends it; until then nothing is read back.
  */
 import { useEffect, useState } from "react";
 import { filesContent } from "../api/files.ts";
@@ -56,35 +61,67 @@ function current(k: string): Thumbnail | undefined {
   return held;
 }
 
+const keyOf = (fleet: string, instance: string, file_id: string) =>
+  `${fleet}\u0000${instance}\u0000${file_id}`;
+
+/** Hold `blob` as `k`'s picture; an eviction forgets it, and a chip still mounted reads it again. */
+function ready(k: string, blob: Blob): void {
+  let url = "";
+  url = mintBlobUrl(blob, () => {
+    const held = cache.get(k);
+    if (held?.state === "ready" && held.url === url) {
+      cache.delete(k);
+      notify(k);
+    }
+  });
+  settle(k, { state: "ready", url });
+}
+
 function load(k: string, instance: string, file_id: string, read: Fetch): void {
   cache.set(k, LOADING);
   readVerifiedImage(instance, file_id, undefined, read).then(
     (blob) => {
-      let url = "";
-      url = mintBlobUrl(blob, () => {
-        const held = cache.get(k);
-        if (held?.state === "ready" && held.url === url) {
-          cache.delete(k);
-          notify(k);
-        }
-      });
-      settle(k, { state: "ready", url });
+      // A seed that landed while the read was out is the same file; keep it.
+      if (cache.get(k)?.state === "ready") return;
+      ready(k, blob);
     },
     (e: unknown) => {
+      if (cache.get(k)?.state === "ready") return;
       const code = typeof e === "object" && e !== null && "code" in e ? String(e.code) : "";
       settle(k, code === "FILE_NOT_FOUND" ? { state: "expired" } : { state: "failed" });
     },
   );
 }
 
-/** `null` when there is nothing to read: no box, no file, or not an image. */
+/**
+ * A staged image's picture from the bytes the page uploaded, under the key its
+ * message's chip reads. `mime` is the box's sniffed type, not the browser's guess.
+ */
+export function seedThumbnail(
+  fleet: string,
+  instance: string,
+  file_id: string,
+  bytes: Blob,
+  mime: string,
+): void {
+  const k = keyOf(fleet, instance, file_id);
+  if (current(k)?.state === "ready") return;
+  ready(k, new Blob([bytes], { type: mime }));
+}
+
+/**
+ * `null` when there is nothing to read: no box, no file, or not an image.
+ * With `readBox` false the chip shows a seeded picture but asks the box for
+ * nothing: its file is still staged, and the box would answer that it has none.
+ */
 export function useThumbnail(
   instance: string | null,
   file_id: string | null,
   fleet = "",
   read: Fetch = filesContent,
+  readBox = true,
 ): Thumbnail | null {
-  const k = instance && file_id ? `${fleet}\u0000${instance}\u0000${file_id}` : null;
+  const k = instance && file_id ? keyOf(fleet, instance, file_id) : null;
   const [tick, rerender] = useState(0);
   // Subscribe for as long as the chip is mounted, and read whatever is missing.
   // `tick` moves on every notice, so an eviction comes back through here.
@@ -94,12 +131,12 @@ export function useThumbnail(
     const set = listeners.get(k) ?? new Set();
     set.add(tell);
     listeners.set(k, set);
-    if (!current(k)) load(k, instance, file_id, read);
+    if (readBox && !current(k)) load(k, instance, file_id, read);
     return () => {
       set.delete(tell);
       if (set.size === 0 && listeners.get(k) === set) listeners.delete(k);
     };
-  }, [k, instance, file_id, read, tick]);
+  }, [k, instance, file_id, read, readBox, tick]);
   const held = k === null ? null : (current(k) ?? LOADING);
   const url = held?.state === "ready" ? held.url : null;
   // A URL on screen is pinned until this chip lets go of it.
