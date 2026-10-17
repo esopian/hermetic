@@ -574,6 +574,17 @@ textarea:focus-visible,
   }
 }
 
+/* A window nobody is looking at — hidden, minimised, or not the one in front —
+   runs no CSS animation at all (`markPageInactive`, `lib/visibility.ts`).
+   Paused rather than removed, so every spinner and pulse resumes where it was.
+   Transitions are short and finite and are left to finish. */
+[data-page-inactive] *,
+[data-page-inactive] *::before,
+[data-page-inactive] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: Must override inline animation shorthands (OpProgress, AgentLifecycle). */
+  animation-play-state: paused !important;
+}
+
 /* Includes inline OpProgress/AgentDrawer styles and pseudo-elements. A static
    full-width sweep still announces loading; determinate bars keep their value. */
 @media (prefers-reduced-motion: reduce) {

@@ -15,6 +15,7 @@
  * longer has is drawn from the tool's recorded result, and says so.
  */
 import { useEffect, useRef, useState } from "react";
+import { usePageActive } from "../../../lib/visibility.ts";
 import type { ClipboardEvent, DragEvent, ReactNode } from "react";
 import {
   FILES_LIMITS,
@@ -29,7 +30,7 @@ import {
 import * as filesApi from "../../../api/files.ts";
 import type { FileRequestSlot } from "../../../api/files.ts";
 import { fmtBytes } from "../../chat-logic.ts";
-import { useChatIfAvailable } from "../../chat-state.tsx";
+import { useChatGetter, useChatSelect } from "../../chat-select.tsx";
 import {
   baseName,
   capLabel,
@@ -94,14 +95,21 @@ export function FileRequestCard({
   );
 }
 
-/** A second-resolution clock, only while something on the card counts down. */
+/**
+ * A second-resolution clock, only while something on the card counts down and
+ * the page is active (`lib/visibility.ts`). Coming back re-reads the clock at
+ * once, so a countdown that paused in the background shows the right remainder.
+ */
 function useSeconds(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  const pageActive = usePageActive();
+  const ticking = active && pageActive;
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [ticking]);
   return now;
 }
 
@@ -384,8 +392,10 @@ function choose(
 
 /** Where the slot came from: a warning unless it is this conversation's own. */
 function Origin({ slot }: { slot: FileRequestSlot }) {
-  const chat = useChatIfAvailable();
-  const { own, label } = requestOrigin(slot, chat?.session?.id);
+  // The session alone (`chat-select.tsx`): the clock and the roster move the
+  // chat value constantly, and a card in a settled message reads neither.
+  const session = useChatSelect((chat) => chat?.session?.id);
+  const { own, label } = requestOrigin(slot, session);
   return own ? label : <span className="ch-freq-warn">{label}</span>;
 }
 
@@ -410,7 +420,10 @@ function LateDelivery({
   /** What "Tell … & continue" sends. */
   message: string;
 }) {
-  const chat = useChatIfAvailable();
+  // Whether there is a chat to send through, subscribed; the send itself is
+  // read when the button is pressed.
+  const chatPresent = useChatSelect((chat) => chat !== null);
+  const getChat = useChatGetter();
   const [later, setLater] = useState<"open" | "dismissed" | "sent">(() =>
     toldLate(instance, request_id) ? "sent" : "open",
   );
@@ -421,7 +434,7 @@ function LateDelivery({
       <span>{`${agent} stopped waiting at ${clockHM(stoppedAt)}. ${what} is on the box.`}</span>
       {later === "sent" ? (
         <span className="ch-freq-note">{`Sent to ${agent}.`}</span>
-      ) : chat ? (
+      ) : chatPresent ? (
         <div className="ch-freq-actions">
           <button
             type="button"
@@ -434,7 +447,7 @@ function LateDelivery({
                 return;
               }
               // Not sent (a turn in flight, a closed chat): still offered.
-              if (!chat.send(message)) return;
+              if (!getChat()?.send(message)) return;
               markToldLate(instance, request_id);
               setLater("sent");
             }}

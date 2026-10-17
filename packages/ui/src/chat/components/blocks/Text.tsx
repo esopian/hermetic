@@ -18,11 +18,12 @@
  * core's own masking (`tests/chat-redaction.test.ts`). A new construct that
  * draws prose draws it through that component or it does not draw it.
  */
+import { memo, useMemo } from "react";
 import { RedactedText } from "../RedactedText.tsx";
 import type { ChatBlockOf } from "../../../api/index.ts";
-import { renderMathHtml } from "../../chat-math.ts";
 import { parseMarkdown, safeHref } from "../../chat-logic.ts";
 import type { MdNode, MdSpan } from "../../chat-logic.ts";
+import { cachedMarkdown, cachedMathHtml } from "../../markdown-cache.ts";
 
 /**
  * The contents of an emphasis run or a link label: its parsed children when it
@@ -35,7 +36,12 @@ function Inner({ span }: { span: { text: string; spans?: MdSpan[] } }) {
   return span.spans ? <Spans spans={span.spans} /> : <RedactedText text={span.text} />;
 }
 
-function Spans({ spans }: { spans: MdSpan[] }) {
+/**
+ * Memoized, like `Node` and `TextBlock`: parsed nodes come out of a shared
+ * cache (`markdown-cache.ts`), so an unchanged text hands these the very same
+ * node objects and a settled paragraph is never drawn twice.
+ */
+const Spans = memo(function Spans({ spans }: { spans: MdSpan[] }) {
   return (
     <>
       {spans.map((span, i) => {
@@ -65,7 +71,7 @@ function Spans({ spans }: { spans: MdSpan[] }) {
           // that belongs to `RedactedText` rather than to a typesetter. The
           // safety argument for the innerHTML lives in `chat-math.ts`.
           case "math": {
-            const html = renderMathHtml(span.text, false);
+            const html = cachedMathHtml(span.text, false);
             return html === null ? (
               <span className="ch-math" key={key}>
                 <RedactedText text={span.text} />
@@ -123,9 +129,9 @@ function Spans({ spans }: { spans: MdSpan[] }) {
       })}
     </>
   );
-}
+});
 
-function Node({ node }: { node: MdNode }) {
+const Node = memo(function Node({ node }: { node: MdNode }) {
   switch (node.type) {
     case "h": {
       const level = Math.min(Math.max(node.level, 1), 6);
@@ -201,7 +207,7 @@ function Node({ node }: { node: MdNode }) {
     // Display math. Same rule as the inline case above: KaTeX when it can
     // typeset it, the source through `RedactedText` when it cannot.
     case "math": {
-      const html = renderMathHtml(node.text, true);
+      const html = cachedMathHtml(node.text, true);
       return html === null ? (
         <div className="ch-math block">
           <RedactedText text={node.text} />
@@ -229,7 +235,7 @@ function Node({ node }: { node: MdNode }) {
         </p>
       );
   }
-}
+});
 
 /**
  * Operator text, bare-minimum markdown only: backtick `code` spans and fenced
@@ -301,7 +307,7 @@ function PlainText({ text }: { text: string }) {
   );
 }
 
-export function TextBlock({
+export const TextBlock = memo(function TextBlock({
   block,
   streaming = false,
   /** Operator-authored text: bare-minimum markdown, see `PlainText` above. */
@@ -311,15 +317,22 @@ export function TextBlock({
   streaming?: boolean;
   plain?: boolean;
 }) {
+  const text = block.markdown;
+  // A settled text is parsed once and shared (`markdown-cache.ts`). One still
+  // arriving changes on every delta, so its prefixes are parsed directly
+  // rather than crowding settled texts out of the cache.
+  const nodes = useMemo(
+    () => (plain ? [] : streaming ? parseMarkdown(text) : cachedMarkdown(text)),
+    [plain, streaming, text],
+  );
   if (plain) {
     return (
       <>
-        <PlainText text={block.markdown} />
+        <PlainText text={text} />
         {streaming ? <span className="caret" /> : null}
       </>
     );
   }
-  const nodes = parseMarkdown(block.markdown);
   return (
     <>
       {nodes.map((node, i) => (
@@ -330,4 +343,4 @@ export function TextBlock({
       {streaming ? <span className="caret" /> : null}
     </>
   );
-}
+});

@@ -105,7 +105,6 @@ function setup(
                 instance="atlas"
                 bot="default"
                 status="ready"
-                now={Date.now()}
               />
             ))
           : null}
@@ -308,7 +307,6 @@ describe("a steer on screen", () => {
         instance="atlas"
         bot="default"
         status="ready"
-        now={Date.now()}
       />,
     );
 

@@ -964,6 +964,8 @@ describe("chat.observe: a hint survives the wait that did not deliver it", () =>
       { reads: [], failures: [] },
       {
         pollMs: POLL_MS,
+        // These tests are about the poll floor with a stream open; keep it short.
+        hintedPollMs: POLL_MS,
         snapshot: () => {
           reads += 1;
           return Promise.resolve({ session: "s1", messages: [...arrivals] });
@@ -998,6 +1000,8 @@ describe("chat.observe: a hint survives the wait that did not deliver it", () =>
       { reads: [], failures: [] },
       {
         pollMs: POLL_MS,
+        // These tests are about the poll floor with a stream open; keep it short.
+        hintedPollMs: POLL_MS,
         snapshot: () => {
           reads += 1;
           return Promise.resolve({ session: "s1", messages: [...arrivals] });
@@ -1052,6 +1056,8 @@ describe("chat.observe: dropping a hint stream really cancels it", () => {
         // The poll floor is what brings the loop back round to the read that
         // fails. No hint ever arrives to do it, which is the point.
         pollMs: 5,
+        // These tests are about the poll floor with a stream open; keep it short.
+        hintedPollMs: 5,
         hints: (_target, opts) => {
           opened += 1;
           return (async function* (): AsyncIterable<ChatObserveHint> {
@@ -1098,6 +1104,8 @@ describe("chat.observe: dropping a hint stream really cancels it", () => {
       { reads: [{ session: "s1", messages: [] }], failures: [null, refusal] },
       {
         pollMs: 5,
+        // These tests are about the poll floor with a stream open; keep it short.
+        hintedPollMs: 5,
         hints: (): AsyncIterable<ChatObserveHint> => ({
           [Symbol.asyncIterator]: (): AsyncIterator<ChatObserveHint> => ({
             /** Never answers. This is the stream the loop is trying to drop. */

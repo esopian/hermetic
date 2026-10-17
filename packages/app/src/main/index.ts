@@ -40,7 +40,7 @@ import { type ChatWatchdog, createChatWatchdog } from "../chat-watchdog.ts";
 import { dispatch } from "../handlers/dispatch.ts";
 import { createStreamRegistry } from "../handlers/streams.ts";
 import type { HandlerContext } from "../handlers/ctx.ts";
-import { createAppLog } from "../log.ts";
+import { createAppLog, installLogCrashFlush } from "../log.ts";
 import { OpRegistry } from "../ops.ts";
 import { resumePendingOps } from "../resume.ts";
 import { openState } from "../state.ts";
@@ -148,6 +148,9 @@ const state = await openState({
 // The real directory, not `state.home`: fixture state calls its home
 // `:memory:`, which is not a path, and its log already lives in `$HERMETIC_HOME`.
 const log = createAppLog({ home: paths.home, fixture });
+// Lines are queued and written in batches (`log-writer.ts`); this is what writes the
+// tail when the process exits or crashes before the next batch.
+installLogCrashFlush(log);
 
 const pending = openPendingOpStore({ fixture });
 /**

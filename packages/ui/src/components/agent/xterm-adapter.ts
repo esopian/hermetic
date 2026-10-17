@@ -13,6 +13,7 @@
  * never opens a terminal never parses it, and a test that imports the section
  * never evaluates it.
  */
+import { isPageActive, subscribePageActive } from "../../lib/visibility.ts";
 
 export interface TermDisposable {
   dispose(): void;
@@ -89,7 +90,8 @@ export const xtermView: TermFactory = async ({ onLink }) => {
     fontFamily: TERM_FONT,
     fontSize: 12.5,
     lineHeight: 1.25,
-    cursorBlink: true,
+    // Blinks only while the window is in front; see `stopBlinkWhileInactive` below.
+    cursorBlink: isPageActive(),
     scrollback: 5000,
     // Option is Option on a Mac keyboard (é, ñ); Meta would steal them.
     macOptionIsMeta: false,
@@ -111,6 +113,11 @@ export const xtermView: TermFactory = async ({ onLink }) => {
   // OSC 52 is the remote writing this Mac's clipboard. Ignored in v1: claim
   // the sequence so nothing else ever acts on it.
   term.parser.registerOscHandler(52, () => true);
+  // A blinking cursor is a timer and a repaint twice a second; in a window
+  // nobody is looking at it is neither, and it blinks again on return.
+  const stopBlinkWhileInactive = subscribePageActive((active) => {
+    term.options.cursorBlink = active;
+  });
   return {
     open: (el) => term.open(el),
     write: (data, done) => term.write(data, done),
@@ -132,7 +139,10 @@ export const xtermView: TermFactory = async ({ onLink }) => {
     onBinary: (cb) => term.onBinary(cb),
     onTitle: (cb) => term.onTitleChange(cb),
     onBell: (cb) => term.onBell(cb),
-    dispose: () => term.dispose(),
+    dispose: () => {
+      stopBlinkWhileInactive();
+      term.dispose();
+    },
   };
 };
 

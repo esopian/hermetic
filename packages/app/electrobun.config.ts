@@ -18,6 +18,7 @@
 import type { ElectrobunConfig } from "electrobun/bun";
 import pkg from "../../package.json" with { type: "json" };
 import { macRenderer } from "./renderer.ts";
+import { viewBuild } from "./view-build.ts";
 
 /** Set by `scripts/dev-hmr.ts`, which also starts the server it names. */
 const hmr = (process.env["HERMETIC_VIEW_URL"] ?? "") !== "";
@@ -32,7 +33,8 @@ export default {
     // `index.html` links the emitted `index.js` + `entry-app.css` (the
     // stylesheet is named after the entry's basename). The page is copied
     // verbatim rather than generated, because Hutch emits no HTML of its own.
-    views: { main: { entrypoint: "../ui/src/entry-app.tsx" } },
+    // `viewBuild` gives a release the production React (`view-build.ts`).
+    views: { main: { entrypoint: "../ui/src/entry-app.tsx", ...viewBuild(process.env) } },
     copy: {
       "../ui/index.html": "views/main/index.html",
       "../ui/fonts": "views/main/fonts",
