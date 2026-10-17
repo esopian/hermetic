@@ -64,7 +64,7 @@ function hermesOptions(cmd: Cmd): Cmd {
     .option("--approvals <mode>", "smart | manual | off (default off)")
     .option(
       "--hold <keys>",
-      "settings hermetic holds, comma-separated: terminal,max-turns,reasoning (or none)",
+      "settings hermetic holds, comma-separated: model,terminal,max-turns,reasoning (or none)",
     )
     .addHelpText(
       "after",
@@ -74,9 +74,10 @@ function hermesOptions(cmd: Cmd): Cmd {
         "once with the fleet default.\n" +
         "\n--hold makes hermetic hold a setting instead: it is written to the agent's\n" +
         "managed config on every apply and cannot be changed on the box. On `set` the\n" +
-        "list replaces the one before it. The model is always held (it comes from the\n" +
-        "agent's provider profile); --approvals can never be held. An agent created\n" +
-        "before --hold existed holds every setting it was given until --hold is set.\n",
+        "list replaces the one before it. The model is a starting value like the rest\n" +
+        "(the provider profile's, unless --model names one); --hold model pins it.\n" +
+        "--approvals can never be held. An agent created before --hold existed holds\n" +
+        "every setting it was given until --hold is set.\n",
     );
 }
 
@@ -87,6 +88,7 @@ function hermesOptions(cmd: Cmd): Cmd {
  * that is what `--json` prints back.
  */
 const HOLD_SPELLINGS: Readonly<Record<string, HoldableSetting>> = {
+  model: "model",
   terminal: "terminal_backend",
   terminal_backend: "terminal_backend",
   "terminal-backend": "terminal_backend",
@@ -116,7 +118,7 @@ export function holdFrom(raw: unknown): HoldableSetting[] | undefined {
     if (key === undefined) {
       throw new HermeticError(
         "VALIDATION",
-        `--hold: unknown setting "${n}"; use terminal, max-turns, reasoning or none`,
+        `--hold: unknown setting "${n}"; use model, terminal, max-turns, reasoning or none`,
         { hold: n },
       );
     }
