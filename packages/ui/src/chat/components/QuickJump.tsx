@@ -10,6 +10,7 @@ import { useChatEntry } from "../chat-entry-state.tsx";
 import { conversationCandidates } from "../conversation-search.ts";
 import { Dialog } from "../../components/Dialog.tsx";
 import { FLEET_HASH } from "../../nav/fleet-nav.ts";
+import { useDevtools } from "../../state/devtools-store.ts";
 
 interface Result {
   key: string;
@@ -18,6 +19,8 @@ interface Result {
   target?: ChatSelection;
   draft?: string;
   hash?: string;
+  /** A command that does something rather than going somewhere. */
+  run?: () => boolean;
 }
 const COMMANDS = [
   { name: "Chat", hash: "#chat" },
@@ -35,6 +38,7 @@ const COMMANDS = [
 export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; chatMode?: boolean }) {
   const chat = useChat();
   const entry = useChatEntry();
+  const devtools = useDevtools();
   const [query, setQuery] = useState("");
   // The highlighted row is held by key, not position: conversation rows arrive
   // with the session and roster reads, after the dialog opened, and a held
@@ -42,12 +46,35 @@ export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; 
   const [selected, setSelected] = useState<string | null>(null);
   const results = useMemo<Result[]>(() => {
     const q = query.trim().toLowerCase();
-    if (q.startsWith(">"))
-      return COMMANDS.filter((c) => c.name.toLowerCase().includes(q.slice(1).trim())).map((c) => ({
+    if (q.startsWith(">")) {
+      const commands: Result[] = COMMANDS.map((c) => ({
         ...c,
         key: c.name,
         detail: "Open existing view",
       }));
+      // The developer tools' two commands exist only while the tools are on.
+      if (devtools.enabled) {
+        const selection = chat.selection;
+        if (selection)
+          commands.push({
+            key: "devtools:inspect",
+            name: "Inspect stream",
+            detail: `${selection.instance} / ${selection.bot} · ⌥⌘I`,
+            run: () => {
+              if (!entry?.open(selection, "full")) return false;
+              devtools.open(selection);
+              return true;
+            },
+          });
+        commands.push({
+          key: "devtools:settings",
+          name: "Open Settings › Developer",
+          detail: "Developer tools",
+          hash: "#settings/developer",
+        });
+      }
+      return commands.filter((c) => c.name.toLowerCase().includes(q.slice(1).trim()));
+    }
     const rows: Result[] = [];
     const conversations: Result[] = [];
     if (chatMode && !/^[#@>]/.test(q))
@@ -107,12 +134,14 @@ export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; 
     // sends it rather than opening a conversation the text happens to match.
     const drafts = rows.filter((row) => row.draft !== undefined);
     return [...drafts, ...conversations, ...rows.filter((row) => row.draft === undefined)];
-  }, [query, chatMode, chat.swarms, chat.sessions, chat.selection]);
+  }, [query, chatMode, chat.swarms, chat.sessions, chat.selection, devtools, entry]);
   const found = results.findIndex((result) => result.key === selected);
   const index = found < 0 ? 0 : found;
   const choose = (result: Result | undefined, full: boolean) => {
     if (!result) return;
-    if (result.target) {
+    if (result.run) {
+      if (!result.run()) return;
+    } else if (result.target) {
       if (!entry?.open(result.target, result.draft ? "dock" : full ? "full" : "dock", result.draft))
         return;
     } else {
@@ -183,7 +212,13 @@ export function QuickJump({ onClose, chatMode = false }: { onClose: () => void; 
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => choose(result, true)}
           >
-            <span>{result.hash !== undefined ? ">" : result.target?.session ? "#" : "↗"}</span>
+            <span>
+              {result.hash !== undefined || result.run !== undefined
+                ? ">"
+                : result.target?.session
+                  ? "#"
+                  : "↗"}
+            </span>
             <span>
               <span className="qj-row-name">{result.name}</span>
               <span className="qj-row-sub">{result.detail}</span>

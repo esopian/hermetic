@@ -248,6 +248,7 @@ export function shareRpc(raw: Rpc): SharedRpc {
     attach,
     detach,
     alive: () => live,
+    tap: raw.tap,
   };
   hooksOf.set(shared, (next) => {
     hooks = next;
@@ -452,6 +453,8 @@ export function createSessionSockets(deps: SessionSocketDeps): SessionSockets {
           // advertised, so there is nothing to withdraw.
           bindTo(hold, fresh);
           fresh.detach({ withdraw: false });
+          fresh.tap?.bind(hold.bot, hold.stored, "held");
+          fresh.tap?.conn("redial", { attempt: used, session: hold.stored });
           const resumed = rec(
             await fresh.request(
               "session.resume",

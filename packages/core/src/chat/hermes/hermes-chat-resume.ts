@@ -365,6 +365,8 @@ export function createTurnResume(deps: TurnResumeDeps) {
       let fresh: Rpc | null = null;
       try {
         fresh = await deps.connect(box, signal);
+        fresh.tap?.follow(rpc.tap);
+        fresh.tap?.conn("reconnect", { attempt: used, cursor });
         // The turn may have ended while this dial was in the air — a spent
         // deadline, an abort, a pump that has been closed. A socket adopted now
         // would be attached to a gateway nobody is reading.
@@ -409,6 +411,11 @@ export function createTurnResume(deps: TurnResumeDeps) {
         );
         const stamp = str(answer?.epoch);
         const latest = num(answer?.latest_seq);
+        fresh.tap?.conn(
+          "replay",
+          { cursor, latest_seq: latest, events: replayed(answer?.events).length },
+          "in",
+        );
         const reason =
           answer === null
             ? "not supported"

@@ -14,6 +14,8 @@ import {
 } from "./hermes-chat-types.ts";
 import type { ChatSocket } from "./hermes-chat-types.ts";
 import { num, parseJson, rec, str } from "./hermes-chat-wire.ts";
+import { FATE_NONE, inboundType, type TapSlot } from "./hermes-chat-devtap.ts";
+import { tagRecord } from "../devtap.ts";
 
 export interface Rpc {
   request(
@@ -55,12 +57,19 @@ export interface Rpc {
    */
   unref?(): void;
   close(): void;
+  /**
+   * This socket's developer-tools capture (`hermes-chat-devtap.ts`), when the
+   * connection was built with a tap source. Whoever leases the socket names
+   * its conversation through it; absent on the test tree's `Rpc` doubles.
+   */
+  tap?: TapSlot | undefined;
 }
 
 interface Pending {
   resolve: (v: unknown) => void;
   reject: (e: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
+  method: string;
 }
 
 /**
@@ -88,8 +97,13 @@ export function readRpc(
   waitMs: number,
   instance: string,
   heartbeat: HeartbeatOptions = {},
+  tap?: TapSlot,
 ): Rpc {
   const pending = new Map<number, Pending>();
+  /** Why the socket ended, for the developer tools' `close` record. */
+  let closeReason = "socket ended";
+  /** Heartbeat ids the developer tools recorded, so a pong is named `ping`. */
+  const pings = new Set<number>();
   const events = channel<Record<string, unknown>>();
   let nextId = 0;
   let closed = false;
@@ -121,9 +135,13 @@ export function readRpc(
     beat = setInterval(() => {
       if (closed) return;
       try {
-        socket.send(
-          `${JSON.stringify({ jsonrpc: "2.0", id: ++nextId, method: "ping", params: {} })}\n`,
-        );
+        const ping = { jsonrpc: "2.0", id: ++nextId, method: "ping", params: {} };
+        const line = JSON.stringify(ping);
+        // Captured like any request, so its pong is named and settled (`route`).
+        // Bounded: a gateway that stops answering must not grow the set.
+        if (pings.size >= 64) pings.clear();
+        if (tap?.wire("out", ping, line, "ping", FATE_NONE)) pings.add(ping.id);
+        socket.send(`${line}\n`);
       } catch {
         // A socket that will not take a write is already the deadline's
         // problem; raising here would only lose the timer.
@@ -190,7 +208,7 @@ export function readRpc(
     const parsed = parseJson(trimmed);
     // Not a document. A truncated frame with no continuation, a keepalive, a
     // banner — all of them are the box's business and none end this stream.
-    if (parsed !== undefined) route(parsed);
+    if (parsed !== undefined) route(parsed, trimmed);
   }
 
   void (async () => {
@@ -225,6 +243,7 @@ export function readRpc(
       closed = true;
       stopHeartbeat();
       events.close();
+      tap?.conn("close", { reason: closeReason }, "in");
       settleAll(
         new HermeticError(
           CHAT_ERROR_CODES.PROTOCOL,
@@ -234,9 +253,19 @@ export function readRpc(
     }
   })();
 
-  function route(parsed: unknown): void {
+  function route(parsed: unknown, raw?: string): void {
     const doc = rec(parsed);
     if (!doc) return;
+    // Captured raw, before a server request is rewrapped below.
+    const mark = tap?.wire(
+      "in",
+      doc,
+      raw,
+      inboundType(doc, (id) => pending.get(id)?.method ?? (pings.delete(id) ? "ping" : undefined)),
+      // A reply — to a request, to a heartbeat, or to nobody any more — is read
+      // and acted on without producing a frame: settled as it is recorded.
+      doc.method === undefined ? FATE_NONE : null,
+    );
     /**
      * A JSON-RPC *response* is the frame with an `id` and **no `method`**.
      *
@@ -274,17 +303,20 @@ export function readRpc(
         startHeartbeat();
       }
       eventsSeen += 1;
+      if (mark) tagRecord(params, mark);
       events.push(params);
       return;
     }
     if (typeof doc.method === "string" && (typeof doc.id === "string" || typeof doc.id === "number")) {
       const params = rec(doc.params) ?? {};
       eventsSeen += 1;
-      events.push({
+      const request = {
         type: "hermetic.server_request",
         session_id: params.session_id,
         payload: { method: doc.method, id: String(doc.id), params },
-      });
+      };
+      if (mark) tagRecord(request, mark);
+      events.push(request);
     }
   }
 
@@ -348,8 +380,12 @@ export function readRpc(
           reject(e);
         },
         timer,
+        method,
       });
-      socket.send(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      const doc = { jsonrpc: "2.0", id, method, params };
+      const line = JSON.stringify(doc);
+      tap?.wire("out", doc, line, method);
+      socket.send(`${line}\n`);
     });
   }
 
@@ -368,6 +404,7 @@ export function readRpc(
   function shutdown(reason: string): void {
     if (closed) return;
     closed = true;
+    closeReason = reason;
     stopHeartbeat();
     events.close();
     settleAll(new HermeticError(CHAT_ERROR_CODES.PROTOCOL, `${instance}: ${reason}`));
@@ -380,7 +417,7 @@ export function readRpc(
 
   const unref = (): void => socket.unref?.();
 
-  return { request, events: events.drain(), arrived: () => eventsSeen, unref, close };
+  return { request, events: events.drain(), arrived: () => eventsSeen, unref, close, tap };
 }
 
 /**

@@ -184,17 +184,20 @@ const LANDS = new Set(["tool", "approval", "question", "subagent"]);
  * Whether it does is read off `assemble` itself: a block it *replaced* leaves
  * the part's block count where it was, and one it would only have appended is
  * new work, which belongs to the live message.
+ *
+ * Answers the id of the part it landed on, or null when it landed nowhere —
+ * the stream inspector's reducer notes file the block under that part.
  */
 export function landOnSegment(
   record: Conversation,
   frame: ChatFrameView,
   seed: { session: string; at: string },
   assemble: Assemble,
-): boolean {
-  if (frame.type !== "block" || record.segments.length === 0) return false;
+): string | null {
+  if (frame.type !== "block" || record.segments.length === 0) return null;
   // Only blocks with an identity of their own. A status snapshot also replaces
   // by key, but it describes the turn as it is now, which is the live part.
-  if (!LANDS.has(frame.block.kind)) return false;
+  if (!LANDS.has(frame.block.kind)) return null;
   for (const id of [...record.segments].reverse()) {
     const index = record.messages.findIndex((m) => m.id === id);
     const part = index === -1 ? null : record.messages[index]!;
@@ -204,9 +207,9 @@ export function landOnSegment(
     const next = [...record.messages];
     next[index] = merged;
     record.messages = next;
-    return true;
+    return id;
   }
-  return false;
+  return null;
 }
 
 /**

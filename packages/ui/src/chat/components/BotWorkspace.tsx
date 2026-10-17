@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
+import type { CSSProperties } from "react";
 import { useChat } from "../chat-state.tsx";
 import { useFleetIfAvailable } from "../../state/state.tsx";
 import { useListeningIfAvailable } from "../../state/listening-state.tsx";
@@ -29,6 +30,9 @@ import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { BotCreateDialog, RoomCreateDialog } from "./BotModeCreate.tsx";
 import { BotResponses } from "./BotResponses.tsx";
 import { Context } from "./Context.tsx";
+import { useDevtools } from "../../state/devtools-store.ts";
+import { Inspector } from "./inspector/Inspector.tsx";
+import { InspectChip, InspectMessageContext } from "./inspector/InspectEntry.tsx";
 
 /**
  * Whether a `chat.respond` result leaves the request closed: `ok` with no batch
@@ -70,6 +74,7 @@ export function BotWorkspace({
     [error, setError] = useState(""),
     [context, setContext] = useState(false),
     [panel, setPanel] = useState<"jobs" | null>(null);
+  const devtools = useDevtools();
   const fleetId = fleet?.meta?.config?.fleet_id ?? "",
     swarm = chat.swarms.find((s) => s.instance === selection?.instance),
     bot = swarm?.bots.find((b) => b.name === selection?.bot),
@@ -186,9 +191,24 @@ export function BotWorkspace({
     setProfile(result);
     setDialog("profile");
   }
+  // The stream inspector replaces the context pane while it is open on the
+  // conversation on screen (`inspector/Inspector.tsx`). Never over a room.
+  const inspecting =
+    devtools.enabled &&
+    withContext &&
+    room === null &&
+    selection !== null &&
+    devtools.isOpenOn(selection);
+  const inspectMessage = useCallback(
+    (message: string) => {
+      if (selection) devtools.open(selection, message);
+    },
+    [devtools, selection],
+  );
   return (
     <div
-      className={`ch-body${withContext ? " with-context" : ""} bm-workspace${panel ? ` bm-show-${panel}` : ""}`}
+      className={`ch-body${withContext ? " with-context" : ""} bm-workspace${panel ? ` bm-show-${panel}` : ""}${inspecting ? " ch-inspecting" : ""}`}
+      style={inspecting ? ({ "--insp-w": `${devtools.width}px` } as CSSProperties) : undefined}
       data-skin="soft"
     >
       <BotRail
@@ -318,53 +338,67 @@ export function BotWorkspace({
                   {error}
                 </p>
               ) : null}
-              <Thread
-                fleetId={fleetId}
-                instance={selection.instance}
-                bot={selection.bot}
-                botTitle={bot?.title}
-                isDefault={bot?.is_default}
-                agent={agent}
-                session={chat.session}
-                destination={chat.destination}
-                state={state}
-                messages={chat.messages}
-                live={chat.live}
-                context={chat.context}
-                sending={chat.sending}
-                remoteBusy={chat.remoteBusy}
-                activity={chat.activity}
-                historyError={chat.historyError}
-                turnError={chat.turnError}
-                now={chat.now}
-                fixture={fleet?.meta?.fixture}
-                reconnectAttempt={chat.reconnectAttempt}
-                observation={chat.observation}
-                onResumeObservation={() => void chat.resumeObservation()}
-                tailnetDetail={chat.tailnetDetail}
-                onSend={chat.send}
-                onAbort={chat.abort}
-                onRename={async (title) => {
-                  // Only the update's own failure is a failed rename.
-                  await botsUpdate({ instance: selection.instance, bot: selection.bot, title });
-                  // Forced: the operator just acted, so the roster read is not a
-                  // background poll the visibility gate should skip. A failed read
-                  // is the roster's to report (`swarmsError`), not the rename's:
-                  // the title is already saved.
-                  await chat.refreshSwarms({ force: true }).catch(() => {});
-                }}
-                mentions={
-                  selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])
-                }
-                mentionHint="Mention a teammate on this instance; Hermes handles delivery."
-                teammates={swarm?.bots}
-                sessions={chat.sessions}
-                onChooseSession={(session) => select(selection.instance, selection.bot, session)}
-              />
+              <InspectMessageContext.Provider value={devtools.enabled ? inspectMessage : null}>
+                <Thread
+                  actions={devtools.enabled ? <InspectChip conversation={selection} /> : undefined}
+                  fleetId={fleetId}
+                  instance={selection.instance}
+                  bot={selection.bot}
+                  botTitle={bot?.title}
+                  isDefault={bot?.is_default}
+                  agent={agent}
+                  session={chat.session}
+                  destination={chat.destination}
+                  state={state}
+                  messages={chat.messages}
+                  live={chat.live}
+                  context={chat.context}
+                  sending={chat.sending}
+                  remoteBusy={chat.remoteBusy}
+                  activity={chat.activity}
+                  historyError={chat.historyError}
+                  turnError={chat.turnError}
+                  now={chat.now}
+                  fixture={fleet?.meta?.fixture}
+                  reconnectAttempt={chat.reconnectAttempt}
+                  observation={chat.observation}
+                  onResumeObservation={() => void chat.resumeObservation()}
+                  tailnetDetail={chat.tailnetDetail}
+                  onSend={chat.send}
+                  onAbort={chat.abort}
+                  onRename={async (title) => {
+                    // Only the update's own failure is a failed rename.
+                    await botsUpdate({ instance: selection.instance, bot: selection.bot, title });
+                    // Forced: the operator just acted, so the roster read is not a
+                    // background poll the visibility gate should skip. A failed read
+                    // is the roster's to report (`swarmsError`), not the rename's:
+                    // the title is already saved.
+                    await chat.refreshSwarms({ force: true }).catch(() => {});
+                  }}
+                  mentions={
+                    selection.session ? [] : (swarm?.bots.filter((b) => b.name !== selection.bot) ?? [])
+                  }
+                  mentionHint="Mention a teammate on this instance; Hermes handles delivery."
+                  teammates={swarm?.bots}
+                  sessions={chat.sessions}
+                  onChooseSession={(session) => select(selection.instance, selection.bot, session)}
+                />
+              </InspectMessageContext.Provider>
             </div>
           </BotResponses.Provider>
           {withContext ? (
-            context ? (
+            inspecting && devtools.inspector ? (
+              <Inspector
+                key={`${selection.instance}/${selection.bot}/${selection.session ?? ""}`}
+                conversation={selection}
+                message={devtools.inspector.message}
+                nonce={devtools.inspector.nonce}
+                keep={devtools.settings?.keep ?? 5000}
+                width={devtools.width}
+                onResize={devtools.setWidth}
+                onClose={devtools.close}
+              />
+            ) : context ? (
               <Context
                 agent={agent}
                 instance={selection.instance}

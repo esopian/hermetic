@@ -45,3 +45,4 @@ export * from "./tombstone.ts";
 export * from "./terminal.ts";
 export * from "./files.ts";
 export * from "./files-requests.ts";
+export * from "./devtools.ts";

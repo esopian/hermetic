@@ -19,6 +19,8 @@ import type { InstanceListeningStore } from "./instance-listening.ts";
 import { HermeticError } from "../errors.ts";
 import { createDeltaGate } from "./chat-gate.ts";
 import { parse, reasonOf } from "./chat-seal.ts";
+import { tapFrame, type DevTap } from "./devtap.ts";
+import type { DevtoolsConversation } from "../schema/index.ts";
 import type { ChatDeps, ChatOptions } from "./chat.ts";
 
 /**
@@ -145,6 +147,18 @@ export function createChatSend(ctx: ChatSendContext) {
        */
       let failure: { code: string; message: string } | null = null;
       let done = false;
+      // The developer tools' capture, and its key: a bot's canonical conversation
+      // is `session: null`, refined once the conversation is known. Asked at
+      // each frame, so tools turned on mid-turn capture the rest of the turn —
+      // and told the canonical id each time, so the adapter's wire records for
+      // it land beside the frames.
+      let tapKey: DevtoolsConversation = { ...where, session: parsed.session ?? null };
+      let canonicalSession: string | null = null;
+      const tap = (): DevTap | null => {
+        const current = deps.devtap?.() ?? null;
+        if (canonicalSession !== null) current?.canonical(where.instance, where.bot, canonicalSession);
+        return current;
+      };
       try {
         const box = await address(parsed.instance);
         boxOfTurn = box;
@@ -180,6 +194,9 @@ export function createChatSend(ctx: ChatSendContext) {
           : null;
         const targetSession = conversation?.session ?? parsed.session;
         sessionOfTurn = targetSession;
+        if (conversation?.kind === "canonical") canonicalSession = conversation.session;
+        tap();
+        tapKey = { ...where, session: canonicalSession !== null ? null : (targetSession ?? null) };
         const attachments = attachmentsFor(box, parsed.attachments);
         if (
           conversation?.kind === "canonical" &&
@@ -192,13 +209,17 @@ export function createChatSend(ctx: ChatSendContext) {
             signal: opts.signal,
             session: conversation.session,
           });
-          yield {
+          const notice: ChatFrame = {
             type: "block",
             seq: 0,
             message: "compact",
             block: { kind: "text", markdown: compactNotice(parsed.message, result) },
           };
-          yield { type: "done", seq: 1, message: "compact" };
+          const finished: ChatFrame = { type: "done", seq: 1, message: "compact" };
+          tapFrame(tap(), tapKey, notice);
+          yield notice;
+          tapFrame(tap(), tapKey, finished);
+          yield finished;
           return;
         }
         for await (const frame of hermes.send(box, parsed.bot, parsed.message, {
@@ -214,6 +235,7 @@ export function createChatSend(ctx: ChatSendContext) {
           // still has to be flushed — an aborted turn keeps its words.
           if (opts.signal?.aborted) break;
           for (const out of gate.accept(frame)) {
+            tapFrame(tap(), tapKey, out, frame);
             if (out.type === "error") failure = { code: out.code, message: out.message };
             if (out.type === "done") {
               done = true;
@@ -234,13 +256,21 @@ export function createChatSend(ctx: ChatSendContext) {
         // verdict is recorded: an aborted turn's watermark is read from the box
         // here, and releasing first would open exactly the window the fence
         // exists to close.
-        yield* gate.flush();
+        for (const out of gate.flush()) {
+          tapFrame(tap(), tapKey, out);
+          yield out;
+        }
         await notifyTurn(failure, done);
       } catch (error) {
-        yield* gate.flush();
+        for (const out of gate.flush()) {
+          tapFrame(tap(), tapKey, out);
+          yield out;
+        }
         const { code, message } = reasonOf(error);
         failure = { code, message: redactText(message) };
-        yield { type: "error", code, message: failure.message };
+        const refusal: ChatFrame = { type: "error", code, message: failure.message };
+        tapFrame(tap(), tapKey, refusal);
+        yield refusal;
         await notifyTurn(failure, done);
         return;
       } finally {

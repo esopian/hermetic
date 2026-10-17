@@ -26,6 +26,8 @@ import type { ProfilesState } from "../../state/state.tsx";
 import { ChatSection } from "./ChatSection.tsx";
 import { AccountSection } from "./AccountSection.tsx";
 import { DangerSection } from "./DangerSection.tsx";
+import { DeveloperSection } from "./DeveloperSection.tsx";
+import { useDevtools } from "../../state/devtools-store.ts";
 import { DefaultsSection, defaultsDraftDirty } from "./DefaultsSection.tsx";
 import { railStatus } from "./rail-status.ts";
 import type { RailStatus } from "./rail-status.ts";
@@ -223,12 +225,14 @@ export function SettingsShell({
   const defaultsDraft = useState<SeededDraft<DefaultsForm> | null>(null);
 
   const fleetId = meta?.fleet?.id ?? config?.fleet_id ?? null;
+  const devtoolsOn = useDevtools().enabled;
   const status = railStatus({
     meta,
     settings,
     profiles,
     fleets: fleet?.fleets ?? null,
     defaultsDirty: defaultsDraftDirty(settings, defaultsDraft[0]),
+    devtools: devtoolsOn,
   });
   // §4.6: how many loadout slots are filled — from the page's held copy, never
   // a read of the rail's own (`rail-status.ts`).
@@ -296,6 +300,7 @@ export function SettingsShell({
             {section === "chat" ? <ChatSection /> : null}
             {section === "notifications" ? <NotificationsSection /> : null}
             {section === "runs" ? <RunsSection config={config} /> : null}
+            {section === "developer" ? <DeveloperSection /> : null}
             {section === "danger" ? (
               <DangerSection config={config} onOpenTeardown={onOpenTeardown} />
             ) : null}

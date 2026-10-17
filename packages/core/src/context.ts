@@ -34,6 +34,7 @@ import type { NotificationDeps } from "./chat/notifications.ts";
 import type { PublishDeps } from "./release/artifacts.ts";
 import type { Backend } from "./backend/types.ts";
 import type { LocalConfig } from "./schema/index.ts";
+import type { DevTap } from "./chat/devtap.ts";
 
 export interface CoreContext {
   backend: Backend;
@@ -109,4 +110,10 @@ export interface CoreContext {
    * `init` all publish through it.
    */
   publishDeps: () => PublishDeps;
+  /**
+   * §9.2's developer-tools capture, or `null` whenever the tools are off — read
+   * afresh at every access, so a tap site that asks after the switch went off
+   * gets `null` at once. Chat modules take it as a `TapSource` (`devtap.ts`).
+   */
+  readonly devtap: DevTap | null;
 }

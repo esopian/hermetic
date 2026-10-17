@@ -17,6 +17,7 @@ import { agentHandlers } from "./agents.ts";
 import { appHandlers } from "./app.ts";
 import { botModeHandlers } from "./bot-mode.ts";
 import { chatHandlers } from "./chat.ts";
+import { devtoolsHandlers } from "./devtools.ts";
 import { filesHandlers } from "./files.ts";
 import { fixtureHandlers } from "./fixture.ts";
 import { fleetHandlers } from "./fleet.ts";
@@ -58,6 +59,7 @@ export const HANDLERS: Readonly<Record<string, Handler>> = Object.freeze(
     ...appHandlers,
     ...botModeHandlers,
     ...chatHandlers,
+    ...devtoolsHandlers,
     ...filesHandlers,
     ...fixtureHandlers,
     ...fleetHandlers,

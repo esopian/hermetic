@@ -217,6 +217,7 @@ export function testContext(backend: Backend, overrides: Partial<CoreContext> = 
       hermeticVersion: FIXTURE_HERMETICD_VERSION,
       fixture: true,
     }),
+    devtap: null,
     ...overrides,
   };
 }

@@ -26,6 +26,7 @@ describe("SETTINGS_SECTIONS", () => {
       "chat",
       "notifications",
       "runs",
+      "developer",
       "account",
       "danger",
     ]);

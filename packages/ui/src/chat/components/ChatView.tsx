@@ -26,6 +26,7 @@ import { threadState } from "../chat-logic.ts";
 import { Context } from "./Context.tsx";
 import { Rail } from "./Rail.tsx";
 import { NoRoute, Thread } from "./Thread.tsx";
+import { DockInspectButton } from "./inspector/InspectEntry.tsx";
 
 export function ChatView({
   withContext = true,
@@ -147,6 +148,7 @@ export function ChatView({
         </section>
       ) : selection ? (
         <Thread
+          actions={<DockInspectButton conversation={selection} />}
           fleetId={fleetId}
           instance={selection.instance}
           bot={selection.bot}
