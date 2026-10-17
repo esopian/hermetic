@@ -408,6 +408,33 @@ describe("closing a window", () => {
    * chat owner for the life of the process, pushing frames at a page that is
    * gone. Verified red by removing that call.
    */
+  /**
+   * A reload keeps the binding, so `close()` never runs for the page that went
+   * away. Verified red with `page.ready` closing terminal attaches only, which
+   * is what it used to do: every feed of every reloaded page stayed open.
+   */
+  test("the streams a reloaded page opened do not outlive it", async () => {
+    const { ctx, options, request } = await bound();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const op = ctx.ops.start("upgrade", "fathom", async function* () {
+      await gate;
+      yield { phase: "done", progress: 1, message: "converged", at: new Date().toISOString() };
+    });
+    const chat = (await request("chat.subscribe", {})) as { stream_id: string };
+    const follow = (await request("ops.subscribe", { op_id: op.id })) as { stream_id: string };
+    expect(ctx.streams.has(chat.stream_id)).toBe(true);
+    expect(ctx.streams.has(follow.stream_id)).toBe(true);
+
+    options.handlers.messages?.["page.ready"]?.({} as never);
+
+    expect(ctx.streams.has(chat.stream_id)).toBe(false);
+    expect(ctx.streams.has(follow.stream_id)).toBe(false);
+    release();
+  });
+
   test("the streams a window opened do not outlive it", async () => {
     const { ctx, request, close } = await bound();
     const opened = (await request("chat.subscribe", {})) as { stream_id: string };

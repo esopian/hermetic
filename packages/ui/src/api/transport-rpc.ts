@@ -374,6 +374,14 @@ interface OpenStream {
   streamId: string | null;
   closed: boolean;
   ended: boolean;
+  /**
+   * Drop every reference the transport holds to this reader. Called when the
+   * stream ends on its own `done` as well as when the caller closes it: a
+   * reader whose caller never calls the closer (a chat turn, a file save) would
+   * otherwise stay in `byStreamId`, with its handlers and everything they close
+   * over, for the life of the page.
+   */
+  release: () => void;
 }
 
 export interface RpcTransportOptions {
@@ -471,6 +479,7 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
     // whether the *op* succeeded is in the frame the reader just got.
     if (frame.event !== "done") return true;
     stream.ended = true;
+    stream.release();
     // The reader may have closed us from inside `onFrame` — `followOp` reads
     // the `done` payload and hangs up on the spot — and `onEnd` is documented
     // never to arrive after that.
@@ -769,7 +778,16 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
     },
 
     openStream(name: StreamName, params: RequestParams, handlers: StreamHandlers): () => void {
-      const stream: OpenStream = { handlers, streamId: null, closed: false, ended: false };
+      const stream: OpenStream = {
+        handlers,
+        streamId: null,
+        closed: false,
+        ended: false,
+        release: () => {
+          forget();
+          if (stream.streamId !== null) byStreamId.delete(stream.streamId);
+        },
+      };
       const opId = name === "ops.subscribe" ? stringField(params, "op_id") : null;
       /**
        * The replay cursor, and the reason this transport keeps one at all: an

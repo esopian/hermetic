@@ -31,7 +31,16 @@ import {
 } from "./hermes-chat-media.ts";
 import { parseProcessNotice } from "./process-notice.ts";
 import { STEER_DISPLAY_KIND, unwrapSteer } from "./steer-marker.ts";
-import { arr, describe, isoOrNull, num, rec, str, stripToken } from "./hermes-chat-wire.ts";
+import {
+  arr,
+  describe,
+  discardBody,
+  isoOrNull,
+  num,
+  rec,
+  str,
+  stripToken,
+} from "./hermes-chat-wire.ts";
 import type { createCanonicalSessions } from "../../render/hermes-canonical.ts";
 import {
   SUBAGENT_TOOLS_MAX,
@@ -78,11 +87,13 @@ export function createChatHistory(deps: ChatHistoryDeps) {
         );
       }
       if (response.status === 401 && cached && attempt === 0) {
+        discardBody(response);
         conn.invalidate(box);
         tok = await conn.token(box, signal);
         continue;
       }
       if (!response.ok) {
+        discardBody(response);
         throw chatError(
           CHAT_ERROR_CODES.PROTOCOL,
           `${box.instance}: history answered HTTP ${response.status}`,
@@ -124,13 +135,15 @@ export function createChatHistory(deps: ChatHistoryDeps) {
       const rows = rec(raw)?.messages;
       if (!Array.isArray(rows))
         throw chatError(CHAT_ERROR_CODES.PROTOCOL, `${box.instance}: history named no messages`);
-      const fingerprint = JSON.stringify(rows);
-      if (rows.length && seenPages.has(fingerprint))
-        throw chatError(CHAT_ERROR_CODES.PROTOCOL, `${box.instance}: history repeated a page`);
-      seenPages.add(fingerprint);
       transcript.push(...rows);
+      // A bounded read (an observation's window) is one page, and so is a short
+      // page: neither can be followed by a repeat, so neither is fingerprinted.
       if (opts.limit !== undefined || rows.length < pageSize)
         return describeHistory(box, mapHistory(box, session, transcript), opts.signal);
+      const key = pageKey(rows);
+      if (seenPages.has(key))
+        throw chatError(CHAT_ERROR_CODES.PROTOCOL, `${box.instance}: history repeated a page`);
+      seenPages.add(key);
       offset += rows.length;
     }
   }
@@ -731,4 +744,31 @@ function historyBlocks(row: Record<string, unknown>): ChatBlock[] {
     }
   }
   return blocks;
+}
+
+/**
+ * What identifies one page of the paged history read, for its repeated-page
+ * guard: the rows' durable identities in order, when every row has one.
+ *
+ * The guard exists for a dashboard that ignores `offset` and hands back the
+ * same page for ever. Two pages fetched at different offsets carrying the same
+ * ids in the same order are that repeat, whatever their content says — a row
+ * edited between the two fetches does not make the second a new page — so the
+ * ids are the whole question and the bodies need not be serialised. A page
+ * with a row lacking any identity falls back to its full serialisation.
+ */
+export function pageKey(rows: readonly unknown[]): string {
+  const ids: string[] = [];
+  for (const row of rows) {
+    const r = rec(row);
+    const id =
+      str(r?.id) ??
+      str(r?.message_id) ??
+      num(r?.id)?.toString() ??
+      num(r?.row_id)?.toString() ??
+      str(r?.row_id);
+    if (id === null || id === undefined) return `raw\u0000${JSON.stringify(rows)}`;
+    ids.push(id);
+  }
+  return `ids\u0000${ids.join("\u0000")}`;
 }

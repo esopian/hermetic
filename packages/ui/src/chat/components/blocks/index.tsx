@@ -13,6 +13,7 @@
  * decides, and it is pure, so the fallthrough is tested without mounting
  * anything as well as with.
  */
+import { memo } from "react";
 import { ActivityNotice, ActivityGroup } from "../Activity.tsx";
 import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
 import { blockKind } from "../../chat-logic.ts";
@@ -32,8 +33,18 @@ import { UnknownBlock } from "./Unknown.tsx";
 import { SubagentBlock } from "./Subagent.tsx";
 import type { ClosedRequest } from "../../chat-requests.ts";
 
-export function Block({
+/**
+ * Memoized: a block whose props did not change draws what it drew. `Message`
+ * hands every block the transcript's own block object, which keeps its
+ * identity while it is unchanged (`chat-message-identity.ts`).
+ */
+export const Block = memo(function Block({
   block,
+  /**
+   * The clock a request card reads expiry against. Only an approval or a
+   * clarify reads it, so `Message` passes it to those alone and the transcript
+   * tick re-renders nothing else.
+   */
   now,
   /** This is the last block of a turn still arriving, so prose gets the caret. */
   streaming = false,
@@ -61,7 +72,7 @@ export function Block({
   untrusted = false,
 }: {
   block: ChatBlockView;
-  now: number;
+  now?: number | undefined;
   streaming?: boolean;
   mine?: boolean;
   closed?: ClosedRequest;
@@ -114,7 +125,7 @@ export function Block({
       return (
         <ApprovalBlock
           block={block as ChatBlockOf<"approval">}
-          now={now}
+          now={now ?? Date.now()}
           closed={closed}
           pending={pending}
         />
@@ -134,7 +145,7 @@ export function Block({
     default:
       return <UnknownBlock block={block} />;
   }
-}
+});
 
 export { ApprovalBlock, AttachmentBlock, HermeticBlock, ProcessEventBlock, QuestionBlock };
 export { ReasoningBlock, SourcesBlock, TextBlock, ToolBlock, UnknownBlock };

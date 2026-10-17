@@ -1056,6 +1056,52 @@ describe("hermes-chat · abort", () => {
     expect(out.at(-1)?.type).toBe("done");
   });
 
+  test("repeated canonical lookups share one pooled socket", async () => {
+    // An observation resolves the canonical session on every read; each used to
+    // dial (and close) a socket of its own.
+    const h = harness({
+      results: { "session.list": { sessions: [{ id: "root", title: "Bot Chat" }] } },
+    });
+    const chat = createHermesChat(h.deps);
+    for (let i = 0; i < 3; i++)
+      expect((await chat.conversation?.(BOX, "default"))?.session).toBe("root");
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0]?.sent.map((call) => call.method)).toEqual([
+      "session.list",
+      "session.list",
+      "session.list",
+    ]);
+    // A named session is a read-only lookup too.
+    await chat.conversation?.(BOX, "default", { session: "elsewhere" });
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  test("a pooled lookup still sees a rollover on the next read", async () => {
+    const h = harness({
+      sequence: {
+        "session.list": [
+          { sessions: [{ id: "root-1", title: "Bot Chat" }] },
+          { sessions: [{ id: "root-2", title: "Bot Chat" }] },
+        ],
+      },
+    });
+    const chat = createHermesChat(h.deps);
+    expect((await chat.conversation?.(BOX, "default"))?.root_session).toBe("root-1");
+    expect((await chat.conversation?.(BOX, "default"))?.root_session).toBe("root-2");
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  test("unpooled, each canonical lookup dials its own socket", async () => {
+    const h = harness({
+      results: { "session.list": { sessions: [{ id: "root", title: "Bot Chat" }] } },
+    });
+    const chat = createHermesChat({ ...h.deps, pooled: false });
+    await chat.conversation?.(BOX, "default");
+    await chat.conversation?.(BOX, "default");
+    expect(h.sockets).toHaveLength(2);
+    expect(h.sockets.every((socket) => socket.isClosed())).toBe(true);
+  });
+
   test("an idle bot abort is a no-op, with no create or interrupt", async () => {
     const h = harness({ results: { "session.list": { sessions: [] } } });
     expect(await createHermesChat(h.deps).abort(BOX, "default")).toBe(false);

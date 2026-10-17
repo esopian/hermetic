@@ -23,6 +23,7 @@
  * network read" is one decision, and five copies of it is five chances to get
  * it wrong the next time a browser surprises us.
  */
+import { useSyncExternalStore } from "react";
 
 /**
  * How recent a read has to be for a return to the tab to skip it.
@@ -134,4 +135,117 @@ export function isVisible(): boolean {
   if (pushed !== null) return pushed;
   if (typeof document === "undefined") return true;
   return document.visibilityState !== "hidden";
+}
+
+/* ── page active: on screen *and* in front ───────────────────────────────── */
+
+/**
+ * Is the operator looking at this window right now — on screen and focused?
+ *
+ * This is the gate for everything purely decorative: the avatar draw loop,
+ * GSAP's tweens, the page's CSS animations, a terminal's blinking cursor and
+ * the one-second clocks. None of it is worth a frame in a window that is
+ * hidden, minimised, behind another app or simply not the one in front, and a
+ * dev build's CEF never throttles a background window on its own.
+ *
+ * In the app the head's push wins outright, because it already *is* both
+ * halves: `main/windows.ts` sends `app.visibility` on the native window's focus
+ * and blur, and a minimised or hidden window has lost focus first. The DOM
+ * cannot be asked there — the webview reports `hidden` for the life of the
+ * window. Elsewhere (a test, a plain browser) it is `isVisible()` and
+ * `document.hasFocus()` together, the same pair `state/terminal-watch.ts`
+ * reads. An environment with neither reads as active, for the reason
+ * `isVisible` gives.
+ *
+ * Only decoration hangs off this. Pushes, polls and state updates keep running
+ * in an inactive window; they gate on `isVisible()` where they gate at all.
+ */
+export function isPageActive(): boolean {
+  if (pushed !== null) return pushed;
+  if (!isVisible()) return false;
+  if (typeof document === "undefined" || typeof document.hasFocus !== "function") return true;
+  return document.hasFocus();
+}
+
+const ACTIVE_SUBS = new Set<(active: boolean) => void>();
+/** The last answer the subscribers were given, so a change is reported once. */
+let lastActive = true;
+/** Removes the three DOM listeners; non-null exactly while anyone subscribes. */
+let unhookActive: (() => void) | null = null;
+
+function recomputeActive(): void {
+  const active = isPageActive();
+  if (active === lastActive) return;
+  lastActive = active;
+  for (const sub of [...ACTIVE_SUBS]) sub(active);
+}
+
+/**
+ * Called with the new answer whenever `isPageActive()` changes. Not called on
+ * subscribe: read `isPageActive()` for the current value. Returns the
+ * unsubscribe.
+ *
+ * One set of listeners for the whole page, attached with the first subscriber
+ * and removed with the last: `visibilitychange` (which `setPageVisible` also
+ * dispatches, so a push lands here too) and the window's own `focus` and
+ * `blur`. Nothing engine-specific — both engines fire all three.
+ */
+export function subscribePageActive(onChange: (active: boolean) => void): () => void {
+  if (unhookActive === null && typeof document !== "undefined") {
+    lastActive = isPageActive();
+    const win = typeof window === "undefined" ? null : window;
+    document.addEventListener("visibilitychange", recomputeActive);
+    win?.addEventListener("focus", recomputeActive);
+    win?.addEventListener("blur", recomputeActive);
+    unhookActive = () => {
+      document.removeEventListener("visibilitychange", recomputeActive);
+      win?.removeEventListener("focus", recomputeActive);
+      win?.removeEventListener("blur", recomputeActive);
+    };
+  } else {
+    // A state that moved without an event (a test's `setPageHidden`, a pushed
+    // answer cleared) is reported to the existing subscribers now, rather than
+    // being mistaken for "no change" at the next real event.
+    recomputeActive();
+  }
+  ACTIVE_SUBS.add(onChange);
+  return () => {
+    ACTIVE_SUBS.delete(onChange);
+    if (ACTIVE_SUBS.size > 0 || unhookActive === null) return;
+    unhookActive();
+    unhookActive = null;
+  };
+}
+
+/**
+ * The attribute on `<html>` that pauses every CSS animation in the page while
+ * it is inactive (`styles/polish.css`).
+ */
+export const PAGE_INACTIVE_ATTR = "data-page-inactive";
+
+/**
+ * Keep `PAGE_INACTIVE_ATTR` on `root` exactly while the page is inactive.
+ * Installed by `Portal.tsx` for as long as the portal is mounted; returns the
+ * undo, which also takes the attribute off.
+ */
+export function markPageInactive(root: Element = document.documentElement): () => void {
+  const apply = (active: boolean): void => {
+    if (active) root.removeAttribute(PAGE_INACTIVE_ATTR);
+    else root.setAttribute(PAGE_INACTIVE_ATTR, "");
+  };
+  apply(isPageActive());
+  const off = subscribePageActive(apply);
+  return () => {
+    off();
+    root.removeAttribute(PAGE_INACTIVE_ATTR);
+  };
+}
+
+/**
+ * `isPageActive()` as React state: the component re-renders when the window
+ * comes to the front or leaves it. The server snapshot is "active", which is
+ * what a static render draws.
+ */
+export function usePageActive(): boolean {
+  return useSyncExternalStore(subscribePageActive, isPageActive, () => true);
 }

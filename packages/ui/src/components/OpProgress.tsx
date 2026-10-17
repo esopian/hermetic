@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { fmtClock } from "../logic/format.ts";
 import { railNotes } from "../logic/op-hints.ts";
 import type { OpState } from "../lib/useOp.ts";
+import { usePageActive } from "../lib/visibility.ts";
 
 /**
  * How often the live region is allowed to speak. An op emits an event every
@@ -56,12 +57,15 @@ function fmtElapsed(ms: number): string {
 /** `…` became a number: how long the current step has been running, ticking. */
 export function useTicker(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  // And only while the window is in front: a return catches the count up.
+  const front = usePageActive();
+  const ticking = active && front;
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [active]);
+  }, [ticking]);
   return now;
 }
 
