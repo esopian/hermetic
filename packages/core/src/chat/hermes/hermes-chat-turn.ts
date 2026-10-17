@@ -22,6 +22,7 @@ import { createConnectionGate, hermesActivity, hermesRequest } from "./hermes-ch
 import { chatFailure, contextUsageBlock, mapUsage, toolBlock } from "./hermes-chat-blocks.ts";
 import { createTurnResume, reconnectBlock, type TurnPump } from "./hermes-chat-resume.ts";
 import { advertiseServerRequests, type Rpc } from "./hermes-chat-rpc.ts";
+import { turnTrace, type TurnTrace } from "./hermes-chat-devtap.ts";
 import { attachToTurn, detachQueued } from "./hermes-chat-attach.ts";
 import {
   turnFileRequests,
@@ -240,6 +241,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
       return;
     }
     const rpc: Rpc = lease.rpc;
+    // The developer tools file this socket under the conversation (`hermes-chat-devtap.ts`).
+    if (opts.session) rpc.tap?.bind(bot, opts.session, "held");
+    const trace = turnTrace(rpc.tap);
 
     let active: { runtime: string; stored: string | null } | null = null;
     /** Images this turn queued on the session; taken back unless the prompt was accepted. */
@@ -282,6 +286,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // its `info` is what `contextUsageBlock` reads below.
         ({ runtime: session, info } = await resume(rpc, box, bot, opts.session, opts.signal));
         lease.keep(opts.session, session);
+        rpc.tap?.conn("session.resume", { runtime: session, stored: opts.session, info }, "in");
       } else {
         // Stamped so `session.list` can tell this session from the box's own TUI
         // (`HERMETIC_SESSION_SOURCE`); `portal` still comes only from the local record.
@@ -305,6 +310,8 @@ export function createChatTurn(deps: ChatTurnDeps) {
         // A create that names no durable id leaves nothing to hold the socket
         // under, and the turn closes it on the way out as it always did.
         if (stored) lease.keep(stored, runtime);
+        if (stored) rpc.tap?.bind(bot, stored, "held");
+        rpc.tap?.conn("session.create", { runtime, stored, info }, "in");
       }
       // The window the gateway already holds for this session, said before the
       // prompt goes in. A session still live on the box answers its resume with
@@ -407,7 +414,9 @@ export function createChatTurn(deps: ChatTurnDeps) {
         delegation,
         requests,
         outboxOnce(deps.listOutbox, box.instance, opts.signal),
+        trace,
       )) {
+        trace?.frame(frame);
         if (frame.type === "done" || frame.type === "error") ended = true;
         yield frame;
       }
@@ -423,6 +432,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       ended = true;
       yield errorFrame(e);
     } finally {
+      trace?.end();
       // A consumer that stopped reading before the turn's last frame.
       await stopBox();
       // Before the socket is released: upstream keeps a session's image queue
@@ -478,6 +488,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     delegation: ReturnType<typeof subagentTurn>,
     requests: TurnFileRequests,
     outbox: (refresh?: boolean) => Promise<readonly FileEntry[] | null>,
+    trace: TurnTrace | null,
   ): AsyncIterable<ChatFrame> {
     let reasoning = "";
     let reasoningTokens: number | null = null;
@@ -720,6 +731,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       }
 
       const ev = step.value;
+      trace?.event(ev);
       const type = str(ev.type);
       if (!type) continue;
       const sourceSeq = num(ev.seq) ?? 0;
@@ -743,7 +755,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // unlisted is mapped by hermes-chat-activity.ts or survives as `unknown`.
       // It also runs before the child-session `subagent` wrap below, so a
       // listed event from a child session is dropped too, by intent.
-      if (isHermesInternalEvent(type) && !infoUsage) continue;
+      if (isHermesInternalEvent(type) && !infoUsage) {
+        trace?.drop("internal");
+        continue;
+      }
 
       // Reclamation is broadcast globally, but its payload addresses one runtime.
       // A different conversation releasing a slot is not a failure of this turn.
@@ -778,7 +793,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // highest one already handled is a replay. Without this a retransmitted
       // delta doubles a word in the middle of a sentence and nothing notices.
       // Adapter-minted and seq-less frames carry 0 and are never deduplicated.
-      if (!unsequenced && seq > 0 && seq <= lastSeq) continue;
+      if (!unsequenced && seq > 0 && seq <= lastSeq) {
+        trace?.drop("replay");
+        continue;
+      }
       if (!unsequenced && seq > lastSeq) {
         lastSeq = seq;
         // The cursor a reconnect resumes from is the last event actually
@@ -817,7 +835,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
         if (child) yield { type: "block", seq, message, block: child };
         continue;
       }
-      if (connections.stale(type, payload)) continue;
+      if (connections.stale(type, payload)) {
+        trace?.drop("replay");
+        continue;
+      }
       const activity = hermesActivity(type, payload);
       if (activity) {
         if (type === "tool.generating" || type === "session.usage") seenContent = true;
@@ -845,7 +866,10 @@ export function createChatTurn(deps: ChatTurnDeps) {
           delivered += t;
           // A `MEDIA:` line, and the rest of its paragraph, wait for the final.
           const shown = media.push(t);
-          if (!shown) break;
+          if (!shown) {
+            trace?.buffer("media");
+            break;
+          }
           yield* openText(seq);
           yield { type: "delta", seq, message, text: shown };
           break;
@@ -865,6 +889,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
           const text = str(payload.text) ?? "";
           if (!text) break;
           seenContent = true;
+          trace?.buffer("reasoning");
           if (!reasoning) {
             yield {
               type: "block",

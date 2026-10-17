@@ -1,0 +1,652 @@
+/* The stream inspector (§9.2 "Developer tools") and its entry points.
+
+   Drawn in the app's brutalist voice rather than the chat's soft skin — it is
+   a table you scan — so nothing here is scoped to `[data-skin="soft"]`, and
+   every rule is specific enough to win over the soft skin's `.ch-chip`.
+   No new tokens, no radius. A dashed border marks every developer affordance,
+   so a screenshot of a dev-enabled app cannot be mistaken for product UI. */
+
+/* ── the split ──────────────────────────────────────────────────────────── */
+
+/* The inspector replaces the context pane, at the width its grip was dragged
+   to — but never so wide that the thread column drops under 660px, what its
+   header needs on one line (`CHAT_MIN_WIDTH` in `Inspector.tsx`; 962px is the
+   300px rail, that, and the two 1px seams), and never under 360px itself.
+   Specific enough to beat bot-mode.css's narrow-window two-column rule. */
+.bm-workspace.ch-body.with-context.ch-inspecting {
+  grid-template-columns: 300px minmax(0, 1fr) clamp(360px, var(--insp-w, 560px), calc(100% - 962px));
+}
+/* When the window is narrower than that, the header gives way in order: the
+   default-bot badge ellipsises before anything else, and the name never does. */
+.ch-inspecting .ch-thead-name > .ch-default {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── entry points ───────────────────────────────────────────────────────── */
+
+.ch-thead-actions .ch-chip.insp-chip,
+.ch-chip.insp-chip {
+  border-style: dashed;
+  border-color: var(--line2);
+  color: var(--fg2);
+  font-family: var(--mono);
+}
+.ch-thead-actions .ch-chip.insp-chip:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+.ch-thead-actions .ch-chip.insp-chip.on {
+  border-style: solid;
+  border-color: var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* A message's hover action: present for the keyboard, shown on hover/focus. */
+.ch-msg-inspect {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  margin-left: 8px;
+  padding: 0 6px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px dashed var(--line2);
+  font: 700 10px / 1 var(--mono);
+  color: var(--fg3);
+  opacity: 0;
+}
+.ch-msg:hover .ch-msg-inspect,
+.ch-msg-inspect:focus-visible {
+  opacity: 1;
+}
+.ch-msg-inspect:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+.ch-msg-inspect:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
+/* ── the pane ───────────────────────────────────────────────────────────── */
+
+.insp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 11px / 1.4 var(--mono);
+  border-left: 1px dashed var(--line2);
+}
+.insp-grip {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.insp-grip:hover {
+  background: var(--line2);
+}
+.insp-grow {
+  flex: 1;
+}
+
+.insp-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--fg);
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+}
+/* In a narrow pane the header gives way in order: the title ellipsises to
+   nothing first, because the badges carry state (live, masked) and the title
+   does not; then the badges; the buttons never wrap or shrink. */
+.insp-hd > .insp-title,
+.insp-hd > .insp-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-hd > .insp-title {
+  flex-shrink: 100;
+}
+.insp-hd > .insp-grow {
+  min-width: 0;
+}
+.insp-title {
+  font: 900 13px / 1 var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
+.insp-badge {
+  border: 1px solid var(--line2);
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+.insp-badge.ok {
+  border-color: var(--ok);
+  color: var(--text-ok, var(--ok));
+}
+.insp-badge.bad {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.insp-btn {
+  all: unset;
+  box-sizing: border-box;
+  flex: none;
+  white-space: nowrap;
+  cursor: pointer;
+  height: 22px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line2);
+  font: 700 10px / 1 var(--mono);
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+.insp-btn:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+.insp-btn:focus-visible,
+.insp-tabs button:focus-visible,
+.insp-dtabs button:focus-visible,
+.insp-cat-chip:focus-visible,
+.insp-link:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+.insp-x {
+  border-color: transparent;
+}
+
+.insp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg3);
+  flex: none;
+}
+.insp-meta b {
+  color: var(--fg);
+  font-weight: 500;
+}
+.insp-notice {
+  margin: 0;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg2);
+  flex: none;
+}
+.insp-notice.bad {
+  color: var(--bad);
+}
+
+.insp-tabs,
+.insp-dtabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.insp-tabs button,
+.insp-dtabs button {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  padding: 7px 10px;
+  font: 700 10px / 1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  border-right: 1px solid var(--line);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.insp-tabs button.on,
+.insp-dtabs button.on {
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--acc);
+}
+.insp-tabs small {
+  font-weight: 400;
+  color: var(--fg3);
+}
+.insp-dtabs button {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.insp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  flex: none;
+}
+.insp-filter {
+  all: unset;
+  box-sizing: border-box;
+  flex: 1 1 160px;
+  min-width: 120px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+  color: var(--fg);
+  font: 400 11px / 1 var(--mono);
+}
+.insp-filter::placeholder {
+  color: var(--fg3);
+}
+.insp-filter:focus {
+  border-color: var(--fg);
+}
+.insp-cat-chip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  font: 400 10px / 1 var(--mono);
+  color: var(--fg3);
+}
+.insp-cat-chip.on {
+  border-color: var(--line2);
+  color: var(--fg);
+}
+.insp-cat-chip i,
+.insp-cat {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--fg3);
+  flex: none;
+}
+
+/* Category squares: neutral by default; only the accent and the status
+   colours already in use, each kept to its meaning. */
+.insp-cat.c-text,
+.insp-cat-chip.c-text i {
+  background: var(--fg);
+}
+.insp-cat.c-reasoning,
+.insp-cat-chip.c-reasoning i {
+  background: var(--fg2);
+}
+.insp-cat.c-tool,
+.insp-cat-chip.c-tool i {
+  background: var(--ok);
+}
+.insp-cat.c-approval,
+.insp-cat-chip.c-approval i {
+  background: var(--warn);
+}
+.insp-cat.c-activity,
+.insp-cat-chip.c-activity i {
+  background: var(--fg3);
+}
+.insp-cat.c-usage,
+.insp-cat-chip.c-usage i {
+  background: var(--line2);
+}
+.insp-cat.c-rpc,
+.insp-cat-chip.c-rpc i {
+  background: var(--acc);
+}
+.insp-cat.c-internal,
+.insp-cat-chip.c-internal i {
+  background: var(--line);
+}
+
+.insp-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 0 10px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg2);
+  font-size: 10.5px;
+  flex: none;
+}
+.insp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.insp-toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  cursor: pointer;
+}
+.insp-toggle input:checked {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+.insp-toggle input:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
+/* ── the list ───────────────────────────────────────────────────────────── */
+
+.insp-list {
+  flex: 1 1 50%;
+  min-height: 120px;
+  overflow: auto;
+  position: relative;
+  outline: none;
+}
+.insp-list:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--acc);
+}
+.insp-list-inner {
+  position: relative;
+}
+.insp-row {
+  box-sizing: border-box;
+  height: 22px;
+  display: grid;
+  grid-template-columns: 70px 14px 10px minmax(110px, 1.1fr) 34px minmax(0, 2fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.insp-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-row:hover {
+  background: var(--bg2);
+}
+.insp-row.sel {
+  background: var(--sel);
+  box-shadow: inset 3px 0 0 var(--acc);
+}
+.insp-row.child {
+  padding-left: 30px;
+  color: var(--fg2);
+}
+.insp-row.drop .insp-type,
+.insp-row.drop .insp-sum {
+  color: var(--fg3);
+  text-decoration: line-through;
+}
+.insp-t,
+.insp-seq,
+.insp-dir {
+  color: var(--fg3);
+}
+.insp-seq {
+  text-align: right;
+}
+.insp-sum {
+  color: var(--fg2);
+}
+.insp-fate {
+  font-size: 9.5px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  color: var(--fg3);
+}
+.insp-fate.frames {
+  border-color: var(--ok);
+  color: var(--text-ok, var(--ok));
+}
+.insp-fate.buf {
+  border-color: var(--warn);
+  color: var(--text-warn, var(--warn));
+}
+.insp-fate.drop {
+  border: 1px dashed var(--line2);
+}
+.insp-turn {
+  cursor: default;
+  display: flex;
+  gap: 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--fg);
+}
+.insp-turn b {
+  font-weight: 800;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-turn-facts {
+  color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--fg3);
+}
+
+/* ── the detail ─────────────────────────────────────────────────────────── */
+
+.insp-detail {
+  flex: 1 1 40%;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  border-top: 2px solid var(--fg);
+}
+.insp-link {
+  all: unset;
+  cursor: pointer;
+  padding: 0 10px;
+  font: 400 10px / 1 var(--mono);
+  color: var(--fg3);
+  align-self: center;
+}
+.insp-link:hover:not(:disabled) {
+  color: var(--fg);
+}
+.insp-link:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.insp-dbody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+.insp-dk {
+  font: 700 10px / 1.4 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg3);
+  margin-bottom: 6px;
+}
+.insp-pre {
+  margin: 0;
+  font: 400 11px / 1.45 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+}
+.insp-kv > div {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.insp-kv .k {
+  color: var(--fg3);
+}
+.insp-kv .v {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.insp-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.insp-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.insp-step i {
+  font-style: normal;
+  color: var(--fg3);
+}
+.insp-step b {
+  border: 1px solid var(--line2);
+  padding: 2px 5px;
+  font-weight: 700;
+}
+.insp-step small {
+  color: var(--fg2);
+  font-size: 10px;
+}
+.insp-diff .insp-drow {
+  display: grid;
+  grid-template-columns: 14px minmax(140px, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+}
+.insp-drow .g {
+  color: var(--fg3);
+}
+/* Words wrap between words; only a token too long for the column (an id, a
+   JSON run) breaks inside itself. */
+.insp-drow .p,
+.insp-drow .v {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.insp-drow .v {
+  color: var(--fg2);
+}
+.insp-drow.d-renamed .g,
+.insp-drow.d-renamed .p {
+  color: var(--text-warn, var(--warn));
+}
+.insp-drow.d-dropped .p,
+.insp-drow.d-dropped .v {
+  color: var(--fg3);
+  text-decoration: line-through;
+}
+.insp-drow.d-synthesized .g {
+  color: var(--text-ok, var(--ok));
+}
+.insp-drow.d-unmapped .g,
+.insp-drow.d-unmapped .p {
+  color: var(--bad);
+}
+.insp-legend {
+  margin: 8px 0 0;
+  color: var(--fg3);
+  font-size: 10px;
+}
+
+/* ── state ──────────────────────────────────────────────────────────────── */
+
+.insp-state {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+.insp-msg {
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+.insp-msg-h {
+  display: flex;
+  gap: 10px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--fg3);
+}
+.insp-msg-h b {
+  color: var(--fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-blk {
+  padding: 4px 8px 4px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.insp-ver.insp-cur {
+  color: var(--fg);
+}
+.insp-ver {
+  padding-left: 14px;
+  color: var(--fg2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── foot ───────────────────────────────────────────────────────────────── */
+
+.insp-foot {
+  display: flex;
+  gap: 10px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--fg3);
+  font-size: 10.5px;
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.insp-foot > span:not(.insp-grow) {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

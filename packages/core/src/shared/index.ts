@@ -375,3 +375,13 @@ export type {
   SecretFormat,
   SecretInputMode,
 } from "./secret-env.ts";
+
+// --- Developer tools (§9.2) ----------------------------------------------
+// The stream inspector's Diff view: which wire fields the adapter keeps,
+// renames, drops or makes up, pinned against the mappers by a core test.
+export { DEVTOOLS_FIELD_MAP, devtoolsFieldMap } from "./devtools-field-map.ts";
+export type {
+  DevtoolsEventMap,
+  DevtoolsFieldFate,
+  DevtoolsFieldRule,
+} from "./devtools-field-map.ts";

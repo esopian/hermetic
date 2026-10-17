@@ -21,7 +21,7 @@ import { KEEPALIVE_EVENT } from "../handlers/streams.ts";
 import type { StreamFrame, StreamSink } from "../handlers/streams.ts";
 import { terminalMessageHandlers } from "../handlers/terminal.ts";
 import type { TerminalFrame } from "../terminal/channel.ts";
-import type { FilesGetFrame, FilesPutFrame, FilesStageFrame } from "@hermetic/core";
+import type { FilesGetFrame, FilesPutFrame, FilesStageFrame, TapRecord } from "@hermetic/core";
 import { InitInFlightError } from "../init-op.ts";
 import type { AppLog } from "../log.ts";
 import { RequestValidationError } from "../validation.ts";
@@ -242,6 +242,7 @@ const FINITE_MESSAGES: readonly StreamMessageName[] = [
   "files.frame",
   "files.put.frame",
   "files.get.frame",
+  "devtools.record",
 ];
 
 function stringField(value: unknown, field: string): string | undefined {
@@ -310,6 +311,16 @@ function push(
         frame.event === "done"
           ? { stream_id: id, done: frame.data as FilesGetFrame }
           : { stream_id: id, frame: frame.data as FilesGetFrame },
+      );
+      return;
+    case "devtools.record":
+      // `handlers/devtools.ts` sinks only batches of `TapRecord`s on a tap,
+      // and its last word as `done`.
+      send(
+        "devtools.record",
+        frame.event === "done"
+          ? { stream_id: id, done: frame.data }
+          : { stream_id: id, records: frame.data as TapRecord[] },
       );
       return;
     case "terminal.frame":

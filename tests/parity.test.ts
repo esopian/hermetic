@@ -56,7 +56,16 @@ describe("parity", () => {
      * standing as `hermetic.fixture`, which this walk never sees because it is
      * `null` outside fixture mode.
      */
-    const machinery = new Set(["files.internal"]);
+    const machinery = new Set([
+      "files.internal",
+      // §9.2's stream inspector: laptop-only developer tooling the desktop head
+      // wraps in machinery requests. Built in every mode, so this walk sees it.
+      "devtools.settings",
+      "devtools.stats",
+      "devtools.tap",
+      "devtools.clear",
+      "devtools.export",
+    ]);
     const found: string[] = [];
     for (const [key, value] of Object.entries(hermetic)) {
       if (skip.has(key)) continue;

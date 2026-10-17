@@ -28,6 +28,7 @@ import { ChatDock } from "./ChatDock.tsx";
 import type { DockPicker } from "./ChatDock.tsx";
 import { Face } from "./Face.tsx";
 import { QuickJump } from "./QuickJump.tsx";
+import { InspectorShortcut } from "./inspector/InspectEntry.tsx";
 
 export function ChatShell({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
   const chat = useChat();
@@ -525,6 +526,7 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
         </div>
       ) : null}
       {quick ? <QuickJump chatMode={isChatHash(hash)} onClose={() => setQuick(false)} /> : null}
+      {enabled ? <InspectorShortcut /> : null}
     </ChatEntryContext.Provider>
   );
 }

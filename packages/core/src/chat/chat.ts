@@ -88,6 +88,7 @@ import { validateName } from "../shared/naming.ts";
 import { parse, reasonOf, redactSwarm, sealed, unreachableSwarm } from "./chat-seal.ts";
 import { createChatSend } from "./chat-send.ts";
 import { createChatObserveWiring } from "./chat-observe-wiring.ts";
+import type { TapSource } from "./devtap.ts";
 
 export { createDeltaGate, stableCut } from "./chat-gate.ts";
 export type { DeltaGate } from "./chat-gate.ts";
@@ -187,6 +188,11 @@ export interface ChatDeps {
    * an empty one.
    */
   chatSettings?: ChatSettingsStore;
+  /**
+   * The developer tools' capture (`devtap.ts`), asked at each tap site:
+   * `null` whenever the tools are off. Absent, a turn is never captured.
+   */
+  devtap?: TapSource | undefined;
   fleet?: () => string | null;
   /** §4.2's account/fleet guard; the tailnet comes from the fleet it returns. */
   guardFleet: () => Promise<{ config: LocalConfig; fleet: FleetItem; stack: StackInfo }>;

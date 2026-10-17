@@ -56,6 +56,7 @@ import {
   openRunStore,
   SqliteChatFenceStore,
   SqliteChatSettingsStore,
+  SqliteDevtoolsSettingsStore,
   SqliteIncarnationStore,
   SqliteLocalChatSessions,
   SqliteInstanceListeningStore,
@@ -373,6 +374,7 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
       chatFence: new SqliteChatFenceStore(local.db),
       instanceListening: new SqliteInstanceListeningStore(local.db),
       chatSettings: new SqliteChatSettingsStore(local.db),
+      devtoolsSettings: new SqliteDevtoolsSettingsStore(local.db),
       incarnations: new SqliteIncarnationStore(local.db),
       // §4.6's create presets: a laptop preference, so the fixture database's.
       presets: new SqlitePresetStore(local.db),
@@ -465,6 +467,8 @@ export async function openHermetic(opts: OpenOptions = {}): Promise<Hermetic> {
     instanceListening: new SqliteInstanceListeningStore(local.db),
     /** §9.2: this laptop's chat settings — transcript redaction — in `prefs`. */
     chatSettings: new SqliteChatSettingsStore(local.db),
+    /** §9.2: the developer tools' preferences, in `prefs` beside it. */
+    devtoolsSettings: new SqliteDevtoolsSettingsStore(local.db),
     /** §6.7: which incarnation of each name the tables above describe. */
     incarnations: new SqliteIncarnationStore(local.db),
     /** §4.6: this laptop's create presets, one `prefs` row. */

@@ -168,6 +168,7 @@ const STREAM: Record<StreamName, { close: RpcName }> = {
   "files.stage": { close: "files.stage.abort" },
   "files.put": { close: "files.put.abort" },
   "files.get": { close: "files.get.abort" },
+  "devtools.tap": { close: "devtools.untap" },
 };
 
 /**
@@ -198,6 +199,7 @@ const TERMINAL_FRAME = "terminal.frame";
 const FILES_FRAME = "files.frame";
 const FILES_PUT_FRAME = "files.put.frame";
 const FILES_GET_FRAME = "files.get.frame";
+const DEVTOOLS_RECORD = "devtools.record";
 
 /** A source with nothing to say proves the channel alive; a channel needs no proof. */
 const KEEPALIVE = "keepalive";
@@ -565,6 +567,19 @@ export function createRpcTransport(options: RpcTransportOptions): Transport {
         // A download into the save dialog's folder: ending `saved` or `error`.
         [FILES_GET_FRAME]: (payload) => {
           routeById(payload.stream_id, valueFrameOf(payload.frame, payload.done, null));
+        },
+        // A tap's pushes carry a batch of records under `records`, and its
+        // last word as `done`. The batch is one frame: the reader folds it in
+        // at once (`state/devtools-store.ts`).
+        [DEVTOOLS_RECORD]: (payload) => {
+          routeById(
+            payload.stream_id,
+            payload.done !== undefined
+              ? { event: "done", id: "", data: payload.done }
+              : payload.records === undefined
+                ? null
+                : { event: "records", id: "", data: payload.records },
+          );
         },
         [LOGS_LINE]: (payload) => {
           routeById(payload.stream_id, valueFrameOf(payload.line, payload.done, "line"));

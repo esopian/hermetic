@@ -79,6 +79,24 @@ export function headerLine(config: LocalConfig, fixture: boolean): string {
 }
 
 /**
+ * Whether this laptop's developer tools are on (§9.2 "Developer tools"), for
+ * the page's gate: the Inspect chip, the dock's `{ }`, the quick-jump commands
+ * and the shortcut all render only when this is true. Carried on the boot read
+ * so a laptop with the tools off makes no request it did not make before.
+ *
+ * `false` on any failure — a pre-init instance, a `prefs` row that cannot be
+ * read — because the tools being off is the state nothing depends on.
+ */
+async function devtoolsGate(hermetic: HandlerContext["hermetic"]): Promise<{ enabled: boolean }> {
+  try {
+    const settings = await hermetic().devtools.settings({});
+    return { enabled: settings.enabled === true };
+  } catch {
+    return { enabled: false };
+  }
+}
+
+/**
  * What `/api/meta` answers, as a value rather than a response, because the
  * fleet switch answers with it too (a browser that has just moved the server
  * needs every one of these fields again, and a second round trip to fetch
@@ -152,6 +170,7 @@ export function createMetaBody({ state, hermetic, fixture, opts }: HandlerContex
         last_teardown: state.lastTeardown,
         // Nothing to compare against before a fleet exists.
         foundation: null,
+        devtools: await devtoolsGate(hermetic),
         ...versions,
       };
     }
@@ -195,6 +214,7 @@ export function createMetaBody({ state, hermetic, fixture, opts }: HandlerContex
       // `_fleet.tailnet`; it is null until a fleet records one.
       tailnet: config.tailnet ?? null,
       last_teardown: state.lastTeardown,
+      devtools: await devtoolsGate(hermetic),
       ...versions,
     };
   };

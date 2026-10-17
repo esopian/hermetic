@@ -119,6 +119,8 @@ import { abortableSleep } from "../abort.ts";
 import { redactText } from "./chat-redact.ts";
 import { HermeticError } from "../errors.ts";
 import type { ChatMessage, ChatObserveEvent, SubagentBlock } from "../schema/index.ts";
+import type { DevtoolsConversation } from "../schema/index.ts";
+import { tapObserve, type TapSource } from "./devtap.ts";
 
 /* ── the policy constants ─────────────────────────────────────────────────── */
 
@@ -340,6 +342,8 @@ export interface ChatObserveDeps {
   reconnect?:
     | { attempts?: number | undefined; baseMs?: number | undefined; maxMs?: number | undefined }
     | undefined;
+  /** The developer tools' capture (`devtap.ts`); records what this service saw and said. */
+  devtap?: TapSource | undefined;
 }
 
 /* ── the observer queue ───────────────────────────────────────────────────── */
@@ -631,7 +635,15 @@ export function createChatObservation(deps: ChatObserveDeps) {
   const keyOf = (target: ChatObserveTarget): string =>
     `${target.instance}\0${target.bot}\0${target.session ?? ""}`;
 
+  /** The developer tools' key for a watch: the canonical conversation is `session: null`. */
+  const tapKey = (target: ChatObserveTarget): DevtoolsConversation => ({
+    instance: target.instance,
+    bot: target.bot,
+    session: target.session ?? null,
+  });
+
   function emit(sub: Subscription, event: ChatObserveEvent): void {
+    tapObserve(deps.devtap?.() ?? null, tapKey(sub.target), event.type, event);
     for (const observer of sub.observers) observer.push(event);
   }
 
@@ -679,6 +691,18 @@ export function createChatObservation(deps: ChatObserveDeps) {
       if (!whole && !sub.window.has(message.id)) fresh.push(message);
     }
     snapshot.messages = unique;
+    tapObserve(
+      deps.devtap?.() ?? null,
+      tapKey(sub.target),
+      "history.read",
+      {
+        session: snapshot.session,
+        rows: unique.length,
+        fresh: fresh.length,
+        whole,
+      },
+      "in",
+    );
     sub.snapshot = snapshot;
     sub.window = window;
     // The held busy answer was about the session this read rolled away from.
@@ -971,6 +995,8 @@ export function createChatObservation(deps: ChatObserveDeps) {
         // does not go through the thing that broke.
         if (hints !== null) hintAttempt = 0;
         const hint = next.kind === "hint" ? next.hint : undefined;
+        if (next.kind === "hint")
+          tapObserve(deps.devtap?.() ?? null, tapKey(sub.target), "hint", hint ?? {}, "in");
         if (hint?.subagent) {
           emit(sub, {
             type: "subagent",

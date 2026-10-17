@@ -71,6 +71,8 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   /** A precondition of the environment (§4.8): the account's directory table. */
   DIRECTORY_UNAVAILABLE: 9,
   SECRETS_DISABLED: 9,
+  /** A laptop preference is off (§9.2); no CLI verb reaches it, but the table is total. */
+  DEVTOOLS_DISABLED: 9,
   /** A precondition of the environment, like the two above it. */
   TAILSCALE_UNAVAILABLE: 9,
   HERMETICD_UNAVAILABLE: 9,

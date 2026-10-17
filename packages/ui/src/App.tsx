@@ -36,6 +36,7 @@ import { ChatView } from "./chat/components/ChatView.tsx";
 import { ChatEmpty, chatEmptyKind } from "./chat/components/ChatEmpty.tsx";
 import { AgentSectionContext } from "./chat/agent-sections.ts";
 import { ChatShell } from "./chat/components/ChatShell.tsx";
+import { DevtoolsProvider } from "./state/devtools-store.ts";
 import { useChatEntry } from "./chat/chat-entry-state.tsx";
 import { ChatProvider } from "./chat/chat-state.tsx";
 import { Settings } from "./components/settings/SettingsShell.tsx";
@@ -106,11 +107,13 @@ export function App() {
   }, [identity, fleet.meta?.config?.fleet_id]);
   return (
     <ChatProvider key={identity} eager={false}>
-      <ChatShell enabled={initialized}>
-        <NavProvider onOpenCreate={profiles.refresh}>
-          <AppBody profiles={profiles} />
-        </NavProvider>
-      </ChatShell>
+      <DevtoolsProvider>
+        <ChatShell enabled={initialized}>
+          <NavProvider onOpenCreate={profiles.refresh}>
+            <AppBody profiles={profiles} />
+          </NavProvider>
+        </ChatShell>
+      </DevtoolsProvider>
     </ChatProvider>
   );
 }

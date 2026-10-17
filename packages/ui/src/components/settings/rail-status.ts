@@ -31,6 +31,7 @@ export function railStatus({
   profiles,
   fleets,
   defaultsDirty,
+  devtools = false,
 }: {
   meta: Meta | null;
   settings: SettingsResult | null;
@@ -38,6 +39,12 @@ export function railStatus({
   fleets: readonly FleetListEntry[] | null;
   /** Fleet defaults holds staged edits the bar has not sent. */
   defaultsDirty: boolean;
+  /**
+   * The developer tools are on (the page's gate, seeded from `meta.get`). An
+   * accent square and `on`, so a running capture is never invisible; nothing
+   * at all when they are off.
+   */
+  devtools?: boolean;
 }): Partial<Record<SettingsSection, RailStatus>> {
   const out: Partial<Record<SettingsSection, RailStatus>> = {};
 
@@ -89,6 +96,8 @@ export function railStatus({
   }
 
   if (fleets !== null) out.account = { tone: "none", meta: String(fleets.length) };
+
+  if (devtools) out.developer = { tone: "acc", hint: "developer tools are on", meta: "on" };
 
   out.danger = { tone: "bad", hint: "tears down the foundation" };
   return out;
