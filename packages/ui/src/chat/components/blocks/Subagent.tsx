@@ -16,6 +16,7 @@
  * the conversation left and come back to — draws it still.
  */
 import { createContext, useContext, useEffect, useState } from "react";
+import { usePageActive } from "../../../lib/visibility.ts";
 import type { ChatBlockView } from "../../../api/index.ts";
 import {
   activityOf,
@@ -29,6 +30,8 @@ import {
 } from "../../chat-subagents.ts";
 import type { SubagentView } from "../../chat-subagents.ts";
 import { RedactedText } from "../RedactedText.tsx";
+import { jumpToMessage } from "../../thread-jump.ts";
+import { renderProbe } from "../../render-probe.ts";
 
 export interface SubagentScopeValue {
   /** Open a child's modal. `null` where no thread is around to hold one. */
@@ -60,15 +63,21 @@ function useFirstDraw(block: SubagentView): boolean {
   return first;
 }
 
-/** Wall-clock time, re-read every second while `active`; for a running child's timer. */
+/**
+ * Wall-clock time, re-read every second while `active`; for a running child's
+ * timer. The interval sits out an inactive page (hidden, or not the window in
+ * front — `lib/visibility.ts`) and catches up the moment the page is back.
+ */
 export function useTicker(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  const pageActive = usePageActive();
+  const ticking = active && pageActive;
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [ticking]);
   return active ? now : Date.now();
 }
 
@@ -76,17 +85,15 @@ const running = (block: SubagentView): boolean => block.verdict === "running" &&
 
 /** Scroll to the results turn of a background delegation, and land focus on it. */
 function jumpTo(messageId: string): void {
-  const target = Array.from(
-    document.querySelectorAll<HTMLElement>("[data-chat-ids], [data-chat-message]"),
-  ).find(
-    (el) =>
-      el.dataset.chatMessage === messageId || (el.dataset.chatIds ?? "").split(" ").includes(messageId),
+  // The results turn may be a row the virtualized transcript has not mounted;
+  // the thread holding it scrolls it in first (`thread-jump.ts`).
+  void jumpToMessage(messageId, { block: "center" }).then((target) =>
+    target?.focus?.({ preventScroll: true }),
   );
-  target?.scrollIntoView?.({ block: "center" });
-  target?.focus?.({ preventScroll: true });
 }
 
 export function SubagentLine({ block }: { block: SubagentView }) {
+  renderProbe.hit?.("SubagentLine", block.subagent_id);
   const { open, results } = useContext(SubagentContext);
   const first = useFirstDraw(block);
   const live = running(block);

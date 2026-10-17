@@ -854,7 +854,11 @@ const stamped = (frame: ChatFrameView): ChatFrameView => {
 const drawn = (container: HTMLElement) =>
   withoutComposer(container.querySelector(".ch-thread") ?? container)
     .replace(/<svg[\s\S]*?<\/svg>/g, "<svg/>")
-    .replace(/hav_r_\d+/g, "hav");
+    .replace(/hav_r_\d+/g, "hav")
+    // A row appended after the log mounted is marked fresh so only it animates
+    // (`VirtualLog`); a transcript drawn whole has no such row. Not a difference
+    // in what was drawn.
+    .replace(/ data-fresh=""/g, "");
 
 function withoutComposer(root: Element): string {
   const copy = root.cloneNode(true) as Element;

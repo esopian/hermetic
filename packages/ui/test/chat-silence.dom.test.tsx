@@ -54,7 +54,6 @@ function message(
       bot="default"
       botTitle="Kestrel"
       status="ready"
-      now={NOW}
       streaming={streaming}
       activity={streaming ? "streaming" : "idle"}
     />,

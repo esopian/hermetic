@@ -21,7 +21,9 @@ import type { ChatFailureView, ChatMessageView } from "../../api/index.ts";
 import { chatCompact, chatOpen } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { useNavIfAvailable } from "../../nav/nav-state.tsx";
-import { useChatIfAvailable } from "../chat-state.tsx";
+import { useChatGetter, useChatSelect } from "../chat-select.tsx";
+import type { Chat } from "../chat-types.ts";
+import { sameValue } from "../chat-message-identity.ts";
 import { chatHash, isChatHash } from "../chat-routing.ts";
 import {
   draftInto,
@@ -32,6 +34,7 @@ import {
   recoveryPlan,
 } from "../chat-recovery.ts";
 import { RedactedText } from "./RedactedText.tsx";
+import { renderProbe } from "../render-probe.ts";
 
 /**
  * `ChatMessage.error` is one string, and it is allowed to be either a
@@ -99,6 +102,27 @@ export function FailureCard({
   );
 }
 
+/**
+ * What the recovery buttons draw from the chat store, and nothing else: a
+ * failure card sits in a settled message, and subscribing it to the whole chat
+ * value re-rendered it on every clock tick and roster read (`chat-select.tsx`).
+ * Compared structurally, so a re-derived but equal answer is no change.
+ */
+function recoveryView(chat: Chat | null, ids: readonly string[]) {
+  if (!chat) return null;
+  const all = chat.live ? [...chat.messages, chat.live] : chat.messages;
+  return {
+    target: chat.selection,
+    // What Retry sends: the turn's prompt and the staged files that went with
+    // it, as this browser remembered them when it sent; else read back.
+    turn: failedTurnPrompt(all, ids, chat.turnPrompts),
+    sending: chat.sending,
+    // Sending again is the latest failure's to offer (`isLatestFailure`); an
+    // older card keeps Edit, the links and Copy details.
+    resend: isLatestFailure(all, ids),
+  };
+}
+
 function Recovery({
   failure,
   ids,
@@ -108,7 +132,10 @@ function Recovery({
   ids: readonly string[];
   at: string;
 }) {
-  const chat = useChatIfAvailable();
+  renderProbe.hit?.("FailureCard", ids.join(",") || at);
+  const view = useChatSelect((chat) => recoveryView(chat, ids), sameValue);
+  /** The chat as it is when a button is pressed; the handlers subscribe to nothing. */
+  const getChat = useChatGetter();
   const nav = useNavIfAvailable();
   const root = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
@@ -127,17 +154,12 @@ function Recovery({
   }, [plan.retryAt]);
   const waiting = plan.retryAt !== null && plan.retryAt > Date.now() ? plan.retryAt : null;
 
-  const target = chat?.selection ?? null;
-  const all = chat ? (chat.live ? [...chat.messages, chat.live] : chat.messages) : [];
-  // What Retry sends: the turn's prompt and the staged files that went with
-  // it, as this browser remembered them when it sent; else read back.
-  const turn = chat ? failedTurnPrompt(all, ids, chat.turnPrompts) : null;
+  const target = view?.target ?? null;
+  const turn = view?.turn ?? null;
   const prompt = turn?.text || null;
   const canResend = !!turn && (!!turn.text || turn.attachments.length > 0);
-  const idle = !!chat && !chat.sending && !busy;
-  // Sending again is the latest failure's to offer (`isLatestFailure`); an
-  // older card keeps Edit, the links and Copy details.
-  const resend = !!chat && isLatestFailure(all, ids);
+  const idle = !!view && !view.sending && !busy;
+  const resend = !!view && view.resend;
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -151,9 +173,10 @@ function Recovery({
     }
   };
   const retry = () => {
-    if (turn && canResend) chat?.send(turn.text, turn.attachments);
+    if (turn && canResend) getChat()?.send(turn.text, turn.attachments);
   };
   const edit = () => {
+    const chat = getChat();
     if (!chat || !turn) return;
     if (prompt) draftInto(chat.draft, chat.setDraft, prompt, root.current);
     // The files go back to the tray with the words, staged as they were.
@@ -161,6 +184,7 @@ function Recovery({
   };
   const compact = () =>
     void run(async () => {
+      const chat = getChat();
       if (!chat || !target) return;
       await chatCompact({
         instance: target.instance,
@@ -175,8 +199,6 @@ function Recovery({
    * back, and the prompt waits as the new session's draft. So it does if this
    * window cannot switch to it, or the store will not start the turn.
    */
-  const latest = useRef(chat);
-  latest.current = chat;
   // A card no longer on screen is a conversation the operator has left.
   const mounted = useRef(true);
   useEffect(() => {
@@ -187,13 +209,14 @@ function Recovery({
   }, []);
   const fresh = () =>
     void run(async () => {
+      const chat = getChat();
       if (!chat || !target || !turn || !canResend) return;
       const text = turn.text;
       const files = turn.attachments;
       const from = JSON.stringify(target);
       const opened = await chatOpen({ instance: target.instance, bot: target.bot, new_session: true });
       const next = { instance: opened.instance, bot: opened.bot, session: opened.session };
-      const now = latest.current;
+      const now = getChat();
       if (!now) return;
       const park = (why: string) => {
         now.stageDraft(next, text);
@@ -242,7 +265,7 @@ function Recovery({
             Retry
           </button>
         ) : null}
-        {plan.editMessage && chat ? (
+        {plan.editMessage && view ? (
           <button className="btn btn-secondary" type="button" disabled={!canResend} onClick={edit}>
             Edit message
           </button>

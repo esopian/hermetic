@@ -27,14 +27,19 @@ import type { AgentView, ChatMessageView, SessionView } from "../../api/index.ts
 import type { Observation } from "../chat-conversations.ts";
 import { composerState, hasKnownOrigin, originClass, railTime } from "../chat-logic.ts";
 import { turnRows } from "../chat-turns.ts";
+import type { TurnRow } from "../chat-turns.ts";
+import { reuseRows, sameMap } from "../chat-message-identity.ts";
+import { ClockContext, ReleasedContext, startOfDay } from "../chat-clock.tsx";
+import { useStable } from "../use-stable.ts";
+import { renderProbe } from "../render-probe.ts";
 import { latestContextReading, newerReading } from "../context-usage.ts";
 import type { ContextReading } from "../context-usage.ts";
 import { eventAnchors, processStarts, threadItems } from "../process-events.ts";
-import { ProcessBurst, ProcessEventContext, ProcessEventRow } from "./blocks/ProcessEvent.tsx";
+import { ProcessEventContext } from "./blocks/ProcessEvent.tsx";
 import { useNotifyIfAvailable } from "../../state/notify-state.tsx";
 import { useOpenAgentSection } from "../agent-sections.ts";
 import { useViewAck } from "../../nav/view-ack.ts";
-import { pinToBottom, useStickToBottom } from "../stick-to-bottom.ts";
+import { pinToBottom } from "../stick-to-bottom.ts";
 import type { Pin } from "../stick-to-bottom.ts";
 import type { Destination, ThreadState } from "../chat-logic.ts";
 import { Composer } from "./Composer.tsx";
@@ -43,8 +48,11 @@ import { BotTitleEdit } from "./BotTitleEdit.tsx";
 import { BotDmContext } from "./BotDm.tsx";
 import type { ExchangeRequest } from "./BotDm.tsx";
 import { BotExchange } from "./BotExchange.tsx";
-import { RowBoundary } from "./RowBoundary.tsx";
-import { Message } from "./Message.tsx";
+import { TranscriptLog, rowKeyForMessage } from "./TranscriptRows.tsx";
+import type { VirtualLogHandle } from "../virtual/VirtualLog.tsx";
+import { findMessage, registerThreadJump } from "../thread-jump.ts";
+import { DisclosureContext, createDisclosures } from "../disclosures.ts";
+import type { Disclosures } from "../disclosures.ts";
 import { SubagentScope } from "./blocks/SubagentModal.tsx";
 import { useChatIfAvailable } from "../chat-state.tsx";
 import type { SentAttachment } from "../chat-attachments.ts";
@@ -72,6 +80,31 @@ function faceStatus(agent: AgentView | null): Parameters<typeof Face>[0]["status
 }
 
 const NO_TEAMMATES: readonly DmBot[] = [];
+
+/** Two rosters name the same bots, under the same titles, in the same order. */
+function sameTeam(a: readonly DmBot[], b: readonly DmBot[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((bot, i) => {
+      const other = b[i];
+      return (
+        other !== undefined &&
+        bot.instance === other.instance &&
+        bot.name === other.name &&
+        (bot.title ?? null) === (other.title ?? null) &&
+        (bot.is_default ?? false) === (other.is_default ?? false)
+      );
+    })
+  );
+}
+
+const sameStart = (a: { at: string }, b: { at: string }): boolean => a.at === b.at;
+const sameStarts = (
+  a: ReadonlyMap<string, { at: string }>,
+  b: ReadonlyMap<string, { at: string }>,
+): boolean => sameMap(a, b, sameStart);
+const sameAnchors = (a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean =>
+  sameMap(a, b);
 
 /**
  * Whether the header offers the box's Desktop and Terminal: only while the box
@@ -376,7 +409,7 @@ export function Thread({
   onRename,
   mentions,
   mentionHint,
-  teammates = NO_TEAMMATES,
+  teammates: teammatesGiven = NO_TEAMMATES,
   sessions = [],
   onChooseSession,
 }: {
@@ -439,29 +472,45 @@ export function Thread({
   sessions?: readonly SessionView[];
   onChooseSession?: (session: string) => void;
 }) {
+  renderProbe.hit?.("Thread", instance);
   const log = useRef<HTMLDivElement>(null);
+  // Everything the transcript is drawn from is memoized, and kept by identity
+  // where its content did not move, so that a render of the thread — every
+  // store change, clock tick and notification — is not a render of every row
+  // (`TranscriptRows.tsx`). A roster refresh hands over a new array of the
+  // same bots; it is held on to while it says the same thing.
+  const teammates = useStable(teammatesGiven, sameTeam);
+  const liveId = live?.id ?? null;
+  const all = useMemo(() => (live ? [...messages, live] : messages), [messages, live]);
   // One turn is one row: a durable read hands back an assistant row per tool
   // call, and the operator asked for one grouping (`chat-turns.ts`). The live
-  // message never folds into the turn above it.
-  const all = live ? [...messages, live] : messages;
-  const rows = turnRows(all, now, { breakBefore: live?.id });
+  // message never folds into the turn above it. Day dividers read the clock
+  // only through the date, so the rows are keyed on the day, not on the tick.
+  const day = startOfDay(now);
+  const turned = useMemo(() => turnRows(all, day, { breakBefore: liveId }), [all, day, liveId]);
+  const keptRows = useRef<TurnRow<ChatMessageView>[]>([]);
+  const rows = useMemo(() => {
+    const next = reuseRows(keptRows.current, turned);
+    keptRows.current = next;
+    return next;
+  }, [turned]);
   // The window as of the newest turn or live tick, for the composer's meter:
   // the newer of what these rows carry and what the conversation's record holds
   // (`Conversation.context`), since the box's stored rows carry none.
   const context = useMemo(
-    () =>
-      newerReading(latestContextReading(live ? [...messages, live] : messages), contextHeld)?.usage ??
-      null,
-    [messages, live, contextHeld],
+    () => newerReading(latestContextReading(all), contextHeld)?.usage ?? null,
+    [all, contextHeld],
   );
   // Background-process events (§9.2): folded into bursts and linked to the
   // calls that started them. One rendering, with no viewer switch: every event
   // row keeps its output collapsed, and a failure is already drawn in red.
-  const items = threadItems(rows);
+  const items = useMemo(() => threadItems(rows), [rows]);
   // The newest bot turn, unless it is this tab's own streaming one: the turn
   // whose unfinished tool call the box's busy state speaks for.
-  const tail = items.findLast((item) => item.kind === "turn" && item.row.message.role !== "user");
-  const tailId = tail?.kind === "turn" && tail.row.message.id !== live?.id ? tail.row.message.id : null;
+  const tailId = useMemo(() => {
+    const tail = items.findLast((item) => item.kind === "turn" && item.row.message.role !== "user");
+    return tail?.kind === "turn" && tail.row.message.id !== liveId ? tail.row.message.id : null;
+  }, [items, liveId]);
   const working = sending || remoteBusy === true;
   const scoped = useChatIfAvailable();
   const subagents = scoped?.subagents ?? null;
@@ -470,13 +519,20 @@ export function Thread({
   // Only into a composer that can send: the same gate as its ⊕ (`Composer`).
   const composer = composerState(state, destination);
   const drop = useFileDrop(scoped?.selection ? scoped.attachments : null, instance, composer.enabled);
-  const starts = useMemo(() => processStarts(live ? [...messages, live] : messages), [messages, live]);
+  const starts = useStable(
+    useMemo(() => processStarts(all), [all]),
+    sameStarts,
+  );
+  const anchors = useStable(
+    useMemo(() => eventAnchors(items), [items]),
+    sameAnchors,
+  );
   // Refused DMs a later call already sent again, and the ones Retry was asked
   // for (`BotDm.tsx`): both outlive any one marker. Keyed by content, so a
   // streaming turn that changes neither does not re-render every marker.
   const recoveredKey = useMemo(
-    () => [...recoveredDms(live ? [...messages, live] : messages, teammates)].sort().join("\n"),
-    [messages, live, teammates],
+    () => [...recoveredDms(all, teammates)].sort().join("\n"),
+    [all, teammates],
   );
   const recovered = useMemo(() => new Set(recoveredKey.split("\n")), [recoveredKey]);
   const askedDms = useRef(new Set<string>());
@@ -484,15 +540,14 @@ export function Thread({
   // canonical Bot Chat has no origin to name (`hasKnownOrigin`).
   const knownOrigin = hasKnownOrigin(session, messages.length);
   const status = faceStatus(agent);
-  const processContext = {
-    fleetId,
-    instance,
-    bot,
-    botTitle,
-    status,
-    starts,
-    anchors: eventAnchors(items),
-  };
+  const processContext = useMemo(
+    () => ({ fleetId, instance, bot, botTitle, status, starts, anchors }),
+    [fleetId, instance, bot, botTitle, status, starts, anchors],
+  );
+  const groups = useMemo(
+    () => rows.map((row) => ({ id: row.message.id, blocks: row.message.blocks })),
+    [rows],
+  );
 
   const notify = useNotifyIfAvailable();
   const openSection = useOpenAgentSection();
@@ -505,9 +560,46 @@ export function Thread({
    * following the first message it drew.
    */
   const pin = useRef<Pin>({ following: true, pinnedTop: null });
-  // Re-pins on every late resize of a row (an image arriving, a card opening)
-  // while the reader is following — see `stick-to-bottom.ts`.
-  useStickToBottom(log, pin);
+  // The log's rows are drawn by `VirtualLog`, which owns the rest of the rule:
+  // it re-pins on every late resize of a row (an image arriving, a card
+  // opening) while the reader is following, and holds the rows in view still
+  // while they are not. `useStickToBottom` must not watch the same scroller.
+  const handle = useRef<VirtualLogHandle>(null);
+  // A conversation opened is a conversation followed from its first draw, so
+  // that the log's first window over it is its live end rather than wherever
+  // the previous one was scrolled to. Idempotent, so safe to do while rendering.
+  const opened = `${instance}\u0000${bot}\u0000${session?.id ?? ""}`;
+  const openedRef = useRef(opened);
+  if (openedRef.current !== opened) {
+    openedRef.current = opened;
+    pin.current.following = true;
+  }
+  // The groups and steps the reader opened in this conversation, kept beyond
+  // their rows (`disclosures.ts`). A new conversation starts with none; a
+  // session id resolving for the conversation already on screen (none → one,
+  // same instance and bot) is not a new conversation and keeps them. Every
+  // choice is keyed by its row's message ids, so a store kept across that
+  // step cannot hand one conversation's choice to another's rows.
+  const conversation = useRef<{
+    instance: string;
+    bot: string;
+    session: string | null;
+    store: Disclosures;
+  } | null>(null);
+  const sessionId = session?.id ?? null;
+  let held = conversation.current;
+  if (
+    held === null ||
+    held.instance !== instance ||
+    held.bot !== bot ||
+    (held.session !== null && held.session !== sessionId)
+  ) {
+    held = { instance, bot, session: sessionId, store: createDisclosures() };
+    conversation.current = held;
+  } else if (held.session !== sessionId) {
+    held.session = sessionId;
+  }
+  const disclosures = held.store;
 
   // Opening a conversation lands at its latest message, whatever the previous
   // one was scrolled to — the pane is re-used across records, so without this
@@ -562,6 +654,30 @@ export function Thread({
   };
   sendRef.current = send;
 
+  // Deep links (`#message=`, a subagent's results turn) ask every open thread
+  // for a message by id (`thread-jump.ts`): this one maps it to the row that
+  // draws it, which may not be mounted, scrolls that row in, and answers with
+  // the message's element inside it. A thread inside the chat dock (`.ch-dock`,
+  // `ChatDock.tsx`) is asked after every main-view thread.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  useEffect(
+    () =>
+      registerThreadJump(
+        (messageId, { block }) => {
+          const key = rowKeyForMessage(itemsRef.current, messageId);
+          const log = handle.current;
+          if (key === null || !log) return null;
+          return log.scrollToKey(key, { block }).then((row) => {
+            if (!row) return null;
+            return findMessage(row, messageId) ?? row.querySelector<HTMLElement>("[data-chat-message]");
+          });
+        },
+        { secondary: () => log.current?.closest(".ch-dock") != null },
+      ),
+    [],
+  );
+
   // Looking at a conversation is what marks its messages read (see `view-ack`).
   useViewAck({
     scroller: log,
@@ -580,224 +696,205 @@ export function Thread({
         : "unknown";
 
   return (
-    <section className="ch-thread" {...drop.handlers}>
-      {drop.overlay}
-      <div className="ch-thead">
-        <Face
-          fleetId={fleetId}
-          instance={instance}
-          bot={bot}
-          size={44}
-          status={status}
-          activity={activity === "idle" && remoteBusy === true ? "thinking" : activity}
-          large
-        />
-        <div>
-          <div className="ch-thead-name">
-            {onRename ? (
-              <BotTitleEdit
-                label={botLabel(instance, bot, botTitle)}
-                title={botTitle?.trim() && botTitle.trim() !== bot ? botTitle.trim() : null}
-                fallback={botLabel(instance, bot, null)}
-                onSave={onRename}
-              />
-            ) : (
-              <span className="ch-thead-label" title={botLabel(instance, bot, botTitle)}>
-                <RedactedText text={botLabel(instance, bot, botTitle)} />
-              </span>
-            )}
-            {bot !== "default" ? (
-              <span className="mono" title={`@ ${instance}`}>{`@ ${instance}`}</span>
-            ) : null}
-            {isDefault ? <span className="ch-default">default bot</span> : null}
-          </div>
-          <div className="ch-thead-sub">
-            {/*
+    <ClockContext.Provider value={now}>
+      <ReleasedContext.Provider value={scoped?.released ?? null}>
+        <section className="ch-thread" {...drop.handlers}>
+          {drop.overlay}
+          <div className="ch-thead">
+            <Face
+              fleetId={fleetId}
+              instance={instance}
+              bot={bot}
+              size={44}
+              status={status}
+              activity={activity === "idle" && remoteBusy === true ? "thinking" : activity}
+              large
+            />
+            <div>
+              <div className="ch-thead-name">
+                {onRename ? (
+                  <BotTitleEdit
+                    label={botLabel(instance, bot, botTitle)}
+                    title={botTitle?.trim() && botTitle.trim() !== bot ? botTitle.trim() : null}
+                    fallback={botLabel(instance, bot, null)}
+                    onSave={onRename}
+                  />
+                ) : (
+                  <span className="ch-thead-label" title={botLabel(instance, bot, botTitle)}>
+                    <RedactedText text={botLabel(instance, bot, botTitle)} />
+                  </span>
+                )}
+                {bot !== "default" ? (
+                  <span className="mono" title={`@ ${instance}`}>{`@ ${instance}`}</span>
+                ) : null}
+                {isDefault ? <span className="ch-default">default bot</span> : null}
+              </div>
+              <div className="ch-thead-sub">
+                {/*
               The header's badge reads the same `Destination` the composer
               does. It must not fall back to `portal` for a session that
               has not been read — a badge saying `portal` is the same claim the
               band exists to stop the UI from making.
             */}
-            {knownOrigin ? (
-              <>
-                <span className={`ch-origin ${originClass(destination)}`} title={originText}>
-                  <i />
-                  {originText}
+                {knownOrigin ? (
+                  <>
+                    <span className={`ch-origin ${originClass(destination)}`} title={originText}>
+                      <i />
+                      {originText}
+                    </span>
+                    <span>·</span>
+                  </>
+                ) : null}
+                <span className="ch-thead-fit" title={session?.title ?? "canonical Bot Chat"}>
+                  {session?.title ?? "canonical Bot Chat"}
                 </span>
                 <span>·</span>
-              </>
-            ) : null}
-            <span className="ch-thead-fit" title={session?.title ?? "canonical Bot Chat"}>
-              {session?.title ?? "canonical Bot Chat"}
-            </span>
-            <span>·</span>
-            <span className="mono ch-thead-fit" title={agent?.tailscale_dns_name ?? instance}>
-              {agent?.tailscale_dns_name ?? instance}
-            </span>
+                <span className="mono ch-thead-fit" title={agent?.tailscale_dns_name ?? instance}>
+                  {agent?.tailscale_dns_name ?? instance}
+                </span>
+              </div>
+            </div>
+            <div className="ch-thead-actions">
+              {actions}
+              {openSection && linksSections(agent) ? (
+                <>
+                  <button
+                    type="button"
+                    className="ch-chip"
+                    title={`Open ${instance}'s desktop over this conversation`}
+                    onClick={() => openSection(instance, "desktop")}
+                  >
+                    Desktop
+                  </button>
+                  <button
+                    type="button"
+                    className="ch-chip"
+                    title={`Open a terminal on ${instance} over this conversation`}
+                    onClick={() => openSection(instance, "terminal")}
+                  >
+                    Terminal
+                  </button>
+                </>
+              ) : null}
+              {fixture ? <span className="ch-chip static">canned</span> : null}
+              {agent ? <span className="ch-chip static">{agent.display_status}</span> : null}
+            </div>
           </div>
-        </div>
-        <div className="ch-thead-actions">
-          {actions}
-          {openSection && linksSections(agent) ? (
-            <>
-              <button
-                type="button"
-                className="ch-chip"
-                title={`Open ${instance}'s desktop over this conversation`}
-                onClick={() => openSection(instance, "desktop")}
-              >
-                Desktop
-              </button>
-              <button
-                type="button"
-                className="ch-chip"
-                title={`Open a terminal on ${instance} over this conversation`}
-                onClick={() => openSection(instance, "terminal")}
-              >
-                Terminal
-              </button>
-            </>
+
+          <Band
+            state={state}
+            instance={instance}
+            agent={agent}
+            now={now}
+            reconnectAttempt={reconnectAttempt}
+            tailnetDetail={tailnetDetail}
+          />
+
+          <ObservationBand observation={observation} onResume={onResumeObservation} />
+
+          {historyError ? (
+            <div className="ch-band bad" role="alert">
+              <i className="dot" />
+              <span>The transcript could not be read.</span>
+              <span className="sub">{historyError}</span>
+            </div>
           ) : null}
-          {fixture ? <span className="ch-chip static">canned</span> : null}
-          {agent ? <span className="ch-chip static">{agent.display_status}</span> : null}
-        </div>
-      </div>
 
-      <Band
-        state={state}
-        instance={instance}
-        agent={agent}
-        now={now}
-        reconnectAttempt={reconnectAttempt}
-        tailnetDetail={tailnetDetail}
-      />
+          {turnError && !(all[all.length - 1]?.failure || all[all.length - 1]?.error) ? (
+            // A failure the box reported is drawn on the turn itself, with what to
+            // do about it (`FailureCard`); the band is for a turn refused before
+            // it got there, which has no message to carry it.
+            <div className="ch-band bad" role="alert">
+              <i className="dot" />
+              <span>{turnErrorHeadline(turnError.code)}</span>
+              <span className="sub">{turnError.message}</span>
+            </div>
+          ) : null}
 
-      <ObservationBand observation={observation} onResume={onResumeObservation} />
+          <SubagentScope
+            groups={groups}
+            messages={all}
+            liveId={liveId}
+            sending={sending}
+            controls={subagents}
+          >
+            <div className="ch-log" ref={log} data-autoscroll>
+              <BotDmContext.Provider value={dm}>
+                <DisclosureContext.Provider value={disclosures}>
+                  <ProcessEventContext.Provider value={processContext}>
+                    {rows.length === 0 ? (
+                      <Empty
+                        state={state}
+                        instance={instance}
+                        bot={bot}
+                        tailnetDetail={tailnetDetail}
+                      />
+                    ) : null}
+                    {/*
+                    Mounted even with no rows, so that the log knows its
+                    viewport before the first ones arrive.
+                  */}
+                    <TranscriptLog
+                      items={items}
+                      liveId={liveId}
+                      sending={sending}
+                      activity={activity}
+                      tailId={tailId}
+                      remoteBusy={remoteBusy}
+                      fleetId={fleetId}
+                      instance={instance}
+                      bot={bot}
+                      botTitle={botTitle}
+                      status={status}
+                      scroller={log}
+                      pin={pin}
+                      handle={handle}
+                    />
+                  </ProcessEventContext.Provider>
+                </DisclosureContext.Provider>
+              </BotDmContext.Provider>
+            </div>
+          </SubagentScope>
 
-      {historyError ? (
-        <div className="ch-band bad" role="alert">
-          <i className="dot" />
-          <span>The transcript could not be read.</span>
-          <span className="sub">{historyError}</span>
-        </div>
-      ) : null}
+          {exchange ? (
+            <BotExchange
+              request={exchange}
+              fleetId={fleetId}
+              instance={instance}
+              bot={bot}
+              botTitle={botTitle}
+              status={status}
+              transcript={all}
+              teammates={teammates}
+              now={now}
+              onClose={() => setExchange(null)}
+            />
+          ) : null}
 
-      {turnError && !(all[all.length - 1]?.failure || all[all.length - 1]?.error) ? (
-        // A failure the box reported is drawn on the turn itself, with what to
-        // do about it (`FailureCard`); the band is for a turn refused before
-        // it got there, which has no message to carry it.
-        <div className="ch-band bad" role="alert">
-          <i className="dot" />
-          <span>{turnErrorHeadline(turnError.code)}</span>
-          <span className="sub">{turnError.message}</span>
-        </div>
-      ) : null}
-
-      <SubagentScope
-        groups={rows.map((row) => ({ id: row.message.id, blocks: row.message.blocks }))}
-        messages={all}
-        liveId={live?.id ?? null}
-        sending={sending}
-        controls={subagents}
-      >
-        <div className="ch-log" ref={log} data-autoscroll>
-          <BotDmContext.Provider value={dm}>
-            <ProcessEventContext.Provider value={processContext}>
-              {rows.length === 0 ? (
-                <Empty state={state} instance={instance} bot={bot} tailnetDetail={tailnetDetail} />
-              ) : (
-                items.map((item) => {
-                  // Keyed on the row's *first* source id: the merged row is named by
-                  // its last one, which moves every time the turn takes another row,
-                  // and a key that moves remounts the article — losing the group the
-                  // reader closed and the step they opened mid-turn. A burst is keyed
-                  // the same way, on its first event.
-                  const key =
-                    item.kind === "burst" ? item.key : (item.row.ids[0] ?? item.row.message.id);
-                  const divider = item.kind === "burst" ? item.divider : item.row.divider;
-                  const ids =
-                    item.kind === "burst"
-                      ? item.entries.map((entry) => entry.row.message.id)
-                      : item.row.ids;
-                  return (
-                    <div key={key}>
-                      {divider ? (
-                        <div className="ch-divider">
-                          <hr />
-                          <span>{divider}</span>
-                          <hr />
-                        </div>
-                      ) : null}
-                      <RowBoundary
-                        resetKey={`${ids.join(",")}:${item.kind === "turn" ? (item.row.message.blocks?.length ?? 0) : item.kind}`}
-                        label={item.kind === "burst" ? item.key : item.row.message.id}
-                      >
-                        {item.kind === "burst" ? (
-                          <ProcessBurst entries={item.entries} />
-                        ) : item.kind === "event" ? (
-                          <ProcessEventRow entry={item} />
-                        ) : (
-                          <Message
-                            row={item.row}
-                            fleetId={fleetId}
-                            instance={instance}
-                            bot={bot}
-                            botTitle={botTitle}
-                            status={status}
-                            now={now}
-                            streaming={sending && live !== null && item.row.message.id === live.id}
-                            activity={
-                              live !== null && item.row.message.id === live.id ? activity : "idle"
-                            }
-                            inReply={item.inReply}
-                            remoteBusy={item.row.message.id === tailId ? remoteBusy : undefined}
-                          />
-                        )}
-                      </RowBoundary>
-                    </div>
-                  );
-                })
-              )}
-            </ProcessEventContext.Provider>
-          </BotDmContext.Provider>
-        </div>
-      </SubagentScope>
-
-      {exchange ? (
-        <BotExchange
-          request={exchange}
-          fleetId={fleetId}
-          instance={instance}
-          bot={bot}
-          botTitle={botTitle}
-          status={status}
-          transcript={all}
-          teammates={teammates}
-          now={now}
-          onClose={() => setExchange(null)}
-        />
-      ) : null}
-
-      <Composer
-        destination={destination}
-        choices={sessions}
-        onChoose={onChooseSession}
-        placeholder={
-          composer.placeholder === "Message…"
-            ? `Message ${botLabel(instance, bot, botTitle)}…`
-            : composer.placeholder
-        }
-        enabled={composer.enabled}
-        editable={composer.enabled || (destination.state === "pending" && composerState(state).enabled)}
-        sending={sending}
-        working={working}
-        where={agent?.tailscale_dns_name ?? null}
-        onSend={send}
-        onAbort={onAbort}
-        mentions={mentions}
-        mentionHint={mentionHint}
-        context={context}
-      />
-    </section>
+          <Composer
+            destination={destination}
+            choices={sessions}
+            onChoose={onChooseSession}
+            placeholder={
+              composer.placeholder === "Message…"
+                ? `Message ${botLabel(instance, bot, botTitle)}…`
+                : composer.placeholder
+            }
+            enabled={composer.enabled}
+            editable={
+              composer.enabled || (destination.state === "pending" && composerState(state).enabled)
+            }
+            sending={sending}
+            working={working}
+            where={agent?.tailscale_dns_name ?? null}
+            onSend={send}
+            onAbort={onAbort}
+            mentions={mentions}
+            mentionHint={mentionHint}
+            context={context}
+          />
+        </section>
+      </ReleasedContext.Provider>
+    </ClockContext.Provider>
   );
 }

@@ -28,6 +28,7 @@ import { ChatDock } from "./ChatDock.tsx";
 import type { DockPicker } from "./ChatDock.tsx";
 import { Face } from "./Face.tsx";
 import { QuickJump } from "./QuickJump.tsx";
+import { jumpToMessage } from "../thread-jump.ts";
 
 export function ChatShell({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
   const chat = useChat();
@@ -50,6 +51,10 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
   const [hash, setHash] = useState(() => window.location.hash);
   const pendingSend = useRef<{ target: ChatSelection; text: string } | null>(null);
   const focusedMessageHash = useRef<string | null>(null);
+  /** The message link a jump is in flight for, and the hash as of the last render. */
+  const jumpingHash = useRef<string | null>(null);
+  const hashRef = useRef(hash);
+  hashRef.current = hash;
   const currentSelection = useRef(chat.selection);
   currentSelection.current = chat.selection;
   const hovered = useRef<string | null>(null);
@@ -168,21 +173,22 @@ export function ChatShell({ children, enabled = true }: { children: ReactNode; e
       return;
     }
     if (focusedMessageHash.current === hash || chat.historyLoading) return;
-    // A turn is one article built from several source rows (`chat-turns.ts`),
-    // and a link names whichever row the box wrote. The article answers to its
-    // own id and to every id folded into it.
-    const wanted = target.message;
-    const node = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-message]")).find(
-      (el) =>
-        el.dataset.chatMessage === wanted || (el.dataset.chatIds ?? "").split(" ").includes(wanted),
-    );
-    if (node) {
+    // One jump at a time: a refresh landing while the row is being scrolled in
+    // must not start a second one that supersedes it.
+    if (jumpingHash.current === hash) return;
+    jumpingHash.current = hash;
+    // The thread holding the message scrolls its row in — mounting it, since
+    // the transcript is virtualized — and answers with the element; a turn
+    // answers to every source id folded into it (`thread-jump.ts`).
+    void jumpToMessage(target.message, { block: "center" }).then((node) => {
+      if (jumpingHash.current === hash) jumpingHash.current = null;
       // A message link moves focus once, after its transcript arrives. New
-      // messages and history refreshes must not interrupt composer typing.
+      // messages and history refreshes must not interrupt composer typing,
+      // and a link the reader has already left must not pull focus back.
+      if (!node || focusedMessageHash.current === hash || hashRef.current !== hash) return;
       focusedMessageHash.current = hash;
-      node.scrollIntoView?.({ block: "center" });
       node.focus({ preventScroll: true });
-    }
+    });
   }, [hash, chat.messages, chat.historyLoading]);
 
   useEffect(() => {
