@@ -21,7 +21,14 @@ import {
   type HermesChatOptions,
 } from "./hermes-chat-types.ts";
 import { readRpc, type Rpc } from "./hermes-chat-rpc.ts";
-import { describe, isHermeticCode, originOf, socketUrl, stripToken } from "./hermes-chat-wire.ts";
+import {
+  describe,
+  discardBody,
+  isHermeticCode,
+  originOf,
+  socketUrl,
+  stripToken,
+} from "./hermes-chat-wire.ts";
 
 /** `window.__HERMES_SESSION_TOKEN__="…"`, as the SPA HTML writes it. */
 const TOKEN_IN_HTML = /__HERMES_SESSION_TOKEN__\s*=\s*["']([^"']+)["']/;
@@ -81,6 +88,7 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
       );
     }
     if (!res.ok) {
+      discardBody(res);
       throw chatError(
         CHAT_ERROR_CODES.UNREACHABLE,
         `${box.instance}: dashboard answered HTTP ${res.status}`,

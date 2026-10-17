@@ -21,7 +21,7 @@ import {
 } from "./hermes-chat-types.ts";
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import type { RequestPool } from "./hermes-chat-pool.ts";
-import { describe, stripToken } from "./hermes-chat-wire.ts";
+import { describe, discardBody, stripToken } from "./hermes-chat-wire.ts";
 
 /** What `createChatPeer` needs, and nothing more. */
 export interface ChatPeerDeps {
@@ -70,11 +70,13 @@ export function createChatPeer(deps: ChatPeerDeps) {
         );
       }
       if (response.status === 401 && cached && attempt === 0) {
+        discardBody(response);
         conn.invalidate(box);
         tok = await conn.token(box, opts.signal);
         continue;
       }
-      if (!response.ok)
+      if (!response.ok) {
+        discardBody(response);
         throw new HermeticError(
           response.status === 404
             ? "NOT_FOUND"
@@ -85,6 +87,7 @@ export function createChatPeer(deps: ChatPeerDeps) {
                 : "CHAT_PROTOCOL",
           `${box.instance}: dashboard ${method} failed (HTTP ${response.status})`,
         );
+      }
       return response.json();
     }
   }
