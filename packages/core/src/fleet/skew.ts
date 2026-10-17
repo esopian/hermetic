@@ -60,7 +60,7 @@ export function counts(status: AgentStatus): boolean {
 }
 
 /**
- * Is this agent's applied config the one the fleet rendered for it?
+ * Is this agent's applied config the one this build would render for it?
  *
  * The two hashes mean different things and are written by different actors: the
  * laptop writes `config_hash` when it renders and uploads a bundle, and the box
@@ -68,6 +68,11 @@ export function counts(status: AgentStatus): boolean {
  * were separate fields there was one attribute carrying both meanings in turn,
  * which is precisely why drift was invisible — a box that applied an old bundle
  * overwrote the record of what it should have applied.
+ *
+ * `rendered_config_hash`, when supplied, is the same prospective hash used by
+ * `plan.rollout`. A stored `config_hash` can be current with the box while this
+ * build has gained a new managed file or setting; that case still needs a
+ * rollout. Callers without a prospective render compare the stored hashes.
  *
  * A missing half is `unknown` rather than a guess in either direction. Rows
  * written before the field existed have no applied hash and never will until
@@ -79,12 +84,13 @@ export function configVerdict(agent: {
   status?: AgentStatus | undefined;
   config_hash?: string | null | undefined;
   applied_config_hash?: string | null | undefined;
+  rendered_config_hash?: string | null | undefined;
 }): ConfigVerdict {
   if (agent.status !== undefined && !reportsItsOwnConfig(agent.status)) return "unknown";
-  const desired = agent.config_hash ?? null;
+  const recorded = agent.config_hash ?? null;
   const applied = agent.applied_config_hash ?? null;
-  if (desired === null || applied === null) return "unknown";
-  return desired === applied ? "current" : "drifted";
+  if (recorded === null || applied === null) return "unknown";
+  return (agent.rendered_config_hash ?? recorded) === applied ? "current" : "drifted";
 }
 
 /**

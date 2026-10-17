@@ -7,7 +7,7 @@
  * longer sees it sets `resolved_at`, and a later recurrence is a new row rather
  * than a revival of the closed one.
  *
- * Each of the four conditions is tested twice: once directly against
+ * Each condition is tested twice: once directly against
  * `observeAdvisories`, which is where the rule lives, and once through the core
  * method that already computes the condition, which is the seam that would
  * silently stop delivering if somebody moved the call.
@@ -25,12 +25,14 @@ import {
 import { DEFAULT_BEDROCK_MODEL_IDS } from "../src/aws/index.ts";
 import {
   ADVISORY_BEDROCK_GRANT,
+  ADVISORY_CONFIG_ROLLOUT,
   ADVISORY_FOUNDATION_UPDATE,
   ADVISORY_LOOSE_VOLUME,
   ADVISORY_PREFIX,
   ADVISORY_PROFILE_REVISION,
   MemoryNotificationStore,
   bedrockGrantAdvisories,
+  configRolloutAdvisories,
   foundationUpdateAdvisories,
   looseVolumeAdvisories,
   notificationsList,
@@ -47,7 +49,7 @@ import type {
   VolumeView,
 } from "../src/schema/index.ts";
 import type { HermeticDeps } from "../src/hermetic.ts";
-import { testHermetic } from "./helpers.ts";
+import { testContext, testHermetic } from "./helpers.ts";
 
 const FLEET = FIXTURE_CONFIG.fleet_id;
 
@@ -221,6 +223,59 @@ describe("fleet.advisory: the foundation is behind this build", () => {
     const fresh = seedFixtureFoundation(new MemoryBackend());
     await core(fresh, store).foundation.status();
     expect(openKeys(store, ADVISORY_FOUNDATION_UPDATE)).toEqual([]);
+  });
+});
+
+describe("fleet.advisory: an agent needs this build's config", () => {
+  test("the row names the affected agent and the review command", () => {
+    const [row] = configRolloutAdvisories(["sindri"]);
+    expect(row?.key).toBe(`${ADVISORY_PREFIX}${ADVISORY_CONFIG_ROLLOUT}:sindri`);
+    expect(row?.class).toBe("needs_action");
+    expect(row?.detail).toContain("hermetic plan rollout --agent sindri");
+    expect(row?.actions[0]).toMatchObject({ target: "agent", ref: "sindri" });
+  });
+
+  test("startup status raises one row and resolves it after rollout", async () => {
+    const backend = seedFixtureAgents(seedFixtureFoundation(new MemoryBackend()));
+    const agent = [...backend.agents.values()].find((row) => row.status === "ready")!;
+    backend.agents.set(agent.name, {
+      ...agent,
+      config_hash: "old",
+      applied_config_hash: "old",
+    });
+    const store = new MemoryNotificationStore();
+    const hermetic = core(backend, store);
+    const key = `${ADVISORY_PREFIX}${ADVISORY_CONFIG_ROLLOUT}:${agent.name}`;
+
+    await hermetic.foundation.status();
+    await hermetic.foundation.status();
+    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).toContain(key);
+    expect(rows(store).filter((row) => row.key === key)).toHaveLength(1);
+
+    const rendered = testContext(backend).renderFor(
+      agent,
+      backend.fleetItem!.region,
+      backend.fleetItem!.tailnet,
+    ).config_hash;
+    backend.agents.set(agent.name, {
+      ...backend.agents.get(agent.name)!,
+      config_hash: rendered,
+      apply_request: {
+        id: "apply-1",
+        config_hash: rendered,
+        issued_at: backend.now().toISOString(),
+        issued_by: "test",
+      },
+    });
+    await hermetic.foundation.status();
+    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).not.toContain(key);
+
+    backend.agents.set(agent.name, {
+      ...backend.agents.get(agent.name)!,
+      applied_config_hash: rendered,
+    });
+    await hermetic.foundation.status();
+    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).not.toContain(key);
   });
 });
 

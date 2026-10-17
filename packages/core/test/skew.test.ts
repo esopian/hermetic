@@ -29,6 +29,17 @@ describe("configVerdict", () => {
     expect(configVerdict({ config_hash: "b", applied_config_hash: "a" })).toBe("drifted");
   });
 
+  test("a fresh render overrides matching stored hashes", () => {
+    expect(
+      configVerdict({
+        status: "ready",
+        config_hash: "old",
+        applied_config_hash: "old",
+        rendered_config_hash: "new",
+      }),
+    ).toBe("drifted");
+  });
+
   test("a missing half is unknown, never a guess in either direction", () => {
     // The row predates the field, or the box has not reported since it was
     // created. Both would be reported as agreement by a naive comparison, which

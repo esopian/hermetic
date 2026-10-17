@@ -397,11 +397,12 @@ export function observeHealth(deps: NotificationDeps, agents: readonly AgentView
  * fleet.advisory:<family>:<item>     one row per item, so clearing one clears one
  * ```
  *
- * The four families this phase delivers:
+ * The five families this phase delivers:
  *
  * | Key | Raised while |
  * |---|---|
  * | `fleet.advisory:foundation_update` | `foundation.status` reports `update_available` |
+ * | `fleet.advisory:config_rollout:<agent>` | this build renders a config the agent has not applied |
  * | `fleet.advisory:bedrock_grant:<model id>` | the model is named in this fleet and the stack does not grant it |
  * | `fleet.advisory:loose_volume:<volume id>` | the volume is free and no live agent row names it |
  * | `fleet.advisory:profile_revision:<agent>` | the profile the agent is pinned to has moved past its pinned revision |
@@ -413,6 +414,7 @@ export function observeHealth(deps: NotificationDeps, agents: readonly AgentView
 export const ADVISORY_PREFIX = "fleet.advisory:";
 
 export const ADVISORY_FOUNDATION_UPDATE = "foundation_update";
+export const ADVISORY_CONFIG_ROLLOUT = "config_rollout";
 export const ADVISORY_BEDROCK_GRANT = "bedrock_grant";
 export const ADVISORY_LOOSE_VOLUME = "loose_volume";
 export const ADVISORY_PROFILE_REVISION = "profile_revision";
@@ -541,6 +543,18 @@ export function foundationUpdateAdvisories(input: {
       actions: [{ label: "Review", target: "foundation" }],
     },
   ];
+}
+
+/** An agent needs an explicit rollout to take this build's rendered config. */
+export function configRolloutAdvisories(agents: readonly string[]): Advisory[] {
+  return agents.map((name) => ({
+    key: advisoryKey(ADVISORY_CONFIG_ROLLOUT, name),
+    class: "needs_action" as const,
+    title: `${name} needs a config rollout`,
+    detail: `Review with \`hermetic plan rollout --agent ${name}\`, then apply the plan.`,
+    agent: name,
+    actions: [{ label: `Open ${name}`, target: "agent" as const, ref: name }],
+  }));
 }
 
 /**
