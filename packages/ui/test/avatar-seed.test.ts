@@ -13,20 +13,21 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  PIXEL_STILL,
+  PIXEL_STOPPED,
   RESERVED_HUE,
+  SIGIL_HOME,
   avatarMotion,
   avatarPalette,
   avatarSeed,
   avatarSeeds,
-} from "../src/chat/components/avatar/avatar-seed.ts";
-import { blobPath, blobShape } from "../src/chat/components/avatar/blob.ts";
-import {
-  PIXEL_STILL,
-  PIXEL_STOPPED,
+  blobPath,
+  blobShape,
   pixelFrame,
   pixelParts,
-} from "../src/chat/components/avatar/pixel.ts";
-import { SIGIL_HOME, sigilCells, sigilFrame } from "../src/chat/components/avatar/sigil.ts";
+  sigilCells,
+  sigilFrame,
+} from "@hermetic/core/shared";
 
 /** A palette for one key, from a fresh stream every time. */
 function paletteFor(key: string, light: boolean, family = true) {

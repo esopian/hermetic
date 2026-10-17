@@ -2,10 +2,11 @@
 import { useState } from "react";
 import type { BotView, RoomView, SessionView, SwarmView } from "../../api/index.ts";
 import type { ChatSelection } from "../chat-state.tsx";
-import { railTime, railUnread } from "../chat-logic.ts";
+import { type RailFilter, railTime, railUnread } from "../chat-logic.ts";
 import {
   bucketSignal,
   railKey,
+  setRailFilter,
   toggleCollapsed,
   togglePinned,
   useRailPrefs,
@@ -55,7 +56,8 @@ export function BotRail({
   canonicalId?: string | null;
 }) {
   const [tab, setTab] = useState<"bots" | "sessions">("bots");
-  const [filter, setFilter] = useState<"all" | "unread" | "needs">("unread");
+  const filter = useRailPrefs(fleetId).filter;
+  const setFilter = (next: RailFilter) => setRailFilter(fleetId, next);
   const bots = swarms.flatMap((swarm) => swarm.bots);
   /**
    * The inbox's unread `chat.*` rows, added to the roster's own count: the two

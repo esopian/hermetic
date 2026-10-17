@@ -1,0 +1,440 @@
+---
+/*
+ * The iPhone companion page: what the phone app does, how it reaches the fleet, how to pair one,
+ * and what it leaves to the desktop. Every claim names its docs/design.md section (§9.4 is the
+ * phone's design) or the mobile/ file it rests on. Screens are HTML replicas
+ * (components/mobile/Phone.astro); names, previews and commands in them are illustrative.
+ */
+import CtaBand from "../components/CtaBand.astro";
+import EnvStrip from "../components/EnvStrip.astro";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import Kicker from "../components/Kicker.astro";
+import Phone from "../components/mobile/Phone.astro";
+import SectionHead from "../components/SectionHead.astro";
+import StatusSquare from "../components/StatusSquare.astro";
+import { docs, repo } from "../data/links";
+import Marketing from "../layouts/Marketing.astro";
+
+/* design.md §9.4 "Push": the transition table's kinds and bodies, previews off. */
+const PUSHES = [
+  {
+    kind: "needs_action",
+    when: "a session starts waiting on an approval or a question",
+    body: "<bot> is waiting on you",
+  },
+  {
+    kind: "turn.done",
+    when: "a turn the box saw under way settles with a reply",
+    body: "<bot> replied",
+  },
+  { kind: "turn.error", when: "the same turn ends on a failure", body: "<bot> hit an error" },
+  {
+    kind: "message",
+    when: "a routine or a channel starts a new session",
+    body: "New message from <bot>",
+  },
+];
+
+/* What the phone does and what stays on the desktop and the CLI. mobile/AGENTS.md "Admin the phone keeps", design.md §9.4. */
+const MATRIX: { what: string; phone: boolean; note: string }[] = [
+  {
+    what: "Chat with any bot on any listened box",
+    phone: true,
+    note: "the desktop's own chat adapter",
+  },
+  { what: "Answer approvals and questions", phone: true, note: "while the phone follows the turn" },
+  { what: "Start a separate session", phone: true, note: "the + sheet" },
+  { what: "Search bots and last messages", phone: true, note: "name, title, instance, preview" },
+  { what: "Push notifications", phone: true, note: "sent by the box" },
+  { what: "Watch or drive the agent's browser", phone: true, note: "noVNC from the box" },
+  { what: "Agent status, version and health", phone: true, note: "Settings › agents" },
+  { what: "Create, recreate or destroy agents", phone: false, note: "desktop or CLI" },
+  { what: "Volumes, runs, upgrades, provider keys", phone: false, note: "desktop or CLI" },
+  { what: "Switch fleets", phone: false, note: "pair again to change fleet" },
+];
+---
+<Marketing
+  title="iPhone app: your Hermes agents in your pocket | Hermetic"
+  description="The Hermetic iPhone app chats with every Hermes agent in your fleet over your Tailscale tailnet, answers approvals, and gets pushes straight from the boxes. No laptop in the path and no credential on the phone."
+>
+  <EnvStrip />
+  <Header />
+
+  <section class="m-head">
+    <div class="wrap m-head-in">
+      <div class="m-say">
+        <Kicker>iPhone companion</Kicker>
+        <h1>Your fleet,<br><em>in your pocket</em></h1>
+        {/* design.md §9.4: the phone talks to the fleet directly; no laptop bridge, nothing on the laptop listens for a phone */}
+        <p class="lede">The Hermetic iPhone app talks to your agents directly over your tailnet. Chat with any bot, answer an agent that is waiting on you, and get a push when a turn finishes, with your laptop closed.</p>
+        <div class="m-ctas">
+          <a class="btn btn-p" href="#pair">Pair a phone →</a>
+          <a class="btn btn-s" href="#connect">How it connects</a>
+        </div>
+        {/* mobile/README.md "Platforms" (iOS only); README.md "Status" (pre-alpha); mobile/RELEASE_NOTES.md (TestFlight candidate pending) */}
+        <p class="fine">iPhone only · pre-alpha · not in the App Store yet</p>
+      </div>
+      <div class="m-phones">
+        <Phone screen="home" class="m-back" label="Replica of the iPhone home screen: two pinned bots in a hero row, then the other bots grouped by instance, with unread, needs-you and not-answering marks." />
+        <Phone screen="chat" class="m-front" label="Replica of an iPhone conversation stopped on an approval card with Approve once, This session, Always allow and Deny." />
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="facts">
+        {/* design.md §9.4 "Security": the phone and the QR hold no credential */}
+        <div><b>0</b><span>credentials on the phone</span></div>
+        {/* design.md §9.4: no laptop bridge; push comes from hermeticd's watcher on the box */}
+        <div><b>0</b><span>laptop processes it needs</span></div>
+        {/* design.md §9.4 (phone → gateway 443, phone → hermeticd 7434, both over the tailnet) */}
+        <div><b>2</b><span>tailnet ports it dials on a box</span></div>
+        {/* design.md §9.4 (registrations lapse 72 hours after the last renewal) */}
+        <div><b>72h</b><span>until a silent phone stops getting pushes</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="why">
+    <SectionHead num="§01" kicker="Why a phone" title="Keep up with agents away from the desk">
+      <p>Agents work while you are somewhere else. The phone is how you stay in the conversation, without carrying the fleet's keys around.</p>
+    </SectionHead>
+    <div class="grid">
+      {/* design.md §9.4 "The @hermetic/core/chat-client door": the phone imports the desktop's adapter and reads the same ChatFrame stream */}
+      <div class="p"><div class="top"><span class="ix">01</span><StatusSquare kind="acc" /></div><h3>The same chat as the desktop</h3><p>The phone uses the desktop's own Hermes chat adapter, so a turn, a tool call and a question mean the same thing on both. Transcripts stay on the agent's data volume.</p></div>
+      {/* design.md §9.4 (approvals and clarify questions, §9.2 meaning); mobile/src/chat/blocks/Approval.tsx */}
+      <div class="p"><div class="top"><span class="ix">02</span><StatusSquare kind="warn" /></div><h3>Unblock an agent from anywhere</h3><p>When an agent stops for an approval or a question, answer it in the conversation with the same choices the desktop offers. "Always allow" asks you to confirm the pattern first.</p></div>
+      {/* design.md §9.4 "Push": hermeticd's watcher on the box sends through Expo, nothing on the laptop running */}
+      <div class="p"><div class="top"><span class="ix">03</span><StatusSquare kind="ok" /></div><h3>Pushes come from the box</h3><p>Each agent's box watches its own sessions and sends the push itself, so your laptop can stay closed.</p></div>
+      {/* design.md §9.4 "Security": trust is tailnet membership, the ACL and hermeticd's whois gate; session token held in memory only */}
+      <div class="p"><div class="top"><span class="ix">04</span><StatusSquare kind="ok" /></div><h3>Nothing to steal on the phone</h3><p>The phone holds no AWS credential and no API key. It gets in because it is signed into your tailnet. Remove it from the tailnet and every way in ends with it.</p></div>
+      {/* design.md §9.4 "Previews are opt-in": bodies name the bot only unless the phone registers with previews */}
+      <div class="p"><div class="top"><span class="ix">05</span><StatusSquare color="var(--fg2)" /></div><h3>Quiet lock screen by default</h3><p>A push says which bot needs you and nothing of what was said. Turn on message previews and the box sends a redacted excerpt of up to 140 characters.</p></div>
+      {/* design.md §9.4 "Screens" (hero of pinned bots, sections per instance, long-press for the agent browser); §7.3 (headed Chrome, noVNC over Serve) */}
+      <div class="p"><div class="top"><span class="ix">06</span><StatusSquare kind="acc" /></div><h3>Your bots on one screen</h3><p>Pin the bots you talk to most. Everything else sits under its box, sorted so anything waiting on you comes first. Long-press a bot to open the browser it is driving.</p></div>
+    </div>
+  </section>
+
+  <section class="s" id="push">
+    <SectionHead num="§02" kicker="Notifications" title="Know when an agent needs you">
+      {/* design.md §9.4 "Push" (every three seconds, session.active_list, dedupe key) */}
+      <p>The box checks its live sessions every three seconds and pushes on a change. A push and the same event over an open conversation share one key, so you are told once. Tapping a push opens the conversation it is about.</p>
+    </SectionHead>
+    <div class="m-split">
+      <div class="m-lock">
+        <Phone screen="lock" label="Replica of an iPhone lock screen with three Hermetic notifications: corvid is waiting on you, Atlas replied, New message from Rook." />
+      </div>
+      <div class="m-pushes">
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <tr><th>Push</th><th>Sent when</th><th>Lock screen says</th></tr>
+            {PUSHES.map((p) => (
+              <tr><td class="nm">{p.kind}</td><td class="wrapt">{p.when}</td><td>{p.body}</td></tr>
+            ))}
+          </table>
+        </div>
+        <div class="m-notes">
+          {/* design.md §9.4: needs_action is high priority; no inline approve or deny, a tap opens the conversation */}
+          <div><Kicker>Priority</Kicker><p>A bot waiting on you is sent as a high priority push. Answering needs the conversation open, so the push takes you there.</p></div>
+          {/* design.md §9.4: registrations lapse after 72 hours; the phone renews on every foreground */}
+          <div><Kicker>Renewal</Kicker><p>Opening the app renews its registration with every box it listens to. A phone left unopened for three days stops getting pushes until it is opened again.</p></div>
+          {/* design.md §9.4: owner-keyed registrations, four per member per box, pruned when the member leaves the tailnet */}
+          <div><Kicker>Ownership</Kicker><p>Each registration belongs to the tailnet login that made it. Another member of the tailnet cannot silence your phone or take over its pushes.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="connect">
+    <SectionHead num="§03" kicker="Connection" title="Straight to the box, over your tailnet">
+      {/* design.md §9.4 diagram; §5.2 (tailnet ACL admits autogroup:member to tag:hermetic:443,7434) */}
+      <p>There is no Hermetic server in the middle and no relay on your laptop. The phone dials the same two ports on a box that your laptop does, inside the same tailnet rule.</p>
+    </SectionHead>
+    <div class="m-paths">
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <tr><th>From</th><th>To</th><th>Port</th><th>Carries</th></tr>
+          {/* design.md §9.4 diagram, line by line */}
+          <tr><td class="nm">phone</td><td>Hermes gateway, each box</td><td>443 · HTTPS, WSS</td><td class="wrapt">chat, approvals, questions, the agent's browser</td></tr>
+          <tr><td class="nm">phone</td><td>hermeticd, any box</td><td>7434 · in the tunnel</td><td class="wrapt">the fleet list, push registration</td></tr>
+          <tr><td class="nm">box</td><td>Expo push service</td><td>egress</td><td class="wrapt">notifications to your phone</td></tr>
+          <tr><td class="nm">laptop</td><td>phone</td><td>a QR code</td><td class="wrapt">the fleet's name and its agents, no secret</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="docs m-sec">
+      {/* design.md §9.4 "Security" (WireGuard end to end; gateway HTTPS through Serve, §7.3) */}
+      <div class="doc"><Kicker>Transport</Kicker><h4>Encrypted end to end</h4><p>Every link runs inside Tailscale's WireGuard tunnel. The chat gateway is also HTTPS through Tailscale Serve.</p></div>
+      {/* mobile/README.md "The off-tunnel gate": every 7434 call waits for an HTTPS answer from the same host within 60 seconds */}
+      <div class="doc"><Kicker>Off-tunnel gate</Kicker><h4>Checks before it talks</h4><p>Before any call to port 7434, the phone confirms the box answers over HTTPS on the tailnet. If it cannot, the call is never sent.</p></div>
+      {/* design.md §9.4 "Fleet discovery": GET /fleet, read-only Scan of the fleet's own agents table */}
+      <div class="doc"><Kicker>Fleet list</Kicker><h4>Read from any box</h4><p>Any reachable box can answer with the fleet's current agents, read only, from its own fleet's table. The QR's snapshot covers the gap until one does.</p></div>
+      {/* design.md §9.4 "Tailscale status": a probe heuristic, band under the bar for off and unreachable */}
+      <div class="doc"><Kicker>Tailscale</Kicker><h4>Tells you when it is off</h4><p>If no box answers, a band under the top bar says whether Tailscale looks off or the boxes look unreachable, with a button to open Tailscale.</p></div>
+    </div>
+  </section>
+
+  <section class="s" id="pair">
+    <SectionHead num="§04" kicker="Pairing" title="Pair a phone in a minute">
+      {/* design.md §9.4 "Pairing link": no secret, no expiry, safe to show and paste */}
+      <p>Pairing hands the phone the fleet's name and its list of agents. The link carries no secret, so it is safe to screenshot or paste.</p>
+    </SectionHead>
+    <div class="docs m-steps">
+      {/* design.md §9.4 (the phone needs the Tailscale app signed into the fleet's tailnet) */}
+      <div class="doc"><Kicker>Step 1</Kicker><h4>Join the tailnet</h4><p>Install the Tailscale app on the iPhone and sign in to the tailnet your fleet uses.</p></div>
+      {/* design.md §9.4: `hermetic mobile pair` in the CLI, Settings › Pair a phone in the desktop app */}
+      <div class="doc"><Kicker>Step 2</Kicker><h4>Show the code</h4><p>On your Mac, open <b>Settings › Pair a phone</b> in the app, or run <code>hermetic mobile pair</code>.</p></div>
+      {/* design.md §9.4: the phone parses the link, shows a confirm screen, stores it in the iOS keychain */}
+      <div class="doc"><Kicker>Step 3</Kicker><h4>Scan and confirm</h4><p>Scan the QR from the app, check the fleet, tailnet and agent count, and confirm. The pairing is kept in the iPhone's keychain.</p></div>
+      {/* design.md §9.4: listening defaults to every ready agent; the phone registers for push with every box it listens to */}
+      <div class="doc"><Kicker>Step 4</Kicker><h4>Pick what to hear</h4><p>The phone listens to every ready agent to start with. Turn boxes off in Settings, and turn on push to hear from the ones you keep.</p></div>
+    </div>
+    <div class="m-cli"><span>$</span> hermetic mobile pair</div>
+  </section>
+
+  <section class="s" id="support">
+    <SectionHead num="§05" kicker="Support" title="What the phone does">
+      {/* mobile/AGENTS.md "Admin the phone keeps"; design.md §9.4 "Screens" */}
+      <p>The phone is for talking to agents and keeping an eye on them. Anything that changes the fleet or touches AWS stays on the desktop app and the CLI, which keeps the phone free of credentials.</p>
+    </SectionHead>
+    <div class="m-matrix">
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <tr><th>Feature</th><th>iPhone</th><th>Notes</th></tr>
+          {MATRIX.map((r) => (
+            <tr class:list={{ "m-no": !r.phone }}>
+              <td class="nm wrapt">{r.what}</td>
+              <td><StatusSquare kind={r.phone ? "ok" : "off"} />{r.phone ? "yes" : "no"}</td>
+              <td class="wrapt">{r.note}</td>
+            </tr>
+          ))}
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="limits">
+    <SectionHead num="§06" kicker="Requirements" title="What you need">
+      <p>The app is pre-alpha, like the rest of Hermetic. These are the limits today.</p>
+    </SectionHead>
+    <div class="docs">
+      {/* mobile/README.md "Platforms": iOS only, Android out of scope */}
+      <div class="doc"><Kicker>Platform</Kicker><h4>iPhone only</h4><p>The app is built for iOS. There is no Android version.</p></div>
+      {/* design.md §9.4 (the phone needs Tailscale signed into the same tailnet) */}
+      <div class="doc"><Kicker>Network</Kicker><h4>Tailscale on the phone</h4><p>The Tailscale app must be signed in to the fleet's tailnet. Without it the phone cannot reach any box.</p></div>
+      {/* design.md §9.4 rollout: artifacts push, agent recreate, foundation update (foundation 17 Scan grant) */}
+      <div class="doc"><Kicker>Older fleets</Kicker><h4>One rollout first</h4><p>A fleet built before the phone needs <code>hermetic artifacts push</code>, a recreate of each agent, and <code>hermetic foundation update</code> for the full fleet list.</p></div>
+      {/* design.md §9.4 "Chat": answering needs a live turn on this phone; mobile/README.md "a request raised while the phone was away" */}
+      <div class="doc"><Kicker>Known gap</Kicker><h4>Requests raised while away</h4><p>An approval raised while the app was in the background shows as waiting. Answer it from the desktop, or stop the turn from the phone.</p></div>
+    </div>
+    <div class="trade-foot">
+      <a class="btn btn-s btn-sm" href={docs.securityModel}>Security model →</a>
+      <a class="btn btn-s btn-sm" href={repo.designSpec}>Design spec →</a>
+    </div>
+  </section>
+
+  <CtaBand />
+  <Footer />
+</Marketing>
+
+<style>
+  .m-head {
+    border-bottom: 3px solid var(--fg);
+    overflow: hidden;
+  }
+  .m-head-in {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 48px;
+    align-items: center;
+    padding-top: 64px;
+  }
+  .m-head h1 {
+    font-weight: 900;
+    font-size: clamp(40px, 5.2vw, 80px);
+    line-height: 0.9;
+    letter-spacing: -0.045em;
+    text-transform: uppercase;
+    margin: 18px 0 28px;
+  }
+  .m-head h1 em {
+    font-style: normal;
+    color: var(--acc);
+  }
+  .lede {
+    font-size: 19px;
+    color: var(--fg2);
+    max-width: 34em;
+  }
+  .m-ctas {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 32px;
+  }
+  .fine {
+    font: 700 11px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg3);
+    margin-top: 16px;
+  }
+  .m-phones {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    padding: 0 8px 0 0;
+  }
+  .m-phones :global(.m-back) {
+    margin-top: 56px;
+  }
+  .m-phones :global(.m-front) {
+    margin-left: -40px;
+    box-shadow: -18px 18px 0 var(--bg);
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin: 48px 0;
+  }
+  .facts div {
+    background: var(--bg);
+    padding: 22px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .facts b {
+    font: 900 40px / 1 var(--sans);
+    letter-spacing: -0.03em;
+  }
+  .facts span {
+    font: 700 11px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg3);
+  }
+
+  .m-split {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .m-lock {
+    padding: 36px 40px;
+    border-right: 1px solid var(--line);
+    display: flex;
+    justify-content: center;
+  }
+  .m-pushes {
+    min-width: 0;
+    padding: 28px 24px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .tbl td.wrapt {
+    white-space: normal;
+    min-width: 14em;
+  }
+  .m-notes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+  .m-notes > div {
+    background: var(--bg);
+    padding: 18px;
+  }
+  .m-notes p {
+    color: var(--fg2);
+    font-size: 14px;
+    margin-top: 8px;
+  }
+
+  .m-paths,
+  .m-matrix {
+    padding: 28px 24px 32px;
+  }
+  .m-sec {
+    border-top: 1px solid var(--line);
+  }
+  .doc code,
+  .m-steps code {
+    font: 500 12px var(--mono);
+    color: var(--fg);
+    background: var(--bg3);
+    padding: 1px 5px;
+  }
+  .m-steps .doc b {
+    color: var(--fg);
+  }
+  .m-cli {
+    font: 500 14px var(--mono);
+    padding: 18px 24px;
+    border-top: 1px solid var(--line);
+    color: var(--fg);
+  }
+  .m-cli span {
+    color: var(--acc);
+    margin-right: 8px;
+  }
+  .tbl tr.m-no td {
+    color: var(--fg3);
+  }
+  .trade-foot {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 20px 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  @media (max-width: 1080px) {
+    .m-head-in {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .m-phones {
+      justify-content: center;
+    }
+    .facts {
+      grid-template-columns: 1fr 1fr;
+    }
+    .m-split {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .m-lock {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+  }
+  @media (max-width: 640px) {
+    .m-head-in {
+      padding-top: 44px;
+      gap: 32px;
+    }
+    .lede {
+      font-size: 17px;
+    }
+    .m-phones :global(.m-back) {
+      display: none;
+    }
+    .m-phones :global(.m-front) {
+      margin-left: 0;
+    }
+    .facts b {
+      font-size: 30px;
+    }
+    .m-lock {
+      padding: 28px 16px;
+    }
+    .m-pushes,
+    .m-paths,
+    .m-matrix {
+      padding: 22px 16px;
+    }
+  }
+</style>

@@ -136,6 +136,13 @@ export const ERROR_CODES = [
    * reaches the directory is a fleet the next laptop cannot find.
    */
   "DIRECTORY_UNAVAILABLE",
+  /**
+   * hermeticd's `GET /fleet` could not list the fleet's agents (§9.4) — most
+   * often a foundation below version 17, whose agent role holds no
+   * `dynamodb:Scan`. The box answers 503; a phone keeps its pairing snapshot,
+   * and `hermetic foundation update` is the remedy.
+   */
+  "FLEET_LIST_UNAVAILABLE",
   /** The caller is authenticated but not permitted — heads map it to 403. */
   "FORBIDDEN",
   /**
@@ -270,6 +277,14 @@ export const ERROR_CODES = [
    * per app (issue #18). Ending a session is the remedy.
    */
   "TERMINAL_LIMIT",
+  /**
+   * HTTP-shaped refusals: a caller the server will not admit (401), one that
+   * asked too often (429; also a provider's rate limit on a chat turn), and a
+   * body over the payload limit (413).
+   */
+  "UNAUTHORIZED",
+  "RATE_LIMITED",
+  "PAYLOAD_TOO_LARGE",
   /**
    * The files service (hermeticd's `/files` routes and the plugin socket).
    * hermeticd answers each with the HTTP status in `FILES_HTTP_STATUS`

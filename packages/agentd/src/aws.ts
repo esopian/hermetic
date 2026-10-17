@@ -1,9 +1,9 @@
 /**
  * hermeticd's AWS surface, and the one place in hermetic where the *default*
  * credential provider chain is correct: on the box the chain resolves to the
- * instance role, whose IAM policy scopes it to this agent's own row
- * (`LeadingKeys`), its own SSM path and its own S3 prefix (§6.4). It has no view
- * of the fleet.
+ * instance role, whose IAM policy scopes it to its own fleet's tables, SSM
+ * path and S3 prefixes (§5.1, §6.4). It writes only its own row; the one view
+ * it has of the rest of the fleet is a read-only Scan, for the phone (§9.4).
  *
  * Three services, nothing more:
  *   SSM      GetParameter (WithDecryption) for `${param_prefix}<name>/{ts-key,bws-token,provider-key}`,
@@ -14,7 +14,9 @@
  *   S3       GetObject for `manifest.json`, the config tarball and the release objects
  *            the manifest records under `artifacts/<ver>/<generation>/…` — never a
  *            key rebuilt from the version label (§3.6)
- *   DynamoDB GetItem/UpdateItem on its own row + PutItem into `events`
+ *   DynamoDB GetItem/UpdateItem on its own row + PutItem into `events`; Scan of
+ *            `agents` and GetItem of `_fleet` for `GET /fleet` (foundation v17+;
+ *            below it the Scan is `AccessDenied`, which the route reports)
  *
  * Two rules govern every write here:
  *
@@ -30,7 +32,13 @@
  *    increment it, and those are already guarded on the current status.
  */
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  ScanCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { GetParameterCommand, GetParametersByPathCommand, SSMClient } from "@aws-sdk/client-ssm";
 import type {
@@ -41,7 +49,7 @@ import type {
   Health,
   Metrics,
 } from "@hermetic/core/schema";
-import { FLEET_MANIFEST_KEY } from "@hermetic/core/shared";
+import { FLEET_KEY, FLEET_MANIFEST_KEY } from "@hermetic/core/shared";
 import { parseFleetManifest } from "./fleet.ts";
 import { AgentdError } from "./errors.ts";
 
@@ -114,8 +122,17 @@ export interface Aws {
    * it is the file that names them.
    */
   getFleetManifest(bucket: string): Promise<FleetManifest>;
-  /** hermeticd's own row. It cannot read another agent's. */
+  /** hermeticd's own row. Nothing on the box reads another agent's by key. */
   getOwnRow(name: string): Promise<Agent | null>;
+  /**
+   * Every item in the agents table, `_fleet` included, unparsed — the caller
+   * (`GET /fleet`, `rpc-mobile.ts`) decides what is an agent. Consistent and
+   * paginated. Throws the SDK's error as-is, so `AccessDeniedException` on a
+   * foundation below v17 reaches the route by name.
+   */
+  scanAgents(): Promise<Record<string, unknown>[]>;
+  /** The `_fleet` item (`FLEET_KEY`), unparsed; `null` when absent. */
+  getFleetRow(): Promise<Record<string, unknown> | null>;
   /**
    * A guarded status change (§4.3). The condition is on the *current* status, so
    * a stale writer cannot move a `destroying` agent back to `ready`.
@@ -273,6 +290,9 @@ export async function fetchFleetManifest(s3: CommandSink, bucket: string): Promi
   return parseFleetManifest(new TextDecoder().decode(await bodyBytes(out.Body)));
 }
 
+/** The most pages one `scanAgents` reads before it gives up. */
+export const SCAN_MAX_PAGES = 50;
+
 /** Events are keyed (name, timestamp); two in the same millisecond would collide. */
 const EVENT_COLLISION_RETRIES = 5;
 
@@ -354,6 +374,36 @@ export function makeAws(deps: AwsDeps): Aws {
         new GetCommand({ TableName: deps.agentsTable, Key: { name }, ConsistentRead: true }),
       )) as { Item?: Record<string, unknown> };
       return (out.Item as Agent | undefined) ?? null;
+    },
+
+    async scanAgents() {
+      const items: Record<string, unknown>[] = [];
+      let start: Record<string, unknown> | undefined;
+      // Bounded: a fleet is tens of rows, a page is 1 MB, and a table that
+      // somehow kept answering with a cursor must not hold a request forever.
+      for (let page = 0; page < SCAN_MAX_PAGES; page += 1) {
+        const out = (await deps.ddb.send(
+          new ScanCommand({
+            TableName: deps.agentsTable,
+            ConsistentRead: true,
+            ...(start === undefined ? {} : { ExclusiveStartKey: start }),
+          }),
+        )) as { Items?: Record<string, unknown>[]; LastEvaluatedKey?: Record<string, unknown> };
+        items.push(...(out.Items ?? []));
+        start = out.LastEvaluatedKey;
+        if (start === undefined) return items;
+      }
+      throw new AgentdError(
+        "INTERNAL",
+        `the agents table did not finish scanning in ${SCAN_MAX_PAGES} pages`,
+      );
+    },
+
+    async getFleetRow() {
+      const out = (await deps.ddb.send(
+        new GetCommand({ TableName: deps.agentsTable, Key: { name: FLEET_KEY }, ConsistentRead: true }),
+      )) as { Item?: Record<string, unknown> };
+      return out.Item ?? null;
     },
 
     async transition({ name, from, to, action, detail, set }) {

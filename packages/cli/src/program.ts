@@ -17,6 +17,7 @@ import * as fleets from "./commands/fleets.ts";
 import * as files from "./commands/files.ts";
 import * as chat from "./commands/chat.ts";
 import * as inbox from "./commands/inbox.ts";
+import * as mobile from "./commands/mobile.ts";
 import * as foundation from "./commands/foundation.ts";
 import * as init from "./commands/init.ts";
 import * as ops from "./commands/ops.ts";
@@ -67,6 +68,7 @@ export function buildProgram(): Command {
   chat.register(program);
   files.register(program);
   botMode.register(program);
+  mobile.register(program);
   ops.register(program);
   policy.register(program);
   network.register(program);

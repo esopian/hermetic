@@ -211,3 +211,32 @@ describe("the high-entropy fallback", () => {
     expect(looksSecret("Ab1Cd2Ef3Gh4Ij5Kl6")).toBe(false);
   });
 });
+
+describe("Expo push tokens (§9.4)", () => {
+  const EXPONENT = "ExponentPushToken[xAbC123dEfG456hIjK789lM]";
+  const EXPO = "ExpoPushToken[nOpQ-rStU_vWxYz0123]";
+
+  test("either spelling keeps its name and loses its inner part", () => {
+    expect(looksSecret(EXPONENT)).toBe(true);
+    expect(looksSecret(EXPO)).toBe(true);
+    expect(redactValue(EXPONENT)).toBe("ExponentPushToken[…]");
+    expect(redactValue(EXPO)).toBe("ExponentPushToken[…]");
+  });
+
+  test("inside a line, only the token goes", () => {
+    const line = `expo refused ${EXPONENT}: DeviceNotRegistered; also ${EXPO}`;
+    const redacted = redactValue(line);
+    expect(redacted).toBe(
+      "expo refused ExponentPushToken[…]: DeviceNotRegistered; also ExponentPushToken[…]",
+    );
+    expect(redacted).not.toContain("xAbC123dEfG456hIjK789lM");
+    expect(redacted).not.toContain("nOpQ-rStU_vWxYz0123");
+  });
+
+  test("the name alone, or an empty bracket, is not a token", () => {
+    expect(redactValue("an ExponentPushToken[] is malformed")).toBe(
+      "an ExponentPushToken[] is malformed",
+    );
+    expect(redactValue("the ExpoPushToken shape")).toBe("the ExpoPushToken shape");
+  });
+});

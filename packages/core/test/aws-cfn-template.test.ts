@@ -239,13 +239,58 @@ describe("the foundation template", () => {
       expect(template.Parameters["BedrockModelArns"]!["Type"]).toBe("CommaDelimitedList");
     });
 
-    test("nothing in the policy grants an agent a view of the fleet", () => {
+    test("the one fleet-wide read is a Scan of the agents table, and nothing else", () => {
+      // §9.4, foundation v17: hermeticd's `GET /fleet` lists the fleet for a
+      // paired phone. Read-only, agents table only — never the events table,
+      // and never in the read-write `FleetRows` statement.
+      const list = statement("FleetList");
+      expect(list.Action).toEqual(["dynamodb:Scan"]);
+      expect(JSON.stringify(list.Resource)).toContain("AgentsTable");
+      expect(JSON.stringify(list.Resource)).not.toContain("EventsTable");
+      expect(list.Condition).toBeUndefined();
+      const scanners = agentStatements().filter((s) =>
+        (typeof s.Action === "string" ? [s.Action] : (s.Action ?? [])).includes("dynamodb:Scan"),
+      );
+      expect(scanners.map((s) => s.Sid)).toEqual(["FleetList"]);
+    });
+
+    /**
+     * §9.4: the Scan is fleet-scoped because the table is. Every fleet is its
+     * own stack with its own `${AWS::StackName}-agents` table, so naming this
+     * stack's table — by `GetAtt`, never by a pattern — is what keeps a box from
+     * listing another fleet's agents. A wildcard, a `Fn::Sub` ARN or a second
+     * entry would each widen that.
+     */
+    test("FleetList names exactly this stack's own agents table", () => {
+      const list = statement("FleetList");
+      expect(list.Resource).toEqual([{ "Fn::GetAtt": ["AgentsTable", "Arn"] }]);
+      const table = template.Resources["AgentsTable"] as {
+        Type: string;
+        Properties: { TableName?: unknown };
+      };
+      expect(table.Type).toBe("AWS::DynamoDB::Table");
+      expect(table.Properties.TableName).toEqual({ "Fn::Sub": "${AWS::StackName}-agents" });
+      const scanAnywhere = agentStatements().some(
+        (s) =>
+          asList(s.Action).some((a) => wildcardMatches(String(a), "dynamodb:Scan")) &&
+          asList(s.Resource).some((r) => typeof r === "string" && r.includes("*")),
+      );
+      expect(scanAnywhere).toBe(false);
+      expect(
+        roleAllows(
+          "dynamodb:Scan",
+          `arn:aws:dynamodb:us-east-1:000000000000:table/hermetic-${OTHER_FLEET}-agents`,
+        ),
+      ).toBe(false);
+    });
+
+    test("nothing in the policy lets an agent change the rest of the fleet", () => {
       const actions = agentStatements().flatMap((s) =>
         typeof s.Action === "string" ? [s.Action] : (s.Action ?? []),
       );
-      expect(actions).not.toContain("dynamodb:Scan");
       expect(actions).not.toContain("ec2:RunInstances");
       expect(actions).not.toContain("ssm:PutParameter");
+      expect(actions).not.toContain("dynamodb:DeleteItem");
     });
 
     /**

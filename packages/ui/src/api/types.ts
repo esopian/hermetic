@@ -371,3 +371,10 @@ export type CreateAgentInput = BridgeInput<"agents.create">;
  * it, and every progress rail followed `undefined` with nothing to say so.
  */
 export type Accepted = ServerAccepted;
+
+/*
+ * The phone companion's pairing link (`mobile.pair`): the open fleet and its
+ * live agents as a `hermetic://fleet?…` link. It carries no secret — the phone
+ * is trusted by its tailnet membership — so it needs no special handling.
+ */
+export type MobilePairView = BridgeResult<"mobile.pair">;

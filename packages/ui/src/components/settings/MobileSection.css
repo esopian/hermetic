@@ -1,0 +1,65 @@
+/* Settings › Mobile: the pairing code's QR beside its link. */
+.mob-pair {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  padding-top: 16px;
+}
+.mob-qr {
+  display: block;
+  width: 216px;
+  height: 216px;
+  border: 2px solid var(--fg);
+  background: #fff;
+  line-height: 0;
+}
+.mob-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* No QR: the square stays, so the layout does not jump, and says why. */
+.mob-qr-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg2);
+  color: var(--fg2);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+.mob-pair-info {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+.mob-link {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.mob-link-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  font-size: 12px;
+}
+.mob-link .btn {
+  height: 32px;
+  flex: none;
+}
+.mob-pair-info p {
+  margin: 0;
+}
+.mob-count {
+  font-weight: 700;
+}
+.mob-help {
+  font-size: 13px;
+  color: var(--fg);
+}

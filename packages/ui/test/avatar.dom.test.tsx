@@ -28,7 +28,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Avatar } from "../src/chat/components/avatar/Avatar.tsx";
 import { clearPageVisible, setPageVisible } from "../src/lib/visibility.ts";
-import type { AvatarStyle } from "../src/chat/components/avatar/avatar-seed.ts";
+import type { AvatarStyle } from "@hermetic/core/shared";
 
 const STYLES: AvatarStyle[] = ["sigil", "pixel", "blob"];
 

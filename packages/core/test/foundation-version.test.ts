@@ -139,6 +139,13 @@ const FOUNDATION_TEMPLATE_SHA256: Record<number, string> = {
   // and DLM descriptions and the schedule's name stop saying "daily" in the
   // same version, an in-place modify of the same resource.
   16: "de25f45f69a6b60dbe38eb499e8de4a13248729fa25ddaa6fc46048297041c62",
+  // v17 is a template change in the agent role's policy only, and a widening:
+  // a new read-only `FleetList` statement grants `dynamodb:Scan` on the agents
+  // table (never the events table), so hermeticd can serve `GET /fleet` to a
+  // paired phone that holds no AWS credential (§9.4). No state moves, so the
+  // v17 migration carries no hooks. Below v17 the Scan is `AccessDenied` and
+  // the route answers `FLEET_LIST_UNAVAILABLE`.
+  17: "13830271f221be5c3728db67148b6a7597dabe3297bd0639db8577185c6be59d",
 };
 
 describe("foundation version", () => {

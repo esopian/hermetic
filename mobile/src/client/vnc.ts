@@ -1,0 +1,154 @@
+/**
+ * The noVNC client URL for an agent's browser desktop — the phone's mirror of
+ * `agentHostname` / `agentDesktopClientUrl` in `packages/core/src/shared/naming.ts`.
+ *
+ * Only the long form works from a WebView: `/vnc/vnc.html?path=vnc/websockify`.
+ * noVNC builds its socket URL from the site root, so without `path=` a client
+ * served under `/vnc` dials the dashboard's `/websockify` and never upgrades,
+ * and a plain `/vnc` 404s the socket.
+ */
+import { cloudName } from "@hermetic/core/shared";
+
+export { cloudName };
+
+/** The slice of an agent the noVNC URL is built from (a `FleetAgent`, or a `/fleet` row). */
+export interface VncAgent {
+  name: string;
+  tailscale_dns_name?: string | null;
+}
+
+/**
+ * A host the noVNC URL may name: a lower-case DNS name — letters, digits, dots
+ * and hyphens, nothing else. No `/`, `@`, `:` or `?`, so a box's reported name
+ * can never smuggle a userinfo, a port or a path into the URL the WebView loads.
+ */
+export const TAILNET_HOST = /^[a-z0-9][a-z0-9.-]*$/;
+
+export function validTailnetHost(host: string): boolean {
+  return host.length <= 253 && TAILNET_HOST.test(host) && !host.includes("..");
+}
+
+/**
+ * Whether `host` is a node on this fleet's tailnet: a name under
+ * `.<tailnet>` when the fleet names its tailnet (the pairing link), else
+ * under `.ts.net`. A box's reported `tailscale_dns_name` is not trusted on its
+ * own — `evil.com` is a syntactically fine host, and would become the one
+ * origin the WebView is pinned to.
+ */
+export function onTailnet(host: string, tailnet: string | null): boolean {
+  // `hermetic init --tailnet` is free text: `tail1234` and `tail1234.ts.net` both mean the latter.
+  let zone = (tailnet ?? "").trim().toLowerCase().replace(/\.$/, "");
+  if (zone && !zone.includes(".")) zone = `${zone}.ts.net`;
+  const suffix = zone && validTailnetHost(zone) ? `.${zone}` : ".ts.net";
+  return validTailnetHost(host) && host.endsWith(suffix) && host.length > suffix.length;
+}
+
+export function agentHostname(agent: VncAgent, tailnet: string, cloud?: string | null): string {
+  return (agent.tailscale_dns_name ?? `${cloud ?? agent.name}.${tailnet}`).replace(/\.$/, "");
+}
+
+export interface VncOptions {
+  /** The browser identity's Serve path (`browserServePath` in core's naming); `/vnc` for `default`. */
+  servePath?: string;
+  viewOnly?: boolean;
+}
+
+/** A Serve path: `/`-separated segments of letters, digits, `.`, `_` and `-`. */
+const SERVE_PATH = /^(\/[A-Za-z0-9._-]+)+$/;
+
+/**
+ * Why there is no noVNC URL: no tailnet name to build a host from yet, a name
+ * a URL cannot carry safely, a name off this fleet's tailnet, or a Serve path
+ * that is not one.
+ */
+export type NoVncRefusal = "no_name" | "bad_host" | "off_tailnet" | "bad_path";
+
+export type NoVncTarget =
+  | { ok: true; url: string; host: string }
+  | { ok: false; reason: NoVncRefusal; host: string | null };
+
+/**
+ * The noVNC URL for an agent, or why the app will not load one. `tailnet` is
+ * the pairing link's: the host must be a name under it, or under `.ts.net`
+ * when it is unknown.
+ */
+export function noVncTarget(
+  agent: VncAgent,
+  tailnet: string | null,
+  fleetId: string | null,
+  opts: VncOptions = {},
+): NoVncTarget {
+  if (!agent.tailscale_dns_name && !tailnet) return { ok: false, reason: "no_name", host: null };
+  const host = agentHostname(agent, tailnet ?? "", cloudName(fleetId, agent.name)).toLowerCase();
+  if (!validTailnetHost(host)) return { ok: false, reason: "bad_host", host };
+  if (!onTailnet(host, tailnet)) return { ok: false, reason: "off_tailnet", host };
+  const path = `/${(opts.servePath ?? "/vnc").replace(/^\/+|\/+$/g, "")}`;
+  if (!SERVE_PATH.test(path) || path.split("/").some((seg) => seg === "." || seg === ".."))
+    return { ok: false, reason: "bad_path", host };
+  const socket = `${path.replace(/^\//, "")}/websockify`;
+  const view = opts.viewOnly ? "&view_only=true" : "";
+  return {
+    ok: true,
+    host,
+    url: `https://${host}${path}/vnc.html?path=${socket}&autoconnect=true&resize=scale&reconnect=true${view}`,
+  };
+}
+
+/** `noVncTarget`'s URL, or `null` for any refusal. */
+export function noVncUrl(
+  agent: VncAgent,
+  tailnet: string | null,
+  fleetId: string | null,
+  opts: VncOptions = {},
+): string | null {
+  const target = noVncTarget(agent, tailnet, fleetId, opts);
+  return target.ok ? target.url : null;
+}
+
+/** What the agent screen says instead of loading the browser. */
+export function noVncRefusalText(
+  reason: NoVncRefusal,
+  reported: string | null,
+  tailnet: string | null,
+): string {
+  switch (reason) {
+    case "no_name":
+      return "This agent has no tailnet name yet. Its browser is reachable once it has joined the tailnet.";
+    case "off_tailnet":
+      return `This agent reported the name ${reported ?? "(none)"}, which is not on this fleet's tailnet (${tailnet ?? "*.ts.net"}). The app will not load a browser from it.`;
+    case "bad_path":
+      return "This agent's browser path is not one this app will load.";
+    default:
+      return `This agent's tailnet name (${reported ?? "(none)"}) is not a host this app will load.`;
+  }
+}
+
+/** The one origin a noVNC URL loads from (`https://host`), for the WebView's allow-list. */
+export function noVncOrigin(url: string): string | null {
+  const match = /^https:\/\/([a-z0-9][a-z0-9.-]*)\//.exec(url);
+  return match ? `https://${match[1]}` : null;
+}
+
+/**
+ * Whether the WebView may navigate to `url`: only the noVNC origin itself.
+ * `originWhitelist` alone is a prefix match (`https://host` also admits
+ * `https://host.example` and `https://host:8443`), so the screen checks the
+ * exact authority here too. Everything else is handed to the OS, not loaded.
+ */
+export function vncNavigationAllowed(url: string, origin: string): boolean {
+  if (url === "about:blank") return true;
+  const authority = /^[A-Za-z][A-Za-z0-9+\-.]+:(\/\/)?[^/?#]*/.exec(url);
+  return authority !== null && authority[0].toLowerCase() === origin;
+}
+
+export type VncScale = "fit" | "actual";
+
+/**
+ * JavaScript run inside the noVNC page to switch its scaling: `fit` is noVNC's
+ * `resize=scale` (the remote screen shrinks to the view), `actual` is `off`
+ * (1:1, pan and pinch). Sets the settings control and the live client both.
+ */
+export function vncScaleScript(scale: VncScale): string {
+  const mode = scale === "fit" ? "'scale'" : "'off'";
+  return `(function(){try{var m=${mode};var s=document.getElementById('noVNC_setting_resize');if(s){s.value=m;s.dispatchEvent(new Event('change'));}if(window.UI&&UI.rfb){UI.rfb.scaleViewport=(m==='scale');UI.rfb.clipViewport=(m!=='scale');}}catch(e){}})();true;`;
+}

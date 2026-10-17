@@ -21,9 +21,8 @@
  * Everything here is pure: no socket, no clock.
  */
 import { HermeticError } from "../../errors.ts";
-import { formatBytes } from "../../files/stage.ts";
 import type { AttachmentBlock, ChatBlock, FilesCommitResult } from "../../schema/index.ts";
-import { isFileId, isImageMime } from "../../shared/files.ts";
+import { formatBytes, isFileId, isImageMime } from "../../shared/files.ts";
 import { HERMES_HOME } from "../../shared/hermes.ts";
 
 /** The image extensions upstream's `image.attach` takes (`hermes_cli/cli_terminal_input.py` `_IMAGE_EXTENSIONS`). */

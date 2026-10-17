@@ -227,7 +227,7 @@ async function mount(
 
 /** Opens a room from the rail and waits for its pane to accept a message. */
 async function open(name: string): Promise<void> {
-  // The rail opens on Unread, which hides an idle room; ask for the full list.
+  // Ask for the full list, which an Unread filter would hide an idle room from.
   fireEvent.click(await screen.findByRole("button", { name: "All" }));
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(name) }));
   await screen.findByLabelText("Message the room");
