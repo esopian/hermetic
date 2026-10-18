@@ -412,6 +412,7 @@ export function BotWorkspace({
                 bot={selection.bot}
                 title={bot?.title ?? selection.bot}
                 fleetId={fleetId}
+                live={chat.live}
               />
             )
           ) : null}
