@@ -58,6 +58,8 @@ import "./chat/styles/bot-mode.css";
 // The stream inspector and its dashed entry points (developer tools). After
 // bot-mode.css, whose narrow-window grid it overrides while open.
 import "./chat/styles/chat-inspector.css";
+// The composer's slash-command list.
+import "./chat/styles/chat-slash.css";
 import "./styles/listening.css";
 import "./styles/drawer.css";
 import "./styles/create.css";

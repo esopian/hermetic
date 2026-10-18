@@ -33,6 +33,7 @@ import {
   ChatAbortInput,
   ChatSteerInput,
   ChatHistoryInput,
+  ChatCommandsInput,
   ChatListenInput,
   ChatListeningInput,
   ChatObserveInput,
@@ -65,6 +66,7 @@ export const chatSettingsSchema = declareRpc("chat.settings", ChatSettingsInput)
 export const chatSwarmsSchema = declareRpc("chat.swarms", ChatSwarmsInput);
 export const chatSessionsSchema = declareRpc("chat.sessions", ChatSessionsInput);
 export const chatHistorySchema = declareRpc("chat.history", ChatHistoryInput);
+export const chatCommandsSchema = declareRpc("chat.commands", ChatCommandsInput);
 export const chatSendSchema = declareRpc("chat.send", ChatSendInput);
 export const chatAbortSchema = declareRpc("chat.abort", ChatAbortInput);
 export const chatSteerSchema = declareRpc("chat.steer", ChatSteerInput);
@@ -175,6 +177,12 @@ export async function sessions(ctx: HandlerContext, params: unknown) {
 export async function history(ctx: HandlerContext, params: unknown) {
   const input = parseInput(chatHistorySchema, params);
   return await ctx.hermetic().chat.history(input, { signal: ctx.signal });
+}
+
+/** §9.2: the gateway's slash-command catalog, for the composer's picker. */
+export async function commands(ctx: HandlerContext, params: unknown) {
+  const input = parseInput(chatCommandsSchema, params);
+  return await ctx.hermetic().chat.commands(input, { signal: ctx.signal });
 }
 
 export async function abort(ctx: HandlerContext, params: unknown) {
@@ -433,6 +441,7 @@ export const chatHandlers = {
   "chat.swarms": swarms,
   "chat.sessions": sessions,
   "chat.history": history,
+  "chat.commands": commands,
   "chat.send": sendEntry,
   "chat.abort": abort,
   "chat.steer": steer,

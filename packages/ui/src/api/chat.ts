@@ -13,6 +13,7 @@ import type {
   BridgeName,
   BridgeResult,
   ChatAbortResult,
+  ChatCommandsResult,
   ChatFrameView,
   ChatHistoryResult,
   ChatResumeResult,
@@ -98,6 +99,31 @@ export function fetchHistory(
     "chat.history",
     { instance, bot, ...input },
     { signal },
+  );
+}
+
+/**
+ * `chat.commands` — the slash commands the bot's gateway offers, for the
+ * composer's picker. Read once per conversation for the life of the window
+ * (`cachedFetch` with no expiry): the catalog moves only when the box's
+ * profile does. A failure is not kept, so the next open of the picker retries.
+ */
+export function fetchCommands(where: {
+  fleet: string;
+  instance: string;
+  bot: string;
+  session?: string | null;
+}): Promise<ChatCommandsResult> {
+  const { fleet, instance, bot, session } = where;
+  return cachedFetch(
+    `chat.commands ${fleet} ${instance}/${bot} ${session ?? ""}`,
+    () =>
+      transport().request<ChatCommandsResult>("chat.commands", {
+        instance,
+        bot,
+        ...(session ? { session } : {}),
+      }),
+    Number.POSITIVE_INFINITY,
   );
 }
 

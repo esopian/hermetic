@@ -81,6 +81,7 @@ import { createChatConnection } from "./hermes-chat-connect.ts";
 import { createChatHistory } from "./hermes-chat-history.ts";
 import { createBusyProbe } from "./hermes-chat-busy.ts";
 import { createLiveUsage } from "./hermes-chat-live-usage.ts";
+import { createChatCommands } from "./hermes-chat-commands.ts";
 import { createChatPeer } from "./hermes-chat-peer.ts";
 import { createRequestPool } from "./hermes-chat-pool.ts";
 import { createChatRoster } from "./hermes-chat-roster.ts";
@@ -199,6 +200,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const observation = createChatObserve({ connect: connection.connect, subagents, idle });
   const live = createLiveUsage({ rpc: peer.botModeRpc });
   const probe = createBusyProbe({ rpc: peer.botModeRpc });
+  const catalog = createChatCommands({ rpc: peer.botModeRpc });
   const turn = createChatTurn({
     connect: connection.connect,
     now: deps.now,
@@ -224,6 +226,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     history: history.history,
     liveUsage: live.liveUsage,
     busy: probe.busy,
+    commands: catalog.commands,
     send: turn.send,
     abort: turn.abort,
     steer: turn.steer,
