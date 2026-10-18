@@ -5,7 +5,7 @@
  * `hutch electrobun dev --watch` outlives the app it launched: quit the window
  * and the watcher keeps running, waiting for the next edit. That is harmless on
  * its own, but the watcher holds a shared lock on the Electrobun release
- * (`~/.hutch/releases/electrobun/<version>/macos-arm64.lock`), which is one file
+ * (`~/.hutch/releases/electrobun/<version>/<os>-<arch>.lock`), which is one file
  * for the whole machine, and a new `dev` in *any* checkout wants it exclusively
  * at startup. So a forgotten terminal tab whose app was quit an hour ago leaves
  * every other checkout at "[electrobun] Waiting for the project build lock...".
@@ -23,34 +23,74 @@
  * So: the app was up, and now it is gone and the build lock is free, for the
  * whole of `GRACE_MS`, means the operator quit it.
  *
- * "The app" is a launcher in the session's own process group, not any launcher
- * built from this checkout: a canary build left open from `build/`, or a
- * second session, must not keep this one alive.
+ * "The app" is the Electrobun launcher in the session's own process group, not
+ * any launcher built from this checkout: a canary build left open from
+ * `build/`, or a second session, must not keep this one alive.
  *
- * macOS only: the lock probe calls `flock` from `libSystem` and the app is
- * found by its `.app/Contents/MacOS/launcher` path. Elsewhere (a Linux dev box
- * driving the app over CDP) the watch is a silent no-op, and `libSystem` is
- * never opened, so importing this module cannot fail.
+ * The same mechanism on macOS and Linux, with only the C library differing:
+ *
+ * - The lock probe is `flock(2)`, because that is what Hutch's engine takes the
+ *   build lock with, and only an `flock` probe sees an `flock` holder (`fcntl`
+ *   and `flock` locks do not conflict on Linux). Bun has no file-lock API and
+ *   `node:fs` none either, so it is called through `bun:ffi` from `libSystem`
+ *   on macOS and `libc.so.6` on Linux; the `LOCK_*` values are the same on
+ *   both. The library is opened on first use, so importing this module never
+ *   fails.
+ * - The launcher's file name, and the `<os>-<arch>` key of the release, come
+ *   from the Electrobun release in use (`native-devkit.json`, found from the
+ *   version `packages/app` pins), not from a path written in here. A process is
+ *   the app when it is in the session's group and its executable is that file:
+ *   `ps -o comm=` names the executable on both systems (the full path on
+ *   macOS, the bare name on Linux), so its basename is compared.
+ *
+ * On any other platform (Windows has neither `flock` nor `ps`) the watch is
+ * inert.
  */
 import { dlopen, FFIType } from "bun:ffi";
-import { closeSync, existsSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 const POLL_MS = 500;
 /** How long "app down, lock free" must hold before it counts as a quit. */
 const GRACE_MS = 2_000;
 
-const LOCK_SH = 1;
-const LOCK_NB = 4;
-const LOCK_UN = 8;
+export const LOCK_SH = 1;
+export const LOCK_EX = 2;
+export const LOCK_NB = 4;
+export const LOCK_UN = 8;
 
-/** Opened on first use, so importing this module off macOS cannot fail. */
-let libc: ReturnType<typeof openLibSystem> | undefined;
+/** The C library that exports `flock`, per platform the quit watch supports. */
+const LIBC: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "/usr/lib/libSystem.B.dylib",
+  linux: "libc.so.6",
+};
 
-function openLibSystem() {
-  return dlopen("/usr/lib/libSystem.B.dylib", {
+/** Electrobun's name for each supported platform, as in its release keys. */
+const ELECTROBUN_OS: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "macos",
+  linux: "linux",
+};
+
+/** The launcher's file name when a release carries no manifest to say so. */
+const DEFAULT_LAUNCHER = "launcher";
+
+type Flock = (fd: number, operation: number) => number;
+
+const flocks = new Map<NodeJS.Platform, Flock>();
+
+/** `flock(2)` from the platform's C library, opened on first use. */
+export function flock(platform: NodeJS.Platform = process.platform): Flock {
+  const cached = flocks.get(platform);
+  if (cached !== undefined) return cached;
+  const path = LIBC[platform];
+  if (path === undefined) throw new Error(`dev-quit: no flock on ${platform}`);
+  const lib = dlopen(path, {
     flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
   });
+  const call: Flock = (fd, operation) => lib.symbols.flock(fd, operation);
+  flocks.set(platform, call);
+  return call;
 }
 
 /**
@@ -58,66 +98,136 @@ function openLibSystem() {
  * probe: it fails only against an exclusive holder, and is released at once so
  * the probe itself can never be what a build waits on.
  */
-function heldExclusively(path: string): boolean {
+export function heldExclusively(path: string, platform: NodeJS.Platform = process.platform): boolean {
   if (!existsSync(path)) return false;
-  libc ??= openLibSystem();
+  const call = flock(platform);
   const fd = openSync(path, "r");
   try {
-    if (libc.symbols.flock(fd, LOCK_SH | LOCK_NB) !== 0) return true;
-    libc.symbols.flock(fd, LOCK_UN);
+    if (call(fd, LOCK_SH | LOCK_NB) !== 0) return true;
+    call(fd, LOCK_UN);
     return false;
   } finally {
     closeSync(fd);
   }
 }
 
-/** Whether an app launcher is running in process group `pgid`. */
-function appRunning(pgid: number): boolean {
-  const ps = Bun.spawnSync(["ps", "-axo", "pgid=,command="]);
-  return ps.stdout
-    .toString()
-    .split("\n")
-    .some((line) => {
-      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
-      return (
-        match !== null &&
-        Number(match[1]) === pgid &&
-        (match[2] ?? "").includes(".app/Contents/MacOS/launcher")
-      );
-    });
+/** Electrobun's release key for a platform, e.g. `macos-arm64`, `linux-arm64`. */
+export function releaseKey(platform: NodeJS.Platform, arch: string): string {
+  const os = ELECTROBUN_OS[platform];
+  if (os === undefined) throw new Error(`dev-quit: Electrobun has no ${platform} release here`);
+  return `${os}-${arch}`;
+}
+
+/**
+ * The Electrobun release `appDir` builds with: the version it pins (its
+ * `electrobun` devDependency, which `test/pins.test.ts` holds equal to
+ * `hutch.config.ts`) under Hutch's release store in `home`.
+ */
+export function electrobunRelease(
+  appDir: string,
+  platform: NodeJS.Platform,
+  arch: string,
+  home: string = homedir(),
+): string {
+  const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")) as {
+    devDependencies?: Record<string, string>;
+  };
+  const version = pkg.devDependencies?.["electrobun"];
+  if (version === undefined) throw new Error(`dev-quit: ${appDir} pins no electrobun version`);
+  return join(home, ".hutch/releases/electrobun", version, releaseKey(platform, arch));
+}
+
+/**
+ * The launcher's file name as the release's `native-devkit.json` declares it.
+ * Read again until the release is there, since the watch can start before
+ * `hutch` has fetched it.
+ */
+function launcherReader(release: string): () => string {
+  let name: string | undefined;
+  return () => {
+    if (name !== undefined) return name;
+    const manifest = join(release, "native-devkit.json");
+    if (!existsSync(manifest)) return DEFAULT_LAUNCHER;
+    const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
+      layout?: { runtime?: { launcher?: string } };
+    };
+    name = parsed.layout?.runtime?.launcher ?? DEFAULT_LAUNCHER;
+    return name;
+  };
+}
+
+/** One process as `ps -axo pgid=,comm=` lists it. */
+export interface ProcessEntry {
+  pgid: number;
+  /** The executable: a full path on macOS, the bare name on Linux. */
+  comm: string;
+}
+
+export function parsePs(output: string): ProcessEntry[] {
+  const entries: ProcessEntry[] = [];
+  for (const line of output.split("\n")) {
+    const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line);
+    if (match !== null) entries.push({ pgid: Number(match[1]), comm: match[2] ?? "" });
+  }
+  return entries;
+}
+
+function listProcesses(): ProcessEntry[] {
+  return parsePs(Bun.spawnSync(["ps", "-axo", "pgid=,comm="]).stdout.toString());
+}
+
+/** Whether a process running the executable `launcher` is in group `pgid`. */
+export function appRunning(processes: ProcessEntry[], pgid: number, launcher: string): boolean {
+  return processes.some((p) => p.pgid === pgid && basename(p.comm) === launcher);
+}
+
+export interface QuitWatchOptions {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  /** Where Hutch's `.hutch` release store lives. */
+  home?: string;
+  pollMs?: number;
+  graceMs?: number;
 }
 
 /**
  * Call `onQuit` once, the first time the app launched by the session leading
  * process group `pgid` is quit. `appDir` is `packages/app`, whose build lock
  * tells a rebuild from a quit. Returns a function that stops watching.
- * Off macOS (`platform`, defaulting to the running one) it watches nothing and
- * `onQuit` is never called.
  */
 export function onAppQuit(
   appDir: string,
   pgid: number,
   onQuit: () => void,
-  platform: NodeJS.Platform = process.platform,
+  options: QuitWatchOptions = {},
 ): () => void {
-  if (platform !== "darwin") return () => {};
+  const platform = options.platform ?? process.platform;
+  if (LIBC[platform] === undefined) return () => {};
+  const release = electrobunRelease(
+    appDir,
+    platform,
+    options.arch ?? process.arch,
+    options.home ?? homedir(),
+  );
+  const launcher = launcherReader(release);
+  const graceMs = options.graceMs ?? GRACE_MS;
   const buildLock = join(appDir, ".hutch/locks/electrobun-build.lock");
   let seen = false;
   let downSince: number | null = null;
   const timer = setInterval(() => {
-    if (appRunning(pgid)) {
+    if (appRunning(listProcesses(), pgid, launcher())) {
       seen = true;
       downSince = null;
       return;
     }
-    if (!seen || heldExclusively(buildLock)) {
+    if (!seen || heldExclusively(buildLock, platform)) {
       downSince = null;
       return;
     }
     downSince ??= Date.now();
-    if (Date.now() - downSince < GRACE_MS) return;
+    if (Date.now() - downSince < graceMs) return;
     clearInterval(timer);
     onQuit();
-  }, POLL_MS);
+  }, options.pollMs ?? POLL_MS);
   return () => clearInterval(timer);
 }
