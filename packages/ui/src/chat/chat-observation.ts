@@ -27,6 +27,7 @@ import {
   sessionOf,
   stillPending,
   takeHeld,
+  withCommandRows,
 } from "./chat-conversation-record.ts";
 import type { Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
 import { observeSubagent, reapplySubagents, takeSubagents } from "./chat-subagents.ts";
@@ -310,10 +311,10 @@ export function useObservation({
           // (`reuseMessages`, after the children are placed back below), so a
           // snapshot that repeats the transcript re-renders none of it.
           const held = record.messages;
-          record.messages = [
+          record.messages = withCommandRows(record, [
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
-          ];
+          ]);
           noteRows(record, messages);
           record.historyRead = true;
           record.historyError = null;

@@ -235,6 +235,16 @@ export function blockLines(block: ChatBlock, agent: string | null = null): strin
   switch (block.kind) {
     case "text":
       return block.markdown.split("\n");
+    case "command": {
+      // Answered by the gateway's command layer, not the model: marked so.
+      const state = block.state === "done" ? "" : ` ${block.state}`;
+      const body = [
+        ...(block.warning ? [`warning: ${block.warning}`] : []),
+        ...(block.output ? block.output.split("\n") : []),
+        ...(block.prefill ? block.prefill.split("\n") : []),
+      ];
+      return [`[command${state}] ${block.command}`, ...body.map((line) => `  ${line}`)];
+    }
     case "activity":
       // Human output stays compact; the JSON stream retains the inspectable payload.
       return [`[${block.state}] ${block.title}${block.detail ? ` — ${block.detail}` : ""}`];

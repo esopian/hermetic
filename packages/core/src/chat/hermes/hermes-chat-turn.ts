@@ -10,6 +10,8 @@
 import { checkAbort } from "../../abort.ts";
 import { HermeticError } from "../../errors.ts";
 import { isHermesInternalEvent } from "../../shared/hermes-internal-events.ts";
+import { looksLikeSlashCommand, parseSlashCommand } from "../../shared/slash.ts";
+import { runCommand } from "./hermes-chat-command.ts";
 import {
   CHAT_ERROR_CODES,
   chatError,
@@ -228,6 +230,27 @@ export function createChatTurn(deps: ChatTurnDeps) {
     // arrives.
     yield status(message, "connecting");
 
+    // A slash command is run by the gateway's command layer, not sent to the
+    // model (`hermes-chat-command.ts`). Files have nowhere to go on that path,
+    // so the pair is refused before anything is dispatched, rather than the
+    // command running and the files being quietly dropped.
+    const command = looksLikeSlashCommand(text);
+    if (command && opts.attachments?.ids.length) {
+      yield {
+        type: "block",
+        seq: 0,
+        message,
+        block: {
+          kind: "command",
+          command: `/${parseSlashCommand(text).name}`,
+          output: "A slash command cannot carry attachments. Send the files in a message of their own.",
+          state: "error",
+        },
+      };
+      yield { type: "done", seq: 0, message, usage: null, incomplete: null };
+      return;
+    }
+
     // The conversation's held socket when it has one, else a fresh dial that
     // the session's ids below turn into the hold. Never closed here: the
     // `finally` hands it back, and the socket stays attached to the session.
@@ -320,6 +343,27 @@ export function createChatTurn(deps: ChatTurnDeps) {
       // tick. Adapter-minted, so `seq: 0`, like the status frames.
       const known = contextUsageBlock(info);
       if (known) yield { type: "block", seq: 0, message, block: known };
+      // After the session, because the command layer runs against one; before
+      // anything that belongs to a model turn. A command answered in full ends
+      // the turn here with no prompt submitted; `send`/`skill` come back as
+      // the prompt to submit in the line's place — the one submit below.
+      let line = text;
+      if (command) {
+        const outcome = yield* runCommand({
+          rpc,
+          instance: box.instance,
+          session,
+          line: text,
+          message,
+          signal: opts.signal,
+        });
+        if (outcome.prompt === null) {
+          ended = true;
+          yield { type: "done", seq: 0, message, usage: null, incomplete: null };
+          return;
+        }
+        line = outcome.prompt;
+      }
       active = { runtime: session, stored };
       // Registered now, before the prompt: a background delegation's children
       // may first report after this turn has ended, on the observation stream,
@@ -341,11 +385,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
             session,
             commitSession: stored ?? session,
             attachments: opts.attachments,
-            message: text,
+            message: line,
             signal: opts.signal,
             queued,
           })
-        : text;
+        : line;
       pump = continuation.pump({ rpc, box, bot, session });
       const baseline = await pump.probe(opts.signal);
       // Checked here rather than left to the request: on a gateway that cannot
