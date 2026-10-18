@@ -23,6 +23,7 @@ import {
   electrobunRelease,
   flock,
   heldExclusively,
+  listProcesses,
   LOCK_EX,
   LOCK_NB,
   LOCK_UN,
@@ -78,8 +79,7 @@ async function startLauncher(): Promise<ChildProcess> {
   children.push(child);
   const pgid = child.pid ?? -1;
   for (let i = 0; i < 100; i++) {
-    const ps = parsePs(Bun.spawnSync(["ps", "-axo", "pgid=,comm="]).stdout.toString());
-    if (appRunning(ps, pgid, "launcher")) return child;
+    if (appRunning(listProcesses(), pgid, "launcher")) return child;
     await Bun.sleep(20);
   }
   throw new Error("the fake launcher never showed up in ps");
@@ -131,18 +131,38 @@ describe("naming per platform", () => {
     const ps = parsePs(
       [
         // macOS: comm is the full executable path, spaces included.
-        "  4242 /src/hermetic/packages/app/build/dev-macos-arm64/Hermetic Dev.app/Contents/MacOS/launcher",
-        "  4242 /opt/bun/bin/bun",
+        "  4242 S    /src/hermetic/packages/app/build/dev-macos-arm64/Hermetic Dev.app/Contents/MacOS/launcher",
+        "  4242 Ss   /opt/bun/bin/bun",
         // Linux: comm is the bare name.
-        "  5151 launcher",
-        "  5151 bun",
-        "  6161 bun",
+        "  5151 Sl   launcher",
+        "  5151 S+   bun",
+        "  6161 R    bun",
       ].join("\n"),
     );
+    expect(ps[0]).toEqual({
+      pgid: 4242,
+      stat: "S",
+      comm: "/src/hermetic/packages/app/build/dev-macos-arm64/Hermetic Dev.app/Contents/MacOS/launcher",
+    });
     expect(appRunning(ps, 4242, "launcher")).toBe(true);
     expect(appRunning(ps, 5151, "launcher")).toBe(true);
     expect(appRunning(ps, 6161, "launcher")).toBe(false);
     expect(appRunning(ps, 7171, "launcher")).toBe(false);
+  });
+
+  test("an exited, unreaped launcher does not count as running", () => {
+    const ps = parsePs(
+      [
+        // The launcher has exited; its parent has not reaped it yet.
+        "  5151 Z    launcher",
+        "  5151 X    launcher",
+        "  5151 Sl   bun",
+        // A live launcher in another group still counts.
+        "  6161 Sl   launcher",
+      ].join("\n"),
+    );
+    expect(appRunning(ps, 5151, "launcher")).toBe(false);
+    expect(appRunning(ps, 6161, "launcher")).toBe(true);
   });
 });
 

@@ -156,9 +156,11 @@ function launcherReader(release: string): () => string {
   };
 }
 
-/** One process as `ps -axo pgid=,comm=` lists it. */
+/** One process as `ps -axo pgid=,stat=,comm=` lists it. */
 export interface ProcessEntry {
   pgid: number;
+  /** The process state, e.g. `Ss`, `R+`; a zombie's starts with `Z`. */
+  stat: string;
   /** The executable: a full path on macOS, the bare name on Linux. */
   comm: string;
 }
@@ -166,19 +168,28 @@ export interface ProcessEntry {
 export function parsePs(output: string): ProcessEntry[] {
   const entries: ProcessEntry[] = [];
   for (const line of output.split("\n")) {
-    const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line);
-    if (match !== null) entries.push({ pgid: Number(match[1]), comm: match[2] ?? "" });
+    const match = /^\s*(\d+)\s+(\S+)\s+(.*?)\s*$/.exec(line);
+    if (match !== null) {
+      entries.push({ pgid: Number(match[1]), stat: match[2] ?? "", comm: match[3] ?? "" });
+    }
   }
   return entries;
 }
 
-function listProcesses(): ProcessEntry[] {
-  return parsePs(Bun.spawnSync(["ps", "-axo", "pgid=,comm="]).stdout.toString());
+export function listProcesses(): ProcessEntry[] {
+  return parsePs(Bun.spawnSync(["ps", "-axo", "pgid=,stat=,comm="]).stdout.toString());
 }
 
-/** Whether a process running the executable `launcher` is in group `pgid`. */
+/**
+ * Whether a live process running the executable `launcher` is in group `pgid`.
+ * A launcher that has exited but not been reaped stays in the table as a
+ * zombie (`Z`, or `X` once dead on Linux) under the same group and name, and
+ * must not count, or the watch never sees the quit.
+ */
 export function appRunning(processes: ProcessEntry[], pgid: number, launcher: string): boolean {
-  return processes.some((p) => p.pgid === pgid && basename(p.comm) === launcher);
+  return processes.some(
+    (p) => p.pgid === pgid && !/^[ZX]/.test(p.stat) && basename(p.comm) === launcher,
+  );
 }
 
 export interface QuitWatchOptions {
