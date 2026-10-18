@@ -73,6 +73,8 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   /** hermeticd's fleet view (§9.4): a foundation precondition, like the line above. */
   FLEET_LIST_UNAVAILABLE: 9,
   SECRETS_DISABLED: 9,
+  /** A laptop preference is off (§9.2); no CLI verb reaches it, but the table is total. */
+  DEVTOOLS_DISABLED: 9,
   /** A precondition of the environment, like the two above it. */
   TAILSCALE_UNAVAILABLE: 9,
   HERMETICD_UNAVAILABLE: 9,

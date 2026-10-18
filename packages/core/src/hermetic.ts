@@ -49,6 +49,7 @@ import { MemoryInstanceListeningStore } from "./chat/instance-listening.ts";
 import { MemoryLocalChatSessions, createChat, defaultHermesChat } from "./chat/chat.ts";
 import { MemoryChatFenceStore } from "./chat/chat-fence.ts";
 import { MemoryChatSettingsStore } from "./chat/chat-settings.ts";
+import { createDevtools } from "./chat/devtools.ts";
 import { createBotMode } from "./chat/bot-mode.ts";
 import {
   MemoryNotificationStore,
@@ -70,6 +71,7 @@ import { foundationTemplateSha256 } from "./aws/cfn-template.ts";
 import type { FetchLike } from "./aws/tailscale.ts";
 import { agentParamPath, sharedSecretPath } from "./backend/constants.ts";
 import type { CoreContext } from "./context.ts";
+import type { DevTap } from "./chat/devtap.ts";
 import { MemoryPresetStore, createPresets } from "./local/create-presets.ts";
 import { createLocalAgentPurge } from "./local/purge-agent.ts";
 import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
@@ -162,6 +164,14 @@ export function createHermetic(deps: HermeticDeps) {
    * The helpers every module below shares — guards, locks, transitions, the
    * render — built once (`agent-runtime.ts`) and handed out as one context.
    */
+  // §9.2: whether transcript content is masked, read by every chat read as it starts.
+  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
+  /** §9.2's developer tools: the capture exists only while its preference is on. */
+  const devtools = createDevtools({
+    store: deps.devtoolsSettings,
+    redact: () => chatSettings.settings().redact,
+  });
+
   const runtime = createAgentRuntime({
     backend,
     config: deps.config,
@@ -180,7 +190,11 @@ export function createHermetic(deps: HermeticDeps) {
     localBuild,
     notifications: notificationDeps,
     publishDeps,
+    get devtap() {
+      return devtools.current();
+    },
   };
+  const devtap = (): DevTap | null => ctx.devtap;
   const { nowIso, requireConfig, guardAccount, guardFleet, getAgent, scanAgents, renderFor, fleetId } =
     ctx;
 
@@ -474,6 +488,7 @@ export function createHermetic(deps: HermeticDeps) {
   const fixtureChat = createFixtureChatStack(fixture, deps.fixtureChat ?? {}, {
     // The `E2E_FILE_REQUEST*` turns open their slots on the fixture boxes' files service.
     ...(backend.files instanceof MemoryFiles ? { files: backend.files } : {}),
+    devtap,
   });
   const hermesChat =
     fixtureChat.hermes ??
@@ -481,9 +496,8 @@ export function createHermetic(deps: HermeticDeps) {
       // A running request card's slot (`hermes-chat-file-requests.ts`).
       listFileRequests: async (name, signal) => (await backend.files.list(name, { signal })).requests,
       listOutbox: async (name, signal) => (await backend.files.list(name, { signal })).outbox,
+      devtap,
     });
-  // §9.2: whether transcript content is masked, read by every chat read as it starts.
-  const chatSettings = deps.chatSettings ?? new MemoryChatSettingsStore();
   const botMode = createBotMode({
     guardFleet,
     getAgent,
@@ -494,6 +508,7 @@ export function createHermetic(deps: HermeticDeps) {
   const chat = createChat({
     instanceListening,
     chatSettings,
+    devtap,
     fleet: () => deps.config?.fleet_id ?? null,
     guardFleet,
     // Chat reads rows without the fleet list, and its sessions, fence and
@@ -681,6 +696,11 @@ export function createHermetic(deps: HermeticDeps) {
     target: deps.config === null ? null : runTargetFor(deps.config),
     /** Fixture-mode chat staging (§9.2). `null` outside fixture mode, and that is the guard. */
     fixture: fixtureChat.controls,
+    /**
+     * §9.2's stream inspector, in every mode. Not a §9 command: no CLI verb, no
+     * `PUBLIC_METHODS` entry; the desktop head reaches it through machinery.
+     */
+    devtools: devtools.controls,
     /**
      * The phone companion's pairing link. The phone talks to the boxes
      * directly over the tailnet; the laptop only shows it where the fleet is.

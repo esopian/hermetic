@@ -99,6 +99,8 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
     let rpc: Rpc | null = null;
     try {
       rpc = await deps.connect(box, opts.signal);
+      // Captured raw by the developer tools, under the watched conversation.
+      rpc.tap?.bind(bot, opts.session ?? null, "hint");
       const socket = rpc;
       void (async () => {
         try {

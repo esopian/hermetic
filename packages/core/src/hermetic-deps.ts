@@ -34,6 +34,7 @@ import type { InstanceListeningStore } from "./chat/instance-listening.ts";
 import type { IncarnationStore } from "./local/incarnations.ts";
 import type { PresetStore } from "./local/create-presets.ts";
 import type { ChatSettingsStore } from "./chat/chat-settings.ts";
+import type { DevtoolsSettingsStore } from "./chat/devtools.ts";
 
 export interface OpOptions {
   signal?: AbortSignal;
@@ -164,6 +165,12 @@ export interface HermeticDeps {
    * defaults (redaction off) until something is set.
    */
   chatSettings?: ChatSettingsStore;
+  /**
+   * §9.2's developer-tools preferences — on/off, capture scope, ring size — in
+   * this laptop's `prefs`. Absent, an in-process store reads as the defaults
+   * (off) until something is set.
+   */
+  devtoolsSettings?: DevtoolsSettingsStore;
   /**
    * Which incarnation of each agent name this laptop's local state describes
    * (`local/incarnations.ts`, §6.7). Local, beside the tables it guards. Absent

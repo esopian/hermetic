@@ -30,6 +30,8 @@ import {
 } from "./fixture-chat.ts";
 import type { FixtureControls } from "./fixture-controls.ts";
 import { createFixtureControls } from "./fixture-controls.ts";
+import { withFixtureDevtap } from "./fixture-devtap.ts";
+import type { TapSource } from "../../chat/devtap.ts";
 
 export interface FixtureChatStack {
   /** The chat adapter, or null when this is not fixture mode. */
@@ -42,7 +44,10 @@ export interface FixtureChatStack {
 export type FixtureChatPacing = Pick<FixtureChatOptions, "delayMs" | "cutAfter">;
 
 /** What the stack takes from the fixture backend, beside the pacing. */
-export type FixtureChatBackend = Pick<FixtureChatOptions, "files">;
+export type FixtureChatBackend = Pick<FixtureChatOptions, "files"> & {
+  /** The developer tools' capture; the fixture's frames get synthetic wire beneath them. */
+  devtap?: TapSource | undefined;
+};
 
 export function createFixtureChatStack(
   fixture: boolean,
@@ -51,8 +56,10 @@ export function createFixtureChatStack(
 ): FixtureChatStack {
   if (!fixture) return { hermes: null, controls: null };
   const activity = createFixtureChatActivity();
+  const { devtap, ...files } = backend;
+  const client = withFixtureBotMode(fixtureChatClient({ activity, ...pacing, ...files }), { activity });
   return {
-    hermes: withFixtureBotMode(fixtureChatClient({ activity, ...pacing, ...backend }), { activity }),
+    hermes: devtap === undefined ? client : withFixtureDevtap(client, devtap),
     controls: createFixtureControls({ fixture: true, activity }),
   };
 }

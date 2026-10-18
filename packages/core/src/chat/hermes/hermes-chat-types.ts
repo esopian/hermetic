@@ -13,6 +13,7 @@ import type { ChatObserveHint } from "../chat-observe.ts";
 import type { createCanonicalSessions, ConversationOptions } from "../../render/hermes-canonical.ts";
 import { HermeticError } from "../../errors.ts";
 import type { SessionSocketTuning } from "./hermes-chat-session-socket.ts";
+import type { TapSource } from "./hermes-chat-devtap.ts";
 import type {
   ChatConversation,
   ChatFrame,
@@ -151,6 +152,11 @@ export interface HermesChatDeps {
    * fit inside the gateway's twenty-second orphan reap.
    */
   sessionTuning?: SessionSocketTuning | undefined;
+  /**
+   * The developer tools' capture (`../devtap.ts`), asked at each tap site:
+   * `null` whenever the tools are off. Absent, nothing is ever captured.
+   */
+  devtap?: TapSource | undefined;
 }
 
 export interface HermesChatOptions {

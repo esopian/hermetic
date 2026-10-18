@@ -27,6 +27,7 @@ describe("SETTINGS_SECTIONS", () => {
       "mobile",
       "notifications",
       "runs",
+      "developer",
       "account",
       "danger",
     ]);

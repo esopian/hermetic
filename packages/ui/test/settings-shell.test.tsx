@@ -164,6 +164,7 @@ const MARKER: Record<SettingsSection, string> = {
   mobile: "Pair a phone",
   notifications: "Open inbox",
   runs: "reading the local run log…",
+  developer: "Enable developer tools",
   danger: "TEAR DOWN THE FOUNDATION",
 };
 
@@ -250,6 +251,7 @@ describe("SettingsShell", () => {
       mobile: "st-ro",
       notifications: "st-laptop",
       runs: "st-laptop",
+      developer: "st-laptop",
       danger: "st-fleet",
     };
     for (const s of SETTINGS_SECTIONS) {

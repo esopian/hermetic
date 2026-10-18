@@ -58,6 +58,7 @@ import {
 } from "../api/index.ts";
 import type { ChatBlockView, ChatFrameView, ChatMessageView, SwarmView } from "../api/index.ts";
 import { useConversations } from "./chat-conversations.ts";
+import { devtap } from "./devtap.ts";
 import { useSendQueue } from "./chat-queue.ts";
 import { NO_ATTACHMENTS } from "./chat-attachments.ts";
 import type { SentAttachment } from "./chat-attachments.ts";
@@ -220,6 +221,10 @@ function blockKey(block: ChatBlockView): string | null {
   if (block.kind === "subagent") return `subagent:${block.subagent_id}`;
   return toolKey(block) ?? requestKey(block);
 }
+
+// The inspector's reducer notes count a replacement exactly when this store
+// makes one (`devtap.ts`).
+devtap.setMergeKey(blockKey);
 
 function mergeBlock(blocks: ChatBlockView[], incoming: ChatBlockView): ChatBlockView[] {
   const key = blockKey(incoming);

@@ -201,6 +201,21 @@ export type SettingsSetInput = Omit<BridgeInput<"settings.set">, "target">;
 export type PresetsResult = BridgeResult<"presets.get">;
 /** This laptop's chat settings (`chat.settings`), shared with the CLI. */
 export type ChatSettingsView = BridgeResult<"chat.settings">;
+
+/* ── developer tools (§9.2 "Developer tools") ────────────────────────────── */
+
+/** This laptop's stream inspector preferences: the switch, when to capture, how much to keep. */
+export type DevtoolsSettingsView = BridgeResult<"devtools.settings">;
+/** Settings › Developer's facts about the capture. */
+export type DevtoolsStatsView = BridgeResult<"devtools.stats">;
+/** A masked NDJSON export of one conversation's capture. */
+export type DevtoolsExportView = BridgeResult<"devtools.export">;
+/** One captured record, as a tap pushes it (`devtools.record`). */
+export type TapRecordView = NonNullable<
+  HermeticRPC["webview"]["messages"]["devtools.record"]["records"]
+>[number];
+/** Which conversation a record belongs to; `session: null` is the canonical one. */
+export type DevtoolsConversationView = TapRecordView["conversation"];
 export type PresetsSetInput = BridgeInput<"presets.set">;
 
 /**

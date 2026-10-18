@@ -9,6 +9,7 @@ import { setChatAvatarStyle, useChatAvatarStyle } from "../../chat/chat-appearan
 import { Avatar } from "../../chat/components/avatar/Avatar.tsx";
 import type { AvatarStyle } from "@hermetic/core/shared";
 import { chatSettings } from "../../api/chat.ts";
+import { devtap } from "../../chat/devtap.ts";
 import type { ChatSettingsView } from "../../api/types.ts";
 import {
   Block,
@@ -63,6 +64,9 @@ function RedactionBlock() {
     setError(null);
     try {
       setSettings(await chatSettings({ redact }));
+      // The inspector's page notes hold blocks as they were received; switching
+      // masking on must not leave unmasked copies behind (`chat/devtap.ts`).
+      if (redact) devtap.clear();
       flash();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

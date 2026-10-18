@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +32,9 @@ import { FLEET_KEY } from "../src/schema/index.ts";
 import { migrate } from "../src/local/db/index.ts";
 import { SqliteNotificationStore } from "../src/local/db/notifications.ts";
 import { notifyTerminalEvent } from "../src/chat/terminal-notifications.ts";
+import { disposeChatRequestPools } from "../src/chat/hermes/hermes-chat.ts";
+import { eventFrame } from "./fixtures/hermes-frames.ts";
+import { DEVTAP_CONVERSATION, devtapTurn } from "./fixtures/devtap-box.ts";
 import { openHermetic } from "../src/index.ts";
 
 /**
@@ -1173,5 +1176,46 @@ describe("files.put never leaks a secret it carries", () => {
     expect(error?.message).toInclude("not requested");
     assertNoFileSecret(JSON.stringify({ message: error?.message, details: error?.details }));
     assertNoFileSecret(JSON.stringify(await backend.files.list("atlas", {})));
+  });
+});
+
+/**
+ * §9.2's developer tools: the stream inspector's capture is memory-only, but
+ * it is the one place a raw tool result is held, and its export is a file that
+ * leaves the app. A turn whose tool result carries a fixture key is replayed
+ * through the real adapter with the tools on.
+ */
+describe("the developer tools never hold or export a secret", () => {
+  const TOOL_TURN = [
+    eventFrame("tool.complete", 3, {
+      tool_id: "tc_FIXTURE_1",
+      name: "terminal",
+      args: { command: "env" },
+      result: `OPENROUTER_API_KEY=${FIXTURE_PROVIDER_KEY}\nTS=${FIXTURE_TS_KEY}`,
+    }),
+    eventFrame("message.complete", 4, { text: "done", status: "complete" }),
+  ];
+
+  afterEach(() => disposeChatRequestPools());
+
+  test("redaction on: absent from every record and from the export", async () => {
+    const { tap, records } = await devtapTurn(TOOL_TURN, { redact: true });
+    expect(records.length).toBeGreaterThan(0);
+    const exported = tap?.exportRing(DEVTAP_CONVERSATION).ndjson ?? "";
+    for (const secret of SECRETS) {
+      expect(JSON.stringify(records)).not.toContain(secret);
+      expect(exported).not.toContain(secret);
+    }
+    expect(JSON.stringify(records)).not.toMatch(/tskey-auth-[A-Za-z0-9]/);
+  });
+
+  test("redaction off: absent from the export", async () => {
+    const { tap, records } = await devtapTurn(TOOL_TURN, { redact: false });
+    // Shown whole in the inspector, as the operator chose…
+    expect(JSON.stringify(records)).toContain(FIXTURE_PROVIDER_KEY);
+    // …and never in the file that leaves the app.
+    const exported = tap?.exportRing(DEVTAP_CONVERSATION).ndjson ?? "";
+    expect(exported.length).toBeGreaterThan(0);
+    for (const secret of SECRETS) expect(exported).not.toContain(secret);
   });
 });

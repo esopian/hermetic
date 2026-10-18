@@ -30,6 +30,7 @@ import { noteSubagentFrame, reapplySubagents } from "./chat-subagents.ts";
 import { reuseMessages } from "./chat-message-identity.ts";
 import { useSubagentControls } from "./chat-subagent-control.ts";
 import { useObservation } from "./chat-observation.ts";
+import { devtap } from "./devtap.ts";
 import {
   localAttachmentBlock,
   markDelivery,
@@ -370,6 +371,8 @@ export function useConversations(
               (m.role !== "user" && !isProcessEventMessage(m) && Date.parse(m.at) >= since),
           );
           if (!record.dropped || recorded) {
+            // T3: the inspector shows the live message giving way to the box's copy.
+            if (devtap.on) devtap.history(record.target, record.live.id);
             record.live = null;
             record.dropped = false;
           } else record.live = { ...record.live, incomplete: true };
@@ -670,15 +673,24 @@ export function useConversations(
               record.activity = "idle";
               // The failure is drawn on the turn itself, minted if it came first.
               record.live = assemble(record.live, frame, { ...seed, at: record.segmentAt ?? seed.at });
+              if (devtap.on) devtap.applied(record.target, frame, record.live?.id ?? null);
               if (record.live)
                 rememberTurnPrompt(record, record.live.id, { text: body, attachments: files });
               changed();
               return;
             }
-            if (frame.seq < seq) return;
+            if (frame.seq < seq) {
+              // T3 (`devtap.ts`): one boolean read while the tools are off.
+              if (devtap.on)
+                devtap.dropped(record.target, frame, "seq_lt_last", record.live?.id ?? null);
+              return;
+            }
             if (frame.type === "delta") {
               const fingerprint = `${frame.seq}:${frame.text}`;
-              if (fingerprint === lastDelta) return;
+              if (fingerprint === lastDelta) {
+                if (devtap.on) devtap.dropped(record.target, frame, "dup", record.live?.id ?? null);
+                return;
+              }
               lastDelta = fingerprint;
             }
             seq = frame.seq;
@@ -695,8 +707,14 @@ export function useConversations(
             const block =
               frame.type === "block" ? noteSubagentFrame(record, frame.block, Date.now()) : null;
             const merged = frame.type === "block" && block ? { ...frame, block } : frame;
-            if ((frame.type !== "block" || block) && !landOnSegment(record, merged, seed, assemble))
+            const reduces = frame.type !== "block" || Boolean(block);
+            const landed = reduces ? landOnSegment(record, merged, seed, assemble) : null;
+            if (reduces && landed === null)
               record.live = assemble(record.live, merged, { ...seed, at: record.segmentAt ?? seed.at });
+            // T3: filed under the part of the reply the block landed on, when a
+            // steer had closed it off, else under the live message.
+            if (devtap.on && reduces)
+              devtap.applied(record.target, merged, landed ?? record.live?.id ?? frame.message);
             noteContext(record, frameContext(frame, new Date().toISOString()));
             changed();
           },
@@ -769,6 +787,8 @@ export function useConversations(
       const at = new Date().toISOString();
       if (record.turn === turn && record.sending && record.live && record.live.blocks.length > 0) {
         const id = `${record.live.id}~${record.segments.length + 1}`;
+        // T3: the inspector's notes follow the blocks to the part's new id.
+        if (devtap.on) devtap.segment(record.target, record.live.id, id);
         record.messages = [...record.messages, { ...record.live, id }];
         record.segments = [...record.segments, id];
         record.live = null;

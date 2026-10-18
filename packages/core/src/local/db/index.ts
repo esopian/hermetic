@@ -12,6 +12,7 @@ export * from "./pending.ts";
 export * from "./notifications.ts";
 export * from "./chat.ts";
 export * from "./presets.ts";
+export * from "./devtools.ts";
 export * from "./incarnations.ts";
 
 /**
