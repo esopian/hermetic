@@ -95,7 +95,6 @@ function renderMessage(message: ChatMessageView, bot_ = "scribe") {
         bot={bot_}
         botTitle={TEAM.find((b) => b.name === bot_)?.title ?? null}
         status="ready"
-        now={NOW}
       />
     </BotDmContext.Provider>,
   );

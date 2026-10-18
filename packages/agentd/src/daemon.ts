@@ -1,5 +1,5 @@
 /**
- * `hermeticd serve` — the systemd service and its three loops. The subcommands
+ * `hermeticd serve` — the systemd service and its five loops. The subcommands
  * that run and exit are in `cli.ts`; `main.ts` is the entrypoint.
  */
 import type { Host } from "./host.ts";
@@ -9,6 +9,13 @@ import { makeHeartbeat } from "./heartbeat.ts";
 import { HERMETICD_PATH } from "./stages.ts";
 import { reportBrowsers } from "./browser-health.ts";
 import { serveRpc, tailscaleWhois } from "./rpc.ts";
+import { fleetViewSource, makeMobileRoutes } from "./rpc-mobile.ts";
+import { pushDeviceStore } from "./push/devices.ts";
+import { bunChatSocket } from "./push/socket.ts";
+import { createWatcher } from "./push/watch.ts";
+import { tailnetLogins } from "./tailscale.ts";
+import { createHermesChat } from "@hermetic/core/chat-client";
+import { HERMES_DASHBOARD_UNIT, expoPushSender, expoReceiptFetcher } from "@hermetic/core/shared";
 import { startFiles } from "./files/service.ts";
 import { makeFilesSettings, type FilesSettingsHolder } from "./files/settings.ts";
 import {
@@ -32,7 +39,8 @@ import { bootContext, log, stderrEmit, type Context, type RunDeps } from "./cont
 
 /**
  * The systemd service (§6.4): heartbeat every 30 s, self-update at start-up and
- * at 03:17 UTC, and answer operator RPCs on the Tailscale interface.
+ * at 03:17 UTC, answer operator RPCs on the Tailscale interface, and watch the
+ * box's own gateway for pushes to paired phones (§9.4).
  *
  * The heartbeat and the update scheduler run as two independent loops. An
  * update fetches and swaps a binary, and the fleet must not see the agent go
@@ -141,6 +149,21 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     onFirstWrite: settled,
   });
 
+  // The phones this box pushes to: written by `POST /push/devices`, read by
+  // the gateway watcher, pruned by Expo's receipts (§9.4).
+  const devices = pushDeviceStore(host, log);
+  const mobile = makeMobileRoutes({
+    fleetView: fleetViewSource({
+      aws: ctx.aws,
+      manifest: () => ctx.fleet,
+      now: () => host.now(),
+      log,
+    }),
+    devices,
+    now: () => host.now().getTime(),
+    log,
+  });
+
   // The fleet's files settings: the cached manifest's now, then every manifest
   // the update loop fetches (`updateLoop`'s `onManifest`). A change on the
   // laptop takes effect at this box's next manifest read (`files/settings.ts`).
@@ -172,6 +195,7 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
       // One audit line per RPC, through the same redacting stderr writer
       // everything else here uses — journald is where it belongs (§8.3).
       log,
+      mobile,
       ...(files.tailnet ? { files: files.tailnet } : {}),
     },
     { log },
@@ -179,13 +203,56 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
   log(`rpc on ${listener.hostname}:${listener.port}`);
 
   const forever = new AbortController();
-  // Four loops, never awaiting each other. The files sweeper never resolves
+  // Five loops, never awaiting each other. The files sweeper never resolves
   // on its own; it is in the race so it stops with the rest.
   const beats = heartbeat.run(forever.signal);
   const updates = updateLoop(host, ctx, gate, forever.signal, filesSettings);
   const converges = convergeLoop(host, ctx, converge, forever.signal);
+  const watches = pushWatchLoop(host, ctx, devices, forever.signal);
   const sweeps = files.run(forever.signal);
-  await Promise.race([beats, updates, converges, sweeps]);
+  await Promise.race([beats, updates, converges, watches, sweeps]);
+}
+
+/**
+ * §9.4's gateway watcher, wired: the chat adapter over Bun's `fetch` and
+ * `WebSocket` against this box's own dashboard on loopback, Expo's public push
+ * API over the same `fetch`, and agentd's redaction on every preview. Idle
+ * while the dashboard unit is not running — a box mid-bootstrap or with Hermes
+ * stopped has nothing to watch. The loop never throws (`push/watch.ts`), so a
+ * gateway outage costs pushes, never the heartbeat beside it.
+ */
+function pushWatchLoop(
+  host: Host,
+  ctx: Context,
+  devices: ReturnType<typeof pushDeviceStore>,
+  signal: AbortSignal,
+): Promise<void> {
+  const http = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => fetch(input, init);
+  const watcher = createWatcher({
+    chat: createHermesChat({
+      fetch: http,
+      openSocket: bunChatSocket,
+      now: () => host.now().toISOString(),
+    }),
+    devices,
+    send: expoPushSender(http),
+    fetchReceipts: expoReceiptFetcher(http),
+    now: () => host.now().getTime(),
+    sleep: (ms) => host.sleep(ms),
+    log,
+    instance: ctx.userData.name,
+    fleet_id: ctx.fleet.fleet_id,
+    redact: redactValue,
+    gatewayUp: async () => {
+      const res = await host
+        .exec(["systemctl", "is-active", "--quiet", HERMES_DASHBOARD_UNIT])
+        .catch(() => null);
+      return res !== null && res.code === 0;
+    },
+    // Owners who have left the tailnet lose their registrations (§9.4).
+    tailnetLogins: () => tailnetLogins(host),
+  });
+  return watcher.run(signal);
 }
 
 /**

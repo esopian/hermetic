@@ -958,9 +958,10 @@ describe.concurrent("agent set · the Hermes settings", () => {
 
   /** `--hold` (§6.4) takes the flag spellings, `none` to clear, and refuses the rest. */
   test("--hold maps flag spellings onto the settings it holds", async () => {
-    const held = await run("agent", "set", "atlas", "--hold", "max-turns, reasoning", "--json");
+    const held = await run("agent", "set", "atlas", "--hold", "model,max-turns, reasoning", "--json");
     expect(held.code).toBe(0);
     expect((JSON.parse(held.stdout) as { hermes_hold: string[] }).hermes_hold).toEqual([
+      "model",
       "max_turns",
       "reasoning_effort",
     ]);
@@ -969,7 +970,7 @@ describe.concurrent("agent set · the Hermes settings", () => {
   });
 
   test("--hold refuses a setting it cannot hold", async () => {
-    for (const name of ["approvals", "model", "nonsense"]) {
+    for (const name of ["approvals", "nonsense"]) {
       const { code, stderr } = await run("agent", "set", "atlas", "--hold", name);
       expect(code).toBe(2);
       expect(stderr).toContain(`unknown setting "${name}"`);

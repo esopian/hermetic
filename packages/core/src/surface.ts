@@ -77,6 +77,7 @@ import {
   ListVolumesInput as ListVolumesInputSchema,
   NetworkStatusInput as NetworkStatusInputSchema,
   LogsInput as LogsInputSchema,
+  MobilePairInput as MobilePairInputSchema,
   NotificationsAckInput as NotificationsAckInputSchema,
   NotificationsClearInput as NotificationsClearInputSchema,
   NotificationsListInput as NotificationsListInputSchema,
@@ -195,6 +196,8 @@ export const PUBLIC_METHODS = [
   "chat.steer",
   // §9.2: a watch on one conversation, independent of any send.
   "chat.observe",
+  // The phone companion's pairing link: a read of the fleet, no secret in it.
+  "mobile.pair",
   // Composer attachments: one file to an agent's stage area, for a chat turn to attach.
   "files.stage",
   // Agent file requests: answer one with a file or a text secret, or say no.
@@ -359,6 +362,7 @@ export const REQUEST_SCHEMAS = {
    * what makes reconnecting to it safe.
    */
   "chat.observe": ChatObserveInputSchema,
+  "mobile.pair": MobilePairInputSchema,
   /**
    * Composer attachments (§9). A stream like `chat.send`, and like it *not* in
    * `STREAMING_METHODS`: an upload is a live pipe, not an op to restart, and

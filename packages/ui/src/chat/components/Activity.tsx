@@ -1,5 +1,5 @@
 /** Tool work is inspectable without taking the answer or composer off screen. */
-import { useState } from "react";
+import { memo } from "react";
 import type { TurnActivity } from "../chat-activity.ts";
 import type { ChatBlockOf, ChatBlockView } from "../../api/index.ts";
 import { fmtMs, formatPayload, unknownName } from "../chat-logic.ts";
@@ -12,6 +12,7 @@ import { JumpLink, useProcessEvents } from "./blocks/ProcessEvent.tsx";
 import { ToolBlock } from "./blocks/Tool.tsx";
 import { SubagentGroup } from "./blocks/Subagent.tsx";
 import { dispatchedOnly, isSubagent, subagentLayout } from "../chat-subagents.ts";
+import { useDisclosure, useRowPosition } from "../disclosures.ts";
 
 export function isActivity(block: ChatBlockView): boolean {
   return ["activity", "tool", "reasoning", "subagent", "unknown"].includes(block.kind);
@@ -236,7 +237,9 @@ function stepStatus(
  *
  * `open` is state rather than a bare attribute so that a reader who closed a
  * step — or opened one — keeps that choice when the turn's next block arrives
- * and re-renders the group around them.
+ * and re-renders the group around them. It is also kept in the thread's
+ * disclosure store under `id` (`disclosures.ts`), so the choice outlives the
+ * row being scrolled out of the virtualized transcript and back.
  *
  * Every step starts shut, failures included: the red glyph and the status
  * word already say a call failed, and a turn that retries past a failed call
@@ -244,18 +247,20 @@ function stepStatus(
  * opens the ones they want, and nothing reopens or shuts one behind them.
  */
 function Step({
+  id,
   block,
   streaming,
   remoteBusy,
 }: {
+  /** The step's identity within its turn, for the disclosure store. */
+  id: string;
   block: ChatBlockView;
   streaming: boolean;
   remoteBusy?: boolean | null;
 }) {
   const state = stepStatus(block, streaming, remoteBusy);
-  const [choice, setChoice] = useState<boolean | null>(null);
+  const [choice, setOpen] = useDisclosure(id);
   const open = choice ?? false;
-  const setOpen = (next: boolean) => setChoice(next);
   const target = block.kind === "tool" ? toolSummary(block) : "";
   const duration = "duration_ms" in block ? fmtMs(block.duration_ms) : "";
   // A call that started a background process links down to the event that
@@ -294,24 +299,75 @@ function Step({
   );
 }
 
-export function ActivityGroup({
-  blocks,
-  streaming,
-  waiting = false,
-  activity,
-  remoteBusy,
-}: {
+interface ActivityGroupProps {
   blocks: ChatBlockView[];
   streaming: boolean;
   waiting?: boolean;
   activity?: TurnActivity;
   /** The box's busy state, on the newest bot turn only; see `stepStatus`. */
   remoteBusy?: boolean | null;
-}) {
+}
+
+/**
+ * Props equal for drawing purposes: `blocks` is a fresh array on every pass of
+ * `Message`'s section loop, so it is compared by its elements, which are the
+ * transcript's own block objects and keep their identity while unchanged.
+ */
+function sameGroupProps(a: ActivityGroupProps, b: ActivityGroupProps): boolean {
+  return (
+    a.streaming === b.streaming &&
+    a.waiting === b.waiting &&
+    a.activity === b.activity &&
+    a.remoteBusy === b.remoteBusy &&
+    a.blocks.length === b.blocks.length &&
+    a.blocks.every((block, i) => block === b.blocks[i])
+  );
+}
+
+export const ActivityGroup = memo(ActivityGroupView, sameGroupProps);
+
+/**
+ * A step's identity within its turn: a tool call's id, an activity's key, a
+ * child's id; only a block with none at all falls back to its position.
+ */
+function stepKey(block: ChatBlockView, index: number): string {
+  if (block.kind === "activity") return `activity:${block.key}`;
+  if (block.kind === "tool" && block.tool_id) return `tool:${block.tool_id}`;
+  if (block.kind === "subagent") return `subagent:${block.subagent_id}`;
+  return `row:${index}`;
+}
+
+/**
+ * A group's identity within its turn, for the disclosure store. It must not
+ * move while the turn streams, so it is read off the group's *first* block,
+ * which a growing group keeps: that block's own identity when it has one, else
+ * its position among the row's blocks (`position`, -1 outside a row), which
+ * only appending cannot shift. A later block with an id is no use here — a
+ * group that opened on bare reasoning would change key when its first tool
+ * call streamed in, and lose the reader's choice with it.
+ */
+function groupKey(blocks: readonly ChatBlockView[], position: number): string {
+  const first = blocks[0];
+  if (first === undefined) return "group:empty";
+  const own = stepKey(first, 0);
+  if (!own.startsWith("row:")) return `group:${own}`;
+  return position >= 0 ? `group:at:${position}` : "group:anonymous";
+}
+
+function ActivityGroupView({
+  blocks,
+  streaming,
+  waiting = false,
+  activity,
+  remoteBusy,
+}: ActivityGroupProps) {
   // The run stays on screen after it finishes, collapsed: the summary carries
   // what is happening now, and the reader opens it for the steps. A failed call
   // marks the summary rather than opening the group; see `Step`.
-  const [choice, setChoice] = useState<boolean | null>(null);
+  // Kept in the thread's disclosure store too (`disclosures.ts`), so a group the
+  // reader opened is still open when its row is scrolled away and back.
+  const group = groupKey(blocks, useRowPosition(blocks[0]));
+  const [choice, setOpen] = useDisclosure(group);
   const rows = activityRows(blocks);
   if (rows.length === 0) return null;
   // The steps are the work: tool calls, reasoning, anything this build did not
@@ -357,7 +413,6 @@ export function ActivityGroup({
   // their progress shows, live or after the turn (Option C). The reader's own
   // choice still wins either way.
   const open = choice ?? kids.length > 0;
-  const setOpen = (next: boolean) => setChoice(next);
   // Collapsed and live, the summary says what the turn is doing right now: the
   // running step by name and target, else the latest status snapshot.
   const current =
@@ -440,17 +495,17 @@ export function ActivityGroup({
           // A tool call keeps its identity across renders, so its step keeps
           // whatever the reader opened; only a block with no identity at all
           // falls back to its position.
-          const key =
-            block.kind === "activity"
-              ? `activity:${block.key}`
-              : block.kind === "tool" && block.tool_id
-                ? `tool:${block.tool_id}`
-                : `row:${index}`;
+          const key = stepKey(block, index);
           const children =
             block.kind === "tool" && block.tool_id ? layout.byTool.get(block.tool_id) : undefined;
           return [
             <li key={key}>
-              <Step block={block} streaming={streaming} remoteBusy={remoteBusy} />
+              <Step
+                id={`${group}/${key}`}
+                block={block}
+                streaming={streaming}
+                remoteBusy={remoteBusy}
+              />
             </li>,
             ...(children
               ? [

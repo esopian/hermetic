@@ -50,7 +50,6 @@ function message(
       instance="silent-crane"
       bot="default"
       status="ready"
-      now={NOW}
       streaming={streaming}
       activity={phase}
     />,

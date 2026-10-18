@@ -479,14 +479,15 @@ export function createRpcBinding<Rpc>(deps: RpcBindingDeps<Rpc>): RpcBinding<Rpc
           // the old page said it was viewing, and the keystroke count it was
           // on, belong to a page that is gone. The new one reports afresh.
           ctx.terminals?.forgetWindow(windowKey);
-          // The old page's attaches died with it and the new page attaches
-          // afresh; left open, each would stall on credits it can never be
-          // acked for and resync once a second until its session ends.
-          // `page.ready` precedes the new page's first attach, so only the
-          // old page's streams are here to close.
-          for (const id of ctx.terminals?.attachIds((s) => ctx.streams.has(s)) ?? []) {
-            ctx.streams.close(id);
-          }
+          // Every stream the old page opened died with it, and the new page
+          // opens its own. Left open, a terminal attach would stall on credits
+          // it can never be acked for and resync once a second until its
+          // session ends, and a fleet, chat or op feed would push to nobody
+          // (a chat feed's first frames are every watched transcript) for the
+          // life of the process. `page.ready` is sent before the new page's
+          // first render (`entry-app.tsx`), so only the old page's streams are
+          // here to close.
+          ctx.streams.closeAll();
         },
         // Keystrokes, acks and the view state. Never logged — not here, not
         // in the handlers — because the first of them is what the operator

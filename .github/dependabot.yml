@@ -31,3 +31,12 @@ updates:
     directory: /site
     schedule:
       interval: weekly
+  # mobile/ is the same shape (see AGENTS.md "Layout"): the Expo phone app, its
+  # own bun.lock, never installed by the root `bun install`. Expo pins its SDK
+  # packages to one release line (`bunx expo install` keeps them matched), so a
+  # bump here is read as a set, and the `mobile` CI job's `bun run check` and
+  # `expo export` prove it still type-checks, tests and bundles.
+  - package-ecosystem: bun
+    directory: /mobile
+    schedule:
+      interval: weekly

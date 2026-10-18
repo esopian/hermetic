@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { setChatAvatarStyle, useChatAvatarStyle } from "../../chat/chat-appearance.ts";
 import { Avatar } from "../../chat/components/avatar/Avatar.tsx";
-import type { AvatarStyle } from "../../chat/components/avatar/Avatar.tsx";
+import type { AvatarStyle } from "@hermetic/core/shared";
 import { chatSettings } from "../../api/chat.ts";
 import { devtap } from "../../chat/devtap.ts";
 import type { ChatSettingsView } from "../../api/types.ts";

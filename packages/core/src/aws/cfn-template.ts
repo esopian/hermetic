@@ -263,13 +263,23 @@ function agentPolicy(): CfnValue {
           Resource: "*",
         },
         {
-          // `Query` and not `Scan`: an agent reads and writes rows by key. The
-          // key it uses is still its own name — nothing in hermeticd addresses
-          // another agent's row — but IAM no longer enforces that.
+          // An agent reads and writes rows by key. The key it uses is still its
+          // own name — nothing in hermeticd writes another agent's row — but
+          // IAM no longer enforces that.
           Sid: "FleetRows",
           Effect: "Allow",
           Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
           Resource: [getAtt("AgentsTable", "Arn"), getAtt("EventsTable", "Arn")],
+        },
+        {
+          // Read-only, and the agents table only: hermeticd serves the fleet
+          // view (`GET /fleet`) to a paired phone, which holds no AWS
+          // credential of its own (§9.4). Since foundation v17. The role could
+          // already read every row here by key; this lists them.
+          Sid: "FleetList",
+          Effect: "Allow",
+          Action: ["dynamodb:Scan"],
+          Resource: [getAtt("AgentsTable", "Arn")],
         },
         {
           Sid: "FleetConfigPrefix",

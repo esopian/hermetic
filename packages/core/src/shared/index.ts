@@ -214,6 +214,8 @@ export {
   HERMES_WEB_DIST_DIR,
   hermesConfigGetArgv,
 } from "./hermes.ts";
+export { hermesConfigLeaves, hermesOwnedDrift } from "./hermes-owned.ts";
+export type { OwnedKeyDrift } from "./hermes-owned.ts";
 export {
   AGENT_CONFIG_SCHEMA_VERSION,
   APT_LOCK_TIMEOUT_SECONDS,
@@ -240,10 +242,12 @@ export {
 } from "./browser.ts";
 export {
   HERMETICD_RPC_PORT,
+  PUSH_DEVICE_ROUTE_PREFIX,
   RPC_CONTENT_TYPE,
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
+  pushDevicePath,
 } from "./rpc.ts";
 
 // --- Terminal shell integration (issue #18) --------------------------------
@@ -257,6 +261,101 @@ export {
 } from "./shell-markers.ts";
 export type { ShellMarker } from "./shell-markers.ts";
 
+// --- Avatars (§9.2, §9.4) ---------------------------------------------------
+// The desktop and the phone draw a bot's face from the same seed and the same
+// geometry; the pairing link carries the viewer's style choice across.
+export { AVATAR_STYLES, DEFAULT_AVATAR_STYLE, isAvatarStyle } from "./avatar/style.ts";
+export type { AvatarStyle } from "./avatar/style.ts";
+// The seed and palette, then each style's geometry and still frames. Both
+// heads draw from these; only the drawing (DOM or react-native-svg) is theirs.
+export {
+  RESERVED_HUE,
+  avatarMotion,
+  avatarPalette,
+  avatarSeed,
+  avatarSeeds,
+  rngFor,
+} from "./avatar/seed.ts";
+export type {
+  AvatarActivity,
+  AvatarMotion,
+  AvatarPalette,
+  AvatarStatus,
+  Rng,
+} from "./avatar/seed.ts";
+export { BLOB_VIEWBOX, blobFrame, blobPath, blobShape } from "./avatar/blob.ts";
+export type { BlobFrame, BlobPoint, BlobShape } from "./avatar/blob.ts";
+export {
+  SIGIL_HOME,
+  SIGIL_N,
+  SIGIL_VIEWBOX,
+  sigilCells,
+  sigilFrame,
+  transformFor,
+} from "./avatar/sigil.ts";
+export type { SigilCell, SigilFrame } from "./avatar/sigil.ts";
+export {
+  PIXEL_STILL,
+  PIXEL_STOPPED,
+  PIXEL_VIEWBOX,
+  pixelFrame,
+  pixelParts,
+} from "./avatar/pixel.ts";
+export type { PixelFrame, PixelParts, PixelRect } from "./avatar/pixel.ts";
+
+// --- QR codes (the mobile pairing link) -------------------------------------
+export { encodeQr, qrToSvg, qrToTerminal } from "./qr.ts";
+export type { QrMatrix } from "./qr.ts";
+
+// --- The phone's pairing link (no secret; the phone parses the same code) ---
+export {
+  MOBILE_LINK_ACCEPTED_VERSIONS,
+  MOBILE_LINK_MAX_AGENTS,
+  MOBILE_LINK_MAX_LENGTH,
+  MOBILE_LINK_PREFIX,
+  MOBILE_LINK_PREF_KEYS,
+  MOBILE_LINK_VERSION,
+  encodeMobileLink,
+  parseMobileLink,
+} from "./mobile-link.ts";
+export type {
+  MobileLinkAgentEntry,
+  MobileLinkInput,
+  MobileLinkPayload,
+  MobileLinkPrefs,
+} from "./mobile-link.ts";
+
+// --- SHA-256 (chat message ids) ---------------------------------------------
+// The chat adapter's transcript row ids are a SHA-256 prefix, and the adapter
+// runs on the phone and the box as well as the laptop, so the hash cannot be
+// `node:crypto`. Pinned byte-equal to it in `test/sha256.test.ts`.
+export { createSha256, type Sha256, sha256Hex } from "./sha256.ts";
+
+// --- Expo push (hermeticd's gateway watcher, §9.4) -------------------------
+// The box sends; the payload shapes, batching and the ticket/receipt parse are
+// plain values a second runtime may need verbatim, and nothing here opens a
+// socket of its own — the caller hands in `fetch`.
+export {
+  EXPO_DEVICE_NOT_REGISTERED,
+  EXPO_PUSH_BATCH,
+  EXPO_PUSH_TIMEOUT_MS,
+  EXPO_PUSH_URL,
+  EXPO_RECEIPTS_BATCH,
+  EXPO_RECEIPTS_URL,
+  chunk,
+  expoPushSender,
+  expoReceiptFetcher,
+  isDeviceNotRegistered,
+  receiptOf,
+} from "./expo-push.ts";
+export type {
+  ExpoFetch,
+  ExpoPushMessage,
+  ExpoPushReceipt,
+  ExpoPushSender,
+  ExpoPushTicket,
+  ExpoReceiptFetcher,
+} from "./expo-push.ts";
 // --- Files service (attachments, requests, shares) -----------------------
 // The routes, ids, name rules, caps and sniffer hermeticd, core and the UI
 // must agree on for every file that crosses between laptop and box.

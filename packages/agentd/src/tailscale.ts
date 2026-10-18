@@ -1,6 +1,6 @@
 /**
  * What hermeticd still asks the `tailscale` binary directly: its own tailnet
- * address, and its own node's view of itself.
+ * address, its own node's view of itself, and who else is on the tailnet.
  *
  * Joining the tailnet is `stages/01-tailscale.sh`'s job now (§4.3) — it owns the
  * apt source, the auth key file and `tailscale up`. But the address is read at
@@ -78,5 +78,56 @@ export async function tailscaleSelf(host: Host): Promise<TailscaleSelf> {
     };
   } catch {
     return { online: false, dnsName: null, version: null };
+  }
+}
+
+/** Who is on the tailnet, as this node sees it (`tailnetLogins`). */
+export interface TailnetMembers {
+  /** Every user login that owns a node: `User[*].LoginName`. */
+  readonly logins: ReadonlySet<string>;
+  /** Every node's MagicDNS name and host name, this one's included, as `nodeName` spells them. */
+  readonly nodes: ReadonlySet<string>;
+}
+
+/** A node name compared without case or its trailing dot (`atlas.example.ts.net.`). */
+export function nodeName(name: string): string {
+  return name.trim().replace(/\.$/, "").toLowerCase();
+}
+
+/**
+ * The tailnet's current members, from `tailscale status --json`: its `User`
+ * map (one entry per user owning a node this node can see, keyed by user id,
+ * each with a `LoginName`) and its `Self` and `Peer` nodes. The push registry
+ * prunes owners against it (§9.4), so a member removed from the tailnet stops
+ * being pushed to without waiting out the registration's TTL.
+ *
+ * `null` — no evidence, so nothing is pruned — when the binary fails, the
+ * output does not parse, or it names no user at all, which no healthy node
+ * reports (its own owner is always in the map).
+ */
+export async function tailnetLogins(host: Host): Promise<TailnetMembers | null> {
+  const res = await host.exec(["tailscale", "status", "--json"]);
+  if (res.code !== 0) return null;
+  try {
+    const status = JSON.parse(res.stdout) as {
+      User?: Record<string, { LoginName?: unknown } | null> | null;
+      Self?: { DNSName?: unknown; HostName?: unknown } | null;
+      Peer?: Record<string, { DNSName?: unknown; HostName?: unknown } | null> | null;
+    };
+    const logins = new Set<string>();
+    for (const user of Object.values(status.User ?? {})) {
+      const login = user?.LoginName;
+      if (typeof login === "string" && login !== "") logins.add(login);
+    }
+    if (logins.size === 0) return null;
+    const nodes = new Set<string>();
+    for (const node of [status.Self, ...Object.values(status.Peer ?? {})]) {
+      for (const name of [node?.DNSName, node?.HostName]) {
+        if (typeof name === "string" && nodeName(name) !== "") nodes.add(nodeName(name));
+      }
+    }
+    return { logins, nodes };
+  } catch {
+    return null;
   }
 }

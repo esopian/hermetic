@@ -131,6 +131,9 @@ const MAX_LOGGED_OUTPUT = 4 * 1024;
  * - `runs` *prints* the log, so recording its output would fold every previous
  *   row into the next one — 295 bytes becomes 11 KiB in five invocations, and
  *   keeps squaring. The command that reads the log does not write to it.
+ *
+ * `mobile pair` is recorded like any read: its link names a fleet and holds
+ * no secret.
  */
 function loggedOutput(command: string): string {
   if (command.startsWith("secrets push")) return "[redacted]";

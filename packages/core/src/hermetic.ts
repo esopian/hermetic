@@ -77,6 +77,7 @@ import { createLocalAgentPurge } from "./local/purge-agent.ts";
 import { incarnationEnd } from "./agents/lifecycle/release-name.ts";
 import { MemoryIncarnationStore, createIncarnationReconciler } from "./local/incarnations.ts";
 import type { HermeticDeps } from "./hermetic-deps.ts";
+import { createMobilePair } from "./mobile-pair.ts";
 
 /**
  * The surface declaration lives in its own module (`surface.ts`), and is
@@ -574,6 +575,9 @@ export function createHermetic(deps: HermeticDeps) {
     },
   });
 
+  /** The phone's pairing link (`mobile-pair.ts`): a read, and no secret in it. */
+  const mobile = createMobilePair({ ctx, listAgents: list });
+
   const hermetic = {
     ...botMode,
     init: initWithHelpers,
@@ -697,6 +701,11 @@ export function createHermetic(deps: HermeticDeps) {
      * `PUBLIC_METHODS` entry; the desktop head reaches it through machinery.
      */
     devtools: devtools.controls,
+    /**
+     * The phone companion's pairing link. The phone talks to the boxes
+     * directly over the tailnet; the laptop only shows it where the fleet is.
+     */
+    mobile: { pair: mobile.pair },
     /** Derived-state constants the heads render against. */
     constants: { HEARTBEAT_INTERVAL_MS, UNREACHABLE_INTERVALS },
   };

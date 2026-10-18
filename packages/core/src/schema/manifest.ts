@@ -215,6 +215,20 @@ export const AgentConfig = z.object({
    * rather than about a release.
    */
   requires: z.array(z.string().min(1)).optional(),
+  /**
+   * The keys hermetic owns in this agent's Hermes config, each with the value
+   * it rendered (`hermesOwnedKeys`, §6.4): every leaf of the managed
+   * `/etc/hermes/config.yaml`, as dotted paths. The heartbeat compares the box's
+   * managed file against this and reports a key that moved; a key not named
+   * here is the agent's, and is never compared.
+   *
+   * Outside `config_hash`, with `requires`: it is derived from the managed
+   * file's content in `files`, so hashing it would say nothing new, and adding
+   * it would have re-hashed every agent in every fleet. Optional because a
+   * manifest rendered before the field has no record, and on such a box the
+   * heartbeat watches nothing rather than guessing.
+   */
+  hermes_owned: z.record(z.string(), z.string()).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

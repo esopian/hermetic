@@ -964,6 +964,14 @@
 .ch-msg:hover {
   background: var(--bg2);
 }
+/* A virtualized log (`virtual/VirtualLog.tsx`) mounts a row again every time
+   it is scrolled back into range, and the rise would replay on each of those.
+   Only a row new to the transcript since the log mounted (`data-fresh`) rises
+   in; the rows drawn with the log, and every remount, do not. The attribute
+   selectors out-rank the soft skin's own `.ch-msg` animation as well. */
+[data-vrow]:not([data-fresh]) .ch-msg {
+  animation: none;
+}
 /* The operator's own turns are tinted, so scanning back through a long thread
    finds "what did I ask" without reading a word. */
 .ch-msg.me {

@@ -70,6 +70,8 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   SG_INBOUND_RULE: 9,
   /** A precondition of the environment (§4.8): the account's directory table. */
   DIRECTORY_UNAVAILABLE: 9,
+  /** hermeticd's fleet view (§9.4): a foundation precondition, like the line above. */
+  FLEET_LIST_UNAVAILABLE: 9,
   SECRETS_DISABLED: 9,
   /** A laptop preference is off (§9.2); no CLI verb reaches it, but the table is total. */
   DEVTOOLS_DISABLED: 9,
@@ -147,6 +149,14 @@ export const EXIT_CODES: Readonly<Record<ErrorCode, number>> = {
   TAILSCALE_STOPPED: 9,
   TAILSCALE_WRONG_TAILNET: 9,
   TERMINAL_LIMIT: 7,
+  /**
+   * HTTP-shaped refusals, rarely raised by a CLI command against core — but the
+   * table is exhaustive. A rate limit is a precondition of the environment; a
+   * refused caller is a conflict with what is.
+   */
+  RATE_LIMITED: 9,
+  UNAUTHORIZED: 7,
+  PAYLOAD_TOO_LARGE: EXIT_VALIDATION,
   /**
    * The files service's refusals. A bad name is a bad name, like
    * `NAME_INVALID`; a missing entry is a `NOT_FOUND`; refusing a secret's

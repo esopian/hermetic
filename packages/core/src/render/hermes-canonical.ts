@@ -15,6 +15,18 @@ export interface ConversationOptions extends HermesChatOptions {
 }
 export interface CanonicalDeps {
   connect(box: BoxAddress, signal?: AbortSignal): Promise<BotRpc>;
+  /**
+   * One request over the box's shared Bot Mode socket (`peer.botModeRpc`,
+   * `hermes-chat-pool.ts`). The read-only lookups go through it, so an
+   * observation reconciling every few seconds does not dial a socket per read;
+   * absent, they dial their own through `connect` as before.
+   */
+  request?(
+    box: BoxAddress,
+    method: string,
+    params: Record<string, unknown>,
+    opts: HermesChatOptions & { deadlineMs?: number },
+  ): Promise<unknown>;
   patch(
     box: BoxAddress,
     session: string,
@@ -90,19 +102,54 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
     return identity(box, bot, root, str(row.resolved_id) ?? root);
   }
 
+  /** A session the caller named: canonical when the registry says so, else a thread. */
+  async function named(
+    rpc: BotRpc,
+    box: BoxAddress,
+    bot: string,
+    session: string,
+  ): Promise<ChatConversation> {
+    const canonical = await find(rpc, box, bot);
+    if (canonical && [canonical.root_session, canonical.session].includes(session)) return canonical;
+    return identity(box, bot, session, session, false, "thread");
+  }
+
+  /**
+   * The read-only lookups — a named session, or the canonical one without
+   * `create` — over the shared socket: one `session.list` frame each, where
+   * they used to cost a WebSocket and TLS dial apiece.
+   *
+   * The answer is deliberately not cached between calls. Every read resolving
+   * the registry afresh is what lets an observation notice a rollover (the
+   * conversation archived and a new Bot Chat opened from another client) on
+   * its next read; a cached tip would read the archived session until
+   * something invalidated it, and nothing reliably would.
+   */
+  function pooled(box: BoxAddress, opts: ConversationOptions): BotRpc | null {
+    const request = deps.request;
+    if (!request) return null;
+    if (!opts.session && (opts.create || opts.new_session)) return null;
+    return {
+      request: (method, params, deadlineMs) =>
+        request(box, method, params, {
+          signal: opts.signal,
+          ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+        }),
+      // The pool owns the socket; a lease ends with its request.
+      close: () => {},
+    };
+  }
+
   async function resolve(
     box: BoxAddress,
     bot: string,
     opts: ConversationOptions,
   ): Promise<ChatConversation | null> {
+    const shared = pooled(box, opts);
+    if (shared) return opts.session ? named(shared, box, bot, opts.session) : find(shared, box, bot);
     const rpc = await deps.connect(box, opts.signal);
     try {
-      if (opts.session) {
-        const canonical = await find(rpc, box, bot);
-        if (canonical && [canonical.root_session, canonical.session].includes(opts.session))
-          return canonical;
-        return identity(box, bot, opts.session, opts.session, false, "thread");
-      }
+      if (opts.session) return await named(rpc, box, bot, opts.session);
       if (opts.new_session) {
         const created = rec(
           await rpc.request("session.create", { profile: bot, source: HERMETIC_SESSION_SOURCE }),

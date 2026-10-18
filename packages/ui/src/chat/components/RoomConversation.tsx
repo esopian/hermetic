@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { botHandle } from "@hermetic/core/shared";
 import {
   ApiError,
@@ -15,7 +15,11 @@ import { HERMETIC_GATES } from "../bot-capabilities.ts";
 import { useChatIfAvailable } from "../chat-state.tsx";
 import { botLabel } from "../chat-presentation.ts";
 import { SILENT_LABEL, isSilentPreview, silentTitle } from "../chat-silence.ts";
-import { threadTime } from "../chat-logic.ts";
+import { ClockContext, ThreadTime } from "../chat-clock.tsx";
+import { pinToBottom } from "../stick-to-bottom.ts";
+import type { Pin } from "../stick-to-bottom.ts";
+import { VirtualLog } from "../virtual/VirtualLog.tsx";
+import type { VirtualItem } from "../virtual/VirtualLog.tsx";
 import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
 import { GatedNote } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
@@ -102,6 +106,87 @@ export function memberName(
   return named || profile || "";
 }
 
+/**
+ * One room event as the log draws it. Memoized, and stamped through the
+ * `ThreadTime` leaf, so a clock tick or a poll re-renders only the stamps and
+ * the rows that changed.
+ */
+const RoomEventRow = memo(function RoomEventRow({
+  event,
+  fleetId,
+  instance,
+  who,
+  name,
+  bot,
+}: {
+  event: RoomEventView;
+  fleetId: string;
+  instance: string;
+  /** The member the event is from, as the room addresses it. */
+  who: string;
+  name: string;
+  /** From a room member rather than the operator. */
+  bot: boolean;
+}) {
+  // A member's post that is only a Hermes silence token is the same muted
+  // marker the bot thread draws (`chat-silence.ts`). The operator's own words
+  // and any non-message event stay literal.
+  if (bot && event.kind.startsWith("message") && isSilentPreview(event.text)) {
+    return (
+      <RowBoundary label={event.event_id}>
+        <article className="ch-silent" title={silentTitle(event.text ?? "")}>
+          <span className="ch-silent-gut">
+            <Face
+              fleetId={fleetId}
+              instance={instance}
+              bot={who}
+              size={20}
+              status="ready"
+              square={false}
+            />
+          </span>
+          <span className="ch-silent-line">
+            <b>{name}</b> {SILENT_LABEL}
+            <span className="ch-silent-at">
+              <ThreadTime at={event.created_at} />
+            </span>
+          </span>
+        </article>
+      </RowBoundary>
+    );
+  }
+  return (
+    <RowBoundary label={event.event_id}>
+      <article className="ch-msg">
+        {bot ? (
+          <Face
+            fleetId={fleetId}
+            instance={instance}
+            bot={who}
+            size={36}
+            status="ready"
+            square={false}
+          />
+        ) : (
+          <div className="ch-avatar me">ME</div>
+        )}
+        <div className="ch-msg-body">
+          <div className="ch-msg-head">
+            <b>{name}</b>
+            {/* One formatter for every stamp in the app; see `threadTime`. */}
+            <time>
+              <ThreadTime at={event.created_at} />
+            </time>
+          </div>
+          <p className="bm-pre">
+            <RedactedText text={event.text ?? ""} />
+          </p>
+        </div>
+      </article>
+    </RowBoundary>
+  );
+});
+
 export function RoomConversation({
   instance,
   id,
@@ -164,8 +249,17 @@ export function RoomConversation({
       b.title,
     ]),
   );
-  /** The clock every stamp in this pane is rendered against, shared with the rail. */
-  const now = chat?.now ?? Date.now();
+  /**
+   * The clock every stamp in this pane is rendered against, shared with the
+   * rail. Null reads the wall clock where it is drawn (`useClock`).
+   */
+  const now = chat?.now ?? null;
+  /**
+   * Whether the reader is at the live end, shared with `VirtualLog`, which
+   * follows it there while true and holds the rows in view still while not.
+   * Same rule as the bot thread: an open or an own send follows again.
+   */
+  const pin = useRef<Pin>({ following: true, pinnedTop: null });
   const input = useRef<HTMLTextAreaElement>(null);
   // Switching back to the app lands the caret here, so a paste goes in.
   useFocusOnReturn(input);
@@ -310,8 +404,15 @@ export function RoomConversation({
       unsubscribe();
     };
   }, [instance, id, version, pollMs, returnReadMinAgeMs]);
+  // Opening a room lands at its latest event.
   useEffect(() => {
-    if (log.current) log.current.scrollTop = log.current.scrollHeight;
+    pin.current.following = true;
+    if (log.current) pinToBottom(log.current, pin.current);
+  }, [instance, id]);
+  // New events follow the live end only while the reader is there: one who
+  // scrolled up into the room's history is reading it.
+  useEffect(() => {
+    if (log.current && pin.current.following) pinToBottom(log.current, pin.current);
   }, [events.length]);
   async function act(work: () => Promise<unknown>) {
     if (busy) return;
@@ -339,6 +440,9 @@ export function RoomConversation({
       onPending(pending.current);
     }
     const event_id = pending.current.id;
+    // Sending is the reader asking to be at the live end.
+    pin.current.following = true;
+    if (log.current) pinToBottom(log.current, pin.current);
     await act(async () => {
       let receipt: Awaited<ReturnType<typeof roomsSend>>;
       try {
@@ -369,8 +473,48 @@ export function RoomConversation({
         setNotice("Already delivered — the gateway recognised this message and kept the original.");
     });
   }
+  // The note about what was not loaded is the log's first row, so that the
+  // log's coordinates start at the top of its content.
+  const items: VirtualItem[] = [];
+  if (earlier || truncated) {
+    items.push({
+      key: "room-note",
+      node: (
+        <p className="bm-note">
+          {earlier
+            ? `This room opens at its recent end; ${earlier} earlier ${
+                earlier === 1 ? "event was" : "events were"
+              } not loaded. Open the complete log in Hermes.`
+            : "History truncated for display; open the complete log in Hermes."}
+          {truncated ? " This view keeps catching up." : ""}
+        </p>
+      ),
+    });
+  }
+  for (const event of events) {
+    if (!event.text) continue;
+    const bot = event.actor.kind !== "user";
+    const who = event.member_id ?? event.actor.id;
+    const member = memberOf(who);
+    const name = bot
+      ? memberName(instance, member?.profile ?? who, member?.display_name, roster)
+      : "You";
+    items.push({
+      key: `${event.seq}-${event.event_id}`,
+      node: (
+        <RoomEventRow
+          event={event}
+          fleetId={fleetId}
+          instance={instance}
+          who={who}
+          name={name}
+          bot={bot}
+        />
+      ),
+    });
+  }
   return (
-    <>
+    <ClockContext.Provider value={now}>
       <section className="ch-thread">
         <div className="ch-thead bm-room-head">
           <span className="bm-room-icon">▣</span>
@@ -418,79 +562,7 @@ export function RoomConversation({
           </p>
         ) : null}
         <div className="ch-log" ref={log}>
-          {earlier || truncated ? (
-            <p className="bm-note">
-              {earlier
-                ? `This room opens at its recent end; ${earlier} earlier ${
-                    earlier === 1 ? "event was" : "events were"
-                  } not loaded. Open the complete log in Hermes.`
-                : "History truncated for display; open the complete log in Hermes."}
-              {truncated ? " This view keeps catching up." : ""}
-            </p>
-          ) : null}
-          {events
-            .filter((e) => e.text)
-            .map((event) => {
-              const bot = event.actor.kind !== "user";
-              const who = event.member_id ?? event.actor.id;
-              const member = memberOf(who);
-              const name = bot
-                ? memberName(instance, member?.profile ?? who, member?.display_name, roster)
-                : "You";
-              // A member's post that is only a Hermes silence token is the same
-              // muted marker the bot thread draws (`chat-silence.ts`). The
-              // operator's own words and any non-message event stay literal.
-              if (bot && event.kind.startsWith("message") && isSilentPreview(event.text)) {
-                return (
-                  <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
-                    <article className="ch-silent" title={silentTitle(event.text ?? "")}>
-                      <span className="ch-silent-gut">
-                        <Face
-                          fleetId={fleetId}
-                          instance={instance}
-                          bot={who}
-                          size={20}
-                          status="ready"
-                          square={false}
-                        />
-                      </span>
-                      <span className="ch-silent-line">
-                        <b>{name}</b> {SILENT_LABEL}
-                        <span className="ch-silent-at">{threadTime(event.created_at, now)}</span>
-                      </span>
-                    </article>
-                  </RowBoundary>
-                );
-              }
-              return (
-                <RowBoundary key={`${event.seq}-${event.event_id}`} label={event.event_id}>
-                  <article className="ch-msg">
-                    {bot ? (
-                      <Face
-                        fleetId={fleetId}
-                        instance={instance}
-                        bot={who}
-                        size={36}
-                        status="ready"
-                        square={false}
-                      />
-                    ) : (
-                      <div className="ch-avatar me">ME</div>
-                    )}
-                    <div className="ch-msg-body">
-                      <div className="ch-msg-head">
-                        <b>{name}</b>
-                        {/* One formatter for every stamp in the app; see `threadTime`. */}
-                        <time>{threadTime(event.created_at, now)}</time>
-                      </div>
-                      <p className="bm-pre">
-                        <RedactedText text={event.text ?? ""} />
-                      </p>
-                    </div>
-                  </article>
-                </RowBoundary>
-              );
-            })}
+          <VirtualLog items={items} scroller={log} pin={pin} />
           {!events.length ? (
             <p className="bm-note">Start a shared conversation with these bots.</p>
           ) : null}
@@ -690,6 +762,6 @@ export function RoomConversation({
           <p>Stop this room and revoke its member routes? This room cannot be reopened.</p>
         </BotModeDialog>
       ) : null}
-    </>
+    </ClockContext.Provider>
   );
 }

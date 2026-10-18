@@ -50,6 +50,8 @@ export const SETTINGS_SECTIONS = [
   // it is the one laptop page that changes what gets built.
   { id: "presets", label: "Create presets", group: "laptop" },
   { id: "chat", label: "Chat", group: "laptop" },
+  // The phone companion's pairing code: a read of the fleet, shown from this laptop.
+  { id: "mobile", label: "Mobile", group: "laptop" },
   // §4.9: the delivery rules *and* the full inbox. It sits beside Runs because
   // they are the same history read two ways — the run log is what this laptop
   // asked for, the inbox is what it was told.

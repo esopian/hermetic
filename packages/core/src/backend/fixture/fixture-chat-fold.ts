@@ -75,6 +75,11 @@ export function createFixtureTurnRow(): FixtureTurnRow {
         (block.kind === "attachment" && block.href.startsWith("outbox/"))
       )
         row.full = true;
+      // A background process's notice and a bot-to-bot DM are rows of their
+      // own in a real transcript, never flattened into the reply's text
+      // (`fixture-chat-demo.ts` raises both live).
+      if (block.kind === "process_event" || (block.kind === "tool" && block.render === "message_agent"))
+        row.full = true;
       if (block.kind === "tool") {
         const found = blocks.findIndex((b) => b.kind === "tool" && b.tool_id === block.tool_id);
         const at = found >= 0 ? found : blocks.length;

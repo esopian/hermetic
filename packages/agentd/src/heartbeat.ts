@@ -20,6 +20,7 @@ import type { Host, MemorySample } from "./host.ts";
 import { DATA_MOUNT } from "./disk.ts";
 import { STATE_DIR } from "./fleet.ts";
 import { readAppliedConfigHash } from "./manifest.ts";
+import { describeOwnedDrift, driftSignature, readOwnedDrift } from "./owned-drift.ts";
 import { tailscaleIpv4, tailscaleSelf } from "./tailscale.ts";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -341,6 +342,13 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
    * It is refreshed only by a health check that actually answered.
    */
   let reportedHermesVersion: string | null = null;
+  /**
+   * The owned-key drift this process last reported (`driftSignature`), or
+   * `null` before the first reading. In memory, like `lastRequestId`: a
+   * restarted hermeticd reports a standing drift once more, which costs one
+   * repeated event and never a missed one.
+   */
+  let lastDrift: string | null = null;
   let lastRequestId: string | null = null;
   let lastApplyId: string | null = null;
 
@@ -554,6 +562,42 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
     }
   }
 
+  /**
+   * Watch the keys hermetic owns in Hermes's config, and say so when one moves
+   * (`owned-drift.ts`, §6.4).
+   *
+   * An event, not a health check: drift on an owned key is something the
+   * operator should hear about, but the agent is still answering, and putting
+   * it into `degraded` would be hermetic overruling the box over a value the
+   * next apply restores anyway. Reported on change only — when the set of
+   * drifted keys moves, and once more when it clears — so a standing drift is
+   * one line in `agent history`, not one every 30 s. The first reading of a
+   * clean box says nothing.
+   */
+  async function reportOwnedDrift(): Promise<void> {
+    const drift = await readOwnedDrift(host).catch(() => null);
+    if (drift === null) return;
+    const signature = driftSignature(drift);
+    if (signature === lastDrift) return;
+    const previous = lastDrift;
+    lastDrift = signature;
+    try {
+      if (drift.length > 0) {
+        await aws.appendEvent({ name, action: "config-drift", detail: describeOwnedDrift(drift) });
+      } else if (previous !== null) {
+        await aws.appendEvent({
+          name,
+          action: "config-drift-cleared",
+          detail: "every key hermetic owns is back to the value it rendered",
+        });
+      }
+    } catch {
+      // Unreported, so the next tick tries again. A failed event write must
+      // not cost this tick its status decision, which comes after this.
+      lastDrift = previous;
+    }
+  }
+
   const once = async (): Promise<HeartbeatTick> => {
     // Before the probes: `probeHermes` compares against the restart counter
     // this loads, and on the first tick of a fresh process that counter is on
@@ -658,6 +702,8 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
       announcedFirstWrite = true;
       deps.onFirstWrite?.();
     }
+
+    await reportOwnedDrift();
 
     const failing = !health.hermes || !health.tailscale || !health.disk || !health.dashboard;
     consecutiveFailing = failing ? consecutiveFailing + 1 : 0;

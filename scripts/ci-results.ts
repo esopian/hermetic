@@ -31,6 +31,7 @@ export const EXPECTED_JOBS = [
   "audit",
   "gitleaks",
   "site",
+  "mobile",
 ] as const;
 
 /** The environment variable the workflow passes `toJSON(needs)` through. */

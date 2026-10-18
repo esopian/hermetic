@@ -561,6 +561,37 @@ const MIGRATIONS: Migration[] = [
     statements: [],
     columns: [{ table: "agent_status_seen", column: "pending_since", type: "TEXT" }],
   },
+  {
+    /**
+     * Once the laptop mobile bridge's paired phones and pair codes. The bridge
+     * was removed before release (the phone now talks to the boxes over the
+     * tailnet), so this is a no-op. The name stays so a home that ran the
+     * original keeps a valid ledger (it ran as 16 there; the number moved to
+     * make way for `agent-health-pending`, which names make harmless), and
+     * `mobile-tables-dropped` below removes whatever it created.
+     */
+    name: "mobile-devices",
+    version: 17,
+    statements: [],
+  },
+  {
+    /**
+     * Once a `fleet_id` column on the bridge's `mobile_devices`. A no-op for
+     * the same reason as `mobile-devices`, and kept for the same ladder.
+     */
+    name: "mobile-devices-fleet",
+    version: 18,
+    statements: [],
+  },
+  {
+    /**
+     * The laptop mobile bridge's tables, gone with the bridge. `IF EXISTS`,
+     * because only a home that ran the original `mobile-devices` has them.
+     */
+    name: "mobile-tables-dropped",
+    version: 19,
+    statements: ["DROP TABLE IF EXISTS mobile_devices", "DROP TABLE IF EXISTS mobile_pair_codes"],
+  },
 ];
 
 /**

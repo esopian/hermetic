@@ -21,7 +21,14 @@ import {
   type HermesChatOptions,
 } from "./hermes-chat-types.ts";
 import { readRpc, type Rpc } from "./hermes-chat-rpc.ts";
-import { describe, isHermeticCode, originOf, socketUrl, stripToken } from "./hermes-chat-wire.ts";
+import {
+  describe,
+  discardBody,
+  isHermeticCode,
+  originOf,
+  socketUrl,
+  stripToken,
+} from "./hermes-chat-wire.ts";
 import { TapSlot, type TapSource } from "./hermes-chat-devtap.ts";
 import { REDACTED } from "../chat-redact.ts";
 
@@ -99,6 +106,7 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
       );
     }
     if (!res.ok) {
+      discardBody(res);
       throw chatError(
         CHAT_ERROR_CODES.UNREACHABLE,
         `${box.instance}: dashboard answered HTTP ${res.status}`,

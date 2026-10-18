@@ -97,7 +97,12 @@
  *   writes no new row must not be invisible for good. Any other answer resets
  *   the count.
  *
- * The spacing is measured from the last probe's start on `deps.clock`.
+ * The spacing is measured from the last probe's start on `deps.clock`. A
+ * probe only ever follows a read, so on the long floor (`OBSERVE_HINTED_POLL_MS`,
+ * idle with a healthy hint stream) an unanswerable gateway is asked about once
+ * a minute rather than every thirty seconds; a running turn never sees the
+ * long floor, because `true` keeps the loop on `pollMs`, and neither does a
+ * watch whose first probe is still out.
  *
  * The event goes out when the value changes, and again on every probe that
  * reads `true`, so a head that cleared its own flag when its send finished is
@@ -129,14 +134,17 @@ import { tapObserve, type TapSource } from "./devtap.ts";
  *
  * It is the deduplication window as well as the read, so it has to be larger
  * than anything that can plausibly arrive between two reconciles. Two hundred
- * messages against a five-second cadence is four orders of magnitude of
+ * messages against a five-second floor is four orders of magnitude of
  * headroom, and it is still a bounded read: the durable route pages stored
  * rows, so the cost is one page rather than a whole transcript per tick.
  */
 export const OBSERVE_WINDOW = 200;
 
 /**
- * The reconcile floor, and the poll when no live hint stream exists.
+ * The reconcile floor whenever the hint stream cannot be relied on: no stream,
+ * one shown not to deliver (`hintsUsable`, the hint budget spent), or one being
+ * reopened — and while the conversation is moving (`OBSERVE_HOT_MS`) or a turn
+ * reads busy, whatever the stream's state.
  *
  * Five seconds is chosen against the operator, not against the box: it is
  * inside the window in which somebody who has just been told "the agent is
@@ -147,6 +155,34 @@ export const OBSERVE_WINDOW = 200;
  * exists so that a gateway which drops a broadcast cannot strand a transcript.
  */
 export const OBSERVE_POLL_MS = 5_000;
+
+/**
+ * The reconcile floor while a hint stream is open and has proven itself, the
+ * conversation is idle, and no turn reads busy.
+ *
+ * Every read is not free on the laptop's side: it passes the listen check,
+ * resolves the canonical session over the gateway's socket and pages two hundred
+ * rows over HTTPS. At five seconds, a handful of pinned conversations that
+ * nobody is typing into cost tens of thousands of reads a day, every one of
+ * them answered by a hint stream that would have said so had anything moved.
+ * So while that stream is healthy the floor exists only for the broadcast the
+ * gateway drops, and a minute bounds how long such a drop can strand an idle
+ * transcript. A hint still wakes the loop at once, whatever the floor.
+ */
+export const OBSERVE_HINTED_POLL_MS = 60_000;
+
+/**
+ * How long after the last sign of activity the short floor is kept even with a
+ * healthy hint stream: a hint naming this conversation, a read that found new
+ * messages, or a rollover.
+ *
+ * A dropped broadcast matters most while a conversation is moving — the reply
+ * after the one just seen, the next tool result — and a send from this laptop
+ * shows up here as exactly that activity, so this is also the "just after a
+ * send" window. A minute covers the gap between the rows of one exchange
+ * without holding an idle conversation on five seconds for long.
+ */
+export const OBSERVE_HOT_MS = 60_000;
 
 /**
  * The retry budget: five attempts, `1s, 2s, 4s, 8s, 16s`, capped at 30s.
@@ -339,6 +375,10 @@ export interface ChatObserveDeps {
   /** Injected so a test asserts the backoff instead of waiting for it. */
   sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
   pollMs?: number | undefined;
+  /** The long floor; see `OBSERVE_HINTED_POLL_MS`. */
+  hintedPollMs?: number | undefined;
+  /** The activity window that keeps the short floor; see `OBSERVE_HOT_MS`. */
+  hotMs?: number | undefined;
   reconnect?:
     | { attempts?: number | undefined; baseMs?: number | undefined; maxMs?: number | undefined }
     | undefined;
@@ -432,6 +472,11 @@ interface Subscription {
   nulls: number;
   /** When the last probe started, on `deps.clock`; null before the first. */
   probedAt: number | null;
+  /**
+   * When the conversation last showed activity (a hint, new messages, a
+   * rollover), on `deps.clock`; null before any. See `OBSERVE_HOT_MS`.
+   */
+  activeAt: number | null;
 }
 
 type BusyEvent = Extract<ChatObserveEvent, { type: "busy" }>;
@@ -626,6 +671,8 @@ function reason(error: unknown): { code: string; message: string } {
 export function createChatObservation(deps: ChatObserveDeps) {
   const sleep = deps.sleep ?? abortableSleep;
   const pollMs = deps.pollMs ?? OBSERVE_POLL_MS;
+  const hintedPollMs = deps.hintedPollMs ?? OBSERVE_HINTED_POLL_MS;
+  const hotMs = deps.hotMs ?? OBSERVE_HOT_MS;
   const attempts = deps.reconnect?.attempts ?? OBSERVE_RECONNECT_ATTEMPTS;
   const baseMs = deps.reconnect?.baseMs ?? OBSERVE_RECONNECT_BASE_MS;
   const maxMs = deps.reconnect?.maxMs ?? OBSERVE_RECONNECT_MAX_MS;
@@ -707,6 +754,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
     sub.window = window;
     // The held busy answer was about the session this read rolled away from.
     if (rolled) sub.busy = null;
+    if (rolled || fresh.length > 0) sub.activeAt = clock();
     if (whole) {
       emit(sub, {
         type: "snapshot",
@@ -808,6 +856,24 @@ export function createChatObservation(deps: ChatObserveDeps) {
   }
 
   /**
+   * The poll floor for the next wait: `hintedPollMs` only while the hint stream
+   * is open and not being reopened after an end, the last busy probe did not
+   * read `true` and the first one is not still out, and nothing has happened in
+   * the last `hotMs`. Anything else is `pollMs`. A first probe still out counts
+   * as busy: its answer lands after this wait has started, and a turn found
+   * running at attach must not then sit out a whole minute. Later probes go
+   * out after a change (which is activity anyway) or by the clock after `null`,
+   * and the latter is exactly the gateway that must not hold the short floor.
+   * See `OBSERVE_HINTED_POLL_MS`.
+   */
+  function floorMs(sub: Subscription, hintsHealthy: boolean): number {
+    if (!hintsHealthy || sub.probed === true) return pollMs;
+    if (sub.probing && sub.probed === undefined) return pollMs;
+    if (sub.activeAt !== null && clock() - sub.activeAt < hotMs) return pollMs;
+    return Math.max(pollMs, hintedPollMs);
+  }
+
+  /**
    * Wait for the next reason to reconcile: a hint, the poll floor, the hint
    * stream ending, or the caller hanging up.
    *
@@ -815,7 +881,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
    * observation that ticks every five seconds for an hour would otherwise pin
    * seven hundred dead listeners to a signal the caller still holds.
    */
-  async function wake(hints: HintChannel | null, signal: AbortSignal): Promise<Wake> {
+  async function wake(hints: HintChannel | null, signal: AbortSignal, floor: number): Promise<Wake> {
     if (signal.aborted) return { kind: "aborted" };
     const races: Promise<Wake>[] = [];
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -823,7 +889,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
     if (hints !== null) races.push(hints.pull());
     races.push(
       new Promise<Wake>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: "tick" }), pollMs);
+        timer = setTimeout(() => resolve({ kind: "tick" }), floor);
         timer.unref?.();
       }),
     );
@@ -987,7 +1053,11 @@ export function createChatObservation(deps: ChatObserveDeps) {
         await sleep(delay, signal);
         continue;
       }
-      const next = await wake(hints, signal);
+      // `hintAttempt` is non-zero from a stream ending until its replacement
+      // survives a wait, so a stream being reopened keeps the short floor. A
+      // first stream counts as healthy at once: one that closes on open ends
+      // this wait immediately anyway, whatever the floor.
+      const next = await wake(hints, signal, floorMs(sub, hints !== null && hintAttempt === 0));
       if (next.kind === "aborted" || signal.aborted) break;
       if (next.kind !== "ended") {
         // A hint, or a whole poll interval with the stream still open, is the
@@ -997,6 +1067,12 @@ export function createChatObservation(deps: ChatObserveDeps) {
         const hint = next.kind === "hint" ? next.hint : undefined;
         if (next.kind === "hint")
           tapObserve(deps.devtap?.() ?? null, tapKey(sub.target), "hint", hint ?? {}, "in");
+        // Only a hint about this conversation is activity. A gateway also
+        // broadcasts box-wide changes with no session (another bot's sessions,
+        // cron, pairing), and those must not hold every watch on the box on
+        // the short floor; the read they wake still marks real arrivals.
+        if (hint?.subagent || (hint?.session != null && sessionsOfInterest(sub).includes(hint.session)))
+          sub.activeAt = clock();
         if (hint?.subagent) {
           emit(sub, {
             type: "subagent",
@@ -1084,6 +1160,7 @@ export function createChatObservation(deps: ChatObserveDeps) {
         owed: false,
         nulls: 0,
         probedAt: null,
+        activeAt: null,
       };
       subscriptions.set(key, sub);
       void run(sub);

@@ -38,16 +38,7 @@
  * the case where the box never wrote one — and keeping it *in* `messages` would
  * be the merge the risk register forbids. It is neither.
  */
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { TargetScopeContext } from "./chat-target-scope.tsx";
 import { chatForTarget } from "./chat-target-chat.ts";
@@ -78,8 +69,15 @@ export type { Observation, ObserveState } from "./chat-conversations.ts";
 import type { Destination, RailFilter, RailScope } from "./chat-logic.ts";
 import { useListeningIfAvailable } from "../state/listening-state.tsx";
 import { useNotifyIfAvailable } from "../state/notify-state.tsx";
-import { isVisible, onReturnVisible, RETURN_READ_MIN_AGE_MS } from "../lib/visibility.ts";
+import {
+  isPageActive,
+  isVisible,
+  onReturnVisible,
+  RETURN_READ_MIN_AGE_MS,
+  subscribePageActive,
+} from "../lib/visibility.ts";
 import type { Chat, ChatApi, ChatSelection, ChatTiming } from "./chat-types.ts";
+import { ChatContext, ChatStoreProvider } from "./chat-select.tsx";
 export type { Chat, ChatApi, ChatSelection, ChatTiming } from "./chat-types.ts";
 
 /** How often the relative timestamps in the rail are recomputed. */
@@ -169,7 +167,7 @@ const LIVE_API: ChatApi = {
   resumeObservation,
 };
 
-export const ChatContext = createContext<Chat | null>(null);
+export { ChatContext };
 
 /* ── frame assembly ──────────────────────────────────────────────────────── */
 
@@ -431,17 +429,33 @@ export function ChatProvider({
   const [swarmsLoading, setSwarmsLoading] = useState(false);
   const [swarmsError, setSwarmsError] = useState<string | null>(null);
   const [scope, setScope] = useState<RailScope>({ kind: "all" });
-  const [filter, setFilter] = useState<RailFilter>("unread");
+  const [filter, setFilter] = useState<RailFilter>("all");
   const [query, setQuery] = useState("");
   /** `doctor`'s reading of this machine's own tailscale, once it has been asked. */
   const [localTailnet, setLocalTailnet] = useState<{ ok: boolean; detail: string } | null>(null);
   /** How many roster reads have completed, so the probe can re-examine an outage. */
   const [rosterReads, setRosterReads] = useState(0);
   /** Whether this tab is the one on screen; the roster tick is suspended when not. */
-  const [visible, setVisible] = useState(() => !document.hidden);
+  const [visible, setVisible] = useState(() => isVisible());
   const [now, setNow] = useState(() => clock());
 
-  useEffect(() => armInterval(() => setNow(clockRef.current()), CLOCK_MS), [armInterval]);
+  // The clock only drives relative times on screen, and every tick re-renders
+  // whatever reads it, so it sits out a page nobody is looking at (inactive:
+  // hidden, or not the window in front — `lib/visibility.ts`) and catches up
+  // the moment the page is back rather than waiting out the interval.
+  useEffect(() => {
+    const tick = (): void => setNow(clockRef.current());
+    const stopTicking = armInterval(() => {
+      if (isPageActive()) tick();
+    }, CLOCK_MS);
+    const stopWatching = subscribePageActive((active) => {
+      if (active) tick();
+    });
+    return () => {
+      stopWatching();
+      stopTicking();
+    };
+  }, [armInterval]);
 
   /**
    * Every roster read, whoever asked for it, goes through one visibility gate.
@@ -1152,7 +1166,9 @@ export function ChatProvider({
     <TargetScopeContext.Provider
       value={{ chat: targetChat, ensure: conversations.ensure, showThread: showScopedThread }}
     >
-      <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
+      <ChatContext.Provider value={value}>
+        <ChatStoreProvider value={value}>{children}</ChatStoreProvider>
+      </ChatContext.Provider>
     </TargetScopeContext.Provider>
   );
 }

@@ -26,6 +26,7 @@ import { countdown, shortSha } from "../../chat/file-request-logic.ts";
 import { saveErrorText, useFileSave } from "../../chat/use-file-save.ts";
 import { isOff } from "../../logic/format.ts";
 import { isStalePlan } from "../../logic/destroy-plan.ts";
+import { usePageActive } from "../../lib/visibility.ts";
 import { filesServiceUp, useFileRequestsIfAvailable } from "../../state/file-requests-state.tsx";
 import {
   ageLabel,
@@ -47,15 +48,19 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 const COUNTDOWN_TICK_MS = 1000;
 const AGE_TICK_MS = 30_000;
 
-/** A clock ticking every `intervalMs`, or not at all when `null`. */
+/**
+ * A clock ticking every `intervalMs`, or not at all when `null` — nor while the
+ * window is not in front (`usePageActive`); a return catches it up.
+ */
 function useNow(intervalMs: number | null): number {
   const [now, setNow] = useState(() => Date.now());
+  const active = usePageActive();
   useEffect(() => {
-    if (intervalMs === null) return;
+    if (intervalMs === null || !active) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(timer);
-  }, [intervalMs]);
+  }, [intervalMs, active]);
   return now;
 }
 

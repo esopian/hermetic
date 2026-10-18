@@ -89,6 +89,7 @@ import { parse, reasonOf, redactSwarm, sealed, unreachableSwarm } from "./chat-s
 import { createChatSend } from "./chat-send.ts";
 import { createChatObserveWiring } from "./chat-observe-wiring.ts";
 import type { TapSource } from "./devtap.ts";
+import { createObserveAddressCache } from "./chat-observe-address.ts";
 
 export { createDeltaGate, stableCut } from "./chat-gate.ts";
 export type { DeltaGate } from "./chat-gate.ts";
@@ -269,6 +270,14 @@ export interface ChatDeps {
    */
   observeTuning?: {
     pollMs?: number | undefined;
+    /** The long floor while a hint stream is healthy (`OBSERVE_HINTED_POLL_MS`). */
+    hintedPollMs?: number | undefined;
+    /** How long an observation trusts a passed fleet guard (`OBSERVE_GUARD_TTL_MS`). */
+    guardTtlMs?: number | undefined;
+    /** How long an observation trusts an instance's address (`OBSERVE_ADDRESS_TTL_MS`). */
+    addressTtlMs?: number | undefined;
+    /** Monotonic milliseconds for the address TTL and the poll floor. */
+    clock?: (() => number) | undefined;
     sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
     reconnect?:
       | { attempts?: number | undefined; baseMs?: number | undefined; maxMs?: number | undefined }
@@ -449,7 +458,11 @@ export function createChat(deps: ChatDeps) {
    * work and reaches a box nobody is watching.
    */
   async function address(instance: string): Promise<BoxAddress> {
-    const { fleet } = await guardFleet();
+    return await locate((await guardFleet()).fleet, instance);
+  }
+
+  /** `address` after the guard: the listen check, the row, the URL. */
+  async function locate(fleet: FleetItem, instance: string): Promise<BoxAddress> {
     requireListening(fleet.fleet_id, instance);
     const agent = await getAgent(instance);
     requireListening(fleet.fleet_id, instance);
@@ -644,11 +657,17 @@ export function createChat(deps: ChatDeps) {
    * here could detect. A cache, if one is ever wanted, is a head's performance
    * decision and is allowed to be wrong.
    */
-  async function history(input: unknown, opts: ChatOptions = {}): Promise<ChatHistoryResult> {
+  async function history(
+    input: unknown,
+    opts: ChatOptions = {},
+    // The observation passes its cached lookup (`chat-observe-address.ts`);
+    // every other caller gets the fully guarded one.
+    resolve: (instance: string) => Promise<BoxAddress> = address,
+  ): Promise<ChatHistoryResult> {
     const parsed = parse(ChatHistoryInput, input, "chat log");
     validateName(parsed.instance);
     const view = mask();
-    const box = await address(parsed.instance);
+    const box = await resolve(parsed.instance);
     opts.signal?.throwIfAborted();
     const conversation = hermes.conversation
       ? await hermes.conversation(box, parsed.bot, {
@@ -765,7 +784,22 @@ export function createChat(deps: ChatDeps) {
     return { instance: parsed.instance, bot: parsed.bot, status };
   }
 
-  const observation = createChatObserveWiring({ deps, hermes, address, history, now, mask });
+  const observation = createChatObserveWiring({
+    deps,
+    hermes,
+    addresses: createObserveAddressCache({
+      guard: async () => (await guardFleet()).fleet,
+      locate,
+      requireListening,
+      fleet: deps.fleet,
+      guardTtlMs: deps.observeTuning?.guardTtlMs,
+      addressTtlMs: deps.observeTuning?.addressTtlMs,
+      clock: deps.observeTuning?.clock,
+    }),
+    history,
+    now,
+    mask,
+  });
 
   /**
    * The four reads are sealed on the way out (`redactError`); `send` is not,

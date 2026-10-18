@@ -18,7 +18,10 @@ import { BotRail } from "../src/chat/components/BotRail.tsx";
 import { NotifyProvider } from "../src/state/notify-state.tsx";
 import type { NotifyApi } from "../src/state/notify-state.tsx";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 function chatRow(id: string, ref: string): NotificationView {
   return {
@@ -171,26 +174,37 @@ function botRail(props: Partial<Parameters<typeof BotRail>[0]> = {}) {
   );
 }
 
-/** BotRail opens on Unread; a test that wants the whole roster presses All, as an operator would. */
+/** BotRail opens on All; a test that wants the whole roster presses All anyway, as an operator would. */
 function showAll() {
   fireEvent.click(screen.getByRole("button", { name: "All" }));
 }
 
-test("the bot rail opens on Unread, which hides a bot and a room with nothing new", () => {
+test("the bot rail opens on All and keeps the filter the operator last chose", () => {
   botRail();
+  expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("Pun Corner")).toBeTruthy();
+  expect(screen.getByText("the default bot")).toBeTruthy();
 
-  expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("true");
-  expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Unread" }));
   expect(screen.queryByText("Pun Corner")).toBeNull();
   expect(screen.queryByText("the default bot")).toBeNull();
 
+  // Leaving the chat view unmounts the rail; coming back must not reset the choice.
+  cleanup();
+  botRail();
+  expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.queryByText("Pun Corner")).toBeNull();
+
   showAll();
+  cleanup();
+  botRail();
+  expect(screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByText("Pun Corner")).toBeTruthy();
-  expect(screen.getByText("the default bot")).toBeTruthy();
 });
 
 test("under Unread the open bot and the open room stay listed with nothing new", () => {
   botRail({ selection: { instance: "veronica", bot: "default", session: null } });
+  fireEvent.click(screen.getByRole("button", { name: "Unread" }));
   expect(screen.getByRole("button", { name: "Unread" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByText("the default bot")).toBeTruthy();
   expect(screen.queryByText("Pun Corner")).toBeNull();

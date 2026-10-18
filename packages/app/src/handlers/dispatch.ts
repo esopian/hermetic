@@ -24,6 +24,7 @@ import { fleetHandlers } from "./fleet.ts";
 import { initHandlers } from "./init.ts";
 import { lifecycleHandlers } from "./lifecycle.ts";
 import { metaHandlers } from "./meta.ts";
+import { mobileHandlers } from "./mobile.ts";
 import { opHandlers } from "./ops.ts";
 import { planHandlers } from "./plans.ts";
 import { providerHandlers } from "./providers.ts";
@@ -66,6 +67,7 @@ export const HANDLERS: Readonly<Record<string, Handler>> = Object.freeze(
     ...initHandlers,
     ...lifecycleHandlers,
     ...metaHandlers,
+    ...mobileHandlers,
     ...opHandlers,
     ...planHandlers,
     ...providerHandlers,

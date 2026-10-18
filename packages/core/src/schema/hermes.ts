@@ -26,6 +26,8 @@ export {
   HERMES_GATEWAY_DROPIN,
   HERMES_NOFILE_LIMIT,
 } from "../shared/hermes.ts";
+export { hermesConfigLeaves, hermesOwnedDrift } from "../shared/hermes-owned.ts";
+export type { OwnedKeyDrift } from "../shared/hermes-owned.ts";
 
 /**
  * What Hermes itself is configured with, as opposed to what hermetic builds
@@ -59,10 +61,20 @@ export {
  * what moves it. The rule is one sentence — **hermetic manages what it was
  * told to manage** — and `HermesHold` is the one place it is told.
  *
- * The model is the exception. A profile-bound agent's model is managed whether
- * or not anyone said so (§8.3): a profile exists to answer which model its
- * credential runs, and an agent that drifted off it on the box would make that
- * answer a suggestion. `splitHermesSettings` carries the rest of the rule.
+ * The model follows the same rule. It used to be the exception: a
+ * profile-bound agent's model was managed whether or not anyone said so, and
+ * that locked every agent out of its own `model.default`. The profile's model
+ * is where an agent *starts*, and an agent that picks a different model for its
+ * own work is ordinary, not drift (§8.3). It is now seeded and re-asserted when
+ * the stated answer changes (a profile refresh, `agent set --model`), and
+ * `--hold model` is how an operator pins it. `splitHermesSettings` carries the
+ * rest of the rule.
+ *
+ * What hermetic holds is also what it watches. The leaves of the managed file
+ * are the agent's *owned keys* (`hermesOwnedKeys`), recorded in its manifest.
+ * The heartbeat reports when the box's managed file stops saying what was
+ * rendered for one of them, and says nothing about any key hermetic did not set
+ * (§6.4).
  */
 
 /**
@@ -143,12 +155,12 @@ export type HermesSettings = z.infer<typeof HermesSettings>;
 /**
  * The settings an operator can ask hermetic to hold (`--hold`, §6.4).
  *
- * Not every `HermesSettings` key. `model` is held on every profile-bound agent
- * already, so naming it would be a flag that does nothing. `approvals_mode` is
- * seed-only by design (`SEED_ONLY`): holding it would make the mode
- * un-flippable on the box in both directions at once.
+ * Every `HermesSettings` key but one. `approvals_mode` is seed-only by design
+ * (`SEED_ONLY`): holding it would make the mode un-flippable on the box in both
+ * directions at once. `model` is holdable like the rest: the profile's model is
+ * the agent's starting value, and `--hold model` is what pins it.
  */
-export const HoldableSetting = z.enum(["terminal_backend", "max_turns", "reasoning_effort"]);
+export const HoldableSetting = z.enum(["model", "terminal_backend", "max_turns", "reasoning_effort"]);
 export type HoldableSetting = z.infer<typeof HoldableSetting>;
 
 /**
@@ -253,9 +265,11 @@ const SEED_ONLY = new Set<keyof HermesSettings>(["approvals_mode"]);
  *   rule would hand settings their operators asked hermetic to hold to the box
  *   without anyone asking; `agent set --hold` is how one moves over.
  *
- * `model` is managed whenever it is stated, under both rules: every
- * profile-bound agent states it (`create-agent.ts`), and a profile's model is
- * held by design (§8.3). `SEED_ONLY` names the keys seeded whatever is said.
+ * `model` follows the same two rules as every other key. Every profile-bound
+ * agent states it (`create-agent.ts`), so under the list rule it is seeded and
+ * re-asserted on change unless `hold` names it, and under the absent-list rule
+ * it stays managed, as it always was. `SEED_ONLY` names the keys seeded
+ * whatever is said.
  *
  * `seedDefaults` is the fleet's own answers as they stood when this agent was
  * created (`Agent.seed`, resolved by `resolveCreateDefaults`). It fills unstated
@@ -284,7 +298,7 @@ export function splitHermesSettings(
   const seed: HermesSettings = {};
   const held = (key: keyof HermesSettings): boolean => {
     if (SEED_ONLY.has(key)) return false;
-    if (key === "model" || hold === null || hold === undefined) return stated[key] !== undefined;
+    if (hold === null || hold === undefined) return stated[key] !== undefined;
     return (hold as readonly string[]).includes(key);
   };
   for (const key of Object.keys(full) as Array<keyof Required<HermesSettings>>) {

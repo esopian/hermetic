@@ -17,6 +17,7 @@
  * is actually lost; throwing away the visible half would only make that harder
  * to believe.
  */
+import { memo, use } from "react";
 import type { TurnActivity } from "../chat-activity.ts";
 import { botLabel } from "../chat-presentation.ts";
 import { ActivityGroup, isActivity, isStatusBlock, needsAttention } from "./Activity.tsx";
@@ -24,7 +25,8 @@ import { RedactedText } from "./RedactedText.tsx";
 import { closedRequests, keepsCard, nextExpiry, openRequests } from "../chat-requests.ts";
 import type { ClosedRequest } from "../chat-requests.ts";
 import { useWakeAt } from "../use-wake-at.ts";
-import { useChatIfAvailable } from "../chat-state.tsx";
+import { ClockContext, ReleasedContext } from "../chat-clock.tsx";
+import { renderProbe } from "../render-probe.ts";
 import type { ChatBlockView, ChatMessageView } from "../../api/index.ts";
 import { fmtClock } from "../../logic/format.ts";
 import { FailureCard, failureOf } from "./FailureCard.tsx";
@@ -79,6 +81,26 @@ function requestClosed(
     : undefined;
 }
 
+/**
+ * Whether `blocks` hold a request card still waiting on the operator, as far as
+ * the blocks alone can tell: carrying an id, not closed by a notice, not yet
+ * expired. Only such a message reads the transcript clock and the `released`
+ * set (`chat-clock.tsx`), so only it re-renders when either moves.
+ */
+function asksNow(
+  blocks: readonly ChatBlockView[],
+  closed: ReadonlyMap<string, ClosedRequest>,
+): boolean {
+  const wall = Date.now();
+  return blocks.some(
+    (block) =>
+      (block.kind === "approval" || block.kind === "question") &&
+      !!block.request_id &&
+      !closed.has(block.request_id) &&
+      !(block.expires_at && Date.parse(block.expires_at) <= wall),
+  );
+}
+
 /** A text block's words; empty for any other kind. */
 function markdownOf(block: ChatBlockView | undefined): string {
   return block?.kind === "text" ? block.markdown : "";
@@ -106,7 +128,13 @@ function sectionSignal(blocks: readonly ChatBlockView[]): string {
   return `${text}/${marks.join(",")}`;
 }
 
-export function Message({
+/**
+ * Memoized, and every prop a primitive or a reference that holds while its
+ * content does (`Thread` keeps unchanged rows by identity): an unchanged turn
+ * does not re-render when another one streams, a row is appended, a reconcile
+ * delivers the same rows again, the roster refreshes or the clock ticks.
+ */
+export const Message = memo(function Message({
   row,
   fleetId,
   instance,
@@ -114,7 +142,6 @@ export function Message({
   bot,
   botTitle,
   status,
-  now,
   /** The turn is still arriving, so the last prose block gets a caret. */
   streaming = false,
   activity = streaming ? "streaming" : "idle",
@@ -136,13 +163,13 @@ export function Message({
   bot: string;
   botTitle?: string | null;
   status: "ready" | "degraded" | "error" | "stopped" | "destroyed" | "pending";
-  now: number;
   streaming?: boolean;
   activity?: TurnActivity;
   inReply?: string | null;
   remoteBusy?: boolean | null;
 }) {
   const { message, continuation } = row;
+  renderProbe.hit?.("Message", message.id);
   const dm = useBotDm();
   // Every source id this article stands for. A `#message=` link names the row
   // the box wrote, which may now be in the middle of a merged turn, so the
@@ -171,10 +198,13 @@ export function Message({
   // their own card (`released`), and which are still open at this moment. The
   // transcript clock ticks every 30 s; expiry is read against the real one, and
   // a timer re-renders at the earliest open expiry so "waiting" ends on time.
-  const released = useChatIfAvailable()?.released;
-  const clock = Math.max(now, Date.now());
+  // Only a message with a request still open reads the clock and `released`
+  // (`use` may be conditional), so the tick passes every other message by.
   const closed = closedRequests(message.blocks);
-  const open = openRequests(message.blocks, closed, released, clock);
+  const asks = asksNow(message.blocks, closed);
+  const released = asks ? use(ReleasedContext) : null;
+  const clock = Math.max((asks ? use(ClockContext) : null) ?? 0, Date.now());
+  const open = asks ? openRequests(message.blocks, closed, released, clock) : [];
   useWakeAt(nextExpiry(open, clock));
   if (message.blocks.length === 0 && !broken && !message.usage) return null;
   const blocks = message.blocks.filter(
@@ -399,7 +429,7 @@ export function Message({
                 ) : (
                   <Block
                     block={section.blocks[0]!}
-                    now={requestCard(section.blocks[0]) ? clock : now}
+                    now={requestCard(section.blocks[0]) ? clock : undefined}
                     streaming={streaming && activity === "streaming" && index === sections.length - 1}
                     mine={mine}
                     closed={requestClosed(section.blocks[0], closed)}
@@ -439,4 +469,4 @@ export function Message({
       </div>
     </article>
   );
-}
+});

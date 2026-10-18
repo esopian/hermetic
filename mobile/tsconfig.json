@@ -1,0 +1,21 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["jest", "node"],
+    // Core's doors, the same four `metro.config.js` resolves and Jest's `moduleNameMapper` maps.
+    "paths": {
+      "@hermetic/core/schema": ["../packages/core/src/schema/index.ts"],
+      "@hermetic/core/shared": ["../packages/core/src/shared/index.ts"],
+      "@hermetic/core/chat-client": ["../packages/core/src/chat-client.ts"],
+      "@hermetic/core/chat-client-fixture": ["../packages/core/src/chat-client-fixture.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+}
