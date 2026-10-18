@@ -1,0 +1,123 @@
+---
+/*
+ * Landing section "On your phone": the iPhone companion in one sheet, a replica of its home screen
+ * beside four short points, linking to /mobile/. Claims cite docs/design.md §9.4.
+ */
+import Phone from "../mobile/Phone.astro";
+import SheetHead from "./SheetHead.astro";
+
+interface Props {
+  num: string;
+}
+
+const { num } = Astro.props;
+---
+<section class="ms" id="e-mobile">
+  <SheetHead num={num} kicker="On your phone" note="iPhone companion" title="Your agents, away from the desk">
+    {/* design.md §9.4: the phone reaches each box over the tailnet; the laptop only shows the pairing QR */}
+    <p>The iPhone app talks to each box over your tailnet. Your laptop only shows the code that pairs it.</p>
+  </SheetHead>
+  <div class="wrap">
+    <div class="ms-in">
+      <div class="ms-ph">
+        <Phone screen="chat" label="Replica of an iPhone conversation stopped on an approval card with Approve once, This session, Always allow and Deny." />
+      </div>
+      <div class="ms-pts">
+        {/* design.md §9.4 (the desktop's chat adapter through @hermetic/core/chat-client) */}
+        <div><b>01</b><h3>Chat with any bot</h3><p>Every bot on every box you listen to, on one home screen, with the desktop's own chat underneath.</p></div>
+        {/* design.md §9.4 (approvals and questions mean what they mean in §9.2) */}
+        <div><b>02</b><h3>Answer when it waits</h3><p>Approve a command or answer a question from the conversation, with the choices the desktop offers.</p></div>
+        {/* design.md §9.4 "Push" (hermeticd's watcher on the box; previews opt-in) */}
+        <div><b>03</b><h3>Pushes from the box</h3><p>The agent's own box sends the push, so nothing on your laptop has to be running. Previews stay off until you turn them on.</p></div>
+        {/* design.md §9.4 "Security" (no credential on the phone or in the QR; revoke by removing it from the tailnet) */}
+        <div><b>04</b><h3>No keys on the phone</h3><p>The phone gets in by being on your tailnet. Remove it from the tailnet to cut it off.</p></div>
+        <a href="/mobile/">The iPhone app →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .ms {
+    border-bottom: 3px solid var(--fg);
+  }
+  .ms-in {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    border: 2px solid var(--fg);
+    margin-bottom: 56px;
+  }
+  .ms-ph {
+    padding: 36px 44px;
+    border-right: 1px solid var(--line);
+    display: flex;
+    justify-content: center;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .ms-pts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 1fr auto;
+    gap: 1px;
+    background: var(--line);
+  }
+  .ms-pts > div {
+    background: var(--bg);
+    padding: 28px 24px;
+  }
+  .ms-pts b {
+    font: 700 12px var(--mono);
+    color: var(--acc);
+  }
+  .ms-pts h3 {
+    font-weight: 900;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    text-transform: uppercase;
+    margin: 14px 0 10px;
+  }
+  .ms-pts p {
+    color: var(--fg2);
+    font-size: 15px;
+  }
+  .ms-pts a {
+    grid-column: 1 / -1;
+    background: var(--bg);
+    padding: 18px 24px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+  }
+  .ms-pts a:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  @media (max-width: 1080px) {
+    .ms-in {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .ms-ph {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+  }
+  @media (max-width: 640px) {
+    .ms-ph {
+      padding: 28px 16px;
+    }
+    .ms-pts {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .ms-pts > div {
+      padding: 22px 16px;
+    }
+    .ms-in {
+      margin-bottom: 40px;
+    }
+  }
+</style>

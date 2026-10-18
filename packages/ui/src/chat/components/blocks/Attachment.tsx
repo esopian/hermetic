@@ -13,12 +13,17 @@ import type { ChatBlockOf } from "../../../api/index.ts";
 import { fmtBytes, safeHref, safeImageSrc } from "../../chat-logic.ts";
 import { attachmentDelivery } from "../../chat-attachments.ts";
 import type { AttachmentDelivery } from "../../chat-attachments.ts";
-import { useChatIfAvailable } from "../../chat-state.tsx";
+import { useChatSelect } from "../../chat-select.tsx";
+import type { Chat } from "../../chat-types.ts";
 import { useThumbnail } from "../../thumbnails.ts";
 import { useFleetIfAvailable } from "../../../state/state.tsx";
 import { fleetIdOf } from "../../../api/index.ts";
 import { ShareAttachment } from "./ShareCard.tsx";
 import { typeTag } from "../../file-type-tag.ts";
+import { renderProbe } from "../../render-probe.ts";
+
+/** The selected box, the one slice of the chat store a chip reads (`chat-select.tsx`). */
+const selectedInstance = (chat: Chat | null): string | null => chat?.selection?.instance ?? null;
 
 /**
  * A file that went through the files service: `href` is a path on the box,
@@ -42,7 +47,8 @@ function StagedAttachment({
 }) {
   // The thread's own box, as the message row names it; the selection only
   // for a caller that names none.
-  const selected = useChatIfAvailable()?.selection?.instance ?? null;
+  renderProbe.hit?.("Attachment", file_id);
+  const selected = useChatSelect(selectedInstance);
   const instance = own ?? selected;
   const current = fleetIdOf(useFleetIfAvailable()?.meta);
   const fleet = ownFleet ?? current ?? "";

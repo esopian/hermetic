@@ -31,12 +31,29 @@ const KNOWN_SEVERITIES = new Set(["info", "low", "moderate", "high", "critical"]
 /**
  * Advisories waived, as `--ignore` arguments (GHSA or advisory ID).
  *
- * Empty, and kept that way by preference: an entry needs the advisory ID, the
- * package, why it does not apply here, and who is watching it, written beside
- * it. When there are two of these, move them to a reviewed file with an
- * expiry.
+ * Empty by preference: an entry needs the advisory ID, the package, why it
+ * does not apply here, and who is watching it, written beside it. When there
+ * are more than a handful, move them to a reviewed file with an expiry.
+ *
+ * `--ignore` applies to every scan target (root, site, mobile), so an entry
+ * waives that advisory everywhere; say which tree it was granted for.
  */
-export const IGNORED_ADVISORIES: string[] = [];
+export const IGNORED_ADVISORIES: string[] = [
+  // GHSA-vfj7-8cjw-p6xm — braces <= 3.0.3 (stack exhaustion on deeply nested
+  // brace patterns). Tree: mobile/, via jest -> micromatch -> braces and
+  // metro/expo-cli globbing. Dev tooling only: never in the app bundle, and the
+  // patterns are our own globs, not attacker input. No patched release exists
+  // (3.0.3 is the latest on npm), so an override cannot fix it.
+  // Owner: mobile. Review by 2026-12-01, or when braces ships a fix.
+  "GHSA-vfj7-8cjw-p6xm",
+  // GHSA-86w9-cpqp-85rv — node-forge <= 1.4.0 (RSA PKCS#1 v1.5 signature
+  // verification accepts extra DigestAlgorithm elements). Tree: mobile/, via
+  // @expo/cli and @expo/code-signing-certificates. Runs on the developer's
+  // machine in the Expo CLI (dev-server code signing); not shipped in the app
+  // bundle. No patched release exists (1.4.0 is the latest on npm).
+  // Owner: mobile. Review by 2026-12-01, or when node-forge ships a fix.
+  "GHSA-86w9-cpqp-85rv",
+];
 
 /**
  * How long the scanner gets before the run counts as an infrastructure failure.
@@ -137,6 +154,7 @@ export function classify(run: AuditRun): Verdict {
   }
 
   const findings: Finding[] = [];
+  let waived = 0;
   for (const [pkg, advisories] of Object.entries(parsed)) {
     if (!Array.isArray(advisories)) {
       return { kind: "broken", reason: `scanner report for "${pkg}" is not a list of advisories` };
@@ -144,6 +162,15 @@ export function classify(run: AuditRun): Verdict {
     for (const advisory of advisories) {
       if (!isRecord(advisory)) {
         return { kind: "broken", reason: `scanner report for "${pkg}" holds a non-advisory entry` };
+      }
+      // `bun audit --json` prints an ignored advisory anyway (verified against
+      // 1.3.10 and 1.4.3; only the text report honours `--ignore`), so the
+      // waiver list is applied here too.
+      const url = str(advisory["url"], "");
+      const advisoryId = str(advisory["id"] === undefined ? undefined : String(advisory["id"]), "");
+      if (IGNORED_ADVISORIES.some((id) => advisoryId === id || url.endsWith(`/${id}`))) {
+        waived += 1;
+        continue;
       }
       findings.push({
         package: pkg,
@@ -162,7 +189,9 @@ export function classify(run: AuditRun): Verdict {
   );
 
   if (findings.length === 0) {
-    if (run.exitCode !== 0) {
+    // Everything the scanner reported was waived: its exit code says 1 for
+    // advisories we have chosen to accept, which is not a scan failure.
+    if (run.exitCode !== 0 && waived === 0) {
       return {
         kind: "broken",
         reason: `scanner exited ${run.exitCode} with an empty report: ${tail(run.stderr)}`,
@@ -263,6 +292,14 @@ if (import.meta.main) {
   const siteDir = join(root, "site");
   if (existsSync(join(siteDir, "bun.lock"))) {
     targets.push({ cwd: siteDir, label: "site" });
+  }
+
+  // `mobile/` is the same shape and gets the same gate: the Expo phone app has
+  // its own `bun.lock` and ships to a device, so an advisory in its tree must
+  // not pass because the root install never resolves it.
+  const mobileDir = join(root, "mobile");
+  if (existsSync(join(mobileDir, "bun.lock"))) {
+    targets.push({ cwd: mobileDir, label: "mobile" });
   }
 
   let worstExit = 0;

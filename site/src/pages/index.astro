@@ -2,8 +2,8 @@
 /*
  * The landing page: the blueprint of one sealed agent and its zoom-out story (Blueprint), a
  * replayable zero-to-agent session in the CLI or the app (ZeroToAgent), five app screens
- * (AppTour), the sizes (PowerStrip) and the closing call to action. Sections live in
- * src/components/landing/.
+ * (AppTour), the sizes (PowerStrip), the iPhone companion (MobileStrip) and the closing call to
+ * action. Sections live in src/components/landing/.
  */
 import EnvStrip from "../components/EnvStrip.astro";
 import Footer from "../components/Footer.astro";
@@ -11,6 +11,7 @@ import Header from "../components/Header.astro";
 import AppTour from "../components/landing/AppTour.astro";
 import Blueprint from "../components/landing/Blueprint.astro";
 import Closing from "../components/landing/Closing.astro";
+import MobileStrip from "../components/landing/MobileStrip.astro";
 import PowerStrip from "../components/landing/PowerStrip.astro";
 import ZeroToAgent from "../components/landing/ZeroToAgent.astro";
 import Marketing from "../layouts/Marketing.astro";
@@ -26,6 +27,7 @@ import Marketing from "../layouts/Marketing.astro";
     <ZeroToAgent num="04" />
     <AppTour num="05" />
     <PowerStrip num="06" />
+    <MobileStrip num="07" />
     <Closing />
   </main>
   <Footer />

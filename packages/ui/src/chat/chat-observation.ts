@@ -30,6 +30,7 @@ import {
 } from "./chat-conversation-record.ts";
 import type { Conversation, Failure, ObserveState } from "./chat-conversation-record.ts";
 import { observeSubagent, reapplySubagents, takeSubagents } from "./chat-subagents.ts";
+import { reuseMessages } from "./chat-message-identity.ts";
 import { mergeAttachments } from "./chat-attachments.ts";
 import { noteBusy } from "./chat-remote-busy.ts";
 
@@ -305,6 +306,10 @@ export function useObservation({
           // not lost: the copy the retired session keeps holds it. Anything
           // adopted from a merged-away record was typed into *this* session and
           // is still pending in it.
+          // Rows equal to the ones already held are kept as those objects
+          // (`reuseMessages`, after the children are placed back below), so a
+          // snapshot that repeats the transcript re-renders none of it.
+          const held = record.messages;
           record.messages = [
             ...messages,
             ...stillPending(retiredSession ? adopted : [...record.messages, ...adopted], messages),
@@ -317,6 +322,7 @@ export function useObservation({
             record.dropped = false;
           }
           reapplySubagents(record);
+          record.messages = reuseMessages(held, record.messages);
           break;
         }
         case "message": {

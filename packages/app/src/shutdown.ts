@@ -127,7 +127,18 @@ export async function shutdown(target: ShutdownTarget, signal: string): Promise<
     // stay up.
   }
   // `true`: close active connections too, which is what ends the SSE streams.
-  await target.server.stop(true);
+  try {
+    await target.server.stop(true);
+  } finally {
+    /**
+     * Last, so the lines the teardown above logged are in the file before the
+     * caller exits. A flush that fails is the log's own business
+     * (`log-writer.ts` goes quiet); it must not turn a clean stop into a failure.
+     * `process.on("exit")` (`installLogCrashFlush`) is the backstop for a path
+     * that exits without coming through here.
+     */
+    await target.log?.flush().catch(() => {});
+  }
 }
 
 export interface InstallShutdownOptions {

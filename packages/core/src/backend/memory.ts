@@ -58,6 +58,7 @@ import {
 } from "./fixture/memory-fixture.ts";
 import { createMemoryCompute } from "./memory-compute.ts";
 import { MemoryFiles } from "./fixture/memory-files.ts";
+import { FIXTURE_NO_FILES_AGENT } from "./fixture/fixture-files-box.ts";
 import { FILES_CAPABILITY } from "../shared/files.ts";
 import { createMemoryFoundation } from "./memory-foundation.ts";
 import { tailscaleReformat } from "./memory-simulation.ts";
@@ -933,11 +934,9 @@ export { FLEET_KEY };
 export { E2E_FILE_DIGEST, E2E_FILE_TOO_LARGE, MemoryFiles } from "./fixture/memory-files.ts";
 export type { MemoryFileEntry } from "./fixture/memory-files.ts";
 
-/**
- * The one fixture agent whose hermeticd reports no `files` capability: `ember`,
- * which the fixture seeds on hermeticd 0.4.0, from before the files service.
- */
-export const FIXTURE_NO_FILES_AGENT = "ember";
+// The one fixture agent whose hermeticd reports no `files` capability (`ember`).
+// Defined beside the phone's fixture files box, which answers the same way.
+export { FIXTURE_NO_FILES_AGENT };
 
 /**
  * The fixture data, re-exported so this module stays the one door every test

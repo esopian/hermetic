@@ -43,5 +43,6 @@ export * from "./fixture.ts";
 export * from "./presets.ts";
 export * from "./tombstone.ts";
 export * from "./terminal.ts";
+export * from "./mobile.ts";
 export * from "./files.ts";
 export * from "./files-requests.ts";

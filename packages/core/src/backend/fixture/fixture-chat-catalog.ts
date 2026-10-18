@@ -10,7 +10,11 @@
 import { HERMES_HOME } from "../../shared/hermes.ts";
 import type { ChatMessage } from "../../schema/index.ts";
 import { at } from "./fixture-chat-roster.ts";
-import { FIXTURE_CHAT_FILES, fixtureAttachmentBlock } from "./fixture-chat-files.ts";
+import {
+  FIXTURE_CHAT_FILES,
+  FIXTURE_CHAT_SCREENSHOT,
+  fixtureAttachmentBlock,
+} from "./fixture-chat-files.ts";
 import { storedUsage, usage } from "./fixture-chat-usage.ts";
 import {
   AUDITOR_DM_ROWS,
@@ -40,15 +44,11 @@ export const md = (...lines: string[]): string => lines.join("\n");
 const CITED = md(
   "Short answer: the cache is not the bottleneck, the volume is.",
   "",
-  "A gp3 volume ships 125 MB/s of throughput until somebody provisions more [1],",
-  "and this one never was. The write cache's queue depth sits at four for the",
-  "whole sample, which is what a queue looks like when it is waiting on the",
-  "device rather than on the application [2].",
+  "A gp3 volume ships 125 MB/s of throughput until somebody provisions more [1], and this one never was. The write cache's queue depth sits at four for the whole sample, which is what a queue looks like when it is waiting on the device rather than on the application [2].",
 );
 
 const FENCED = md(
-  "Here is the change I would make. It provisions throughput on the volume and",
-  "leaves the cache alone:",
+  "Here is the change I would make. It provisions throughput on the volume and leaves the cache alone:",
   "",
   "```bash",
   "aws ec2 modify-volume \\",
@@ -85,26 +85,21 @@ export const SOURCES = [
  * A streaming renderer is the one part of this view that cannot be checked
  * against a still: the delta gate in `../chat.ts` holds back a partial secret
  * pattern, the browser has to keep the scroll pinned while text lands, and both
- * of those need more than a sentence to show anything. So this is four
+ * of those need more than a sentence to show anything. So this is three
  * paragraphs, and `chunk` below cuts it at fixed widths that land mid-word on
  * purpose — upstream splits on tokens, not on spaces, and a fixture that only
  * ever split on spaces would let a renderer that re-joins with a space pass.
+ *
+ * Each paragraph is one line, as a model writes it: the renderer keeps a lone
+ * newline as a `<br>`, so hard-wrapping prose here would draw ragged mid-sentence
+ * breaks in any narrow column.
  */
 export const FIXTURE_CHAT_REPLY = md(
-  "Right - I can see the box from here. The gateway is up, the data volume is",
-  "mounted at /data, and the agent's own log has nothing in it since the last",
-  "restart, which is the first good sign.",
+  "Right - I can see the box from here. The gateway is up, the data volume is mounted at /data, and the agent's own log has nothing in it since the last restart, which is the first good sign.",
   "",
-  "I pulled the last hour of metrics before answering, because the interesting",
-  "question is not whether the box is busy but whether it is busy waiting. It",
-  "is: CPU sits under forty percent for the whole window while the device queue",
-  "never drops below four. That is a volume that has run out of throughput, not",
-  "a process that has run out of CPU.",
+  "I pulled the last hour of metrics before answering, because the interesting question is not whether the box is busy but whether it is busy waiting. It is: CPU sits under forty percent for the whole window while the device queue never drops below four. That is a volume that has run out of throughput, not a process that has run out of CPU.",
   "",
-  "The fix is a live resize of the volume - no detach, no reboot, and the agent",
-  "keeps its session. I have written it out above. If you would rather I did not",
-  "touch anything in the account from here, say so and I will hand you the",
-  "command instead of running it.",
+  "The fix is a live resize of the volume - no detach, no reboot, and the agent keeps its session. I have written it out above. If you would rather I did not touch anything in the account from here, say so and I will hand you the command instead of running it.",
 );
 
 /* ── the transcripts ──────────────────────────────────────────────────────── */
@@ -326,8 +321,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
             "  --throughput 500 \\",
             "  --iops 6000",
             "",
-            "Live resize. No detach, no reboot, and the change is billed from the",
-            "moment it applies.",
+            "Live resize. No detach, no reboot, and the change is billed from the moment it applies.",
           ),
           expires_at: at("09:32:02"),
         },
@@ -368,8 +362,11 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           name: "browser.screenshot",
           server: "playwright",
           args: { url: "https://grafana.fixture.invalid/d/ebs/granite", width: 1280, height: 720 },
+          // `file_id` names the bytes on the box (the phone's fixture box
+          // serves them); `href` is the portal path the desktop draws from.
           result: {
             href: "/api/chat/attachments/fixture/granite-grafana.png",
+            file_id: FIXTURE_CHAT_SCREENSHOT.id,
             width: 1280,
             height: 720,
           },
@@ -384,7 +381,12 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
           name: "image.generate",
           server: "pencil",
           args: { prompt: "queue depth over time, one line, no legend" },
-          result: { href: "/api/chat/attachments/fixture/queue-depth.png", width: 1024, height: 1024 },
+          result: {
+            href: "/api/chat/attachments/fixture/queue-depth.png",
+            file_id: FIXTURE_CHAT_FILES.queueDepth.id,
+            width: 1024,
+            height: 1024,
+          },
           // Warn rather than ok: it produced an image and then told us the
           // palette it was asked for was not available. A tool that half worked
           // is the status nobody seeds and every renderer has to draw.

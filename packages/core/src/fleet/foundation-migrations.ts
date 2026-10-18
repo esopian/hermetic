@@ -653,6 +653,23 @@ export const FOUNDATION_MIGRATIONS: ReadonlyArray<FoundationMigration> = [
      * nothing to back-fill and the entry carries no hooks.
      */
   },
+  {
+    version: 17,
+    describe: "grant agents a read-only Scan of the agents table, for the phone's fleet view",
+    /**
+     * §9.4: hermeticd serves `GET /fleet` to a paired phone, which holds no
+     * AWS credential and so cannot read DynamoDB itself. The template half is
+     * one new statement in the agent role, `FleetList` — `dynamodb:Scan` on
+     * the agents table only. The role could already read every row there by
+     * key; this lets it list them.
+     *
+     * No hooks: no remote or local state moves. The stack update is the
+     * migration, and a box running an older hermeticd simply holds a grant it
+     * does not use. A fleet still below v17 is not broken either — its boxes
+     * answer `GET /fleet` with `FLEET_LIST_UNAVAILABLE` and the phone keeps its
+     * pairing snapshot — so nothing on the laptop refuses on its behalf.
+     */
+  },
 ];
 
 /**

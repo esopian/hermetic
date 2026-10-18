@@ -14,8 +14,10 @@
 # Below the markers, a short list of exact test values from before the
 # markers were the rule, each still in history: an empty `NOUS_API_KEY=` line,
 # the fixture fleet's avatar seed key, the redaction tests' made-up token and
-# Bitwarden access token, and the account guard's fake AWS key id. Each is
-# anchored to the whole value, so nothing else slips through with it.
+# Bitwarden access token, the account guard's fake AWS key id, and the mobile
+# app's preferences storage-slot name (`hermetic.prefs.v1`, once held in a
+# constant named `KEY`, which the generic-api-key rule read as a credential).
+# Each is anchored to the whole value, so nothing else slips through with it.
 #
 # One commit is excused whole: e32afb6 added `looksLikeKeyMaterial`'s tests,
 # whose PEM header strings on two adjacent lines read as one private key. The
@@ -36,5 +38,6 @@ regexes = [
   '''^Xk7Qp2LmRt9VbNc4ZfWyJh6Ds1Ag8Ue5Ko3Ii0Pq$''',
   '''^0\.4b1c2d3e-1111-2222-3333-444455556666\.YWJjZGVmZ2hpamts-bW5vcHFy_c3R1dnd4eXo=$''',
   '''^AKIAENVOVERRIDE0+$''',
+  '''^hermetic\.prefs\.v1$''',
 ]
 commits = ["e32afb6591cf94bb37e9db6eeca8b93ccca5dfbe"]

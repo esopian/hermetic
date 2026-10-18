@@ -1,0 +1,68 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  // mobile/ is its own toolchain (like site/): the root biome.jsonc excludes it, and this file
+  // mirrors the root's formatter settings so code reads the same on both sides of the seam.
+  "root": true,
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!.expo",
+      "!ios",
+      "!android",
+      "!**/bun.lock",
+      "!**/*.md",
+      // Byte-identical copy of packages/ui/src/chat/chat-markdown.ts (seam-tested). Formatting it
+      // here would break the identity the root test asserts; the root formatter owns its shape.
+      "!src/client/markdown.ts"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 104,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false,
+      "quoteProperties": "asNeeded"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": { "useLiteralKeys": "off" },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "useExhaustiveDependencies": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noAssignInExpressions": "off",
+        "noArrayIndexKey": "off",
+        "noTemplateCurlyInString": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useTemplate": "off"
+      }
+    }
+  },
+  "assist": { "enabled": false }
+}

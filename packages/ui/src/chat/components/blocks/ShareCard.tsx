@@ -15,7 +15,8 @@
 import { FILES_TTL, isImageMime, isShareId } from "@hermetic/core/shared";
 import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
 import { fmtBytes, safeImageSrc } from "../../chat-logic.ts";
-import { useChatIfAvailable } from "../../chat-state.tsx";
+import { useChatSelect } from "../../chat-select.tsx";
+import type { Chat } from "../../chat-types.ts";
 import { saveErrorText, useFileSave } from "../../use-file-save.ts";
 import type { FileSaveState } from "../../use-file-save.ts";
 import { useSharePreview } from "../../use-share-preview.ts";
@@ -23,6 +24,10 @@ import { RedactedText, plainText } from "../RedactedText.tsx";
 import { typeTag } from "../../file-type-tag.ts";
 import { ToolBlock, resultText, subjectOf } from "./Tool.tsx";
 import "./ShareCard.css";
+import { renderProbe } from "../../render-probe.ts";
+
+/** The selected box, the one slice of the chat store a card reads (`chat-select.tsx`). */
+const selectedInstance = (chat: Chat | null): string | null => chat?.selection?.instance ?? null;
 
 /** What a card draws: a `share_file` result, or an outbox chip's facts. */
 export interface ShareFacts {
@@ -79,9 +84,10 @@ function saveLine(state: FileSaveState): { text: string; tone: "ok" | "bad" | "m
 }
 
 export function ShareCard({ share, instance: own }: { share: ShareFacts; instance?: string }) {
+  renderProbe.hit?.("ShareCard", share.id);
   // The thread's own box, as the message row names it; the selection only
   // for a caller that names none.
-  const selected = useChatIfAvailable()?.selection?.instance ?? null;
+  const selected = useChatSelect(selectedInstance);
   const instance = own ?? selected;
   const mime = typeof share.mime === "string" ? share.mime : "";
   const image = isImageMime(mime);

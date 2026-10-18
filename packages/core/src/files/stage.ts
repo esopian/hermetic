@@ -13,6 +13,7 @@ import {
 } from "../schema/index.ts";
 import {
   FILES_LIMITS,
+  formatBytes,
   isImageMime,
   looksLikeKeyMaterial,
   sanitizeFileName,
@@ -21,6 +22,8 @@ import {
 import { validateName } from "../shared/naming.ts";
 import { peekHead } from "./stream-source.ts";
 import type { UploadRegistry } from "./uploads.ts";
+
+export { formatBytes };
 
 /**
  * `files.stage` (§9): one file from this laptop to an agent's stage
@@ -52,13 +55,6 @@ type Resolved =
   | { kind: "stream"; name: string; size: number; body: AsyncIterable<Uint8Array>; upload_id: string };
 
 const READ_CHUNK = 1024 * 1024;
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 function parseInput(input: unknown): FilesStageInput {
   const result = FilesStageInput.safeParse(input);

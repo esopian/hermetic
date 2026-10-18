@@ -1,0 +1,49 @@
+{
+  "cli": {
+    "version": ">= 24.14.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development",
+      "bun": "1.4.3"
+    },
+    "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "developmentClient": false,
+      "env": {
+        "EXPO_PUBLIC_HERMETIC_FIXTURE": "0"
+      },
+      "ios": {
+        "buildConfiguration": "Release"
+      },
+      "bun": "1.4.3"
+    },
+    "production": {
+      "autoIncrement": true,
+      "environment": "production",
+      "developmentClient": false,
+      "env": {
+        "EXPO_PUBLIC_HERMETIC_FIXTURE": "0"
+      },
+      "ios": {
+        "buildConfiguration": "Release"
+      },
+      "distribution": "store",
+      "bun": "1.4.3"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appName": "Hermetic",
+        "ascAppId": "6823667364",
+        "bundleIdentifier": "com.hermetic.mobile",
+        "groups": ["Hermetic Internal"]
+      }
+    }
+  }
+}

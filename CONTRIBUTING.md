@@ -201,7 +201,7 @@ PR.
 green before you push. GitHub Actions runs the same scripts, one per job
 (`.github/workflows/ci.yml`: `typecheck`, `test`, `lint:biome`, `lint`, `lint:cfn`, `lint:sh`,
 `build`, `audit:dependencies`), so a red check names the step that failed and the slow jobs do not
-queue behind the fast ones. CI also runs three things `bun run ci` does not:
+queue behind the fast ones. CI also runs four things `bun run ci` does not:
 
 - The `test` job is a matrix over the two shards in `scripts/test-shard.ts` — `cli`
   (`packages/cli`, which spawns a real process per test) and `non-cli` (everything else) — run as
@@ -221,6 +221,18 @@ queue behind the fast ones. CI also runs three things `bun run ci` does not:
 - The `app` job builds the desktop app on a `macos-14` runner with `bun run app:build:canary`, then
   lists `packages/app/artifacts`. It proves the app still builds; nothing it produces is published.
   Locally: `bun run app:build:canary`.
+- The `mobile` job checks the phone app: `bun install --frozen-lockfile` and `bun run check` in
+  `mobile/` (typecheck, Jest, Biome), then `npx expo export --platform ios` to prove the Metro bundle
+  builds, on an ubuntu runner (no iOS binary is built or signed). It always reports, like `site`, and
+  does the work only when a PR touches `mobile/`, `packages/core/src/chat/`,
+  `packages/core/src/chat-client*`, `packages/core/src/schema/`, `packages/core/src/shared/`,
+  `packages/core/package.json` (the exports map the phone resolves) or
+  `packages/ui/src/chat/chat-markdown.ts` (the file the phone copies byte for byte); a push to
+  `master` always runs it. It installs the root workspace first, because Metro resolves
+  `../packages/core` and the root `node_modules/zod`. The root seam tests that guard the phone's
+  edges, `tests/mobile-link-seam.test.ts`, `tests/mobile-box-seams.test.ts` and
+  `tests/mobile-gateway-e2e.test.ts`, run in `test`.
+  Locally: `bun run mobile:check`.
 
 The `ci` job aggregates the rest into a single green/red check for branch protection, and it fails
 unless *every* job it needs reported `success` — skipped, cancelled and missing all count as failure
@@ -267,6 +279,10 @@ bun run dev:fixture                # the app against the fixture backend
 bun run dev:wizard                 # fixture backend, forced init wizard
 bun run dev:hmr                    # any of the three with `:hmr`: Vite serves the page, UI hot-reloads
 bun run app:cdp <command>          # scripts/app-cdp.ts: drive the running dev app over DevTools (CEF)
+bun run site:dev | site:build | site:check | site:deploy   # cd site && bun run <dev|build|check|deploy>
+bun run mobile:check               # cd mobile && bun run check: typecheck + jest + biome (needs `bun install` there)
+bun run mobile:test                # cd mobile && bun run test: jest only
+bun run mobile:ios                 # cd mobile && bun run ios: dev client in the iOS simulator
 ```
 
 Narrower than any script: `bun test packages/core` (or `cli`, `app`, `ui`, `agentd`), or a single
@@ -321,6 +337,79 @@ workflows default to `permissions: contents: read`, and `.github/dependabot.yml`
 updates weekly. `tests/ci-contract.test.ts` enforces all of that, plus the agreement between the
 workflow's jobs, the `ci` aggregate's `needs`, and `EXPECTED_JOBS` in `scripts/ci-results.ts` — so
 adding a CI job without requiring it fails the suite rather than quietly widening the gap.
+
+## Phone app
+
+`mobile/` is the Expo phone app. It talks to the fleet directly over the tailnet: chat through the
+Hermes gateway on each box (core's own adapter, imported through `@hermetic/core/chat-client`), the
+fleet list and push-token registration through hermeticd on port 7434, push from hermeticd's watcher
+on the box. Your laptop only renders the pairing QR; nothing on it listens for a phone. It is not a
+root workspace (like `site/`): its own `package.json`, `bun.lock`, Jest and Biome, and root
+`bun run check` and `bun run ci` never touch it. It may import `@hermetic/core/schema`, `/shared`
+and `/chat-client`, never a relative path into `packages/`. `mobile/README.md` has the layout and
+`mobile/AGENTS.md` the conventions; the design is design.md §9.4. None of this is needed for the
+desktop app, the CLI or a green `bun run ci`.
+
+Prerequisites, only to run the app in the iOS simulator:
+
+- macOS with **Xcode** (the full app, not only the command line tools) and an iOS simulator runtime
+  installed from Xcode → Settings → Components.
+- **CocoaPods** (`brew install cocoapods`): the first `bun run ios` generates `mobile/ios/` and runs
+  `pod install`. `ios/` is generated and git-ignored. Run root tests with the bun pinned in
+  `.bun-version`: bun 1.3 mis-scans the generated `mobile/ios/Pods` tree (thousands of header
+  symlinks) during `bun test` discovery and every spawn-based test then sees empty output.
+- Node, which Expo's CLI runs on, alongside Bun.
+
+```
+bun install                  # at the repo root first: Metro resolves ../packages/core and root zod
+cd mobile && bun install     # once; the phone has its own lockfile
+bun run ios                  # expo run:ios: builds a dev client, opens the simulator
+bun run check                # typecheck + jest + biome; what the `mobile` CI job runs
+bun run export:ios           # expo export: proves the Metro bundle builds
+```
+
+From the repo root, `bun run mobile:ios`, `mobile:test` and `mobile:check` do the same. The app
+uses native modules (camera, notifications, secure store, webview), so it needs a development build,
+not Expo Go.
+
+**Run against the fixture.** No AWS, no tailnet and no laptop process: the phone builds
+`fixtureChatClient` in process, with a canned fleet, a canned Tailscale status and an in-memory push
+registry.
+
+```
+cd mobile && EXPO_PUBLIC_HERMETIC_FIXTURE=1 bun run ios
+```
+
+**Use it on a real fleet.** The phone needs the Tailscale app signed into the fleet's tailnet. On the
+laptop, run `bun run cli -- mobile pair` (or open **Settings → Pair a phone** in the desktop app) and
+scan the QR from the phone's pairing screen, or paste the `hermetic://fleet?v=2&…` link; the simulator
+has no camera, so paste. The link names the fleet and an agent snapshot and carries no secret, so
+there is nothing to revoke on the laptop: removing the phone from the tailnet cuts it off. The
+tailnet policy (§5.2) already admits it. `hermetic mobile pair --fixture` prints a link for the
+fixture fleet.
+
+Two fleet-side pieces ship with hermeticd and the foundation, and a fleet that predates them needs
+them rolled out: `hermetic artifacts push`, then `hermetic agent recreate <name>` for each agent (a
+new hermeticd serves `GET /fleet`, `POST /push/devices` and the push watcher), and `hermetic
+foundation update` (foundation 16 grants the agent role `dynamodb:Scan` on the agents table, which
+`GET /fleet` reads). Until then the phone shows its QR snapshot and has no push.
+
+**Push needs an EAS project id.** No Expo or EAS account is configured for this repo, and nothing
+here creates one. Remote push needs a project id at build time, from `EXPO_PUBLIC_PROJECT_ID`, or
+`EAS_PROJECT_ID`, which EAS sets itself (`mobile/app.config.ts` copies it into `extra.eas`):
+
+```
+EXPO_PUBLIC_PROJECT_ID=<your-eas-project-uuid> bun run ios
+```
+
+Without it the app still pairs and chats, and alerts locally while it holds its socket; Settings
+says push is unavailable. The box talks to Expo itself (`exp.host`, from hermeticd), so a box needs
+internet egress, and tests and the fixture never reach Expo: the sender is injected.
+
+**Tailscale status on the phone is a heuristic.** iOS offers no API to ask the Tailscale app, so the
+Bots screen probes `https://<host>/api/health` on up to three listened boxes and reads the failure:
+DNS failure everywhere means Tailscale is off or signed out, timeouts mean the tailnet is up but no
+box answers.
 
 ## Formatting and hooks
 

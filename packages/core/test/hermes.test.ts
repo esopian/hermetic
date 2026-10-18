@@ -133,8 +133,18 @@ describe("splitHermesSettings", () => {
       expect(seed).not.toHaveProperty("reasoning_effort");
     });
 
-    test("a stated model is managed whatever the list says", () => {
-      const { managed } = splitHermesSettings({ model: "stated-model" }, "catalog-model", null, []);
+    /** The model is a starting value like the rest (#53): seeded unless held. */
+    test("a stated model is seeded unless the list holds it", () => {
+      const free = splitHermesSettings({ model: "stated-model" }, "catalog-model", null, []);
+      expect(free.managed).toEqual({});
+      expect(free.seed.model).toBe("stated-model");
+      const held = splitHermesSettings({ model: "stated-model" }, "catalog-model", null, ["model"]);
+      expect(held.managed).toEqual({ model: "stated-model" });
+      expect(held.seed).not.toHaveProperty("model");
+    });
+
+    test("an absent list still manages a stated model, as before", () => {
+      const { managed } = splitHermesSettings({ model: "stated-model" }, "catalog-model");
       expect(managed).toEqual({ model: "stated-model" });
     });
 

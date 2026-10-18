@@ -14,7 +14,18 @@
  * `tskey-<kind>-<keyID>-<secret>`, and Bitwarden machine tokens end in a
  * base64url payload that itself contains `-` and `_`.
  */
-export const SECRET_SHAPES: ReadonlyArray<{ label: string; re: RegExp }> = [
+export const SECRET_SHAPES: ReadonlyArray<{ label: string; re: RegExp; replacement?: string }> = [
+  /**
+   * An Expo push token (§9.4): whoever holds one can push to that phone. It is
+   * kept recognisable — the log still says a push token was there — and its
+   * inner part goes. First, so the high-entropy rule below never gets to
+   * half-redact the bracketed part on its own.
+   */
+  {
+    label: "expo push token",
+    re: /\bExpo(?:nent)?PushToken\[[^\]]+\]/,
+    replacement: "ExponentPushToken[…]",
+  },
   { label: "tailscale auth key", re: /\btskey-[a-z]+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/ },
   { label: "bitwarden access token", re: /\b0\.[0-9a-f-]{36}\.[A-Za-z0-9+/=_-]{20,}/ },
   { label: "aws access key id", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
@@ -84,10 +95,10 @@ export function looksSecret(value: string): boolean {
 /** Replace any secret-shaped substring, keeping the rest of the token readable. */
 export function redactValue(value: string): string {
   let out = value;
-  for (const { re } of SECRET_SHAPES) {
+  for (const { re, replacement } of SECRET_SHAPES) {
     out = out.replace(
       new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"),
-      REDACTED,
+      replacement ?? REDACTED,
     );
   }
   return out;

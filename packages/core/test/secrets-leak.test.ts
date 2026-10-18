@@ -32,6 +32,7 @@ import { FLEET_KEY } from "../src/schema/index.ts";
 import { migrate } from "../src/local/db/index.ts";
 import { SqliteNotificationStore } from "../src/local/db/notifications.ts";
 import { notifyTerminalEvent } from "../src/chat/terminal-notifications.ts";
+import { openHermetic } from "../src/index.ts";
 
 /**
  * §4.8: these walk `init --create`, so the account they describe has no fleets
@@ -82,12 +83,18 @@ const FIXTURE_SLUGS: readonly string[] = [
   ),
 ].sort();
 
+/** An Expo push token whose inner part is not a `FIXTURE` sentinel. */
+const EXPO_PUSH_TOKEN_LEAK = /Expo(?:nent)?PushToken\[(?!FIXTURE)/;
+
 function assertClean(haystack: string) {
   for (const secret of SECRETS) {
     expect(haystack).not.toInclude(secret);
   }
   // Nor any tailscale key at all, whatever its value.
   expect(haystack).not.toMatch(/tskey-[A-Za-z0-9-]+/);
+  // Nor any Expo push token but a fixture's (§9.4): whoever holds one can push
+  // to that phone, and the only ones a test may carry are `…[FIXTURE…]`.
+  expect(haystack).not.toMatch(EXPO_PUSH_TOKEN_LEAK);
 }
 
 /**
@@ -120,6 +127,13 @@ function fleetWithSharedProfile(): MemoryBackend {
 }
 
 describe("secrets never leak", () => {
+  test("the sentinel rule: an Expo push token fails the suite unless it is a FIXTURE", () => {
+    expect(() => assertClean("ExponentPushToken[FIXTURE-phone]")).not.toThrow();
+    expect(() => assertClean("ExpoPushToken[FIXTURE-phone]")).not.toThrow();
+    expect(() => assertClean("sent to ExponentPushToken[xAbC123dEfG456]")).toThrow();
+    expect(() => assertClean("sent to ExpoPushToken[xAbC123dEfG456]")).toThrow();
+  });
+
   test("a full create of a bitwarden agent leaks nothing", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
     const hermetic = testHermetic({ backend, config: FIXTURE_CONFIG });
@@ -1032,6 +1046,19 @@ describe("terminal rows never carry a secret", () => {
     expect(dump).toContain("command finished · exit 0");
     expect(dump).not.toContain("FIXTURE");
     for (const secret of SECRETS) expect(dump).not.toContain(secret);
+  });
+});
+
+describe("the phone's pairing link carries no secret", () => {
+  test("mobile.pair: neither the link nor the result holds a fixture secret", async () => {
+    const h = await openHermetic({
+      fixture: true,
+      home: mkdtempSync(join(tmpdir(), "hermetic-mobile-leak-")),
+    });
+    const paired = await h.mobile.pair({});
+    expect(paired.agents.length).toBeGreaterThan(0);
+    assertClean(paired.link);
+    assertClean(JSON.stringify(paired));
   });
 });
 

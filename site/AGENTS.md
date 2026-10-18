@@ -87,6 +87,7 @@ and not committed. The CLI reference (`reference/cli.mdx`) is generated the same
   up front ("Play in CLI" / "Play in App") and switchable mid-run without losing its place.
 - `AppTour.astro`: five app screens, each with its CLI equivalent.
 - `PowerStrip.astro`: the size ladder from `src/data/cost.ts`, linking to `/cost/`.
+- `MobileStrip.astro`: the iPhone companion in one sheet, linking to `/mobile/`.
 - `Closing.astro`, and `SheetHead.astro` for the drawing-title-block section heads.
 
 Motion: every animation has a static frame. Under `prefers-reduced-motion`, on phones (640px and
@@ -141,6 +142,15 @@ GiB-month, a public IPv4 address per month and the default disk sizes, all us-ea
 prices that core also carries. `tests/site-cost.test.ts` at the repo root compares the two and
 fails on drift, so a price or size change in core lands here in the same change. The page never
 calls a pricing API and says so; the bill is whatever AWS says it is.
+
+## iPhone page
+
+`/mobile/` (`src/pages/mobile.astro`) presents the iPhone companion (`mobile/`, `docs/design.md`
+§9.4): what it does, how it reaches the boxes, pairing, and what it leaves to the desktop and the
+CLI. Its screens are HTML replicas in `src/components/mobile/Phone.astro`, shared with the
+landing's `MobileStrip`. The replica keeps the phone app's round avatars, bubbles and buttons
+inside its screen area; the frame around it is square like the rest of the site. When §9.4 or the
+phone's screens change, re-check the page, the replica and the support table.
 
 ## Link previews
 

@@ -87,6 +87,7 @@ import {
 } from "./fixture-chat-file-request.ts";
 import { fixtureFileShareScript, type FixtureShareFiles } from "./fixture-chat-file-share.ts";
 import { fixtureErrorScript } from "./fixture-chat-error.ts";
+import { fixtureDemoTurn } from "./fixture-chat-demo.ts";
 import { createFixtureTurnRow } from "./fixture-chat-fold.ts";
 import { createFixtureSubagents, settleFixtureSubagents } from "./fixture-chat-subagent.ts";
 import { processEventSentence } from "../../shared/process-event.ts";
@@ -592,12 +593,15 @@ export function fixtureChatClient(opts: FixtureChatOptions = {}): HermesChatClie
         const failing = fixtureErrorScript(text, () => Date.now() / 1000);
         const asking = files ? fixtureFileRequestScript(text) : null;
         const sharing = files?.share ? fixtureFileShareScript(text) : null;
+        const demo = fixtureDemoTurn(text);
         const log =
           clarify || approval || failing || asking || sharing
             ? []
             : attached.length > 0
               ? [...attachmentTurn(id, attached)]
-              : [...turn(id)];
+              : demo
+                ? demo(id)
+                : [...turn(id)];
         /** The fixture's stand-in for `session.events.since`: everything past a cursor. */
         const eventsSince = (lastSeen: number): SequencedFrame[] =>
           log.filter((frame) => frame.seq > lastSeen);

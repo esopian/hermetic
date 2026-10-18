@@ -18,6 +18,7 @@ import {
   CHAT_INTERVAL_MS,
   FleetPoller,
   getPoller,
+  heartbeatPrint,
   POLL_INTERVAL_MS,
   type FleetEvent,
   type PollerHooks,
@@ -74,6 +75,20 @@ describe("the agent fingerprint", () => {
     // row it was computed from.
     const sent = seen.find((e) => e.type === "agent" && e.agent.name === moved[0]!);
     expect(sent).toMatchObject({ agent: { update_available: true } });
+  });
+
+  /**
+   * `heartbeat_age_ms` is `now - last_heartbeat`, different on every scan. In
+   * the fingerprint raw, it upserted every agent to every page once a minute
+   * for nothing; it is fingerprinted at the resolution the page draws it.
+   */
+  test("a heartbeat age moves the fingerprint only when its rendering would", () => {
+    expect(heartbeatPrint(null)).toBe("null");
+    expect(heartbeatPrint(0)).toBe(heartbeatPrint(59_999));
+    expect(heartbeatPrint(12_000)).toBe(heartbeatPrint(41_000));
+    expect(heartbeatPrint(60_000)).not.toBe(heartbeatPrint(59_999));
+    expect(heartbeatPrint(60_000)).toBe(heartbeatPrint(119_999));
+    expect(heartbeatPrint(120_000)).not.toBe(heartbeatPrint(119_999));
   });
 
   test("a rotation that reaches nothing emits nothing", async () => {

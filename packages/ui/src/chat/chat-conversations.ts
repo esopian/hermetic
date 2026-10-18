@@ -27,6 +27,7 @@ import {
 import type { Assemble, Conversation, Failure } from "./chat-conversation-record.ts";
 import { frameContext, usageContext } from "./context-usage.ts";
 import { noteSubagentFrame, reapplySubagents } from "./chat-subagents.ts";
+import { reuseMessages } from "./chat-message-identity.ts";
 import { useSubagentControls } from "./chat-subagent-control.ts";
 import { useObservation } from "./chat-observation.ts";
 import {
@@ -350,6 +351,10 @@ export function useConversations(
             },
           ];
         }
+        // Kept as the objects already held wherever a row is unchanged
+        // (`reuseMessages`, once the children are placed back below): a re-read
+        // that says what the transcript already said re-renders none of it.
+        const held = record.messages;
         record.messages = absorbEarly(record, result.messages);
         noteRows(record, record.messages);
         noteContext(record, usageContext(result.usage, asked));
@@ -372,6 +377,7 @@ export function useConversations(
         // After the live message is retired, never before: a child placed on a
         // live message the read then drops would be lost with it.
         reapplySubagents(record);
+        record.messages = reuseMessages(held, record.messages);
         return true;
       } catch (error) {
         if (!stale()) record.historyError = error instanceof Error ? error.message : String(error);

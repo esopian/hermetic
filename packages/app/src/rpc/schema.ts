@@ -47,6 +47,7 @@ import type * as fleet from "../handlers/fleet.ts";
 import type * as init from "../handlers/init.ts";
 import type * as lifecycle from "../handlers/lifecycle.ts";
 import type * as meta from "../handlers/meta.ts";
+import type * as mobile from "../handlers/mobile.ts";
 import type * as ops from "../handlers/ops.ts";
 import type * as plans from "../handlers/plans.ts";
 import type * as providers from "../handlers/providers.ts";
@@ -114,6 +115,7 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof init.initHandlers &
   typeof lifecycle.lifecycleHandlers &
   typeof meta.metaHandlers &
+  typeof mobile.mobileHandlers &
   typeof ops.opHandlers &
   typeof plans.planHandlers &
   typeof providers.providerHandlers &

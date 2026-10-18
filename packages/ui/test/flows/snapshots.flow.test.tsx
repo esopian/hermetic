@@ -90,8 +90,14 @@ test("a retention change sends only the retention", async () => {
   expect(within(drawer).queryByRole("checkbox")).toBeNull();
 });
 
-test("a fleet behind this build cannot open the editor, and says why", async () => {
+test("a stack from before the snapshot parameters cannot open the editor, and says why", async () => {
+  // `staging` is one version behind this build, which is no longer behind the
+  // snapshot policy (v16): take the three parameters off its stack, as a stack
+  // created on an older template never had them.
   harness = await flowHarness({ fleet: "staging" });
+  for (const k of ["SnapshotsEnabled", "SnapshotRetainCount", "SnapshotIntervalHours"]) {
+    delete harness.backend().stack?.parameters[k];
+  }
   gotoHash("#settings/foundation");
   mountPortal();
   const block = await screen.findByTestId("snapshots-block");

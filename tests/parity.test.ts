@@ -171,6 +171,8 @@ const SURFACE: Record<PublicMethod, string> = {
   // outgoing message at all. It writes nothing — that is the property the whole
   // design rests on, and `chat watch` is named for it.
   "chat.observe": "chat watch",
+  // The phone companion's pairing link: a read of the fleet, no secret in it.
+  "mobile.pair": "mobile pair",
   // Composer attachments: one file to an agent's stage area. A stream like `chat`, not an op.
   "files.stage": "files stage",
   // Answering an agent's file or secret request, and saying no to one.

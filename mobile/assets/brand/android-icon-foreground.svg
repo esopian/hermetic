@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><title>Hermetic fleet mark</title><g transform="translate(256 256) scale(2.327272727272727)">
+  <title>Hermetic fleet mark</title>
+  <rect x="0" y="0" width="60" height="60" rx="4" fill="#ff5a1f"/>
+  <rect x="80" y="0" width="60" height="60" rx="4" fill="#f1efe9"/>
+  <rect x="160" y="0" width="60" height="60" rx="4" fill="#ff5a1f"/>
+  <rect x="0" y="80" width="60" height="60" rx="4" fill="#ff5a1f"/>
+  <path d="M84 80h14v23h24V80h14a4 4 0 0 1 4 4v52a4 4 0 0 1-4 4h-14v-23H98v23H84a4 4 0 0 1-4-4V84a4 4 0 0 1 4-4Z" fill="#ff5a1f"/>
+  <rect x="160" y="80" width="60" height="60" rx="4" fill="#ff5a1f"/>
+  <rect x="0" y="160" width="60" height="60" rx="4" fill="#ff5a1f"/>
+  <rect x="80" y="160" width="60" height="60" rx="4" fill="#f1efe9"/>
+  <rect x="160" y="160" width="60" height="60" rx="4" fill="#ff5a1f"/>
+</g></svg>

@@ -11,19 +11,27 @@
  * Wire format for the log routes is core's `@hermetic/core/schema` `rpc.ts`:
  * NDJSON, one `RpcFrame` per line, flushed as it happens. `GET /healthz` says
  * who this box is and what it is running, and `GET /logs` streams journald —
- * or, with `file=`, one of Hermes's own rotating logs on the data volume.
+ * or, with `file=`, one of Hermes's own rotating logs on the data volume. The
+ * paired phone's three routes (§9.4) live in `rpc-mobile.ts`: `GET /fleet` (a
+ * read-only fleet view) and `POST`/`DELETE /push/devices` (which phones this
+ * box pushes to).
  *
- * The `/files` routes (`files/routes.ts`) are the one narrow write path: an
- * operator handing the agent a file. Narrow by construction — bytes land only
- * under fixed roots (the inbox, its stage, the tmpfs drop), at a name the box
- * derives from a fresh random id plus a sanitized basename, never a path the
- * caller chose; every create is exclusive, so nothing is overwritten; and
- * nothing received is ever executed. It is behind the same `whois` gate as the
- * rest, and that gate admits nobody new: the autogroup:member caller it lets
- * through can already run a shell as `hermes` through the chat terminal tool
- * (design §7.4), so a file it could write that way gains it nothing. A config
- * change still goes out by rerendering and rerunning the bootstrap stages
- * (§4.2), never over this listener.
+ * Two write paths, both narrow. The push registry (`rpc-mobile.ts`,
+ * `push/devices.ts`) is bounded on every axis: one 0600 file of at most 32
+ * validated entries, a body of at most 8 KB, ten writes per peer per minute; it
+ * names where notifications go and nothing the box executes or serves.
+ *
+ * The `/files` routes (`files/routes.ts`) are the other: an operator handing
+ * the agent a file. Bytes land only under fixed roots (the inbox, its stage,
+ * the tmpfs drop), at a name the box derives from a fresh random id plus a
+ * sanitized basename, never a path the caller chose; every create is
+ * exclusive, so nothing is overwritten; and nothing received is ever executed.
+ * It is behind the same `whois` gate as the rest, and that gate admits nobody
+ * new: the autogroup:member caller it lets through can already run a shell as
+ * `hermes` through the chat terminal tool (design §7.4), so a file it could
+ * write that way gains it nothing. A config change still goes out by
+ * rerendering and rerunning the bootstrap stages (§4.2), never over this
+ * listener.
  */
 import type { ErrorCode, HermesLogFile, RpcFrame, RpcHealth, RpcLogLine } from "@hermetic/core/schema";
 import { LogsRequest, encodeRpcFrame } from "@hermetic/core/schema";
@@ -34,6 +42,7 @@ import {
   HERMES_HOME,
   HERMETICD_RPC_PORT,
   RPC_CONTENT_TYPE,
+  PUSH_DEVICE_ROUTE_PREFIX,
   RPC_PATHS,
   RPC_PROTOCOL_VERSION,
   RPC_VERSION_HEADER,
@@ -44,6 +53,8 @@ import type { FilesTailnetHandler } from "./files/routes.ts";
 import type { Host } from "./host.ts";
 import { tailscaleIpv4 } from "./tailscale.ts";
 import { AgentdError } from "./errors.ts";
+import { rpcRefusal, type MobileRoutes } from "./rpc-mobile.ts";
+import { deviceTag } from "./push/devices.ts";
 
 export { HERMETICD_RPC_PORT };
 
@@ -115,6 +126,11 @@ export interface RpcDeps {
   /** Where the audit line goes. `main.ts`'s `log`, which redacts, in the service. */
   readonly log?: (message: string) => void;
   /**
+   * The phone's routes (`rpc-mobile.ts`), asked after the whois gate and before
+   * the 404. Absent: the listener has no phone routes at all.
+   */
+  readonly mobile?: MobileRoutes;
+  /**
    * The files routes (`files/service.ts`). Absent, `/files/*` is a 404 and
    * `/healthz` reports no `files` capability — how a head tells this build
    * from one that can take an attachment.
@@ -135,7 +151,7 @@ export interface RpcAccess {
 }
 
 /**
- * Who is allowed to reach `logs` and `healthz`.
+ * Who is allowed to reach `logs`, `healthz` and the phone's routes.
  *
  * The tailnet ACL is the authorization layer (§6.4), and this is that ACL's own
  * rule restated on the box. What hermetic writes into the policy file is
@@ -179,6 +195,20 @@ export function rpcAccess(who: Whois | null, allowedTags: readonly string[] = []
     return { allowed: false, reason: "no tailnet user identity" };
   }
   return { allowed: true, reason: "tailnet member" };
+}
+
+/**
+ * The identity a phone registration is bound to (§9.4): the tailnet login
+ * `whois` reported for an admitted peer. A tagged node the gate admits through
+ * `allowedTags` has no person behind it — every such node reports the shared
+ * `tagged-devices` login — so it is identified by its node name instead, and
+ * two tagged nodes can no more touch each other's registrations than two people.
+ */
+export function peerOwner(who: Whois): string {
+  if (who.tags.length > 0 || who.login === "" || who.login === TAGGED_DEVICES_LOGIN) {
+    return `node:${who.node}`;
+  }
+  return who.login;
 }
 
 /** `(request, peerIp) => Response` — an `app.fetch`-shaped handler, testable in-process. */
@@ -252,10 +282,7 @@ function ndjson(source: AsyncIterable<RpcFrame>, onCancel: () => void = () => {}
 }
 
 function refuse(status: number, message: string, code: ErrorCode = "INTERNAL"): Response {
-  return new Response(encodeRpcFrame({ type: "error", code, message }), {
-    status,
-    headers: NDJSON_HEADERS,
-  });
+  return rpcRefusal(status, message, code);
 }
 
 /**
@@ -307,11 +334,22 @@ function auditLine(
 }
 
 /**
- * The path as the audit line records it. A stage upload carries its file name
- * in the path, and a name can itself be the sensitive part — so it is cut.
+ * The path as the audit line spells it: a phone's device id, the one value a
+ * path here carries, is replaced by its `deviceTag` (§9.4). A stage upload
+ * carries its file name in the path, and a name can itself be the sensitive
+ * part — so it is cut.
  */
 export function auditPath(path: string): string {
-  return path.startsWith("/files/stage/") ? "/files/stage/…" : path;
+  if (path.startsWith("/files/stage/")) return "/files/stage/…";
+  if (!path.startsWith(PUSH_DEVICE_ROUTE_PREFIX)) return path;
+  const raw = path.slice(PUSH_DEVICE_ROUTE_PREFIX.length);
+  let id = raw;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    // Not decodable: hashed as it came, and the route refuses it anyway.
+  }
+  return `${PUSH_DEVICE_ROUTE_PREFIX}${deviceTag(id)}`;
 }
 
 /** Whether a path is one of the files routes' (`/files` or under it). */
@@ -437,6 +475,13 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
       );
     }
 
+    // `who` is non-null past the gate (`rpcAccess` refuses a null); the
+    // fallback only satisfies the type.
+    const mobile =
+      deps.mobile && who
+        ? await deps.mobile(request, url, { ip: peerIp, owner: peerOwner(who) })
+        : null;
+    if (mobile !== null) return mobile;
     if (isFilesPath(url.pathname)) {
       // `rpcAccess` admits a node carrying a configured `allowedTags` tag, for
       // the read-only routes. The files routes write to the box and stand in

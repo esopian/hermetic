@@ -10,12 +10,10 @@
  * and a short markdown note — so nothing binary is checked in, and nothing in
  * them looks like a credential.
  */
-import { createHash } from "node:crypto";
-import { deflateSync } from "node:zlib";
 import type { TurnAttachments } from "../../chat/hermes/hermes-chat-types.ts";
 import type { AttachmentBlock, ChatFrame, ChatMessage, FilesCommitResult } from "../../schema/index.ts";
 import { HERMES_HOME } from "../../shared/hermes.ts";
-import type { MemoryBackend } from "../memory.ts";
+import { sha256Hex } from "../../shared/sha256.ts";
 
 /* ── a PNG, by hand ───────────────────────────────────────────────────────── */
 
@@ -42,6 +40,37 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   out.set(new TextEncoder().encode(type), 4);
   out.set(data, 8);
   view.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)));
+  return out;
+}
+
+/** A zlib stream with uncompressed DEFLATE blocks, portable to the phone. */
+function deflateStored(bytes: Uint8Array): Uint8Array {
+  const blockCount = Math.max(1, Math.ceil(bytes.length / 0xffff));
+  const out = new Uint8Array(2 + blockCount * 5 + bytes.length + 4);
+  let cursor = 0;
+  out[cursor++] = 0x78; // zlib header: deflate, 32K window
+  out[cursor++] = 0x01; // fastest/no-compression hint
+
+  for (let offset = 0, block = 0; block < blockCount; block++) {
+    const length = Math.min(0xffff, bytes.length - offset);
+    out[cursor++] = block === blockCount - 1 ? 1 : 0; // final, byte-aligned stored block
+    out[cursor++] = length & 0xff;
+    out[cursor++] = length >>> 8;
+    const inverse = ~length & 0xffff;
+    out[cursor++] = inverse & 0xff;
+    out[cursor++] = inverse >>> 8;
+    out.set(bytes.subarray(offset, offset + length), cursor);
+    cursor += length;
+    offset += length;
+  }
+
+  let a = 1;
+  let b = 0;
+  for (const byte of bytes) {
+    a = (a + byte) % 65521;
+    b = (b + a) % 65521;
+  }
+  new DataView(out.buffer).setUint32(cursor, ((b << 16) | a) >>> 0);
   return out;
 }
 
@@ -73,7 +102,7 @@ export function fixturePng(size = 32): Uint8Array {
   const parts = [
     signature,
     chunk("IHDR", header),
-    chunk("IDAT", deflateSync(raw)),
+    chunk("IDAT", deflateStored(raw)),
     chunk("IEND", new Uint8Array()),
   ];
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -124,6 +153,20 @@ export const FIXTURE_CHAT_FILES = {
   },
 } as const satisfies Record<string, SeededFile>;
 
+/**
+ * The Grafana screenshot the catalogue's `browser.screenshot` call names by
+ * `file_id`. Not in `FIXTURE_CHAT_FILES`: the desktop's fixture backend never
+ * reads a tool result's file by id, so only the phone's fixture box
+ * (`createFixtureFilesBox`) holds it, beside the canned files above.
+ */
+export const FIXTURE_CHAT_SCREENSHOT = {
+  id: "f_fxgrafana001",
+  agent: "atlas",
+  name: "granite-grafana.png",
+  mime: "image/png",
+  bytes: fixturePng(96),
+} as const satisfies SeededFile;
+
 const SEEDED_DAY = "2026-09-17";
 
 function relOf(file: SeededFile): string {
@@ -131,7 +174,7 @@ function relOf(file: SeededFile): string {
 }
 
 function sha256(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return sha256Hex(bytes);
 }
 
 /** The transcript's block for one seeded file. */
@@ -148,29 +191,30 @@ export function fixtureAttachmentBlock(file: SeededFile): AttachmentBlock {
 }
 
 /**
- * Put the canned transcripts' files in the fixture box's inbox, for each agent
- * this backend has. Committed long ago and never expiring, so a fixture
- * session opened on any day still loads them.
+ * The inbox entry for each canned transcript file, for the fixture box to hold.
+ * Committed long ago and never expiring, so a fixture session opened on any day
+ * still loads them. Plain records rather than a write into `MemoryBackend`:
+ * this module is in the phone's fixture door, which must not reach `backend/`
+ * (`test/chat-client-portable.test.ts`); `memory-fixture.ts` does the seeding.
  */
-export function seedFixtureChatFiles(backend: MemoryBackend): void {
-  for (const file of Object.values(FIXTURE_CHAT_FILES) as SeededFile[]) {
-    if (!backend.agents.has(file.agent)) continue;
+export function fixtureChatFileEntries() {
+  return (Object.values(FIXTURE_CHAT_FILES) as SeededFile[]).map((file) => {
     const rel = relOf(file);
-    backend.files.entries.set(file.id, {
+    return {
       id: file.id,
       agent: file.agent,
       name: file.name,
       bytes: file.bytes,
       mime: file.mime,
       sha256: sha256(file.bytes),
-      class: file.mime.startsWith("image/") ? "image" : "file",
-      state: "inbox",
+      class: file.mime.startsWith("image/") ? ("image" as const) : ("file" as const),
+      state: "inbox" as const,
       created_at: `${SEEDED_DAY}T09:20:00.000Z`,
       expires_at: "2099-01-01T00:00:00.000Z",
       rel,
       path: `${HERMES_HOME}/${rel}`,
-    });
-  }
+    };
+  });
 }
 
 /* ── a turn that carries attachments ──────────────────────────────────────── */

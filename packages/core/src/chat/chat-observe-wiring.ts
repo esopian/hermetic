@@ -12,6 +12,7 @@ import type {
   ChatObserveTarget,
 } from "./chat-observe.ts";
 import type { BoxAddress, HermesChatClient } from "./hermes/hermes-chat.ts";
+import type { ObserveAddressCache } from "./chat-observe-address.ts";
 import type { ChatDeps, ChatHistoryResult, ChatOptions } from "./chat.ts";
 import type { TranscriptMask } from "./chat-redact.ts";
 import type { SubagentBlock } from "../schema/index.ts";
@@ -20,10 +21,20 @@ import type { SubagentBlock } from "../schema/index.ts";
 export interface ChatObserveContext {
   deps: ChatDeps;
   hermes: HermesChatClient;
-  /** The guarded lookup every method goes through (`chat.ts`'s `address`). */
-  address: (instance: string) => Promise<BoxAddress>;
-  /** `chat.ts`'s `history`, so every reconcile passes the fleet guard and the listen check. */
-  history: (input: unknown, opts?: ChatOptions) => Promise<ChatHistoryResult>;
+  /**
+   * The observation's own guarded lookup (`chat-observe-address.ts`): the fleet
+   * guard and the agent row cached for a while, the listen check run every time.
+   */
+  addresses: ObserveAddressCache;
+  /**
+   * `chat.ts`'s `history`, handed the lookup to read through, so every
+   * reconcile passes the listen check and, when the cache is cold, the guard.
+   */
+  history: (
+    input: unknown,
+    opts?: ChatOptions,
+    resolve?: (instance: string) => Promise<BoxAddress>,
+  ) => Promise<ChatHistoryResult>;
   now: () => string;
   /** The redaction door (`chat.ts`'s `mask`), for the one payload a hint carries. */
   mask: () => TranscriptMask;
@@ -39,24 +50,27 @@ function maskSubagent(view: TranscriptMask, block: SubagentBlock): SubagentBlock
 }
 
 export function createChatObserveWiring(ctx: ChatObserveContext) {
-  const { deps, hermes, address, history, now, mask } = ctx;
+  const { deps, hermes, addresses, history, now, mask } = ctx;
 
   /**
    * Continuous observation (§9.2), wired to the seams this module
    * already owns rather than given seams of its own.
    *
-   * `snapshot` is this file's `history`, which means an observation goes
-   * through `address()` — and therefore through the fleet guard and the listen
-   * check — on *every* reconcile rather than once at the start. An instance the
-   * operator stops listening to fails the next read with `VALIDATION`, which
-   * `chat-observe.ts` treats as terminal, so unlistening ends the observation
-   * instead of leaving a loop reading a box nobody asked about. It also means
-   * the messages the service sees have already been through the redaction door;
-   * `chat-observe.ts` is not a second one.
+   * `snapshot` is `chat.ts`'s `history`, read through `addresses` — the fleet
+   * guard and the agent row kept for a while (`chat-observe-address.ts`), and
+   * the listen check run on *every* reconcile rather than once at the start. An
+   * instance the operator stops listening to fails the next read with
+   * `VALIDATION`, which `chat-observe.ts` treats as terminal, so unlistening
+   * ends the observation instead of leaving a loop reading a box nobody asked
+   * about. A read whose cached address no longer answers is retried once
+   * through a freshly guarded one, so a recreated or destroyed box is seen on
+   * that read.
+   * It also means the messages the service sees have already been through the
+   * redaction door; `chat-observe.ts` is not a second one.
    *
-   * `busy` is passed only when the adapter has one, and goes through `address()`
-   * like everything else, so an unlistened instance is never probed. Without it
-   * an observation emits no `busy` event and a head knows only its own turns.
+   * `busy` is passed only when the adapter has one, and goes through the same
+   * lookup, so an unlistened instance is never probed. Without it an
+   * observation emits no `busy` event and a head knows only its own turns.
    *
    * `hints` is passed only when the adapter has one, and `hintsUsable` decides
    * separately whether the one it has is working. Asking only the first
@@ -73,29 +87,38 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
    */
   const observation = createChatObservation({
     snapshot: async (target, request) => {
-      const result = await history(
-        {
-          instance: target.instance,
-          bot: target.bot,
-          ...(target.session !== undefined ? { session: target.session } : {}),
-          limit: OBSERVE_WINDOW,
-        },
-        request,
+      const result = await addresses.read(
+        target.instance,
+        (box) =>
+          history(
+            {
+              instance: target.instance,
+              bot: target.bot,
+              ...(target.session !== undefined ? { session: target.session } : {}),
+              limit: OBSERVE_WINDOW,
+            },
+            request,
+            async () => box,
+          ),
+        request.signal,
       );
       return { session: result.session, messages: result.messages };
     },
     ...(hermes.observe ? { hints, hintsUsable } : {}),
     ...(hermes.busy ? { busy } : {}),
     pollMs: deps.observeTuning?.pollMs,
+    hintedPollMs: deps.observeTuning?.hintedPollMs,
+    clock: deps.observeTuning?.clock,
     sleep: deps.observeTuning?.sleep,
     reconnect: deps.observeTuning?.reconnect,
     now,
   });
 
   /**
-   * The adapter's busy probe, addressed. A refusal from `address()` reads as
+   * The adapter's busy probe, addressed. A refusal from the lookup reads as
    * "could not tell", like any other probe failure: ending the watch is the
-   * next authoritative read's job, not the probe's.
+   * next authoritative read's job, not the probe's. A failure other than an
+   * abort also drops the cached address, so the next read re-guards.
    */
   async function busy(
     target: ChatObserveTarget,
@@ -103,17 +126,22 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
   ): Promise<boolean | null> {
     const probe = hermes.busy;
     if (!probe) return null;
-    const box = await address(target.instance);
-    return await probe(box, target.bot, request.sessions, { signal: request.signal });
+    const box = await addresses.get(target.instance);
+    try {
+      return await probe(box, target.bot, request.sessions, { signal: request.signal });
+    } catch (error) {
+      if (request.signal?.aborted !== true) addresses.forget(target.instance);
+      throw error;
+    }
   }
 
   /**
    * The adapter's hint stream, addressed.
    *
    * An async generator rather than a direct call because the box has to be
-   * resolved first, and resolving it is `address()` — the same guarded lookup
-   * every other method here goes through. A hint stream is therefore refused
-   * for an instance this laptop is not listening to, exactly as a read is.
+   * resolved first, and resolving it is the same lookup the reads go through.
+   * A hint stream is therefore refused for an instance this laptop is not
+   * listening to, exactly as a read is.
    */
   async function* hints(
     target: ChatObserveTarget,
@@ -121,7 +149,7 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
   ): AsyncIterable<ChatObserveHint> {
     const open = hermes.observe;
     if (!open) return;
-    const box = await address(target.instance);
+    const box = await addresses.get(target.instance);
     let heard = false;
     try {
       for await (const hint of open(box, target.bot, {
@@ -143,6 +171,7 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
       // A socket that failed before it said anything is the same evidence as
       // one that closed before it said anything.
       if (!heard) strikeHints(target.instance);
+      if (request.signal?.aborted !== true) addresses.forget(target.instance);
       throw error;
     }
     // Ended cleanly and said nothing. An abort is not evidence of anything: it

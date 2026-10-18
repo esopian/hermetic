@@ -264,23 +264,23 @@ describe("the rail", () => {
     expect(container.querySelector(".ch-conv[aria-current]")).not.toBeNull();
   });
 
-  test("opens on the Unread filter, and All is one press away", async () => {
+  test("opens on All, and Unread is one press away", async () => {
     const h = harness({ swarms: [swarmOf("atlas"), swarmOf("corvid")] });
     const { container } = mount(h);
     await sendable(container);
     const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
-    expect(pressed("Unread")).toBe("true");
-    expect(pressed("All")).toBe("false");
+    expect(pressed("All")).toBe("true");
+    expect(pressed("Unread")).toBe("false");
     expect(pressed("Needs you")).toBe("false");
-    // Nothing is unread, so the default view draws only the open bot's bucket:
-    // the filter never hides the conversation on screen.
+    expect(container.querySelectorAll(".ch-bucket").length).toBe(2);
+    // Nothing is unread, so Unread draws only the open bot's bucket: the filter
+    // never hides the conversation on screen.
+    fireEvent.click(screen.getByRole("button", { name: "Unread" }));
+    expect(pressed("Unread")).toBe("true");
     expect(container.querySelectorAll(".ch-bucket").length).toBe(1);
     const rows = container.querySelectorAll(".ch-conv");
     expect(rows.length).toBe(1);
     expect(rows[0]?.getAttribute("aria-current")).toBe("true");
-    showAllRail();
-    expect(pressed("All")).toBe("true");
-    expect(container.querySelectorAll(".ch-bucket").length).toBe(2);
   });
 
   test("an unreachable box keeps its bucket, striped, read-only, with its reason on it", async () => {

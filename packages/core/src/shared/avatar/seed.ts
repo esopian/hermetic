@@ -4,9 +4,9 @@
  * Pure, DOM-free and React-free on purpose. Everything an avatar *is* — which
  * colours it wears, which cells are on, how fast it moves when its box is
  * thinking — is decided here, so it can be tested without mounting anything and
- * so a second head could derive the same picture from the same three fields.
- * The renderers in `sigil.ts` / `pixel.ts` / `blob.ts` consume this module and
- * draw; `Avatar.tsx` is the only file that touches React.
+ * so every head derives the same picture from the same three fields. The
+ * geometry in `sigil.ts` / `pixel.ts` / `blob.ts` beside this file consumes it;
+ * the desktop (`packages/ui`) and the phone (`mobile/`) only draw.
  *
  * The CLI promise in §9.2 rests on that purity: `agent ps` already prints
  * `fleet_id`, the agent name and the profile, and both hash functions below are
@@ -15,32 +15,11 @@
  * dependency on the DOM if that is to stay true.
  */
 
-/* ── the three styles, the two enums the app already has ──────────────────── */
-
-export type AvatarStyle = "sigil" | "pixel" | "blob";
-
-/**
- * `blob` is the default, chosen by the owner on 2026-09-17.
- *
- * It is the style that costs something to ship, and the cost was accepted
- * deliberately rather than overlooked (§9.2). `styles.css` declares
- * `* { border-radius: 0 }` and means it — the brutalist shell has no curve
- * anywhere — so a blob is a **stated exception to a real rule**, and the reason
- * it is allowed is that an avatar is the one thing on screen that is not a
- * control, not a surface and not a seam. It is a face. A rule with one
- * deliberate exception is still a rule; a rule with one undocumented exception
- * is a bug somebody later "fixes", which is why this comment exists and why
- * `docs/ui-brief.md` names it too.
- *
- * `sigil` was the default until this choice: a 5×3 cell matrix built entirely
- * from hermetic's own unit, the square. It remains available and remains the
- * conservative pick if the curve is ever regretted — swapping the constant
- * below is the whole change, because every style reads the same seed.
- */
-export const AVATAR_STYLES: readonly AvatarStyle[] = ["sigil", "pixel", "blob"];
-export const DEFAULT_AVATAR_STYLE: AvatarStyle = "blob";
+/* ── the two enums the app already has ─────────────────────────────────────── */
 
 /** The agent's health, as the fleet view already reports it. */
+import { HermeticError } from "../../errors.ts";
+
 export type AvatarStatus = "ready" | "degraded" | "error" | "stopped" | "destroyed" | "pending";
 
 /** What the bot is doing *right now*, which is a different axis from health. */
@@ -128,7 +107,7 @@ export function pick<T>(rnd: Rng, arr: readonly T[]): T {
   // `arr` is never empty at any call site, but `noUncheckedIndexedAccess` is on
   // and an assertion here would be the only one in the file.
   const item = arr[Math.floor(rnd() * arr.length)];
-  if (item === undefined) throw new Error("pick() from an empty parts library");
+  if (item === undefined) throw new HermeticError("INTERNAL", "pick() from an empty parts library");
   return item;
 }
 

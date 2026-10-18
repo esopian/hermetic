@@ -88,7 +88,6 @@ function Said({
           bot={bot}
           botTitle={who.name}
           status={status}
-          now={now}
         />
       ))}
     </>

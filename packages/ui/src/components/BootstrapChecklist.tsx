@@ -20,6 +20,7 @@ import {
 } from "../logic/bootstrap.ts";
 import type { StageState } from "../logic/bootstrap.ts";
 import { fmtDuration } from "../logic/format.ts";
+import { usePageActive } from "../lib/visibility.ts";
 import { ScanBar } from "./Loading.tsx";
 
 function StageRow({ stage }: { stage: StageState }) {
@@ -59,11 +60,15 @@ function SilentBox({ agent }: { agent: AgentView }) {
   const [failed, setFailed] = useState<string | null>(null);
   // Ticks so "silent for 4m" does not sit at the value it had when the drawer
   // opened; this panel is only mounted for an agent nobody has heard from.
+  // Only while the window is in front; a return catches it up.
   const [now, setNow] = useState(() => Date.now());
+  const active = usePageActive();
   useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [active]);
   // A different agent gets a different console, not the last one's.
   useEffect(() => {
     setLines(null);

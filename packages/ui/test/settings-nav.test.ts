@@ -24,6 +24,7 @@ describe("SETTINGS_SECTIONS", () => {
       "diagnostics",
       "presets",
       "chat",
+      "mobile",
       "notifications",
       "runs",
       "account",

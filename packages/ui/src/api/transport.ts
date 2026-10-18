@@ -114,6 +114,8 @@ export type RequestName =
   | "notifications.settings"
   | "presets.get"
   | "presets.set"
+  // The phone companion's pairing link (`api/mobile.ts`): a read of the fleet.
+  | "mobile.pair"
   | "chat.listening"
   | "chat.listen"
   | "chat.settings"

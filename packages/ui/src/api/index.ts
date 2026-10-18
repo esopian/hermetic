@@ -10,3 +10,4 @@ export * from "./client.ts";
 export * from "./fleet.ts";
 export * from "./chat.ts";
 export * from "./streams.ts";
+export * from "./mobile.ts";

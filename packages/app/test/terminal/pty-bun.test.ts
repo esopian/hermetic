@@ -95,12 +95,12 @@ describe.skipIf(!PTY_SUPPORTED)("spawnBunPty", () => {
     // Keep the shell alive until its output is consumed. A short-lived env
     // leader can deadlock Bun 1.4's PTY exit wait in the full test process.
     const pty = spawnBunPty(
-      ["/bin/sh", "-c", "/usr/bin/env; read _"],
+      ["/bin/sh", "-c", "/usr/bin/env; printf 'ENV_DONE\\n'; read _"],
       { cols: 80, rows: 24, env: { HERMETIC_EXTRA: "yes" } },
       { env: { PATH: "/usr/bin:/bin", AWS_SECRET_ACCESS_KEY: "FIXTURE_SECRET", LC_ALL: "C" } },
     );
     const out = collect(pty);
-    const text = await out.until((s) => s.includes("HERMETIC_EXTRA"));
+    const text = await out.until((s) => s.includes("ENV_DONE"));
     expect(text).toContain("TERM=xterm-256color");
     expect(text).toContain("LC_ALL=C");
     expect(text).not.toContain("FIXTURE_SECRET");

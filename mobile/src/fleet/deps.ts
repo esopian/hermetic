@@ -1,0 +1,112 @@
+/**
+ * The app's `FleetDeps`: the real platform (keychain, document files, the
+ * global `fetch` and `WebSocket`, expo-notifications, background refresh,
+ * React Native's `AppState`), or — only in a development build made with
+ * `EXPO_PUBLIC_HERMETIC_FIXTURE=1` — the fixture kit's doubles in their place.
+ *
+ * Both halves are required: `__DEV__` and the flag. Any other flag value, or
+ * any release build (`__DEV__` false) even with the flag set, builds none of
+ * the fixture: the chat adapter is the live one, `fetch` is the network's, and
+ * the pairing lives under the real keys. A release build made without the flag
+ * does not even carry it: the fixture module is required only behind the
+ * inlined flag, which Metro folds to `false` before it collects dependencies,
+ * so neither `src/fixture/` nor core's canned chat client is in the bundle.
+ */
+import Constants from "expo-constants";
+import { AppState, Platform } from "react-native";
+import { createPhoneFiles } from "../gateway/files.ts";
+import { createSocketOpener, type WebSocketCtor } from "../gateway/socket.ts";
+import { registerBackgroundRefresh, unregisterBackgroundRefresh } from "./background.ts";
+import type { AppStateLike, FleetDeps } from "./FleetProvider.tsx";
+import { expoNotifier } from "./notifications.ts";
+import { documentFile, FLEET_VIEW_FILE, INBOX_FILE, secureKv } from "./persist.ts";
+import { hermeticdRegistrar } from "./push.ts";
+import { prefixedKv } from "./store.ts";
+
+const appState: AppStateLike = {
+  current: () => AppState.currentState,
+  subscribe: (listener) => {
+    const sub = AppState.addEventListener("change", listener);
+    return () => sub.remove();
+  },
+};
+
+type FixtureModule = typeof import("../fixture/index.ts");
+
+/**
+ * The fixture module, loaded only in a fixture development build (see above).
+ * The inlined flag comes first so a build without it folds the whole test to
+ * `false` and the `require` drops out of the bundle.
+ */
+const fixtureModule: FixtureModule | null =
+  process.env.EXPO_PUBLIC_HERMETIC_FIXTURE === "1" && __DEV__
+    ? (require("../fixture/index.ts") as FixtureModule)
+    : null;
+
+/** Whether this build may run the fixture: a development build, and the flag exactly `"1"`. */
+export function fixtureSelected(flag: string | undefined, dev: boolean): boolean {
+  return dev && flag === "1";
+}
+
+/**
+ * Build the app's deps. `flag` is `process.env.EXPO_PUBLIC_HERMETIC_FIXTURE`
+ * (Expo inlines it at build time) and `dev` is `__DEV__`; only both together
+ * select the fixture (`fixtureSelected`). `load` is a test seam: the fixture
+ * module, when the build carries it.
+ */
+export function appFleetDeps(
+  flag: string | undefined = process.env.EXPO_PUBLIC_HERMETIC_FIXTURE,
+  load: () => FixtureModule | null = () => fixtureModule,
+  dev: boolean = __DEV__,
+): FleetDeps {
+  const kit = fixtureSelected(flag, dev)
+    ? (load()?.fixtureKit(flag, undefined, { seed: true }) ?? null)
+    : null;
+  const appVersion = Constants.expoConfig?.version ?? "0.0.0";
+  const platform = Platform.OS === "android" ? "android" : "ios";
+  const operatorTailnet = process.env.EXPO_PUBLIC_HERMETIC_TAILNET || null;
+  const openSocket = createSocketOpener(WebSocket as unknown as WebSocketCtor);
+  if (kit) {
+    return {
+      secure: prefixedKv(secureKv, kit.storagePrefix),
+      viewCache: documentFile(`${kit.storagePrefix}${FLEET_VIEW_FILE}`),
+      inboxFile: documentFile(`${kit.storagePrefix}${INBOX_FILE}`),
+      fetch: kit.fetch,
+      openSocket,
+      chat: kit.chat,
+      files: kit.files,
+      // A canned token, so the push switch registers with the memory registry.
+      notifier: { ...expoNotifier, pushToken: async () => ({ ok: true, token: kit.pushToken }) },
+      registrar: hermeticdRegistrar(kit.fetch),
+      background: null,
+      appState,
+      platform,
+      appVersion,
+      operatorTailnet,
+      fixture: {
+        link: kit.link,
+        tailscale: kit.tailscale,
+        demoPrompts: kit.demoPrompts,
+        drive: kit.drive,
+        sampleFiles: kit.sampleFiles,
+      },
+    };
+  }
+  const fetchFn = (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init);
+  return {
+    secure: secureKv,
+    viewCache: documentFile(FLEET_VIEW_FILE),
+    inboxFile: documentFile(INBOX_FILE),
+    fetch: fetchFn,
+    openSocket,
+    files: (host) => createPhoneFiles({ fetch: fetchFn, host }),
+    notifier: expoNotifier,
+    registrar: hermeticdRegistrar(fetchFn),
+    background: { register: registerBackgroundRefresh, unregister: unregisterBackgroundRefresh },
+    appState,
+    platform,
+    appVersion,
+    operatorTailnet,
+    fixture: null,
+  };
+}

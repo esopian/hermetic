@@ -163,6 +163,10 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
   const peer = createChatPeer({ connection, ...(pool !== undefined ? { pool } : {}) });
   const canonical = createCanonicalSessions({
     connect: connection.connect,
+    // The read-only lookups share Bot Mode's pooled socket (one per box), so
+    // reads closer together than its idle timeout — an observation on its short
+    // floor, a burst of hints, a pane's reads — send a frame rather than dialling.
+    request: peer.botModeRpc,
     now: deps.now,
     patch: (box, session, body, opts) =>
       peer.botModeRest(box, "PATCH", `/api/sessions/${encodeURIComponent(session)}`, body, opts),

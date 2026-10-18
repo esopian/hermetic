@@ -144,9 +144,10 @@ export function requestOrigin(
 const UNTRUSTED_TOOL = /^(web|browser|mcp)_/;
 
 /**
- * The turn read something from outside before this request: a tool the
- * gateway flagged (`tool.output_risk`, an activity keyed `risk:`), or a web,
- * browser or MCP tool (an MCP server's output is a third party's words). The request may be the page's words rather than the operator's.
+ * The turn read something from outside before this request: a web, browser or
+ * MCP tool (an MCP server's output is a third party's words). Older in-memory
+ * turns may still carry a `risk:` activity from `tool.output_risk`. The request
+ * may be the page's words rather than the operator's.
  */
 export function untrustedBefore(blocks: readonly ChatBlockView[], index: number): boolean {
   for (let i = 0; i < index && i < blocks.length; i += 1) {

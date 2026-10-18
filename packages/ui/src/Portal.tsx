@@ -1,9 +1,10 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { App } from "./App.tsx";
 import { NotifyProvider } from "./state/notify-state.tsx";
 import { useFleet } from "./state/state.tsx";
 import { isInitialized } from "./api/index.ts";
 import { ListeningProvider } from "./state/listening-state.tsx";
+import { markPageInactive } from "./lib/visibility.ts";
 
 /** Notification caches and chat URLs belong to the same fleet lifetime. */
 export function Portal() {
@@ -13,6 +14,10 @@ export function Portal() {
     fleet.meta?.config?.region,
     fleet.meta?.fleet?.id ?? fleet.meta?.config?.fleet_id,
   ]);
+  // Every CSS animation in the page pauses while the window is not in front
+  // (`styles/polish.css`). Held by the portal rather than installed once by the
+  // entry, so that unmounting the page takes its listeners with it.
+  useEffect(() => markPageInactive(), []);
   const previousFleet = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (!fleet.meta?.config?.fleet_id) return;
