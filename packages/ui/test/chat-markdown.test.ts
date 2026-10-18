@@ -452,3 +452,83 @@ test("inline parsing is linear in the length of what a model wrote", () => {
   expect(spans.length).toBeGreaterThan(8000);
   expect(performance.now() - started).toBeLessThan(2000);
 });
+
+describe("parseInline: bare URLs", () => {
+  test("a bare URL is a link to itself", () => {
+    expect(parseInline("see https://github.com/esopian/hermetic/pull/50 now")).toEqual([
+      { type: "text", text: "see " },
+      {
+        type: "link",
+        text: "https://github.com/esopian/hermetic/pull/50",
+        href: "https://github.com/esopian/hermetic/pull/50",
+      },
+      { type: "text", text: " now" },
+    ]);
+    expect(parseInline("http://localhost:8080/x")).toEqual([
+      { type: "link", text: "http://localhost:8080/x", href: "http://localhost:8080/x" },
+    ]);
+  });
+
+  test("trailing punctuation stays outside the URL", () => {
+    for (const tail of [".", ",", ")", ";", ":", "!", "?", "'", '"', ")."]) {
+      const spans = parseInline(`(at https://x.dev/a${tail}`);
+      expect(spans.find((s) => s.type === "link")).toEqual({
+        type: "link",
+        text: "https://x.dev/a",
+        href: "https://x.dev/a",
+      });
+      expect(spans[spans.length - 1]).toEqual({ type: "text", text: tail });
+    }
+  });
+
+  test("a balanced paren and a path's underscores belong to the URL", () => {
+    expect(parseInline("https://en.wikipedia.org/wiki/Bun_(software).")).toEqual([
+      {
+        type: "link",
+        text: "https://en.wikipedia.org/wiki/Bun_(software)",
+        href: "https://en.wikipedia.org/wiki/Bun_(software)",
+      },
+      { type: "text", text: "." },
+    ]);
+    expect(parseInline("https://x.dev/a_b_c and *em*")[0]).toMatchObject({
+      href: "https://x.dev/a_b_c",
+    });
+  });
+
+  test("a URL inside a Markdown link is not linked twice", () => {
+    expect(parseInline("[https://x.dev/a](https://x.dev/a)")).toEqual([
+      { type: "link", text: "https://x.dev/a", href: "https://x.dev/a" },
+    ]);
+    expect(parseInline("[**see https://x.dev/a**](https://x.dev/b)")).toEqual([
+      {
+        type: "link",
+        text: "**see https://x.dev/a**",
+        href: "https://x.dev/b",
+        spans: [{ type: "strong", text: "see https://x.dev/a" }],
+      },
+    ]);
+  });
+
+  test("a URL in a code span or a code block stays literal", () => {
+    expect(parseInline("run `curl https://x.dev/a` first")).toEqual([
+      { type: "text", text: "run " },
+      { type: "code", text: "curl https://x.dev/a" },
+      { type: "text", text: " first" },
+    ]);
+    expect(parseMarkdown("```\ncurl https://x.dev/a\n```")).toEqual([
+      { type: "code", lang: null, text: "curl https://x.dev/a" },
+    ]);
+  });
+
+  test("a URL inside emphasis is linked; a bare scheme or a glued prefix is not", () => {
+    expect(parseInline("**https://x.dev/a**")).toEqual([
+      {
+        type: "strong",
+        text: "https://x.dev/a",
+        spans: [{ type: "link", text: "https://x.dev/a", href: "https://x.dev/a" }],
+      },
+    ]);
+    expect(parseInline("the https:// prefix")).toEqual([{ type: "text", text: "the https:// prefix" }]);
+    expect(parseInline("xhttps://x.dev")).toEqual([{ type: "text", text: "xhttps://x.dev" }]);
+  });
+});
