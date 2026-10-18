@@ -38,6 +38,7 @@ import { isShareTool, shareIdOf } from "./blocks/ShareCard.tsx";
 import { dmBotName, dmSender, messageAgentCall } from "../bot-dm.ts";
 import { DmSentMarker, useBotDm } from "./BotDm.tsx";
 import { Face, OperatorFace } from "./Face.tsx";
+import { InspectMessageButton } from "./inspector/InspectEntry.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
 
 export { FailureCard, splitError } from "./FailureCard.tsx";
@@ -378,6 +379,7 @@ export const Message = memo(function Message({
             </span>
           ) : null}
           <span className="ch-msg-meta">{meta}</span>
+          <InspectMessageButton message={message.id} />
         </div>
         <div className="ch-msg-body">
           {/*

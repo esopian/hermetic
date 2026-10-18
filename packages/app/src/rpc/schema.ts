@@ -22,6 +22,10 @@
  * `messages` — so the re-type is a parameterisation and not a rewrite.
  */
 import type {
+  DevtoolsClearInput,
+  DevtoolsExportInput,
+  DevtoolsSettingsInput,
+  DevtoolsTapInput,
   FilesCapabilityInput,
   FilesSecretTextUploadInput,
   FilesUploadRefInput,
@@ -34,6 +38,7 @@ import type {
   FleetTarget,
   PublicMethod,
   REQUEST_SCHEMAS,
+  TapRecord,
 } from "@hermetic/core";
 import { PUBLIC_METHODS } from "@hermetic/core";
 import type { z, ZodType } from "zod";
@@ -41,6 +46,7 @@ import type * as agents from "../handlers/agents.ts";
 import type * as app from "../handlers/app.ts";
 import type * as botMode from "../handlers/bot-mode.ts";
 import type * as chat from "../handlers/chat.ts";
+import type * as devtools from "../handlers/devtools.ts";
 import type * as files from "../handlers/files.ts";
 import type * as fixture from "../handlers/fixture.ts";
 import type * as fleet from "../handlers/fleet.ts";
@@ -109,6 +115,7 @@ type HandlerTables = typeof agents.agentHandlers &
   typeof app.appHandlers &
   typeof botMode.botModeHandlers &
   typeof chat.chatHandlers &
+  typeof devtools.devtoolsHandlers &
   typeof files.filesHandlers &
   typeof fixture.fixtureHandlers &
   typeof fleet.fleetHandlers &
@@ -216,6 +223,20 @@ export type MachineryRequests = {
   "fixture.chat.hint": RpcRequest<unknown, Answer<typeof fixture.hint>>;
 
   /**
+   * The developer tools (`handlers/devtools.ts`). Core validates each input
+   * against its own schema, so the params are core's input types and the
+   * handler forwards them whole. `devtools.tap` opens a stream whose records
+   * ride `devtools.record`; `devtools.untap` is its close half. Every one but
+   * `devtools.settings` is refused `DEVTOOLS_DISABLED` while the tools are off.
+   */
+  "devtools.settings": RpcRequest<DevtoolsSettingsInput, Answer<typeof devtools.settings>>;
+  "devtools.stats": RpcRequest<Record<string, never>, Answer<typeof devtools.stats>>;
+  "devtools.tap": RpcRequest<DevtoolsTapInput, { stream_id: string }>;
+  "devtools.untap": RpcRequest<StreamRef, StreamClosed>;
+  "devtools.clear": RpcRequest<DevtoolsClearInput, Answer<typeof devtools.clear>>;
+  "devtools.export": RpcRequest<DevtoolsExportInput, Answer<typeof devtools.exportCapture>>;
+
+  /**
    * The native five (`handlers/app.ts`). A head without a window refuses every
    * one `UNSUPPORTED`, but a refusal is an error rather than an answer, so the
    * responses are the desktop head's real ones — read off the handlers like
@@ -298,6 +319,12 @@ export const MACHINERY_REQUEST_NAMES = [
   "files.saveNative",
   "fixture.chat.inject",
   "fixture.chat.hint",
+  "devtools.settings",
+  "devtools.stats",
+  "devtools.tap",
+  "devtools.untap",
+  "devtools.clear",
+  "devtools.export",
   "app.info",
   "app.openExternal",
   "app.checkForUpdate",
@@ -386,6 +413,12 @@ export type WebviewMessages = {
    * which is always the last. `keepalive` is never sent, as for every stream.
    */
   "terminal.frame": { stream_id: string; frame: TerminalFrame };
+  /**
+   * One push of a `devtools.tap` stream: `records` is a batch of captured
+   * records in capture order (coalesced, `handlers/devtools.ts`), `done` the
+   * tap's last word when its source ended — `{ ok: false, error }`.
+   */
+  "devtools.record": { stream_id: string; records?: TapRecord[]; done?: unknown };
 };
 
 export type WebviewMessageName = keyof WebviewMessages;
@@ -449,6 +482,7 @@ export const MESSAGE_FOR_REQUEST = {
   "files.put": "files.put.frame",
   "files.get": "files.get.frame",
   "terminal.attach": "terminal.frame",
+  "devtools.tap": "devtools.record",
 } as const satisfies Record<string, WebviewMessageName>;
 
 export type StreamingRequestName = keyof typeof MESSAGE_FOR_REQUEST;

@@ -112,6 +112,7 @@ export function createChatObserveWiring(ctx: ChatObserveContext) {
     sleep: deps.observeTuning?.sleep,
     reconnect: deps.observeTuning?.reconnect,
     now,
+    ...(deps.devtap !== undefined ? { devtap: deps.devtap } : {}),
   });
 
   /**

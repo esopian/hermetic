@@ -58,6 +58,12 @@ export type RequestName =
   | "terminal.close"
   | "terminal.list"
   | "terminal.external"
+  // The developer tools (`app/src/handlers/devtools.ts`): this laptop's stream
+  // inspector. `devtools.tap` is a stream (`StreamName`), not a request.
+  | "devtools.settings"
+  | "devtools.stats"
+  | "devtools.clear"
+  | "devtools.export"
   // core methods
   | "init"
   | "agents.list"
@@ -179,7 +185,8 @@ export type StreamName =
   | "terminal.attach"
   | "files.stage"
   | "files.put"
-  | "files.get";
+  | "files.get"
+  | "devtools.tap";
 
 /** Which long-lived feed a `subscribe` means. One socket each, today and under RPC. */
 export type SubscriptionKind = "fleet" | "chat";

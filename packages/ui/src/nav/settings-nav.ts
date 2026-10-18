@@ -57,6 +57,10 @@ export const SETTINGS_SECTIONS = [
   // asked for, the inbox is what it was told.
   { id: "notifications", label: "Notifications", group: "laptop" },
   { id: "runs", label: "Runs", group: "laptop" },
+  // §9.2 "Developer tools": the stream inspector's switch and capture. Last in
+  // the group, and shown in every build — nothing it gates depends on a dev
+  // renderer.
+  { id: "developer", label: "Developer", group: "laptop" },
   { id: "account", label: "Account & fleets", group: "account" },
   { id: "danger", label: "Danger zone", group: "danger", tone: "danger" },
 ] as const satisfies ReadonlyArray<{

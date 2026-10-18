@@ -175,6 +175,9 @@ export { redactText } from "./chat/chat-redact.ts";
  */
 export { DEFAULT_CHAT_SETTINGS, MemoryChatSettingsStore } from "./chat/chat-settings.ts";
 export type { ChatSettings, ChatSettingsStore } from "./chat/chat-settings.ts";
+/** §9.2's developer tools: `hermetic.devtools`, and the store its preferences live in. */
+export type { DevtoolsControls, DevtoolsSettingsStore } from "./chat/devtools.ts";
+export { MemoryDevtoolsSettingsStore } from "./chat/devtools.ts";
 /**
  * The size of one observation's read, which is also the size of its
  * deduplication window.

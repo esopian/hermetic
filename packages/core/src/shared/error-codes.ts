@@ -316,6 +316,12 @@ export const ERROR_CODES = [
   "FILE_LOOKS_SECRET",
   /** The write would breach the disk floor (507): `FILES_LIMITS.diskFloorBytes`/`diskFloorPct`. */
   "DISK_FULL",
+  /**
+   * A developer-tools read (`hermetic.devtools`, §9.2) while the tools are off
+   * on this laptop. Its own code so a head can offer the switch rather than
+   * report a failure: nothing is wrong, the capture simply does not exist.
+   */
+  "DEVTOOLS_DISABLED",
   /** Input failed schema validation at the boundary — heads map it to 400. */
   "VALIDATION",
   "UNSUPPORTED",

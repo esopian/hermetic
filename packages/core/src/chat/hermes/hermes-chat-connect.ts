@@ -29,6 +29,8 @@ import {
   socketUrl,
   stripToken,
 } from "./hermes-chat-wire.ts";
+import { TapSlot, type TapSource } from "./hermes-chat-devtap.ts";
+import { REDACTED } from "../chat-redact.ts";
 
 /** `window.__HERMES_SESSION_TOKEN__="…"`, as the SPA HTML writes it. */
 const TOKEN_IN_HTML = /__HERMES_SESSION_TOKEN__\s*=\s*["']([^"']+)["']/;
@@ -39,6 +41,8 @@ export interface ChatConnectionDeps {
   openSocket: HermesChatDeps["openSocket"];
   /** How long to wait for a reply, resolved by the caller from `slotWaitMs`. */
   waitMs: number;
+  /** The developer tools' capture; absent, no socket carries a `TapSlot`. */
+  devtap?: TapSource | undefined;
 }
 
 /** One box's reachability, shared by every module that talks to one. */
@@ -71,7 +75,21 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
    */
   const tokens = new Map<string, string>();
 
-  async function scrapeToken(box: BoxAddress, signal: AbortSignal | undefined): Promise<string> {
+  async function scrapeToken(
+    box: BoxAddress,
+    signal: AbortSignal | undefined,
+    tap?: TapSlot,
+  ): Promise<string> {
+    const token = await scrapeOnce(box, signal).catch((e: unknown) => {
+      tap?.conn("token.scrape", { url: box.baseUrl, error: describe(e) }, "in");
+      throw e;
+    });
+    // The value never reaches a record, whatever the redaction setting says.
+    tap?.conn("token.scrape", { url: box.baseUrl, found: true, token: REDACTED }, "in");
+    return token;
+  }
+
+  async function scrapeOnce(box: BoxAddress, signal: AbortSignal | undefined): Promise<string> {
     let res: Response;
     try {
       res = await deps.fetch(box.baseUrl, {
@@ -112,10 +130,14 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
     return token;
   }
 
-  async function token(box: BoxAddress, signal: AbortSignal | undefined): Promise<string> {
+  async function token(
+    box: BoxAddress,
+    signal: AbortSignal | undefined,
+    tap?: TapSlot,
+  ): Promise<string> {
     const cached = tokens.get(box.baseUrl);
     if (cached) return cached;
-    const fresh = await scrapeToken(box, signal);
+    const fresh = await scrapeToken(box, signal, tap);
     tokens.set(box.baseUrl, fresh);
     return fresh;
   }
@@ -137,8 +159,9 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
   async function connect(box: BoxAddress, signal: AbortSignal | undefined): Promise<Rpc> {
     checkAbort(signal, "chat connect");
     const hadCached = tokens.has(box.baseUrl);
+    const tap = deps.devtap ? new TapSlot(deps.devtap, box.instance) : undefined;
     try {
-      return await dial(box, await token(box, signal), signal);
+      return await dial(box, await token(box, signal, tap), signal, tap);
     } catch (e) {
       // Only a *cached* token is worth a retry. A token scraped one line ago
       // that is already refused is a box saying no for some other reason, and
@@ -147,7 +170,8 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
       if (!hadCached || isHermeticCode(e, CHAT_ERROR_CODES.NO_TOKEN)) throw e;
       tokens.delete(box.baseUrl);
       checkAbort(signal, "chat connect");
-      return await dial(box, await token(box, signal), signal);
+      tap?.conn("token.stale", { url: box.baseUrl });
+      return await dial(box, await token(box, signal, tap), signal, tap);
     }
   }
 
@@ -165,15 +189,24 @@ export function createChatConnection(deps: ChatConnectionDeps): ChatConnection {
    * this function, whatever produced it, and the message names the box's origin
    * rather than the URL that was dialled.
    */
-  async function dial(box: BoxAddress, tok: string, signal: AbortSignal | undefined): Promise<Rpc> {
-    const socket = deps.openSocket(socketUrl(box.baseUrl, tok), {
+  async function dial(
+    box: BoxAddress,
+    tok: string,
+    signal: AbortSignal | undefined,
+    tap?: TapSlot,
+  ): Promise<Rpc> {
+    const url = socketUrl(box.baseUrl, tok);
+    const socket = deps.openSocket(url, {
       signal,
       headers: DIRECT_DIAL_HEADERS,
     });
-    const rpc = readRpc(socket, waitMs, box.instance);
+    tap?.conn("dial", { url: stripToken(url, tok), headers: DIRECT_DIAL_HEADERS });
+    const rpc = readRpc(socket, waitMs, box.instance, {}, tap);
     try {
       await socket.opened;
+      tap?.conn("open", { origin: originOf(box.baseUrl) }, "in");
     } catch (e) {
+      tap?.conn("dial.refused", { error: stripToken(describe(e), tok) }, "in");
       rpc.close();
       throw chatError(
         CHAT_ERROR_CODES.UNREACHABLE,

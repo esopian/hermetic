@@ -147,6 +147,7 @@ export function createHermesChat(deps: HermesChatDeps): HermesChatClient {
     fetch: deps.fetch,
     openSocket: deps.openSocket,
     waitMs,
+    ...(deps.devtap !== undefined ? { devtap: deps.devtap } : {}),
   });
   /**
    * Bot Mode's RPCs share one socket per box; every other transport keeps its
