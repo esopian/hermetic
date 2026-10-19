@@ -141,3 +141,28 @@ export function mediaLinePath(line: string): string | null {
   const path = unquoteMediaPath(match[2] ?? "");
   return path === "" ? null : path;
 }
+
+/**
+ * The gateway's delivery directives (`gateway/platforms/base.py`): a voice
+ * note and a forced document. Hermetic renders neither; they are listed so a
+ * stream never shows one half written (upstream #141584, PR #138551).
+ */
+export const MEDIA_DIRECTIVES = ["[[audio_as_voice]]", "[[as_document]]"] as const;
+
+/**
+ * How many characters at the end of `text` are an unfinished directive: the
+ * longest proper prefix of one, at least `[[`, that `text` ends with; 0 when
+ * none. A finished directive is not held.
+ */
+export function partialDirectiveTail(text: string): number {
+  let longest = 0;
+  for (const directive of MEDIA_DIRECTIVES) {
+    for (let k = Math.min(directive.length - 1, text.length); k >= 2; k--) {
+      if (k > longest && text.endsWith(directive.slice(0, k))) {
+        longest = k;
+        break;
+      }
+    }
+  }
+  return longest;
+}
