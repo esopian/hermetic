@@ -59,10 +59,11 @@ beforeAll(() => {
     JSON.stringify({ layout: { runtime: { launcher: "launcher" } } }),
   );
   // A built app's launcher: a real executable named as the manifest says, so
-  // `ps` shows it exactly as it shows Electrobun's.
+  // `ps` shows it exactly as it shows Electrobun's. A copy of bun, not of
+  // /bin/sleep: macOS kills a copied Apple platform binary the moment it starts.
   mkdirSync(join(appDir, "build/bin"), { recursive: true });
   launcherPath = join(appDir, "build/bin/launcher");
-  copyFileSync(Bun.which("sleep") ?? "/bin/sleep", launcherPath);
+  copyFileSync(process.execPath, launcherPath);
   Bun.spawnSync(["chmod", "+x", launcherPath]);
 });
 
@@ -75,7 +76,10 @@ afterEach(() => {
 
 /** Start a launcher leading its own process group, and wait until `ps` shows it. */
 async function startLauncher(): Promise<ChildProcess> {
-  const child = spawn(launcherPath, ["60"], { detached: true, stdio: "ignore" });
+  const child = spawn(launcherPath, ["-e", "setTimeout(() => {}, 60_000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
   children.push(child);
   const pgid = child.pid ?? -1;
   for (let i = 0; i < 100; i++) {
