@@ -6,12 +6,15 @@ import type { FoundationStatus, HermesUpstream } from "../../schema/index.ts";
 import { staleBedrockGrants } from "../../profiles/bedrock-grants.ts";
 import {
   ADVISORY_BEDROCK_GRANT,
+  ADVISORY_CONFIG_ROLLOUT,
   ADVISORY_FOUNDATION_UPDATE,
   bedrockGrantAdvisories,
+  configRolloutAdvisories,
   foundationUpdateAdvisories,
   observeAdvisories,
 } from "../../chat/notifications.ts";
 import { settingsOf } from "../../profiles/settings.ts";
+import { pendingApplied } from "../../profiles/profile-binding.ts";
 import { HermeticError } from "../../errors.ts";
 import { computeSkew, configVerdict, isConverging } from "../skew.ts";
 import type { FoundationCtx } from "./shared.ts";
@@ -256,13 +259,14 @@ export function createStatus(ctx: FoundationCtx) {
             agents,
             granted: fleet.bedrock_model_ids,
           });
-    /**
-     * §6.6: the per-agent half of the skew, computed from the scan this read
-     * already paid for. `configVerdict` compares the two hashes the row now
-     * keeps apart — what the fleet rendered, and what the box reports having
-     * applied — which is the comparison that was impossible while one attribute
-     * carried both meanings in turn.
-     */
+    /** The same pure prospective render as plan.rollout, including staged bindings. */
+    const renderedHashes = new Map(
+      agents.map((agent) => [
+        agent.name,
+        core.renderFor(pendingApplied(agent), fleet.region, fleet.tailnet).config_hash,
+      ]),
+    );
+    /** Compare the box with this build, not merely with the row's last render. */
     const agentRows = agents
       .map((a) => ({
         name: a.name,
@@ -286,7 +290,7 @@ export function createStatus(ctx: FoundationCtx) {
           a.last_heartbeat == null || a.hermeticd_version == null
             ? null
             : a.hermeticd_version === hermeticdVersion,
-        config: configVerdict(a),
+        config: configVerdict({ ...a, rendered_config_hash: renderedHashes.get(a.name) }),
         hermes_version: a.hermes_version ?? null,
         running_hermes_version: a.running_hermes_version ?? null,
         last_heartbeat: a.last_heartbeat ?? null,
@@ -303,7 +307,11 @@ export function createStatus(ctx: FoundationCtx) {
      * whose clock is frozen — reads the same age every time.
      */
     const nowMs = now().getTime();
-    const converging = new Set(agents.filter((a) => isConverging(a, nowMs)).map((a) => a.name));
+    const converging = new Set(
+      agents
+        .filter((a) => a.config_hash === renderedHashes.get(a.name) && isConverging(a, nowMs))
+        .map((a) => a.name),
+    );
     const updateAvailable =
       current.foundation_version < available.foundation_version ||
       current.template_sha256 !== available.template_sha256 ||
@@ -355,7 +363,12 @@ export function createStatus(ctx: FoundationCtx) {
       ...(staleGrants === undefined ? {} : { stale_bedrock_grants: staleGrants }),
       agents: agentRows,
     };
-    observeStatusAdvisories(result);
+    observeStatusAdvisories(
+      result,
+      agentRows
+        .filter((row) => row.config === "drifted" && !converging.has(row.name))
+        .map((row) => row.name),
+    );
     return result;
   }
 
@@ -369,7 +382,7 @@ export function createStatus(ctx: FoundationCtx) {
    * empty list would resolve every open Bedrock row as though the grant had
    * been fixed.
    */
-  function observeStatusAdvisories(status: FoundationStatus): void {
+  function observeStatusAdvisories(status: FoundationStatus, rolloutAgents: readonly string[]): void {
     const notifications = core.notifications;
     if (notifications === undefined) return;
     observeAdvisories(
@@ -381,6 +394,7 @@ export function createStatus(ctx: FoundationCtx) {
         available: status.available,
       }),
     );
+    observeAdvisories(notifications, ADVISORY_CONFIG_ROLLOUT, configRolloutAdvisories(rolloutAgents));
     const stale = status.stale_bedrock_grants;
     if (stale !== undefined) {
       observeAdvisories(notifications, ADVISORY_BEDROCK_GRANT, bedrockGrantAdvisories(stale));

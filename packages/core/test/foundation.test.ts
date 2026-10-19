@@ -243,11 +243,16 @@ describe("foundation.status", () => {
   test("a drift reads as drifted, as pending while an apply lands, and drifted once it is stale", async () => {
     const backend = seedFixtureFoundation(new MemoryBackend());
     const seeded = await seedOne(backend, "drifty");
+    const desired = testContext(backend).renderFor(
+      seeded,
+      backend.fleetItem!.region,
+      backend.fleetItem!.tailnet,
+    ).config_hash;
     backend.agents.set("drifty", {
       ...seeded,
       status: "ready",
       hermeticd_version: FIXTURE_HERMETICD_VERSION,
-      config_hash: "want",
+      config_hash: desired,
       applied_config_hash: "have",
       last_heartbeat: backend.now().toISOString(),
     });
@@ -257,7 +262,7 @@ describe("foundation.status", () => {
     expect((await skewOf())?.fix).toBe("hermetic plan rollout");
     expect((await skewOf())?.agents_affected).toBe(1);
 
-    const request = (issued: number, config_hash = "want") => ({
+    const request = (issued: number, config_hash = desired) => ({
       id: "r1",
       config_hash,
       issued_at: new Date(issued).toISOString(),
@@ -281,6 +286,46 @@ describe("foundation.status", () => {
     const status = await core(backend).foundation.status();
     expect(Object.keys(status.agents[0] ?? {})).not.toContain("converging");
     expect(FoundationStatus.safeParse(status).success).toBe(true);
+  });
+
+  test("a new renderer is reported as drift even when the stored hashes agree", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const seeded = await seedOne(backend, "old-render");
+    backend.agents.set(seeded.name, {
+      ...seeded,
+      config_hash: "old",
+      applied_config_hash: "old",
+    });
+    const hermetic = core(backend);
+    const status = await hermetic.foundation.status();
+    expect(status.agents.find((agent) => agent.name === seeded.name)?.config).toBe("drifted");
+    expect(status.skew?.severity).toBe("drifted");
+    expect((await hermetic.plan.rollout({ agents: [seeded.name] })).steps[0]?.description).toContain(
+      "apply",
+    );
+
+    backend.agents.set(seeded.name, {
+      ...backend.agents.get(seeded.name)!,
+      apply_request: {
+        id: "old-apply",
+        config_hash: "old",
+        issued_at: backend.now().toISOString(),
+        issued_by: "test",
+      },
+    });
+    expect((await hermetic.foundation.status()).skew?.severity).toBe("drifted");
+
+    const rendered = testContext(backend).renderFor(
+      seeded,
+      backend.fleetItem!.region,
+      backend.fleetItem!.tailnet,
+    ).config_hash;
+    backend.agents.set(seeded.name, {
+      ...backend.agents.get(seeded.name)!,
+      config_hash: rendered,
+      applied_config_hash: rendered,
+    });
+    expect((await hermetic.foundation.status()).agents[0]?.config).toBe("current");
   });
 });
 
