@@ -25,8 +25,8 @@
     },
     {
       "name": "site",
-      "runtimeExecutable": "bun",
-      "runtimeArgs": ["run", "--cwd", "site", "dev", "--", "--port", "4322"],
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd site && bun install --frozen-lockfile && bun run sync && bun run dev -- --port 4322 --ignore-lock"],
       "port": 4322
     }
   ]
