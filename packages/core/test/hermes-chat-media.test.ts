@@ -227,6 +227,24 @@ describe("the live hold", () => {
     expect(hold.holding()).toBe(false);
   });
 
+  test("a directive split across deltas is never streamed half written", () => {
+    for (const deltas of [
+      ["Note [[audio_", "as_voice]] done"],
+      ["Note [[as_", "doc]] done"],
+    ]) {
+      const hold = createMediaHold();
+      const shown: string[] = [];
+      for (const delta of deltas) {
+        const out = hold.push(delta);
+        shown.push(out);
+        // Nothing shown so far ends inside an unclosed `[[`.
+        expect(shown.join("")).not.toMatch(/\[\[[^\]]*$/);
+      }
+      expect(shown.join("")).toBe(deltas.join(""));
+      expect(hold.holding()).toBe(false);
+    }
+  });
+
   test("only a line that could still become a shared path is held", () => {
     for (const line of [
       "MEDIA:/tmp/a.png",
