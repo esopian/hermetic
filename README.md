@@ -75,9 +75,7 @@ The twelve-digit account id is a required typed confirmation, not `--yes` alone.
 Working on hermetic needs a checkout, [Bun](https://bun.sh) pinned in `.bun-version`, [`uv`/`uvx`](https://docs.astral.sh/uv/) for the lint steps, and [Hutch](https://hutch.blackboard.sh) pinned in `.hutch-version` for the desktop app:
 
 ```
-bun install
-bun run setup            # check the toolchain, fix what is safely fixable
-bun run app:prepare      # materialise the Electrobun devkit, once per machine
+bun run setup            # check the toolchain, fix what is safely fixable: deps, Hutch, the Electrobun devkit
 bun run check            # typecheck + test + boundaries + lint
 bun run dev              # the app in real mode: wizard if uninitialized, dashboard if not
 bun run dev:fixture      # seeded fixture fleet, no AWS — for UI work and demos

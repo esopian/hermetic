@@ -173,8 +173,7 @@ Commands, CI jobs, the formatter and hooks: `CONTRIBUTING.md`. `bun run check` b
 ## Dev
 
 ```
-bun install
-bun run app:prepare  # once per machine: materialises packages/app/.hutch/devkit (typecheck needs it)
+bun run setup        # deps, the pinned Hutch, and packages/app/.hutch/devkit (typecheck needs it)
 bun run dev          # the app, real mode: wizard if uninitialized, dashboard if not
 bun run dev:fixture  # the app against the fixture backend, rebuilding on ui/core edits
 bun run dev:fixture:hmr  # same, but Vite serves the page: UI edits hot-reload, no relaunch
