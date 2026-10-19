@@ -10,17 +10,21 @@ the app against a fake fleet. An AWS account (and Tailscale) only matter for rea
 - [`uv`/`uvx`](https://docs.astral.sh/uv/) — needed by `bun run lint:cfn` and `lint:sh`, and so by `bun run check`/`bun run ci`.
 - An AWS profile in `~/.aws/config` for the account you want to target (only needed for real mode — `bun run dev:fixture` needs no AWS at all).
 - The Tailscale CLI and a Tailscale OAuth client, for real mode — see [`docs/operations.md`'s Prerequisites section](docs/operations.md#prerequisites) for the exact scopes.
-- [Hutch](https://hutch.blackboard.sh), pinned in `.hutch-version` (0.27.1) — it builds and runs the
-  desktop app. Install the pinned version without touching your shell profile:
+- [Hutch](https://hutch.blackboard.sh), pinned in `.hutch-version` — it builds and runs the
+  desktop app, and its devkit is where the app's types resolve from, so `bun run check` needs it
+  too. `bun run setup` installs the pinned version when Hutch is missing. By hand, without
+  touching your shell profile:
 
   ```
   curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh -s -- --version "$(cat .hutch-version)" --no-modify-path
   ```
 
-  Then add `~/.hutch/bin` to your PATH and run `bun run app:prepare` once per machine (it is
-  `hutch electrobun prepare` in `packages/app`). That projects the Electrobun devkit into
-  `packages/app/.hutch/devkit`, a few hundred megabytes fetched on first run, and it is where the
-  app's types resolve from: `scripts/typecheck.ts` refuses to run without it.
+  Then add `~/.hutch/bin` to your PATH (the `bun run` scripts find it there either way) and run
+  `bun run app:prepare` (it is `hutch electrobun prepare` in `packages/app`; `bun run setup` does
+  it too). That projects the Electrobun devkit into `packages/app/.hutch/devkit`, which is
+  git-ignored, so every checkout and worktree needs its own. The few hundred megabytes behind it
+  are fetched into `~/.hutch` on the first run on a machine and reused after that.
+  `scripts/typecheck.ts` refuses to run without the devkit.
 - The first `bun run build` downloads a linux-arm64 Bun runtime to compile `hermeticd`; expect that one-time fetch.
 
 ## Setup
@@ -33,7 +37,10 @@ bun run setup -- --full  # also warm the slow caches (cfn-lint, shellcheck, herm
 
 `scripts/dev-setup.sh` is the one command between a fresh checkout and a green `bun run ci`. It
 verifies bun matches `.bun-version` and `uvx` is installed (a failure in either means `bun run
-check` cannot pass), installs dependencies, points `core.hooksPath` at `.githooks`, reports the
+check` cannot pass), installs the pinned Hutch if it is missing (a different installed version is
+only reported, since `~/.hutch/bin` is shared by every checkout), installs dependencies, points
+`core.hooksPath` at `.githooks`, runs `bun run app:prepare` when the checkout has no Electrobun
+devkit, reports the
 optional tools real mode needs (`aws`, `tailscale`) and agents lean on (`gh`, `jq`, `rg`), and sets
 up two workspace-local conveniences: `.context/hermetic-home` so a dev run's log never lands
 in the real `~/.hermetic/hermetic.db`, and a read-only permission allowlist in
@@ -126,8 +133,7 @@ summary and the raw text disagree. Otherwise leave it on. `rtk gain` shows the s
 ## Dev loop
 
 ```
-bun install
-bun run app:prepare     # once per machine, before anything typechecks or runs the app
+bun run setup           # once per checkout: deps, Hutch, the Electrobun devkit, before anything typechecks or runs the app
 bun run dev:fixture:hmr # fastest inner loop: fixture fleet, no AWS, UI edits hot-reload in place
 bun run check           # typecheck + test (incl. boundaries) + biome check + lint + cfn-lint + shellcheck
 bun run ci              # check + build + audit:dependencies; run before every push
@@ -265,7 +271,7 @@ bun run check                      # typecheck, test, lint:biome, lint, lint:cfn
 bun run ci                         # check, build, audit:dependencies
 bun run build                      # hermetic (CLI) + hermeticd, into dist/
 bun run app:stage                  # scripts/app-stage.ts: the sidecars the app bundles, no dist/ wipe
-bun run app:prepare                # hutch electrobun prepare in packages/app (once per machine)
+bun run app:prepare                # hutch electrobun prepare in packages/app (once per checkout; bun run setup runs it)
 bun run app:build                  # the stable channel app (alias of app:build:stable)
 bun run app:build:canary           # the canary channel app — verification, never published
 bun run app:build:stable           # cd packages/app && hutch run build:stable

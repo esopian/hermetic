@@ -89,6 +89,59 @@ step_uv() {
   note "install: curl -LsSf https://astral.sh/uv/install.sh | sh"
 }
 
+HUTCH_BIN="$HOME/.hutch/bin"
+HUTCH_INSTALL="curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh -s -- --version \"\$(cat .hutch-version)\" --no-modify-path"
+
+# `hutch` from PATH, else the installer's default location — the same lookup
+# scripts/dev-app.ts and the package.json app scripts make.
+hutch_path() {
+  if have hutch; then
+    command -v hutch
+  elif [ -x "$HUTCH_BIN/hutch" ]; then
+    echo "$HUTCH_BIN/hutch"
+  fi
+}
+
+# Hutch builds and runs the desktop app, and its devkit (step_devkit) is where
+# the app's types resolve from, so without it 'bun run typecheck' fails. The
+# installer is user-local (~/.hutch), verifies the archive against the release
+# manifest, and --no-modify-path leaves the shell profile alone, so a missing
+# Hutch is safe to install. A mismatched one is only reported: ~/.hutch/bin is
+# shared by every checkout on the machine.
+step_hutch() {
+  local want path
+  want="$(cat "$ROOT/.hutch-version" 2>/dev/null || echo "")"
+  path="$(hutch_path)"
+  if [ -z "$path" ]; then
+    if ! would_fix; then
+      fail "hutch not installed (want $want) — the desktop app cannot build or typecheck"
+      note "install: $HUTCH_INSTALL"
+      return
+    fi
+    if curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh -s -- --version "$want" --no-modify-path >/dev/null 2>&1 \
+      && [ -x "$HUTCH_BIN/hutch" ]; then
+      fixed "installed hutch $want into ~/.hutch/bin"
+      path="$HUTCH_BIN/hutch"
+    else
+      fail "hutch install failed — run it directly to see the error"
+      note "install: $HUTCH_INSTALL"
+      return
+    fi
+  else
+    local got
+    got="$("$path" --version 2>/dev/null)"
+    if [ "$got" = "$want" ]; then
+      ok "hutch $got matches .hutch-version"
+    else
+      warn "hutch $got, .hutch-version pins $want — CI runs $want"
+      note "align: $HUTCH_INSTALL"
+    fi
+  fi
+  if ! have hutch; then
+    note "$HUTCH_BIN is not on PATH; the bun run scripts find it, a bare 'hutch' will not"
+  fi
+}
+
 step_install() {
   if [ -d "$ROOT/node_modules" ] && [ "$ROOT/bun.lock" -ot "$ROOT/node_modules" ]; then
     ok "node_modules up to date with bun.lock"
@@ -117,6 +170,30 @@ step_hooks() {
     return
   fi
   git config core.hooksPath .githooks && fixed "core.hooksPath -> .githooks"
+}
+
+# The Electrobun devkit Hutch projects into packages/app/.hutch/devkit. It is
+# git-ignored, so every checkout and worktree needs its own; the download
+# behind it is cached in ~/.hutch, so only the first one on a machine is slow.
+step_devkit() {
+  if [ -f "$ROOT/packages/app/.hutch/devkit/package.json" ]; then
+    ok "Electrobun devkit at packages/app/.hutch/devkit"
+    return
+  fi
+  if ! would_fix; then
+    fail "Electrobun devkit missing — 'bun run typecheck' refuses without it (run bun run app:prepare)"
+    return
+  fi
+  if [ -z "$(hutch_path)" ]; then
+    fail "Electrobun devkit missing and hutch not installed — fix hutch above, then rerun"
+    return
+  fi
+  note "preparing the Electrobun devkit (the first run on a machine fetches a few hundred MB)"
+  if bun run app:prepare >/dev/null 2>&1; then
+    fixed "bun run app:prepare (packages/app/.hutch/devkit)"
+  else
+    fail "bun run app:prepare failed — rerun it directly to see the error"
+  fi
 }
 
 # --------------------------------------------------------- optional: real mode --
@@ -286,10 +363,12 @@ printf '%shermetic dev setup%s  %s(%s mode%s)%s\n' "$BOLD" "$OFF" "$DIM" "$MODE"
 section "Toolchain"
 step_bun
 step_uv
+step_hutch
 
 section "Repository"
 step_install
 step_hooks
+step_devkit
 
 section "Optional tools"
 step_optional_tools
