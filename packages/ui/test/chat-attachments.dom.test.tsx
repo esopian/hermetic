@@ -12,7 +12,7 @@ import { attachmentErrorText, useDraftAttachments } from "../src/chat/chat-attac
 import type { AttachmentsApi, AttachmentsControl } from "../src/chat/chat-attachments.ts";
 import { fresh, key } from "../src/chat/chat-conversation-record.ts";
 import type { Conversation } from "../src/chat/chat-conversation-record.ts";
-import { safeImageSrc } from "../src/chat/chat-logic.ts";
+import { safeImageSrc, safeMediaSrc } from "../src/chat/chat-logic.ts";
 import {
   isMintedBlobUrl,
   mintBlobUrl,
@@ -159,6 +159,17 @@ describe("pure helpers", () => {
     expect(safeImageSrc("blob:https://elsewhere/abc")).toBeNull();
     revokeBlobUrl(url);
     expect(safeImageSrc(url)).toBeNull();
+  });
+  test("safeMediaSrc takes only a blob: URL this page minted: no path, no data:, no box URL", () => {
+    const url = mintBlobUrl(new Blob(["x"], { type: "audio/wav" }));
+    expect(safeMediaSrc(url)).toBe(url);
+    expect(safeMediaSrc("/fonts/x.woff2")).toBeNull();
+    expect(safeMediaSrc("data:audio/wav;base64,AAAA")).toBeNull();
+    expect(safeMediaSrc("https://atlas.tail0000.ts.net/outbox/a.wav")).toBeNull();
+    expect(safeMediaSrc("file:///data/hermes/work/a.wav")).toBeNull();
+    expect(safeMediaSrc("blob:https://elsewhere/abc")).toBeNull();
+    revokeBlobUrl(url);
+    expect(safeMediaSrc(url)).toBeNull();
   });
 });
 

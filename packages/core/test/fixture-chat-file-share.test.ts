@@ -7,6 +7,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { fixtureChatClient } from "../src/backend/fixture/fixture-chat.ts";
+import {
+  FIXTURE_FOREIGN_MEDIA_PATH,
+  FIXTURE_MEDIA_KINDS_DELTA,
+} from "../src/backend/fixture/fixture-chat-file-share.ts";
 import { MemoryFiles } from "../src/backend/fixture/memory-files.ts";
 import type { BoxAddress } from "../src/chat/hermes/hermes-chat.ts";
 import type { ChatBlock, ChatFrame } from "../src/schema/index.ts";
@@ -139,6 +143,40 @@ describe("E2E_MEDIA_SHARE", () => {
       "q3-revenue.png",
       "q3-revenue.csv",
     ]);
+  });
+});
+
+describe("E2E_MEDIA_KINDS", () => {
+  test("audio, video and a text file are chips; the laptop path stays prose", async () => {
+    const { files, frames, blocks, text } = await run("E2E_MEDIA_KINDS today's files");
+    for (const frame of frames) expect(ChatFrameSchema.safeParse(frame).success).toBe(true);
+    const chips = blocks.filter((b) => b.kind === "attachment");
+    // Spaced names, read whole from bare, backticked and quoted lines alike.
+    expect(chips.map((c) => [c.name, c.mime])).toEqual([
+      ["standup recap.wav", "audio/wav"],
+      ["build preview.webm", "video/webm"],
+      ["release notes.md", "text/markdown"],
+    ]);
+    const listed = await files.list(AGENT, {});
+    for (const chip of chips) {
+      const entry = listed.outbox.find((e) => e.id === chip.file_id)!;
+      expect(chip.sha256).toBe(entry.sha256);
+      expect(chip.bytes).toBe(entry.bytes);
+    }
+    expect(text).toBe(
+      `Here are today's files.\n${MEDIA_TAG}${FIXTURE_FOREIGN_MEDIA_PATH}\nThat last one is on your laptop, not on this box.\n`,
+    );
+  });
+
+  test("no delta ever shows a shared line, whole or in part", async () => {
+    const { frames } = await run("E2E_MEDIA_KINDS");
+    const deltas = frames.flatMap((f) => (f.type === "delta" ? [f.text] : []));
+    // Small enough pieces that every path was split across deltas.
+    expect(FIXTURE_MEDIA_KINDS_DELTA).toBeLessThan("standup recap.wav".length);
+    for (const delta of deltas) {
+      for (const part of ["/data/hermes", "recap", "preview", "notes", "outbox", "`", '"', "**"])
+        expect(delta.includes(part)).toBe(false);
+    }
   });
 });
 

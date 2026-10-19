@@ -7,7 +7,13 @@
  * at all: the reply names each on its own `MEDIA:` line, which the plugin's
  * `transform_llm_output` hook shares and rewrites to the outbox form — the way
  * an agent following hermetic's platform hint (`HERMETIC_PLATFORM_HINT`)
- * delivers a file.
+ * delivers a file. `E2E_MEDIA_KINDS` hands over one file of each other kind
+ * the desktop app draws — audio, video and a text file — on `MEDIA:` lines
+ * written the ways the desktop parser reads (bare with spaces in the name,
+ * backticked, quoted inside emphasis), plus one naming a path on the
+ * operator's own laptop, which the box cannot share and which stays prose. Its
+ * reply streams in small pieces through the live turn's own hold
+ * (`createMediaHold`), so a path split across deltas is never shown half read.
  *
  * Both files are put into the fixture box's outbox (`MemoryFiles.share`), so
  * `files.content` serves the very bytes the card names, under the digest the
@@ -18,13 +24,15 @@
  * chip and leaves the text.
  */
 import { toolBlock } from "../../chat/hermes/hermes-chat-blocks.ts";
-import { shareAttachment, splitMedia } from "../../chat/hermes/hermes-chat-media.ts";
+import { createMediaHold, shareAttachment, splitMedia } from "../../chat/hermes/hermes-chat-media.ts";
 import type { ChatBlock, ChatFrame, ShareFileResult } from "../../schema/index.ts";
 import { FILES_OUTBOX_DIR, MEDIA_TAG } from "../../shared/files.ts";
 import { fixturePng } from "./fixture-chat-files.ts";
+import { fixtureWav, fixtureWebm } from "./fixture-media-bytes.ts";
 
 export const FIXTURE_FILE_SHARE_TRIGGER = "E2E_FILE_SHARE";
 export const FIXTURE_MEDIA_SHARE_TRIGGER = "E2E_MEDIA_SHARE";
+export const FIXTURE_MEDIA_KINDS_TRIGGER = "E2E_MEDIA_KINDS";
 
 type SequencedFrame = Extract<ChatFrame, { seq: number }>;
 
@@ -71,15 +79,24 @@ export interface FixtureFileShareScript {
 export function fixtureFileShareScript(prompt: string): FixtureFileShareScript | null {
   if (prompt.includes(FIXTURE_FILE_SHARE_TRIGGER)) return shareFileScript;
   if (prompt.includes(FIXTURE_MEDIA_SHARE_TRIGGER)) return mediaLineScript;
+  if (prompt.includes(FIXTURE_MEDIA_KINDS_TRIGGER)) return mediaKindsScript;
   return null;
 }
 
-/** One of `SHARES` put into the outbox, as `POST /outbox` answers it. */
+/** A file the agent shares: where it is on the box, and its bytes. */
+interface ShareSpec {
+  readonly path: string;
+  readonly name: string;
+  readonly note: string;
+  readonly bytes: () => Uint8Array;
+}
+
+/** One share put into the outbox, as `POST /outbox` answers it. */
 function putShare(
   files: FixtureShareFiles,
   agent: string,
   session: string | null,
-  spec: (typeof SHARES)[number],
+  spec: ShareSpec,
 ): ShareFileResult {
   return files.share(agent, {
     name: spec.name,
@@ -197,6 +214,100 @@ const mediaLineScript: FixtureFileShareScript = {
       results.map(outboxLine).join("") +
       "September is up 8% on August.\n";
     emitReply(reply, results, emit);
+    out.push(done(out, message));
+    return out;
+  },
+};
+
+/** The release notes `E2E_MEDIA_KINDS` shares. FIXTURE values only. */
+const RELEASE_NOTES =
+  "# Release notes\n\n- Faster chart rendering\n- The standup recap is now an audio file\n- FIXTURE build 2026.10\n";
+
+/** `E2E_MEDIA_KINDS`'s files, and how the model wrote each one's `MEDIA:` line. */
+const KINDS: readonly (ShareSpec & { readonly line: (path: string) => string })[] = [
+  {
+    path: "/data/hermes/work/standup recap.wav",
+    name: "standup recap.wav",
+    note: "Standup recap",
+    bytes: () => fixtureWav(),
+    line: (path) => `MEDIA:${path}`,
+  },
+  {
+    path: "/data/hermes/work/build preview.webm",
+    name: "build preview.webm",
+    note: "Build preview",
+    bytes: () => fixtureWebm(),
+    line: (path) => `MEDIA:\`${path}\``,
+  },
+  {
+    path: "/data/hermes/work/release notes.md",
+    name: "release notes.md",
+    note: "Release notes",
+    bytes: () => new TextEncoder().encode(RELEASE_NOTES),
+    line: (path) => `**MEDIA:"${path}"**`,
+  },
+];
+
+/** A path on the operator's laptop: the box has no such file, so the plugin leaves the line be. */
+export const FIXTURE_FOREIGN_MEDIA_PATH = "/Users/nobody/Desktop/elsewhere.png";
+
+/** How many characters each streamed delta of `E2E_MEDIA_KINDS`'s reply carries. */
+export const FIXTURE_MEDIA_KINDS_DELTA = 9;
+
+/**
+ * `E2E_MEDIA_KINDS`: audio, video and a text file on `MEDIA:` lines, and one
+ * line naming a path on another machine. The reply streams as the model wrote
+ * it, in pieces small enough to split every path, through the live turn's
+ * hold; the plugin's rewrite then settles it, so each shared line becomes a
+ * chip and the foreign line stays text.
+ */
+const mediaKindsScript: FixtureFileShareScript = {
+  frames(message, files, agent, session) {
+    const { out, emit } = frameLog(message);
+    emit({
+      type: "block",
+      block: {
+        kind: "reasoning",
+        text: "Send the recap, the preview clip and the notes. The screenshot is on their laptop.",
+        duration_ms: 350,
+        tokens: 21,
+      },
+    });
+    const results = KINDS.map((spec) => putShare(files, agent, session, spec));
+    const lines = KINDS.map((spec) => `${spec.line(spec.path)}\n`).join("");
+    const head = "Here are today's files.\n";
+    const tail = "That last one is on your laptop, not on this box.\n";
+    const foreign = `MEDIA:${FIXTURE_FOREIGN_MEDIA_PATH}\n`;
+    const written = head + lines + foreign + tail;
+    // What the plugin's `transform_llm_output` hook hands back.
+    const transformed = head + results.map(outboxLine).join("") + foreign + tail;
+
+    let textOpen = false;
+    const text = (delta: string) => {
+      if (!delta) return;
+      if (!textOpen) emit({ type: "block", block: { kind: "text", markdown: "" } });
+      textOpen = true;
+      emit({ type: "delta", text: delta });
+    };
+    const hold = createMediaHold();
+    for (let at = 0; at < written.length; at += FIXTURE_MEDIA_KINDS_DELTA) {
+      text(hold.push(written.slice(at, at + FIXTURE_MEDIA_KINDS_DELTA)));
+    }
+    for (const piece of hold.settle(transformed)) {
+      if (piece.kind === "text") {
+        text(piece.text);
+        continue;
+      }
+      textOpen = false;
+      const shared = results.find((r) => r.share_id === piece.share_id);
+      emit({
+        type: "block",
+        block: {
+          ...shareAttachment(piece),
+          ...(shared ? { mime: shared.mime, bytes: shared.bytes, sha256: shared.sha256 } : {}),
+        },
+      });
+    }
     out.push(done(out, message));
     return out;
   },

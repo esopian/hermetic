@@ -227,6 +227,32 @@ test("files.content takes a share id (sh_…); files.discard still takes files o
   expect((discard as { code?: string }).code).toBe("VALIDATION");
 });
 
+test("files.content reads a share for its purpose and refuses any other type", async () => {
+  const { ctx } = await harness();
+  // The seeded share is a CSV: text to show, never a picture or a player.
+  const text = (await dispatch(ctx, "files.content", {
+    instance: "atlas",
+    id: "sh_fxatlascsv01",
+    purpose: "text",
+  })) as { mime: string; data_b64: string };
+  expect(text.mime).toBe("text/csv");
+  expect(Buffer.from(text.data_b64, "base64").toString("utf8").length).toBeGreaterThan(0);
+  for (const purpose of ["image", "playback"]) {
+    const e = await dispatch(ctx, "files.content", {
+      instance: "atlas",
+      id: "sh_fxatlascsv01",
+      purpose,
+    }).catch((x: unknown) => x as { code?: string });
+    expect((e as { code?: string }).code).toBe("FILE_TYPE_REJECTED");
+  }
+  const bad = await dispatch(ctx, "files.content", {
+    instance: "atlas",
+    id: "sh_fxatlascsv01",
+    purpose: "path",
+  }).catch((x: unknown) => x as { code?: string });
+  expect((bad as { code?: string }).code).toBe("VALIDATION");
+});
+
 test("the bridge sends stage frames on `files.frame`, the last as `done`", async () => {
   const { ctx, target } = await harness();
   const sent: Array<{ name: string; payload: unknown }> = [];

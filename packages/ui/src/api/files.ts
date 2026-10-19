@@ -8,6 +8,7 @@
  * which is all `chat.send` carries; request answers use `files.put`.
  */
 import type { HermeticRPC } from "@hermetic/app";
+import type { ContentPurpose } from "@hermetic/core/shared";
 import { target } from "./client.ts";
 import type { FleetTarget } from "./client.ts";
 import { transport } from "./transport.ts";
@@ -102,16 +103,18 @@ export function filesDiscard(instance: string, id: string): Promise<Answer<"file
   return transport().request("files.discard", { instance, id, target: target() });
 }
 
-/** Verified image bytes, with an optional digest pinned by a share card. */
+/** Verified bytes for the page to show — an image unless `purpose` says otherwise — with an optional digest pinned by a share card. */
 export function filesContent(
   instance: string,
   id: string,
   expected_sha256?: string,
+  purpose?: ContentPurpose,
 ): Promise<Answer<"files.content">> {
   return transport().request("files.content", {
     instance,
     id,
     ...(expected_sha256 ? { expected_sha256 } : {}),
+    ...(purpose ? { purpose } : {}),
   });
 }
 

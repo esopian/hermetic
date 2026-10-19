@@ -16,6 +16,7 @@
 import { HermeticError } from "../errors.ts";
 import type { ErrorCode } from "./error-codes.ts";
 import { HERMES_HOME } from "./hermes.ts";
+import { mediaLinePath } from "./media-tags.ts";
 import { SECRET_KEY_RE } from "./secret-env.ts";
 
 export function formatBytes(n: number): string {
@@ -130,6 +131,14 @@ const GiB = 1024 * MiB;
 export const FILES_LIMITS = {
   /** Hermes's own image cap. */
   imageBytes: 25 * MiB,
+  /**
+   * The most a share card reads to play an audio or video share in the page.
+   * The bytes cross the bridge whole, so this is the image cap; a larger file
+   * is saved instead.
+   */
+  playbackBytes: 25 * MiB,
+  /** The most a share card reads to show a text share's contents. */
+  textPreviewBytes: 256 * KiB,
   /** The default `files.max_bytes` for a file; a fleet may lower it. */
   fileBytes: 256 * MiB,
   /**
@@ -618,7 +627,126 @@ const RASTER_IMAGE_MIMES: ReadonlySet<string> = new Set([
 
 /** The raster types Hermes's image tool takes. SVG is not one of them. */
 export function isImageMime(mime: string): boolean {
-  return RASTER_IMAGE_MIMES.has(mime.toLowerCase().split(";")[0]?.trim() ?? "");
+  return RASTER_IMAGE_MIMES.has(bareMime(mime));
+}
+
+/** `mime` lowercased, without its parameters. */
+function bareMime(mime: string): string {
+  return mime.toLowerCase().split(";")[0]?.trim() ?? "";
+}
+
+/** The audio types `sniffMime` names, each one both WebKit and Chromium play. */
+const AUDIO_MIMES: ReadonlySet<string> = new Set([
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "audio/flac",
+  "audio/mp4",
+  "audio/aac",
+  "audio/webm",
+]);
+
+/** The video types `sniffMime` names that a page can play. Matroska is not one. */
+const VIDEO_MIMES: ReadonlySet<string> = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+
+/**
+ * How a share is drawn, from the box's sniffed type (never the name): an image
+ * is shown, audio and video are played, anything else is a file card.
+ */
+export type MediaKind = "image" | "audio" | "video" | "file";
+
+export function mediaKindOf(mime: string): MediaKind {
+  const bare = bareMime(mime);
+  if (RASTER_IMAGE_MIMES.has(bare)) return "image";
+  if (AUDIO_MIMES.has(bare)) return "audio";
+  if (VIDEO_MIMES.has(bare)) return "video";
+  return "file";
+}
+
+/** The text types a share card shows the contents of. A PEM file is never one. */
+export function isTextPreviewMime(mime: string): boolean {
+  const bare = bareMime(mime);
+  if (bare === "application/x-pem-file") return false;
+  return (
+    bare.startsWith("text/") ||
+    bare === "application/json" ||
+    bare === "application/yaml" ||
+    bare === "application/xml" ||
+    bare === "application/toml"
+  );
+}
+
+/**
+ * What a page may read an entry's bytes for (`files.content`): an image to
+ * show, audio or video to play, or text to show. Each has its own cap.
+ */
+export const CONTENT_PURPOSES = ["image", "playback", "text"] as const;
+export type ContentPurpose = (typeof CONTENT_PURPOSES)[number];
+
+/** Whether an entry of type `mime` may be read for `purpose`. */
+export function contentPurposeAllows(purpose: ContentPurpose, mime: string): boolean {
+  switch (purpose) {
+    case "image":
+      return isImageMime(mime);
+    case "playback": {
+      const kind = mediaKindOf(mime);
+      return kind === "audio" || kind === "video";
+    }
+    case "text":
+      return isTextPreviewMime(mime);
+  }
+}
+
+/** Why an entry was not read for `purpose`: the refusal's words. */
+export function purposeRefusal(purpose: ContentPurpose): string {
+  return purpose === "image"
+    ? "only images have a preview"
+    : purpose === "playback"
+      ? "only audio and video play here"
+      : "only text files have a text preview";
+}
+
+/** The most a page reads for `purpose`. */
+export function contentPurposeBytes(purpose: ContentPurpose): number {
+  return purpose === "image"
+    ? FILES_LIMITS.imageBytes
+    : purpose === "playback"
+      ? FILES_LIMITS.playbackBytes
+      : FILES_LIMITS.textPreviewBytes;
+}
+
+/**
+ * The audio or video type of `head`, from its magic number; `ext` only tells
+ * an ISO base media file's audio from its video when the brand does not.
+ */
+function sniffMediaMime(head: Uint8Array, ext: string): string | null {
+  if (startsWithBytes(head, ascii("RIFF")) && startsWithBytes(head, ascii("WAVE"), 8)) {
+    return "audio/wav";
+  }
+  if (startsWithBytes(head, ascii("OggS"))) return "audio/ogg";
+  if (startsWithBytes(head, ascii("fLaC"))) return "audio/flac";
+  if (startsWithBytes(head, ascii("ID3"))) return "audio/mpeg";
+  // An MPEG audio frame: eleven sync bits, then layer III (MP3) or ADTS (AAC).
+  const b1 = head[1] ?? 0;
+  if (head[0] === 0xff && (b1 & 0xe0) === 0xe0) {
+    if ((b1 & 0x06) === 0x02) return "audio/mpeg";
+    if ((b1 & 0x06) === 0x00) return "audio/aac";
+  }
+  if (startsWithBytes(head, [0x1a, 0x45, 0xdf, 0xa3])) {
+    // EBML: WebM names its doctype early in the header; other Matroska does not.
+    return latin1(head.subarray(0, 64)).includes("webm")
+      ? ext === ".weba"
+        ? "audio/webm"
+        : "video/webm"
+      : "video/x-matroska";
+  }
+  if (startsWithBytes(head, ascii("ftyp"), 4)) {
+    const brand = latin1(head.subarray(8, 12));
+    if (brand === "qt  ") return "video/quicktime";
+    if (brand === "M4A " || brand === "M4B " || ext === ".m4a") return "audio/mp4";
+    if (/^(?:isom|iso[2-9]|mp4[12]|avc1|M4V |MSNV|dash|3gp)/.test(brand)) return "video/mp4";
+  }
+  return null;
 }
 
 /** Lowercase extension with its dot (`.pem`), or `""`. */
@@ -700,6 +828,8 @@ export function sniffMime(head: Uint8Array, name: string): string {
     return "image/webp";
   }
   if (startsWithBytes(head, ascii("%PDF-"))) return "application/pdf";
+  const media = sniffMediaMime(head, extensionOf(name));
+  if (media !== null) return media;
   if (
     startsWithBytes(head, [0x50, 0x4b, 0x03, 0x04]) ||
     startsWithBytes(head, [0x50, 0x4b, 0x05, 0x06]) ||
@@ -1017,19 +1147,20 @@ export interface OutboxMediaRef {
 }
 
 /**
- * The share a line names, when the line is exactly
- * `MEDIA:${FILES_OUTBOX_DIR}/<sh_…>/<name>` — the form the files plugin
- * rewrites a shared `MEDIA:` line into — or `null` for anything else, which
- * stays plain text. Surrounding whitespace is ignored; nothing else is: a
- * second path segment, a name `sanitizeFileName` would change, or a share id
- * of the wrong shape is not an outbox line. One parser, so core (mapping a
- * reply to attachment chips) and the UI agree on which lines those are.
+ * The share a line names, when the line is a single `MEDIA:` tag
+ * (`mediaLinePath`: quoted, backticked, emphasised or bare, spaces in the name
+ * allowed) whose path is `${FILES_OUTBOX_DIR}/<sh_…>/<name>` — the form the
+ * files plugin rewrites a shared `MEDIA:` line into — or `null` for anything
+ * else, which stays plain text. A second path segment, a name
+ * `sanitizeFileName` would change, or a share id of the wrong shape is not an
+ * outbox line. One parser, so core (mapping a reply to attachment chips) and
+ * the UI agree on which lines those are.
  */
 export function parseOutboxMediaLine(line: string): OutboxMediaRef | null {
-  const text = line.trim();
-  const prefix = `${MEDIA_TAG}${FILES_OUTBOX_DIR}/`;
-  if (!text.startsWith(prefix)) return null;
-  const rest = text.slice(prefix.length);
+  const path = mediaLinePath(line);
+  const prefix = `${FILES_OUTBOX_DIR}/`;
+  if (path === null || !path.startsWith(prefix)) return null;
+  const rest = path.slice(prefix.length);
   const cut = rest.indexOf("/");
   if (cut < 0) return null;
   const share_id = rest.slice(0, cut);

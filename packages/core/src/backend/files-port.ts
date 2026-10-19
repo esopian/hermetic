@@ -6,7 +6,7 @@ import type {
   FilesSecretBody,
   FilesStageResult,
 } from "../schema/index.ts";
-import type { SecretTextAs } from "../shared/files.ts";
+import type { ContentPurpose, SecretTextAs } from "../shared/files.ts";
 
 /**
  * The laptop half of hermeticd's files service (`/files` on port 7434): the
@@ -40,8 +40,9 @@ export interface FilesApi {
    * `GET /files/:id/content`, read whole. Refused `FILE_TOO_LARGE` before the
    * body is read when the entry is over `maxBytes`, and `FILE_DIGEST_MISMATCH`
    * when the body ends short or does not hash to its `Content-Digest`. With
-   * `imagesOnly`, an entry that is not an image is refused `FILE_TYPE_REJECTED`
-   * from its type alone, before the body is read.
+   * `purpose`, an entry of a type that purpose does not admit
+   * (`contentPurposeAllows`) is refused `FILE_TYPE_REJECTED` from its type
+   * alone, before the body is read.
    */
   content(
     name: string,
@@ -111,7 +112,7 @@ export interface FilesCallOptions {
 
 export interface FilesContentOptions {
   maxBytes: number;
-  imagesOnly?: boolean;
+  purpose?: ContentPurpose;
 }
 
 export interface FilesProgress {

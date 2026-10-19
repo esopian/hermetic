@@ -3,23 +3,30 @@
  * `share_file`, or a `MEDIA:` line naming the box's outbox.
  *
  * One card per share: the type tag, the name, the size, a short sha256, how
- * long the box keeps it, and Save…. An image is fetched at once over the
- * preview machinery and shown above the row — only when the share names a full
- * sha256 and its bytes hash to it; with no digest to check, the card says so
- * and offers Save… instead (core verifies what it saves). Save… asks the main process for a
- * folder (the page never sees the path) and downloads into it.
+ * long the box keeps it, and Save…. What sits above the row follows the box's
+ * sniffed type (`mediaKindOf`), as the desktop app's `MediaAttachment` does:
+ * an image is shown and zooms on a click, audio and video get a player, and a
+ * text file gets a Preview button that shows its contents. Images and media
+ * are fetched at once over the preview machinery, text only when Preview is
+ * pressed — each only when the share names a full sha256 and its bytes hash to
+ * it; with no digest to check, the card says so and offers Save… instead
+ * (core verifies what it saves). Save… asks the main process for a folder (the
+ * page never sees the path) and downloads into it.
  *
  * A share the box refused never gets a card: the call is a tool error, and the
  * box's words ("share refused: credential path") are what the operator reads.
  */
-import { FILES_TTL, isImageMime, isShareId } from "@hermetic/core/shared";
+import { useState } from "react";
+import { FILES_TTL, isShareId, isTextPreviewMime, mediaKindOf } from "@hermetic/core/shared";
 import type { ChatBlockOf, ChatBlockView } from "../../../api/index.ts";
-import { fmtBytes, safeImageSrc } from "../../chat-logic.ts";
+import { fmtBytes, safeImageSrc, safeMediaSrc } from "../../chat-logic.ts";
 import { useChatSelect } from "../../chat-select.tsx";
 import type { Chat } from "../../chat-types.ts";
 import { saveErrorText, useFileSave } from "../../use-file-save.ts";
 import type { FileSaveState } from "../../use-file-save.ts";
-import { useSharePreview } from "../../use-share-preview.ts";
+import { useSharePreview, useShareText } from "../../use-share-preview.ts";
+import type { SharePreview, ShareText } from "../../use-share-preview.ts";
+import { ZoomableImage } from "./ZoomableImage.tsx";
 import { RedactedText, plainText } from "../RedactedText.tsx";
 import { typeTag } from "../../file-type-tag.ts";
 import { ToolBlock, resultText, subjectOf } from "./Tool.tsx";
@@ -83,6 +90,34 @@ function saveLine(state: FileSaveState): { text: string; tone: "ok" | "bad" | "m
   }
 }
 
+/** The one line a preview that could not be drawn leaves, in the card's words. */
+function PreviewNote({ preview, what }: { preview: SharePreview | ShareText | null; what: string }) {
+  switch (preview?.state) {
+    case "mismatch":
+      return (
+        <div className="ch-share-note bad" role="alert">
+          {`${what} withheld — the file does not match the shared sha256`}
+        </div>
+      );
+    case "unverified":
+      return (
+        <div className="ch-share-note muted" role="note">
+          {`no ${what} without a verified sha256 — Save… instead`}
+        </div>
+      );
+    case "too_large":
+      return (
+        <div className="ch-share-note muted" role="note">
+          {`too large to ${what === "playback" ? "play" : "preview"} here — Save… instead`}
+        </div>
+      );
+    case "failed":
+      return <div className="ch-shot-missing">{`${what} unavailable`}</div>;
+    default:
+      return null;
+  }
+}
+
 export function ShareCard({ share, instance: own }: { share: ShareFacts; instance?: string }) {
   renderProbe.hit?.("ShareCard", share.id);
   // The thread's own box, as the message row names it; the selection only
@@ -90,12 +125,27 @@ export function ShareCard({ share, instance: own }: { share: ShareFacts; instanc
   const selected = useChatSelect(selectedInstance);
   const instance = own ?? selected;
   const mime = typeof share.mime === "string" ? share.mime : "";
-  const image = isImageMime(mime);
-  const preview = useSharePreview(instance, share.id, image, share.sha256);
+  const kind = mediaKindOf(mime);
+  const playable = kind === "audio" || kind === "video";
+  const preview = useSharePreview(
+    instance,
+    share.id,
+    kind === "image" ? "image" : playable ? "playback" : null,
+    share.sha256,
+  );
+  const textual = kind === "file" && isTextPreviewMime(mime);
+  const [reading, setReading] = useState(false);
+  // The engine could not decode what it was given: the desktop's "Open file" fallback is Save….
+  const [undecodable, setUndecodable] = useState<string | null>(null);
+  const text = useShareText(instance, share.id, textual && reading, share.sha256);
   const saving = useFileSave(instance, share.id);
-  const src = preview?.state === "ready" ? safeImageSrc(preview.url) : null;
+  const ready = preview?.state === "ready" ? preview.url : null;
+  const src = kind === "image" ? safeImageSrc(ready) : null;
+  const played = playable ? safeMediaSrc(ready) : null;
+  const media = played !== null && played !== undecodable ? played : null;
   const gone =
     preview?.state === "gone" ||
+    text?.state === "gone" ||
     (saving.state.phase === "error" && saving.state.code === "FILE_NOT_FOUND");
   const sha = share.sha256 ? `sha ${share.sha256.slice(0, 4)}…` : null;
   const meta = [
@@ -107,20 +157,38 @@ export function ShareCard({ share, instance: own }: { share: ShareFacts; instanc
     .join(" · ");
   const busy = saving.state.phase === "choosing" || saving.state.phase === "saving";
   const line = gone ? null : saveLine(saving.state);
+  const name = plainText(share.name);
   return (
-    <div className="ch-attach ch-share" data-share-id={share.id}>
-      {src ? <img className="ch-shot" src={src} alt={plainText(share.name)} /> : null}
-      {preview?.state === "mismatch" ? (
-        <div className="ch-share-note bad" role="alert">
-          preview withheld — the image does not match the shared sha256
-        </div>
+    <div className="ch-attach ch-share" data-share-id={share.id} data-media-kind={kind}>
+      {src ? <ZoomableImage src={src} alt={name} /> : null}
+      {media && kind === "audio" ? (
+        // biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer.
+        <audio
+          className="ch-share-audio"
+          controls
+          preload="metadata"
+          src={media}
+          aria-label={name}
+          onError={() => setUndecodable(media)}
+        />
       ) : null}
-      {preview?.state === "unverified" ? (
+      {media && kind === "video" ? (
+        // biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer.
+        <video
+          className="ch-share-video"
+          controls
+          preload="metadata"
+          src={media}
+          aria-label={name}
+          onError={() => setUndecodable(media)}
+        />
+      ) : null}
+      {played !== null && played === undecodable ? (
         <div className="ch-share-note muted" role="note">
-          no preview without a verified sha256 — Save… instead
+          this app cannot play this file — Save… instead
         </div>
       ) : null}
-      {preview?.state === "failed" ? <div className="ch-shot-missing">preview unavailable</div> : null}
+      {gone ? null : <PreviewNote preview={preview} what={playable ? "playback" : "preview"} />}
       <div className={`ch-attach-item ch-share-item${gone ? " expired" : ""}`}>
         <i>{typeTag(mime, share.name)}</i>
         <span>
@@ -129,15 +197,35 @@ export function ShareCard({ share, instance: own }: { share: ShareFacts; instanc
           </b>
           <span>{meta}</span>
         </span>
-        <button
-          type="button"
-          className="ch-share-save"
-          disabled={instance === null || busy || gone}
-          onClick={saving.start}
-        >
-          {busy ? "Saving…" : "Save…"}
-        </button>
+        <span className="ch-share-actions">
+          {textual ? (
+            <button
+              type="button"
+              className="ch-share-preview"
+              aria-expanded={reading}
+              disabled={instance === null || gone}
+              onClick={() => setReading((open) => !open)}
+            >
+              {reading ? "Hide" : "Preview"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ch-share-save"
+            disabled={instance === null || busy || gone}
+            onClick={saving.start}
+          >
+            {busy ? "Saving…" : "Save…"}
+          </button>
+        </span>
       </div>
+      {text?.state === "ready" ? (
+        <pre className="ch-share-text">
+          <RedactedText text={text.text} />
+        </pre>
+      ) : null}
+      {text?.state === "loading" ? <div className="ch-shot-missing">loading preview…</div> : null}
+      {gone ? null : <PreviewNote preview={text} what="preview" />}
       {line ? (
         <div className={`ch-share-note ${line.tone}`} role={line.tone === "bad" ? "alert" : "status"}>
           <RedactedText text={line.text} />
