@@ -31,3 +31,19 @@ export const HERMETIC_VERSION: string = process.env.HERMETIC_VERSION ?? "0.0.0-d
  * moves it forward (§6.6).
  */
 export const FOUNDATION_VERSION = 17;
+
+/**
+ * The version of the *artifacts bundle*: the `hermeticd` binary and the
+ * bootstrap stages a push uploads — exactly the inputs `sourceFingerprint`
+ * (`release/artifacts-release.ts`) hashes. `BUILD_VERSIONS.hermeticd` is a label
+ * that rarely moves between commits, so it cannot say that the bundle changed;
+ * this number can. Bump it whenever anything under those inputs changes, and
+ * add the new fingerprint to the table in
+ * `packages/core/test/artifacts-version.test.ts`, which fails until you do.
+ *
+ * `foundation.update`, `init --create` and an `artifacts push` of this build's
+ * own bundle record it on `_fleet` as `artifacts_version`. A fleet carrying none is version **0**, and a fleet
+ * behind this number is an available update (§6.6), so every dashboard on a
+ * newer build prompts its fleet to push the new bundle.
+ */
+export const ARTIFACTS_VERSION = 1;

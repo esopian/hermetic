@@ -28,7 +28,7 @@ import {
 import { readFleetManifest } from "../src/release/artifacts.ts";
 import { foundationTemplateSha256 } from "../src/aws/cfn-template.ts";
 import { bedrockModelArns } from "../src/aws/index.ts";
-import { FOUNDATION_VERSION } from "../src/version.ts";
+import { ARTIFACTS_VERSION, FOUNDATION_VERSION } from "../src/version.ts";
 import { HermeticError } from "../src/errors.ts";
 import { BUILD_VERSIONS, createHermetic, type HermeticDeps } from "../src/hermetic.ts";
 import {
@@ -188,6 +188,30 @@ describe("foundation.status", () => {
     const status = await core(backend).foundation.status();
     expect(status.fleet.foundation_version).toBe(FOUNDATION_VERSION);
     expect(status.update_available).toBe(true);
+  });
+
+  test("an older artifacts bundle alone is an update; a newer one is not a downgrade", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const { artifacts_version: _a, ...unrecorded } = fleetOf(backend);
+    backend.fleetItem = unrecorded;
+    const behind = await core(backend).foundation.status();
+    expect(behind.fleet.artifacts_version).toBe(0);
+    expect(behind.available.artifacts_version).toBe(ARTIFACTS_VERSION);
+    expect(behind.update_available).toBe(true);
+    expect(behind.skew).toMatchObject({
+      severity: "degraded",
+      headline: `hermeticd artifacts v0 published · this build ships v${ARTIFACTS_VERSION}`,
+      fix: "hermetic foundation update",
+    });
+
+    backend.fleetItem = { ...unrecorded, artifacts_version: ARTIFACTS_VERSION };
+    expect((await core(backend).foundation.status()).update_available).toBe(false);
+
+    // Pushed from a newer checkout: pushing this build's bundle would go backwards.
+    backend.fleetItem = { ...unrecorded, artifacts_version: ARTIFACTS_VERSION + 1 };
+    const ahead = await core(backend).foundation.status();
+    expect(ahead.update_available).toBe(false);
+    expect(ahead.skew?.severity).toBe("none");
   });
 
   test("a fleet ahead of this build reports tool_outdated", async () => {
@@ -693,6 +717,32 @@ describe("foundation.update", () => {
     expect(fleet.foundation_updated_by).toBe(FIXTURE_CONFIG.frozen_by);
     // Released, always: an update that finished holds nothing (§4.4).
     expect(fleet.lock).toBeNull();
+  });
+
+  test("`artifacts push` of this build's bundle records the version; an explicit binary does not", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const { artifacts_version: _a, ...unrecorded } = fleetOf(backend);
+    backend.fleetItem = unrecorded;
+    await drain(core(backend).artifacts.push({ path: HERMETICD_STANDIN, rollout: false }));
+    expect(fleetOf(backend).artifacts_version).toBeUndefined();
+    expect((await core(backend).foundation.status()).update_available).toBe(true);
+
+    await drain(core(backend).artifacts.push({ rollout: false }));
+    expect(fleetOf(backend).artifacts_version).toBe(ARTIFACTS_VERSION);
+    expect((await core(backend).foundation.status()).update_available).toBe(false);
+  });
+
+  test("an update on a fleet behind only on artifacts pushes them and records the version", async () => {
+    const backend = seedFixtureFoundation(new MemoryBackend());
+    const { artifacts_version: _a, ...unrecorded } = fleetOf(backend);
+    backend.fleetItem = unrecorded;
+    backend.resetMutations();
+    const events = await drain(core(backend).foundation.update({ yes: true }));
+    expect(events.at(-1)).toMatchObject({ phase: "done", progress: 1 });
+    // The release went up again although the template and hermeticd label did not move.
+    expect(backend.mutations.some((m) => m.startsWith("artifacts.put"))).toBe(true);
+    expect(fleetOf(backend).artifacts_version).toBe(ARTIFACTS_VERSION);
+    expect((await core(backend).foundation.status()).update_available).toBe(false);
   });
 
   /**
@@ -1702,6 +1752,7 @@ describe("doctor and init", () => {
     const fleet = backend.fleetItem!;
     expect(fleet.foundation_version).toBe(FOUNDATION_VERSION);
     expect(fleet.foundation_template_sha256).toBe(foundationTemplateSha256());
+    expect(fleet.artifacts_version).toBe(ARTIFACTS_VERSION);
     expect((await readFleetManifest(backend.artifacts))!.foundation).toMatchObject({
       version: FOUNDATION_VERSION,
       template_sha256: foundationTemplateSha256(),

@@ -35,6 +35,7 @@ import { AGENT_PARAM_ROOT, HERMETIC_PARAM_ROOT } from "../backend/constants.ts";
 import { legacyParamPrefixes, listLegacyParams, readFleetScope } from "./legacy-params.ts";
 import { deriveDisplayStatus, heartbeatAgeMs } from "../agents/state.ts";
 import { staleBedrockGrants } from "../profiles/bedrock-grants.ts";
+import { ARTIFACTS_VERSION } from "../version.ts";
 import { settingsOf } from "../profiles/settings.ts";
 // The §4.7 preflight's own bound. `doctor` reuses the number rather than
 // picking a second one: it is the same daemon, asked the same question.
@@ -602,9 +603,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     findings.push(`${FLEET_KEY} fleet_id disagrees with local config`);
 
   /**
-   * §6.6: three ways to be behind, and each of them means the same fix. The
+   * §6.6: four ways to be behind, and each of them means the same fix. The
    * template digest is checked as well as the version because a template edit
-   * that forgot to bump `FOUNDATION_VERSION` would otherwise look current.
+   * that forgot to bump `FOUNDATION_VERSION` would otherwise look current, and
+   * an artifacts bundle older than `ARTIFACTS_VERSION` because the hermeticd
+   * label alone rarely moves.
    *
    * Reported as a *field* and deliberately not pushed into `findings`. A
    * finding is something wrong with this fleet, and `ok` is derived from the
@@ -619,7 +622,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     foundationVersion <= deps.available.foundationVersion &&
     (foundationVersion < deps.available.foundationVersion ||
       fleet.foundation_template_sha256 !== deps.available.templateSha256 ||
-      fleet.min_hermetic_version !== deps.available.hermeticdVersion);
+      fleet.min_hermetic_version !== deps.available.hermeticdVersion ||
+      (fleet.artifacts_version ?? 0) < ARTIFACTS_VERSION);
 
   const inbound = await backend.compute.describeSecurityGroupInbound();
   if (inbound.length > 0) {
