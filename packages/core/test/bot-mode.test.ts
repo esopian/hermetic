@@ -1261,11 +1261,13 @@ describe("the canonical chat never resets", () => {
     const h = await fixture();
     const blocks: string[] = [];
     for await (const frame of h.chat.send({ instance: "atlas", bot: "default", message }))
-      if (frame.type === "block" && frame.block.kind === "text") blocks.push(frame.block.markdown);
+      if (frame.type === "block" && frame.block.kind === "command") blocks.push(frame.block.output);
     return blocks;
   }
   test("/new and /reset compact instead, in Desktop's words", async () => {
-    for (const message of ["/new", "/reset "]) {
+    // Named too: `/new <name>` is still a fork, and the gateway's slash worker
+    // would only reset its own session.
+    for (const message of ["/new", "/reset ", "/new side quest", "/RESET x"]) {
       const [notice, ...rest] = await say(message);
       expect(rest).toEqual([]);
       expect(notice).toStartWith("This chat never resets.");

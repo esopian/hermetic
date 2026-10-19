@@ -14,7 +14,6 @@ import {
   botsUpdate,
   botsDelete,
   chatOpen,
-  chatCompact,
   chatArchive,
   chatRespond,
   roomsCreate,
@@ -79,6 +78,10 @@ export function BotWorkspace({
     swarm = chat.swarms.find((s) => s.instance === selection?.instance),
     bot = swarm?.bots.find((b) => b.name === selection?.bot),
     agent = selection ? (fleet?.byName.get(selection.instance) ?? null) : null;
+  // Core's running status for a `/compact` turn (`chat-send.ts`).
+  const compacting =
+    chat.sending &&
+    !!chat.live?.blocks.some((b) => b.kind === "activity" && b.key === "status:compact");
   useEffect(() => {
     setRoom(null);
   }, [selection?.instance, selection?.bot, selection?.session]);
@@ -311,18 +314,11 @@ export function BotWorkspace({
                   <button
                     type="button"
                     disabled={chat.sending}
-                    onClick={() =>
-                      void act(async () => {
-                        await chatCompact({
-                          instance: selection.instance,
-                          bot: selection.bot,
-                          ...(chat.session ? { session: chat.session.id } : {}),
-                        });
-                        await chat.reloadHistory();
-                      })
-                    }
+                    // The typed `/compact`'s path: a turn, so it shows its
+                    // progress and the transcript is re-read when it lands.
+                    onClick={() => chat.send("/compact")}
                   >
-                    Compact
+                    {compacting ? "Compacting…" : "Compact"}
                   </button>
                   <button
                     type="button"
@@ -574,6 +570,9 @@ export function BotWorkspace({
             const session = chat.session?.id;
             if (!session) throw new Error("Wait for session identity");
             await chatArchive({ instance: selection.instance, bot: selection.bot, session });
+            // An archived conversation is no longer reachable: land on the bot's
+            // Bot Chat, which resolves afresh (a new one when Bot Chat was archived).
+            select(selection.instance, selection.bot);
             await chat.reloadHistory();
             await chat.refreshSwarms();
           }}

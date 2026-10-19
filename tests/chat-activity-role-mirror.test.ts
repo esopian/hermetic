@@ -18,6 +18,7 @@ import { defaultRole } from "../packages/core/src/chat/hermes/hermes-chat-activi
 import { CHAT_BLOCK_KINDS, type ChatBlock } from "../packages/core/src/schema/chat.ts";
 import type { ChatBlockOf } from "../packages/ui/src/api/index.ts";
 import { CHAT_BLOCK_KINDS as UI_BLOCK_KINDS } from "../packages/ui/src/chat/chat-logic.ts";
+import { CHAT_BLOCK_KINDS as PHONE_BLOCK_KINDS } from "../mobile/src/client/chat-logic.ts";
 import { isActivity, isStatusBlock } from "../packages/ui/src/chat/components/Activity.tsx";
 
 // core's activity shape (`payload: unknown`) and the UI's wire-typed view
@@ -73,6 +74,10 @@ describe("core's defaultRole and the UI's role-less fallback agree", () => {
 describe("the UI's block-kind mirror", () => {
   test("names exactly core's kinds, so no kind falls through to `unknown`", () => {
     expect([...UI_BLOCK_KINDS].sort()).toEqual([...CHAT_BLOCK_KINDS].sort());
+  });
+
+  test("the phone's copy names them too", () => {
+    expect([...PHONE_BLOCK_KINDS].sort()).toEqual([...CHAT_BLOCK_KINDS].sort());
   });
 
   test("a subagent block is run work, never a status snapshot", () => {

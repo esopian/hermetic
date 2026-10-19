@@ -33,6 +33,8 @@ import { reuseMessages } from "./chat-message-identity.ts";
 import { useSubagentControls } from "./chat-subagent-control.ts";
 import { useObservation } from "./chat-observation.ts";
 import { devtap } from "./devtap.ts";
+import { isNewSessionCommand } from "@hermetic/core/shared";
+import { chatHash, isChatHash } from "./chat-routing.ts";
 import {
   localAttachmentBlock,
   markDelivery,
@@ -555,6 +557,29 @@ export function useConversations(
       const record = get(where);
       const body = text.trim();
       if ((!body && files.length === 0) || record.sending || record.aborting) return false;
+      // `/new` in an additional session opens a fresh one, as Desktop's local
+      // `/new` does; the gateway would only reset its slash worker. Bot Chat
+      // (or a session not yet listed) goes to core, which compacts (§9.2).
+      const kind = record.sessions.find((s) => s.id === where.session)?.kind;
+      const open = apiRef.current.openConversation;
+      if (open && kind && kind !== "canonical" && files.length === 0 && isNewSessionCommand(body)) {
+        const { instance, bot } = where;
+        open({ instance, bot, new_session: true }).then(
+          (opened) => {
+            if (!alive.current || !select(opened.instance, opened.bot, opened.session)) return;
+            if (isChatHash(window.location.hash)) window.location.hash = chatHash(opened);
+          },
+          (error: unknown) => {
+            if (!alive.current) return;
+            record.turnError = {
+              code: (error as { code?: string }).code ?? "UNCLASSIFIED",
+              message: error instanceof Error ? error.message : String(error),
+            };
+            changed();
+          },
+        );
+        return true;
+      }
       clearReconnect(record);
       const turn = ++record.turn;
       record.dropped = false;
@@ -744,7 +769,7 @@ export function useConversations(
       }
       return true;
     },
-    [assemble, changed, clearReconnect, get, readHistory, readSessions, reconnect, permits],
+    [assemble, changed, clearReconnect, get, readHistory, readSessions, reconnect, permits, select],
   );
 
   /**

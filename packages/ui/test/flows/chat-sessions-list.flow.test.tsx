@@ -108,3 +108,44 @@ test("a new session with a turn in it is still listed after clicking the bot", a
     { timeout: 4_000 },
   );
 });
+
+/** The session the URL names, or `null` for the bot's Bot Chat. */
+const hashSession = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("session");
+
+test("/new in an additional session opens a fresh one instead of reaching the bot", async () => {
+  await openScribe();
+  await newSession();
+  const first = hashSession();
+  expect(first).toBeTruthy();
+  const composer = await screen.findByRole("textbox", { name: /^Message Marshall/ });
+  await userEvent.type(composer, "/new{Enter}");
+
+  await waitFor(
+    () => {
+      expect(hashSession()).not.toBe(first);
+      expect(hashSession()).toBeTruthy();
+      expect(within(rail()).getAllByRole("button", { name: /Additional chat/ })).toHaveLength(2);
+    },
+    { timeout: 4_000 },
+  );
+  // Desktop's `/new` is a local action: nothing went to the gateway as a turn.
+  expect(harness!.calls.some((call) => call.name === "chat.turn")).toBe(false);
+});
+
+test("archiving an additional session lands back on Bot Chat", async () => {
+  await openScribe();
+  await newSession();
+  const strip = document.querySelector(".bm-strip") as HTMLElement;
+  await userEvent.click(within(strip).getByRole("button", { name: "Archive" }));
+  const dialog = await screen.findByRole("dialog", { name: "Archive conversation" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+
+  await waitFor(
+    () => {
+      expect(window.location.hash).toBe("#chat/atlas/scribe");
+      expect(within(rail()).queryByRole("button", { name: /Additional chat/ })).toBeNull();
+    },
+    { timeout: 4_000 },
+  );
+  expect(screen.getByText("Canonical Bot Chat · always here when you return")).toBeTruthy();
+});
