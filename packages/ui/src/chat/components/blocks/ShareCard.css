@@ -62,21 +62,21 @@
   outline: none;
   cursor: default;
 }
+/* Fit to the window, scaling a small picture up as well as a large one down. */
 .ch-zoom-full {
   display: block;
-  max-width: 92vw;
-  max-height: calc(92vh - 40px);
+  width: 92vw;
+  height: calc(92vh - 40px);
   object-fit: contain;
-  background: var(--bg);
 }
 .ch-zoom-close {
   appearance: none;
   -webkit-appearance: none;
   order: -1;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--fg);
   border-radius: 0;
-  background: transparent;
-  color: var(--bg);
+  background: var(--bg);
+  color: var(--fg);
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 800;
@@ -89,23 +89,29 @@
   outline-offset: 1px;
 }
 
+/* A player or a text preview takes a line of its own above or below the row. */
+.ch-share-media {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
 /* Audio and video the agent shared: the engine's player, sized like a preview. */
 .ch-share-audio {
-  flex-basis: 100%;
+  display: block;
   width: min(100%, 520px);
   height: 40px;
 }
+/* Scaled to the preview width, a small clip up as well as a large one down. */
 .ch-share-video {
-  flex-basis: 100%;
-  width: auto;
-  max-width: min(100%, 520px);
+  display: block;
+  width: min(100%, 520px);
+  height: auto;
   max-height: 320px;
   background: var(--bg3);
 }
 
 /* A text share's contents, drawn as text, scrolled inside the card. */
 .ch-share-text {
-  flex-basis: 100%;
   max-width: min(100%, 520px);
   max-height: 260px;
   overflow: auto;
