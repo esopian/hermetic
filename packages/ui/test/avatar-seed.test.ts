@@ -237,8 +237,8 @@ describe("sigil", () => {
     }
   });
 
-  test("streaming holds every cell in place and moves the material instead", () => {
-    const m = avatarMotion("ready", "streaming");
+  test("thinking holds every cell in place and moves the material instead", () => {
+    const m = avatarMotion("ready", "thinking");
     const seen = new Set<string>();
     for (const t of [0, 0.4, 1.1, 2.6, 5.5]) {
       const f = sigilFrame(cells[0]!, t, m);
@@ -249,8 +249,8 @@ describe("sigil", () => {
     expect(seen.size).toBeGreaterThan(3);
   });
 
-  test("thinking takes the mark apart — cells leave home and come back", () => {
-    const m = avatarMotion("ready", "thinking");
+  test("streaming takes the mark apart — cells leave home and come back", () => {
+    const m = avatarMotion("ready", "streaming");
     let away = 0;
     let home = 0;
     for (let i = 0; i < 400; i++) {
