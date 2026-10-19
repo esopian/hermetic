@@ -17,7 +17,7 @@
  */
 import type { ElectrobunConfig } from "electrobun/bun";
 import pkg from "../../package.json" with { type: "json" };
-import { macRenderer } from "./renderer.ts";
+import { linuxRenderer, macRenderer } from "./renderer.ts";
 import { viewBuild } from "./view-build.ts";
 
 /** Set by `scripts/dev-hmr.ts`, which also starts the server it names. */
@@ -80,6 +80,9 @@ export default {
       icons: "assets/icon.iconset",
       ...macRenderer(process.env),
     },
+    // The same keys for Linux, where a dev build stays on WebKitGTK unless
+    // `HERMETIC_RENDERER=cef` asks for CEF and its DevTools port.
+    linux: linuxRenderer(process.env),
   },
   // Build hooks are top-level, not `build.hooks`: a `build.hooks` key is
   // silently ignored by the builder, which is why the sidecars never staged.

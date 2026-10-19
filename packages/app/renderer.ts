@@ -22,13 +22,22 @@
  * renderer and no CEF, and asking for CEF there is a build failure rather than
  * a release that quietly ships Chromium.
  *
+ * Linux follows the same contract with one difference: a dev build stays on
+ * WebKitGTK unless `HERMETIC_RENDERER=cef` asks for Chromium. CEF is opt-in
+ * there because it is a large per-build download, and the reason to want it —
+ * DevTools on a headless dev box — is narrower than on a Mac. A Linux release,
+ * like a Mac one, never bundles CEF.
+ *
  * Nothing here imports the devkit, so a test drives it with a plain env.
  */
 
 /** Set by Hutch while it evaluates the config. */
 export const BUILD_ENV = "ELECTROBUN_BUILD_ENV";
 
-/** `cef` (the dev default) or `native`. Honoured only in a dev build. */
+/**
+ * `cef` or `native`. Honoured only in a dev build, where the default is `cef`
+ * on a Mac and `native` on Linux.
+ */
 export const RENDERER_ENV = "HERMETIC_RENDERER";
 
 /** The DevTools port a dev CEF build listens on, on 127.0.0.1. */
@@ -38,14 +47,14 @@ export const DEFAULT_CDP_PORT = 9333;
 
 export type Renderer = "native" | "cef";
 
-/** The renderer keys of `ElectrobunConfig["build"]["mac"]`. */
-export interface MacRenderer {
+/** The renderer keys of `ElectrobunConfig["build"]["mac"]` and `["linux"]`. */
+export interface RendererKeys {
   bundleCEF: boolean;
   defaultRenderer: Renderer;
   chromiumFlags?: Record<string, string | boolean>;
 }
 
-const NATIVE: MacRenderer = { bundleCEF: false, defaultRenderer: "native" };
+const NATIVE: RendererKeys = { bundleCEF: false, defaultRenderer: "native" };
 
 function requested(env: Record<string, string | undefined>): Renderer | undefined {
   const raw = env[RENDERER_ENV]?.trim() ?? "";
@@ -65,7 +74,17 @@ export function cdpPort(env: Record<string, string | undefined>): number {
   return port;
 }
 
-export function macRenderer(env: Record<string, string | undefined>): MacRenderer {
+/** The renderer keys for `build.mac`: CEF by default in a dev build. */
+export function macRenderer(env: Record<string, string | undefined>): RendererKeys {
+  return rendererKeys(env, "cef");
+}
+
+/** The renderer keys for `build.linux`: CEF in a dev build only when asked. */
+export function linuxRenderer(env: Record<string, string | undefined>): RendererKeys {
+  return rendererKeys(env, "native");
+}
+
+function rendererKeys(env: Record<string, string | undefined>, devDefault: Renderer): RendererKeys {
   const buildEnv = env[BUILD_ENV] ?? "";
   const asked = requested(env);
   if (buildEnv !== "dev") {
@@ -76,7 +95,7 @@ export function macRenderer(env: Record<string, string | undefined>): MacRendere
     }
     return NATIVE;
   }
-  if (asked === "native") return NATIVE;
+  if ((asked ?? devDefault) === "native") return NATIVE;
   return {
     bundleCEF: true,
     defaultRenderer: "cef",
