@@ -162,26 +162,30 @@ export function ShareCard({ share, instance: own }: { share: ShareFacts; instanc
     <div className="ch-attach ch-share" data-share-id={share.id} data-media-kind={kind}>
       {src ? <ZoomableImage src={src} alt={name} /> : null}
       {media && kind === "audio" ? (
-        // biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer.
-        <audio
-          className="ch-share-audio"
-          controls
-          preload="metadata"
-          src={media}
-          aria-label={name}
-          onError={() => setUndecodable(media)}
-        />
+        <div className="ch-share-media">
+          {/* biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer. */}
+          <audio
+            className="ch-share-audio"
+            controls
+            preload="metadata"
+            src={media}
+            aria-label={name}
+            onError={() => setUndecodable(media)}
+          />
+        </div>
       ) : null}
       {media && kind === "video" ? (
-        // biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer.
-        <video
-          className="ch-share-video"
-          controls
-          preload="metadata"
-          src={media}
-          aria-label={name}
-          onError={() => setUndecodable(media)}
-        />
+        <div className="ch-share-media">
+          {/* biome-ignore lint/a11y/useMediaCaption: an agent's file carries no caption track to offer. */}
+          <video
+            className="ch-share-video"
+            controls
+            preload="metadata"
+            src={media}
+            aria-label={name}
+            onError={() => setUndecodable(media)}
+          />
+        </div>
       ) : null}
       {played !== null && played === undecodable ? (
         <div className="ch-share-note muted" role="note">
@@ -220,9 +224,11 @@ export function ShareCard({ share, instance: own }: { share: ShareFacts; instanc
         </span>
       </div>
       {text?.state === "ready" ? (
-        <pre className="ch-share-text">
-          <RedactedText text={text.text} />
-        </pre>
+        <div className="ch-share-media">
+          <pre className="ch-share-text">
+            <RedactedText text={text.text} />
+          </pre>
+        </div>
       ) : null}
       {text?.state === "loading" ? <div className="ch-shot-missing">loading preview…</div> : null}
       {gone ? null : <PreviewNote preview={text} what="preview" />}
