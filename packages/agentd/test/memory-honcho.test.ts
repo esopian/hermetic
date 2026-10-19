@@ -9,6 +9,7 @@
  * `honcho.json`), written out by hand: this suite is about what the box does
  * with such a manifest, not about the renderer.
  */
+import { PATH_KIND_SCRIPT } from "../src/files/fs-ops.ts";
 import { describe, expect, test } from "bun:test";
 import type { AgentConfig, RenderedFile } from "@hermetic/core/schema";
 import {
@@ -248,7 +249,7 @@ describe("honcho: a fresh box", () => {
       expect(result.restarted).toContain(u);
     }
     expect(host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
-      "LLM_OPENAI_API_KEY='FIXTURE openai key'\n",
+      'LLM_OPENAI_API_KEY="FIXTURE openai key"\n',
     );
     expect(result.installed).toEqual(
       expect.arrayContaining([
@@ -269,7 +270,12 @@ describe("honcho: a fresh box", () => {
       expect.arrayContaining(["postgresql-16", `memory:${HONCHO.pin}`, `pgdata:${honchoPgDataDir}`]),
     );
     expect(plan.changed).toContain(HONCHO_CREATECLUSTER_CONF);
-    expect(host.commands.filter((c) => INSTALL_WORK.test(c) || c.startsWith("runuser "))).toEqual([]);
+    // The managed `.env` block's read-only look as the account is the one exception.
+    expect(
+      host.commands.filter(
+        (c) => INSTALL_WORK.test(c) || (c.startsWith("runuser ") && !c.includes(PATH_KIND_SCRIPT)),
+      ),
+    ).toEqual([]);
     expect(host.files.has(HONCHO_CREATECLUSTER_CONF)).toBe(false);
   });
 

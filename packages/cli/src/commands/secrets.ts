@@ -17,7 +17,7 @@ import {
   SecretsPushInput,
   SecretsVerifyInput,
 } from "@hermetic/core";
-import { renderSharedSecrets } from "../table.ts";
+import { renderKeyPush, renderSharedSecrets } from "../table.ts";
 import { askSecretSlug } from "../confirm.ts";
 
 const secretsPushSchema = declare("secrets.push", "secrets push", SecretsPushInput);
@@ -116,6 +116,7 @@ export function register(program: Command): void {
           if (pushed.rekeyed !== undefined && pushed.rekeyed.length > 0) {
             await out(`rekeyed: ${pushed.rekeyed.join(", ")}\n`);
           }
+          for (const line of renderKeyPush(pushed)) await out(`${line}\n`);
           // The value was stored and something is still missing — a Tailscale
           // client that mints but cannot list devices. Core returns the
           // sentence; the head is the only thing allowed to print it (rule 1).

@@ -6,6 +6,7 @@ import {
   RPC_VERSION_HEADER,
   RpcFrame,
   RpcHealth,
+  SecretsSyncResult,
 } from "../schema/index.ts";
 import { HermeticError } from "../errors.ts";
 import type { FetchLike } from "./tailscale.ts";
@@ -35,6 +36,14 @@ export interface HermeticdRpcOptions {
  * diagnose without making a live one any more likely to be found.
  */
 export const RPC_DEFAULT_TIMEOUT_MS = 5_000;
+
+/**
+ * `secretsSync`'s budget, longer than `health`'s because the box does real work
+ * before it answers: an SSM read, maybe a bws fetch, and one `.env` rewrite per
+ * bot under the env lock. Five seconds is short enough for a box with many bots
+ * to miss, and a miss is reported as unreachable.
+ */
+export const RPC_SECRETS_SYNC_TIMEOUT_MS = 30_000;
 
 /**
  * `http://<tailscale ip>:7434` for one agent, or a typed refusal: no such row,
@@ -121,7 +130,7 @@ export class HermeticdRpc implements RpcApi {
   }
 
   /**
-   * `GET /healthz` (§6.4), bounded. This is the only RPC that must *return* —
+   * `GET /healthz` (§6.4), bounded. This is an RPC that must *return* —
    * `logs --follow` is unbounded by design — so it is the one that reads
    * `requestTimeoutMs`, and it combines that budget with whatever signal the
    * caller brought rather than choosing between them: an operator's Ctrl-C and
@@ -132,14 +141,38 @@ export class HermeticdRpc implements RpcApi {
    * the message as its detail, so what the operator reads is what happened.
    */
   async health(name: string, opts: { signal?: AbortSignal } = {}): Promise<RpcHealth> {
-    const url = `${await this.base(name)}${RPC_PATHS.health}`;
-    const timeout = AbortSignal.timeout(this.opts.requestTimeoutMs ?? RPC_DEFAULT_TIMEOUT_MS);
-    const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+    return RpcHealth.parse(await this.bounded(name, RPC_PATHS.health, "GET", opts.signal));
+  }
+
+  /**
+   * `POST /secrets/sync` (§8.1), bounded like `health` but by
+   * `RPC_SECRETS_SYNC_TIMEOUT_MS`. The request has no body
+   * and the answer names bots only; a 404 is an older hermeticd without the
+   * route, which the caller reports as unreachable like any other failure.
+   */
+  async secretsSync(name: string, opts: { signal?: AbortSignal } = {}): Promise<SecretsSyncResult> {
+    return SecretsSyncResult.parse(
+      await this.bounded(name, RPC_PATHS.secretsSync, "POST", opts.signal, RPC_SECRETS_SYNC_TIMEOUT_MS),
+    );
+  }
+
+  /** One bounded request answering JSON: the caller's signal plus the timeout. */
+  private async bounded(
+    name: string,
+    path: string,
+    method: "GET" | "POST",
+    callerSignal: AbortSignal | undefined,
+    defaultTimeoutMs = RPC_DEFAULT_TIMEOUT_MS,
+  ): Promise<unknown> {
+    const url = `${await this.base(name)}${path}`;
+    const timeoutMs = this.opts.requestTimeoutMs ?? defaultTimeoutMs;
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 
     let res: Response;
     try {
       res = await this.http(url, {
-        method: "GET",
+        method,
         headers: { [RPC_VERSION_HEADER]: String(RPC_PROTOCOL_VERSION) },
         signal,
       });
@@ -148,7 +181,7 @@ export class HermeticdRpc implements RpcApi {
       // — "it did not reply" — but the reason is the interesting half, so it is
       // kept verbatim rather than flattened into one message.
       const why = timeout.aborted
-        ? `did not answer within ${this.opts.requestTimeoutMs ?? RPC_DEFAULT_TIMEOUT_MS}ms`
+        ? `did not answer within ${timeoutMs}ms`
         : e instanceof Error
           ? e.message
           : String(e);
@@ -160,7 +193,7 @@ export class HermeticdRpc implements RpcApi {
         status: res.status,
       });
     }
-    return RpcHealth.parse(await res.json());
+    return await res.json();
   }
 
   /**

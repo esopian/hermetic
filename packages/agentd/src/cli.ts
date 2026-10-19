@@ -20,15 +20,8 @@ import { realHost, type Host } from "./host.ts";
 import { paramPath } from "./fleet.ts";
 import { normalize, resolve } from "node:path";
 import { MANIFEST_PATH, parseManifestJson, readBundleManifest } from "./manifest.ts";
-import {
-  apply,
-  materialiseMemoryLlm,
-  materialiseSecrets,
-  memoryLlmFor,
-  SECRETS_ENV_DIR,
-  SECRETS_ENV_DIR_MODE,
-  SECRETS_ENV_PATH,
-} from "./apply/index.ts";
+import { apply, SECRETS_ENV_DIR, SECRETS_ENV_DIR_MODE, settleLegacySecretsEnv } from "./apply/index.ts";
+import { describeSync, resolveAndSync } from "./secrets-sync.ts";
 import { checkHermes } from "./hermes-check.ts";
 import { bootstrap, installBootstrapUnit } from "./bootstrap.ts";
 import { DATA_MOUNT, DEVICE_WAIT_MS, mountDataVolume } from "./disk.ts";
@@ -135,7 +128,7 @@ const USAGE = `hermeticd ${HERMETICD_VERSION}
   hermeticd update [--check] [--force]
   hermeticd serve
   hermeticd heartbeat --once
-  hermeticd secrets materialise --out <path> [--mode 0600]
+  hermeticd secrets materialise
   hermeticd version
 `;
 
@@ -271,10 +264,9 @@ export async function run(
       let bwsToken: string | undefined;
       let providerKey: string | undefined;
       let ctx: Context | null = null;
-      // Only when `apply` would rewrite `secrets.env` at all. On a box where it
-      // would not, `hermetic-secrets.service` remains the file's sole author and
-      // there is nothing for apply to preserve — so no SSM call is made. The
-      // memory server's credential is the provider key again, so it adds no read.
+      // Only when the managed `.env` block has a slot to hold. With neither, the
+      // block is empty and no SSM call is made. The memory server's credential
+      // is the provider key again, so it adds no read.
       if (manifest.secrets_mode === "bitwarden" || PROVIDERS[manifest.provider].env !== null) {
         ctx = await context(host, deps);
         if (manifest.secrets_mode === "bitwarden") {
@@ -399,68 +391,28 @@ export async function run(
         process.stderr.write(USAGE);
         return 1;
       }
-      const out = typeof flags["out"] === "string" ? flags["out"] : SECRETS_ENV_PATH;
-      // Runtime secrets live on tmpfs and nowhere else (§8.3). `/data` is
-      // snapshotted nightly; the root volume is disposable but not ephemeral.
-      if (!out.startsWith(SECRETS_ENV_DIR + "/") && !out.startsWith("/run/")) {
-        throw new AgentdError(
-          "INTERNAL",
-          `refusing to write secrets to ${out}: runtime secrets live under /run (tmpfs), mode 600`,
-          { out },
-        );
-      }
+      /**
+       * The boot oneshot (`hermetic-secrets.service`): the managed block in
+       * every Hermes `.env`, then the memory server's credential file on
+       * tmpfs, both from the manifest at `MANIFEST_PATH`. A render from before
+       * the key moved into `.env` still passes `--out`/`--mode`; both are
+       * ignored, and the old path is settled instead (`settleLegacySecretsEnv`).
+       */
       const text = await host.readFile(MANIFEST_PATH);
       if (text === null) {
         throw new AgentdError("MANIFEST_REFUSED", `no manifest at ${MANIFEST_PATH}`);
       }
       const manifest = parseManifestJson(text);
-      const keyEnv = PROVIDERS[manifest.provider].env;
-      // No early return, even with nothing to write. `hermes-dashboard.service` names
-      // this file in an unconditional `EnvironmentFile=`, so a Bedrock box with
-      // no provider key and no Bitwarden project still needs an (empty) file to
-      // exist — otherwise systemd refuses to start the unit at all.
       const ctx = await context(host, deps);
-      const token =
-        manifest.secrets_mode === "bitwarden"
-          ? await ctx.aws.getParameter(paramPath(ctx.paramPrefix, "bws-token"))
-          : null;
-      const key =
-        keyEnv === null
-          ? null
-          : await ctx.aws.getParameter(paramPath(ctx.paramPrefix, providerKeyRefOf(manifest)));
-      // Before either file is written: a memory server that needs the key and
-      // has none is refused here, as `apply` refuses it.
-      const memoryLlm = memoryLlmFor(manifest, key ?? undefined);
-      if (manifest.secrets_mode !== "bitwarden" && keyEnv === null) {
-        process.stderr.write(
-          "no provider key and no bitwarden project; writing an empty environment file\n",
-        );
-      }
-      const mode = typeof flags["mode"] === "string" ? flags["mode"] : "0600";
-      const changed = await materialiseSecrets({
+      const synced = await resolveAndSync({
         host,
-        ...(token ? { bitwarden: { token, project: manifest.name } } : {}),
-        ...(keyEnv !== null && key ? { providerKey: { env: keyEnv, value: key } } : {}),
-        outPath: out,
+        aws: ctx.aws,
+        paramPrefix: ctx.paramPrefix,
+        manifest,
       });
-      // Unconditional: an existing file with the right content may still have
-      // the wrong bits, and that is exactly the case worth correcting.
-      await host.chmod(out, mode);
-      process.stderr.write(`${changed ? "wrote" : "unchanged"} ${out}\n`);
-      /**
-       * The memory server's credential file, beside `secrets.env`: this same
-       * oneshot recreates `/run/hermetic` on every boot, and
-       * `hermetic-memory.service` names the file in an unconditional
-       * `EnvironmentFile=`. Removed for an agent without a server. Only when
-       * `--out` is the real `secrets.env` — a materialise aimed elsewhere is a
-       * look at the output, and must not move the live file under the unit.
-       */
-      if (out === SECRETS_ENV_PATH) {
-        const memoryChanged = await materialiseMemoryLlm({ host, memoryLlm });
-        if (memoryChanged) {
-          process.stderr.write(`${memoryLlm === null ? "removed" : "wrote"} ${MEMORY_LLM_ENV_PATH}\n`);
-        }
-      }
+      await settleLegacySecretsEnv(host, manifest);
+      process.stderr.write(`${describeSync(synced)}\n`);
+      if (synced.memoryChanged) process.stderr.write(`wrote or removed ${MEMORY_LLM_ENV_PATH}\n`);
       return EXIT_OK;
     }
 

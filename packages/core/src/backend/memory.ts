@@ -5,6 +5,7 @@ import type {
   FleetItem,
   NetworkMode,
   RpcHealth,
+  SecretsSyncResult,
   SnapshotPolicy,
 } from "../schema/index.ts";
 import { FLEET_KEY, RPC_PROTOCOL_VERSION, browserIdentities, stackNameFor } from "../schema/index.ts";
@@ -855,6 +856,22 @@ export class MemoryBackend implements Backend {
     fleetId: () => this.boundFleetId(),
   });
 
+  /** The row of a box whose hermeticd would answer: a tailnet address and a fresh heartbeat. */
+  private answering(name: string): Agent {
+    const agent = this.agents.get(name);
+    if (!agent) throw new HermeticError("NOT_FOUND", `no such agent: ${name}`, { name });
+    const stale =
+      !agent.tailscale_ip ||
+      agent.last_heartbeat === null ||
+      agent.last_heartbeat === undefined ||
+      this.now().getTime() - Date.parse(agent.last_heartbeat) >
+        HEARTBEAT_INTERVAL_MS * UNREACHABLE_INTERVALS;
+    if (stale) {
+      throw new HermeticError("INTERNAL", `hermeticd on ${name} did not answer`, { name });
+    }
+    return agent;
+  }
+
   readonly rpc = {
     /**
      * The fixture's `/healthz`. It answers for a row with a tailnet address and
@@ -865,17 +882,7 @@ export class MemoryBackend implements Backend {
      * it always says "fine", which is the opposite of what it is for.
      */
     health: async (name: string): Promise<RpcHealth> => {
-      const agent = this.agents.get(name);
-      if (!agent) throw new HermeticError("NOT_FOUND", `no such agent: ${name}`, { name });
-      const stale =
-        !agent.tailscale_ip ||
-        agent.last_heartbeat === null ||
-        agent.last_heartbeat === undefined ||
-        this.now().getTime() - Date.parse(agent.last_heartbeat) >
-          HEARTBEAT_INTERVAL_MS * UNREACHABLE_INTERVALS;
-      if (stale) {
-        throw new HermeticError("INTERNAL", `hermeticd on ${name} did not answer`, { name });
-      }
+      const agent = this.answering(name);
       return {
         name,
         hermeticd_version: agent.hermeticd_version ?? FIXTURE_HERMETICD_VERSION,
@@ -900,6 +907,19 @@ export class MemoryBackend implements Backend {
           detail: `hermetic-browser@${b.name} active, CDP on 127.0.0.1:${b.cdp_port}`,
         })),
       };
+    },
+    /**
+     * The fixture's `POST /secrets/sync`: answers where `/healthz` would,
+     * except for `FIXTURE_SYNC_UNREACHABLE`, so a key push in `bun run
+     * dev:fixture` shows one `pushed` and one `unreachable` agent. A fixture
+     * box has no bots on disk, so `bots` is empty.
+     */
+    secretsSync: async (name: string): Promise<SecretsSyncResult> => {
+      this.answering(name);
+      if (name === FIXTURE_SYNC_UNREACHABLE) {
+        throw new HermeticError("INTERNAL", `hermeticd on ${name} did not answer`, { name });
+      }
+      return { changed: true, bots: [] };
     },
     /**
      * Two lines and then the end of the stream — including under `follow`. A
@@ -937,6 +957,12 @@ export type { MemoryFileEntry } from "./fixture/memory-files.ts";
 // The one fixture agent whose hermeticd reports no `files` capability (`ember`).
 // Defined beside the phone's fixture files box, which answers the same way.
 export { FIXTURE_NO_FILES_AGENT };
+/**
+ * The bound fixture agent (`ibis`, on the openrouter profile) whose hermeticd
+ * does not answer `POST /secrets/sync`, so a key push has an `unreachable` line
+ * to render. Every other answer from it is normal.
+ */
+export const FIXTURE_SYNC_UNREACHABLE = "ibis";
 
 /**
  * The fixture data, re-exported so this module stays the one door every test

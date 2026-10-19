@@ -330,6 +330,9 @@ describe("phone gateway ↔ scripted Hermes gateway", () => {
       "profiles.configure",
       "profiles.describe",
     ]);
+    // Both heads ask upstream to copy the default `.env` (the provider key)
+    // into the new bot (§9.2).
+    expect(JSON.parse(desktopSent[0]?.params ?? "{}")).toMatchObject({ mirror_credentials: true });
     expect(desktopSent[1]?.params).toBe(
       '{"name":"scout","ui_meta":{"hermes-bots":{"version":1,"title":"Scout","created":0}}}',
     );

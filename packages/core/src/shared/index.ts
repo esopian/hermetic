@@ -235,7 +235,10 @@ export {
   HERMES_TUI_DIR,
   HERMES_USER_CONFIG,
   HERMES_USER_ENV,
+  HERMES_PROFILES_DIR,
   HERMES_WEB_DIST_DIR,
+  MANAGED_ENV_BEGIN,
+  MANAGED_ENV_END,
   hermesConfigGetArgv,
 } from "./hermes.ts";
 export { hermesConfigLeaves, hermesOwnedDrift } from "./hermes-owned.ts";

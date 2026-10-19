@@ -242,17 +242,37 @@ export function canDeleteSecret(row: SecretRow): { ok: boolean; reason?: string 
 }
 
 /** What a shared-secret push's receipt (§8.2) resolved to on re-key. */
-export interface RekeyReceipt {
+export interface RekeyReceipt extends KeyPush {
   /** How many running agents on this slot were re-copied into. */
   rekeyed: number;
   /** Whether "Re-key running agents" was ticked for this push at all. */
   rekeyRequested: boolean;
 }
 
+/** Where a pushed key went (§8.1): core's `pushed`/`unreachable` per agent. */
+export interface KeyPush {
+  pushed?: string[];
+  unreachable?: string[];
+}
+
+/**
+ * One line for a key push, or null when it reached no agent: the boxes that
+ * rewrote their `.env` now, and the ones that did not answer and take the key
+ * at their next heartbeat or boot.
+ */
+export function keyPushMessage(push: KeyPush): string | null {
+  const parts: string[] = [];
+  if (push.pushed?.length) parts.push(`key pushed to ${push.pushed.join(", ")}`);
+  if (push.unreachable?.length) {
+    parts.push(`${push.unreachable.join(", ")} unreachable — takes the key at its next sync`);
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
 /**
  * The rotate receipt has three distinct outcomes, not two: a plain push never
  * touches a running agent, so it always says so; a re-key that matched
- * something says how many and that each takes it on its next `recreate`; and
+ * something says how many and which boxes took it now (`keyPushMessage`); and
  * a re-key that matched *nothing* is not the same as not asking — an operator
  * who ticked the box and got a silent "future creates get this value" would
  * reasonably read that as the tick having done nothing, when in fact no agent
@@ -265,7 +285,7 @@ export function rekeyReceiptMessage(receipt: RekeyReceipt): string {
   if (receipt.rekeyed === 0) {
     return "re-key requested — no running agent uses this slot; future creates get the value";
   }
-  return `rekeyed ${String(receipt.rekeyed)} agent${receipt.rekeyed === 1 ? "" : "s"} · each takes it on its next recreate`;
+  return `rekeyed ${String(receipt.rekeyed)} agent${receipt.rekeyed === 1 ? "" : "s"} · ${keyPushMessage(receipt) ?? "each takes it at its next sync"}`;
 }
 
 /* ── failures ────────────────────────────────────────────────────────────── */

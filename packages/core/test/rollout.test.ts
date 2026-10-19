@@ -387,6 +387,7 @@ describe("a config the fleet's published release could not apply", () => {
     const { hermetic } = await publish([
       "gateway-unit",
       "restart-units",
+      "managed-env",
       "browser-stack",
       "memory-provider",
     ]);
@@ -412,7 +413,7 @@ describe("a config the fleet's published release could not apply", () => {
    * the change was saved.
    */
   test("staging a binding onto a revision slot is refused at `set`, and stages nothing", async () => {
-    const { backend, hermetic } = await publish(["gateway-unit", "restart-units"]);
+    const { backend, hermetic } = await publish(["gateway-unit", "restart-units", "managed-env"]);
     const before = backend.agents.get("kestrel")!;
 
     await expect(hermetic.agents.set({ name: "kestrel", refresh_profile: true })).rejects.toThrow(
@@ -432,7 +433,7 @@ describe("a config the fleet's published release could not apply", () => {
    * nothing staged to retry.
    */
   test("an apply onto a slot the published release cannot read leaves the row untouched", async () => {
-    const { backend, hermetic } = await publish(["gateway-unit", "restart-units"]);
+    const { backend, hermetic } = await publish(["gateway-unit", "restart-units", "managed-env"]);
     const before = backend.agents.get("corvid")!;
     expect(before.pending).toBeTruthy();
     // The plan is computed against the fleet as it was published; the refusal
@@ -467,7 +468,7 @@ describe("a config the fleet's published release could not apply", () => {
    * gone and nothing staged to retry.
    */
   test("a recreate onto a slot the published release cannot read leaves the binding staged", async () => {
-    const { backend, hermetic } = await publish(["gateway-unit", "restart-units"]);
+    const { backend, hermetic } = await publish(["gateway-unit", "restart-units", "managed-env"]);
     const before = backend.agents.get("corvid")!;
     expect(before.pending).toBeTruthy();
 

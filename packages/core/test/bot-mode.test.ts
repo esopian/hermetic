@@ -1219,7 +1219,7 @@ describe("creating a bot", () => {
     // prefixed with it: the teammate roster joins the two itself.
     expect(sent[0]).toEqual({
       method: "profiles.create",
-      params: { name: "scribe", description: "Digest" },
+      params: { name: "scribe", description: "Digest", mirror_credentials: true },
     });
     const meta = markerOf(sent[1]?.params);
     expect(sent[1]?.method).toBe("profiles.configure");

@@ -100,6 +100,21 @@ export const HERMES_USER_CONFIG = HERMES_HOME + "/config.yaml";
  */
 export const HERMES_USER_ENV = HERMES_HOME + "/.env";
 /**
+ * Where upstream keeps one directory per bot (a named Hermes profile, `hermes -p
+ * <name>`), each with its own `.env` (§9.2). hermeticd keys every one of them
+ * with the same managed block it writes into `HERMES_USER_ENV`.
+ */
+export const HERMES_PROFILES_DIR = HERMES_HOME + "/profiles";
+/**
+ * The fence around the lines hermeticd owns in every Hermes `.env` (§8.1): the
+ * provider key, then the Bitwarden lines. hermeticd is the block's only
+ * writer and splices it in, leaving every line outside it untouched; an edit
+ * inside it is reverted by the next sync, which the opening comment says.
+ */
+export const MANAGED_ENV_BEGIN =
+  "# >>> hermetic managed: rewritten by hermeticd; change keys with `hermetic providers` >>>";
+export const MANAGED_ENV_END = "# <<< hermetic managed <<<";
+/**
  * The directory the managed scope *is*: `managed_scope.py` takes
  * `$HERMES_MANAGED_DIR` if set and existing, else this path if it exists.
  *

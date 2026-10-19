@@ -28,6 +28,7 @@ export const HERMETICD_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<Agen
   "gateway-unit",
   "restart-units",
   "provider-key-ref",
+  "managed-env",
   "browser-stack",
   "memory-provider",
   "memory-service",

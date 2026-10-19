@@ -1,11 +1,10 @@
 /**
- * `hermeticd secrets materialise` and the environment file it writes (§8.3).
+ * `hermeticd secrets materialise` and the managed block it writes into every
+ * Hermes `.env` (§8.1).
  *
- * The thing being pinned here is that the file is *always* written: core's
- * rendered `hermes-dashboard.service` names it in an unconditional `EnvironmentFile=`,
- * and systemd refuses to start a unit whose environment file is missing — so a
- * Bedrock box with no provider key and no Bitwarden project still has to end up
- * with an empty file, not with none.
+ * The thing being pinned here is that the block is *always* written: a Bedrock
+ * box with no provider key and no Bitwarden project ends up with an empty
+ * fence, so a key from a previous binding cannot outlive it.
  *
  * There is deliberately nothing here about a dashboard login. Hermes runs in
  * local mode behind a loopback nginx proxy, so the box has no browser gate to
@@ -14,8 +13,14 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { GetParameterCommand, GetParametersByPathCommand } from "@aws-sdk/client-ssm";
-import { FILES_SECRET_DIR, encodeSecretEnvelope } from "@hermetic/core/shared";
-import { envLine, materialiseSecrets, SECRETS_ENV_DIR, SECRETS_ENV_PATH } from "../src/apply/index.ts";
+import {
+  FILES_SECRET_DIR,
+  HERMES_USER_ENV,
+  MANAGED_ENV_BEGIN,
+  MANAGED_ENV_END,
+  encodeSecretEnvelope,
+} from "@hermetic/core/shared";
+import { envLine, managedEnvLines, SECRETS_ENV_DIR, SECRETS_ENV_PATH } from "../src/apply/index.ts";
 import { makeAws } from "../src/aws.ts";
 import { FLEET_CACHE_PATH } from "../src/fleet.ts";
 import { MANIFEST_PATH } from "../src/manifest.ts";
@@ -38,6 +43,12 @@ import { captureOutput } from "./quiet.ts";
 captureOutput();
 
 const HOSTNAME = "research-1.tail1234.ts.net";
+const PROFILES = "/data/hermes/.hermes/profiles";
+
+/** A `.env` holding just the managed block, with these lines in it. */
+function fenced(...lines: string[]): string {
+  return [MANAGED_ENV_BEGIN, ...lines, MANAGED_ENV_END, ""].join("\n");
+}
 
 /** `ParameterNotFound` as the SSM client surfaces it: a name, not a status. */
 function parameterNotFound(): Error {
@@ -56,6 +67,8 @@ interface RigOptions extends ManifestOverrides {
 function rig(options: RigOptions = {}) {
   const { slots = {}, bitwardenSecrets, ...manifestOverrides } = options;
   const host = new FakeHost();
+  // The account's home, as `ensureAccounts` leaves it; nothing invents it.
+  for (const dir of ["/data", "/data/hermes", "/data/hermes/.hermes"]) host.dirs.add(dir);
   if (bitwardenSecrets) {
     host.handlers.push((argv) =>
       argv[0] === "bws" ? { code: 0, stdout: JSON.stringify(bitwardenSecrets), stderr: "" } : null,
@@ -74,7 +87,7 @@ function rig(options: RigOptions = {}) {
     const slot = name.slice(name.lastIndexOf("/") + 1);
     const value = slots[slot];
     if (value === undefined) throw parameterNotFound();
-    return { Parameter: { Value: value } };
+    return { Parameter: { Value: value, Version: 3 } };
   });
   // The durable file secrets are listed, one level, under the same prefix.
   ssm.byCommand.set("GetParametersByPathCommand", (command) => {
@@ -100,8 +113,9 @@ function rig(options: RigOptions = {}) {
     host,
     ssm,
     materialise: () => run(["secrets", "materialise"], host, { aws: () => aws }),
+    runArgs: (argv: string[]) => run(argv, host, { aws: () => aws }),
     apply: () => run(["apply"], host, { aws: () => aws }),
-    env: () => host.files.get(SECRETS_ENV_PATH)?.content ?? null,
+    env: () => host.files.get(HERMES_USER_ENV)?.content ?? null,
   };
 }
 
@@ -121,7 +135,7 @@ async function captureStderr(body: () => Promise<void>): Promise<string> {
   return captured;
 }
 
-describe("the tmpfs environment file (§8.3)", () => {
+describe("the managed .env block (§8.1)", () => {
   test("a keyed provider's slot becomes its one variable, and nothing else", async () => {
     const r = rig({ provider: "nous", slots: { "provider-key": "nous-FIXTURE-KEY" } });
 
@@ -129,35 +143,39 @@ describe("the tmpfs environment file (§8.3)", () => {
     await captureStderr(async () => void (code = await r.materialise()));
 
     expect(code).toBe(0);
-    expect(r.env()).toBe("NOUS_API_KEY=nous-FIXTURE-KEY\n");
+    expect(r.env()).toBe(fenced("NOUS_API_KEY=nous-FIXTURE-KEY"));
     expect(host0600(r.host)).toBe(true);
     // Local-mode Hermes has no browser gate, so no box writes one.
     expect(r.env()).not.toContain("HERMES_DASHBOARD");
-    // This agent's own subtree, and only it — no fleet-wide slot is read.
-    expect(r.ssm.commandCalls(GetParameterCommand).map((c) => c.input.Name)).toEqual([
-      "/hermes/research-1/provider-key",
+    // This agent's own subtree, and only it — no fleet-wide slot is read. The
+    // first read is the version, undecrypted; the second the value.
+    const reads = r.ssm.commandCalls(GetParameterCommand).map((c) => c.input);
+    expect(reads.map((i) => [i.Name, i.WithDecryption])).toEqual([
+      ["/hermes/research-1/provider-key", false],
+      ["/hermes/research-1/provider-key", true],
     ]);
+    // Nothing secret is left on tmpfs any more.
+    expect(r.host.files.has(SECRETS_ENV_PATH)).toBe(false);
     // Nothing waited on: there is no read here that is allowed to be retried.
     expect(r.host.sleeps).toEqual([]);
   });
 
-  test("bedrock with no bitwarden project still writes an empty environment file", async () => {
+  test("bedrock with no bitwarden project still writes an empty block", async () => {
     // Bedrock authenticates by instance role, so there is no provider key
-    // either: nothing whatsoever to put in the file, which must exist anyway.
+    // either: nothing whatsoever to put in the block, whose fence stays.
     const r = rig({ provider: "bedrock", secrets_mode: "none" });
 
     let code = -1;
-    const stderr = await captureStderr(async () => void (code = await r.materialise()));
+    await captureStderr(async () => void (code = await r.materialise()));
 
     expect(code).toBe(0);
-    expect(r.env()).toBe("\n");
+    expect(r.env()).toBe(fenced());
     expect(host0600(r.host)).toBe(true);
-    expect(stderr).toContain("writing an empty environment file");
     // A box with nothing to fetch asks SSM for nothing at all.
     expect(r.ssm.commandCalls(GetParameterCommand)).toEqual([]);
   });
 
-  test("a bitwarden project's secrets are listed into the same file", async () => {
+  test("a bitwarden project's secrets are listed into the same block", async () => {
     const r = rig({
       provider: "bedrock",
       secrets_mode: "bitwarden",
@@ -169,7 +187,7 @@ describe("the tmpfs environment file (§8.3)", () => {
     await captureStderr(async () => void (code = await r.materialise()));
 
     expect(code).toBe(0);
-    expect(r.env()).toBe("GITHUB_TOKEN=FIXTURE-gh\n");
+    expect(r.env()).toBe(fenced("GITHUB_TOKEN=FIXTURE-gh"));
     expect(host0600(r.host)).toBe(true);
     // The token reaches `bws` through the environment, never through argv.
     expect(r.host.commandsMatching(/^bws /)[0]).not.toContain("0.FIXTURE.token");
@@ -195,10 +213,9 @@ describe("the tmpfs environment file (§8.3)", () => {
   });
 
   /**
-   * `apply` rewrites `secrets.env` whole on a box whose provider needs a key,
-   * which makes it the second author of a file `hermetic-secrets.service` also
-   * writes. The two must agree byte for byte, or every apply would flap the
-   * file and restart Hermes for nothing.
+   * `apply` rewrites the block too, which makes it the second author of what
+   * `hermetic-secrets.service` writes. The two must agree byte for byte, or
+   * every apply would rewrite every `.env` for nothing.
    */
   test("`hermeticd apply` writes exactly what `secrets materialise` wrote", async () => {
     const r = rig({ provider: "nous", slots: { "provider-key": "nous-FIXTURE-KEY" } });
@@ -207,8 +224,70 @@ describe("the tmpfs environment file (§8.3)", () => {
     await captureStderr(async () => void (code = await r.apply()));
 
     expect(code).toBe(0);
-    expect(r.env()).toBe("NOUS_API_KEY=nous-FIXTURE-KEY\n");
+    expect(r.env()).toBe(fenced("NOUS_API_KEY=nous-FIXTURE-KEY"));
     expect(host0600(r.host)).toBe(true);
+  });
+
+  test("every bot gets the block; a dot-name and a symlinked home do not", async () => {
+    const r = rig({ provider: "nous", slots: { "provider-key": "nous-FIXTURE-KEY" } });
+    r.host.seed(`${PROFILES}/alpha/.env`, "# placeholder\nTZ=UTC\n", "0600");
+    r.host.dirs.add(`${PROFILES}/beta`);
+    r.host.dirs.add(`${PROFILES}/.gamma.staging-7`);
+    r.host.dirs.add(`${PROFILES}/link`);
+    r.host.symlinks.add(`${PROFILES}/link`);
+
+    await captureStderr(async () => void (await r.materialise()));
+
+    expect(r.host.files.get(`${PROFILES}/alpha/.env`)?.content).toBe(
+      `${fenced("NOUS_API_KEY=nous-FIXTURE-KEY")}# placeholder\nTZ=UTC\n`,
+    );
+    expect(r.host.files.get(`${PROFILES}/beta/.env`)?.content).toBe(
+      fenced("NOUS_API_KEY=nous-FIXTURE-KEY"),
+    );
+    expect(r.host.files.has(`${PROFILES}/.gamma.staging-7/.env`)).toBe(false);
+    expect(r.host.files.has(`${PROFILES}/link/.env`)).toBe(false);
+  });
+
+  /**
+   * A box can run this hermeticd under a render from before the move, whose
+   * units still name `secrets.env` in an `EnvironmentFile=` and whose oneshot
+   * still passes `--out`. That file is kept, empty, so those units still start;
+   * once no rendered file names it, it goes.
+   */
+  test("the old tmpfs file is emptied while a unit names it, removed once none does", async () => {
+    const old = rig({ provider: "nous", slots: { "provider-key": "nous-FIXTURE-KEY" } });
+    const manifest = makeManifest({ provider: "nous", tailscale_hostname: HOSTNAME });
+    const legacyUnit = {
+      ...manifest.files[0]!,
+      path: "/etc/systemd/system/hermes-dashboard.service",
+      content: `[Service]\nEnvironmentFile=${SECRETS_ENV_PATH}\n`,
+    };
+    old.host.seed(
+      MANIFEST_PATH,
+      JSON.stringify({ ...manifest, files: [...manifest.files, legacyUnit] }),
+    );
+    old.host.seed(SECRETS_ENV_PATH, "NOUS_API_KEY=nous-FIXTURE-OLD\n", "0600");
+    let code = -1;
+    await captureStderr(
+      async () =>
+        void (code = await old.runArgs([
+          "secrets",
+          "materialise",
+          "--out",
+          "/elsewhere",
+          "--mode",
+          "0644",
+        ])),
+    );
+    expect(code).toBe(0);
+    expect(old.host.files.get(SECRETS_ENV_PATH)?.content).toBe("\n");
+    expect(old.host.files.has("/elsewhere")).toBe(false);
+    expect(old.env()).toBe(fenced("NOUS_API_KEY=nous-FIXTURE-KEY"));
+
+    const now = rig({ provider: "nous", slots: { "provider-key": "nous-FIXTURE-KEY" } });
+    now.host.seed(SECRETS_ENV_PATH, "NOUS_API_KEY=nous-FIXTURE-OLD\n", "0600");
+    await captureStderr(async () => void (await now.materialise()));
+    expect(now.host.files.has(SECRETS_ENV_PATH)).toBe(false);
   });
 
   /**
@@ -288,12 +367,10 @@ describe("Aws.getParametersByPath", () => {
   });
 });
 
-describe("EnvironmentFile quoting", () => {
+describe("dotenv quoting", () => {
   /**
-   * systemd's env-file parser is not a shell: it strips a value's outer
-   * whitespace and lets a leading quote open a string. A provider key never
-   * contains either, but a secret out of the operator's own Bitwarden project
-   * can contain anything at all.
+   * Upstream's `_quote_env_value`: a provider key needs no quoting, but a
+   * secret out of the operator's own Bitwarden project can contain anything.
    */
   test("a value with a space and a # round-trips", async () => {
     const host = new FakeHost();
@@ -307,25 +384,28 @@ describe("EnvironmentFile quoting", () => {
         : null,
     );
 
-    await materialiseSecrets({
+    const lines = await managedEnvLines({
       host,
       bitwarden: { token: "0.FIXTURE.token", project: "research-1" },
     });
 
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe("NOTE='corr#ect horse #battery'\n");
+    expect(lines).toEqual(['NOTE="corr#ect horse #battery"']);
   });
 
-  test("quotes and backslashes are escaped the way systemd unescapes them", () => {
+  test('quoted only for #, quotes and whitespace; then \\ and " are escaped', () => {
     expect(envLine("K", "plain-value_1.2/3:4")).toBe("K=plain-value_1.2/3:4");
-    expect(envLine("K", "it's")).toBe("K='it\\'s'");
-    expect(envLine("K", "back\\slash")).toBe("K='back\\\\slash'");
+    // Upstream reads `$` and a bare backslash literally (no interpolation).
+    expect(envLine("K", "back\\slash$x")).toBe("K=back\\slash$x");
+    expect(envLine("K", "it's")).toBe(`K="it's"`);
+    expect(envLine("K", 'say "hi" \\o')).toBe('K="say \\"hi\\" \\\\o"');
     // Leading and trailing spaces survive only inside quotes.
-    expect(envLine("K", " padded ")).toBe("K=' padded '");
-    expect(envLine("K", "")).toBe("K=''");
+    expect(envLine("K", " padded ")).toBe('K=" padded "');
+    expect(envLine("K", "")).toBe("K=");
   });
 });
 
-/** The file and the tmpfs directory above it are both closed to other accounts. */
+/** The default `.env` is the account's own, and closed to every other one. */
 function host0600(host: FakeHost): boolean {
-  return host.files.get(SECRETS_ENV_PATH)?.mode === "0600";
+  const file = host.files.get(HERMES_USER_ENV);
+  return file?.mode === "0600" && file.ownership === "hermes:hermes";
 }

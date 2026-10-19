@@ -284,7 +284,8 @@ describe("agents.set", () => {
     const { hermetic } = seeded();
     await drain(hermetic.agents.create({ name: "wren", provider_profile: "openrouter-cheap" }));
     await hermetic.agents.set({ name: "wren", model: "an-override" });
-    await hermetic.providers.update({ profile: "openrouter-cheap", api_key: "sk-or-v1-FIXTURE-NEW" });
+    // A model edit moves the revision; a key rotation alone would not (§8.3).
+    await hermetic.providers.update({ profile: "openrouter-cheap", model: "deepseek/deepseek-v4.2" });
 
     const next = await hermetic.agents.set({ name: "wren", refresh_profile: true });
     expect(next.pending).toMatchObject({

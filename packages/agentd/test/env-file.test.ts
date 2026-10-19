@@ -1,10 +1,10 @@
 /**
- * Reading a systemd `EnvironmentFile`, and reading systemd's own `KEY=VALUE`
- * output (§6.4, §8.3).
+ * Reading a dotenv file, and reading systemd's own `KEY=VALUE` output (§6.4,
+ * §8.1).
  *
- * Two parsers on the box consume that shape. `verify-hermes` reads the tmpfs
- * environment file to answer "did the provider key arrive", and reads the
- * agent's own `.env` to answer "does anything shadow it" — the first decides
+ * Two parsers on the box consume that shape. `verify-hermes` reads the managed
+ * block of the agent's own `.env` to answer "did the provider key arrive", and
+ * the rest of that file to answer "does anything shadow it" — the first decides
  * whether a boot is refused, the second whether a key hermetic delivers is the
  * one Hermes will use. `parseUnitState` reads `systemctl show`, which is the
  * same grammar from the other direction.
@@ -16,7 +16,8 @@
  * exercised together here rather than each against its own idea of the format.
  */
 import { describe, expect, test } from "bun:test";
-import { SECRETS_ENV_PATH, envLine, materialiseSecrets } from "../src/apply/index.ts";
+import { MANAGED_ENV_BEGIN, MANAGED_ENV_END } from "@hermetic/core/shared";
+import { envLine, managedEnvLines, writeManagedEnv } from "../src/apply/index.ts";
 import { checkHermes } from "../src/hermes-check.ts";
 import { parseUnitState } from "../src/heartbeat.ts";
 import { BoxHost as FakeHost } from "./fake-box.ts";
@@ -44,24 +45,28 @@ async function checkOf(host: FakeHost, name: string): Promise<{ ok: boolean; det
   return { ok: found.ok, detail: found.detail };
 }
 
-/** Does the box read the provider key as delivered, given this file? */
+/** `inside` fenced as the managed block, then `outside`. */
+function fenced(inside: string, outside = ""): string {
+  return `${MANAGED_ENV_BEGIN}\n${inside}${inside.endsWith("\n") ? "" : "\n"}${MANAGED_ENV_END}\n${outside}`;
+}
+
+/** Does the box read the provider key as delivered, given this managed block? */
 async function keyIsSet(env: string): Promise<boolean> {
   const host = new FakeHost();
   await keyedBox(host);
-  host.seed(SECRETS_ENV_PATH, env, "0600");
+  host.seed(USER_ENV, fenced(env), "0600");
   return (await checkOf(host, "key")).ok;
 }
 
-/** Does the agent's own `.env` shadow the key, given this file? */
+/** Do these lines, outside the managed block, shadow the key? */
 async function shadows(dotenv: string): Promise<boolean> {
   const host = new FakeHost();
   await keyedBox(host);
-  host.seed(SECRETS_ENV_PATH, `${KEY_ENV}=fixture-not-a-real-key\n`, "0600");
-  host.seed(USER_ENV, dotenv, "0600");
+  host.seed(USER_ENV, fenced(`${KEY_ENV}=fixture-not-a-real-key\n`, dotenv), "0600");
   return !(await checkOf(host, "env_shadow")).ok;
 }
 
-describe("an EnvironmentFile as the key check reads it", () => {
+describe("the managed block as the key check reads it", () => {
   test("a value containing `=` is a value, not a second assignment", async () => {
     // Base64 pads with `=`, and a Bitwarden secret can be anything at all: a
     // parser that split on every `=` would read this key as empty and refuse a
@@ -107,19 +112,21 @@ describe("an EnvironmentFile as the key check reads it", () => {
     ).toBe(true);
   });
 
-  test("the file `materialiseSecrets` writes is a file the key check reads", async () => {
+  test("the block `writeManagedEnv` writes is a block the key check reads", async () => {
     // The round trip that matters: a secret needing quotes goes out through
     // `envLine` and has to come back as "set" — a reader that did not expect
     // the quotes would fail a boot over a key that is perfectly well delivered.
     const host = new FakeHost();
     await keyedBox(host);
-    await materialiseSecrets({
+    await host.mkdir("/data/hermes/.hermes");
+    const lines = await managedEnvLines({
       host,
       providerKey: { env: KEY_ENV, value: "sk-FIXTURE with a space and a #hash" },
     });
+    await writeManagedEnv(host, USER_ENV, lines);
 
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe(
-      `${KEY_ENV}='sk-FIXTURE with a space and a #hash'\n`,
+    expect(host.files.get(USER_ENV)?.content).toBe(
+      fenced(`${KEY_ENV}="sk-FIXTURE with a space and a #hash"\n`),
     );
     expect((await checkOf(host, "key")).ok).toBe(true);
   });

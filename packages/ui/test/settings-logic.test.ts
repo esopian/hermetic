@@ -364,10 +364,23 @@ describe("rekeyReceiptMessage", () => {
 
   test("a re-key that matched agents says how many, singular and plural", () => {
     expect(rekeyReceiptMessage({ rekeyed: 1, rekeyRequested: true })).toBe(
-      "rekeyed 1 agent · each takes it on its next recreate",
+      "rekeyed 1 agent · each takes it at its next sync",
     );
     expect(rekeyReceiptMessage({ rekeyed: 3, rekeyRequested: true })).toBe(
-      "rekeyed 3 agents · each takes it on its next recreate",
+      "rekeyed 3 agents · each takes it at its next sync",
+    );
+  });
+
+  test("a re-key names the boxes it pushed to and the ones that did not answer", () => {
+    expect(
+      rekeyReceiptMessage({
+        rekeyed: 3,
+        rekeyRequested: true,
+        pushed: ["corvid", "kestrel"],
+        unreachable: ["ibis"],
+      }),
+    ).toBe(
+      "rekeyed 3 agents · key pushed to corvid, kestrel · ibis unreachable — takes the key at its next sync",
     );
   });
 

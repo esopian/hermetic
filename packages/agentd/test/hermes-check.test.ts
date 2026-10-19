@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, test } from "bun:test";
 import { HERMES_PROBE_TIMEOUT_S, checkHermes, hermesProbeArgv } from "../src/hermes-check.ts";
-import { SECRETS_ENV_PATH } from "../src/apply/index.ts";
+import { MANAGED_ENV_BEGIN, MANAGED_ENV_END } from "@hermetic/core/shared";
 import { AgentdError } from "../src/errors.ts";
 import { MANIFEST_PATH } from "../src/manifest.ts";
 import { run } from "../src/main.ts";
@@ -58,6 +58,19 @@ function approvalsResolves(host: FakeHost, mode: string | null): void {
   );
 }
 
+/**
+ * The agent's own `.env`: the managed block hermeticd writes (holding `block`),
+ * then `outside`, the lines the agent or the operator wrote.
+ */
+function seedEnv(
+  host: FakeHost,
+  outside: string,
+  mode = "0600",
+  block: readonly string[] = ["NOUS_API_KEY=fixture-not-a-real-key"],
+): void {
+  host.seed(USER_ENV, [MANAGED_ENV_BEGIN, ...block, MANAGED_ENV_END, ""].join("\n") + outside, mode);
+}
+
 /** What a boot that went right leaves behind, for a keyed provider. */
 async function wellConfigured(host: FakeHost): Promise<void> {
   host.seed(
@@ -66,7 +79,7 @@ async function wellConfigured(host: FakeHost): Promise<void> {
     "0640",
   );
   host.seed(USER, 'model:\n  default: "anthropic/claude-sonnet-5"\n', "0640");
-  host.seed(SECRETS_ENV_PATH, "NOUS_API_KEY=fixture-not-a-real-key\n", "0600");
+  seedEnv(host, "");
   hermesResolves(host, "anthropic/claude-sonnet-5");
   // The mode `makeManifest` states by default, so the approvals check passes
   // for every test that is not about it.
@@ -90,6 +103,7 @@ describe("verify-hermes", () => {
     expect(failedNames(checks)).toEqual([]);
     expect(checks.map((c) => c.name).sort()).toEqual([
       "approvals",
+      "bots_keyed",
       "env_shadow",
       "key",
       "model",
@@ -107,26 +121,73 @@ describe("verify-hermes", () => {
    */
   test("a key in the agent's own .env shadows hermetic's and fails the boot", async () => {
     await wellConfigured(host);
-    host.seed(USER_ENV, "NOUS_API_KEY=FIXTURE-shadow\n", "0600");
+    seedEnv(host, "NOUS_API_KEY=FIXTURE-shadow\n", "0600");
     const checks = await checkHermes(host, makeManifest({ provider: "nous" }));
     expect(failedNames(checks)).toEqual(["env_shadow"]);
     const detail = checks.find((c) => c.name === "env_shadow")!.detail;
     expect(detail).toContain(USER_ENV);
     expect(detail).toContain("NOUS_API_KEY");
-    expect(detail).toContain("prefers");
+    expect(detail).toContain("outside the hermetic managed block");
     // Whether one is there, never what it is.
     expect(detail).not.toContain("FIXTURE-shadow");
   });
 
   /** An `.env` that says something else about something else is not a shadow. */
-  test("an .env naming other variables passes, and so does no .env at all", async () => {
+  test("an .env naming other variables passes; no .env at all is a missing key", async () => {
     await wellConfigured(host);
     // A commented-out key is not a key: python-dotenv skips the line, so a
     // check that counted it would fail a boot over a note to self.
-    host.seed(USER_ENV, "export EDITOR=vi\nTZ=UTC\n# NOUS_API_KEY=old\n", "0600");
+    seedEnv(host, "export EDITOR=vi\nTZ=UTC\n# NOUS_API_KEY=old\n", "0600");
     expect(failedNames(await checkHermes(host, makeManifest({ provider: "nous" })))).toEqual([]);
     await host.remove(USER_ENV);
+    expect(failedNames(await checkHermes(host, makeManifest({ provider: "nous" })))).toEqual(["key"]);
+  });
+
+  describe("bots_keyed", () => {
+    const PROFILES = "/data/hermes/.hermes/profiles";
+    const block = (lines: readonly string[]) =>
+      [MANAGED_ENV_BEGIN, ...lines, MANAGED_ENV_END, ""].join("\n");
+    const KEYED = block(["NOUS_API_KEY=fixture-not-a-real-key"]);
+    const botsKeyed = async () =>
+      (await checkHermes(host, makeManifest({ provider: "nous" }))).find(
+        (c) => c.name === "bots_keyed",
+      )!;
+
+    test("every bot holding the default's block passes, and dot-names are not bots", async () => {
+      await wellConfigured(host);
+      host.seed(`${PROFILES}/alpha/.env`, `# note\n${KEYED}`, "0600");
+      host.seed(`${PROFILES}/beta/.env`, KEYED, "0600");
+      host.seed(`${PROFILES}/.gamma.staging-12/.env`, "", "0600");
+      const check = await botsKeyed();
+      expect(check.ok).toBe(true);
+      expect(check.detail).toContain("alpha, beta");
+    });
+
+    test("a stale block and a per-bot key are advisory findings that name bots, never values", async () => {
+      await wellConfigured(host);
+      host.seed(`${PROFILES}/alpha/.env`, block(["NOUS_API_KEY=FIXTURE-old"]), "0600");
+      host.seed(`${PROFILES}/beta/.env`, `${KEYED}NOUS_API_KEY=FIXTURE-own\n`, "0600");
+      const check = await botsKeyed();
+      expect(check.ok).toBe(false);
+      expect(check.advisory).toBe(true);
+      expect(check.detail).toContain("without the current managed block: alpha");
+      expect(check.detail).toContain("outside the block, a per-bot key hermetic leaves alone: beta");
+      expect(check.detail).not.toContain("FIXTURE");
+      // Advisory: the boot verdict is unchanged.
+      expect(failedNames(await checkHermes(host, makeManifest({ provider: "nous" })))).toEqual([
+        "bots_keyed",
+      ]);
+    });
+  });
+
+  /** The key variable inside the fence is hermetic's own line, never a shadow of it. */
+  test("the key inside the managed block is not a shadow; the same line outside it is", async () => {
+    await wellConfigured(host);
     expect(failedNames(await checkHermes(host, makeManifest({ provider: "nous" })))).toEqual([]);
+    seedEnv(host, "export NOUS_API_KEY=FIXTURE-shadow\n");
+    expect(failedNames(await checkHermes(host, makeManifest({ provider: "nous" })))).toEqual([
+      "env_shadow",
+    ]);
   });
 
   /**
@@ -184,6 +245,7 @@ describe("verify-hermes", () => {
     // Every other check still answered, which is the whole point of not throwing.
     expect(checks.map((c) => c.name).sort()).toEqual([
       "approvals",
+      "bots_keyed",
       "env_shadow",
       "key",
       "model",
@@ -226,15 +288,15 @@ describe("verify-hermes", () => {
 
   test("a keyed provider whose key never arrived fails, and says how to push it", async () => {
     await wellConfigured(host);
-    host.seed(SECRETS_ENV_PATH, "NOUS_API_KEY=\n", "0600");
+    seedEnv(host, "", "0600", ["NOUS_API_KEY="]);
     const checks = await checkHermes(host, makeManifest({ provider: "nous" }));
     expect(failedNames(checks)).toEqual(["key"]);
     expect(checks.find((c) => c.name === "key")!.detail).toContain("secrets push");
   });
 
-  test("an empty secrets file fails the same way as a missing variable", async () => {
+  test("an empty managed block fails the same way as a missing variable", async () => {
     await wellConfigured(host);
-    host.seed(SECRETS_ENV_PATH, "", "0600");
+    seedEnv(host, "", "0600", []);
     const checks = await checkHermes(host, makeManifest({ provider: "nous" }));
     expect(failedNames(checks)).toEqual(["key"]);
   });
@@ -346,7 +408,7 @@ describe("verify-hermes", () => {
 
     /** The line hermetic's post-step leaves in the agent's `.env`. */
     function envSeeded(): void {
-      host.seed(USER_ENV, `BROWSER_CDP_URL=${CDP_URL}\n`, "0600");
+      seedEnv(host, `BROWSER_CDP_URL=${CDP_URL}\n`, "0600");
     }
 
     test("a browser agent is asked what Hermes resolves browser.cdp_url to", async () => {
@@ -422,8 +484,8 @@ describe("verify-hermes", () => {
     test("BROWSER_CDP_URL naming this box's browser passes, export form and quotes included", async () => {
       await wellConfigured(host);
       cdpResolves(CDP_URL);
-      host.seed(
-        USER_ENV,
+      seedEnv(
+        host,
         `# BROWSER_CDP_URL=http://elsewhere\nBROWSER_CDP_URL=http://10.0.0.9:9222\nexport BROWSER_CDP_URL="${CDP_URL}"\n`,
         "0600",
       );
@@ -446,7 +508,7 @@ describe("verify-hermes", () => {
     test("BROWSER_CDP_URL naming another endpoint is reported as the hand-over it is", async () => {
       await wellConfigured(host);
       cdpResolves(CDP_URL);
-      host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
+      seedEnv(host, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
 
       const checks = await checkHermes(host, browserAgent());
 
@@ -465,11 +527,7 @@ describe("verify-hermes", () => {
     test("a shadowed key and a shadowed cdp_url are two findings, not one", async () => {
       await wellConfigured(host);
       cdpResolves(CDP_URL);
-      host.seed(
-        USER_ENV,
-        "NOUS_API_KEY=FIXTURE-shadow\nBROWSER_CDP_URL=http://127.0.0.1:9333\n",
-        "0600",
-      );
+      seedEnv(host, "NOUS_API_KEY=FIXTURE-shadow\nBROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
 
       const checks = await checkHermes(host, browserAgent());
 
@@ -500,7 +558,10 @@ describe("verify-hermes", () => {
 
       const checks = await checkHermes(host, browserAgent());
 
-      expect(checks.filter((c) => c.advisory === true).map((c) => c.name)).toEqual(["approvals"]);
+      expect(checks.filter((c) => c.advisory === true).map((c) => c.name)).toEqual([
+        "bots_keyed",
+        "approvals",
+      ]);
       expect(checks.filter((c) => c.advisory !== true).map((c) => c.name)).toEqual([
         "provider",
         "model",
@@ -514,7 +575,7 @@ describe("verify-hermes", () => {
 
     test("an agent with no browser has neither check, and BROWSER_CDP_URL is not a shadow", async () => {
       await wellConfigured(host);
-      host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
+      seedEnv(host, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
 
       const checks = await checkHermes(host, makeManifest({ provider: "nous" }));
 
@@ -598,7 +659,7 @@ describe("verify-hermes", () => {
      */
     test("a failing advisory check is printed and does not fail the stage", async () => {
       await wellConfigured(host);
-      host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
+      seedEnv(host, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
       host.handlers.unshift((argv) =>
         argv.join(" ").includes("browser.cdp_url")
           ? { code: 0, stdout: '"http://127.0.0.1:9222"\n', stderr: "" }
@@ -613,7 +674,7 @@ describe("verify-hermes", () => {
     });
 
     test("a non-advisory failure on a browser agent still fails the stage", async () => {
-      host.seed(USER_ENV, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
+      seedEnv(host, "BROWSER_CDP_URL=http://127.0.0.1:9333\n", "0600");
       host.seed(MANIFEST_PATH, JSON.stringify(makeManifest({ provider: "nous", browser: true })));
 
       const error = (await run(["stage", "verify-hermes"], host).catch(

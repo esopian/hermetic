@@ -350,8 +350,9 @@ export function stagesProfileChange(input: StageInput): boolean {
  *   another's endpoint.
  * - **refresh** (`refresh_profile`): the profile the row is already on, at
  *   whatever revision it has reached, keeping the explicit model override the
- *   row carries. This is how a rotated key or an edited profile reaches an
- *   agent, and it must not quietly undo a model the operator chose.
+ *   row carries. This is how an edited profile reaches an agent (a rotated
+ *   key is pushed, `key-push.ts`), and it must not quietly undo a model the
+ *   operator chose.
  * - **model only**: not a profile change at all; the caller handles it as the
  *   ordinary managed setting it has always been.
  *
@@ -387,8 +388,8 @@ export function stageProfileChange(
    * before profiles existed has no `profile_id` at all — so the profile
    * `boundProfile` answered with (the fleet's designation for that row's
    * provider) reads as a *different* profile and the model resets. That is the
-   * one thing a refresh promises not to do: it is how a rotated key reaches an
-   * agent, and an operator who rotates a key must not discover afterwards that
+   * one thing a refresh promises not to do: it is how an edited profile reaches
+   * an agent, and an operator who refreshes must not discover afterwards that
    * the model they pinned was replaced by the profile's.
    */
   const switching = !refreshOnly && target.id !== agent.profile_id;

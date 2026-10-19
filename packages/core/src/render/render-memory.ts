@@ -360,9 +360,8 @@ function memoryUnit(id: MemoryServiceProvider, spec: MemoryUnitSpec): string {
      */
     "RequiresMountsFor=/data",
     /**
-     * `MEMORY_LLM_ENV_PATH` is on tmpfs and written by hermeticd beside
-     * `secrets.env`, so it is gone after every reboot until the secrets unit
-     * has run again.
+     * `MEMORY_LLM_ENV_PATH` is on tmpfs and written by the secrets oneshot,
+     * so it is gone after every reboot until that unit has run again.
      */
     "After=hermetic-secrets.service",
     "Requires=hermetic-secrets.service",
@@ -375,7 +374,7 @@ function memoryUnit(id: MemoryServiceProvider, spec: MemoryUnitSpec): string {
     "WorkingDirectory=" + (spec.workingDirectory ?? memoryServiceDir(id)),
     ...(spec.envFiles ?? []).map((f) => "EnvironmentFile=" + f),
     /**
-     * Unconditional, like `secrets.env`: hermeticd always writes it, empty for
+     * Unconditional: hermeticd always writes it, empty for
      * a Bedrock agent, so the unit's shape does not depend on the vendor.
      */
     "EnvironmentFile=" + MEMORY_LLM_ENV_PATH,

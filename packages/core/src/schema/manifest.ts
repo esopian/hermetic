@@ -269,6 +269,15 @@ export const AGENT_CONFIG_CAPABILITIES = {
    */
   "provider-key-ref": "materialise the provider key from the slot the manifest names",
   /**
+   * hermeticd writes the provider key into the managed block of every Hermes
+   * `.env` (`$HERMES_HOME/.env` and each bot's), which is now the only place
+   * the rendered units get it: they no longer load `/run/hermetic/secrets.env`.
+   * An older box would go on writing only that tmpfs file, which nothing reads
+   * any more, and Hermes would start keyless — every turn failing on auth while
+   * the apply reported success — so every manifest this build renders asks.
+   */
+  "managed-env": "write the provider key into the managed block of every Hermes .env",
+  /**
    * hermeticd unpacks the mirrored Chrome build the manifest pins and runs the
    * per-identity browser units (`hermetic-browser@<name>.service` and the Xvfb,
    * window manager, x11vnc and websockify instances beside it).
@@ -331,6 +340,12 @@ export function requiredCapabilities(manifest: {
   const out: AgentCapability[] = [];
   if (manifest.units.some((u) => /^hermes-gateway.*\.service$/.test(u))) out.push("gateway-unit");
   if (manifest.files.some((f) => (f.restart_units?.length ?? 0) > 0)) out.push("restart-units");
+  /*
+   * Unconditional, because nothing in the document marks it: what changed is
+   * the units every render emits (no `EnvironmentFile=`), and the renderer is
+   * this function's only caller, so every document it sees depends on it.
+   */
+  out.push("managed-env");
   /*
    * Still derived from the document rather than asserted, even though every
    * manifest this build renders names a browser. The input is what makes it

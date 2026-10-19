@@ -798,7 +798,22 @@ export function renderProfile(result: ProvidersWriteResult): string {
     `  credential ${p.credential.kind === "role" ? "instance role" : p.credential.slug}`,
     ...(p.grant === undefined ? [] : [`  grant     ${p.grant}`]),
     `  settings now at version ${result.settings.version}`,
+    ...renderKeyPush(result),
   ].join("\n");
+}
+
+/**
+ * Where a pushed key went (§8.1): the boxes that rewrote their `.env` now, and
+ * the ones that did not answer and take it at their next heartbeat or boot.
+ * Nothing when the write pushed to no agent.
+ */
+export function renderKeyPush(result: { pushed?: string[]; unreachable?: string[] }): string[] {
+  return [
+    ...(result.pushed?.length ? [`pushed: ${result.pushed.join(", ")}`] : []),
+    ...(result.unreachable?.length
+      ? [`unreachable: ${result.unreachable.join(", ")} (takes the key at its next sync)`]
+      : []),
+  ];
 }
 
 /**

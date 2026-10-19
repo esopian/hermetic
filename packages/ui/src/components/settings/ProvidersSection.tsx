@@ -18,9 +18,9 @@
  */
 import { useEffect, useState } from "react";
 import { deleteProfile, updateProfile } from "../../api/index.ts";
-import type { ProfileView, SettingsResult } from "../../api/index.ts";
+import type { ProfileView, ProvidersWriteResult, SettingsResult } from "../../api/index.ts";
 import type { ProfilesState } from "../../state/state.tsx";
-import { toSaveError } from "../../logic/settings-logic.ts";
+import { keyPushMessage, toSaveError } from "../../logic/settings-logic.ts";
 import type { SaveError } from "../../logic/settings-logic.ts";
 import {
   canDeleteProfile,
@@ -209,6 +209,8 @@ export function ProvidersSection({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<SaveError | null>(null);
   const [confirming, setConfirming] = useState<ProfileView | null>(null);
+  // Where the last key rotation went; replaced by the next write.
+  const [pushNote, setPushNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!startNew) return;
@@ -219,7 +221,8 @@ export function ProvidersSection({
   const expected = settings?.persisted ? (settings.settings.version ?? null) : null;
 
   /** Re-read both halves: the profiles themselves and the version a write moved. */
-  function written() {
+  function written(result?: ProvidersWriteResult) {
+    setPushNote(result === undefined ? null : keyPushMessage(result));
     profiles.refresh();
     void onRefresh().catch((e: unknown) => setError(toSaveError(e)));
   }
@@ -228,8 +231,7 @@ export function ProvidersSection({
     setBusy(profile.id);
     setError(null);
     try {
-      await updateProfile(profile.id, { ...body, expected_version: expected });
-      written();
+      written(await updateProfile(profile.id, { ...body, expected_version: expected }));
     } catch (e) {
       setError(toSaveError(e));
     } finally {
@@ -303,6 +305,11 @@ export function ProvidersSection({
           <div className="st-hint mono st-err" role="alert">
             {error !== null ? `${error.code} · ${error.message}` : profiles.error}
             {error?.code === "CONFLICT" ? " — reload the page to see the other laptop's write" : ""}
+          </div>
+        ) : null}
+        {pushNote !== null ? (
+          <div className="st-hint mono" role="status">
+            {pushNote}
           </div>
         ) : null}
 

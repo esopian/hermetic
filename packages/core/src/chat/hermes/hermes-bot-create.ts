@@ -64,7 +64,9 @@ export async function createBotOverRpc(
   now: () => number = Date.now,
 ): Promise<BotProfile> {
   const { instance, title, ...create } = input;
-  const created = record(await call("profiles.create", create));
+  // Explicit, though upstream defaults it on: the new bot gets a copy of the
+  // default `.env`, whose managed block holds the provider key (§8.1, §9.2).
+  const created = record(await call("profiles.create", { ...create, mirror_credentials: true }));
   if (created.ok !== true)
     throw new HermeticError("CHAT_PROTOCOL", "Gateway did not create the profile");
   const meta = { version: 1, ...(title ? { title } : {}), created: now() };

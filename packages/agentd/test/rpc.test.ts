@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { HERMETICD_RPC_PORT, RPC_CONTENT_TYPE, RPC_PATHS, decodeRpcFrame } from "@hermetic/core/schema";
-import type { RpcFrame, RpcHealth } from "@hermetic/core/schema";
+import type { RpcFrame, RpcHealth, SecretsSyncResult } from "@hermetic/core/schema";
+import { AgentdError } from "../src/errors.ts";
 import type { Whois } from "../src/rpc.ts";
 import {
   HERMES_LOG_DIR,
   REFUSAL_LOG_WINDOW_MS,
   TAGGED_DEVICES_LOGIN,
+  SECRETS_SYNC_PER_MINUTE,
   hermesLogPath,
   makeRpcHandler,
   mapJournalLine,
@@ -43,6 +45,8 @@ function handler(
      * Still no journald: it goes through `FakeHost.execLines` like everything.
      */
     defaultJournal?: boolean;
+    /** `POST /secrets/sync`; absent wires no route. */
+    secretsSync?: () => Promise<SecretsSyncResult>;
   } = {},
 ) {
   const host = new FakeHost();
@@ -66,6 +70,7 @@ function handler(
       // Only tailnet addresses resolve; everything else is an unknown peer.
       whois: async (ip) => (ip.startsWith("100.64.") ? (options.peer ?? MEMBER) : null),
       ...(options.allowedTags ? { allowedTags: options.allowedTags } : {}),
+      ...(options.secretsSync ? { secretsSync: options.secretsSync } : {}),
       log: (message) => void audit.push(message),
       ...(options.defaultJournal
         ? {}
@@ -614,5 +619,69 @@ describe("who may use the RPC", () => {
     expect(rpcAccess(AGENT_NODE, ["tag:hermetic"]).allowed).toBe(true);
     // Tailscale's own sentinel for "a machine, acting as itself".
     expect(rpcAccess({ login: TAGGED_DEVICES_LOGIN, node: "n", tags: [] }).allowed).toBe(false);
+  });
+});
+
+describe("POST /secrets/sync", () => {
+  const url = `http://100.64.0.7:${HERMETICD_RPC_PORT}${RPC_PATHS.secretsSync}`;
+  const post = () => new Request(url, { method: "POST" });
+
+  function syncRig(options: { peer?: Whois; fail?: boolean } = {}) {
+    let calls = 0;
+    const rig = handler({
+      ...(options.peer ? { peer: options.peer } : {}),
+      secretsSync: async () => {
+        calls += 1;
+        if (options.fail) throw new AgentdError("COMMAND_FAILED", "bws said FIXTURE-secret-value");
+        // Extra fields a sync knows about must not reach the wire.
+        return { changed: true, bots: ["alpha"], refused: ["odd"] } as SecretsSyncResult;
+      },
+    });
+    return { ...rig, calls: () => calls };
+  }
+
+  test("a peer whois cannot name, or a tagged node, is refused 403 and nothing syncs", async () => {
+    const stranger = syncRig();
+    expect((await stranger.fetch(post(), STRANGER_IP)).status).toBe(403);
+    const node = syncRig({ peer: AGENT_NODE });
+    expect((await node.fetch(post(), OPERATOR_IP)).status).toBe(403);
+    expect(stranger.calls() + node.calls()).toBe(0);
+  });
+
+  test("a member's POST syncs and is answered with a flag and bot names only", async () => {
+    const r = syncRig();
+    const res = await r.fetch(post(), OPERATOR_IP);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ changed: true, bots: ["alpha"] });
+    expect(r.calls()).toBe(1);
+  });
+
+  test("any other method is 405, and without the dependency the route is a 404", async () => {
+    const r = syncRig();
+    expect((await r.fetch(new Request(url), OPERATOR_IP)).status).toBe(405);
+    expect(r.calls()).toBe(0);
+    expect((await handler().fetch(post(), OPERATOR_IP)).status).toBe(404);
+  });
+
+  test("one peer is held to its per-minute budget", async () => {
+    const r = syncRig();
+    for (let i = 0; i < SECRETS_SYNC_PER_MINUTE; i += 1) {
+      expect((await r.fetch(post(), OPERATOR_IP)).status).toBe(200);
+    }
+    const over = await r.fetch(post(), OPERATOR_IP);
+    expect(over.status).toBe(429);
+    expect((await frames(over))[0]).toMatchObject({ code: "RATE_LIMITED" });
+    r.host.advance(60_000);
+    expect((await r.fetch(post(), OPERATOR_IP)).status).toBe(200);
+  });
+
+  test("a failed sync answers its code, never its message", async () => {
+    const r = syncRig({ fail: true });
+    const res = await r.fetch(post(), OPERATOR_IP);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(text).toContain("COMMAND_FAILED");
+    expect(text).not.toContain("FIXTURE");
+    expect(r.audit.join("\n")).not.toContain("FIXTURE");
   });
 });

@@ -228,6 +228,16 @@ export interface HeartbeatDeps {
    * update is.
    */
   readonly onFirstWrite?: () => void;
+  /**
+   * Started once per tick, never awaited: the managed `.env` block's catch-up
+   * for a key push this box missed (`makeSecretsSyncer().tick`,
+   * `secrets-sync.ts`). It reads the provider slot's SSM `Version` and syncs
+   * when it moved. A slow SSM, bws or `.env` lock must not hold up the row —
+   * a late row reads as an unreachable box — so the tick does not wait, and
+   * skips starting another while one is still running. Must not throw; a
+   * rejection is swallowed so it can never cost the tick its write.
+   */
+  readonly secretsTick?: () => Promise<void>;
 }
 
 export interface HeartbeatTick {
@@ -351,6 +361,7 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
   let lastDrift: string | null = null;
   let lastRequestId: string | null = null;
   let lastApplyId: string | null = null;
+  let secretsRunning = false;
 
   async function showUnit(unit: string): Promise<UnitState> {
     const shown = await host.exec(["systemctl", "show", "-p", UNIT_SHOW_PROPERTIES, unit]);
@@ -622,6 +633,14 @@ export function makeHeartbeat(deps: HeartbeatDeps): Heartbeat {
     if (applyRequest && applyRequest.id !== lastApplyId) {
       lastApplyId = applyRequest.id;
       deps.onApplyRequest?.(applyRequest);
+    }
+
+    if (deps.secretsTick && !secretsRunning) {
+      secretsRunning = true;
+      void deps
+        .secretsTick()
+        .catch(() => undefined)
+        .finally(() => (secretsRunning = false));
     }
 
     const data = await host.filesystem(DATA_MOUNT);

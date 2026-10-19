@@ -91,7 +91,8 @@ describe("a profile write holds the fleet lock across both of its writes", () =>
       await realPut(path, value);
     };
 
-    const first = hermetic.providers.update({ profile: ANT, api_key: KEY_ONE });
+    // A model edit too, so the first write moves the revision (a key alone does not).
+    const first = hermetic.providers.update({ profile: ANT, api_key: KEY_ONE, model: "claude-opus-5" });
     await reached.promise;
 
     const refused = await errorOf(() => hermetic.providers.update({ profile: ANT, api_key: KEY_TWO }));
@@ -110,9 +111,9 @@ describe("a profile write holds the fleet lock across both of its writes", () =>
     expect(fleetOf(backend).lock ?? null).toBeNull();
 
     await hermetic.providers.update({ profile: ANT, api_key: KEY_TWO });
-    // Serialised: r3 on the record, r3's key in the slot. The interleaving
-    // would have left r3 on the record and r2's key in the slot.
-    expect(fleetOf(backend).settings!.profiles![ANT]!.revision).toBe(3);
+    // Serialised: the second key in the slot. The interleaving could have left
+    // the first rotation's key there. A key-only edit keeps the revision (§8.3).
+    expect(fleetOf(backend).settings!.profiles![ANT]!.revision).toBe(2);
     expect(await backend.secrets.get(ANT_PATH)).toBe(KEY_TWO);
   });
 

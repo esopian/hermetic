@@ -110,6 +110,12 @@ export interface Aws {
   getParameter(path: string): Promise<string>;
   getParameterOptional(path: string): Promise<string | null>;
   /**
+   * The parameter's `Version`, read `WithDecryption: false` so no KMS call is
+   * made and no plaintext reaches the box; `null` when it does not exist. The
+   * heartbeat's cue that a slot moved (`secrets-sync.ts`).
+   */
+  getParameterVersion(path: string): Promise<number | null>;
+  /**
    * Every parameter directly under `path` (not recursive), decrypted, across
    * every page. Same rule as `getParameter`: the values are never logged and
    * never written to disk except by the caller that materialises them on tmpfs.
@@ -324,6 +330,18 @@ export function makeAws(deps: AwsDeps): Aws {
 
   const aws: Aws = {
     getParameterOptional,
+
+    async getParameterVersion(path) {
+      try {
+        const out = (await deps.ssm.send(
+          new GetParameterCommand({ Name: path, WithDecryption: false }),
+        )) as { Parameter?: { Version?: number } };
+        return out.Parameter?.Version ?? null;
+      } catch (e) {
+        if ((e as { name?: string }).name === "ParameterNotFound") return null;
+        throw e;
+      }
+    },
 
     async getParameter(path) {
       const value = await getParameterOptional(path);

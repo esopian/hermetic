@@ -24,6 +24,12 @@ export const RPC_PATHS = {
   fleet: "/fleet",
   /** `POST`: register or update one phone's push token (`MobilePushDevice`). */
   pushDevices: "/push/devices",
+  /**
+   * `POST`, no body: re-read this box's own secret slots now and rewrite the
+   * managed block in every Hermes `.env` (`SecretsSyncResult`, §8.1). The
+   * request carries no secret; it only says "re-read".
+   */
+  secretsSync: "/secrets/sync",
 } as const;
 
 /** `DELETE <prefix><device_id>` unregisters one phone. */
