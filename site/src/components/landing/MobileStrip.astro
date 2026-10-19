@@ -1,6 +1,6 @@
 ---
 /*
- * Landing section "On your phone": the iPhone companion in one sheet, a replica of its home screen
+ * Landing section "On your phone": the mobile companion in one sheet, a replica of its home screen
  * beside four short points, linking to /mobile/. Claims cite docs/design.md §9.4.
  */
 import Phone from "../mobile/Phone.astro";
@@ -13,9 +13,9 @@ interface Props {
 const { num } = Astro.props;
 ---
 <section class="ms" id="e-mobile">
-  <SheetHead num={num} kicker="On your phone" note="iPhone companion" title="Your agents, away from the desk">
+  <SheetHead num={num} kicker="On your phone" note="Mobile companion" title="Your agents, away from the desk">
     {/* design.md §9.4: the phone reaches each box over the tailnet; the laptop only shows the pairing QR */}
-    <p>The iPhone app talks to each box over your tailnet. Your laptop only shows the code that pairs it.</p>
+    <p>The mobile app talks to each box over your tailnet. Your laptop only shows the code that pairs it.</p>
   </SheetHead>
   <div class="wrap">
     <div class="ms-in">
@@ -31,7 +31,7 @@ const { num } = Astro.props;
         <div><b>03</b><h3>Pushes from the box</h3><p>The agent's own box sends the push, so nothing on your laptop has to be running. Previews stay off until you turn them on.</p></div>
         {/* design.md §9.4 "Security" (no credential on the phone or in the QR; revoke by removing it from the tailnet) */}
         <div><b>04</b><h3>No keys on the phone</h3><p>The phone gets in by being on your tailnet. Remove it from the tailnet to cut it off.</p></div>
-        <a href="/mobile/">The iPhone app →</a>
+        <a href="/mobile/">The mobile app →</a>
       </div>
     </div>
   </div>

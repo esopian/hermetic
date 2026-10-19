@@ -86,6 +86,9 @@ and not committed. The CLI reference (`reference/cli.mdx`) is generated the same
 - `ZeroToAgent.astro`: one shared timeline played as a CLI session or as the app's screens, chosen
   up front ("Play in CLI" / "Play in App") and switchable mid-run without losing its place.
 - `AppTour.astro`: five app screens, each with its CLI equivalent.
+- `Powertools.astro`: the stream inspector in real screenshots of the app (`src/assets/powertools/`),
+  the CLI commands that look inside a box, and a call to contribute, linking to `/docs/powertools/`.
+  Framed as seeing how hermetic works and helping build it, not as troubleshooting.
 - `PowerStrip.astro`: the size ladder from `src/data/cost.ts`, linking to `/cost/`.
 - `MobileStrip.astro`: the iPhone companion in one sheet, linking to `/mobile/`.
 - `Closing.astro`, and `SheetHead.astro` for the drawing-title-block section heads.

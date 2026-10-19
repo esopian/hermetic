@@ -1,0 +1,316 @@
+---
+/*
+ * Landing section "Developer powertools": see how hermetic works from the inside, then help build
+ * it. The app's stream inspector in real screenshots of the desktop app (src/assets/powertools/,
+ * captured from a dev build with one chat turn on screen), the CLI commands that look inside a
+ * box, and a call to contribute. Links to /docs/powertools/ and the repository. Claims cite
+ * docs/design.md beside them.
+ */
+import { Image } from "astro:assets";
+import hero from "../../assets/powertools/inspector-hero.png";
+import timing from "../../assets/powertools/inspector-timing.png";
+import { repo } from "../../data/links";
+import SheetHead from "./SheetHead.astro";
+
+interface Props {
+  num: string;
+}
+
+const { num } = Astro.props;
+---
+<section class="pt" id="e-powertools">
+  <SheetHead num={num} kicker="Developer powertools" note="See how it works" title="Watch a turn from box to screen">
+    {/* design.md §9.2 "Developer tools": off by default, in every build including stable */}
+    <p>Open the stream inspector beside any chat and follow each message from the agent's box to the block it becomes on your screen. It ships in every build and waits in Settings until you switch it on.</p>
+  </SheetHead>
+  <div class="wrap">
+    <figure class="pt-hero">
+      <div class="pt-shot">
+        <Image
+          src={hero}
+          alt="The Hermetic desktop app with a chat open and the stream inspector docked on the right. The Wire tab lists each message from the box (message.start, message.delta ×49, tool.start, tool.complete, message.complete), each followed by the frame it produced and what the page did with it: new block, replaced v2, applied. The selected tool.start row's Lineage reads wire, adapter, 1 frame, block, page, new block."
+          widths={[800, 1600, 2400]}
+          sizes="(max-width: 1260px) 100vw, 1200px"
+          loading="lazy"
+        />
+      </div>
+      {/* design.md §9.2 "In the page": entry points and the Lineage pane */}
+      <figcaption>The inspector docked beside a chat. <kbd>⌥⌘I</kbd> or the dashed <code>{"{ } Inspect"}</code> chip opens it.</figcaption>
+    </figure>
+
+    <div class="pt-in">
+      <div class="pt-ph">
+        <Image
+          src={timing}
+          alt="The inspector on its own. A message.delta ×49 row is selected, and the Ids & timing pane lists its record id, the time it arrived, 41 ms since the previous record, the layer (wire, box to laptop), its seq, 162 bytes as received, the conversation and the frame it became."
+          widths={[480, 960]}
+          sizes="(max-width: 1080px) 100vw, 480px"
+          loading="lazy"
+        />
+      </div>
+      <div class="pt-pts">
+        {/* design.md §9.2 "What a record is": wire, frame, observe and conn layers */}
+        <div><b>01</b><h3>Every layer of a turn</h3><p>Wire, Frames, State and Connection tabs follow one conversation from the socket to the screen.</p></div>
+        {/* design.md §9.2 "A wire record's fate" and the Lineage pane */}
+        <div><b>02</b><h3>Follow one message</h3><p>Pick a row and Lineage traces it from the box, through the frames it became, to the block the page drew.</p></div>
+        {/* design.md §9.2 "Off means absent": a ring per conversation, so it can open after the fact */}
+        <div><b>03</b><h3>Look back at any turn</h3><p>With capture always on, each conversation keeps a ring of its newest records, so you can open the inspector on a turn that already finished.</p></div>
+        {/* design.md §9.2 "Off means absent" and "Masking": memory only, copy always masked */}
+        <div><b>04</b><h3>Memory only</h3><p>Captures live in the app's memory and are gone when it quits. Nothing is written to disk, and Copy always masks secrets.</p></div>
+        <a href="/docs/powertools/">Developer powertools in the docs →</a>
+      </div>
+    </div>
+
+    <div class="pt-box">
+      <div class="pt-box-h">
+        <span class="kicker">Look inside a box</span>
+        <p>The CLI reads each agent's machine directly.</p>
+      </div>
+      <dl>
+        {/* design.md §4.2 the append-only events table; history survives destroy */}
+        <div><dt><span>$</span> hermetic agent history atlas</dt><dd>Every event in an agent's life from its first boot on, kept even after the agent is destroyed.</dd></div>
+        {/* design.md §9 `logs --file`: Hermes's own log files under $HERMES_HOME/logs/ */}
+        <div><dt><span>$</span> hermetic logs atlas --file agent</dt><dd>Hermes's own log files, read from the agent's data volume.</dd></div>
+        {/* CLI `logs --console`: the instance's serial console instead of the RPC */}
+        <div><dt><span>$</span> hermetic logs atlas --console</dt><dd>The instance's serial console, from the moment the machine starts.</dd></div>
+        {/* design.md §4.6 the local `runs` table */}
+        <div><dt><span>$</span> hermetic runs --last</dt><dd>What this laptop ran last, with its output. The app's Runs view shows the same.</dd></div>
+      </dl>
+    </div>
+
+    <div class="pt-contrib">
+      <div>
+        <span class="kicker">Become a contributor</span>
+        <h3>Seen how it works? Help build it.</h3>
+        {/* LICENSE (MIT); CONTRIBUTING.md, docs/architecture.md and docs/design.md in the repository */}
+        <p>hermetic is open source under the MIT license. The inspector is a quick way to learn the chat path before you change it, and the repository has the rest: how to build and test, the architecture, and the design spec every change is held to.</p>
+      </div>
+      <nav aria-label="Contributor links">
+        <a href={repo.contributing}>Contributing →</a>
+        <a href={repo.architecture}>Architecture →</a>
+        <a href={repo.designSpec}>Design spec →</a>
+        <a href={repo.home}>GitHub ↗</a>
+      </nav>
+    </div>
+  </div>
+</section>
+
+<style>
+  .pt {
+    border-bottom: 3px solid var(--fg);
+  }
+  .pt-hero {
+    margin: 0 0 32px;
+    border: 2px solid var(--fg);
+  }
+  .pt-shot {
+    padding: 28px;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .pt-shot img,
+  .pt-ph img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--line2);
+  }
+  .pt-hero figcaption {
+    border-top: 1px solid var(--line);
+    padding: 14px 24px;
+    font: 12px var(--mono);
+    color: var(--fg2);
+  }
+  .pt-hero kbd,
+  .pt-hero code {
+    font: 700 12px var(--mono);
+    color: var(--fg);
+  }
+  .pt-in {
+    display: grid;
+    grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
+    border: 2px solid var(--fg);
+    margin-bottom: 32px;
+  }
+  .pt-ph {
+    padding: 28px;
+    border-right: 1px solid var(--line);
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .pt-pts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: 1fr 1fr auto;
+    gap: 1px;
+    background: var(--line);
+  }
+  .pt-pts > div {
+    background: var(--bg);
+    padding: 28px 24px;
+  }
+  .pt-pts b {
+    font: 700 12px var(--mono);
+    color: var(--acc);
+  }
+  .pt-pts h3 {
+    font-weight: 900;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    text-transform: uppercase;
+    margin: 14px 0 10px;
+  }
+  .pt-pts p {
+    color: var(--fg2);
+    font-size: 15px;
+  }
+  .pt-pts a {
+    grid-column: 1 / -1;
+    background: var(--bg);
+    padding: 18px 24px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+  }
+  .pt-pts a:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .pt-box {
+    border: 2px solid var(--fg);
+    margin-bottom: 32px;
+  }
+  .pt-box-h {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    align-items: baseline;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pt-box-h p {
+    color: var(--fg2);
+    font-size: 15px;
+  }
+  .pt-box dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--line);
+    margin: 0;
+  }
+  .pt-box dl > div {
+    background: var(--bg);
+    padding: 20px 24px;
+  }
+  .pt-box dt {
+    font: 700 13px var(--mono);
+    overflow-wrap: anywhere;
+  }
+  .pt-box dt span {
+    color: var(--acc);
+    margin-right: 6px;
+  }
+  .pt-box dd {
+    margin: 8px 0 0;
+    color: var(--fg2);
+    font-size: 15px;
+  }
+  .pt-contrib {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 24px 48px;
+    align-items: end;
+    border: 2px solid var(--acc);
+    padding: 32px 28px;
+    margin-bottom: 56px;
+  }
+  .pt-contrib h3 {
+    font-weight: 900;
+    font-size: 30px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    text-transform: uppercase;
+    margin: 12px 0 12px;
+  }
+  .pt-contrib p {
+    color: var(--fg2);
+    font-size: 15px;
+    max-width: 62ch;
+  }
+  .pt-contrib nav {
+    display: grid;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    min-width: 220px;
+  }
+  .pt-contrib nav a {
+    background: var(--bg);
+    padding: 12px 18px;
+    font: 700 12px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+  }
+  .pt-contrib nav a:hover {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  @media (max-width: 1080px) {
+    .pt-contrib {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pt-in {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pt-ph {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: center;
+    }
+    .pt-ph img {
+      max-width: 420px;
+    }
+  }
+  @media (max-width: 640px) {
+    .pt-shot,
+    .pt-ph {
+      padding: 16px;
+    }
+    .pt-hero figcaption,
+    .pt-box-h,
+    .pt-box dl > div {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+    .pt-pts,
+    .pt-box dl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pt-pts {
+      grid-template-rows: none;
+    }
+    .pt-pts > div {
+      padding: 22px 16px;
+    }
+    .pt-in,
+    .pt-hero {
+      margin-bottom: 24px;
+    }
+    .pt-box {
+      margin-bottom: 24px;
+    }
+    .pt-contrib {
+      padding: 24px 16px;
+      margin-bottom: 40px;
+    }
+  }
+</style>

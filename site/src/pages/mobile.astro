@@ -1,6 +1,6 @@
 ---
 /*
- * The iPhone companion page: what the phone app does, how it reaches the fleet, how to pair one,
+ * The mobile companion page: what the phone app does, how it reaches the fleet, how to pair one,
  * and what it leaves to the desktop. Every claim names its docs/design.md section (§9.4 is the
  * phone's design) or the mobile/ file it rests on. Screens are HTML replicas
  * (components/mobile/Phone.astro); names, previews and commands in them are illustrative.
@@ -55,8 +55,8 @@ const MATRIX: { what: string; phone: boolean; note: string }[] = [
 ];
 ---
 <Marketing
-  title="iPhone app: your Hermes agents in your pocket | Hermetic"
-  description="The Hermetic iPhone app chats with every Hermes agent in your fleet over your Tailscale tailnet, answers approvals, and gets pushes straight from the boxes. No laptop in the path and no credential on the phone."
+  title="Mobile app: your Hermes agents in your pocket | Hermetic"
+  description="The Hermetic mobile app chats with every Hermes agent in your fleet over your Tailscale tailnet, answers approvals, and gets pushes straight from the boxes. No laptop in the path and no credential on the phone."
 >
   <EnvStrip />
   <Header />
@@ -64,10 +64,10 @@ const MATRIX: { what: string; phone: boolean; note: string }[] = [
   <section class="m-head">
     <div class="wrap m-head-in">
       <div class="m-say">
-        <Kicker>iPhone companion</Kicker>
+        <Kicker>Mobile companion</Kicker>
         <h1>Your fleet,<br><em>in your pocket</em></h1>
         {/* design.md §9.4: the phone talks to the fleet directly; no laptop bridge, nothing on the laptop listens for a phone */}
-        <p class="lede">The Hermetic iPhone app talks to your agents directly over your tailnet. Chat with any bot, answer an agent that is waiting on you, and get a push when a turn finishes, with your laptop closed.</p>
+        <p class="lede">The Hermetic mobile app talks to your agents directly over your tailnet. Chat with any bot, answer an agent that is waiting on you, and get a push when a turn finishes, with your laptop closed.</p>
         <div class="m-ctas">
           <a class="btn btn-p" href="#pair">Pair a phone →</a>
           <a class="btn btn-s" href="#connect">How it connects</a>
@@ -180,7 +180,7 @@ const MATRIX: { what: string; phone: boolean; note: string }[] = [
     </SectionHead>
     <div class="docs m-steps">
       {/* design.md §9.4 (the phone needs the Tailscale app signed into the fleet's tailnet) */}
-      <div class="doc"><Kicker>Step 1</Kicker><h4>Join the tailnet</h4><p>Install the Tailscale app on the iPhone and sign in to the tailnet your fleet uses.</p></div>
+      <div class="doc"><Kicker>Step 1</Kicker><h4>Join the tailnet</h4><p>Install the Tailscale app on the phone and sign in to the tailnet your fleet uses.</p></div>
       {/* design.md §9.4: `hermetic mobile pair` in the CLI, Settings › Pair a phone in the desktop app */}
       <div class="doc"><Kicker>Step 2</Kicker><h4>Show the code</h4><p>On your Mac, open <b>Settings › Pair a phone</b> in the app, or run <code>hermetic mobile pair</code>.</p></div>
       {/* design.md §9.4: the phone parses the link, shows a confirm screen, stores it in the iOS keychain */}
@@ -199,7 +199,7 @@ const MATRIX: { what: string; phone: boolean; note: string }[] = [
     <div class="m-matrix">
       <div class="tbl-wrap">
         <table class="tbl">
-          <tr><th>Feature</th><th>iPhone</th><th>Notes</th></tr>
+          <tr><th>Feature</th><th>Mobile</th><th>Notes</th></tr>
           {MATRIX.map((r) => (
             <tr class:list={{ "m-no": !r.phone }}>
               <td class="nm wrapt">{r.what}</td>

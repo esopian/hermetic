@@ -66,12 +66,14 @@ export default defineConfig({
         { label: "Explainer", link: "/explainer/" },
         // The cost page (src/pages/cost.astro), also outside the docs collection.
         { label: "Cost", link: "/cost/" },
-        // The iPhone companion page (src/pages/mobile.astro), also outside the docs collection.
-        { label: "iPhone app", link: "/mobile/" },
+        // The mobile companion page (src/pages/mobile.astro), also outside the docs collection.
+        { label: "Mobile app", link: "/mobile/" },
         {
           label: "Start here",
           items: ["docs/start/install", "docs/start/first-fleet"],
         },
+        // The stream inspector, the CLI commands that look inside a box, and contributing.
+        "docs/powertools",
         {
           label: "Concepts",
           items: ["docs/concepts/principles", "docs/concepts/security-model"],
