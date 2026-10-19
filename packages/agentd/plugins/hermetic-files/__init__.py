@@ -588,8 +588,10 @@ def transform_llm_output(*args: Any, **kwargs: Any) -> str | None:
             if found is None:
                 continue
             match, cr = found
-            path = match.group("path").strip()
-            if _in_outbox(os.path.expanduser(path)):
+            # One file, one share: `~/a b.pdf`, `/data/hermes/./a b.pdf` and
+            # `/data/hermes//a b.pdf` name the same file (upstream #120021, #78383).
+            path = os.path.abspath(os.path.expanduser(match.group("path").strip()))
+            if _in_outbox(path):
                 continue
             if path not in shared:
                 left = deadline - _monotonic()

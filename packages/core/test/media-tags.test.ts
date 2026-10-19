@@ -11,7 +11,12 @@
  * `/Users/nobody`, `scripts/lint.ts` rule 5) in place of the desktop's.
  */
 import { describe, expect, test } from "bun:test";
-import { createMediaHold, splitMedia } from "../src/chat/hermes/hermes-chat-media.ts";
+import {
+  createMediaHold,
+  describeShares,
+  readMediaShares,
+  splitMedia,
+} from "../src/chat/hermes/hermes-chat-media.ts";
 import { MemoryFiles } from "../src/backend/fixture/memory-files.ts";
 import {
   FILES_LIMITS,
@@ -23,7 +28,13 @@ import {
   parseOutboxMediaLine,
   sniffMime,
 } from "../src/shared/files.ts";
-import { mediaLinePath, mediaTagValues, unquoteMediaPath } from "../src/shared/media-tags.ts";
+import type { ChatBlock, FileEntry } from "../src/schema/index.ts";
+import {
+  mediaLinePath,
+  mediaTagValues,
+  partialDirectiveTail,
+  unquoteMediaPath,
+} from "../src/shared/media-tags.ts";
 
 const SPACED = "/home/app/Morten - Nobly Kickoff - Opening and cue cards EN.docx";
 const SH = "sh_abcdefghij12";
@@ -258,5 +269,125 @@ describe("what a share's type lets the page do", () => {
     expect(await read("playback")).toBe("audio/wav");
     expect(await read("image")).toBe("FILE_TYPE_REJECTED");
     expect(await read("text")).toBe("FILE_TYPE_REJECTED");
+  });
+});
+
+/*
+ * The upstream MEDIA bugs (NousResearch/hermes-agent, checked 2026-10-19),
+ * each held as a requirement on the port: one test per issue, named for it.
+ */
+describe("upstream MEDIA requirements", () => {
+  const SH2 = "sh_zyxwvutsrq98";
+  const outboxLine = (id: string, name: string) => `MEDIA:${FILES_OUTBOX_DIR}/${id}/${name}`;
+  const attachments = (blocks: readonly ChatBlock[]) =>
+    blocks.filter((b): b is Extract<ChatBlock, { kind: "attachment" }> => b.kind === "attachment");
+
+  // #141584, PR #138551
+  test("a stream split inside a MEDIA path never shows the partial path", () => {
+    const hold = createMediaHold();
+    let shown = "";
+    for (const chunk of ["Sent.\nMEDIA:/tmp/rep", "orts/q3 fin", "al.pdf", "\nAnything else?"]) {
+      shown += hold.push(chunk);
+      expect(shown).not.toContain("MEDIA:");
+    }
+    expect(shown).toBe("Sent.\n");
+    expect(hold.settle(`Sent.\n${outboxLine(SH, "q3 final.pdf")}\nAnything else?`)).toEqual([
+      { kind: "share", share_id: SH, name: "q3 final.pdf" },
+      { kind: "text", text: "Anything else?" },
+    ]);
+    // A reply that is only the tag never shows it either.
+    const only = createMediaHold();
+    expect(only.push("MEDIA:/tmp/scratch/")).toBe("");
+    expect(only.settle(outboxLine(SH, "a.png"))).toEqual([
+      { kind: "share", share_id: SH, name: "a.png" },
+    ]);
+  });
+
+  // PR #138551: the same hold for the gateway's [[…]] directives.
+  test("a directive split across deltas is never shown half written", () => {
+    const hold = createMediaHold();
+    const shown = ["Your note [[audio_", "as_v", "oice]] is ready"].map((c) => hold.push(c));
+    expect(shown).toEqual(["Your note ", "", "[[audio_as_voice]] is ready"]);
+    const doc = createMediaHold();
+    expect(doc.push("Report [[as_doc")).toBe("Report ");
+    expect(doc.settle("Report [[as_document]]")).toEqual([{ kind: "text", text: "[[as_document]]" }]);
+    // Only an unfinished directive waits: a lone bracket and other brackets stream.
+    expect(partialDirectiveTail("see [")).toBe(0);
+    expect(partialDirectiveTail("see [[")).toBe(2);
+    expect(partialDirectiveTail("see [[link]]")).toBe(0);
+    expect(partialDirectiveTail("[[audio_as_voice]]")).toBe(0);
+  });
+
+  // #120021, #78383
+  test("MEDIA:/tmp/AI Brain/report.pdf gives one candidate", () => {
+    expect(mediaTagValues("MEDIA:/tmp/AI Brain/report.pdf")).toEqual(["/tmp/AI Brain/report.pdf"]);
+    expect(mediaLinePath("MEDIA:/tmp/AI Brain/report.pdf")).toBe("/tmp/AI Brain/report.pdf");
+    // No extensionless fallback: a whole line without a known extension is still one path.
+    expect(mediaLinePath("MEDIA:/tmp/AI Brain/report")).toBe("/tmp/AI Brain/report");
+    // The box shares one file once (`test_plugin.py`), so its lines name one share: one chip.
+    const line = outboxLine(SH, "report.pdf");
+    expect(splitMedia(`${line}\n**${line}**\nMEDIA: "${line.slice(6)}"`)).toEqual([
+      { kind: "share", share_id: SH, name: "report.pdf" },
+    ]);
+  });
+
+  // #123567
+  test("two MEDIA: lines give two attachments", () => {
+    const blocks = readMediaShares([
+      {
+        kind: "text",
+        markdown: `[[audio_as_voice]]\n${outboxLine(SH, "voice.ogg")}\nAnd the chart:\n${outboxLine(SH2, "chart.png")}`,
+      },
+    ]);
+    expect(attachments(blocks).map((b) => b.file_id)).toEqual([SH, SH2]);
+  });
+
+  // #34632
+  test("a drive path parses", () => {
+    expect(mediaLinePath("MEDIA:C:\\Users\\x\\file.pdf")).toBe("C:\\Users\\x\\file.pdf");
+    expect(mediaLinePath('MEDIA:"D:/Work Files/Q3 report.pdf"')).toBe("D:/Work Files/Q3 report.pdf");
+    expect(mediaTagValues("see MEDIA:C:\\Users\\x\\My File.pdf now")).toEqual([
+      "C:\\Users\\x\\My File.pdf",
+    ]);
+    // Parsed, but not the box's file: it stays text.
+    expect(parseOutboxMediaLine("MEDIA:C:\\Users\\x\\file.pdf")).toBeNull();
+  });
+
+  // #71559
+  test("a /relay/media/ URL is not trusted from its path shape", () => {
+    for (const url of [
+      "https://evil.example/relay/media/abc.png",
+      "https://cdn.example/files/relay/media/photo.png",
+      `https://evil.example${FILES_OUTBOX_DIR}/${SH}/a.png`,
+    ]) {
+      expect(parseOutboxMediaLine(`MEDIA:${url}`)).toBeNull();
+      expect(attachments(readMediaShares([{ kind: "text", markdown: `MEDIA:${url}` }]))).toEqual([]);
+    }
+  });
+
+  // #128855
+  test("a refused path does not render as a working attachment", () => {
+    // The plugin refused it, so the line is as the model wrote it: text, no chip.
+    const refused = readMediaShares([{ kind: "text", markdown: "MEDIA:/data/hermes/.hermes/.env" }]);
+    expect(refused).toEqual([{ kind: "text", markdown: "MEDIA:/data/hermes/.hermes/.env" }]);
+    // A share the box's outbox does not hold draws no chip, so nothing renders
+    // that the box would not serve.
+    const listed: FileEntry = {
+      id: SH2,
+      dir: "outbox",
+      class: "file",
+      name: "kept.csv",
+      bytes: 1,
+      mime: "text/csv",
+      sha256: "b".repeat(64),
+      created_at: "2026-10-14T10:00:00.000Z",
+      expires_at: "2026-10-15T10:00:00.000Z",
+      from: { kind: "agent" },
+    };
+    const blocks = readMediaShares([
+      { kind: "text", markdown: `${outboxLine(SH, "gone.pdf")}\n${outboxLine(SH2, "kept.csv")}` },
+    ]);
+    const [described] = describeShares([{ blocks }], [listed]);
+    expect(attachments(described?.blocks ?? []).map((b) => b.file_id)).toEqual([SH2]);
   });
 });

@@ -13,6 +13,7 @@ import type { AttachmentsApi, AttachmentsControl } from "../src/chat/chat-attach
 import { fresh, key } from "../src/chat/chat-conversation-record.ts";
 import type { Conversation } from "../src/chat/chat-conversation-record.ts";
 import { safeImageSrc, safeMediaSrc } from "../src/chat/chat-logic.ts";
+import { AttachmentBlock } from "../src/chat/components/blocks/Attachment.tsx";
 import {
   isMintedBlobUrl,
   mintBlobUrl,
@@ -170,6 +171,27 @@ describe("pure helpers", () => {
     expect(safeMediaSrc("blob:https://elsewhere/abc")).toBeNull();
     revokeBlobUrl(url);
     expect(safeMediaSrc(url)).toBeNull();
+  });
+});
+
+// NousResearch/hermes-agent #71559: a URL's path shape is not authorization.
+describe("media the page did not read", () => {
+  test("a /relay/media/ URL from another origin does not render as authenticated media", () => {
+    for (const href of [
+      "https://evil.example/relay/media/abc.png",
+      "//evil.example/relay/media/abc.png",
+      "https://cdn.example/files/relay/media/clip.mp4",
+    ]) {
+      expect(safeImageSrc(href)).toBeNull();
+      expect(safeMediaSrc(href)).toBeNull();
+      for (const mime of ["image/png", "video/mp4", "audio/ogg"]) {
+        const { container } = render(
+          <AttachmentBlock block={{ kind: "attachment", name: "abc.png", mime, bytes: 9, href }} />,
+        );
+        expect(container.querySelector("img, audio, video, source")).toBeNull();
+        cleanup();
+      }
+    }
   });
 });
 

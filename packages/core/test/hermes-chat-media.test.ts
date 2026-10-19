@@ -685,3 +685,30 @@ describe("history", () => {
     ]);
   });
 });
+
+// NousResearch/hermes-agent #37358, #39607
+describe("no replay", () => {
+  test("re-rendering the transcript does not duplicate or re-attach old files", () => {
+    const history = {
+      messages: [
+        { id: 1, role: "assistant", content: `Here it is.\n${LINE}` },
+        { id: 2, role: "user", content: "thanks, now summarise it" },
+        { id: 3, role: "assistant", content: "Summary: up and to the right." },
+      ],
+    };
+    const chips = (messages: ReturnType<typeof mapHistory>) =>
+      messages.map((m) => m.blocks.filter((b) => b.kind === "attachment").map((b) => b.file_id));
+    const first = mapHistory(BOX, STORED_SESSION_ID, history);
+    expect(chips(first)).toEqual([[SH], [], []]);
+    expect(mapHistory(BOX, STORED_SESSION_ID, history)).toEqual(first);
+
+    // Live: the next message's settle never carries the last one's share.
+    const hold = createMediaHold();
+    hold.push(`Here it is.\n${LINE}`);
+    expect(hold.settle(`Here it is.\n${LINE}`)).toEqual([
+      { kind: "share", share_id: SH, name: "chart.png" },
+    ]);
+    hold.push("Summary: up and to the right.");
+    expect(hold.settle("Summary: up and to the right.")).toEqual([]);
+  });
+});

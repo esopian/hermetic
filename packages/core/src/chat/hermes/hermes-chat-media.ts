@@ -37,6 +37,7 @@ import {
   parseOutboxMediaLine,
   type OutboxMediaRef,
 } from "../../shared/files.ts";
+import { partialDirectiveTail } from "../../shared/media-tags.ts";
 
 /** A run of text, or an outbox share, in the order the reply had them. */
 export type MediaPiece =
@@ -406,7 +407,12 @@ export function createMediaHold(): MediaHold {
       }
     }
     const partial = raw.slice(scan);
-    const safe = held || (fence === null && mediaHead(partial) !== "no") ? scan : raw.length;
+    // A directive still being written (`[[audio_as_v`) waits for its last
+    // character, so the page never shows one half written.
+    const safe =
+      held || (fence === null && mediaHead(partial) !== "no")
+        ? scan
+        : raw.length - partialDirectiveTail(partial);
     if (safe <= shown) return "";
     const out = raw.slice(shown, safe);
     shown = safe;
