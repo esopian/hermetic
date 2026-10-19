@@ -538,15 +538,13 @@ export function withFixtureBotMode(
       const original = await base.sessions(box, bot, opts);
       const k = key(box, bot);
       const c = canonical.get(k);
-      const found = original.map((s) =>
-        retired.has(`${k}/${s.id}`)
-          ? { ...s, kind: "thread" as const, title: `Archived ${s.title}` }
-          : s,
-      );
+      // An archived session drops out of the list, as upstream's `session.list`
+      // leaves archived rows out (`list_sessions_rich`, Hermes v2026.9.24).
+      const found = original.filter((s) => !retired.has(`${k}/${s.id}`));
       for (const stored of transcripts.keys()) {
         if (!stored.startsWith(`${k}/`)) continue;
         const id = stored.slice(k.length + 1);
-        if (found.some((s) => s.id === id)) continue;
+        if (retired.has(stored) || found.some((s) => s.id === id)) continue;
         found.push({
           id,
           instance: box.instance,
@@ -717,6 +715,9 @@ export function withFixtureBotMode(
     async compact(box, bot, opts = {}) {
       const c = await conversation(box, bot, opts);
       if (!c) throw new HermeticError("NOT_FOUND", "No Bot Chat");
+      // A focus naming `E2E_COMPACT_SLOW` takes a real compaction's beat, so its progress shows.
+      if (opts.focus_topic?.includes("E2E_COMPACT_SLOW"))
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
       return { conversation: c, status: "compressed", compressed: true };
     },
     async archive(box, bot, session) {

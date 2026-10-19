@@ -1,4 +1,4 @@
-import { openSeparateSession } from "../../src/client/new-session.ts";
+import { openSeparateSession, opensNewSession } from "../../src/client/new-session.ts";
 
 function client() {
   const sent: [string, string][] = [];
@@ -61,5 +61,18 @@ describe("openSeparateSession", () => {
     const c = client();
     await openSeparateSession(c, T, undefined, () => true);
     expect(c.sent).toEqual([]);
+  });
+});
+
+describe("opensNewSession", () => {
+  test("/new and /reset in a separate session open a new one", () => {
+    expect(opensNewSession("/new", { kind: "thread" })).toBe(true);
+    expect(opensNewSession("/reset side quest", { kind: "routine" })).toBe(true);
+  });
+  test("Bot Chat, an unlisted session and other lines go out as turns", () => {
+    expect(opensNewSession("/new", { kind: "canonical" })).toBe(false);
+    expect(opensNewSession("/new", null)).toBe(false);
+    expect(opensNewSession("/compact", { kind: "thread" })).toBe(false);
+    expect(opensNewSession("new plan", { kind: "thread" })).toBe(false);
   });
 });

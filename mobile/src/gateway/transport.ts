@@ -6,7 +6,7 @@
  * The composition mirrors the desktop's `packages/core/src/chat/chat.ts`
  * (`history`, `sessions`, `steer`, `abort`, the Bot Mode lifecycle) and
  * `chat-send.ts` (resolve the conversation first, then send into its session;
- * `/new`, `/reset` and `/compact` in Bot Chat compact instead), without the
+ * a compaction from the composer runs through core's `compactionFrames`), without the
  * laptop's own parts: no local claim on sessions, no fence, no inbox. The
  * transcript mask is `transcriptMask(DEFAULT_CHAT_SETTINGS.redact)`, the
  * desktop's default — content as the box wrote it, failure text always masked
@@ -28,6 +28,8 @@ import {
   type ChatObserveHint,
   type ChatObserveOptions,
   type ChatObserveTarget,
+  compactionFor,
+  compactionFrames,
   createBotOverRpc,
   createChatObservation,
   DEFAULT_CHAT_SETTINGS,
@@ -190,18 +192,6 @@ interface TurnRun {
   forgotten: boolean;
 }
 
-const BOT_CHAT_RESET = /^\/(new|reset|compact)\s*$/;
-
-/** What `/compact` (or a reset in Bot Chat) says in the transcript (desktop `compactNotice`). */
-function compactNotice(message: string, result: { compressed?: boolean; status?: string }): string {
-  const outcome = result.compressed ? null : `Compaction: ${result.status ?? "not compressed"}`;
-  if (/^\/compact\s*$/.test(message.trim())) return outcome ?? "✓ Context compression complete";
-  const notice =
-    "This chat never resets. Bot chats are one continuous conversation — compacting instead. " +
-    "For a throwaway session with this bot, start a separate session.";
-  return outcome ? `${notice}\n\n${outcome}` : notice;
-}
-
 /** A box that did not answer a roster read (desktop `unreachableSwarm`). */
 export function unreachableSwarm(instance: string, reason: string): Swarm {
   return {
@@ -302,25 +292,19 @@ export function createGatewayTransport(deps: GatewayTransportDeps): GatewayTrans
       const session = conversation?.session ?? turn.session;
       run.session = session ?? null;
       if (session && !run.forgotten) deps.turns().session?.(turn_id, session);
-      // A reset with files attached is a turn, not a reset: the files would be dropped.
-      if (
-        conversation?.kind === "canonical" &&
-        !turn.attachments &&
-        BOT_CHAT_RESET.test(turn.message.trim())
-      ) {
-        if (!client.compact)
+      // A compaction with files attached is a turn: the files would be dropped.
+      const compaction =
+        conversation && !turn.attachments ? compactionFor(turn.message, conversation.kind) : null;
+      if (conversation && compaction) {
+        const compact = client.compact;
+        if (!compact)
           throw new HermeticError("CHAT_PROTOCOL", "Compaction is unavailable on this gateway");
-        const result = await client.compact(run.box, run.bot, {
+        const frames = compactionFrames(
+          turn.message,
+          () => compact(run.box, run.bot, { signal, session: conversation.session, ...compaction }),
           signal,
-          session: conversation.session,
-        });
-        deliver({
-          type: "block",
-          seq: 0,
-          message: "compact",
-          block: { kind: "text", markdown: compactNotice(turn.message, result) },
-        });
-        deliver({ type: "done", seq: 1, message: "compact" });
+        );
+        for await (const frame of frames) deliver(frame);
       } else {
         for await (const frame of client.send(run.box, run.bot, turn.message, {
           signal,
