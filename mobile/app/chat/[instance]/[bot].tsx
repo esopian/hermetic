@@ -54,7 +54,7 @@ import { questionsOf } from "../../../src/client/chat-requests.ts";
 import type { RespondResult, SendAttachments } from "../../../src/client/chat-types.ts";
 import type { ConversationTarget, RespondInput } from "../../../src/client/conversation-store.ts";
 import { ATTACHMENT_LIMIT, errorCopy, HermeticError } from "../../../src/client/errors.ts";
-import { openSeparateSession } from "../../../src/client/new-session.ts";
+import { openSeparateSession, opensNewSession } from "../../../src/client/new-session.ts";
 import {
   discardPicked,
   pickDocument,
@@ -539,6 +539,14 @@ export default function Conversation() {
         if (text) setDraft((d) => d || text);
         return;
       }
+      if (attachments.length === 0 && opensNewSession(text, session)) {
+        openNewSession().catch((e: unknown) => {
+          if (!alive.current) return;
+          haptic.error();
+          Alert.alert("No new session", e instanceof Error ? e.message : String(e));
+        });
+        return;
+      }
       if (attachments.length === 0) {
         setPinSignal((n) => n + 1);
         if (!client.chat.sendMessage(target, text)) client.chat.enqueue(target, text);
@@ -604,7 +612,7 @@ export default function Conversation() {
         if (upload.current === controller) upload.current = null;
       });
     },
-    [client, target, attachments, files, view?.resolvedSession, sending],
+    [client, target, attachments, files, view?.resolvedSession, sending, session, openNewSession],
   );
 
   const onSendNow = useCallback(

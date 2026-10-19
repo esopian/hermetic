@@ -71,6 +71,8 @@ export { HERMES_INTERNAL_EVENTS, isHermesInternalEvent } from "./hermes-internal
 export {
   DISPATCH_TYPES,
   SLASH_COMMAND_RE,
+  isCompactCommand,
+  isNewSessionCommand,
   looksLikeSlashCommand,
   parseCommandDispatch,
   parseSlashCommand,

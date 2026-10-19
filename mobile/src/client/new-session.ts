@@ -9,6 +9,7 @@
  * route replace, the haptic) waits on it being shown; a screen that is gone
  * does not watch the new session either, so nothing is left observing it.
  */
+import { isNewSessionCommand } from "@hermetic/core/shared";
 import type { SendAttachments } from "./chat-types.ts";
 import type { ConversationTarget } from "./conversation-store.ts";
 
@@ -55,4 +56,15 @@ export async function openSeparateSession(
     client.chat.sendMessage(next, prompt ?? "", attachments ?? null);
   }
   return onScreen ? next : null;
+}
+
+/**
+ * Whether a line typed into `session` opens a new session rather than going
+ * out as a turn: `/new` or `/reset` in a listed session that is not Bot Chat,
+ * as the desktop's (`chat-conversations.ts`) — the gateway would only reset
+ * its slash worker. In Bot Chat, or a session not yet listed, the transport
+ * compacts instead (core's `compactionFor`).
+ */
+export function opensNewSession(text: string, session: { kind: string } | null): boolean {
+  return !!session && session.kind !== "canonical" && isNewSessionCommand(text);
 }

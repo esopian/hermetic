@@ -74,6 +74,7 @@ export type {
 export { redactText, transcriptMask } from "./chat/chat-redact.ts";
 export type { TranscriptMask } from "./chat/chat-redact.ts";
 export { DEFAULT_CHAT_SETTINGS } from "./chat/chat-settings.ts";
+export { compactionFor, compactionFrames } from "./chat/compact-turn.ts";
 export type { ChatSettings } from "./chat/chat-settings.ts";
 
 // --- Errors and aborts ---------------------------------------------------
@@ -123,6 +124,7 @@ export type ErrorFrame = Extract<ChatFrame, { type: "error" }>;
 
 export type ChatBlockKind = ChatBlock["kind"];
 export type TextBlock = Extract<ChatBlock, { kind: "text" }>;
+export type CommandBlock = Extract<ChatBlock, { kind: "command" }>;
 export type ActivityBlock = Extract<ChatBlock, { kind: "activity" }>;
 export type ReasoningBlock = Extract<ChatBlock, { kind: "reasoning" }>;
 export type ToolBlock = Extract<ChatBlock, { kind: "tool" }>;

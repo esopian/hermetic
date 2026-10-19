@@ -21,6 +21,7 @@ import { ShareAttachment, ShareToolBlock } from "./ShareCard.tsx";
 import {
   ActivityNotice,
   AttachmentBlock,
+  CommandBlock,
   HermeticBlock,
   ProcessEventBlock,
   ReasoningBlock,
@@ -66,6 +67,8 @@ function BlockImpl({
         <Markdown markdown={markdown} streaming={streaming} />
       );
     }
+    case "command":
+      return block.kind === "command" ? <CommandBlock block={block} /> : null;
     case "reasoning":
       return block.kind === "reasoning" ? <ReasoningBlock block={block} /> : null;
     case "activity":

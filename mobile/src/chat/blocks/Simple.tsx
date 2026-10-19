@@ -17,6 +17,7 @@ import type {
   ActivityBlock,
   AttachmentBlock as AttachmentBlockType,
   ChatBlock,
+  CommandBlock as CommandBlockType,
   HermeticBlock as HermeticBlockType,
   ProcessEventBlock as ProcessEventBlockType,
   ReasoningBlock as ReasoningBlockType,
@@ -44,6 +45,30 @@ export function ReasoningBlock({ block }: { block: ReasoningBlockType }) {
         {block.text}
       </Text>
     </Card>
+  );
+}
+
+const COMMAND_STATE = { done: null, error: "Failed", unsupported: "Not supported here" } as const;
+
+/**
+ * `command` — a slash command's answer from the gateway's command layer, or a
+ * compaction's (§9.2): a mono pane under the command, never prose, since the
+ * model never saw the line (desktop `blocks/Command.tsx`). A refusal is an alert.
+ */
+export function CommandBlock({ block }: { block: CommandBlockType }) {
+  const label = COMMAND_STATE[block.state];
+  return (
+    <View accessibilityRole={block.state === "done" ? "text" : "alert"}>
+      <Card verdict={block.state === "done" ? "muted" : "bad"} head={block.command} right={label}>
+        {block.warning ? (
+          <Text selectable variant="bodySmall" tone="warn">
+            {block.warning}
+          </Text>
+        ) : null}
+        {block.output ? <CodePane text={block.output} wrap /> : null}
+        {block.prefill ? <CodePane text={block.prefill} wrap /> : null}
+      </Card>
+    </View>
   );
 }
 

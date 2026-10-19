@@ -44,6 +44,12 @@ export interface CanonicalDeps {
 }
 const failure = (message: string) => new HermeticError("CHAT_PROTOCOL", message);
 /**
+ * Above the gateway's own compute-host wait (630 s cap,
+ * `_COMPUTE_HOST_COMPRESS_WAIT_CAP_SECS`), after which it answers `pending`
+ * rather than an error: Desktop's `SESSION_COMPRESS_TIMEOUT_MS`.
+ */
+const COMPRESS_DEADLINE_MS = 660_000;
+/**
  * One answer to "is this row Bot Chat", mirrored by `mapSessions`
  * (`hermes-chat-sessions.ts:65`), which classifies `kind: "canonical"` from the
  * same `root_title ?? title`. Two readers disagreeing about that would let a
@@ -336,7 +342,7 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
             session_id: runtime,
             ...(opts.focus_topic ? { focus_topic: opts.focus_topic } : {}),
           },
-          180_000,
+          COMPRESS_DEADLINE_MS,
         ),
       );
       const status = str(result?.status) ?? (result?.compressed === false ? "blocked" : "unknown");
