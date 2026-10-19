@@ -10,13 +10,13 @@
  * Three *kinds* of motion, not three speeds of one — an operator should be able
  * to tell them apart from across a room:
  *
- *   thinking   the mark comes APART and puts itself back together. Every cell
+ *   thinking   every block holds its place and the MATERIAL moves — a hue sweep
+ *              and a shading sweep at different frequencies, so the two never
+ *              line up and the mark keeps moving without a cell leaving home.
+ *   streaming  the mark comes APART and puts itself back together. Every cell
  *              has its own cycle length and phase, and on EVERY loop it rolls a
  *              fresh entry and exit style, so the choreography never settles
  *              into something you can learn.
- *   streaming  every block holds its place and the MATERIAL moves — a hue sweep
- *              and a shading sweep at different frequencies, so the two never
- *              line up and the mark keeps moving without a cell leaving home.
  *   idle       a quiet diagonal opacity wave. If the resting state also flew
  *              apart, working would have nothing left to say.
  *
@@ -39,7 +39,7 @@ export interface SigilCell {
   readonly id: number;
   /** Which of the palette's two tones this cell wears. */
   readonly tone: 0 | 1;
-  /** Diagonal index, which is what the idle wave and the streaming sweep travel along. */
+  /** Diagonal index, which is what the idle wave and the thinking sweep travel along. */
   readonly d: number;
   /** Rect geometry, already in viewBox units. */
   readonly x: number;
@@ -155,7 +155,7 @@ const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(
  * writes that put it on screen.
  *
  * `dh`/`dl` are offsets applied to the cell's own tone, never absolute colours —
- * that is what keeps the streaming sweep from drifting away from the agent's
+ * that is what keeps the thinking sweep from drifting away from the agent's
  * identity palette.
  */
 export interface SigilFrame {
@@ -283,7 +283,7 @@ const EXITS: readonly Move[] = [
 export function sigilFrame(cell: SigilCell, t: number, motion: AvatarMotion): SigilFrame {
   if (!motion.alive) return SIGIL_HOME;
 
-  if (motion.activity === "streaming") {
+  if (motion.activity === "thinking") {
     // Blocks hold, the material moves. Two sweeps at deliberately unrelated
     // frequencies, so they never line up and the loop has no visible period.
     return {
@@ -293,7 +293,7 @@ export function sigilFrame(cell: SigilCell, t: number, motion: AvatarMotion): Si
     };
   }
 
-  if (motion.activity === "thinking") {
+  if (motion.activity === "streaming") {
     const u = t * cell.speed + cell.phase;
     const cycle = Math.floor(u);
     const f = u - cycle;
