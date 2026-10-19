@@ -1,7 +1,8 @@
 /**
  * Files the agent shares with the operator (attachments plan §8.5, scenario E)
  * over the real `bind` and `dispatch` and the fixture backend: `share_file`
- * draws a card per file, an image is shown only once its bytes hash to the
+ * draws a card per file, and so does a reply that names its files only on
+ * `MEDIA:` lines (`E2E_MEDIA_SHARE`, what hermetic's platform hint teaches); an image is shown only once its bytes hash to the
  * shared sha256 (and never read for one when the share names no full digest),
  * Save… goes through the folder dialog into the folder it
  * chose, and a refused share shows the box's words instead of a card.
@@ -56,6 +57,7 @@ function stubFolder(folder: string | null): void {
 
 async function share(
   given: FlowHarness | null = null,
+  trigger = "E2E_FILE_SHARE",
 ): Promise<{ pane: Element; cards: () => Element[] }> {
   harness = given ?? (await flowHarness());
   await harness.ctx.hermetic().chat.listen({ instance: "atlas", listening: true });
@@ -69,7 +71,7 @@ async function share(
     { timeout: 4_000 },
   );
   const pane = composer.closest(".ch-thread")!;
-  await userEvent.type(composer, "send me the Q3 numbers E2E_FILE_SHARE{Enter}");
+  await userEvent.type(composer, `send me the Q3 numbers ${trigger}{Enter}`);
   const cards = () => Array.from(pane.querySelectorAll(".ch-share"));
   await waitFor(() => expect(cards().length).toBe(2), WAIT);
   return { pane, cards };
@@ -113,6 +115,43 @@ test("share_file draws one card per file; the chart shows once its sha256 checks
   const csvId = csv.getAttribute("data-share-id") ?? "";
   expect(csvId.startsWith("sh_")).toBe(true);
   expect(contentIds.includes(csvId)).toBe(false);
+}, 20_000);
+
+test("MEDIA: lines alone, with no share_file call, draw a card per file", async () => {
+  const { pane, cards } = await share(null, "E2E_MEDIA_SHARE");
+  expect(pane.querySelector(".ch-share-refused") === null).toBe(true);
+  expect(cards().map((c) => c.querySelector(".ch-attach-item b")?.textContent ?? "")).toEqual([
+    "q3-revenue.png",
+    "q3-revenue.csv",
+  ]);
+  // The lines leave the prose, and the prose on both sides of them stays.
+  const text = pane.textContent ?? "";
+  expect(text).not.toContain("MEDIA:");
+  expect(text).not.toContain("outbox/sh_");
+  expect(text).toContain("the CSV behind it.");
+  expect(text).toContain("September is up 8% on August.");
+
+  // The image is previewed inline, from bytes that hash to the shared digest.
+  const png = () => card(cards(), "q3-revenue.png");
+  await waitFor(
+    () => expect(png()?.querySelector("img.ch-shot")?.getAttribute("src") ?? "").toMatch(/^blob:/),
+    WAIT,
+  );
+  expect(png()!.textContent ?? "").toMatch(/PNG.*q3-revenue\.png.* · sha [0-9a-f]{4}… · on box 24 h/);
+  expect(saveButton(png())?.disabled).toBe(false);
+
+  // The CSV is a card with no preview, and downloads through Save….
+  const csv = () => card(cards(), "q3-revenue.csv");
+  expect(csv()!.querySelector("img") === null).toBe(true);
+  expect(csv()!.textContent ?? "").toMatch(/CSV.*q3-revenue\.csv\d+ B · sha [0-9a-f]{4}…/);
+  const folder = mkdtempSync(join(folders, "media-"));
+  stubFolder(folder);
+  await userEvent.click(saveButton(csv())!);
+  await waitFor(() => expect(csv()?.textContent ?? "").toContain("✓ saved q3-revenue.csv"), WAIT);
+  expect(readdirSync(folder)).toEqual(["q3-revenue.csv"]);
+  expect(
+    readFileSync(join(folder, "q3-revenue.csv"), "utf8").startsWith("month,revenue_usd,orders\n"),
+  ).toBe(true);
 }, 20_000);
 
 test("an image whose bytes do not hash to the shared sha256 is not shown", async () => {
