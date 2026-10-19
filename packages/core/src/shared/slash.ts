@@ -45,6 +45,27 @@ export function parseSlashCommand(command: string): ParsedSlashCommand {
     : { arg: "", name: "" };
 }
 
+/**
+ * Hermes's "start a new session": `/new [name]` or its alias `/reset`
+ * (`hermes_cli/commands.py`). A bot's canonical Bot Chat compacts instead, since
+ * the forever-chat never resets; any other session opens a fresh one (§9.2).
+ */
+export function isNewSessionCommand(text: string): boolean {
+  const line = text.trim();
+  return looksLikeSlashCommand(line) && ["new", "reset"].includes(parseSlashCommand(line).name);
+}
+
+/**
+ * `/compress [focus]` or its alias `/compact`. Run on the gateway's
+ * `session.compress`, never through the slash worker: Desktop makes it an
+ * action for the same reason, since the worker's pipe times out before a large
+ * session's summary call finishes (`desktop-slash-commands.ts`, hermes#44456).
+ */
+export function isCompactCommand(text: string): boolean {
+  const line = text.trim();
+  return looksLikeSlashCommand(line) && ["compact", "compress"].includes(parseSlashCommand(line).name);
+}
+
 /** Every directive `command.dispatch` can answer with (upstream's `DispatchType`). */
 export const DISPATCH_TYPES = ["exec", "alias", "plugin", "send", "skill", "prefill"] as const;
 export type DispatchType = (typeof DISPATCH_TYPES)[number];

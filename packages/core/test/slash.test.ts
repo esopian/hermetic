@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DISPATCH_TYPES,
+  isNewSessionCommand,
   looksLikeSlashCommand,
   parseCommandDispatch,
   parseSlashCommand,
@@ -116,6 +117,17 @@ describe("parseCommandDispatch", () => {
     expect(parseCommandDispatch({ type: "send", message: 42 })).toBeNull();
     expect(parseCommandDispatch({ type: "prefill", notice: "x" })).toBeNull();
     expect(parseCommandDispatch({ type: "nope" })).toBeNull();
+  });
+});
+
+describe("isNewSessionCommand", () => {
+  test("/new and /reset, bare or named, any case", () => {
+    for (const line of ["/new", " /reset ", "/new side quest", "/RESET x", "/new\nnotes"])
+      expect(isNewSessionCommand(line)).toBe(true);
+  });
+  test("other commands and prose are not", () => {
+    for (const line of ["/compact", "/newer", "/news today", "new", "please /new", "/new/x"])
+      expect(isNewSessionCommand(line)).toBe(false);
   });
 });
 

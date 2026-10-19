@@ -283,10 +283,50 @@ describe("turns", () => {
     await flush();
     expect(s.calls.map((c) => c.method)).toEqual(["conversation", "compact"]);
     expect(s.frames()).toEqual([
-      block(0, { kind: "text", markdown: "✓ Context compression complete" }, "compact"),
-      { type: "done", seq: 1, message: "compact" },
+      block(
+        0,
+        {
+          kind: "activity",
+          category: "notice",
+          key: "status:compact",
+          title: "Compacting context…",
+          state: "running",
+          role: "status",
+        },
+        "compact",
+      ),
+      block(
+        1,
+        {
+          kind: "command",
+          command: "/compact",
+          output: "✓ Context compression complete",
+          state: "done",
+        },
+        "compact",
+      ),
+      { type: "done", seq: 2, message: "compact" },
     ]);
     expect(s.events.at(-1)).toMatchObject({ state: "done" });
+  });
+
+  test("/compact in a separate session compacts that session, never the slash worker", async () => {
+    const s = setup({ conversation: { ...canonical("t-1"), kind: "thread" } });
+    await s.transport.startTurn({ ...ATLAS, session: "t-1", message: "/compact" });
+    await flush();
+    expect(s.calls.map((c) => c.method)).toEqual(["conversation", "compact"]);
+    expect(s.calls[1]!.args).toEqual(["atlas", "scribe", "t-1"]);
+  });
+
+  test("/new <name> in Bot Chat compacts; in a separate session it is not a compaction", async () => {
+    const bot = setup();
+    await bot.transport.startTurn({ ...ATLAS, message: "/new side quest" });
+    await flush();
+    expect(bot.calls.map((c) => c.method)).toEqual(["conversation", "compact"]);
+    const thread = setup({ conversation: { ...canonical("t-1"), kind: "thread" }, frames: [done(1)] });
+    await thread.transport.startTurn({ ...ATLAS, session: "t-1", message: "/new" });
+    await flush();
+    expect(thread.calls.map((c) => c.method)).toEqual(["conversation", "send"]);
   });
 
   test("a turn's attachments reach the adapter's send, even with no words", async () => {

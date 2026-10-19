@@ -428,7 +428,7 @@ describe("devtap · frames chat.send makes itself", () => {
     expect(records.map((r) => [r.layer, r.type])).toEqual([["frame", "error"]]);
   });
 
-  test("a compaction's notice and done are captured", async () => {
+  test("a compaction's status, answer and done are captured", async () => {
     const home = mkdtempSync(join(tmpdir(), "hermetic-devtools-compact-"));
     const hermetic = await openHermetic({ fixture: true, home });
     await hermetic.chat.listen({ instance: "atlas", listening: true });
@@ -445,8 +445,8 @@ describe("devtap · frames chat.send makes itself", () => {
       .ndjson.trim()
       .split("\n")
       .map((line) => (JSON.parse(line) as TapRecord).type);
-    expect(frames).toEqual(["block", "done"]);
-    expect(types).toEqual(["block.text", "done"]);
+    expect(frames).toEqual(["block", "block", "done"]);
+    expect(types).toEqual(["block.activity", "block.command", "done"]);
   });
 });
 

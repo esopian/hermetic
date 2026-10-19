@@ -8,6 +8,7 @@
  * box's coordinate system — are documented on the function itself.
  */
 import { ChatSendInput } from "../schema/index.ts";
+import { compactionFor, compactionFrames } from "./compact-turn.ts";
 import type { ChatFrame } from "../schema/index.ts";
 import { redactText } from "./chat-redact.ts";
 import type { TranscriptMask } from "./chat-redact.ts";
@@ -35,27 +36,6 @@ import type { ChatDeps, ChatOptions } from "./chat.ts";
  * model has already finished speaking.
  */
 const ATTRIBUTION_DEADLINE_MS = 5_000;
-
-/**
- * What the canonical chat says when a slash command compacts it.
- *
- * `/new` and `/reset` would fork Bot Chat, so they compact instead, and the
- * operator is told so in Hermes Desktop's words — its composer middleware
- * reroutes them the same way and toasts "This chat never resets"
- * (`apps/desktop/src/plugins/hermes-bots/plugin.tsx:756-784` at v2026.9.24).
- * Desktop's last line points at its Sessions mode; Hermetic's equivalent is a
- * separate session. A typed `/compact` gets the gateway's own completion
- * status (`tui_gateway/compute_host_bridge.py:340`). A compaction the gateway
- * did not perform reports its status either way.
- */
-function compactNotice(message: string, result: { compressed: boolean; status: string }): string {
-  const outcome = result.compressed ? null : `Compaction: ${result.status}`;
-  if (/^\/compact\s*$/.test(message.trim())) return outcome ?? "✓ Context compression complete";
-  const notice =
-    "This chat never resets. Bot chats are one continuous conversation — compacting instead. " +
-    "For a throwaway session with this bot, start a separate session.";
-  return outcome ? `${notice}\n\n${outcome}` : notice;
-}
 
 /** What `send` reads from the surface that built it. */
 export interface ChatSendContext {
@@ -198,28 +178,29 @@ export function createChatSend(ctx: ChatSendContext) {
         tap();
         tapKey = { ...where, session: canonicalSession !== null ? null : (targetSession ?? null) };
         const attachments = attachmentsFor(box, parsed.attachments);
-        if (
-          conversation?.kind === "canonical" &&
-          attachments === undefined &&
-          /^\/(new|reset|compact)\s*$/.test(parsed.message.trim())
-        ) {
-          if (!hermes.compact)
+        // A compaction from the composer runs on `session.compress` (§9.2).
+        const compaction =
+          conversation && attachments === undefined
+            ? compactionFor(parsed.message, conversation.kind)
+            : null;
+        if (conversation && compaction) {
+          const compact = hermes.compact;
+          if (!compact)
             throw new HermeticError("CHAT_PROTOCOL", "Compaction is unavailable on this gateway");
-          const result = await hermes.compact(box, parsed.bot, {
-            signal: opts.signal,
-            session: conversation.session,
-          });
-          const notice: ChatFrame = {
-            type: "block",
-            seq: 0,
-            message: "compact",
-            block: { kind: "text", markdown: compactNotice(parsed.message, result) },
-          };
-          const finished: ChatFrame = { type: "done", seq: 1, message: "compact" };
-          tapFrame(tap(), tapKey, notice);
-          yield notice;
-          tapFrame(tap(), tapKey, finished);
-          yield finished;
+          const frames = compactionFrames(
+            parsed.message,
+            () =>
+              compact(box, parsed.bot, {
+                signal: opts.signal,
+                session: conversation.session,
+                ...compaction,
+              }),
+            opts.signal,
+          );
+          for await (const frame of frames) {
+            tapFrame(tap(), tapKey, frame);
+            yield frame;
+          }
           return;
         }
         for await (const frame of hermes.send(box, parsed.bot, parsed.message, {
