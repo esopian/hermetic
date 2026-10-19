@@ -83,6 +83,7 @@ test("create: the picker offers exactly the catalogue, and a picked provider is 
     "hindsight",
     "openviking",
     "honcho",
+    "prism",
   ]);
   // Nothing is held back on the default preset for size, and the only vendor
   // block is Honcho on the fleet's default (anthropic) profile.
@@ -327,6 +328,7 @@ test("Settings › Defaults: every choice is a radio with its resource chips, an
     "hindsight",
     "openviking",
     "honcho",
+    "prism",
   ]);
   // One native group: a single tab stop, and the arrow keys move within it.
   expect(new Set(radios.map((r) => r.name)).size).toBe(1);
@@ -347,7 +349,7 @@ test("Settings › Defaults: every choice is a radio with its resource chips, an
   expect(providerRow("honcho").textContent).toContain(
     "Not available for anthropic / bedrock agents: no embeddings API",
   );
-  for (const p of ["none", "holographic", "hindsight", "openviking"]) {
+  for (const p of ["none", "holographic", "hindsight", "openviking", "prism"]) {
     expect(providerRow(p).querySelector(".mem-opt-note")).toBeNull();
   }
   // Nothing about keys is left anywhere on the page.

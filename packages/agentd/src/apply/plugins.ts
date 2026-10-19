@@ -1,4 +1,8 @@
 /**
+ * The Hermes plugins hermeticd carries: `hermetic-files` on every box, and the
+ * `prme` memory provider for an agent on `prism` (`BUNDLED_MEMORY_PLUGINS`,
+ * installed by `memory-service.ts`).
+ *
  * The `hermetic-files` Hermes plugin (plan §06): `request_file`,
  * `request_secret`, `await_file`, `list_files`, `share_file`, the tool-result
  * scrub hook, and the `MEDIA:` line hook that turns a reply's file into a share.
@@ -23,9 +27,11 @@
  * picked up at Hermes's next start.
  */
 /// <reference path="../plugin-assets.d.ts" />
-import { HERMES_ACCOUNT, HERMES_HOME } from "@hermetic/core/shared";
+import { HERMES_ACCOUNT, HERMES_HOME, type MemoryServiceId } from "@hermetic/core/shared";
 import pluginInit from "../../plugins/hermetic-files/__init__.py" with { type: "text" };
 import pluginManifest from "../../plugins/hermetic-files/plugin.yaml" with { type: "text" };
+import prmeInit from "../../plugins/prme/__init__.py" with { type: "text" };
+import prmeManifest from "../../plugins/prme/plugin.yaml" with { type: "text" };
 import { asHermes, installAccountDir } from "../account-dirs.ts";
 import type { Emit } from "../events.ts";
 import { opEvent } from "../events.ts";
@@ -36,11 +42,25 @@ export const HERMES_PLUGIN_NAME = "hermetic-files";
 export const HERMES_PLUGINS_DIR = `${HERMES_HOME}/plugins`;
 export const HERMES_PLUGIN_DIR = `${HERMES_PLUGINS_DIR}/${HERMES_PLUGIN_NAME}`;
 
-/** The plugin as hermeticd carries it: file name → content. */
-export const HERMES_PLUGIN_FILES: ReadonlyArray<{ readonly name: string; readonly content: string }> = [
+/** A plugin as hermeticd carries it: file name → content. */
+export type PluginFiles = ReadonlyArray<{ readonly name: string; readonly content: string }>;
+
+export const HERMES_PLUGIN_FILES: PluginFiles = [
   { name: "plugin.yaml", content: pluginManifest },
   { name: "__init__.py", content: pluginInit },
 ];
+
+/**
+ * Memory-provider plugins hermeticd ships itself, for a service provider whose
+ * spec names no catalog checkout (`MemoryServiceSpec.plugin` null). Installed
+ * into `hermesPluginDir(hermesMemoryProviderName(provider))`.
+ */
+export const BUNDLED_MEMORY_PLUGINS: Partial<Record<MemoryServiceId, PluginFiles>> = {
+  prism: [
+    { name: "plugin.yaml", content: prmeManifest },
+    { name: "__init__.py", content: prmeInit },
+  ],
+};
 
 /** Plain files Hermes imports: readable, not executable, the account's. */
 const PLUGIN_FILE_MODE = "0644";
@@ -77,22 +97,31 @@ async function writeAsAccount(host: Host, path: string, content: string): Promis
 }
 
 /**
- * Put the embedded plugin at `HERMES_PLUGIN_DIR`, writing only files whose
- * content differs. Returns whether anything changed (or, dry, would change).
+ * Put an embedded plugin at `$HERMES_HOME/plugins/<name>`, writing only files
+ * whose content differs. Returns whether anything changed (or, dry, would
+ * change).
  *
  * Best effort, like `ensureAgentVenv`: a failure is a `warn` event and the
  * apply goes on, because Hermes runs without the plugin — it only lacks the
- * file tools until the next apply tries again.
+ * plugin's tools until the next apply tries again. `fatal` rethrows instead,
+ * for a memory plugin, whose absence would leave Hermes on built-in memory
+ * with nothing saying so.
  */
-export async function ensureHermesPlugin(host: Host, emit: Emit, dry: boolean): Promise<boolean> {
+export async function ensureBundledPlugin(
+  host: Host,
+  emit: Emit,
+  dry: boolean,
+  plugin: { readonly name: string; readonly files: PluginFiles; readonly fatal?: boolean },
+): Promise<boolean> {
+  const dir = `${HERMES_PLUGINS_DIR}/${plugin.name}`;
   try {
     if (!dry) {
       await installAccountDir(host, HERMES_PLUGINS_DIR, "0700");
-      await installAccountDir(host, HERMES_PLUGIN_DIR, "0700");
+      await installAccountDir(host, dir, "0700");
     }
     const stale: Array<{ readonly name: string; readonly content: string }> = [];
-    for (const file of HERMES_PLUGIN_FILES) {
-      if ((await installedContent(host, `${HERMES_PLUGIN_DIR}/${file.name}`)) !== file.content) {
+    for (const file of plugin.files) {
+      if ((await installedContent(host, `${dir}/${file.name}`)) !== file.content) {
         stale.push(file);
       }
     }
@@ -101,22 +130,22 @@ export async function ensureHermesPlugin(host: Host, emit: Emit, dry: boolean): 
       opEvent(
         "accounts",
         0.39,
-        `${dry ? "would install" : "installing"} the ${HERMES_PLUGIN_NAME} Hermes plugin ` +
+        `${dry ? "would install" : "installing"} the ${plugin.name} Hermes plugin ` +
           `(${stale.map((f) => f.name).join(", ")})`,
         host.now(),
       ),
     );
     if (dry) return true;
-    for (const file of stale)
-      await writeAsAccount(host, `${HERMES_PLUGIN_DIR}/${file.name}`, file.content);
+    for (const file of stale) await writeAsAccount(host, `${dir}/${file.name}`, file.content);
     return true;
   } catch (e) {
+    if (plugin.fatal) throw e;
     emit(
       opEvent(
         "accounts",
         0.39,
-        `could not install the ${HERMES_PLUGIN_NAME} Hermes plugin (${e instanceof Error ? e.message : String(e)}); ` +
-          "the agent has no file tools until the next apply",
+        `could not install the ${plugin.name} Hermes plugin (${e instanceof Error ? e.message : String(e)}); ` +
+          "the agent goes without it until the next apply",
         host.now(),
         "warn",
       ),

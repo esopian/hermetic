@@ -332,7 +332,7 @@ export const FIXTURE_PROFILE_REVISIONS = {
 export const FIXTURE_PROFILE_KEY = "sk-profile-FIXTURE-SECRET";
 
 /** The hermeticd release the fixture fleet's manifest points at. */
-export const FIXTURE_HERMETICD_VERSION = "0.8.2";
+export const FIXTURE_HERMETICD_VERSION = "0.8.3";
 
 /**
  * The browser build the fixture fleet's manifest names (§7.3). Written out

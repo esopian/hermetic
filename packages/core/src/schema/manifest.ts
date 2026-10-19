@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DEFAULT_PROVIDER_KEY_SLOT } from "../shared/box.ts";
 import {
   MEMORY_HONCHO_CAPABILITY,
+  MEMORY_PRISM_CAPABILITY,
   MEMORY_PROVIDER_CAPABILITY,
   MEMORY_SERVICE_CAPABILITY,
 } from "../shared/memory-providers.ts";
@@ -308,6 +309,13 @@ export const AGENT_CONFIG_CAPABILITIES = {
    */
   [MEMORY_HONCHO_CAPABILITY]:
     "run honcho's memory server: its Postgres, source build, worker and plugin config link",
+  /**
+   * prism's plugin is shipped inside hermeticd rather than checked out, and its
+   * pack and model cache are directories hermeticd makes. A box without it
+   * reads `prism` as no provider (`StoredManifestMemory`) and leaves Hermes
+   * asking for a `prme` plugin that is not there.
+   */
+  [MEMORY_PRISM_CAPABILITY]: "run prism's memory server and install its bundled prme plugin",
 } as const;
 export type AgentCapability = keyof typeof AGENT_CONFIG_CAPABILITIES;
 
@@ -358,5 +366,6 @@ export function requiredCapabilities(manifest: {
   /* A pin is what a service provider's manifest carries, and only that one. */
   if (manifest.memory?.pin !== undefined) out.push(MEMORY_SERVICE_CAPABILITY);
   if (manifest.memory?.provider === "honcho") out.push(MEMORY_HONCHO_CAPABILITY);
+  if (manifest.memory?.provider === "prism") out.push(MEMORY_PRISM_CAPABILITY);
   return out;
 }

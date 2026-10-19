@@ -2,7 +2,7 @@
  * `MemoryBox`: the stateful box the memory-provider suites run apply against
  * (`memory-provider.test.ts`, `memory-honcho.test.ts`).
  */
-import { MEMORY_SERVICES, hermesPluginDir } from "@hermetic/core/shared";
+import { MEMORY_SERVICES, hermesPluginDir, memoryServiceDir } from "@hermetic/core/shared";
 import { importNameOf } from "../src/apply/index.ts";
 import { HERMES_VENV_DIR } from "../src/apply/hermes.ts";
 import type { ExecOptions, ExecResult, FileStat } from "../src/host.ts";
@@ -11,6 +11,7 @@ import { fail, ok } from "./fake-host.ts";
 
 const HERMES_PYTHON = `${HERMES_VENV_DIR}/bin/python`;
 const PLUGIN = MEMORY_SERVICES.hindsight.plugin!;
+const PRISM_PYTHON = `${memoryServiceDir("prism")}/venv/bin/python`;
 
 /** A downloaded file this fake stands in for: its claimed digest and size, not its bytes. */
 export const blob = (sha: string, size: number): string => `BLOB ${sha} ${size}`;
@@ -37,6 +38,8 @@ export class MemoryBox extends BoxHost {
    * as `hermes`). `UNKNOWN:UNKNOWN` is a uid the box no longer has a name for.
    */
   readonly dirOwners = new Map<string, string>();
+  /** prism's warm-up fails every attempt (a download that keeps failing), leaving partial caches. */
+  warmFails = false;
 
   override async stat(path: string): Promise<FileStat | null> {
     const stat = await super.stat(path);
@@ -144,6 +147,25 @@ export class MemoryBox extends BoxHost {
     if (bin === HERMES_PYTHON && args[0] === "-c") {
       const module = /^import (\S+)$/.exec(args[1] ?? "")?.[1] ?? "";
       return this.hermesModules.has(module) ? ok() : fail(1, `No module named '${module}'`);
+    }
+    // prism's install-time warm-up fills both caches it is pointed at.
+    if (bin === PRISM_PYTHON && args[0] === "-c" && args[1]?.includes("fastembed")) {
+      if (this.warmFails) {
+        this.seed(
+          `${opts?.env?.FASTEMBED_CACHE_PATH ?? ""}/models--qdrant--bge-small-en-v1.5-onnx-q/blobs/ab.incomplete`,
+          "",
+        );
+        return fail(1, "huggingface_hub.errors.HfHubHTTPError: 503 Service Unavailable");
+      }
+      this.seed(
+        `${opts?.env?.FASTEMBED_CACHE_PATH ?? ""}/models--qdrant--bge-small-en-v1.5-onnx-q/model.onnx`,
+        "onnx",
+      );
+      this.seed(
+        `${opts?.env?.TIKTOKEN_CACHE_DIR ?? ""}/9b5ad71b2ce5302211f9c61530b329a4922fc6a4`,
+        "cl100k",
+      );
+      return ok();
     }
     // The plugin's sparse clone; Hermes's own checkout stays BoxHost's.
     const clone = `${hermesPluginDir("")}.hindsight.clone`;

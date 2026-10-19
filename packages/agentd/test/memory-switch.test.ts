@@ -30,7 +30,10 @@ import {
   MEMORY_SERVICE_UNIT,
   MEMORY_SERVICE_UNITS,
   MEMORY_WORKER_UNIT,
+  PRISM_DATA_DIR,
+  PRISM_FASTEMBED_DIR,
   PROVIDERS,
+  hermesMemoryProviderName,
   hermesPluginDir,
   honchoClientConfPath,
   honchoEnvPath,
@@ -164,6 +167,17 @@ function memoryPart(
         ],
       };
     }
+    case "prism":
+      return {
+        memory: { provider, pin: MEMORY_SERVICES.prism.pin },
+        units: [MEMORY_SERVICE_UNIT],
+        files: [
+          unitFile(
+            MEMORY_SERVICE_UNIT,
+            `ExecStart=${memoryServiceDir("prism")}/venv/bin/python -m prme.api --host 127.0.0.1 --port 18010`,
+          ),
+        ],
+      };
   }
 }
 
@@ -176,7 +190,7 @@ function agent(provider: Choice, options: { vendor?: Vendor; hash?: string } = {
     ...(part.memory ? { memory: part.memory } : {}),
     hermesConfigBody:
       `model:\n  provider: "${vendor}"\n` +
-      (part.memory ? `memory:\n  provider: "${part.memory.provider}"\n` : ""),
+      (part.memory ? `memory:\n  provider: "${hermesMemoryProviderName(part.memory.provider)}"\n` : ""),
     units: [
       SECRETS_UNIT,
       ...part.units,
@@ -326,6 +340,10 @@ const DATA: Record<MemoryProvider, Array<[string, string]>> = {
     [`${honchoPgDataDir}/base/16384/2619`, "honcho memory rows"],
     [`${honchoPgDataDir}/postgresql.auto.conf`, "# honcho tuned\n"],
   ],
+  prism: [
+    [`${PRISM_DATA_DIR}/memory.duckdb`, "prism memory rows"],
+    [`${PRISM_FASTEMBED_DIR}/models--bge-small/model.onnx`, "embedding weights"],
+  ],
 };
 
 /** Every path under which a provider's data, install or plugin lives. */
@@ -343,6 +361,8 @@ function rootsOf(provider: MemoryProvider): string[] {
       return [memoryServiceDir("openviking")];
     case "honcho":
       return [memoryServiceDir("honcho")];
+    case "prism":
+      return [memoryServiceDir("prism"), hermesPluginDir(hermesMemoryProviderName("prism"))];
   }
 }
 
@@ -378,6 +398,7 @@ describe("a memory switch away and back keeps the first provider's data and reus
     ["hindsight", "openviking"],
     ["honcho", "hindsight"],
     ["holographic", "honcho"],
+    ["prism", "openviking"],
   ] as const) {
     test(`${a} → ${b} → ${a}`, async () => {
       const { host, f } = await bootstrapped(agent(a));

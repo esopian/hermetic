@@ -32,6 +32,7 @@ export const HERMETICD_CAPABILITIES: ReadonlySet<AgentCapability> = new Set<Agen
   "memory-provider",
   "memory-service",
   "memory-honcho",
+  "memory-prism",
 ]);
 
 export const MANIFEST_PATH = "/etc/hermetic/manifest.json";

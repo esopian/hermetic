@@ -19,7 +19,8 @@
  * each into `MEMORY_LLM_ENV_PATH` — tmpfs, root-only, loaded by the memory
  * unit alone, so an alias such as `OPENAI_API_KEY` for a Nous key never
  * reaches Hermes's own environment. Bedrock has no key: the server signs as
- * the instance role, and is told the region.
+ * the instance role, and is told the region. prism calls no model: it embeds
+ * locally and stores what it is given, so its manifest carries no `llm`.
  *
  * **Loopback only.** No server authenticates its callers, so each is bound
  * to 127.0.0.1 explicitly — hindsight's own default is 0.0.0.0 — and the box's
@@ -43,6 +44,10 @@ import {
   MEMORY_SERVICES,
   MEMORY_SERVICE_UNIT,
   MEMORY_WORKER_UNIT,
+  PRISM_DATA_DIR,
+  PRISM_EMBEDDING_MODEL,
+  PRISM_FASTEMBED_DIR,
+  PRISM_TIKTOKEN_DIR,
   PROVIDERS,
   PROVIDER_EMBEDDING_DIMENSION,
   honchoClientConfPath,
@@ -67,6 +72,9 @@ import {
 
 /** The providers that run a server, and so have a `MEMORY_SERVICES` entry. */
 export type MemoryServiceProvider = keyof typeof MEMORY_SERVICES;
+
+/** The service providers whose server calls the agent's model (`uses_llm`). */
+export type MemoryLlmProvider = Exclude<MemoryServiceProvider, "prism">;
 
 export function isMemoryServiceProvider(id: MemoryProvider): id is MemoryServiceProvider {
   return MEMORY_PROVIDERS[id].kind === "service";
@@ -148,12 +156,12 @@ export function memoryLlmFor(
   model: string,
 ): { llm: MemoryLlm; settings: HonchoLlmSettings };
 export function memoryLlmFor(
-  provider: MemoryServiceProvider,
+  provider: MemoryLlmProvider,
   vendor: Provider,
   model: string,
 ): { llm: MemoryLlm; settings: HindsightLlmSettings | OpenVikingLlmSettings | HonchoLlmSettings };
 export function memoryLlmFor(
-  provider: MemoryServiceProvider,
+  provider: MemoryLlmProvider,
   vendor: Provider,
   model: string,
 ): { llm: MemoryLlm; settings: HindsightLlmSettings | OpenVikingLlmSettings | HonchoLlmSettings } {
@@ -294,6 +302,8 @@ export function memoryHermesLines(input: Pick<MemoryRenderInput, "memory">): Mem
    *   rest of its settings have no variable and live in that file
    *   (`honchoClientConfPath`). A loopback URL is what lets the plugin run
    *   with no key.
+   * - prism: the `prme` plugin hermeticd ships reads `PRME_API_URL`; the
+   *   server takes no key on loopback.
    */
   const service = memoryPluginEnv(id, loopback);
   return { ordering, service };
@@ -313,6 +323,8 @@ function memoryPluginEnv(id: MemoryServiceProvider, loopback: string): string[] 
       ];
     case "honcho":
       return [`Environment=HONCHO_BASE_URL=${HONCHO_LOOPBACK_URL}`];
+    case "prism":
+      return [`Environment=PRME_API_URL=${loopback}`];
   }
 }
 
@@ -401,11 +413,11 @@ export interface RenderedMemory {
   hermesUnitLines: MemoryHermesLines;
 }
 
-/** One server's own files, units and the model it was mapped onto. */
+/** One server's own files, units and the model it was mapped onto, if it calls one. */
 interface RenderedServer {
   files: RenderedFile[];
   units: string[];
-  llm: MemoryLlm;
+  llm?: MemoryLlm;
 }
 
 function unitFile(unit: string, content: string): RenderedFile {
@@ -493,6 +505,34 @@ function renderOpenViking(input: MemoryRenderInput, region: string[]): RenderedS
 }
 
 /**
+ * prism: PRME's HTTP API, configured by environment alone (`PRME_*`, absolute
+ * paths — its defaults are relative to the working directory). No conf file and
+ * no model calls: `/v1/store` and `/v1/retrieve` embed locally with fastembed,
+ * which PRME constructs without a `cache_dir`, so `FASTEMBED_CACHE_PATH` is the
+ * one cache both hermeticd's install-time warm-up and the server resolve; the
+ * same for tiktoken's `TIKTOKEN_CACHE_DIR`. The model is named here, not left to
+ * PRME's default, so the server and the warm-up agree. No `ExecStartPre`: a
+ * download inside `systemctl restart` would hold the apply, and fail it, before
+ * Hermes restarts.
+ */
+function renderPrism(): RenderedServer {
+  const spec = MEMORY_SERVICES.prism;
+  const python = `${memoryServiceDir("prism")}/venv/bin/${spec.command}`;
+  const unit = memoryUnit("prism", {
+    env: [
+      `Environment=PRME_DB_PATH=${PRISM_DATA_DIR}/memory.duckdb`,
+      `Environment=PRME_VECTOR_PATH=${PRISM_DATA_DIR}/vectors.usearch`,
+      `Environment=PRME_LEXICAL_PATH=${PRISM_DATA_DIR}/lexical_index`,
+      `Environment=PRME_EMBEDDING_MODEL_NAME=${PRISM_EMBEDDING_MODEL}`,
+      `Environment=FASTEMBED_CACHE_PATH=${PRISM_FASTEMBED_DIR}`,
+      `Environment=TIKTOKEN_CACHE_DIR=${PRISM_TIKTOKEN_DIR}`,
+    ],
+    execStart: `${python} -m prme.api --host 127.0.0.1 --port ${String(spec.port)}`,
+  });
+  return { files: [unitFile(MEMORY_SERVICE_UNIT, unit)], units: [MEMORY_SERVICE_UNIT] };
+}
+
+/**
  * honcho: three units (`render-memory-honcho.ts`). The API and the worker are
  * memory servers of the usual shape, run from the source checkout with its
  * settings file loaded before the key file; the database is its own.
@@ -570,11 +610,18 @@ export function renderMemory(input: MemoryRenderInput): RenderedMemory {
       // No bedrock: refused before render (`assertMemoryLlm`), so no region.
       server = renderHoncho(input);
       break;
+    case "prism":
+      server = renderPrism();
+      break;
   }
   return {
     files: server.files,
     units: server.units,
-    manifestMemory: { provider: id, pin: MEMORY_SERVICES[id].pin, llm: server.llm },
+    manifestMemory: {
+      provider: id,
+      pin: MEMORY_SERVICES[id].pin,
+      ...(server.llm === undefined ? {} : { llm: server.llm }),
+    },
     hermesUnitLines,
   };
 }

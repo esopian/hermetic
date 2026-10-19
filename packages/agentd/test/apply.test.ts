@@ -24,7 +24,7 @@ import type { FleetManifest } from "@hermetic/core/schema";
 import { FILES_INBOX_DIR, FILES_OUTBOX_DIR, FILES_STAGE_DIR } from "@hermetic/core/shared";
 import { collector } from "../src/events.ts";
 import { ensureLoginShell } from "../src/apply/accounts.ts";
-import { HERMES_PLUGIN_FILES, ensureHermesPlugin } from "../src/apply/plugins.ts";
+import { HERMES_PLUGIN_FILES, HERMES_PLUGIN_NAME, ensureBundledPlugin } from "../src/apply/plugins.ts";
 import { AgentdError } from "../src/errors.ts";
 import { APPLY_PENDING_PATH, LEGACY_STOP_MARKER_PATH } from "../src/apply-pending.ts";
 import { APPLIED_CONFIG_PATH } from "../src/manifest.ts";
@@ -3191,7 +3191,12 @@ describe("the hermetic-files Hermes plugin", () => {
 
   test("a dry run reports the install and touches nothing", async () => {
     const { emit, events } = collector();
-    expect(await ensureHermesPlugin(host, emit, true)).toBe(true);
+    expect(
+      await ensureBundledPlugin(host, emit, true, {
+        name: HERMES_PLUGIN_NAME,
+        files: HERMES_PLUGIN_FILES,
+      }),
+    ).toBe(true);
     expect(events.some((e) => e.message.includes("would install the hermetic-files"))).toBe(true);
     expect(host.commands.filter((c) => c.includes("/plugins"))).toEqual([]);
     expect(host.streamWrites).toEqual([]);

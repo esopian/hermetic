@@ -47,6 +47,7 @@ describe("memoryOptions", () => {
       "hindsight",
       "openviking",
       "honcho",
+      "prism",
     ]);
     const current = opts.filter((o) => o.current);
     expect(current.map((o) => o.value)).toEqual(["holographic"]);

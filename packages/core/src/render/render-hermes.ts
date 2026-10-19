@@ -14,6 +14,7 @@ import {
   HERMES_USER_CONFIG,
   PROVIDERS,
   browserIdentities,
+  hermesMemoryProviderName,
   hermesConfigGetArgv,
   hermesConfigLeaves,
   hermesConfigSetArgv,
@@ -294,7 +295,7 @@ export function hermesManagedConfig(input: RenderInput): string {
    * the same bytes it always did.
    */
   if (input.memory !== undefined) {
-    lines.push("memory:", "  provider: " + yamlString(input.memory.provider));
+    lines.push("memory:", "  provider: " + yamlString(hermesMemoryProviderName(input.memory.provider)));
   }
 
   /**
