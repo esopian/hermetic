@@ -31,6 +31,7 @@ import { Iso, Sha256 } from "./common.ts";
  */
 export {
   CONTENT_DIGEST_HEADER,
+  CONTENT_PURPOSES,
   ENV_SECRET_SLOT_RE,
   FILES_CAPABILITY,
   FILES_DROP_DIR,
@@ -61,6 +62,8 @@ export {
   SECRET_TEXT_KEY_RE,
   SECRET_TEXT_MAX_KEYS,
   acceptMatches,
+  contentPurposeAllows,
+  contentPurposeBytes,
   decodeSecretEnvelope,
   encodeSecretEnvelope,
   envSecretSlot,
@@ -81,6 +84,7 @@ export {
   newRequestId,
   newShareId,
   parseContentDigest,
+  purposeRefusal,
   sanitizeFileName,
   secretEnvelopeFits,
   secretSlotFileName,
@@ -90,6 +94,7 @@ export {
   sniffMime,
 } from "../shared/files.ts";
 export type {
+  ContentPurpose,
   FileNameRejection,
   FilesErrorCode,
   FilesRoute,

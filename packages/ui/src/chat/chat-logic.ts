@@ -450,6 +450,18 @@ export function safeImageSrc(href: string | null | undefined): string | null {
   return raw.startsWith("/") && !raw.startsWith("//") ? raw : null;
 }
 
+/**
+ * The only source an `<audio>` or `<video>` may load: a `blob:` URL this page
+ * minted from bytes the main process read for it. Stricter than
+ * `safeImageSrc`: the bundle ships no media, so no same-origin path either —
+ * and never a `data:` URI or a box's path.
+ */
+export function safeMediaSrc(href: string | null | undefined): string | null {
+  if (typeof href !== "string") return null;
+  const raw = href.trim();
+  return raw.startsWith("blob:") && isMintedBlobUrl(raw) ? raw : null;
+}
+
 /* ── cards: the verdict, and the collapse rule ───────────────────────────── */
 
 /**

@@ -15,8 +15,114 @@
 .ch-share .ch-share-item > span {
   min-width: 0;
 }
+.ch-share .ch-share-item > .ch-share-actions {
+  display: flex;
+  gap: 6px;
+}
+.ch-share-preview[aria-expanded="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
 
-.ch-share-save {
+/* A shared image: a button around the picture, so a click zooms it. */
+.ch-share .ch-zoom {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-basis: 100%;
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: zoom-in;
+  text-align: left;
+}
+.ch-share .ch-zoom:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.ch-zoom-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.72);
+  cursor: zoom-out;
+}
+.ch-zoom-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 92vw;
+  max-height: 92vh;
+  outline: none;
+  cursor: default;
+}
+.ch-zoom-full {
+  display: block;
+  max-width: 92vw;
+  max-height: calc(92vh - 40px);
+  object-fit: contain;
+  background: var(--bg);
+}
+.ch-zoom-close {
+  appearance: none;
+  -webkit-appearance: none;
+  order: -1;
+  border: 2px solid var(--bg);
+  border-radius: 0;
+  background: transparent;
+  color: var(--bg);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.ch-zoom-close:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
+/* Audio and video the agent shared: the engine's player, sized like a preview. */
+.ch-share-audio {
+  flex-basis: 100%;
+  width: min(100%, 520px);
+  height: 40px;
+}
+.ch-share-video {
+  flex-basis: 100%;
+  width: auto;
+  max-width: min(100%, 520px);
+  max-height: 320px;
+  background: var(--bg3);
+}
+
+/* A text share's contents, drawn as text, scrolled inside the card. */
+.ch-share-text {
+  flex-basis: 100%;
+  max-width: min(100%, 520px);
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ch-share-save,
+.ch-share-preview {
   appearance: none;
   -webkit-appearance: none;
   border: 2px solid var(--fg);
@@ -31,15 +137,18 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.ch-share-save:hover:not(:disabled) {
+.ch-share-save:hover:not(:disabled),
+.ch-share-preview:hover:not(:disabled) {
   background: var(--fg);
   color: var(--bg);
 }
-.ch-share-save:focus-visible {
+.ch-share-save:focus-visible,
+.ch-share-preview:focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: 1px;
 }
-.ch-share-save:disabled {
+.ch-share-save:disabled,
+.ch-share-preview:disabled {
   border-color: var(--line2);
   color: var(--fg3);
   cursor: default;

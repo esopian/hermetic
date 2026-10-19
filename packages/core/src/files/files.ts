@@ -9,6 +9,7 @@ import {
   type FilesListResult,
 } from "../schema/index.ts";
 import { FILES_CAPABILITY, isFileId, isRequestId, isShareId } from "../shared/files.ts";
+import type { ContentPurpose } from "../shared/files.ts";
 import { validateName } from "../shared/naming.ts";
 import type { FilesContent } from "../backend/files-port.ts";
 import { requestStateRefusal } from "./errors.ts";
@@ -202,14 +203,15 @@ export function createFiles(deps: FilesDeps) {
 
   /**
    * An entry's bytes — a file (`f_…`) or a share (`sh_…`) — verified, refused
-   * over `maxBytes` and, with `imagesOnly`, refused when it is not an image,
-   * before they are read. The box refuses a secret's content on its own.
+   * over `maxBytes` and, with a `purpose`, refused when that purpose does not
+   * admit its type, before they are read. The box refuses a secret's content
+   * on its own.
    */
   async function content(
     instance: string,
     id: string,
     maxBytes: number,
-    opts: { signal?: AbortSignal; imagesOnly?: boolean } = {},
+    opts: { signal?: AbortSignal; purpose?: ContentPurpose } = {},
   ): Promise<FilesContent> {
     validateName(instance);
     requireEntryId(id);

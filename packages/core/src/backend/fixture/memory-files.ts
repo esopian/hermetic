@@ -24,6 +24,7 @@ import {
   type SecretTextAs,
   type SecretTextFormat,
   acceptMatches,
+  contentPurposeAllows,
   decodeSecretEnvelope,
   envSecretSlot,
   inboxRelPath,
@@ -34,6 +35,7 @@ import {
   newRequestId,
   newShareId,
   outboxRelPath,
+  purposeRefusal,
   sanitizeFileName,
   secretTextSlug,
   sniffMime,
@@ -283,8 +285,8 @@ export class MemoryFiles implements FilesApi {
     // As on the box (`entryContent`): only inbox and outbox files are served;
     // a staged file has no content until a turn commits it.
     if (entry.state === "staged") throw filesRefusal("FILE_NOT_FOUND", agent);
-    if (opts.imagesOnly && !isImageMime(entry.mime)) {
-      throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: only images have a preview`, {
+    if (opts.purpose !== undefined && !contentPurposeAllows(opts.purpose, entry.mime)) {
+      throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: ${purposeRefusal(opts.purpose)}`, {
         name: agent,
       });
     }
