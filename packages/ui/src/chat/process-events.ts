@@ -33,6 +33,7 @@ import {
 } from "@hermetic/core/shared";
 import type { ChatBlockOf } from "../api/index.ts";
 import { messageAgentCall } from "./bot-dm.ts";
+import type { MessageAgentCall } from "./bot-dm.ts";
 import type { BlockLike, MessageLike } from "./chat-logic.ts";
 import type { TurnRow } from "./chat-turns.ts";
 
@@ -479,12 +480,16 @@ export function backgroundProcessId(block: BlockLike): string | null {
  * stamp of the source row it arrived on. Read off the unmerged messages: a
  * merged turn is stamped with its first row, which is not when the call ran.
  */
-export function processStarts(messages: readonly MessageLike[]): Map<string, { at: string }> {
-  const starts = new Map<string, { at: string }>();
+export function processStarts(
+  messages: readonly MessageLike[],
+): Map<string, { at: string; call?: MessageAgentCall }> {
+  const starts = new Map<string, { at: string; call?: MessageAgentCall }>();
   for (const message of messages) {
     for (const block of message.blocks) {
       const id = backgroundProcessId(block);
-      if (id && !starts.has(id)) starts.set(id, { at: message.at });
+      // A `message_agent` start keeps its call, so the reply's notice can open the exchange.
+      if (id && !starts.has(id))
+        starts.set(id, { at: message.at, call: messageAgentCall(block) ?? undefined });
     }
   }
   return starts;

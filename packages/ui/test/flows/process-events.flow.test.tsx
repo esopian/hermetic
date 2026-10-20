@@ -70,7 +70,7 @@ function burst(): HTMLDetailsElement | null {
 }
 
 function dmCard(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(".ch-ev .ch-ev-dm");
+  return document.querySelector<HTMLElement>(".ch-ev .ch-dm-mark.from");
 }
 
 /** Whether `root`, or anything in it, is labelled exactly "You". */
@@ -78,13 +78,17 @@ function labelledYou(root: Element): boolean {
   return [root, ...root.querySelectorAll("*")].some((el) => el.textContent?.trim() === "You");
 }
 
-test("a DM reply is drawn as the bot that replied", async () => {
-  await openKestrel();
-  const card = dmCard();
-  expect(card).not.toBeNull();
-  const head = card!.querySelector(".ch-ev-dm-head")!;
-  expect(head.textContent).toContain(`lead-qa → ${FIXTURE.sseAgent}`);
-  expect(card!.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("lead-qa");
+test("a DM reply is a compact notice; its body stays out of the thread", async () => {
+  const log = await openKestrel();
+  // The reply and the delivery's plumbing belong to the exchange, not the main thread.
+  expect(log.textContent).not.toContain('byte-identical" claim since it was new evidence');
+  const notice = dmCard();
+  expect(notice).not.toBeNull();
+  const row = notice!.closest(".ch-ev")!.textContent;
+  expect(row).not.toContain("delivered by proc_");
+  expect(row).not.toContain("query-file");
+  expect(notice!.textContent).toContain("Message from lead-qa");
+  expect(notice!.textContent).toContain("sent ↑");
 });
 
 test("a failed run opens shut, with its last output line in red on the fold", async () => {

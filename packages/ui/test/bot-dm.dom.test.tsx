@@ -295,7 +295,7 @@ describe("the receiver's delivery row", () => {
   });
 });
 
-describe("the DM reply card", () => {
+describe("the DM reply notice", () => {
   const reply = (to_profile: string) => eventOf({ dm: { to_profile, reply: REPLY, warnings: [] } });
   const renderReply = (to_profile: string) =>
     render(
@@ -304,17 +304,45 @@ describe("the DM reply card", () => {
       </BotDmContext.Provider>,
     );
 
-  test("names the replier by its roster title, not its profile id", () => {
+  test("names the replier by its roster title, and leaves the body to the exchange", () => {
     const { container } = renderReply("auditor");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("NickQABot → ");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).not.toContain("auditor");
-    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("NickQABot");
+    expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from NickQABot");
+    expect(container.textContent).not.toContain("auditor");
+    expect(container.textContent).not.toContain(REPLY);
   });
 
   test("falls back to the profile id for a bot not on the roster", () => {
     const { container } = renderReply("stranger");
-    expect(container.querySelector(".ch-ev-dm-head")?.textContent).toContain("stranger → ");
-    expect(container.querySelector(".ch-ev-dm-who .ch-msg-who")?.textContent).toBe("stranger");
+    expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from stranger");
+  });
+
+  test("in the sender's thread, opens the exchange the reply lives in", async () => {
+    server = fakeServer({
+      "chat.history": { instance: "atlas", bot: "auditor", session: null, messages: [] },
+    });
+    const notice = {
+      id: "e1",
+      session: "s",
+      role: "system",
+      at: AT,
+      blocks: [
+        {
+          kind: "process_event",
+          event: "completion",
+          outcome: "ok",
+          process_id: "proc_a41c",
+          exit_code: 0,
+          dm: { to_profile: "auditor", reply: REPLY, warnings: [] },
+          raw: `[IMPORTANT: Background process proc_a41c completed normally (exit code 0).\nOutput:\n${REPLY}]`,
+        },
+      ],
+    } as ChatMessageView;
+    const { container } = renderThread("scribe", [bot("m1", [dmCall(QUEUED)]), notice]);
+    expect(container.textContent).not.toContain(REPLY);
+    expect(container.textContent).not.toContain("proc_a41c");
+    fireEvent.click(screen.getByRole("button", { name: /Message from NickQABot/ }));
+    const dialog = screen.getByRole("dialog", { name: "Marshall ⇄ NickQABot" });
+    await waitFor(() => expect(dialog.textContent).toContain(REPLY));
   });
 });
 

@@ -41,7 +41,6 @@ const ROWS: [file: string, selector: string][] = [
   ["chat-soft.css", '[data-skin="soft"] .ch-event'],
   ["chat-events.css", ".ch-ev"],
   ["chat-events.css", ".ch-ev.sub"],
-  ["chat-events.css", ".ch-ev-dm-body"],
 ];
 
 describe("chat log width", () => {
