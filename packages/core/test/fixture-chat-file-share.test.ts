@@ -98,3 +98,56 @@ describe("E2E_FILE_SHARE", () => {
     ).toBe(false);
   });
 });
+
+describe("E2E_MEDIA_SHARE", () => {
+  test("no tool call: each MEDIA line is a chip, described from the outbox", async () => {
+    const { files, frames, blocks, text } = await run("E2E_MEDIA_SHARE the Q3 numbers");
+    for (const frame of frames) expect(ChatFrameSchema.safeParse(frame).success).toBe(true);
+    expect(blocks.some((b) => b.kind === "tool")).toBe(false);
+
+    const listed = await files.list(AGENT, {});
+    const chips = blocks.filter((b) => b.kind === "attachment");
+    expect(chips.map((c) => [c.name, c.mime])).toEqual([
+      ["q3-revenue.png", "image/png"],
+      ["q3-revenue.csv", "text/csv"],
+    ]);
+    for (const chip of chips) {
+      const entry = listed.outbox.find((e) => e.id === chip.file_id)!;
+      expect(entry.session_id).toBe(SESSION);
+      expect(chip).toEqual({
+        kind: "attachment",
+        name: entry.name,
+        mime: entry.mime,
+        bytes: entry.bytes,
+        href: `outbox/${entry.id}/${entry.name}`,
+        file_id: entry.id,
+        sha256: entry.sha256,
+      });
+    }
+    // The prose on both sides of the lines survives; the lines do not.
+    expect(text).toContain("CSV behind it.");
+    expect(text).toContain("September is up 8% on August.");
+    expect(text).not.toContain(MEDIA_TAG);
+    expect(frames.at(-1)?.type).toBe("done");
+  });
+
+  test("the transcript keeps both chips", async () => {
+    const { client } = await run("E2E_MEDIA_SHARE");
+    const history = await client.history(BOX, "default", { session: SESSION });
+    const reply = history.at(-1)!;
+    expect(reply.blocks.filter((b) => b.kind === "attachment").map((b) => b.name)).toEqual([
+      "q3-revenue.png",
+      "q3-revenue.csv",
+    ]);
+  });
+});
+
+describe("without a files service", () => {
+  test("E2E_MEDIA_SHARE is an ordinary turn", async () => {
+    const client = fixtureChatClient({});
+    const frames: ChatFrame[] = [];
+    for await (const frame of client.send(BOX, "default", "E2E_MEDIA_SHARE", { session: SESSION }))
+      frames.push(frame);
+    expect(frames.some((f) => f.type === "block" && f.block.kind === "attachment")).toBe(false);
+  });
+});
