@@ -71,17 +71,35 @@ async function open(h: Harness) {
 }
 
 describe("a turn the box reports, started elsewhere", () => {
-  test("Enter queues behind it, the composer says the agent is working, and no Stop is offered", async () => {
+  test("Enter queues behind it, and the composer says the agent is working", async () => {
     const r = recording();
     const v = await open(r.h);
     await deliver(r.h, busy(true));
     expect(v.held.store?.remoteBusy).toBe(true);
     expect(screen.getByText("agent is working")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
 
     v.say("after you");
     await waitFor(() => expect(v.rows()).toHaveLength(1));
     expect(r.sends).toEqual([]);
+  });
+
+  test("a stalled turn offers Stop, which aborts it once and says Stopped", async () => {
+    const r = recording();
+    const v = await open(r.h);
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+    await deliver(r.h, busy(true));
+    const stop = screen.getByRole("button", { name: "Stop turn" });
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    await waitFor(() => expect(screen.getByText("Stopped").getAttribute("role")).toBe("status"));
+    expect(r.aborts).toBe(1);
+    expect(v.held.store?.remoteBusy).toBe(false);
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+
+    // The next turn clears it.
+    await deliver(r.h, busy(true));
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.getByText("agent is working")).toBeTruthy();
   });
 
   test("the queue drains once the box says it is idle, sent with queued: true", async () => {

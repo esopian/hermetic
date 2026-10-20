@@ -21,8 +21,10 @@
  * While a turn runs, the footer's right end carries the one Stop control (Esc
  * does the same); the send button keeps queueing, so the two never share a key
  * or a place. A turn the box reports that this tab did not start (`working`
- * without `sending`) queues and steers the same way, but offers no Stop: it is
- * not this window's to end. The input grows with its text up to a cap and then scrolls
+ * without `sending`) queues and steers the same way, and offers the same Stop
+ * button, so an agent stalled after a reload or started elsewhere can still be
+ * ended; Esc stays for this tab's own turn. Once a Stop lands, the footer says
+ * "Stopped" until the next turn starts. The input grows with its text up to a cap and then scrolls
  * (`autosize.ts`); its border and padding sit on the box around it, so text
  * scrolled past the cap is clipped inside the padding rather than at the edge.
  * Before Stop sits the context meter (`ContextMeter.tsx`), when the gateway
@@ -103,6 +105,11 @@ export function Composer({
   context?: ContextUsage | null;
 }) {
   const [localText, setLocalText] = useState("");
+  /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
+  const [stopped, setStopped] = useState<"stopping" | "stopped" | null>(null);
+  useEffect(() => {
+    setStopped((s) => (working ? (s === "stopped" ? null : s) : s === "stopping" ? "stopped" : s));
+  }, [working]);
   const input = useRef<HTMLTextAreaElement>(null);
   // Switching back to the app lands the caret here, so a paste goes in.
   useFocusOnReturn(input, editable);
@@ -581,7 +588,13 @@ export function Composer({
           {items.length > 0 ? (
             <span className="ch-attach-sum">{`${attachSummary(items)} · `}</span>
           ) : null}
-          {sending ? (
+          {stopped === "stopped" ? (
+            <span className="ch-composer-stopped" role="status">
+              Stopped
+            </span>
+          ) : stopped === "stopping" ? (
+            "stopping…"
+          ) : sending ? (
             "turn in flight"
           ) : remote ? (
             <span
@@ -603,13 +616,17 @@ export function Composer({
         </span>
         {context ? <ContextMeter usage={context} /> : null}
         {/* Outside `.right`, so the skin's dimmed footer text never dims it. */}
-        {sending ? (
+        {working ? (
           <button
             type="button"
             className="ch-stop"
             aria-label="Stop turn"
-            title="Stop the turn (Esc)"
-            onClick={onAbort}
+            title={sending ? "Stop the turn (Esc)" : "Stop the agent's turn, started elsewhere"}
+            disabled={stopped === "stopping"}
+            onClick={() => {
+              setStopped("stopping");
+              onAbort();
+            }}
           >
             <i aria-hidden="true" />
             Stop

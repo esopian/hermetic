@@ -2004,6 +2004,10 @@
   vertical-align: 1px;
   background: var(--acc);
 }
+/* After a Stop landed, until the next turn: plain, not an error. */
+.ch-composer-stopped {
+  color: var(--fg2);
+}
 /* The context-window meter: a ring and a percentage, neutral until the window
    nears full (`context-usage.ts`). Its exact figures are a tooltip above it. */
 .ch-window {
@@ -2078,6 +2082,12 @@
 .ch-stop:hover {
   background: var(--bad);
   color: var(--danger-text);
+}
+.ch-stop:disabled {
+  cursor: default;
+  opacity: 0.5;
+  background: none;
+  color: var(--bad);
 }
 .ch-stop:focus-visible {
   outline: 2px solid var(--text-accent);
