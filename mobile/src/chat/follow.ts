@@ -114,6 +114,17 @@ const globalTimers: PinTimers = {
  * - A touch's end catches up a growth skipped during it: at release with no
  *   velocity, at the end of a momentum that began, or `MOMENTUM_GRACE_MS`
  *   after a release with velocity when no momentum begins.
+ *
+ * Opening a thread: the scroll view reports its viewport and content size as
+ * events, after the first frame has been drawn, so a pin made from them alone
+ * comes a frame late, and one made before the viewport is known lands past the
+ * end of the content (iOS does not clamp a programmatic offset) and draws a
+ * blank screen. Until the content size is reported, `measure` (the list's own
+ * layout, read synchronously) stands in, `onCommit` pins from it before the
+ * list paints, and no pin is made while neither knows the viewport. The list's
+ * own scrolls (FlashList's `startRenderingFromBottom` aims its first ones at
+ * the *top* of the last row, unclamped) go through `guard`, which sends them
+ * to the end while following.
  */
 export class PinController {
   following = true;
@@ -121,6 +132,10 @@ export class PinController {
   pinnedY: number | null = null;
   readonly size = { content: 0, viewport: 0, inset: 0 };
   readonly touch = { dragging: false, momentum: false };
+  /** The scroll view has reported a content size: from then on it, not `measure`, is the content. */
+  private reported = false;
+  /** Inside our own `scrollTo`, so `guard` lets it through. */
+  private pinning = false;
   private insetTimer: unknown = null;
   private graceTimer: unknown = null;
   private disposed = false;
@@ -130,6 +145,8 @@ export class PinController {
       scrollTo(offset: number, animated: boolean): void;
       /** Called whenever following is set: each edge, and each explicit pin request. */
       onFollowing(following: boolean): void;
+      /** The list's own layout, read synchronously, or null before it has one. */
+      measure?(): { content: number; viewport: number } | null;
       timers?: PinTimers;
     },
   ) {}
@@ -144,11 +161,52 @@ export class PinController {
     this.deps.onFollowing(following);
   }
 
-  /** Scroll to the end of the measured content plus the inset below it. */
+  /**
+   * The end of the content plus the inset below it, from the scroll view's
+   * sizes, or the list's own layout where the scroll view has not reported
+   * yet; null while the viewport is unknown (the end cannot be known).
+   */
+  end(): number | null {
+    const measured = !this.reported || this.size.viewport <= 0 ? (this.deps.measure?.() ?? null) : null;
+    const content = this.reported ? this.size.content : (measured?.content ?? this.size.content);
+    const viewport = this.size.viewport > 0 ? this.size.viewport : (measured?.viewport ?? 0);
+    if (viewport <= 0) return null;
+    return endOffset(content, viewport, this.size.inset);
+  }
+
+  /** Scroll to the end (`end`); nothing while the viewport is unknown. */
   pinToEnd(animated: boolean): void {
-    const y = endOffset(this.size.content, this.size.viewport, this.size.inset);
-    this.deps.scrollTo(y, animated);
+    const y = this.end();
+    if (y === null) return;
+    this.pinning = true;
+    try {
+      this.deps.scrollTo(y, animated);
+    } finally {
+      this.pinning = false;
+    }
     this.pinnedY = y;
+  }
+
+  /**
+   * Where a scroll the list asks for itself should go: to the end while
+   * following and no touch is moving the list, else where it asked. Our own
+   * pins pass straight through.
+   */
+  guard(y: number): number {
+    if (this.pinning || !shouldRepin({ following: this.following, ...this.touch })) return y;
+    const end = this.end();
+    if (end === null) return y;
+    this.pinnedY = end;
+    return end;
+  }
+
+  /**
+   * The list committed a layout and has not painted it yet (FlashList's
+   * `onCommitLayoutEffect`). Before the scroll view has reported a content
+   * size, pin from the list's own layout, so the first frame is at the end.
+   */
+  onCommit(): void {
+    if (!this.reported) this.repinIfFree();
   }
 
   private repinIfFree(): void {
@@ -184,11 +242,15 @@ export class PinController {
 
   onContentSize(height: number): void {
     this.size.content = height;
+    this.reported = true;
     this.repinIfFree();
   }
 
+  /** The viewport's height; once the content is known, a change moves the end, so a follower re-pins. */
   onViewport(height: number): void {
+    if (height === this.size.viewport) return;
     this.size.viewport = height;
+    if (this.reported) this.repinIfFree();
   }
 
   onInset(bottom: number): void {

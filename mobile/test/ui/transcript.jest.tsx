@@ -171,6 +171,78 @@ describe("PinController", () => {
   });
 });
 
+describe("PinController: opening a thread", () => {
+  // A thread of 20 rows of 100pt in a 600pt viewport, with 16pt of padding
+  // below: the end is 2016 − 600.
+  const END = 1416;
+
+  function opening(measured: { content: number; viewport: number } | null = null) {
+    const scrollTo = jest.fn<void, [number, boolean]>();
+    const pin = new PinController({ scrollTo, onFollowing: jest.fn(), measure: () => measured });
+    return { pin, scrollTo };
+  }
+
+  test("a content size before the viewport is known pins nowhere, rather than past the end", () => {
+    // The old pin went to endOffset(2016, 0) = 2016: every row above the
+    // viewport, the screen blank until the next growth re-pinned.
+    const { pin, scrollTo } = opening();
+    pin.onContentSize(2016);
+    expect(scrollTo).not.toHaveBeenCalled();
+    pin.onViewport(600);
+    expect(scrollTo).toHaveBeenLastCalledWith(END, false);
+  });
+
+  test("the list's first commit pins to the end from its own layout, before any size is reported", () => {
+    const { pin, scrollTo } = opening({ content: 2016, viewport: 600 });
+    pin.onCommit();
+    expect(scrollTo.mock.calls).toEqual([[END, false]]);
+    expect(pin.pinnedY).toBe(END);
+  });
+
+  test("FlashList's own first scroll, to the top of the last row, is sent to the end", () => {
+    const { pin } = opening({ content: 2016, viewport: 600 });
+    // The last row starts at 1900: unclamped, that offset leaves 484pt of the
+    // 600pt viewport blank under a 100pt row.
+    expect(pin.guard(1900)).toBe(END);
+    // A tall last row (its top above the end) would open mid-reply: also the end.
+    expect(pin.guard(900)).toBe(END);
+  });
+
+  test("once the scroll view reports, its size is the content, and commits no longer pin", () => {
+    const { pin, scrollTo } = opening({ content: 2016, viewport: 600 });
+    pin.onViewport(600);
+    pin.onContentSize(2100);
+    expect(scrollTo).toHaveBeenLastCalledWith(1500, false);
+    scrollTo.mockClear();
+    pin.onCommit();
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(pin.guard(1900)).toBe(1500);
+  });
+
+  test("the guard lets our own pins through, and leaves a reader who scrolled away alone", () => {
+    const { pin, scrollTo } = opening({ content: 2016, viewport: 600 });
+    scrollTo.mockImplementation((y) => {
+      // Our pin passes through the same scroll view, so through the guard too.
+      expect(pin.guard(y)).toBe(y);
+    });
+    pin.onCommit();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    pin.dragBegin();
+    expect(pin.guard(300)).toBe(300);
+    pin.onScroll({ offsetY: 300, contentHeight: 2016, viewportHeight: 600 });
+    pin.dragEnd(0);
+    expect(pin.following).toBe(false);
+    expect(pin.guard(300)).toBe(300);
+  });
+
+  test("with no layout anywhere yet, nothing is pinned and the guard passes through", () => {
+    const { pin, scrollTo } = opening(null);
+    pin.onCommit();
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(pin.guard(1900)).toBe(1900);
+  });
+});
+
 describe("transcriptItems", () => {
   const at = (s: number) => new Date(NOW + s * 1000).toISOString();
 

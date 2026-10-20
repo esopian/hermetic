@@ -13,6 +13,7 @@ import {
   type ReactElement,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -131,12 +132,46 @@ export function transcriptItems(
   });
 }
 
-const ChatScroll = forwardRef<ScrollView, ScrollViewProps>(function ChatScroll(props, ref) {
+type ChatScrollProps = ScrollViewProps & {
+  /** Where a scroll FlashList asks for goes instead (`PinController.guard`). */
+  scrollGuard?: (y: number) => number;
+};
+
+/**
+ * The scroll view under the list. FlashList scrolls it itself, by `scrollTo`
+ * on this ref: its `startRenderingFromBottom` aims the first scrolls at the top
+ * of the last row and does not clamp them, so a last row shorter than the
+ * viewport left the screen blank below it until our pin moved it. The ref
+ * hands FlashList the scroll view with `scrollTo` passed through `scrollGuard`.
+ */
+const ChatScroll = forwardRef<ScrollView, ChatScrollProps>(function ChatScroll(
+  { scrollGuard, ...props },
+  ref,
+) {
   const insets = useSafeAreaInsets();
+  const inner = useRef<ScrollView>(null);
+  const guard = useRef(scrollGuard);
+  guard.current = scrollGuard;
+  useImperativeHandle(ref, () => {
+    const view = inner.current as ScrollView;
+    const scrollTo: ScrollView["scrollTo"] = (y, x, animated) => {
+      const to = guard.current;
+      if (to && typeof y === "object" && y !== null && typeof y.y === "number")
+        return view.scrollTo({ ...y, y: to(y.y) });
+      return view.scrollTo(y, x, animated);
+    };
+    return new Proxy(view, {
+      get(target, key) {
+        if (key === "scrollTo") return scrollTo;
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }, []);
   return (
     <KeyboardChatScrollView
       // The chat scroll view is an Animated.ScrollView; FlashList only calls ScrollView methods on it.
-      ref={ref as unknown as React.Ref<React.ComponentRef<typeof KeyboardChatScrollView>>}
+      ref={inner as unknown as React.Ref<React.ComponentRef<typeof KeyboardChatScrollView>>}
       {...props}
       offset={insets.bottom}
       keyboardLiftBehavior="whenAtEnd"
@@ -191,7 +226,14 @@ function TranscriptImpl({
   // it on iOS), so the live end sits above the keyboard rather than under it.
   // Pins use an explicit offset from the measured content, not `scrollToEnd`:
   // inside `onContentSizeChange` FlashList's own layout has not caught up with
-  // the new height yet, so its idea of "the end" is the old one.
+  // the new height yet, so its idea of "the end" is the old one. Before the
+  // scroll view has reported a size, `measure` reads FlashList's own layout
+  // (rows, and the offset of the first one, plus the bottom padding) so the
+  // first frame opens at the end (`PinController`, "Opening a thread").
+  // The bottom padding is part of the content's end; FlashList's layout does not count it.
+  const padBottom = t.space.lg;
+  const padRef = useRef(padBottom);
+  padRef.current = padBottom;
   const [pin] = useState(
     () =>
       new PinController({
@@ -199,6 +241,14 @@ function TranscriptImpl({
         onFollowing: (following) => {
           setAway(!following);
           if (following) setUnseen(false);
+        },
+        measure: () => {
+          const l = list.current;
+          if (!l) return null;
+          const viewport = l.getWindowSize().height;
+          if (viewport <= 0) return null;
+          const rows = l.getChildContainerDimensions().height;
+          return { content: l.getFirstItemOffset() + rows + padRef.current, viewport };
         },
       }),
   );
@@ -228,9 +278,13 @@ function TranscriptImpl({
   // reports every animation frame; the controller re-pins once it settles,
   // leaving the frames in between to the native `whenAtEnd` lift.
   const scrollOverrides = useMemo(
-    () => ({ onContentInsetChange: (insets: { bottom: number }) => pin.onInset(insets.bottom) }),
+    () => ({
+      onContentInsetChange: (insets: { bottom: number }) => pin.onInset(insets.bottom),
+      scrollGuard: (y: number) => pin.guard(y),
+    }),
     [pin],
   );
+  const onCommitLayoutEffect = useCallback(() => pin.onCommit(), [pin]);
 
   const onLayout = useCallback(
     (e: LayoutChangeEvent) => pin.onViewport(e.nativeEvent.layout.height),
@@ -300,6 +354,7 @@ function TranscriptImpl({
         maintainVisibleContentPosition={{ startRenderingFromBottom: true }}
         onScroll={onScroll}
         onContentSizeChange={onContentSizeChange}
+        onCommitLayoutEffect={onCommitLayoutEffect}
         onLayout={onLayout}
         onScrollBeginDrag={() => pin.dragBegin()}
         // A release with no fling ends the touch here; a fling ends it at momentum end.
@@ -314,7 +369,7 @@ function TranscriptImpl({
         contentContainerStyle={{
           paddingHorizontal: t.space.lg,
           paddingTop: t.space.sm,
-          paddingBottom: t.space.lg,
+          paddingBottom: padBottom,
         }}
         ListHeaderComponent={header ?? null}
         ListEmptyComponent={empty ?? null}
