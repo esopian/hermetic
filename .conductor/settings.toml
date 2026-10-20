@@ -40,3 +40,12 @@ icon = "test-tube"
 [scripts.run.check]
 command = "bun run check"
 icon = "check-check"
+
+# Marketing + docs site (site/, Astro). Its own toolchain, so install and sync
+# the generated docs first; one port above the app's so both can run at once.
+# --ignore-lock keeps astro in the foreground (it backgrounds itself when it
+# detects an agent), so stopping the script stops the server.
+[scripts.run.site]
+command = "cd site && bun install --frozen-lockfile && bun run sync && bun run dev -- --port $((CONDUCTOR_PORT + 1)) --ignore-lock"
+available_in = [ "local" ]
+icon = "globe"
