@@ -33,7 +33,14 @@
  * rerendering and rerunning the bootstrap stages (§4.2), never over this
  * listener.
  */
-import type { ErrorCode, HermesLogFile, RpcFrame, RpcHealth, RpcLogLine } from "@hermetic/core/schema";
+import type {
+  ErrorCode,
+  HermesLogFile,
+  RpcFrame,
+  RpcHealth,
+  RpcLogLine,
+  SecretsSyncResult,
+} from "@hermetic/core/schema";
 import { LogsRequest, encodeRpcFrame } from "@hermetic/core/schema";
 import {
   FILES_CAPABILITY,
@@ -53,7 +60,7 @@ import type { FilesTailnetHandler } from "./files/routes.ts";
 import type { Host } from "./host.ts";
 import { tailscaleIpv4 } from "./tailscale.ts";
 import { AgentdError } from "./errors.ts";
-import { rpcRefusal, type MobileRoutes } from "./rpc-mobile.ts";
+import { peerLimiter, rpcRefusal, type MobileRoutes } from "./rpc-mobile.ts";
 import { deviceTag } from "./push/devices.ts";
 
 export { HERMETICD_RPC_PORT };
@@ -136,7 +143,16 @@ export interface RpcDeps {
    * from one that can take an attachment.
    */
   readonly files?: FilesTailnetHandler;
+  /**
+   * `POST /secrets/sync`: re-read this box's own slots and rewrite the managed
+   * `.env` block everywhere (`secrets-sync.ts`). Absent, the route is a 404,
+   * which is what an older hermeticd answers too.
+   */
+  readonly secretsSync?: () => Promise<SecretsSyncResult>;
 }
+
+/** `POST /secrets/sync` calls one peer may make per minute before 429. */
+export const SECRETS_SYNC_PER_MINUTE = 10;
 
 /**
  * The login `tailscale whois` reports for a *tagged* node — a machine acting as
@@ -379,6 +395,7 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
   const allowedTags = deps.allowedTags ?? [];
   /** peer → when its refusal was last logged, and how many since. */
   const refusals = new Map<string, { at: number; suppressed: number }>();
+  const syncOverBudget = peerLimiter(SECRETS_SYNC_PER_MINUTE, () => deps.host.now().getTime());
 
   /** True when this peer's refusal should be written; counts it either way. */
   function shouldLogRefusal(peerIp: string, now: number): { log: boolean; suppressed: number } {
@@ -473,6 +490,36 @@ export function makeRpcHandler(deps: RpcDeps): RpcHandler {
       return ndjson(logFrames(journal, unit, parsed.data.tail, parsed.data.follow, stop.signal), () =>
         stop.abort(),
       );
+    }
+
+    /**
+     * The laptop's poke after a key edit. No body is read and none is needed:
+     * the box re-reads its own slots with its own role, so config still never
+     * travels over this listener, and the answer is names and a flag only.
+     */
+    if (url.pathname === RPC_PATHS.secretsSync && deps.secretsSync) {
+      if (request.method !== "POST") {
+        return refuse(405, `${request.method} ${url.pathname} is not allowed`, "UNSUPPORTED");
+      }
+      if (syncOverBudget(peerIp)) {
+        return refuse(
+          429,
+          `more than ${SECRETS_SYNC_PER_MINUTE} secret syncs in a minute`,
+          "RATE_LIMITED",
+        );
+      }
+      try {
+        const synced = await deps.secretsSync();
+        const body: SecretsSyncResult = { changed: synced.changed, bots: synced.bots };
+        return Response.json(body, {
+          headers: { "cache-control": "no-store", [RPC_VERSION_HEADER]: String(RPC_PROTOCOL_VERSION) },
+        });
+      } catch (e) {
+        // The code only: a message could name a slot path, never worth the risk here.
+        const code = e instanceof AgentdError ? e.code : "unexpected error";
+        say(`secrets sync for ${peerIp} failed: ${code}`);
+        return refuse(500, `the secret sync failed on the box (${code})`, "INTERNAL");
+      }
     }
 
     // `who` is non-null past the gate (`rpcAccess` refuses a null); the

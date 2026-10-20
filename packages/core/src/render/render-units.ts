@@ -52,7 +52,7 @@ function unit(
  * There are two of them and only one of them is hermetic's: `hermes-dashboard.service`
  * (the dashboard) is rendered below, and `hermes-gateway.service` (the channels
  * and the cron runner) is written by `hermes gateway install --system`, which
- * knows nothing about this fleet's tmpfs secrets file, its `docker` group or
+ * knows nothing about this fleet's revision file, its `docker` group or
  * its `hermetic-secrets.service`. The gateway gets these lines through a
  * drop-in instead (`HERMES_GATEWAY_DROPIN`). Same environment, same ordering,
  * one source.
@@ -69,36 +69,17 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
     /**
      * No dashboard environment at all — no public URL, no credentials. Hermes
      * stays in its unauthenticated local mode and the loopback nginx in front
-     * of it makes Serve's requests look local (`nginxConf`). The tmpfs
-     * environment file is still required unconditionally: hermeticd always
-     * writes it, and a keyed provider's API key arrives through it (§6.4,
-     * §8.1).
+     * of it makes Serve's requests look local (`nginxConf`).
      *
-     * What an `EnvironmentFile` does *not* do is win. Upstream loads the user's
-     * `$HERMES_HOME/.env` with `override=True`
-     * (`hermes_cli/env_loader.py:362-365`), which writes those values *into*
-     * `os.environ` at load, and the api-key path is dotenv-first on top of that
-     * (`get_env_value_prefer_dotenv`, `hermes_cli/config.py:2698-2701`; used by
-     * `get_anthropic_key`, `hermes_cli/auth.py:293-303`, whose docstring says it
-     * prefers `.env` so a deliberate rotation is not shadowed by a stale
-     * export). So any key an agent, `hermes setup` or the dashboard's key field
-     * writes into its own `.env` outranks the one hermetic delivered from SSM,
-     * permanently and silently.
-     *
-     * The one channel that wins outright is the managed `/etc/hermes/.env`,
-     * applied last with override (`env_loader.py:423-438`), and hermetic must
-     * not use it: upstream states it is mode 0644 and world-readable and to
-     * keep high-sensitivity secrets out of it
-     * (`website/docs/user-guide/managed-scope.md:141-143`) — which is the same
-     * reasoning that puts hermetic's key on tmpfs in the first place. Stripping
-     * the agent's `.env` is not an option either: after first boot that file is
-     * the agent's own (§6.4).
-     *
-     * So the delivery stays an `EnvironmentFile` and the precedence is asserted
-     * instead: `verify-hermes` fails the boot if `$HERMES_HOME/.env` names the
-     * managed provider's key variable (`packages/agentd/src/hermes-check.ts`).
+     * No provider key either. It lives where vanilla Hermes keeps it, in the
+     * hermeticd-managed block of `$HERMES_HOME/.env` and of every bot's
+     * `.env` (`MANAGED_ENV_BEGIN`, §8.1), because a routed profile under the
+     * multiplex gateway never reads the process environment and upstream's
+     * `profiles.create` mirrors only the default `.env` into a new bot.
+     * Upstream re-reads `.env` on every turn, so a key hermeticd rewrites there
+     * is live without a restart. `hermetic-secrets.service` writes the block
+     * before either process starts (the `Requires=` below).
      */
-    "EnvironmentFile=/run/hermetic/secrets.env",
     /**
      * `HERMES_REVISION`, written by hermeticd once it knows which upstream
      * commit this box's checkout came from (`HERMES_REVISION_ENV`).
@@ -205,7 +186,7 @@ function hermesRuntimeLines(input: RenderInput): HermesRuntime {
    */
   const memory = memoryHermesLines(input);
   service.push(...memory.service);
-  // The tmpfs environment file must exist before either process starts (§6.4).
+  // The managed `.env` block must be written before either process starts (§6.4).
   return {
     ordering: [
       "After=hermetic-secrets.service",
@@ -332,12 +313,12 @@ export function hermeticdUnit(input: RenderInput): string {
 }
 
 /**
- * The tmpfs `EnvironmentFile` and the oneshot unit that writes it are on
- * *every* agent, which is why there is no `hasSecretsFile` predicate. A bedrock
- * agent with `secrets_mode: none` has nothing to put in the file, but
- * `hermeticd secrets materialise` writes it anyway — empty if need be — so
- * `hermes-dashboard.service` can `Requires=` it unconditionally rather than the unit's
- * shape depending on a slot that can be filled or cleared long after the render
+ * The oneshot unit that writes the managed `.env` block is on *every* agent,
+ * which is why there is no `hasSecretsFile` predicate. A bedrock agent with
+ * `secrets_mode: none` has nothing to put in the block, but `hermeticd secrets
+ * materialise` writes the fence anyway — empty if need be — so both Hermes
+ * units can `Requires=` it unconditionally rather than the unit's shape
+ * depending on a slot that can be filled or cleared long after the render
  * (§6.4, §8.1).
  */
 /**
@@ -384,16 +365,17 @@ export function secretsUnit(input: RenderInput): string {
     sources.push("# The bws access token is read from SSM at " + slot("bws-token") + " by hermeticd.");
   }
   return unit(
-    "Materialise " + input.name + "'s secrets into a tmpfs environment file",
+    "Write " + input.name + "'s secrets into the managed block of every Hermes .env",
     [
       "Type=oneshot",
       "RemainAfterExit=yes",
       // 0711, root's: traversable but not listable, so `hermes` can open the
       // durable file secrets under /run/hermetic/files and the files socket by
-      // path, while secrets.env (0600 root) stays unreadable and no name here
-      // is enumerable. hermeticd's apply sets the same mode (SECRETS_ENV_DIR_MODE).
+      // path, while memory-llm.env (0600 root) stays unreadable and no name
+      // here is enumerable. hermeticd's apply sets the same mode
+      // (SECRETS_ENV_DIR_MODE).
       "ExecStartPre=/usr/bin/install -d -m 0711 /run/hermetic",
-      "ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600",
+      "ExecStart=/usr/local/bin/hermeticd secrets materialise",
       ...sources,
     ],
     "multi-user.target",
@@ -411,6 +393,12 @@ export function secretsUnit(input: RenderInput): string {
      * provider key materialised, and refusing to start the whole unit would
      * take Hermes down with it.
      */
-    ["After=tailscaled.service", "Wants=tailscaled.service", `Before=${HERMES_DASHBOARD_UNIT}`],
+    [
+      "After=tailscaled.service",
+      "Wants=tailscaled.service",
+      `Before=${HERMES_DASHBOARD_UNIT}`,
+      // The block lands in `$HERMES_HOME/.env` and the bot homes, all on /data.
+      "RequiresMountsFor=/data",
+    ],
   );
 }

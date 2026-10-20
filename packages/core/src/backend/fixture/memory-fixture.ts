@@ -59,7 +59,7 @@ import {
   releaseGeneration,
 } from "../../release/artifacts.ts";
 export { FIXTURE_BUILD_NUMBER, FIXTURE_COMMIT, FIXTURE_LOCAL_BUILD };
-import { FOUNDATION_VERSION, HERMETIC_VERSION } from "../../version.ts";
+import { ARTIFACTS_VERSION, FOUNDATION_VERSION, HERMETIC_VERSION } from "../../version.ts";
 import { fixtureBrowserBytes, fixtureBrowserEntry } from "../../release/browser-mirror.ts";
 import { foundationTemplateSha256 } from "../../aws/cfn-template.ts";
 import { HermeticError } from "../../errors.ts";
@@ -762,6 +762,7 @@ export function seedFixtureFoundation(backend: MemoryBackend, opts: FixtureSeed 
            */
           foundation_version: opts.foundationVersion ?? fixtureFoundationVersion(fixtureName),
           foundation_template_sha256: foundationTemplateSha256(),
+          artifacts_version: ARTIFACTS_VERSION,
         }),
     tailnet: FIXTURE_TAILNET,
     // Seeded on both fixture fleets, because a fleet created by this build

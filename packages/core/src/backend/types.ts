@@ -10,6 +10,7 @@ import type {
   HermesLogFile,
   NatHealth,
   RpcHealth,
+  SecretsSyncResult,
   SnapshotPolicy,
 } from "../schema/index.ts";
 import type { BedrockApi } from "../aws/bedrock.ts";
@@ -1225,6 +1226,13 @@ export interface RpcApi {
    * owns a timeout and the caller may add its own signal on top.
    */
   health(name: string, opts?: { signal?: AbortSignal }): Promise<RpcHealth>;
+  /**
+   * `POST /secrets/sync`: tell the box to re-read its own secret slots now and
+   * rewrite the managed block in every Hermes `.env` (§8.1). No body, no
+   * secret: the box reads its slots with its instance role. Bounded like
+   * `health`; a box that cannot be reached throws, and the caller reports it.
+   */
+  secretsSync(name: string, opts?: { signal?: AbortSignal }): Promise<SecretsSyncResult>;
 }
 
 /**

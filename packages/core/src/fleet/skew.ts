@@ -197,6 +197,8 @@ export interface SkewInput {
   toolOutdated: boolean;
   /** The version, the template digest or the release differs (`update_available`). */
   updateAvailable: boolean;
+  /** `_fleet.artifacts_version` (absent as 0) and `ARTIFACTS_VERSION`; names the headline. */
+  artifacts?: { fleet: number; expected: number };
   agents: readonly SkewAgent[];
 }
 
@@ -264,7 +266,13 @@ export function computeSkew(input: SkewInput): Skew {
     return {
       ...base,
       severity: "degraded",
-      headline: `fleet foundation v${input.fleetVersion} · this build expects v${input.expectedVersion}`,
+      // When the contract matches, an older bundle is the update to name.
+      headline:
+        input.artifacts !== undefined &&
+        input.fleetVersion === input.expectedVersion &&
+        input.artifacts.fleet < input.artifacts.expected
+          ? `hermeticd artifacts v${input.artifacts.fleet} published · this build ships v${input.artifacts.expected}`
+          : `fleet foundation v${input.fleetVersion} · this build expects v${input.expectedVersion}`,
       message: SKEW_MESSAGE.degraded,
       agents_affected: live.length,
       fix: SKEW_FIX,

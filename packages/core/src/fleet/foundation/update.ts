@@ -22,7 +22,7 @@ import { assertPublishableTree } from "../../release/artifacts.ts";
 import { expectationOf, fleetLockKeeper, lockActivity } from "../fleet-lock.ts";
 import { runChangeSet } from "../stack-change.ts";
 import { backfillNetworkMode, migrationsBetween } from "../foundation-migrations.ts";
-import { HERMETIC_VERSION } from "../../version.ts";
+import { ARTIFACTS_VERSION, HERMETIC_VERSION } from "../../version.ts";
 import { PHASE, foundationHelpers, type FoundationCtx } from "./shared.ts";
 import { checkAbort } from "../../abort.ts";
 import { evt } from "../../events.ts";
@@ -369,6 +369,8 @@ export function createUpdate(
       foundation_version: foundationVersion,
       foundation_template_sha256: templateSha256(),
       min_hermetic_version: hermeticdVersion,
+      // The artifacts phase above pushed this build's bundle, whatever else moved.
+      artifacts_version: ARTIFACTS_VERSION,
       foundation_updated_at: nowIso(),
       foundation_updated_by: await core.actor(),
       lock: { owner, expires: new Date(now().getTime() + lockTtlMs).toISOString() },

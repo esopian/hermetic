@@ -1,11 +1,14 @@
 /**
- * Runtime secrets → the tmpfs `EnvironmentFile` the rendered units read
- * (§6.4, §8.3).
+ * Runtime secrets (§6.4, §8.1, §8.3): the managed block every Hermes `.env`
+ * carries, and the memory server's own tmpfs `EnvironmentFile`.
  */
 import type { AgentConfig } from "@hermetic/core/schema";
 import {
+  HERMES_ACCOUNT,
   HERMES_DASHBOARD_UNIT,
   HERMES_GATEWAY_UNIT,
+  MANAGED_ENV_BEGIN,
+  MANAGED_ENV_END,
   MEMORY_LLM_ENV_PATH,
   MEMORY_SERVICE_UNIT,
   MEMORY_WORKER_UNIT,
@@ -14,12 +17,15 @@ import {
 import type { Host } from "../host.ts";
 import { must } from "../host.ts";
 import { AgentdError } from "../errors.ts";
+import { pathKindAsHermes } from "../files/fs-ops.ts";
+import { writeAsAccount } from "./plugins.ts";
 import { sha256 } from "./shared.ts";
 
 /**
- * Runtime secrets live on tmpfs at mode 600, never on `/data` (§8.3). This is
- * the path core's rendered `hermes-dashboard.service` names in its `EnvironmentFile=`
- * line, so the two must not drift.
+ * Where the provider key and the Bitwarden lines used to live, before they
+ * moved into the managed block of every Hermes `.env` (§8.1). Nothing writes
+ * a secret here any more: apply removes the file, or empties it while a
+ * rendered unit still names it in an `EnvironmentFile=` (`settleLegacySecretsEnv`).
  */
 export const SECRETS_ENV_PATH = "/run/hermetic/secrets.env";
 export const SECRETS_ENV_DIR = "/run/hermetic";
@@ -40,15 +46,16 @@ export const SECRETS_ENV_DIR_MODE = "0711";
 
 /**
  * The boot oneshot core renders on every agent (`secretsUnit`), whose
- * `ExecStart` is `hermeticd secrets materialise`: it writes `SECRETS_ENV_PATH`
- * and `MEMORY_LLM_ENV_PATH` from the manifest at `MANIFEST_PATH`.
+ * `ExecStart` is `hermeticd secrets materialise`: it writes the managed block
+ * into every Hermes `.env` and `MEMORY_LLM_ENV_PATH`, from the manifest at
+ * `MANIFEST_PATH`.
  */
 export const SECRETS_UNIT = "hermetic-secrets.service";
 
 /**
  * Every unit core renders with `Requires=` on `SECRETS_UNIT`: both Hermes
  * units (the gateway through its drop-in), the memory server and honcho's
- * worker. They read the two files that unit writes, and systemd restarts them
+ * worker. They read what that unit writes, and systemd restarts them
  * whenever it is restarted. honcho's database reads neither and is not here.
  * `tests/seams.test.ts` holds the list against the renderer.
  */
@@ -60,80 +67,45 @@ export const SECRETS_DEPENDENTS: readonly string[] = [
 ];
 
 /**
- * Values that need no quoting in a systemd `EnvironmentFile`. Everything else
- * is single-quoted — see `envLine`.
- */
-const ENV_VALUE_SAFE = /^[A-Za-z0-9_./:@,+=-]+$/;
-
-/**
- * One `KEY=value` line for a systemd `EnvironmentFile`.
+ * One `KEY=value` line, quoted the way upstream's own writer quotes it
+ * (`_quote_env_value`, `hermes_cli/config.py`): bare unless the value holds a
+ * `#`, a quote or whitespace, else double-quoted with `\\` and `"` escaped.
  *
- * systemd's parser is not a shell, and its unquoted values have three edges an
- * API key never hit but an arbitrary Bitwarden secret does: leading and trailing
- * whitespace is dropped, a backslash escapes the next character, and a value
- * that begins with `'` or `"` opens a quoted string that runs to the matching
- * close. So anything
- * outside a plainly safe alphabet is single-quoted, with `\` and `'` escaped —
- * which systemd honours inside single quotes even though a POSIX shell would
- * not. A `#` is literal in a value either way; it is quoted here too, because a
- * reader should not have to know that to trust the file.
+ * That form round-trips through upstream's `_parse_env_value` and through
+ * python-dotenv (both read single quotes verbatim, so the old systemd-style
+ * `'…\\'…'` did not), and it is valid systemd `EnvironmentFile` syntax too,
+ * so `memory-llm.env` uses the same function.
  */
 export function envLine(key: string, value: string): string {
-  if (ENV_VALUE_SAFE.test(value)) return `${key}=${value}`;
-  return `${key}='${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  if (!/[#"'\s]/.test(value)) return `${key}=${value}`;
+  return `${key}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /**
- * `bws secret list <project>` for this agent's own project → an
- * `EnvironmentFile` on tmpfs at mode 600 (§6.4). The token reaches `bws` through
- * the environment and the values are never logged or written under `/data`.
+ * The lines of the managed block: the provider key, then whatever
+ * `bws secret list <project>` returns for this agent's own project (§6.4). The
+ * token reaches `bws` through the environment; no value is ever logged.
  *
- * The file is written even when there is nothing to put in it. The rendered
- * `hermes-dashboard.service` names it in an unconditional `EnvironmentFile=`, and systemd
- * fails a unit whose environment file is missing — so "no secrets" has to mean
- * an empty file, not no file.
- *
- * Returns true when the file's content changed.
+ * The provider key comes first so a Bitwarden project that also carries one
+ * wins (the last assignment wins in every dotenv reader): the project is the
+ * operator's own, and an explicit secret there is a deliberate override.
+ * Bedrock with no project is `[]`, an empty block.
  */
-export async function materialiseSecrets(input: {
+export async function managedEnvLines(input: {
   host: Host;
   /** The provider API key and the variable it becomes; from SSM (§8.1). */
   providerKey?: { env: string; value: string };
   /** The Bitwarden machine-account token and the project it may read. */
   bitwarden?: { token: string; project: string };
-  outPath?: string;
-  dryRun?: boolean;
-}): Promise<boolean> {
-  const { host } = input;
-  const outPath = input.outPath ?? SECRETS_ENV_PATH;
-
-  // `bws secret list` is a read, so even a dry run can answer honestly whether
-  // the environment file would change.
-  const slash = outPath.lastIndexOf("/");
-  if (!input.dryRun) {
-    const dir = slash > 0 ? outPath.slice(0, slash) : SECRETS_ENV_DIR;
-    // `/run/hermetic` itself is 0711 (`SECRETS_ENV_DIR_MODE`); a directory an
-    // operator named with `--out` keeps the old, closed 0700. Chmod'd as well as
-    // made, because `mkdir` leaves an existing directory's mode alone — and
-    // every box booted before 0711 has a 0700 one.
-    const mode = dir === SECRETS_ENV_DIR ? SECRETS_ENV_DIR_MODE : "0700";
-    await host.mkdir(dir, mode);
-    if (dir === SECRETS_ENV_DIR) await host.chmod(dir, mode);
-  }
-
-  // The provider key comes first so a Bitwarden project that also carries one
-  // wins — the project is the operator's own, and an explicit secret there is
-  // a deliberate override of the slot.
+}): Promise<string[]> {
   const lines: string[] = [];
   if (input.providerKey) lines.push(envLine(input.providerKey.env, input.providerKey.value));
-
   if (input.bitwarden) {
     const listed = await must(
-      host,
+      input.host,
       ["bws", "secret", "list", input.bitwarden.project, "--output", "json"],
       { env: { BWS_ACCESS_TOKEN: input.bitwarden.token } },
     );
-
     let secrets: Array<{ key?: string; value?: string }>;
     try {
       secrets = JSON.parse(listed.stdout) as Array<{ key?: string; value?: string }>;
@@ -145,16 +117,110 @@ export async function materialiseSecrets(input: {
       lines.push(envLine(secret.key, secret.value));
     }
   }
+  return lines;
+}
 
-  // An empty file is `"\n"`, not `""`: one is a file systemd is happy to read,
-  // and the other is indistinguishable from a truncated write.
-  const body = lines.join("\n") + "\n";
+/**
+ * `existing` with the managed block replaced by one holding `lines`. Every line
+ * outside the fence comes back byte for byte. A file with no complete fence
+ * gets one at the top (stray marker lines dropped), so an assignment the agent
+ * or the operator made further down still wins: that is a deliberate per-bot
+ * key, which a sync reports (`bots_keyed`) and never overwrites.
+ */
+export function spliceManagedBlock(existing: string, lines: readonly string[]): string {
+  const block = [MANAGED_ENV_BEGIN, ...lines, MANAGED_ENV_END];
+  if (existing === "") return block.join("\n") + "\n";
+  const all = existing.split("\n");
+  const begin = all.indexOf(MANAGED_ENV_BEGIN);
+  const end = begin === -1 ? -1 : all.indexOf(MANAGED_ENV_END, begin + 1);
+  if (end !== -1) {
+    all.splice(begin, end - begin + 1, ...block);
+    return all.join("\n");
+  }
+  return [...block, ...all.filter((l) => l !== MANAGED_ENV_BEGIN && l !== MANAGED_ENV_END)].join("\n");
+}
 
-  const existing = await host.readFile(outPath);
-  if (existing !== null && sha256(existing) === sha256(body)) return false;
-  if (input.dryRun) return true;
-  await host.writeFile(outPath, body, "0600");
-  await host.chmod(outPath, "0600");
+/**
+ * The lines inside the managed block of `env`, or `null` when it has no
+ * complete fence. For the checks, which compare blocks and never print them.
+ */
+export function managedBlockOf(env: string): string[] | null {
+  const all = env.split("\n");
+  const begin = all.indexOf(MANAGED_ENV_BEGIN);
+  const end = begin === -1 ? -1 : all.indexOf(MANAGED_ENV_END, begin + 1);
+  return end === -1 ? null : all.slice(begin + 1, end);
+}
+
+/** `env` with the managed block (fence included) taken out: what the agent wrote. */
+export function outsideManagedBlock(env: string): string {
+  const all = env.split("\n");
+  const begin = all.indexOf(MANAGED_ENV_BEGIN);
+  const end = begin === -1 ? -1 : all.indexOf(MANAGED_ENV_END, begin + 1);
+  if (end !== -1) all.splice(begin, end - begin + 1);
+  return all.join("\n");
+}
+
+/**
+ * Splice `lines` into the `.env` at `path` (a Hermes home's), as the account.
+ *
+ * Read with `readStreamAs` and written with `writeAsAccount` (staged, then
+ * `mv -f -T`), so root never opens or follows anything under `/data`, and
+ * every write is a new inode: upstream's `load_env_file` memoises on the
+ * file's stat identity, so the next turn reads the new key. Mode 0600, the
+ * account's. Skipped when the content would not change, so a sync that moved
+ * nothing does not bounce the bot's adapters at upstream's next reconcile.
+ * A missing file is created holding just the block; a symlink or anything
+ * else that is not a regular file is refused.
+ *
+ * Returns true when the file changed (or, on a dry run, would).
+ */
+export async function writeManagedEnv(
+  host: Host,
+  path: string,
+  lines: readonly string[],
+  opts: { dryRun?: boolean } = {},
+): Promise<boolean> {
+  const kind = await pathKindAsHermes(host, path);
+  if (kind === "other") {
+    throw new AgentdError(
+      "AGENT_DIR_UNSAFE",
+      `${path} is not a regular file (a symlink, or a directory); hermetic will not write ` +
+        "the provider key through it. Remove it on the box, then re-apply.",
+      { path },
+    );
+  }
+  const existing =
+    kind === "missing" ? "" : await new Response(host.readStreamAs(HERMES_ACCOUNT, path)).text();
+  const next = spliceManagedBlock(existing, lines);
+  if (kind === "regular" && sha256(existing) === sha256(next)) return false;
+  if (opts.dryRun) return true;
+  await writeAsAccount(host, path, next, "0600");
+  return true;
+}
+
+/**
+ * The old `SECRETS_ENV_PATH`, settled: removed once no rendered file names it,
+ * and an empty file (`"\n"`, no secret) while one still does, because systemd
+ * fails a unit whose `EnvironmentFile=` is missing. The second case is a box
+ * running this hermeticd under a render from before the key moved into `.env`.
+ * Returns true when the file changed.
+ */
+export async function settleLegacySecretsEnv(
+  host: Host,
+  manifest: AgentConfig,
+  dryRun = false,
+): Promise<boolean> {
+  const named = manifest.files.some((f) => f.content.includes(SECRETS_ENV_PATH));
+  const existing = await host.readFile(SECRETS_ENV_PATH);
+  if (named ? existing === "\n" : existing === null) return false;
+  if (dryRun) return true;
+  if (!named) {
+    await host.remove(SECRETS_ENV_PATH);
+    return true;
+  }
+  await host.mkdir(SECRETS_ENV_DIR, SECRETS_ENV_DIR_MODE);
+  await host.writeFile(SECRETS_ENV_PATH, "\n", "0600");
+  await host.chmod(SECRETS_ENV_PATH, "0600");
   return true;
 }
 
@@ -188,14 +254,12 @@ export function memoryLlmFor(
 
 /**
  * Write (or remove) `MEMORY_LLM_ENV_PATH`, the memory service's own
- * `EnvironmentFile`, beside `secrets.env` and by the same rules: tmpfs, root,
- * 0600, rewritten only when its hash moves, and nothing on a dry run but the
- * answer.
+ * `EnvironmentFile`: tmpfs, root, 0600, rewritten only when its hash moves,
+ * and nothing on a dry run but the answer.
  *
- * Its own file rather than lines in `secrets.env`: the key goes in under names
- * the memory server reads (`HINDSIGHT_API_LLM_API_KEY`, sometimes a plain
- * `OPENAI_API_KEY`), and those must not reach Hermes's environment, which
- * `secrets.env` is.
+ * Its own file rather than lines in the managed `.env` block: the key goes in
+ * under names the memory server reads (`HINDSIGHT_API_LLM_API_KEY`, sometimes
+ * a plain `OPENAI_API_KEY`), and those must not reach Hermes.
  *
  * Written whenever the manifest names a service provider, even with nothing in
  * it: `hermetic-memory.service` names it in an unconditional `EnvironmentFile=`,

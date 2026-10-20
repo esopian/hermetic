@@ -14,6 +14,7 @@ import { GetParameterCommand } from "@aws-sdk/client-ssm";
 import type { AgentConfig, ApplyRequest, RenderedFile } from "@hermetic/core/schema";
 import {
   HERMES_HOME,
+  HERMES_USER_ENV,
   MEMORY_LLM_ENV_PATH,
   MEMORY_SERVICES,
   MEMORY_SERVICE_ROOT,
@@ -31,7 +32,6 @@ import {
   MEMORY_PIN_MARKER,
   MEMORY_SERVICE_UNIT_PATH,
   PLUGIN_REF_MARKER,
-  SECRETS_ENV_PATH,
   apply,
   importNameOf,
 } from "../src/apply/index.ts";
@@ -228,10 +228,11 @@ describe("hindsight", () => {
     // The credential: tmpfs, root-only, under the server's name, nowhere else.
     const env = host.files.get(MEMORY_LLM_ENV_PATH);
     expect(env?.mode).toBe("0600");
-    expect(env?.content).toBe("HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n");
-    expect(leaks(host, PROVIDER_KEY)).toEqual([]);
-    // Only Hermes's own variable in Hermes's environment file.
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).not.toContain("HINDSIGHT_API_LLM_API_KEY");
+    expect(env?.content).toBe('HINDSIGHT_API_LLM_API_KEY="FIXTURE anthropic #key"\n');
+    // On `/data`, only the managed block of Hermes's own `.env` holds it (§8.1).
+    expect(leaks(host, PROVIDER_KEY)).toEqual([HERMES_USER_ENV]);
+    // Only Hermes's own variable in Hermes's `.env`.
+    expect(host.files.get(HERMES_USER_ENV)?.content).not.toContain("HINDSIGHT_API_LLM_API_KEY");
   });
 
   test("the key never reaches stdout, stderr, events or argv", async () => {
@@ -287,7 +288,7 @@ describe("hindsight", () => {
     expect((refused as AgentdError).code).toBe("INTERNAL");
     expect((refused as AgentdError).message).toContain("HINDSIGHT_API_LLM_API_KEY");
     expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
-    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
+    expect(host.files.has(HERMES_USER_ENV)).toBe(false);
   });
 
   test("a venv whose interpreter went with the root volume is rebuilt with --clear", async () => {
@@ -698,6 +699,8 @@ describe("the boot oneshot and converge", () => {
     host.seed(USER_DATA_JSON_PATH, makeUserDataJson());
     host.seed(FLEET_CACHE_PATH, JSON.stringify(makeFleetManifest()));
     host.seed(MANIFEST_PATH, JSON.stringify(manifest));
+    // The account's home, as `ensureAccounts` leaves it.
+    for (const dir of ["/data", "/data/hermes", HERMES_HOME]) host.dirs.add(dir);
     const ssm = new RecordingSink();
     ssm.byCommand.set("GetParameterCommand", (command) =>
       (command as GetParameterCommand).input.Name?.endsWith("/provider-key")
@@ -722,34 +725,33 @@ describe("the boot oneshot and converge", () => {
     };
   }
 
-  test("secrets materialise writes the memory credential beside secrets.env", async () => {
+  test("secrets materialise writes the memory credential and the managed block", async () => {
     const r = rig(serviceManifest("hindsight"));
     expect(await r.materialise()).toBe(0);
     expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
-      "HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n",
+      'HINDSIGHT_API_LLM_API_KEY="FIXTURE anthropic #key"\n',
     );
     expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.mode).toBe("0600");
-    expect(r.host.files.get(SECRETS_ENV_PATH)?.content).toBe(
-      "ANTHROPIC_API_KEY='FIXTURE anthropic #key'\n",
+    expect(r.host.files.get(`${HERMES_HOME}/.env`)?.content).toContain(
+      '\nANTHROPIC_API_KEY="FIXTURE anthropic #key"\n',
     );
-    // The provider key is the one read; the memory server has no slot of its own.
-    expect(r.slotsRead()).toEqual(["provider-key"]);
+    // Hermes's copy and the server's are two files: its aliases stay out of `.env`.
+    expect(r.host.files.get(`${HERMES_HOME}/.env`)?.content).not.toContain("HINDSIGHT");
+    // The provider key is the one read (its version, then its value); the
+    // memory server has no slot of its own.
+    expect(r.slotsRead()).toEqual(["provider-key", "provider-key"]);
     expect(out.stderr).not.toContain(PROVIDER_KEY);
   });
 
-  test("secrets materialise --out elsewhere leaves the live credential file alone", async () => {
+  /** A render from before the key moved into `.env` still passes `--out`; it is ignored. */
+  test("secrets materialise --out from an old render writes the real paths, nothing else", async () => {
     const r = rig(serviceManifest("hindsight"));
     r.host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n", "0600");
     expect(await r.materialiseTo("/run/hermetic/look.env")).toBe(0);
-    expect(r.host.files.get("/run/hermetic/look.env")).toBeDefined();
+    expect(r.host.files.has("/run/hermetic/look.env")).toBe(false);
     expect(r.host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
-      "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n",
+      'HINDSIGHT_API_LLM_API_KEY="FIXTURE anthropic #key"\n',
     );
-
-    const bare = rig(makeManifest());
-    bare.host.seed(MEMORY_LLM_ENV_PATH, "HINDSIGHT_API_LLM_API_KEY=FIXTURE-live\n", "0600");
-    expect(await bare.materialiseTo("/run/hermetic/look.env")).toBe(0);
-    expect(bare.host.files.has(MEMORY_LLM_ENV_PATH)).toBe(true);
   });
 
   test("secrets materialise removes it for an agent without a server", async () => {
@@ -808,7 +810,7 @@ describe("the boot oneshot and converge", () => {
 
     expect(outcome.kind).toBe("applied");
     expect(host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(
-      "HINDSIGHT_API_LLM_API_KEY='FIXTURE anthropic #key'\n",
+      'HINDSIGHT_API_LLM_API_KEY="FIXTURE anthropic #key"\n',
     );
     expect(ssm.commandCalls(GetParameterCommand)).toHaveLength(1);
   });

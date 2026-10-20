@@ -138,6 +138,11 @@ export const FoundationStatus = z.object({
     /** `_fleet.min_hermetic_version`: the release the fleet is pointed at. */
     hermeticd_version: Version,
     /**
+     * `_fleet.artifacts_version`, absent reading as 0. Optional on the wire
+     * because a status from an older server does not send it.
+     */
+    artifacts_version: z.number().int().nonnegative().optional(),
+    /**
      * The image the fleet was built on, straight off `_fleet`. Facts, not
      * preferences — there is no "available" counterpart to compare them with —
      * and this is the one read that already opens the `_fleet` item, so it is
@@ -164,8 +169,13 @@ export const FoundationStatus = z.object({
     foundation_version: z.number().int().nonnegative(),
     template_sha256: Sha256,
     hermeticd_version: Version,
+    /** `ARTIFACTS_VERSION`: the hermeticd bundle this build would push. */
+    artifacts_version: z.number().int().nonnegative().optional(),
   }),
-  /** The version is behind, or the template digest differs, or the release does. */
+  /**
+   * The version is behind, or the template digest differs, or the release
+   * does, or the fleet's artifacts bundle is older than this build's.
+   */
   update_available: z.boolean(),
   /**
    * The *fleet* is ahead of this build: somebody updated the foundation from a

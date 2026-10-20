@@ -62,7 +62,7 @@ export const AGENTD_STAGES = "packages/agentd/stages";
  * and it is the right trade: the alternative is two fingerprints that mean
  * almost the same thing, and a later reader picking the wrong one.
  */
-const FINGERPRINT_DIRS = [
+export const FINGERPRINT_DIRS = [
   "packages/agentd/src",
   "packages/core/src/schema",
   // The other door agentd may use (`@hermetic/core/shared`), and what `schema`
@@ -90,7 +90,7 @@ const FINGERPRINT_DIRS = [
  * somewhere without a lockfile still gets a usable fingerprint, just a coarser
  * one.
  */
-const FINGERPRINT_FILES = [
+export const FINGERPRINT_FILES = [
   ".bun-version",
   "bun.lock",
   "packages/agentd/package.json",

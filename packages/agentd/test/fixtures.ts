@@ -141,7 +141,7 @@ export function makeManifest(overrides: ManifestOverrides = {}): AgentConfig {
       mode: "0644",
       content:
         overrides.gatewayDropInBody ??
-        "[Unit]\nRequires=hermetic-secrets.service\n\n[Service]\nEnvironmentFile=/run/hermetic/secrets.env\n",
+        "[Unit]\nRequires=hermetic-secrets.service\nAfter=hermetic-secrets.service\n",
       restart_units: ["hermes-gateway.service"],
     },
     // The agent's sudoers grant (§6.4). It is in the fixture rather than in

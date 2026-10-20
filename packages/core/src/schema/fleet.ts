@@ -270,6 +270,14 @@ export const FleetItem = z.object({
    */
   foundation_template_sha256: Sha256.optional(),
   /**
+   * The `ARTIFACTS_VERSION` (`version.ts`) of the hermeticd binary and stages
+   * this fleet's last `foundation.update`, `init --create` or `artifacts push`
+   * (of this build's own bundle, not an explicit binary or version) pushed. Absent
+   * means **0**, a fleet pushed before the field existed, which every build
+   * that knows the field reports as an available update (§6.6).
+   */
+  artifacts_version: z.number().int().nonnegative().optional(),
+  /**
    * The item's own revision counter (§4.4) — the optimistic-concurrency key an
    * agent row has had all along, arriving late on `_fleet` because this item
    * was written whole for a long time.

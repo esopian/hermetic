@@ -58,7 +58,7 @@ function adapter(
   frames: ChatFrame[],
   opts: {
     hold?: boolean;
-    rpc?: (method: string) => unknown;
+    rpc?: (method: string, params?: unknown) => unknown;
     history?: () => ChatMessage[];
     /** What `abort` answers (default `true`: the box interrupted something). */
     aborted?: () => boolean;
@@ -146,9 +146,9 @@ function adapter(
     },
     ...(rpc
       ? {
-          botModeRpc: async (_box: unknown, method: string) => {
+          botModeRpc: async (_box: unknown, method: string, params?: unknown) => {
             rpcs.push(method);
-            return rpc(method);
+            return rpc(method, params);
           },
         }
       : {}),
@@ -235,7 +235,7 @@ async function setup(
   opts: {
     hold?: boolean;
     view?: MobileFleetView;
-    rpc?: (method: string) => unknown;
+    rpc?: (method: string, params?: unknown) => unknown;
     history?: () => ChatMessage[];
     aborted?: () => boolean;
     timers?: Timers;
@@ -650,10 +650,12 @@ describe("createHermeticClient", () => {
 
   test("createBot runs the bots.create sequence, then reads the roster again", async () => {
     const bots = [bot()];
+    let createParams: unknown;
     const s = await setup([], {
       bots,
-      rpc: (method) => {
+      rpc: (method, params) => {
         if (method === "profiles.create") {
+          createParams = params;
           bots.push(bot({ name: "scout", title: "Scout" }));
           return { ok: true, name: "scout" };
         }
@@ -671,6 +673,8 @@ describe("createHermeticClient", () => {
     expect(listed()).toEqual(["scribe"]);
     const profile = await s.client.createBot("atlas", { name: "scout", title: "Scout" });
     expect(s.chat.rpcs).toEqual(["profiles.create", "profiles.configure", "profiles.describe"]);
+    // The new bot copies the default `.env`, provider key included (§9.2).
+    expect(createParams).toEqual({ name: "scout", mirror_credentials: true });
     expect(profile).toMatchObject({ instance: "atlas", bot: "scout", description: "Finds things" });
     expect(listed()).toEqual(expect.arrayContaining(["scribe", "scout"]));
     s.client.dispose();

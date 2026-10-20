@@ -175,17 +175,17 @@ export const HERMES_FILES_PLUGIN = "hermetic-files";
  *
  * Three of the four providers are named to Hermes as themselves — it knows
  * `bedrock`, `anthropic` and `openrouter`, and finds their credentials in the
- * instance role or in `/run/hermetic/secrets.env` without further help. Nous is
+ * instance role or in `$HERMES_HOME/.env` without further help. Nous is
  * the exception and the reason `hermes_provider_entry` exists: Hermes's
  * built-in `nous` is an OAuth device-code login that never looks at
  * `NOUS_API_KEY`, so the Portal is declared here as its own endpoint instead —
  * base URL plus the *name* of the environment variable the key arrives in.
  *
  * The name of the variable, never the value: `key_env` is the whole reason this
- * file can be world-readable and live on disk. The key itself stays on tmpfs in
- * `/run/hermetic/secrets.env`, which is `hermes-dashboard.service`'s `EnvironmentFile`
- * (§8.3). Nothing secret is rendered, so nothing secret can leak through a
- * config tarball, an S3 object version, or a `cat` in a support thread.
+ * file can be world-readable. The key itself lives in the hermeticd-managed
+ * block of `$HERMES_HOME/.env` (0600 `hermes`) and of every bot's `.env`
+ * (§8.1, §8.3). Nothing secret is rendered, so nothing secret can leak through
+ * a config tarball, an S3 object version, or a `cat` in a support thread.
  */
 export function hermesManagedConfig(input: RenderInput): string {
   const provider = PROVIDERS[input.provider];
@@ -223,7 +223,7 @@ export function hermesManagedConfig(input: RenderInput): string {
       "providers:",
       "  " + provider.hermes_provider + ":",
       "    base_url: " + yamlString(provider.base_url),
-      // The variable's NAME. The value lives on tmpfs; see this function's note.
+      // The variable's NAME. The value lives in .env; see this function's note.
       "    key_env: " + yamlString(provider.env),
     );
   } else if (provider.auth === "role") {
@@ -233,8 +233,8 @@ export function hermesManagedConfig(input: RenderInput): string {
     );
   } else {
     lines.push(
-      "# " + provider.env + " comes from /run/hermetic/secrets.env, which hermeticd",
-      "# writes at boot from this agent's SSM slot. The key is never rendered.",
+      "# " + provider.env + " comes from the managed block of $HERMES_HOME/.env, which",
+      "# hermeticd writes from this agent's SSM slot. The key is never rendered.",
     );
   }
 

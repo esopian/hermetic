@@ -138,7 +138,7 @@ export type ManifestMemory = z.infer<typeof ManifestMemory>;
  * `AgentConfig.memory` as the box reads it: a block naming a provider this
  * build does not know (a bundle rendered under f5ad900 for a since-removed
  * hosted provider, still on a box's root volume) reads as no provider, so the
- * boot oneshot that materialises `secrets.env` keeps working and the next
+ * boot oneshot that writes the managed `.env` block keeps working and the next
  * converge replaces the bundle. A block naming a *known* provider is parsed
  * strictly: a wrong pin or key variable is still refused.
  */

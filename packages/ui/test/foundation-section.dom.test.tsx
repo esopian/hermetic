@@ -95,3 +95,26 @@ describe("FoundationPanel · bedrock grant", () => {
     expect(updateButton().disabled).toBe(true);
   });
 });
+
+describe("FoundationPanel · artifacts", () => {
+  test("an older bundle is shown as a row, and the update button is offered", () => {
+    const base = status({ stale_bedrock_grants: [] } as Partial<FoundationStatus>);
+    render(
+      panel({
+        ...base,
+        fleet: { ...base.fleet, artifacts_version: 0 },
+        available: { ...base.available, artifacts_version: 1 },
+        update_available: true,
+      }),
+    );
+
+    expect(screen.getByText("artifacts")).toBeTruthy();
+    expect(screen.getByText("v0 → v1")).toBeTruthy();
+    expect(updateButton().disabled).toBe(false);
+  });
+
+  test("a server that does not report the bundle shows no row", () => {
+    render(panel(status({ stale_bedrock_grants: [] } as Partial<FoundationStatus>)));
+    expect(screen.queryByText("artifacts")).toBeNull();
+  });
+});

@@ -22,6 +22,9 @@ import type { AgentConfig, ApplyRequest, RenderedFile } from "@hermetic/core/sch
 import {
   HERMES_ACCOUNT_HOME,
   HERMES_HOME,
+  HERMES_USER_ENV,
+  MANAGED_ENV_BEGIN,
+  MANAGED_ENV_END,
   HONCHO_PG_BIN,
   HONCHO_PLUGIN_CONFIG_LINK,
   MEMORY_DB_UNIT,
@@ -87,7 +90,7 @@ function secretsUnitFile(vendor: Vendor): RenderedFile {
     mode: "0644",
     content:
       "[Service]\nType=oneshot\nRemainAfterExit=yes\n" +
-      "ExecStart=/usr/local/bin/hermeticd secrets materialise --out /run/hermetic/secrets.env --mode 0600\n" +
+      "ExecStart=/usr/local/bin/hermeticd secrets materialise\n" +
       `# ${PROVIDERS[vendor].env ?? ""} is read from SSM at this fleet's SSM prefix + ${TEST_NAME}/provider-key by hermeticd.\n`,
   };
 }
@@ -502,7 +505,7 @@ describe("none → honcho, live, through a converge", () => {
     ).toBe(true);
     expect(host.files.get(`${honchoPgDataDir}/PG_VERSION`)?.content).toBe("16\n");
     expect((await host.readdir(honchoTiktokenDir)).length).toBe(2);
-    expect(host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(`LLM_OPENAI_API_KEY='${PROVIDER_KEY}'\n`);
+    expect(host.files.get(MEMORY_LLM_ENV_PATH)?.content).toBe(`LLM_OPENAI_API_KEY="${PROVIDER_KEY}"\n`);
     for (const unit of MEMORY_SERVICE_UNITS) expect(host.enabledUnits.has(unit)).toBe(true);
     // Recorded as applied only now, by the apply itself; the manifest follows.
     expect(JSON.parse(host.files.get(APPLIED_CONFIG_PATH)!.content).config_hash).toBe("honcho-openai");
@@ -587,7 +590,10 @@ describe("the secrets oneshot during a converge", () => {
     expect((await f.rollOut(to())).kind).toBe("applied");
 
     expect(host.restarted).not.toContain(SECRETS_UNIT);
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe(`OPENAI_API_KEY='${PROVIDER_KEY}'\n`);
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(
+      `${MANAGED_ENV_BEGIN}\nOPENAI_API_KEY="${PROVIDER_KEY}"\n${MANAGED_ENV_END}\n`,
+    );
+    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
     expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
     // What `Requires=` would have restarted with it, restarted explicitly.
     for (const unit of HERMES_UNITS) expect(host.restarted).toContain(unit);
@@ -602,7 +608,10 @@ describe("the secrets oneshot during a converge", () => {
     expect((await f.rollOut(to())).kind).toBe("applied");
 
     expect(host.restarted[0]).toBe(SECRETS_UNIT);
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe(`OPENAI_API_KEY='${PROVIDER_KEY}'\n`);
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(
+      `${MANAGED_ENV_BEGIN}\nOPENAI_API_KEY="${PROVIDER_KEY}"\n${MANAGED_ENV_END}\n`,
+    );
+    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
     expect(host.files.has(MEMORY_LLM_ENV_PATH)).toBe(false);
     for (const unit of HERMES_UNITS) expect(restartedAfter(host, unit, SECRETS_UNIT)).toBe(true);
   });

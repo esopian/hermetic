@@ -758,6 +758,7 @@ describe("agents.create with a memory provider", () => {
         "restart-units",
         "browser-stack",
         "provider-key-ref",
+        "managed-env",
         MEMORY_PROVIDER_CAPABILITY,
       ],
     };

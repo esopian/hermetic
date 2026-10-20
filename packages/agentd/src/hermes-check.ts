@@ -9,7 +9,7 @@
  * nothing had ever written Hermes a config naming a provider or a model. Every
  * signal said healthy; the one thing an agent is for did not work.
  *
- * Six things on an agent with no browser, eight on one with, one more on an
+ * Seven things on an agent with no browser, nine on one with, one more on an
  * agent with an external memory provider, in two groups. Some are conditional on what the manifest says rather than on what the box
  * is: `approvals` is skipped by a manifest rendered before that field existed,
  * the two browser checks by one that names no browsers, and `memory` (the
@@ -20,8 +20,10 @@
  *
  *   1. the managed config exists and names a provider;
  *   2. the agent has a model to send to it;
- *   3. a keyed provider's key actually arrived on the box;
- *   4. nothing in the agent's own `.env` shadows that key;
+ *   3. a keyed provider's key actually arrived on the box, in the managed
+ *      block of the agent's own `.env`;
+ *   4. nothing outside that block shadows it, and every bot's `.env` holds
+ *      the same block (`bots_keyed`, advisory);
  *   5. on a browser agent, that `.env` carries `BROWSER_CDP_URL` and it names
  *      this box's browser (`cdp_override` — a verdict when the line is
  *      missing, advisory when it names another endpoint; see below).
@@ -58,6 +60,7 @@
 import type { AgentConfig } from "@hermetic/core/schema";
 import {
   BROWSER_CDP_ENV,
+  HERMES_ACCOUNT,
   HERMES_MANAGED_CONFIG,
   HERMES_USER_CONFIG,
   HERMES_USER_ENV,
@@ -69,7 +72,17 @@ import {
 } from "@hermetic/core/shared";
 import type { Host } from "./host.ts";
 import { AgentdError } from "./errors.ts";
-import { SECRETS_ENV_PATH } from "./apply/index.ts";
+import { managedBlockOf, outsideManagedBlock } from "./apply/secrets.ts";
+import { botEnvPath, listBotHomes } from "./secrets-sync.ts";
+
+/** A Hermes `.env`, read as the account (refusing a symlink); `null` when unreadable or absent. */
+async function readEnvAsHermes(host: Host, path: string): Promise<string | null> {
+  try {
+    return await new Response(host.readStreamAs(HERMES_ACCOUNT, path)).text();
+  } catch {
+    return null;
+  }
+}
 
 /** One thing that was checked, and what it turned out to be. */
 export interface HermesCheck {
@@ -223,6 +236,60 @@ async function runProbe(
 }
 
 /**
+ * Every bot (`$HERMES_HOME/profiles/<bot>`) holds the same managed block as
+ * the default `.env`: the sync writes them together, so a difference is a bot
+ * the last sync missed or an edit inside its fence. The key variable assigned
+ * outside a bot's block is a deliberate per-bot key, which hermeticd never
+ * overwrites and reports here. Always `advisory`: bots are the agent's own,
+ * and none of this is a reason to fail a boot. Names bots only, never a value.
+ */
+async function botsKeyed(
+  host: Host,
+  block: string[] | null,
+  keyEnv: string | null,
+): Promise<HermesCheck> {
+  const bots = await listBotHomes(host);
+  if (bots.length === 0) {
+    return { name: "bots_keyed", ok: true, advisory: true, detail: "no bots on this box" };
+  }
+  if (block === null) {
+    return {
+      name: "bots_keyed",
+      ok: false,
+      advisory: true,
+      detail: `${HERMES_USER_ENV} holds no hermetic managed block to key ${bots.length} bot(s) from`,
+    };
+  }
+  const expected = block.join("\n");
+  const unkeyed: string[] = [];
+  const overriding: string[] = [];
+  for (const bot of bots) {
+    const env = (await readEnvAsHermes(host, botEnvPath(bot))) ?? "";
+    if (managedBlockOf(env)?.join("\n") !== expected) unkeyed.push(bot);
+    if (keyEnv !== null && envDefines(outsideManagedBlock(env), keyEnv)) overriding.push(bot);
+  }
+  if (unkeyed.length === 0 && overriding.length === 0) {
+    return {
+      name: "bots_keyed",
+      ok: true,
+      advisory: true,
+      detail: `every bot holds the current block (${bots.join(", ")})`,
+    };
+  }
+  const parts = [
+    ...(unkeyed.length > 0
+      ? [`without the current managed block: ${unkeyed.join(", ")} (the next sync rewrites it)`]
+      : []),
+    ...(overriding.length > 0
+      ? [
+          `assigning ${keyEnv} outside the block, a per-bot key hermetic leaves alone: ${overriding.join(", ")}`,
+        ]
+      : []),
+  ];
+  return { name: "bots_keyed", ok: false, advisory: true, detail: `bots ${parts.join("; ")}` };
+}
+
+/**
  * Run the checks and return what each found. Throws only if the manifest
  * names a provider this build has never heard of — everything else is a result,
  * so the caller can report every failure at once rather than the first.
@@ -281,15 +348,16 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
       : `neither ${HERMES_MANAGED_CONFIG} nor ${HERMES_USER_CONFIG} names model.default`,
   });
 
+  const dotenv = (await readEnvAsHermes(host, HERMES_USER_ENV)) ?? "";
+  const block = managedBlockOf(dotenv);
   if (providerNeedsKey(manifest.provider) && spec.env !== null) {
-    const env = (await host.readFile(SECRETS_ENV_PATH)) ?? "";
-    const present = envHasValue(env, spec.env);
+    const present = envHasValue((block ?? []).join("\n"), spec.env);
     checks.push({
       name: "key",
       ok: present,
       detail: present
-        ? `${spec.env} is set in ${SECRETS_ENV_PATH}`
-        : `${spec.env} is missing or empty in ${SECRETS_ENV_PATH}` +
+        ? `${spec.env} is set in the managed block of ${HERMES_USER_ENV}`
+        : `${spec.env} is missing or empty in the managed block of ${HERMES_USER_ENV}` +
           ` — push it with \`hermetic secrets push ${manifest.name} --provider-key\``,
     });
   } else {
@@ -301,40 +369,30 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
   }
 
   /**
-   * The key hermetic delivered has to be the key Hermes uses, and an
-   * `EnvironmentFile` does not guarantee that.
+   * The key hermetic delivered has to be the key Hermes uses.
    *
-   * Upstream's user `.env` is loaded with `override=True` into `os.environ`
-   * (`hermes_cli/env_loader.py:362-365`), and the api-key path prefers it over
-   * the environment on top of that (`get_env_value_prefer_dotenv`,
-   * `hermes_cli/config.py:2698-2701`; `get_anthropic_key`,
-   * `hermes_cli/auth.py:293-303`). So a key written there by `hermes setup`, by
-   * the dashboard's key field or by the agent itself silently and permanently
-   * outranks the one hermetic pushed from SSM, and `hermetic secrets push
-   * --provider-key` becomes a no-op with no signal on either side.
-   *
-   * hermetic cannot answer that by writing a higher-precedence channel: the one
-   * that wins outright is the managed `/etc/hermes/.env`, which upstream
-   * documents as 0644 world-readable and not for secrets
-   * (`website/docs/user-guide/managed-scope.md:141-143`). Nor may it delete the
-   * agent's `.env`: after first boot that file is the agent's own (§6.4). So the
-   * precedence claim is asserted at boot instead. An absent file is the normal
-   * case and passes. Drift afterwards — the agent writes a key on day nine — is
-   * a `doctor` finding, not a boot failure.
+   * Every dotenv reader upstream lets the last assignment win
+   * (`_parse_env_text`, python-dotenv), so the key variable assigned anywhere
+   * outside the managed block — a stale line on a reattached volume, `hermes
+   * setup` appending one — can outrank the block hermeticd keeps current, and
+   * `hermetic providers update` becomes a no-op with no signal on either side.
+   * hermeticd never deletes the agent's own lines, so the precedence claim is
+   * asserted at boot instead. Drift afterwards is a `doctor` finding.
    */
-  const dotenv = (await host.readFile(HERMES_USER_ENV)) ?? "";
-  const keyShadowed = spec.env !== null && envDefines(dotenv, spec.env);
+  const keyShadowed = spec.env !== null && envDefines(outsideManagedBlock(dotenv), spec.env);
   checks.push({
     name: "env_shadow",
     ok: !keyShadowed,
     detail: keyShadowed
-      ? `${HERMES_USER_ENV} defines ${spec.env}, which Hermes prefers over the value hermetic ` +
-        `delivers in ${SECRETS_ENV_PATH} — remove that line, or this agent keeps using a key ` +
-        "hermetic did not push"
+      ? `${HERMES_USER_ENV} assigns ${spec.env} outside the hermetic managed block, which can ` +
+        "outrank the key hermetic keeps current there — remove that line, or this agent keeps " +
+        "using a key hermetic did not push"
       : spec.env === null
         ? `${manifest.provider} authenticates as the instance; there is no key variable to shadow`
         : `${HERMES_USER_ENV} does not shadow ${spec.env}`,
   });
+
+  checks.push(await botsKeyed(host, block, spec.env));
 
   /**
    * The browser endpoint in the agent's own `.env` — the reason it is its own
