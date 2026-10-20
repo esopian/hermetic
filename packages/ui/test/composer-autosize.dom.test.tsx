@@ -48,7 +48,7 @@ function mountComposer(sent: string[] = []) {
       onAbort={() => {}}
     />,
   );
-  const input = container.querySelector<HTMLTextAreaElement>(".ch-input-box > .ch-input")!;
+  const input = container.querySelector<HTMLTextAreaElement>(".ch-input-field > .ch-input")!;
   input.style.lineHeight = `${LINE}px`;
   return input;
 }

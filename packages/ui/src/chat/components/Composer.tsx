@@ -448,114 +448,120 @@ export function Composer({
           </section>
         ) : null}
         {/*
-          The box draws the border and padding; the textarea inside has none, so
-          a draft taller than the cap scrolls inside the padding instead of
-          running into the border. A label, so a press on the padding focuses
-          the input natively; the textarea's own `aria-label` still names it.
+          The box draws the border; the field inside it draws the padding and
+          the textarea has none, so a draft taller than the cap scrolls inside
+          the padding instead of running into the border. The field is a label,
+          so a press on the padding focuses the input natively; the textarea's
+          own `aria-label` still names it. Under it, inside the same box, the
+          toolbar: attach at the left, send at the right (Slack's shape).
         */}
         {files ? <AttachTray files={files} /> : null}
-        <label className="ch-input-box">
-          <textarea
-            ref={input}
-            className="ch-input"
-            aria-label={placeholder}
-            {...picker.inputProps}
-            {...slash.inputProps}
-            // Focus gone elsewhere: a list left open would float over whatever took it.
-            onBlur={() => {
-              picker.inputProps.onBlur?.();
-              slash.close();
-            }}
-            rows={1}
-            disabled={!editable}
-            placeholder={placeholder}
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              picker.track(e.target);
-            }}
-            onSelect={(e) => picker.track(e.currentTarget)}
-            onPaste={(e) => {
-              // Files on the clipboard become attachments; a text paste is
-              // untouched, and so is a paste that is both (`isFilePaste`).
-              const data = e.clipboardData;
-              if (!files || !canAttach || !data || !isFilePaste(data)) return;
-              e.preventDefault();
-              files.addFiles(Array.from(data.files));
-            }}
-            onKeyDown={(e) => {
-              if (e.defaultPrevented || e.nativeEvent.isComposing) return;
-              if (slash.onKeyDown(e) || picker.onKeyDown(e)) return;
-              // ⌘⇧A opens the native file dialog for this conversation.
-              if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+        <div className="ch-input-box">
+          <label className="ch-input-field">
+            <textarea
+              ref={input}
+              className="ch-input"
+              aria-label={placeholder}
+              {...picker.inputProps}
+              {...slash.inputProps}
+              // Focus gone elsewhere: a list left open would float over whatever took it.
+              onBlur={() => {
+                picker.inputProps.onBlur?.();
+                slash.close();
+              }}
+              rows={1}
+              disabled={!editable}
+              placeholder={placeholder}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                picker.track(e.target);
+              }}
+              onSelect={(e) => picker.track(e.currentTarget)}
+              onPaste={(e) => {
+                // Files on the clipboard become attachments; a text paste is
+                // untouched, and so is a paste that is both (`isFilePaste`).
+                const data = e.clipboardData;
+                if (!files || !canAttach || !data || !isFilePaste(data)) return;
                 e.preventDefault();
-                if (canAttach) files?.pick();
-                return;
+                files.addFiles(Array.from(data.files));
+              }}
+              onKeyDown={(e) => {
+                if (e.defaultPrevented || e.nativeEvent.isComposing) return;
+                if (slash.onKeyDown(e) || picker.onKeyDown(e)) return;
+                // ⌘⇧A opens the native file dialog for this conversation.
+                if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+                  e.preventDefault();
+                  if (canAttach) files?.pick();
+                  return;
+                }
+                // Enter sends — or queues, while the agent works — and Shift+Enter
+                // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
+                // when idle, past the queue when not.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (e.metaKey || e.ctrlKey) submitNow();
+                  else submit();
+                  return;
+                }
+                // Esc stops the turn. `preventDefault` is load-bearing rather than
+                // tidy: the app shell has a window-level Escape handler that closes
+                // whichever full-page view is up, and it checks `defaultPrevented`
+                // first — so without this, stopping a turn would also leave the
+                // chat view.
+                if (e.key === "Escape" && sending) {
+                  e.preventDefault();
+                  onAbort();
+                }
+              }}
+            />
+          </label>
+          <div className="ch-input-tools">
+            {files ? (
+              <button
+                type="button"
+                className="ch-attach-btn"
+                aria-label="Attach files"
+                disabled={!canAttach}
+                title={noFiles ? NO_FILES_COPY : "Attach files (⌘⇧A)"}
+                onClick={() => files.pick()}
+              >
+                ⊕
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={[
+                "ch-send",
+                label || pending.uploading > 0 ? `label ${label?.tone ?? ""}` : "",
+                hasContent && enabled && !filesBlock ? "ready" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              disabled={!enabled || !hasContent || filesBlock || (working && !chat)}
+              title={
+                pending.uploading > 0
+                  ? "Send waits for uploads to finish"
+                  : pending.failed > 0
+                    ? "Remove the failed attachments to send"
+                    : canQueue
+                      ? "Queue (Enter)"
+                      : "Send (Enter or ⌘↵)"
               }
-              // Enter sends — or queues, while the agent works — and Shift+Enter
-              // is a newline. ⌘Enter (Ctrl+Enter) sends now: the same as Enter
-              // when idle, past the queue when not.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (e.metaKey || e.ctrlKey) submitNow();
-                else submit();
-                return;
-              }
-              // Esc stops the turn. `preventDefault` is load-bearing rather than
-              // tidy: the app shell has a window-level Escape handler that closes
-              // whichever full-page view is up, and it checks `defaultPrevented`
-              // first — so without this, stopping a turn would also leave the
-              // chat view.
-              if (e.key === "Escape" && sending) {
-                e.preventDefault();
-                onAbort();
-              }
-            }}
-          />
-        </label>
-        {files ? (
-          <button
-            type="button"
-            className="ch-attach-btn"
-            aria-label="Attach files"
-            disabled={!canAttach}
-            title={noFiles ? NO_FILES_COPY : "Attach files (⌘⇧A)"}
-            onClick={() => files.pick()}
-          >
-            ⊕
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={[
-            "ch-send",
-            label || pending.uploading > 0 ? `label ${label?.tone ?? ""}` : "",
-            hasContent && enabled && !filesBlock ? "ready" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          disabled={!enabled || !hasContent || filesBlock || (working && !chat)}
-          title={
-            pending.uploading > 0
-              ? "Send waits for uploads to finish"
-              : pending.failed > 0
-                ? "Remove the failed attachments to send"
-                : canQueue
-                  ? "Queue (Enter)"
-                  : "Send (Enter or ⌘↵)"
-          }
-          onClick={() => submit()}
-        >
-          {pending.uploading > 0 ? (
-            "Send · uploading…"
-          ) : label ? (
-            <>
-              {label.label} <span className="k">↵</span>
-            </>
-          ) : (
-            "↵"
-          )}
-        </button>
+              onClick={() => submit()}
+            >
+              {pending.uploading > 0 ? (
+                "Send · uploading…"
+              ) : label ? (
+                <>
+                  {label.label} <span className="k">↵</span>
+                </>
+              ) : (
+                "↵"
+              )}
+            </button>
+          </div>
+        </div>
       </div>
 
       {mentionHint ? <div className="bm-mention-hint">{mentionHint}</div> : null}
