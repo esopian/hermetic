@@ -6,7 +6,7 @@
  * composer pastes an image through `expo-clipboard`'s `ClipboardPasteButton`
  * (iOS's `UIPasteControl`, which reads the pasteboard without the "allow
  * paste" prompt) instead, and hands what it answers here: a `data:` URI and
- * the picture's size. `pasteAttachments` decodes it, writes the bytes to the
+ * the picture's size. `pasteAttachments` checks it, has the base64 written to the
  * cache (`write`, `writeToCache` in `pick-attachment.ts` on the device) so the
  * entry has a `file://` URI like any picked photo, and answers the tray entry.
  * Text answers nothing: the field pastes text itself.
@@ -35,36 +35,12 @@ export type PastePayload = PastedImage | { type: "text"; text: string };
  */
 export const PASTE_IMAGE_OPTIONS = { format: "jpeg", jpegQuality: 0.9 } as const;
 
-const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const B64_INDEX = new Map([...B64].map((c, i) => [c, i]));
-
-/** Standard base64 (padding optional, whitespace ignored) to bytes; `null` on anything else. */
-export function fromBase64(text: string): Uint8Array | null {
-  const clean = text.replace(/\s+/g, "").replace(/=+$/, "");
-  if (clean.length % 4 === 1) return null;
-  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
-  let bits = 0;
-  let acc = 0;
-  let j = 0;
-  for (const c of clean) {
-    const v = B64_INDEX.get(c);
-    if (v === undefined) return null;
-    acc = (acc << 6) | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out[j++] = (acc >> bits) & 0xff;
-    }
-  }
-  return out;
-}
-
-/** A base64 `data:` URI's type and bytes, or `null` when it is not one. */
-export function decodeDataUri(uri: string): { mime: string; bytes: Uint8Array } | null {
+/** A base64 `data:` URI's type and base64 text, or `null` when it is not one (or holds nothing). */
+export function decodeDataUri(uri: string): { mime: string; base64: string } | null {
   const match = /^data:([^;,]+)(?:;[^;,]*)*;base64,(.*)$/s.exec(uri);
-  if (!match) return null;
-  const bytes = fromBase64(match[2] ?? "");
-  return bytes ? { mime: (match[1] ?? "").toLowerCase(), bytes } : null;
+  const base64 = (match?.[2] ?? "").replace(/\s+/g, "");
+  if (!match || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 === 1) return null;
+  return { mime: (match[1] ?? "").toLowerCase(), base64 };
 }
 
 const EXT_FOR_MIME: Readonly<Record<string, string>> = {
@@ -82,25 +58,25 @@ export function pastedName(mime: string, at: Date): string {
 
 /**
  * The tray entries a paste adds: one for an image, none for text (or for an
- * image whose data does not decode). `write` stores the bytes under a name
- * and answers the file's URI.
+ * image whose data does not decode). `write` decodes the base64 into a file
+ * under a name and answers the file's URI and size.
  */
 export async function pasteAttachments(
   payload: PastePayload,
-  write: (name: string, bytes: Uint8Array) => Promise<string>,
+  write: (name: string, base64: string) => Promise<{ uri: string; size: number }>,
   now: () => Date = () => new Date(),
 ): Promise<PendingAttachment[]> {
   if (payload.type !== "image") return [];
   const decoded = decodeDataUri(payload.data);
-  if (!decoded || decoded.bytes.byteLength === 0) return [];
+  if (!decoded) return [];
   const name = pastedName(decoded.mime, now());
-  const uri = await write(name, decoded.bytes);
+  const { uri, size } = await write(name, decoded.base64);
   return [
     pendingAttachment({
       name,
       uri,
       mime: decoded.mime,
-      size: decoded.bytes.byteLength,
+      size,
       kind: isImageMime(decoded.mime) ? "image" : "file",
     }),
   ];

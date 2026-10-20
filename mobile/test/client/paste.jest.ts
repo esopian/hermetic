@@ -1,19 +1,19 @@
 import { base64 } from "../../src/client/file-urls.ts";
-import { decodeDataUri, fromBase64, pasteAttachments, pastedName } from "../../src/client/paste.ts";
+import { decodeDataUri, pasteAttachments, pastedName } from "../../src/client/paste.ts";
 
 const AT = new Date("2026-10-13T12:00:00.123Z");
 
 function writer() {
-  const written = new Map<string, Uint8Array>();
-  const write = jest.fn(async (name: string, bytes: Uint8Array) => {
-    written.set(name, bytes);
-    return `file:///cache/${name}`;
+  const written = new Map<string, string>();
+  const write = jest.fn(async (name: string, base64: string) => {
+    written.set(name, base64);
+    return { uri: `file:///cache/${name}`, size: 9 };
   });
   return { written, write };
 }
 
 describe("pasteAttachments", () => {
-  test("a clipboard image is one picked image entry, written to the cache with its bytes", async () => {
+  test("a clipboard image is one picked image entry, its base64 written to the cache", async () => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 5]);
     const { written, write } = writer();
     const items = await pasteAttachments(
@@ -28,11 +28,11 @@ describe("pasteAttachments", () => {
       uri: "file:///cache/pasted-20261013120000123.jpg",
       mime: "image/jpeg",
       kind: "image",
-      size: jpeg.byteLength,
+      size: 9,
       status: "picked",
     });
     expect(item?.local_id).toMatch(/^att\d+$/);
-    expect([...(written.get("pasted-20261013120000123.jpg") ?? [])]).toEqual([...jpeg]);
+    expect(written.get("pasted-20261013120000123.jpg")).toBe(base64(jpeg));
   });
 
   test("a PNG keeps its type and extension", async () => {
@@ -65,23 +65,16 @@ describe("pasteAttachments", () => {
   });
 });
 
-describe("base64 and data URIs", () => {
-  test("fromBase64 inverts base64 for every padding length", () => {
-    for (const n of [0, 1, 2, 3, 4, 5, 255]) {
-      const bytes = Uint8Array.from({ length: n }, (_, i) => (i * 37) % 256);
-      expect([...(fromBase64(base64(bytes)) ?? [])]).toEqual([...bytes]);
-    }
-    expect(fromBase64("a")).toBeNull();
-    expect(fromBase64("ab!c")).toBeNull();
-  });
-
+describe("data URIs", () => {
   test("decodeDataUri reads the type, ignores parameters, and refuses non-base64", () => {
-    expect(decodeDataUri("data:IMAGE/PNG;base64,AAE=")).toEqual({
+    expect(decodeDataUri("data:IMAGE/PNG;base64,AA\nE=")).toEqual({
       mime: "image/png",
-      bytes: new Uint8Array([0, 1]),
+      base64: "AAE=",
     });
     expect(decodeDataUri("data:image/jpeg;name=x.jpg;base64,AA==")?.mime).toBe("image/jpeg");
     expect(decodeDataUri("data:text/plain,hello")).toBeNull();
+    expect(decodeDataUri("data:image/png;base64,a")).toBeNull();
+    expect(decodeDataUri("data:image/png;base64,ab!c")).toBeNull();
   });
 
   test("pastedName follows the type, with a fallback extension", () => {
