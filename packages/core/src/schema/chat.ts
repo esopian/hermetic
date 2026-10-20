@@ -498,6 +498,12 @@ const QuestionBlock = z.object({
   choices: z.array(z.string()),
   multi_select: z.boolean().optional(),
   questions: z.array(QuestionEntry).optional(),
+  /**
+   * Set when the request is a `vault.code` (a site's one-time 2FA code), not a
+   * clarify: a head draws a masked code field instead of the answer box. The
+   * code is a credential, so the card never shows what was sent.
+   */
+  vault_code: z.object({ site: z.string().nullable(), hint: z.string().nullable() }).optional(),
   request_id: z.string().nullish(),
   expires_at: Iso.nullish(),
   payload: z.unknown().optional(),

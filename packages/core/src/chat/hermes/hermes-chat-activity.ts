@@ -389,8 +389,9 @@ function clarifyQuestions(payload: Record<string, unknown>): QuestionEntry[] {
 }
 
 /**
- * A gateway server request as one block. Approvals and clarifies become the
- * cards `chat.respond` answers; a clarify is one block however many questions
+ * A gateway server request as one block. Approvals, clarifies and `vault.code`
+ * (a 2FA code, drawn as a question carrying `vault_code`) become the cards
+ * `chat.respond` answers; a clarify is one block however many questions
  * it carries, because the gateway keeps it open until every question is
  * answered. Any other request stays visible as a notice pointing at Hermes.
  */
@@ -448,6 +449,20 @@ export function hermesRequest(
         },
       ];
     }
+  }
+  if (method === "vault.code") {
+    const site = text(payload.site);
+    // Answered like a single question; no payload kept, so the card holds nothing but the ask.
+    return [
+      {
+        kind: "question",
+        prompt: site ? `Enter the verification code for ${site}` : "Enter the verification code",
+        choices: [],
+        vault_code: { site, hint: text(payload.hint) },
+        request_id: id,
+        expires_at,
+      },
+    ];
   }
   return [
     {

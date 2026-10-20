@@ -299,3 +299,26 @@ describe("connection requests are one notice per operation", () => {
     expect(gate.stale("connection.update", { op_id: "op1", seq: 4 })).toBe(false);
   });
 });
+
+describe("a vault.code request", () => {
+  test("is a verification-code card for its site, not the raw-JSON notice", () => {
+    const [block] = hermesRequest("vault.code", "srq-b19072d55aac", {
+      session_id: "runtime",
+      site: "github.com",
+      hint: "From your authenticator app",
+    });
+    expect(ChatBlock.parse(block)).toEqual({
+      kind: "question",
+      prompt: "Enter the verification code for github.com",
+      choices: [],
+      vault_code: { site: "github.com", hint: "From your authenticator app" },
+      request_id: "srq-b19072d55aac",
+      expires_at: null,
+    });
+    expect(hermesRequest("vault.code", "srq-2", { session_id: "runtime" })[0]).toMatchObject({
+      kind: "question",
+      prompt: "Enter the verification code",
+      vault_code: { site: null, hint: null },
+    });
+  });
+});

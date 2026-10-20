@@ -593,6 +593,60 @@ describe("pending decision ownership", () => {
       result: { answer: "Coffee" },
     });
   });
+
+  /** A resumed session holding one open `vault.code`, owned by `owner`. */
+  function vaultHarness(owner = "runtime") {
+    return canonicalHarness(async (method) => {
+      if (method === "session.resume")
+        return {
+          session_id: "runtime",
+          open_requests: [
+            {
+              id: "srq-b19072d55aac",
+              method: "vault.code",
+              params: { session_id: owner, site: "github.com", hint: "" },
+            },
+          ],
+        };
+      return { status: "ok" };
+    });
+  }
+  const code = { ...question, request_id: "srq-b19072d55aac" };
+
+  test("a vault code answers its own request with the code as `value`, spaces and dashes gone", async () => {
+    const h = vaultHarness();
+    expect(await h.service.respond(box, { ...code, answer: " 246 810 " })).toEqual({ status: "ok" });
+    expect(h.calls.find((c) => c.method === "session.resume")?.params).toMatchObject({
+      profile: "research",
+      session_id: "stored",
+    });
+    expect(sent(h)).toEqual([
+      {
+        method: "request.answer",
+        params: { profile: "research", id: "srq-b19072d55aac", result: { value: "246810" } },
+      },
+    ]);
+    const skipped = vaultHarness();
+    expect(await skipped.service.respond(box, { ...code, skip: true })).toEqual({ status: "ok" });
+    expect(sent(skipped).at(-1)?.params).toEqual({
+      profile: "research",
+      id: "srq-b19072d55aac",
+      result: { value: "" },
+    });
+  });
+
+  test("a vault code for another session, or a request id not open, is never answered", async () => {
+    const foreign = vaultHarness("someone-else");
+    await expect(foreign.service.respond(box, { ...code, answer: "246810" })).rejects.toThrow(
+      "does not belong",
+    );
+    expect(sent(foreign)).toEqual([]);
+    const other = vaultHarness();
+    expect(
+      await other.service.respond(box, { ...code, request_id: "srq-other", answer: "246810" }),
+    ).toEqual({ status: "expired" });
+    expect(sent(other)).toEqual([]);
+  });
 });
 
 /**

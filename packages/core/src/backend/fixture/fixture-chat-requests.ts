@@ -14,7 +14,9 @@
  * other prompt gets the ordinary canned turn. Matching by substring means
  * upstream's longer `E2E_BATCH_CLARIFY_TRIGGER` spelling works too. Two more are
  * the fixture's own: `E2E_ONE_BATCH_CLARIFY` (a batch of one) and
- * `E2E_CLARIFY_TIMEOUT` (a single question that times out).
+ * `E2E_CLARIFY_TIMEOUT` (a single question that times out), and `E2E_VAULT_CODE`
+ * (a `vault.code` 2FA prompt, with no clarify tool and a reply that never
+ * repeats the code).
  *
  * A parked turn waits on a promise that `respond`, the turn's own `AbortSignal`
  * or, for a request opened with a `timeoutMs`, a timer settles. Only the
@@ -25,7 +27,7 @@
 import type { ChatRespondInput } from "../../schema/requests.ts";
 import type { ApprovalChoice, ChatBlock, ChatFrame } from "../../schema/index.ts";
 import { HermeticError } from "../../errors.ts";
-import { hermesActivity } from "../../chat/hermes/hermes-chat-activity.ts";
+import { hermesActivity, hermesRequest } from "../../chat/hermes/hermes-chat-activity.ts";
 import { CLARIFY_TIMEOUT_RESPONSE } from "../../chat/hermes/hermes-chat-history.ts";
 
 export const FIXTURE_BATCH_CLARIFY_TRIGGER = "E2E_BATCH_CLARIFY";
@@ -34,6 +36,8 @@ export const FIXTURE_BLOCKING_CLARIFY_TRIGGER = "E2E_BLOCKING_CLARIFY";
 export const FIXTURE_ONE_QUESTION_BATCH_TRIGGER = "E2E_ONE_BATCH_CLARIFY";
 /** A single question that nobody answers: the request closes with reason `timeout`. */
 export const FIXTURE_CLARIFY_TIMEOUT_TRIGGER = "E2E_CLARIFY_TIMEOUT";
+/** A `vault.code` request (a site's 2FA code): answered like a single question, never echoed. */
+export const FIXTURE_VAULT_CODE_TRIGGER = "E2E_VAULT_CODE";
 
 /** One question as the registry keeps it; `id` is what an answer is locked under. */
 interface FixtureQuestion {
@@ -307,7 +311,8 @@ export function fixtureClarifyScript(prompt: string): FixtureClarifyScript | nul
   const timeout = prompt.includes(FIXTURE_CLARIFY_TIMEOUT_TRIGGER);
   const oneBatch = prompt.includes(FIXTURE_ONE_QUESTION_BATCH_TRIGGER);
   const batch = prompt.includes(FIXTURE_BATCH_CLARIFY_TRIGGER);
-  if (!batch && !oneBatch && !timeout && !prompt.includes(FIXTURE_BLOCKING_CLARIFY_TRIGGER))
+  const vault = prompt.includes(FIXTURE_VAULT_CODE_TRIGGER);
+  if (!batch && !oneBatch && !timeout && !vault && !prompt.includes(FIXTURE_BLOCKING_CLARIFY_TRIGGER))
     return null;
   const questions = timeout ? TIMEOUT : oneBatch ? ONE_QUESTION_BATCH : batch ? BATCH : BLOCKING;
   const asksBatch = batch || oneBatch;
@@ -370,6 +375,13 @@ export function fixtureClarifyScript(prompt: string): FixtureClarifyScript | nul
     batch: asksBatch,
     timeout,
     ask(message, request_id) {
+      if (vault) {
+        const [card] = hermesRequest("vault.code", request_id, {
+          site: "github.com",
+          hint: "Open your authenticator app",
+        });
+        return card ? [{ type: "block", seq: 1, message, block: card }] : [];
+      }
       const first = questions[0];
       const question: ChatBlock = {
         kind: "question",
@@ -407,7 +419,9 @@ export function fixtureClarifyScript(prompt: string): FixtureClarifyScript | nul
       });
       const reply =
         outcome.kind === "answered"
-          ? `Got it: ${said.join("; ")}. Continuing.`
+          ? vault
+            ? "Code received. Continuing."
+            : `Got it: ${said.join("; ")}. Continuing.`
           : outcome.kind === "timeout"
             ? "No answer came in time. Continuing with the default."
             : "Skipped. Continuing.";
@@ -419,15 +433,14 @@ export function fixtureClarifyScript(prompt: string): FixtureClarifyScript | nul
           ? hermesActivity("request.cancel", { id: request_id, method: "clarify", reason: "timeout" })
           : null;
       if (closed) frames.push({ type: "block", seq: ++seq, message, block: closed });
-      frames.push(
-        {
+      if (!vault)
+        frames.push({
           type: "block",
           seq: ++seq,
           message,
           block: tool("ok", result(answered, outcome.kind === "timeout")),
-        },
-        { type: "block", seq: ++seq, message, block: { kind: "text", markdown: "" } },
-      );
+        });
+      frames.push({ type: "block", seq: ++seq, message, block: { kind: "text", markdown: "" } });
       // Two deltas rather than one, so the continuation streams like any other text.
       const cut = Math.ceil(reply.length / 2);
       for (const text of [reply.slice(0, cut), reply.slice(cut)])

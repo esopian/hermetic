@@ -391,9 +391,10 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
       );
       const runtime = str(snapshot?.session_id);
       if (!runtime) throw failure("Session resume returned no runtime identity");
-      const method = input.kind === "approval" ? "approval" : "clarify";
+      // A `vault.code` (2FA code) is answered as a single question, through the same check.
+      const methods = input.kind === "approval" ? ["approval"] : ["clarify", "vault.code"];
       const pending = records(snapshot?.open_requests).find(
-        (row) => String(row.id) === input.request_id && row.method === method,
+        (row) => String(row.id) === input.request_id && methods.includes(String(row.method)),
       );
       if (!pending) {
         if (input.kind !== "approval") return { status: "expired" };
@@ -486,12 +487,15 @@ export function createCanonicalSessions(deps: CanonicalDeps) {
           id: input.request_id,
           // Skipping a batch is an empty result (no `answers` key), which the
           // gateway reads as cancel-all; a single question skips with "".
+          // A vault code is a credential: it goes only into this frame, never a log or the transcript.
           result:
             input.kind === "approval"
               ? { choice: input.choice }
-              : batch
-                ? {}
-                : { answer: input.skip === true ? "" : input.answer },
+              : pending.method === "vault.code"
+                ? { value: input.skip === true ? "" : (input.answer ?? "").replace(/[\s-]/g, "") }
+                : batch
+                  ? {}
+                  : { answer: input.skip === true ? "" : input.answer },
         }),
       );
       if (result?.status !== "ok" && result?.status !== "expired")
