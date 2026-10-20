@@ -1,9 +1,13 @@
 /**
  * One row of the transcript (desktop `Message.tsx`): the operator's turn
- * (`.me`: the `ME` mark, "You", the words on a recessed panel), a bot turn (avatar, name, meta, then its
+ * (`.me`: "You", the words on a recessed panel), a bot turn (name, meta, then its
  * sections — one activity group per run of steps and one block per thing
  * addressed to the reader — then the failure card and the turn meter), or the
  * box speaking for itself (a system row).
+ *
+ * No avatar gutter: the conversation bar already names and draws the bot, so
+ * every row starts at the transcript's content inset and the words take the
+ * full width.
  */
 import { memo } from "react";
 import { View } from "react-native";
@@ -16,8 +20,6 @@ import { isLocal } from "../client/conversation-store.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
-import type { AvatarStatus } from "@hermetic/core/shared";
-import { Avatar } from "../ui/avatar/Avatar.tsx";
 import { Kicker } from "../ui/Kicker.tsx";
 import { Text } from "../ui/Text.tsx";
 import { ActivityGroup } from "./blocks/Activity.tsx";
@@ -25,8 +27,6 @@ import { Block } from "./blocks/Block.tsx";
 import { FailureCard } from "./blocks/Failure.tsx";
 import { PlainText } from "./PlainText.tsx";
 import { chatTime } from "./time.ts";
-
-const GUTTER = 36;
 
 function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
   const t = useTheme();
@@ -46,9 +46,9 @@ function Meter({ usage }: { usage: NonNullable<ChatMessage["usage"]> }) {
 
 /**
  * The operator's turn, laid out the desktop's way (`.ch-msg.me` in the soft
- * skin): the square `ME` mark in the avatar gutter, a "You" head row with the
- * time, and the words flush in the content column on a recessed panel with a
- * 2px left rule. No bubble and no right alignment: every turn reads from the
+ * skin), less the desktop's avatar gutter: a "You" head row with the time, and
+ * the words flush at the content inset on a recessed panel with a 2px left
+ * rule. No bubble and no right alignment: every turn reads from the
  * same left edge. A steer takes the accent on its rule and a `Steered` tag.
  * The files the operator sent go under the words, through the same `Block`
  * switch as any other turn's attachments.
@@ -69,76 +69,58 @@ function OperatorTurn({
   const steer = message.id.startsWith("local:steer:");
   const attached = message.blocks.filter((b) => b.kind === "attachment");
   return (
-    <View style={{ flexDirection: "row", gap: t.space.sm, marginTop: t.space.md }}>
-      <View
-        style={{
-          width: GUTTER,
-          height: GUTTER,
-          alignItems: "center",
-          justifyContent: "center",
-          borderWidth: t.border.control,
-          borderColor: t.c.fg,
-        }}
-      >
-        <Text mono weight={700} variant="caption" style={{ fontSize: 11 }}>
-          ME
+    <View style={{ marginTop: t.space.md }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <Text weight={800} variant="bodySmall">
+          You
         </Text>
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-          <Text weight={800} variant="bodySmall">
-            You
-          </Text>
-          {steer ? (
-            <View
-              style={{
-                borderWidth: t.border.row,
-                borderColor: t.c.line2,
-                paddingHorizontal: t.space.xs,
-              }}
-            >
-              <Kicker style={{ fontSize: 9, lineHeight: 14 }}>Steered</Kicker>
-            </View>
-          ) : null}
-          <Text variant="caption" mono tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {pending ? "sending…" : chatTime(message.at, now)}
-          </Text>
-        </View>
-        {/* Files sent alone have no words: no empty panel above their chips. */}
-        {text || attached.length === 0 ? (
+        {steer ? (
           <View
             style={{
-              marginTop: t.space.xs,
-              backgroundColor: t.c.sel,
-              borderLeftWidth: t.border.control,
-              borderLeftColor: steer ? t.c.acc : t.c.line2,
-              paddingHorizontal: t.space.md,
-              paddingVertical: t.space.sm,
-              opacity: pending ? 0.7 : 1,
+              borderWidth: t.border.row,
+              borderColor: t.c.line2,
+              paddingHorizontal: t.space.xs,
             }}
           >
-            <PlainText text={text} />
+            <Kicker style={{ fontSize: 9, lineHeight: 14 }}>Steered</Kicker>
           </View>
         ) : null}
-        {attached.length > 0 ? (
-          <View style={{ marginTop: t.space.xs, gap: t.space.xs, opacity: pending ? 0.7 : 1 }}>
-            {attached.map((block, i) => (
-              <Block key={`f${i}`} block={block} now={now} mine />
-            ))}
-          </View>
-        ) : null}
+        <Text variant="caption" mono tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
+          {pending ? "sending…" : chatTime(message.at, now)}
+        </Text>
       </View>
+      {/* Files sent alone have no words: no empty panel above their chips. */}
+      {text || attached.length === 0 ? (
+        <View
+          style={{
+            marginTop: t.space.xs,
+            backgroundColor: t.c.sel,
+            borderLeftWidth: t.border.control,
+            borderLeftColor: steer ? t.c.acc : t.c.line2,
+            paddingHorizontal: t.space.md,
+            paddingVertical: t.space.sm,
+            opacity: pending ? 0.7 : 1,
+          }}
+        >
+          <PlainText text={text} />
+        </View>
+      ) : null}
+      {attached.length > 0 ? (
+        <View style={{ marginTop: t.space.xs, gap: t.space.xs, opacity: pending ? 0.7 : 1 }}>
+          {attached.map((block, i) => (
+            <Block key={`f${i}`} block={block} now={now} mine />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 export interface TurnRowProps {
   row: TurnRowType;
-  fleetId: string;
   instance: string;
   bot: string;
   botTitle?: string | null;
-  status: AvatarStatus;
   now: number;
   streaming?: boolean;
   activity?: TurnActivity;
@@ -154,11 +136,9 @@ export interface TurnRowProps {
 
 function TurnRowImpl({
   row,
-  fleetId,
   instance,
   bot,
   botTitle,
-  status,
   now,
   streaming = false,
   activity = streaming ? "streaming" : "idle",
@@ -228,70 +208,56 @@ function TurnRowImpl({
     .join(" · ");
 
   return (
-    <View style={{ flexDirection: "row", gap: t.space.sm, marginTop: continuation ? 2 : t.space.md }}>
-      <View style={{ width: GUTTER }}>
-        {continuation ? null : (
-          <Avatar
-            fleet_id={fleetId}
-            instance={author?.instance ?? instance}
-            bot={fromBot?.name ?? author?.bot ?? bot}
-            size={GUTTER}
-            status={status}
-            activity={streaming ? activity : "idle"}
-          />
-        )}
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        {continuation ? null : (
-          <View
-            style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm, marginBottom: 2 }}
-          >
-            <Text weight={800} variant="bodySmall" numberOfLines={1} style={{ flexShrink: 1 }}>
-              {who}
-            </Text>
-            <Text variant="caption" mono tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
-              {meta}
-            </Text>
-          </View>
-        )}
-        {list.map((section, index) =>
-          section.activity ? (
-            <ActivityGroup
-              key={`a${index}`}
-              blocks={section.blocks}
-              streaming={streaming && index === live && (activity !== "idle" || waiting)}
-              activity={activity}
-              waiting={waiting}
-              turnRunning={streaming}
-            />
-          ) : (
-            <Block
-              key={`b${index}`}
-              block={section.blocks[0] as ChatMessage["blocks"][number]}
-              now={now}
-              streaming={streaming && activity === "streaming" && index === list.length - 1}
-              closed={(() => {
-                const b = section.blocks[0];
-                return (b?.kind === "approval" || b?.kind === "question") && b.request_id
-                  ? closed.get(b.request_id)
-                  : undefined;
-              })()}
-              pending={pending}
-              session={message.session || null}
-              released={released}
-              stale={!requestsLive}
-            />
-          ),
-        )}
-        {streaming && list.length === 0 ? (
-          <Text mono variant="caption" tone="acc">
-            {activity === "streaming" ? "▍" : "thinking…"}
+    <View style={{ marginTop: continuation ? 2 : t.space.md }}>
+      {continuation ? null : (
+        <View
+          style={{ flexDirection: "row", alignItems: "baseline", gap: t.space.sm, marginBottom: 2 }}
+        >
+          <Text weight={800} variant="bodySmall" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {who}
           </Text>
-        ) : null}
-        {broken ? <FailureCard failure={failure} ids={row.ids} at={message.at} /> : null}
-        {message.usage && !streaming ? <Meter usage={message.usage} /> : null}
-        {fromBot ? <Text variant="caption" tone="fg3">{`Message from ${fromBot.name} ⇄`}</Text> : null}
-      </View>
+          <Text variant="caption" mono tone={streaming ? "acc" : "fg3"} numberOfLines={1}>
+            {meta}
+          </Text>
+        </View>
+      )}
+      {list.map((section, index) =>
+        section.activity ? (
+          <ActivityGroup
+            key={`a${index}`}
+            blocks={section.blocks}
+            streaming={streaming && index === live && (activity !== "idle" || waiting)}
+            activity={activity}
+            waiting={waiting}
+            turnRunning={streaming}
+          />
+        ) : (
+          <Block
+            key={`b${index}`}
+            block={section.blocks[0] as ChatMessage["blocks"][number]}
+            now={now}
+            streaming={streaming && activity === "streaming" && index === list.length - 1}
+            closed={(() => {
+              const b = section.blocks[0];
+              return (b?.kind === "approval" || b?.kind === "question") && b.request_id
+                ? closed.get(b.request_id)
+                : undefined;
+            })()}
+            pending={pending}
+            session={message.session || null}
+            released={released}
+            stale={!requestsLive}
+          />
+        ),
+      )}
+      {streaming && list.length === 0 ? (
+        <Text mono variant="caption" tone="acc">
+          {activity === "streaming" ? "▍" : "thinking…"}
+        </Text>
+      ) : null}
+      {broken ? <FailureCard failure={failure} ids={row.ids} at={message.at} /> : null}
+      {message.usage && !streaming ? <Meter usage={message.usage} /> : null}
+      {fromBot ? <Text variant="caption" tone="fg3">{`Message from ${fromBot.name} ⇄`}</Text> : null}
     </View>
   );
 }

@@ -37,6 +37,8 @@
  * - `sampleFiles` — a canned PNG (the box's seeded `queue-depth.png`) and a
  *   short text file, written to the cache directory, for the conversation's
  *   `?attach=` link (`sample-files.ts`);
+ * - `clipboardImage` — the same PNG as the composer's paste control answers a
+ *   copied picture, for the conversation's `?paste=image` link;
  * - `drive` — the `hermetic://fixture?…` link's driver (`drive.ts`), which
  *   pairs, listens, picks the primary, sets the avatar style and theme, and
  *   names the route to open, so a screenshot run needs no tap;
@@ -60,10 +62,11 @@ import { cloudName, encodeMobileLink, RPC_PATHS } from "@hermetic/core/shared";
 import { createPhoneFiles, type PhoneFilesFactory } from "../gateway/files.ts";
 import type { FetchLike } from "../gateway/hermeticd.ts";
 import type { PickedFile } from "../client/attachments.ts";
+import type { PastedImage } from "../client/paste.ts";
 import type { DemoPrompt, FixtureControls } from "../fleet/fixture-types.ts";
 import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import { drive } from "./drive.ts";
-import { cacheWriter, type SampleWriter, writeSampleFiles } from "./sample-files.ts";
+import { cacheWriter, clipboardSample, type SampleWriter, writeSampleFiles } from "./sample-files.ts";
 
 export const FIXTURE_FLEET_ID = "fxtr0001";
 export const FIXTURE_ALIAS = "main";
@@ -408,6 +411,8 @@ export interface FixtureKit {
   demoPrompts: readonly DemoPrompt[];
   /** The canned attachments for `?attach=` (`sample-files.ts`): an image, then a text file. */
   sampleFiles(): Promise<PickedFile[]>;
+  /** The canned PNG as a paste (`sample-files.ts`), for `?paste=image`. */
+  clipboardImage(): Promise<PastedImage>;
   /** The `hermetic://fixture?…` driver (`drive.ts`). */
   drive: NonNullable<FixtureControls["drive"]>;
   /** A sentinel Expo token: the simulator has none, and the memory registry needs one. */
@@ -464,6 +469,7 @@ export function fixtureKit(
     link: fixturePairingLink(),
     demoPrompts: FIXTURE_DEMO_PROMPTS,
     sampleFiles: async () => writeSampleFiles(await cannedPng(box), opts.writeSample ?? cacheWriter),
+    clipboardImage: async () => clipboardSample(await cannedPng(box)),
     drive,
     pushToken: FIXTURE_PUSH_TOKEN,
     registry,

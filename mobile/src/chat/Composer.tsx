@@ -25,6 +25,12 @@
  *   "Uploading…" and waits; a failed file blocks Send until it is retried or
  *   removed. A box without a file service shows the button disabled, with a
  *   line saying why.
+ * - Paste: while the pasteboard holds an image and the draft can take a file,
+ *   a line above the input offers iOS's paste control (`ClipboardPasteButton`,
+ *   `UIPasteControl`); its answer goes to the tray like a picked photo
+ *   (`paste.ts`). The text field itself pastes text only, so a pasted picture
+ *   has to come this way. Checking for an image (`hasImageAsync`) reads no
+ *   contents, so it raises no paste prompt; the control's tap is the consent.
  *
  * The input grows to six lines, then scrolls. It sizes itself: a multiline
  * input on iOS grows with its content between `minHeight` and `maxHeight`.
@@ -32,19 +38,22 @@
  * there — the reported content size includes the padding, so every pass adds
  * the padding again and an empty input opens several lines tall.
  */
-import { memo, useRef } from "react";
+import * as Clipboard from "expo-clipboard";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   Pressable,
   TextInput,
   View,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { attachmentsSummary, type PendingAttachment } from "../client/attachments.ts";
+import { attachmentsSummary, type PendingAttachment, roomFor } from "../client/attachments.ts";
 import type { QueuedMessage } from "../client/conversation-store.ts";
+import { PASTE_IMAGE_OPTIONS, type PastePayload } from "../client/paste.ts";
 import { useTheme } from "../theme/theme.tsx";
 import { Button } from "../ui/Button.tsx";
 import { haptic } from "../ui/haptics.ts";
@@ -246,6 +255,8 @@ export interface ComposerProps {
   onAttach?(kind: AttachKind): void;
   onRemoveAttachment?(local_id: string): void;
   onRetryAttachment?(local_id: string): void;
+  /** The paste control's answer (`paste.ts`); without it the composer offers no paste. */
+  onPaste?(payload: PastePayload): void;
   /**
    * Whether the attach button shows: `true` (enabled), `false` (hidden), or
    * `"no-service"` (the box answered that it serves no files: disabled, with a
@@ -279,6 +290,100 @@ export function openAttachSheet(onPick: (kind: AttachKind) => void): void {
     ...ATTACH_OPTIONS.map((o) => ({ text: o.label, onPress: () => onPick(o.kind) })),
     { text: "Cancel", style: "cancel" as const },
   ]);
+}
+
+/**
+ * Whether the pasteboard holds an image, while `active`: asked on mount, when
+ * the app comes back to the foreground (another app may have copied one), and
+ * on each change this app hears of. Asking reads no contents.
+ */
+function useClipboardImage(active: boolean): boolean {
+  const [has, setHas] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setHas(false);
+      return;
+    }
+    let live = true;
+    const check = () => {
+      Clipboard.hasImageAsync().then(
+        (yes) => {
+          if (live) setHas(yes);
+        },
+        () => {
+          if (live) setHas(false);
+        },
+      );
+    };
+    check();
+    const changes = Clipboard.addClipboardListener(({ contentTypes }) => {
+      if (live) setHas(contentTypes.includes(Clipboard.ContentType.IMAGE));
+    });
+    const foreground = AppState.addEventListener("change", (state) => {
+      if (state === "active") check();
+    });
+    return () => {
+      live = false;
+      changes.remove();
+      foreground.remove();
+    };
+  }, [active]);
+  return has;
+}
+
+/**
+ * The paste line: what is on the pasteboard and the control that pastes it.
+ * iOS 16 and later draw the system paste control (no prompt); before that a
+ * plain button reads the image, and iOS asks once.
+ */
+function PasteLine({ onPaste }: { onPaste(payload: PastePayload): void }) {
+  const t = useTheme();
+  return (
+    <View
+      testID="composer-paste"
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: t.space.sm,
+        paddingLeft: t.space.xs,
+      }}
+    >
+      <Text variant="caption" tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
+        Image on the clipboard
+      </Text>
+      {Clipboard.isPasteButtonAvailable ? (
+        <Clipboard.ClipboardPasteButton
+          testID="composer-paste-button"
+          acceptedContentTypes={["image"]}
+          imageOptions={PASTE_IMAGE_OPTIONS}
+          displayMode="iconAndLabel"
+          cornerStyle="fixed"
+          backgroundColor={t.c.bg2}
+          foregroundColor={t.c.fg}
+          style={{ width: 104, height: 32 }}
+          onPress={(payload) => {
+            haptic.select();
+            onPaste(payload);
+          }}
+        />
+      ) : (
+        <Button
+          label="Paste image"
+          variant="secondary"
+          compact
+          onPress={() => {
+            void Clipboard.getImageAsync(PASTE_IMAGE_OPTIONS).then(
+              (image) => {
+                if (image) onPaste({ type: "image", ...image });
+              },
+              () => {},
+            );
+          }}
+        />
+      )}
+    </View>
+  );
 }
 
 function QueuedRow({
@@ -353,6 +458,13 @@ function ComposerImpl(props: ComposerProps) {
   const hasFiles = attachments.length > 0;
   const mode = composerMode({ enabled, sending, aborting, draft });
   const editable = enabled || sending;
+  const pasteOn =
+    !!props.onPaste &&
+    canAttach === true &&
+    editable &&
+    files.staging === 0 &&
+    roomFor(attachments) > 0;
+  const clipboardImage = useClipboardImage(pasteOn);
   const input = useRef<TextInput>(null);
   const taken = useRef<{ text: string; at: number } | null>(null);
   const take = () => {
@@ -407,6 +519,7 @@ function ComposerImpl(props: ComposerProps) {
       ) : canAttach === "no-service" ? (
         <Hint>This instance has no file service</Hint>
       ) : null}
+      {pasteOn && clipboardImage && props.onPaste ? <PasteLine onPaste={props.onPaste} /> : null}
       <AttachTray
         items={attachments}
         onRemove={(id) => props.onRemoveAttachment?.(id)}

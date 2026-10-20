@@ -3,9 +3,12 @@
  * only): one small PNG and one short text file, written into the cache
  * directory so the real attachment path reads them back with `readBytes`
  * exactly as it reads a picked file. They stand in for the pickers, which an
- * agent driving the simulator by URL cannot tap through.
+ * agent driving the simulator by URL cannot tap through. `clipboardSample`
+ * is the same PNG as the paste control would answer it, for `?paste=image`.
  */
 import type { PickedFile } from "../client/attachments.ts";
+import { dataUri } from "../client/file-urls.ts";
+import type { PastedImage } from "../client/paste.ts";
 
 /** Write `bytes` under `name` and answer the file's `file://` URI. */
 export type SampleWriter = (name: string, bytes: Uint8Array) => Promise<string>;
@@ -56,4 +59,16 @@ export async function writeSampleFiles(png: Uint8Array, write: SampleWriter): Pr
     { name: SAMPLE_IMAGE_NAME, uri: imageUri, mime: "image/png", size: png.byteLength, kind: "image" },
     { name: SAMPLE_TEXT_NAME, uri: textUri, mime: "text/plain", size: text.byteLength, kind: "file" },
   ];
+}
+
+/** A PNG's width and height from its `IHDR` chunk (zero when the bytes are too short to say). */
+function pngSize(png: Uint8Array): { width: number; height: number } {
+  if (png.byteLength < 24) return { width: 0, height: 0 };
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The canned PNG as the paste control answers a copied picture. */
+export function clipboardSample(png: Uint8Array): PastedImage {
+  return { type: "image", data: dataUri("image/png", png), size: pngSize(png) };
 }

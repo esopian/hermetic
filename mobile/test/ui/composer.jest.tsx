@@ -1,4 +1,5 @@
-import { fireEvent, screen, within } from "@testing-library/react-native";
+import { act, fireEvent, screen, within } from "@testing-library/react-native";
+import * as Clipboard from "expo-clipboard";
 import { useState } from "react";
 import { ActionSheetIOS } from "react-native";
 import {
@@ -330,5 +331,72 @@ describe("Composer: attachments", () => {
     expect(screen.getByLabelText("Send").props.accessibilityState.disabled).toBe(true);
     await fireEvent.press(screen.getByLabelText("Retry notes.pdf"));
     expect(a.onRetryAttachment).toHaveBeenCalledWith("a2");
+  });
+});
+
+describe("Composer: paste", () => {
+  const hasImage = Clipboard.hasImageAsync as jest.Mock;
+  afterEach(() => hasImage.mockReset().mockResolvedValue(false));
+  const image = {
+    type: "image" as const,
+    data: "data:image/png;base64,iVBORw0K",
+    size: { width: 2, height: 2 },
+  };
+
+  test("an image on the clipboard offers the paste control, and its answer goes to onPaste", async () => {
+    hasImage.mockResolvedValue(true);
+    const onPaste = jest.fn();
+    await renderUi(
+      <Harness {...base} {...handlers()} canAttach onAttach={jest.fn()} onPaste={onPaste} />,
+    );
+    expect(await screen.findByText("Image on the clipboard")).toBeTruthy();
+    await fireEvent(screen.getByTestId("composer-paste-button"), "press", image);
+    expect(onPaste).toHaveBeenCalledWith(image);
+  });
+
+  test("a copy heard while open shows or hides the line", async () => {
+    let listener: ((e: { contentTypes: string[] }) => void) | undefined;
+    (Clipboard.addClipboardListener as jest.Mock).mockImplementationOnce((fn) => {
+      listener = fn;
+      return { remove: jest.fn() };
+    });
+    await renderUi(
+      <Harness {...base} {...handlers()} canAttach onAttach={jest.fn()} onPaste={jest.fn()} />,
+    );
+    expect(screen.queryByTestId("composer-paste")).toBeNull();
+    await act(async () => listener?.({ contentTypes: ["image"] }));
+    expect(screen.getByTestId("composer-paste")).toBeTruthy();
+    await act(async () => listener?.({ contentTypes: ["plain-text"] }));
+    expect(screen.queryByTestId("composer-paste")).toBeNull();
+  });
+
+  test("text on the clipboard: no paste line, and pasted text lands in the draft as typed", async () => {
+    const onPaste = jest.fn();
+    const h = handlers();
+    await renderUi(<Harness {...base} {...h} canAttach onAttach={jest.fn()} onPaste={onPaste} />);
+    await act(async () => {});
+    expect(screen.queryByTestId("composer-paste")).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText("Message"), "pasted words");
+    await fireEvent.press(screen.getByLabelText("Send"));
+    expect(h.onSend).toHaveBeenCalledWith("pasted words");
+    expect(onPaste).not.toHaveBeenCalled();
+  });
+
+  test("no paste where the draft cannot take a file", async () => {
+    hasImage.mockResolvedValue(true);
+    const view = await renderUi(
+      <Harness
+        {...base}
+        {...handlers()}
+        canAttach="no-service"
+        onAttach={jest.fn()}
+        onPaste={jest.fn()}
+      />,
+    );
+    await act(async () => {});
+    expect(screen.queryByTestId("composer-paste")).toBeNull();
+    await view.rerender(<Harness {...base} {...handlers()} canAttach={false} onPaste={jest.fn()} />);
+    await act(async () => {});
+    expect(screen.queryByTestId("composer-paste")).toBeNull();
   });
 });
