@@ -8,10 +8,12 @@
  * the request. Without a way to respond from here (no provider, or a request
  * with no id) the questions and their choices are drawn disabled, with a note
  * saying where to answer; a question with no id whose answers were recorded is
- * a clarify read back from history, and reads as settled.
+ * a clarify read back from history, and reads as settled. A `vault_code`
+ * question is a 2FA code prompt and draws `VaultCodeCard` instead.
  */
 import type { ChatBlockOf } from "../../../api/index.ts";
 import { QuestionCard } from "../BotResponses.tsx";
+import { VaultCodeCard } from "./VaultCode.tsx";
 import type { ClosedRequest } from "../../chat-requests.ts";
 
 export function QuestionBlock({
@@ -23,5 +25,9 @@ export function QuestionBlock({
   now?: number;
   closed?: ClosedRequest;
 }) {
-  return <QuestionCard block={block} now={now} closed={closed} />;
+  return block.vault_code ? (
+    <VaultCodeCard block={block} now={now} closed={closed} />
+  ) : (
+    <QuestionCard block={block} now={now} closed={closed} />
+  );
 }

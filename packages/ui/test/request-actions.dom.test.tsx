@@ -769,3 +769,48 @@ describe("late choices on a clarify read back from history", () => {
     expect(document.querySelector(".bm-late")).toBeNull();
   });
 });
+
+describe("a vault.code request", () => {
+  const vault = {
+    kind: "question",
+    request_id: "srq-b19072d55aac",
+    prompt: "Enter the verification code for github.com",
+    choices: [],
+    vault_code: { site: "github.com", hint: "Open your authenticator app" },
+  };
+  const code = () => screen.getByLabelText("Verification code for github.com") as HTMLInputElement;
+  const submit = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
+
+  test("is a code card with a masked numeric field and the hint, not the raw-JSON notice", () => {
+    const { container } = draw(vault, ok);
+    expect(screen.getByText("Enter verification code")).toBeDefined();
+    expect(screen.getByText("Open your authenticator app")).toBeDefined();
+    expect(code().type).toBe("password");
+    expect(code().inputMode).toBe("numeric");
+    expect(code().autocomplete).toBe("one-time-code");
+    expect(container.textContent).not.toContain("Hermes needs your attention");
+    expect(container.textContent).not.toContain("Type your answer");
+    expect(submit().disabled).toBe(true);
+  });
+
+  test("Submit sends the trimmed code to its request, then clears it", async () => {
+    const { sent, container } = draw(vault, ok);
+    fireEvent.change(code(), { target: { value: " 246810 " } });
+    expect(submit().disabled).toBe(false);
+    await act(async () => fireEvent.click(submit()));
+    expect(sent).toEqual([{ request_id: "srq-b19072d55aac", kind: "question", answer: "246810" }]);
+    await waitFor(() => expect(screen.getByText("Code sent.")).toBeDefined());
+    expect(container.querySelector("input")).toBeNull();
+    expect(container.innerHTML).not.toContain("246810");
+  });
+
+  test("Skip answers empty and clears the card", async () => {
+    const { sent, container } = draw(vault, ok);
+    fireEvent.change(code(), { target: { value: "1234" } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Skip" })));
+    expect(sent).toEqual([{ request_id: "srq-b19072d55aac", kind: "question", skip: true }]);
+    await waitFor(() => expect(screen.getByText("Skipped. No code sent.")).toBeDefined());
+    expect(container.querySelector("input")).toBeNull();
+    expect(container.innerHTML).not.toContain("1234");
+  });
+});
