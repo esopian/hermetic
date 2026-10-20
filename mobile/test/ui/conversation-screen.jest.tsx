@@ -39,6 +39,15 @@ jest.mock("expo-file-system", () => ({
     }
   },
 }));
+/** Holds a pasted picture's cache write (`writeToCache`) until a test lets it land. */
+let mockPasteWrite: Promise<void> = Promise.resolve();
+jest.mock("../../src/client/pick-attachment.ts", () => ({
+  ...jest.requireActual("../../src/client/pick-attachment.ts"),
+  writeToCache: async (name: string) => {
+    await mockPasteWrite;
+    return { uri: `file:///cache/${name}`, size: 8 };
+  },
+}));
 
 /** The composer's latest props: its handlers, to call the way a double tap would. */
 let mockComposer: { onSend(text: string): void } | null = null;
@@ -607,6 +616,34 @@ describe("conversation: attachment links (fixture builds only)", () => {
     expect(sentAttachments).toEqual([expect.objectContaining({ ids: ["f-1", "f-2"] })]);
     expect(mockRouter.setParams).toHaveBeenCalledWith({ send: undefined });
     expect(screen.queryByTestId("attach-tray")).toBeNull();
+  });
+
+  test("?paste=image&send= waits for the pasted picture to be saved, then sends it", async () => {
+    const { files, stage } = phoneFiles();
+    const write = deferred<void>();
+    mockPasteWrite = write.promise;
+    await setup({ instance: "atlas", bot: "scribe", paste: "image", send: "see this" }, {
+      fixture: {
+        ...fixture,
+        clipboardImage: async () => ({
+          type: "image",
+          data: "data:image/png;base64,iVBORw0KGgo=",
+          size: { width: 1, height: 1 },
+        }),
+      },
+      files: () => files,
+    } as unknown as Partial<FleetContextValue>);
+    await settle();
+    // The picture is not saved yet, so nothing is sent.
+    expect(sentTexts).toEqual([]);
+    write.resolve();
+    await settle();
+    expect(stage.mock.calls.map((c) => c[0].name)).toEqual([
+      expect.stringMatching(/^pasted-\d+\.png$/),
+    ]);
+    expect(sentTexts).toEqual(["see this"]);
+    expect(sentAttachments).toEqual([expect.objectContaining({ ids: ["f-1"] })]);
+    expect(mockRouter.setParams).toHaveBeenCalledWith({ paste: undefined });
   });
 
   test("?attachSheet=1 opens the attach sheet once", async () => {
