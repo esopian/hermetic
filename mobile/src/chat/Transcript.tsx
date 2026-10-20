@@ -33,7 +33,6 @@ import { type TurnRow as TurnRowType, turnRows } from "../client/chat-turns.ts";
 import type { TurnActivity } from "../client/turn-reducer.ts";
 import type { ChatMessage } from "@hermetic/core/chat-client";
 import { useTheme } from "../theme/theme.tsx";
-import type { AvatarStatus } from "@hermetic/core/shared";
 import { haptic } from "../ui/haptics.ts";
 import { Text } from "../ui/Text.tsx";
 import { PinController } from "./follow.ts";
@@ -147,11 +146,9 @@ const ChatScroll = forwardRef<ScrollView, ScrollViewProps>(function ChatScroll(p
 
 function TranscriptImpl({
   items,
-  fleetId,
   instance,
   bot,
   botTitle,
-  status,
   now,
   activity,
   released,
@@ -162,11 +159,9 @@ function TranscriptImpl({
   pinSignal = 0,
 }: {
   items: TranscriptItem[];
-  fleetId: string;
   instance: string;
   bot: string;
   botTitle: string | null;
-  status: AvatarStatus;
   now: number;
   activity: TurnActivity;
   released: readonly string[];
@@ -274,11 +269,9 @@ function TranscriptImpl({
       ) : (
         <TurnRow
           row={item.row}
-          fleetId={fleetId}
           instance={instance}
           bot={bot}
           botTitle={botTitle}
-          status={status}
           now={now}
           streaming={item.streaming}
           activity={item.streaming ? activity : "idle"}
@@ -287,10 +280,10 @@ function TranscriptImpl({
           answerable={item.answerable}
         />
       ),
-    [t, fleetId, instance, bot, botTitle, status, now, activity, released],
+    [t, instance, bot, botTitle, now, activity, released],
   );
 
-  const extra = useMemo(() => ({ now, activity, released, status }), [now, activity, released, status]);
+  const extra = useMemo(() => ({ now, activity, released }), [now, activity, released]);
 
   return (
     <View style={{ flex: 1 }}>

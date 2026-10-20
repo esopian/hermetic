@@ -797,11 +797,9 @@ export default function Conversation() {
         ) : (
           <Transcript
             items={items}
-            fleetId={fleetId}
             instance={target.instance}
             bot={target.bot}
             botTitle={botTitle}
-            status={avatarStatus}
             now={now}
             activity={view?.activity ?? "idle"}
             released={released}

@@ -292,10 +292,8 @@ describe("a request in a turn no longer live on this phone", () => {
     renderUi(
       <TurnRow
         row={item.row}
-        fleetId="f"
         instance="atlas"
         bot="scribe"
-        status="ready"
         now={NOW}
         streaming={item.streaming}
         activity="idle"
