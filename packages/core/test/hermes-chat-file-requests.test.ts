@@ -207,6 +207,25 @@ describe("turnFileRequests", () => {
     secret.close();
   });
 
+  test("a slot whose session a compression rotated mid-turn matches on the turn's task id", async () => {
+    // Long conversations compress inside the turn: Hermes moves `agent.session_id`
+    // to a child before the tool runs, so the plugin stamps the slot with an id
+    // the turn never saw. The task id is the session key the turn started under.
+    const rotated = { kind: "secret_text" as const, session_id: "sess-compressed-child" };
+    const requests = turnFileRequests(
+      lookup([
+        [
+          slot({ request_id: "fr_foreigntask1", ...rotated, task_id: "someone-else" }),
+          slot({ request_id: "fr_rotatedtask1", ...rotated, task_id: STORED_SESSION_ID }),
+        ],
+      ]),
+      ctx,
+    );
+    requests.tool(running("request_secret", "c1", { keys: ["GITHUB_PASSWORD"], wait_s: 290 }));
+    expect((await found(requests))?.request_id).toBe("fr_rotatedtask1");
+    requests.close();
+  });
+
   test("a slot one card owns is never handed to another", async () => {
     const both = [
       slot({ request_id: "fr_first0000001", created_at: iso(T0 + 100) }),
@@ -379,7 +398,10 @@ describe("turnFileRequests", () => {
 
 /* ── through a live turn ──────────────────────────────────────────────────── */
 
-function liveClient(list: () => Promise<readonly FileRequest[]>) {
+function liveClient(
+  list: () => Promise<readonly FileRequest[]>,
+  overrides: Record<string, unknown> = {},
+) {
   const pushes: ((frame: string) => void)[] = [];
   const fetchImpl: ChatFetch = () =>
     Promise.resolve(
@@ -399,6 +421,7 @@ function liveClient(list: () => Promise<readonly FileRequest[]>) {
     const results: Record<string, unknown> = {
       "session.create": SESSION_CREATE_RESULT,
       "prompt.submit": PROMPT_SUBMIT_RESULT,
+      ...overrides,
     };
     return {
       opened: Promise.resolve(),
@@ -473,5 +496,30 @@ describe("a live turn", () => {
       ["call-1", "ok", "fr_livelookup01"],
     ]);
     expect(out.at(-1)?.type).toBe("done");
+  });
+
+  test("a resumed conversation the gateway followed to its compression tip still finds its slot", async () => {
+    // The head names the pre-compression id; the gateway runs the tip, whose
+    // key is the turn's task id, and the agent compresses again mid-turn.
+    const { client, push } = liveClient(
+      () =>
+        Promise.resolve([
+          slot({
+            request_id: "fr_tiplookup001",
+            session_id: "sess-compressed-again",
+            task_id: "sess-tip",
+          }),
+        ]),
+      { "session.resume": { session_id: SESSION_ID, session_key: "sess-tip", info: {} } },
+    );
+    const ids: (string | null | undefined)[] = [];
+    for await (const frame of client.send(BOX, "default", "need the log", { session: "sess-old" })) {
+      if (frame.type !== "block" || frame.block.kind !== "tool") continue;
+      ids.push(frame.block.request_id);
+      if (frame.block.request_id) {
+        push(eventFrame("message.complete", 2, { text: "ok", status: "complete" }));
+      }
+    }
+    expect(ids).toEqual([null, "fr_tiplookup001"]);
   });
 });

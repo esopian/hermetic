@@ -35,21 +35,22 @@ afterEach(async () => {
 const WAIT = { timeout: 6_000 };
 const TOKEN = "FIXTURE_github_token_0123456789abcdef";
 
-async function ask(prompt: string): Promise<() => Element | null> {
+async function ask(
+  prompt: string,
+  hash = "#chat/atlas/scribe",
+  name = /^Message Marshall/,
+): Promise<() => Element | null> {
   harness = await flowHarness();
   await harness.ctx.hermetic().chat.listen({ instance: "atlas", listening: true });
   await harness.ctx.chatOwner.sync();
   setFleetTarget(harness.target);
-  gotoHash("#chat/atlas/scribe");
+  gotoHash(hash);
   mountPortal();
-  const composer = await screen.findByRole(
-    "textbox",
-    { name: /^Message Marshall/ },
-    { timeout: 4_000 },
-  );
+  const composer = await screen.findByRole("textbox", { name }, { timeout: 4_000 });
   const pane = composer.closest(".ch-thread")!;
   await userEvent.type(composer, `${prompt}{Enter}`);
-  const card = () => pane.querySelector(".ch-freq");
+  // The newest card: a long transcript may already hold older request cards.
+  const card = () => Array.from(pane.querySelectorAll(".ch-freq")).at(-1) ?? null;
   await waitFor(() => expect(card()?.querySelector(".sti") !== null).toBe(true), WAIT);
   return card;
 }
@@ -125,6 +126,25 @@ test("a single-line secret submits on Enter and is stored, never shown", async (
   );
   const slot = await slotOf(id);
   expect(slot.fulfilled?.keys).toEqual(["GITHUB_TOKEN"]);
+  neverLeaked(TOKEN);
+}, 20_000);
+
+test("in a long transcript the newest secret request is a usable card", async () => {
+  // `sx-atlas-portal` is the fixture's long catalogue transcript.
+  const card = await ask(
+    "open the PR E2E_TEXT_SECRET",
+    "#chat/atlas/default?session=sx-atlas-portal",
+    /^Message /,
+  );
+  const pane = card()!.closest(".ch-thread")!;
+  expect(pane.querySelectorAll("[data-chat-message]").length).toBeGreaterThan(5);
+  expect(card()!.textContent).toContain("GITHUB_TOKEN required");
+  const id = requestId();
+  const el = field(card()!);
+  enter(el, TOKEN);
+  fireEvent.keyDown(el, { key: "Enter" });
+  await waitFor(() => expect(card()?.textContent ?? "").toContain("secret delivered"), WAIT);
+  expect((await slotOf(id)).fulfilled?.keys).toEqual(["GITHUB_TOKEN"]);
   neverLeaked(TOKEN);
 }, 20_000);
 

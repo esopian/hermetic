@@ -46,6 +46,13 @@ describe("opening a slot", () => {
     expect(list.requests).toHaveLength(1);
   });
 
+  test("the slot keeps the session and the turn's task id the plugin sent", async () => {
+    const { socket, fetch } = await filesBox();
+    const slot = await openSlot(socket, { session_id: "sess-child", task_id: "sess-turn" });
+    const res = await fetch(`/files/requests/${slot.request_id}`);
+    expect(await res.json()).toMatchObject({ session_id: "sess-child", task_id: "sess-turn" });
+  });
+
   test("max_bytes is clamped to the class cap", async () => {
     const { socket, fetch } = await filesBox();
     const slot = await openSlot(socket, { sensitivity: "secret", max_bytes: 10 * 1024 * 1024 });

@@ -187,7 +187,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
     bot: string,
     stored: string,
     signal: AbortSignal | undefined,
-  ): Promise<{ runtime: string; info: Record<string, unknown> | null; seed: ChatBlock | null }> {
+  ): Promise<{ runtime: string; info: Record<string, unknown> | null; seed: ChatBlock | null; tip: string | null }> {
     const result = rec(
       await rpc.request(
         "session.resume",
@@ -208,7 +208,13 @@ export function createChatTurn(deps: ChatTurnDeps) {
         CHAT_ERROR_CODES.PROTOCOL,
         `${box.instance}: session.resume named no runtime session`,
       );
-    return { runtime, info: rec(result?.info), seed: todoSeedBlock(result?.todo_state) };
+    // `session_key` is the compression tip the gateway followed `stored` to.
+    return {
+      runtime,
+      info: rec(result?.info),
+      seed: todoSeedBlock(result?.todo_state),
+      tip: str(result?.session_key),
+    };
   }
 
   async function* turn(
@@ -306,10 +312,11 @@ export function createChatTurn(deps: ChatTurnDeps) {
       let stored = opts.session ?? null;
       let info: Record<string, unknown> | null;
       let seed: ChatBlock | null = null;
+      let tip: string | null = null;
       if (opts.session) {
         // On a held socket as well as a fresh one: this is the re-attach, and
         // its `info` is what `contextUsageBlock` reads below.
-        ({ runtime: session, info, seed } = await resume(rpc, box, bot, opts.session, opts.signal));
+        ({ runtime: session, info, seed, tip } = await resume(rpc, box, bot, opts.session, opts.signal));
         lease.keep(opts.session, session);
         rpc.tap?.conn("session.resume", { runtime: session, stored: opts.session, info }, "in");
       } else {
@@ -447,7 +454,7 @@ export function createChatTurn(deps: ChatTurnDeps) {
       yield status(message, submitState(str(submitted?.status)));
       requests = turnFileRequests(deps.fileRequests, {
         box,
-        sessions: [session, stored],
+        sessions: [session, stored, tip],
         signal: opts.signal,
       });
       for await (const frame of stream(

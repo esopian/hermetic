@@ -15,7 +15,7 @@
  *   already sent, so the running card cannot carry it.
  *
  * The third is a bounded, abortable poll per running call, matched on kind,
- * session, state (`open`/`receiving`) and time, and never handing one slot to
+ * session (or the turn's task id, which a compression does not move), state (`open`/`receiving`) and time, and never handing one slot to
  * two cards — in this turn or an earlier one on the same session. Waiting
  * calls take slots oldest-first in the order their `tool.start`s arrived, so
  * two parallel `request_secret` calls pair with their slots in call order,
@@ -232,7 +232,8 @@ export function turnFileRequests(
     let best: { id: string; at: number } | null = null;
     for (const r of requests) {
       if (r.kind !== kind || !WAITING_STATES.has(r.state) || isClaimed(r.request_id)) continue;
-      if (!r.session_id || !sessions.has(r.session_id)) continue;
+      // A compression mid-turn rotates the slot's `session_id`; its `task_id` stays.
+      if (!sessions.has(r.session_id ?? "") && !sessions.has(r.task_id ?? "")) continue;
       const at = Date.parse(r.created_at);
       if (!Number.isFinite(at) || at < since) continue;
       if (!best || at < best.at) best = { id: r.request_id, at };

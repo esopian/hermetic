@@ -143,5 +143,8 @@ describe("request card logic", () => {
       label: expect.stringMatching(/ · session not recorded$/),
     });
     expect(requestOrigin(at("sess_other"), null).own).toBe(false);
+    // A compression rotated the slot's session mid-turn; the turn's task id still names this one.
+    expect(requestOrigin({ ...at("sess_child"), task_id: "sess_here" }, "sess_here").own).toBe(true);
+    expect(requestOrigin({ ...at("sess_child"), task_id: "sess_else" }, "sess_here").own).toBe(false);
   });
 });
