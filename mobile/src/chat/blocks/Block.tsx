@@ -17,6 +17,7 @@ import { ApprovalCard } from "./Approval.tsx";
 import { DmLine } from "./DmLine.tsx";
 import { FileRequestBlock } from "./FileRequest.tsx";
 import { QuestionCard } from "./Question.tsx";
+import { VaultCodeCard } from "./VaultCode.tsx";
 import { ShareAttachment, ShareToolBlock } from "./ShareCard.tsx";
 import {
   ActivityNotice,
@@ -108,7 +109,18 @@ function BlockImpl({
         />
       ) : null;
     case "question":
-      return block.kind === "question" ? (
+      if (block.kind !== "question") return null;
+      // A 2FA code prompt (`vault.code`) is a masked code card, not the clarify form.
+      return block.vault_code ? (
+        <VaultCodeCard
+          block={block}
+          now={now}
+          closed={closed}
+          session={session}
+          released={!!block.request_id && released.includes(block.request_id)}
+          stale={stale}
+        />
+      ) : (
         <QuestionCard
           block={block}
           now={now}
@@ -117,7 +129,7 @@ function BlockImpl({
           released={!!block.request_id && released.includes(block.request_id)}
           stale={stale}
         />
-      ) : null;
+      );
     case "sources":
       return block.kind === "sources" ? <SourcesBlock block={block} /> : null;
     case "hermetic":
