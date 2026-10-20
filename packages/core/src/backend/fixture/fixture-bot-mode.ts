@@ -222,7 +222,8 @@ export function withFixtureBotMode(
           // how a client feature-detects gateway-owned compare-and-swap.
           ui_meta_revisions: {},
         });
-        return { ok: true, name };
+        // Upstream's answer: whether the default `.env` (the provider key) was copied.
+        return { ok: true, name, mirrored: { env: p.mirror_credentials !== false } };
       case "profiles.configure": {
         const b = bots.get(name);
         if (!b) throw new HermeticError("NOT_FOUND", "Profile not found");

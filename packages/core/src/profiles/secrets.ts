@@ -33,7 +33,6 @@ import {
 } from "../schema/index.ts";
 import type {
   Agent,
-  AgentStatus,
   FleetItem,
   FleetSettings,
   Provider,
@@ -61,6 +60,7 @@ import { NO_DEVICES_SCOPE_NOTE } from "../fleet/preflight.ts";
 import { commitSettings, expectedVersionOf, readSettings, settingsOf } from "./settings.ts";
 import { profilesIn } from "./profile-migrate.ts";
 import { profileOwningSlug } from "./provider-profiles.ts";
+import { REKEYABLE_STATUSES, pokeSecretsSync } from "./key-push.ts";
 import { credentialSlotOf } from "./profile-binding.ts";
 
 /**
@@ -101,13 +101,21 @@ export const agentProviderKeyPath = (
  * What `secrets.push` reports back. `note` is the one thing a push can have to
  * say that is neither a failure nor part of the path: a stored Tailscale OAuth
  * client that mints but cannot list devices. `rekeyed` is the agents a shared
- * push re-copied into, so a head can say which boxes take the new key on their
- * next recreate. Core does not print either (rule 1); the head does.
+ * push re-copied into; each is then poked, so the box rewrites its `.env` at
+ * once (`pushed`) or at its next sync (`unreachable`). Core does not print
+ * any of it (rule 1); the head does.
  */
 export interface SecretsPushResult {
   path: string;
   note?: string;
   rekeyed?: string[];
+  /**
+   * Per agent whose slot this push wrote: the boxes that rewrote their `.env`
+   * now (`POST /secrets/sync`), and the ones that did not answer and will at
+   * their next heartbeat or boot (§8.1). Absent for a fleet-only slot.
+   */
+  pushed?: string[];
+  unreachable?: string[];
 }
 
 /**
@@ -183,29 +191,6 @@ export interface SecretsApiSurface {
   secretsList: (input?: SecretsListInput) => Promise<SecretsListResult>;
   secretsDelete: (input: SecretsDeleteInput) => Promise<SecretsDeleteResult>;
 }
-
-/**
- * The statuses in which copying a key into an agent's own slot means something.
- *
- * `destroyed` and `destroying` are excluded because `destroy` sweeps
- * `/hermes/<fleet_id>/<name>/` (§6.6): a rekey that included them would *re-create* the
- * slot it had just deleted, leaving a live provider key in an account for a box
- * that no longer exists — the exact leak the sweep is there to prevent. Every
- * other status is a box that is running, will run again, or is being fixed, and
- * each of those reads its slot on its next boot (§8.1).
- *
- * `lifecycle.ts` makes the same distinction when it asks who still owns a
- * volume; this is that rule for slots.
- */
-const REKEYABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>([
-  "creating",
-  "bootstrapping",
-  "ready",
-  "degraded",
-  "stopping",
-  "stopped",
-  "error",
-]);
 
 /** Providers whose settings entry names this slug — the §8.3 fan-out `ls` prints. */
 function usedBy(settings: FleetSettings, slug: string): Provider[] {
@@ -522,7 +507,7 @@ export function createSecrets(deps: SecretsDeps): SecretsApiSurface {
       );
       rekeyed.push(agent.name);
     }
-    return { path, rekeyed };
+    return { path, rekeyed, ...(await pokeSecretsSync(backend.rpc, rekeyed)) };
   }
 
   async function secretsPush(input: SecretsPushInput): Promise<SecretsPushResult> {
@@ -594,7 +579,8 @@ export function createSecrets(deps: SecretsDeps): SecretsApiSurface {
     await backend.secrets.put(path, value);
     // The value is never echoed, logged, or written to disk (§8.3).
     await deps.ctx.appendEvent(agent.name, "secrets.push", `pushed a value to ${path}`);
-    return { path };
+    // Both agent slots feed the managed `.env` block, so either push syncs it.
+    return { path, ...(await pokeSecretsSync(backend.rpc, [agent.name])) };
   }
 
   async function secretsVerify(input: SecretsVerifyInput): Promise<SecretsVerifyReport> {

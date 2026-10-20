@@ -109,7 +109,6 @@ import {
   HERMETIC_RENDERED_MARKER,
   PROVIDER_EXTRAS,
   SECRETS_DEPENDENTS,
-  SECRETS_ENV_PATH,
   SECRETS_UNIT,
 } from "../packages/agentd/src/apply/index.ts";
 import { ownershipOf } from "../packages/agentd/src/apply/accounts.ts";
@@ -121,6 +120,15 @@ import { MemoryBox, blob } from "../packages/agentd/test/memory-box.ts";
 import { ensureMemoryService } from "../packages/agentd/src/apply/memory-service.ts";
 import { collector } from "../packages/agentd/src/events.ts";
 import { SECRET_SLOTS, isKnownSlot } from "../packages/agentd/src/main.ts";
+import { parseArgv } from "../packages/agentd/src/cli.ts";
+import { makeRpcHandler } from "../packages/agentd/src/rpc.ts";
+import { managedBlockOf, spliceManagedBlock } from "../packages/agentd/src/apply/secrets.ts";
+import { MEMBER, OPERATOR_IP } from "../packages/agentd/test/files-fixture.ts";
+import { HermeticdRpc } from "../packages/core/src/aws/rpc.ts";
+import { seedFixtureFleet } from "../packages/core/src/backend/memory.ts";
+import { MANAGED_ENV_BEGIN, MANAGED_ENV_END } from "../packages/core/src/shared/hermes.ts";
+import { RPC_PATHS } from "../packages/core/src/shared/rpc.ts";
+import { SecretsSyncResult } from "../packages/core/src/schema/rpc.ts";
 import { releaseStages, stageEnv } from "../packages/agentd/src/stages.ts";
 import type { StagesDeps } from "../packages/agentd/src/stages.ts";
 
@@ -686,6 +694,22 @@ describe("seam: the provider-key slot core names is the one hermeticd reads", ()
   });
 
   /**
+   * The rendered units no longer load `/run/hermetic/secrets.env`, so the key
+   * reaches Hermes only through the managed `.env` block. Every document asks
+   * for that — the legacy slot included — and this checkout's hermeticd claims
+   * it, so an older box refuses rather than starting Hermes keyless.
+   */
+  test("every document asks for managed-env, and hermeticd advertises it", () => {
+    for (const doc of [render(providerKeySlot(PROFILE_A, 2)), legacy]) {
+      expect([...(doc.manifest.requires ?? [])]).toContain("managed-env");
+      expect(
+        doc.files.some((f) => f.content.includes("EnvironmentFile=/run/hermetic/secrets.env")),
+      ).toBe(false);
+    }
+    expect(HERMETICD_CAPABILITIES.has("managed-env")).toBe(true);
+  });
+
+  /**
    * Absent means `provider-key`, on both ends. Every manifest written before
    * profiles says nothing, and every box that has not been re-applied since
    * still holds one — so "says nothing" has to mean the old slot rather than no
@@ -852,8 +876,8 @@ describe("seam: the memory provider core names is the one hermeticd configures",
   /**
    * A manifest rendered under f5ad900 named a hosted provider and a key slot,
    * and may still sit on a box's root volume when the new hermeticd boots. The
-   * box reads it as no provider — the boot oneshot keeps materialising
-   * `secrets.env`, and the next converge replaces the bundle — rather than
+   * box reads it as no provider — the boot oneshot keeps writing the managed
+   * `.env` block, and the next converge replaces the bundle — rather than
    * refusing a document whose only unknown is a name it no longer serves. A
    * known provider with a wrong pin or key variable is still refused.
    */
@@ -922,17 +946,21 @@ describe("seam: the memory provider core names is the one hermeticd configures",
   });
 
   /**
-   * `hermetic-memory.service` reads its LLM credential from
-   * `/run/hermetic/memory-llm.env`, and `hermeticd` rewrites that file on boot
-   * only when the secrets oneshot's `--out` is exactly its `SECRETS_ENV_PATH`.
-   * If the two drift, the unit's `EnvironmentFile=` is missing after a reboot.
+   * The secrets oneshot is the boot sync: it writes the managed block into
+   * every Hermes `.env` and recreates `/run/hermetic/memory-llm.env`, which
+   * `hermetic-memory.service` names in an unconditional `EnvironmentFile=`.
+   * Both happen only for the bare `secrets materialise` verb, so the unit must
+   * pass hermeticd's own argv parser exactly that, with no `--out`/`--mode`.
    */
-  test("the secrets unit's --out is the path hermeticd rewrites memory-llm.env on", () => {
+  test("the secrets unit runs hermeticd's bare `secrets materialise`", () => {
     const read = parseManifest(overTheWire(render({ provider: "hindsight" }).manifest));
     const unit = read.files.find((f) => f.path === "/etc/systemd/system/hermetic-secrets.service");
     expect(unit).toBeDefined();
-    const out = /^ExecStart=.*\ssecrets materialise\s.*--out\s+(\S+)/m.exec(unit!.content)?.[1];
-    expect(out).toBe(SECRETS_ENV_PATH);
+    const exec = /^ExecStart=(\S+)\s+(.*)$/m.exec(unit!.content);
+    expect(exec?.[1]).toBe("/usr/local/bin/hermeticd");
+    const argv = parseArgv(exec![2]!.split(/\s+/));
+    expect(argv).toEqual({ command: "secrets", sub: "materialise", flags: {}, rest: [] });
+    expect(unit!.content).toInclude("RequiresMountsFor=/data\n");
   });
 
   /**
@@ -1646,5 +1674,49 @@ describe("seam: the hermetic-files plugin the config enables is the one hermetic
     } as unknown as RenderInput);
     const managed = rendered.files.find((f) => f.path === "/etc/hermes/config.yaml");
     expect(managed?.content).toContain(`plugins:\n  enabled:\n    - "${HERMES_FILES_PLUGIN}"\n`);
+  });
+});
+
+/**
+ * §8.1's live key push, both halves: the fence core names is the one hermeticd
+ * writes and reads back, and `POST /secrets/sync` answers in the shape core's
+ * client parses.
+ */
+describe("the managed .env block and its sync route", () => {
+  test("hermeticd fences the block with core's constants and reads its own fence back", () => {
+    const outside = "# the agent's own line\nMY_TOKEN=abc\n";
+    const spliced = spliceManagedBlock(outside, ["AI_GATEWAY_API_KEY=FIXTURE"]);
+    const lines = spliced.split("\n");
+    expect(lines).toContain(MANAGED_ENV_BEGIN);
+    expect(lines).toContain(MANAGED_ENV_END);
+    expect(lines.indexOf(MANAGED_ENV_BEGIN)).toBeLessThan(lines.indexOf(MANAGED_ENV_END));
+    expect(managedBlockOf(spliced)).toEqual(["AI_GATEWAY_API_KEY=FIXTURE"]);
+    expect(spliced).toInclude("MY_TOKEN=abc");
+  });
+
+  test("POST /secrets/sync is served at the path core calls, and parses as SecretsSyncResult", async () => {
+    let calls = 0;
+    const handler = makeRpcHandler({
+      host: new FakeHost(),
+      name: "atlas",
+      hermeticdVersion: HERMETIC_VERSION,
+      configHash: async () => null,
+      whois: async (ip) => (ip === OPERATOR_IP ? MEMBER : null),
+      secretsSync: async () => {
+        calls += 1;
+        return { changed: true, bots: ["scout"] };
+      },
+    });
+    const seen: string[] = [];
+    const rpc = new HermeticdRpc(seedFixtureFleet(new MemoryBackend()).store.agents, {
+      fetch: async (url, init) => {
+        seen.push(`${init?.method} ${new URL(String(url)).pathname}`);
+        return await handler(new Request(String(url), init), OPERATOR_IP);
+      },
+    });
+    const result = await rpc.secretsSync("atlas");
+    expect(seen).toEqual([`POST ${RPC_PATHS.secretsSync}`]);
+    expect(calls).toBe(1);
+    expect(SecretsSyncResult.parse(result)).toEqual({ changed: true, bots: ["scout"] });
   });
 });

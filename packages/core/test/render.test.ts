@@ -1140,7 +1140,9 @@ describe("the gateway unit is upstream's", () => {
     // A drop-in is not the unit's *own* file, so apply's "restart only what
     // changed" rule would never see it without this.
     expect(dropin.restart_units).toEqual(["hermes-gateway.service"]);
-    expect(dropin.content).toContain("EnvironmentFile=/run/hermetic/secrets.env");
+    // The provider key is in `$HERMES_HOME/.env` now, never in the unit (§8.1).
+    expect(dropin.content).not.toContain("/run/hermetic/secrets.env");
+    expect(dropin.content).toContain("Requires=hermetic-secrets.service");
     expect(dropin.content).toContain("SupplementaryGroups=docker");
     expect(dropin.content).toContain("Environment=DEBIAN_FRONTEND=noninteractive");
     expect(dropin.content).toContain("LimitNOFILE=4096");
@@ -1252,12 +1254,14 @@ describe("provider configuration", () => {
   test("openrouter and anthropic are hermes's own providers, keyed from the environment", () => {
     const openrouter = managed("openrouter");
     expect(openrouter).toContain('provider: "openrouter"');
-    expect(openrouter).toContain("OPENROUTER_API_KEY comes from /run/hermetic/secrets.env");
+    expect(openrouter).toContain(
+      "OPENROUTER_API_KEY comes from the managed block of $HERMES_HOME/.env",
+    );
     expect(openrouter).not.toContain("key_env");
 
     const anthropic = managed("anthropic");
     expect(anthropic).toContain('provider: "anthropic"');
-    expect(anthropic).toContain("ANTHROPIC_API_KEY comes from /run/hermetic/secrets.env");
+    expect(anthropic).toContain("ANTHROPIC_API_KEY comes from the managed block of $HERMES_HOME/.env");
     expect(anthropic).not.toContain("base_url");
   });
 
@@ -1508,7 +1512,7 @@ describe("unit ordering", () => {
       secrets_mode: "none",
     });
     const hermes = keyed.manifest.files.find((f) => f.path.endsWith("hermes-dashboard.service"))!;
-    expect(hermes.content).toContain("EnvironmentFile=/run/hermetic/secrets.env");
+    expect(hermes.content).not.toContain("/run/hermetic/secrets.env");
     expect(hermes.content).toContain("Requires=hermetic-secrets.service");
 
     const unit = keyed.manifest.files.find((f) => f.path.endsWith("hermetic-secrets.service"))!;
@@ -1533,9 +1537,10 @@ describe("unit ordering", () => {
 
   /**
    * The ordering used to be conditional on the agent having secrets of its own.
-   * It is not any more: the fleet dashboard login is delivered through the same
-   * tmpfs file (§8.3), so the bedrock/`none` agent — the one with nothing of its
-   * own to materialise — needs the unit exactly as much as the rest.
+   * It is not any more: hermeticd writes the managed `.env` block on every
+   * agent, empty if need be (§8.1), so the bedrock/`none` agent — the one with
+   * nothing of its own to materialise — needs the unit exactly as much as the
+   * rest.
    */
   test("even an agent with no secrets of its own orders after the secrets unit", () => {
     const plain = render({
@@ -1546,11 +1551,11 @@ describe("unit ordering", () => {
     const hermes = plain.manifest.files.find((f) => f.path.endsWith("hermes-dashboard.service"))!;
     expect(hermes.content).toContain("After=hermetic-secrets.service");
     expect(hermes.content).toContain("Requires=hermetic-secrets.service");
-    expect(hermes.content).toContain("EnvironmentFile=/run/hermetic/secrets.env");
+    expect(hermes.content).not.toContain("/run/hermetic/secrets.env");
     expect(plain.manifest.units).toContain("hermetic-secrets.service");
 
     // Nothing of its own, though: an agent with no slots names none. The unit
-    // is still rendered and still required, because hermeticd writes the file
+    // is still rendered and still required, because hermeticd writes the block
     // either way and `hermes-dashboard.service` must not have two shapes.
     const unit = plain.manifest.files.find((f) => f.path.endsWith("hermetic-secrets.service"))!;
     expect(unit.content).not.toContain("provider-key");
@@ -1581,14 +1586,13 @@ describe("the tailnet", () => {
    * Hermes 0.21's auth gate — with no auth provider registered it refuses to
    * start — so the way to keep the dashboard open on the tailnet is to leave
    * Hermes in local mode and let the loopback proxy rewrite `Host`/`Origin`
-   * for it. The env file stays required because a provider key still arrives
-   * through it (§6.4, §8.1).
+   * for it. The provider key is in `$HERMES_HOME/.env`, not the unit (§8.1).
    */
   test("no dashboard public URL or credentials are baked into the unit", () => {
     const out = render({ size: "medium", provider: "bedrock", secrets_mode: "none" });
     const hermes = out.manifest.files.find((f) => f.path.endsWith("hermes-dashboard.service"))!;
     expect(hermes.content).not.toContain("HERMES_DASHBOARD");
-    expect(hermes.content).toContain("EnvironmentFile=/run/hermetic/secrets.env");
+    expect(hermes.content).not.toContain("/run/hermetic/secrets.env");
   });
 
   /**

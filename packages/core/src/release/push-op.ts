@@ -18,9 +18,11 @@ import { randomUUID } from "node:crypto";
 import {
   ArtifactsPushInput as ArtifactsPushInputSchema,
   autoUpdateHermeticd,
+  FLEET_KEY,
 } from "../schema/index.ts";
 import type { ArtifactsPushInput, FleetItem, OpEvent } from "../schema/index.ts";
 import { checkAbort } from "../abort.ts";
+import { ARTIFACTS_VERSION } from "../version.ts";
 import { evt } from "../events.ts";
 import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
 import { pushAndPublish } from "../fleet/init-release.ts";
@@ -76,7 +78,7 @@ export function createArtifactsPush(deps: ArtifactsPushDeps) {
     checkAbort(opts.signal, "artifacts");
     const owner = `${await ctx.actor()}#${randomUUID()}`;
     const now = () => backend.clock.now();
-    const { pushed, locked, before } = await withFleetLock(
+    const { pushed, locked, before, unrecorded } = await withFleetLock(
       backend.store.fleet,
       { fleet, owner, ttlMs: LOCK_TTL_MS, now },
       async (locked: FleetItem) => {
@@ -89,7 +91,17 @@ export function createArtifactsPush(deps: ArtifactsPushDeps) {
          * and after a repair every box is owed the release.
          */
         const before = await readFleetManifest(backend.artifacts).catch(() => null);
-        return { pushed: await pushAndPublish(ctx, parsed, locked, stack), locked, before };
+        const pushed = await pushAndPublish(ctx, parsed, locked, stack);
+        // An explicit binary or another version is not this build's bundle, so
+        // it says nothing about `ARTIFACTS_VERSION` (§6.6).
+        if (parsed.path !== undefined || parsed.bytes !== undefined || parsed.version !== undefined) {
+          return { pushed, locked, before, unrecorded: false };
+        }
+        const written = await backend.store.fleet.updateFleet(
+          { artifacts_version: ARTIFACTS_VERSION },
+          { now: now(), owner },
+        );
+        return { pushed, locked, before, unrecorded: written === null };
       },
     );
     yield evt(
@@ -106,6 +118,16 @@ export function createArtifactsPush(deps: ArtifactsPushDeps) {
     }
     if (pushed.browser_warning !== undefined) {
       yield evt("artifacts", PUSH[1], pushed.browser_warning, nowIso(), "warn");
+    }
+    // The release is up either way; only the skew band's record of it is missing.
+    if (unrecorded) {
+      yield evt(
+        "artifacts",
+        PUSH[1],
+        `the release is published, but ${FLEET_KEY} could not record artifacts v${ARTIFACTS_VERSION}; run \`hermetic artifacts push\` again to clear the update notice`,
+        nowIso(),
+        "warn",
+      );
     }
 
     yield* followRelease(

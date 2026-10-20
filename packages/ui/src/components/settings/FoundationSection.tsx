@@ -277,6 +277,13 @@ export function FoundationPanel({
             v={`${foundation.fleet.hermeticd_version} → ${foundation.available.hermeticd_version}`}
             mono
           />
+          {foundation.available.artifacts_version === undefined ? null : (
+            <Row
+              k="artifacts"
+              v={`v${foundation.fleet.artifacts_version ?? 0} → v${foundation.available.artifacts_version}`}
+              mono
+            />
+          )}
           {/*
             The image the fleet was built on, off `_fleet`. One value, not an
             arrow: there is nothing this build "would apply" to compare it with.

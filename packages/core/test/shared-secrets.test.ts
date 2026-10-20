@@ -792,10 +792,21 @@ describe("secrets push --rekey · who reads a slug", () => {
       rekey: "all",
     });
     expect(result.rekeyed).toEqual(["kestrel"]);
+    // Re-keyed boxes are poked, so the key is live now rather than at a recreate.
+    expect(result.pushed).toEqual(["kestrel"]);
+    expect(result.unreachable).toEqual([]);
     expect(backend.params.get(kestrelSlot)).toBe(NEW_KEY);
     // The other anthropic agent reads the other profile's slot, which this
     // rotation is not about.
     expect(backend.params.get(kiteSlot)).toBe(ALT_KEY);
+  });
+
+  test("an agent's own --provider-key push pokes its box, and a silent one is reported", async () => {
+    const { hermetic } = await withSecondAnthropicProfile();
+    const live = await hermetic.secrets.push({ name: "kestrel", provider_key: true, value: NEW_KEY });
+    expect(live).toMatchObject({ pushed: ["kestrel"], unreachable: [] });
+    const silent = await hermetic.secrets.push({ name: "ibis", provider_key: true, value: NEW_KEY });
+    expect(silent).toMatchObject({ pushed: [], unreachable: ["ibis"] });
   });
 
   test("rotating the second profile's slug reaches its agent and not the first's", async () => {

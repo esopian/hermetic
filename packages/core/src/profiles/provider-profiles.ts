@@ -98,6 +98,7 @@ import { resolveProfileIn } from "./profile-migrate.ts";
 import { mintProfileId } from "../fleet/fleet-id.ts";
 import { listModels } from "./model-catalog.ts";
 import type { ModelCatalogDeps } from "./model-catalog.ts";
+import { copyProfileKey, pokeSecretsSync } from "./key-push.ts";
 
 /* ── what a head is told about a profile ───────────────────────────────────── */
 
@@ -156,6 +157,13 @@ export interface ProvidersWriteResult {
   profile: ProfileView;
   settings: FleetSettings;
   persisted: boolean;
+  /**
+   * A key rotation only: the bound agents whose box rewrote its `.env` now,
+   * and the ones that did not answer and take the key at their next sync
+   * (§8.1, `key-push.ts`).
+   */
+  pushed?: string[];
+  unreachable?: string[];
 }
 
 export interface ProvidersDeleteResult {
@@ -719,16 +727,20 @@ export function createProviderProfiles(deps: ProviderProfilesDeps): ProviderProf
 
   async function providersUpdate(input: ProvidersUpdateInput): Promise<ProvidersWriteResult> {
     const parsed = ProvidersUpdateInputSchema.parse(input);
-    return withProfileLock("providers.update", "hermetic providers update", (held) =>
-      updateLocked(parsed, held),
+    const { live, ...result } = await withProfileLock(
+      "providers.update",
+      "hermetic providers update",
+      (held) => updateLocked(parsed, held),
     );
+    // After the lock: a poke waits on boxes, and the lock is for the writes.
+    return live === null ? result : { ...result, ...(await pokeSecretsSync(backend.rpc, live)) };
   }
 
   /** The rotation itself, with the fleet lock already held; see `createLocked`. */
   async function updateLocked(
     parsed: ProvidersUpdateInput,
     { owner, lock, fleet, settings, persisted }: Held,
-  ): Promise<ProvidersWriteResult> {
+  ): Promise<ProvidersWriteResult & { live: string[] | null }> {
     checkExpected(parsed, settings, persisted);
     const current = resolveProfileIn(settings, parsed.profile);
 
@@ -781,16 +793,18 @@ export function createProviderProfiles(deps: ProviderProfilesDeps): ProviderProf
     const now = deps.ctx.nowIso();
     const who = await deps.ctx.actor();
     /**
-     * Whether anything *on the profile* moves. `--default` alone does not: the
-     * fleet default is `settings.default_profile`, a pointer the fleet holds,
-     * and bumping the revision for it would mark every agent pinned to this
-     * profile `update_available` for a change that reaches none of them.
+     * Whether anything *on the profile* moves, and whether that is something
+     * to stage. `--default` alone is neither: the fleet default is
+     * `settings.default_profile`, a pointer the fleet holds, and bumping the
+     * revision for it would mark every agent pinned to this profile
+     * `update_available` for a change that reaches none of them. A key-only
+     * edit moves the record but not the revision: the key is pushed live into
+     * every bound agent's slots below, so there is nothing left to stage
+     * (§8.3).
      */
-    const touchesProfile =
-      parsed.name !== undefined ||
-      parsed.model !== undefined ||
-      parsed.enabled !== undefined ||
-      parsed.api_key !== undefined;
+    const staged =
+      parsed.name !== undefined || parsed.model !== undefined || parsed.enabled !== undefined;
+    const touchesProfile = staged || parsed.api_key !== undefined;
     const profile: ProviderProfile = touchesProfile
       ? {
           ...current,
@@ -799,9 +813,9 @@ export function createProviderProfiles(deps: ProviderProfilesDeps): ProviderProf
           // read, so refreshing a catalog cannot move it (§8.3).
           ...(parsed.model === undefined ? {} : { model: parsed.model }),
           ...(parsed.enabled === undefined ? {} : { enabled: parsed.enabled }),
-          // Every change bumps it, the key rotation included: an agent pinned to
-          // revision N is stale the moment anything about the profile moves.
-          revision: current.revision + 1,
+          // Every staged change bumps it: an agent pinned to revision N is stale
+          // the moment the profile's configuration moves. The key does not.
+          revision: staged ? current.revision + 1 : current.revision,
           updated_at: now,
           updated_by: who,
         }
@@ -912,8 +926,18 @@ export function createProviderProfiles(deps: ProviderProfilesDeps): ProviderProf
         );
       }
     }
+    // The key is live, not staged (§8.3): into every bound agent's slots now.
+    const live =
+      slug !== null && parsed.api_key !== undefined
+        ? await copyProfileKey(deps.ctx, profile.id, parsed.api_key)
+        : null;
     const agents = (await deps.ctx.scanAgents()).agents;
-    return { profile: await viewOf(next, fleet, agents, profile), settings: next, persisted: true };
+    return {
+      profile: await viewOf(next, fleet, agents, profile),
+      settings: next,
+      persisted: true,
+      live,
+    };
   }
 
   async function providersDelete(input: ProvidersDeleteInput): Promise<ProvidersDeleteResult> {

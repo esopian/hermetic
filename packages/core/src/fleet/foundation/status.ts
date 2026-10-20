@@ -19,6 +19,7 @@ import { HermeticError } from "../../errors.ts";
 import { computeSkew, configVerdict, isConverging } from "../skew.ts";
 import type { FoundationCtx } from "./shared.ts";
 import { BUILD_VERSIONS } from "../../build-versions.ts";
+import { ARTIFACTS_VERSION } from "../../version.ts";
 
 /**
  * Where the advisory Hermes check looks (§6.6). Unauthenticated, and therefore
@@ -230,11 +231,13 @@ export function createStatus(ctx: FoundationCtx) {
       foundation_version: foundationVersion,
       template_sha256: templateSha256(),
       hermeticd_version: hermeticdVersion,
+      artifacts_version: ARTIFACTS_VERSION,
     };
     const current = {
       foundation_version: versionOf(fleet),
       template_sha256: fleet.foundation_template_sha256 ?? null,
       hermeticd_version: fleet.min_hermetic_version,
+      artifacts_version: fleet.artifacts_version ?? 0,
       ubuntu_release: fleet.ubuntu_release,
       ami_id: fleet.ami_id,
       // §5. Absent on a fleet the v6 migration has not reached yet, and
@@ -315,15 +318,19 @@ export function createStatus(ctx: FoundationCtx) {
     const updateAvailable =
       current.foundation_version < available.foundation_version ||
       current.template_sha256 !== available.template_sha256 ||
-      current.hermeticd_version !== available.hermeticd_version;
+      current.hermeticd_version !== available.hermeticd_version ||
+      // Behind only: a fleet pushed from a newer checkout is not offered a
+      // downgrade to this build's older bundle.
+      current.artifacts_version < available.artifacts_version;
     const toolOutdated = current.foundation_version > available.foundation_version;
     const result = {
       fleet: current,
       available,
       /**
-       * Any of the three: a fleet on an older contract, a fleet whose template
-       * digest differs (a template edit that forgot to bump the version), or a
-       * fleet pointed at an older release than this build ships.
+       * Any of the four: a fleet on an older contract, a fleet whose template
+       * digest differs (a template edit that forgot to bump the version), a
+       * fleet pointed at an older release than this build ships, or a fleet
+       * whose artifacts bundle is older than this build's (`ARTIFACTS_VERSION`).
        *
        * Deliberately *not* gated on `tool_outdated`. The two are independent
        * facts and both can be true at once — a fleet that is ahead on the
@@ -344,6 +351,7 @@ export function createStatus(ctx: FoundationCtx) {
         expectedVersion: available.foundation_version,
         toolOutdated,
         updateAvailable,
+        artifacts: { fleet: current.artifacts_version, expected: available.artifacts_version },
         agents: agentRows.map((row) => ({ ...row, converging: converging.has(row.name) })),
       }),
       /**

@@ -21,7 +21,14 @@ import {
   hermesBundleKey,
 } from "@hermetic/core/schema";
 import type { FleetManifest } from "@hermetic/core/schema";
-import { FILES_INBOX_DIR, FILES_OUTBOX_DIR, FILES_STAGE_DIR } from "@hermetic/core/shared";
+import {
+  FILES_INBOX_DIR,
+  FILES_OUTBOX_DIR,
+  FILES_STAGE_DIR,
+  HERMES_USER_ENV,
+  MANAGED_ENV_BEGIN,
+  MANAGED_ENV_END,
+} from "@hermetic/core/shared";
 import { collector } from "../src/events.ts";
 import { ensureLoginShell } from "../src/apply/accounts.ts";
 import { HERMES_PLUGIN_FILES, ensureHermesPlugin } from "../src/apply/plugins.ts";
@@ -857,109 +864,117 @@ describe("hermeticd apply — the four primitives (§6.4)", () => {
     });
   });
 
-  test("bitwarden disabled: no bws package, no bws call, an empty environment file", async () => {
+  /** A `.env` holding just the managed block, with these lines in it. */
+  const fenced = (...lines: string[]) => [MANAGED_ENV_BEGIN, ...lines, MANAGED_ENV_END, ""].join("\n");
+  const BOT_ENV = "/data/hermes/.hermes/profiles/scout/.env";
+
+  test("bitwarden disabled: no bws package, no bws call, an empty managed block", async () => {
     const manifest = makeManifest({ secrets_mode: "none" });
     const result = await apply(manifest, { host });
 
     expect(manifest.packages).not.toContain("bws");
     expect(result.installed).not.toContain("bws");
     expectNotRan(host, /^bws /);
-    // §8.3: the file is written for every manifest, empty when the manifest
+    // §8.3: the block is written for every manifest, empty when the manifest
     // carries nothing, so a key a previous binding left there does not survive.
-    // The dashboard unit `Requires=` it either way.
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe("\n");
-    expect(host.files.get(SECRETS_ENV_PATH)?.mode).toBe("0600");
-    expect(result.changed).toContain(SECRETS_ENV_PATH);
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(fenced());
+    expect(host.files.get(HERMES_USER_ENV)?.mode).toBe("0600");
+    expect(host.files.get(HERMES_USER_ENV)?.ownership).toBe("hermes:hermes");
+    expect(result.changed).toContain(HERMES_USER_ENV);
+    // No unit names the old tmpfs file, so it is not there.
+    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
 
     // Idempotent: a second apply of the same manifest leaves it alone.
     const again = await apply(manifest, { host });
-    expect(again.changed).not.toContain(SECRETS_ENV_PATH);
+    expect(again.changed).not.toContain(HERMES_USER_ENV);
   });
 
-  test("bitwarden enabled: secrets land on tmpfs at mode 600, never under /data", async () => {
+  test("bitwarden enabled: secrets land in the managed block, 0600 and the account's", async () => {
     host.when(/^bws /, { stdout: JSON.stringify([{ key: "ANTHROPIC_API_KEY", value: "sk-fixture" }]) });
     const manifest = makeManifest({ secrets_mode: "bitwarden" });
 
     const result = await apply(manifest, { host, bwsToken: "0.token.fixture" });
 
-    const env = host.files.get(SECRETS_ENV_PATH);
+    const env = host.files.get(HERMES_USER_ENV);
     expect(env?.mode).toBe("0600");
-    expect(env?.content).toContain("ANTHROPIC_API_KEY=sk-fixture");
-    expect(SECRETS_ENV_PATH.startsWith("/run/")).toBe(true);
-    // The data volume does carry files now — the agent's own venv — but none
-    // of them holds a secret.
-    expect(
-      [...host.files].some(
-        ([p, f]) =>
-          p.startsWith("/data") && (f.content.includes("sk-fixture") || f.content.includes("0.token")),
-      ),
-    ).toBe(false);
-    expect(result.changed).toContain(SECRETS_ENV_PATH);
-
+    expect(env?.content).toBe(fenced("ANTHROPIC_API_KEY=sk-fixture"));
+    expect(result.changed).toContain(HERMES_USER_ENV);
+    // The token itself is never written anywhere.
+    expect([...host.files.values()].some((f) => f.content.includes("0.token"))).toBe(false);
     // The token reaches bws through the environment, never through argv.
     expect(host.commandsMatching(/^bws /)[0]).not.toContain("0.token.fixture");
   });
 
-  test("a keyed provider's key becomes its variable in the tmpfs env file", async () => {
+  test("a keyed provider's key becomes its variable in the managed block", async () => {
     const manifest = makeManifest({ provider: "nous" });
 
     const result = await apply(manifest, { host, providerKey: "nous-FIXTURE-KEY" });
 
-    const env = host.files.get(SECRETS_ENV_PATH);
+    const env = host.files.get(HERMES_USER_ENV);
     expect(env?.mode).toBe("0600");
-    expect(env?.content).toBe("NOUS_API_KEY=nous-FIXTURE-KEY\n");
-    expect(result.changed).toContain(SECRETS_ENV_PATH);
+    expect(env?.content).toBe(fenced("NOUS_API_KEY=nous-FIXTURE-KEY"));
+    expect(result.changed).toContain(HERMES_USER_ENV);
     // Nothing Bitwarden-shaped exists on a box that only has a provider key.
     expectNotRan(host, /^bws /);
   });
 
-  test("a switch from a keyed provider to Bedrock clears the key line (§8.3)", async () => {
+  test("a rotation rewrites every block; a switch to Bedrock empties them (§8.3)", async () => {
+    host.seed(BOT_ENV, "TZ=UTC\n", "0600");
     await apply(makeManifest({ provider: "nous" }), { host, providerKey: "nous-FIXTURE-KEY" });
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe("NOUS_API_KEY=nous-FIXTURE-KEY\n");
+    expect(host.files.get(BOT_ENV)?.content).toBe(`${fenced("NOUS_API_KEY=nous-FIXTURE-KEY")}TZ=UTC\n`);
+
+    const rotated = await apply(makeManifest({ provider: "nous" }), {
+      host,
+      providerKey: "nous-FIXTURE-NEW",
+    });
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(fenced("NOUS_API_KEY=nous-FIXTURE-NEW"));
+    expect(host.files.get(BOT_ENV)?.content).toBe(`${fenced("NOUS_API_KEY=nous-FIXTURE-NEW")}TZ=UTC\n`);
+    expect(rotated.changed).toEqual(expect.arrayContaining([HERMES_USER_ENV, BOT_ENV]));
 
     const result = await apply(makeManifest({ provider: "bedrock" }), { host });
 
     // The previous provider's key does not outlive the binding that put it there.
-    expect(host.files.get(SECRETS_ENV_PATH)?.content).toBe("\n");
-    expect(result.changed).toContain(SECRETS_ENV_PATH);
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(fenced());
+    expect(host.files.get(BOT_ENV)?.content).toBe(`${fenced()}TZ=UTC\n`);
+    expect(result.changed).toContain(HERMES_USER_ENV);
   });
 
-  test("a keyed provider with bitwarden gets one file with both sources", async () => {
+  test("a keyed provider with bitwarden gets one block with both sources", async () => {
     host.when(/^bws /, { stdout: JSON.stringify([{ key: "GITHUB_TOKEN", value: "ghp-fixture" }]) });
     const manifest = makeManifest({ provider: "openrouter", secrets_mode: "bitwarden" });
 
     await apply(manifest, { host, providerKey: "sk-or-FIXTURE", bwsToken: "0.token.fixture" });
 
-    const env = host.files.get(SECRETS_ENV_PATH);
-    expect(env?.content).toContain("OPENROUTER_API_KEY=sk-or-FIXTURE");
-    expect(env?.content).toContain("GITHUB_TOKEN=ghp-fixture");
+    expect(host.files.get(HERMES_USER_ENV)?.content).toBe(
+      fenced("OPENROUTER_API_KEY=sk-or-FIXTURE", "GITHUB_TOKEN=ghp-fixture"),
+    );
   });
 
   test("a keyed provider with no key resolved is a refused apply, not a keyless box", async () => {
     const manifest = makeManifest({ provider: "openrouter" });
     await expect(apply(manifest, { host })).rejects.toThrow(/OPENROUTER_API_KEY/);
-    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
+    expect(host.files.has(HERMES_USER_ENV)).toBe(false);
   });
 
-  test("the environment file is materialised before any unit is enabled or restarted", async () => {
+  test("the managed block is written before any unit is enabled or restarted", async () => {
     host.when(/^bws /, { stdout: JSON.stringify([{ key: "K", value: "V" }]) });
     await apply(makeManifest({ secrets_mode: "bitwarden" }), { host, bwsToken: "0.token.fixture" });
 
     expect(ranInOrder(host, [/^bws /, /^systemctl (enable|restart|daemon-reload)/])).toBe(true);
   });
 
-  test("--dry-run reports the secrets file accurately without writing it", async () => {
+  test("--dry-run reports the managed block accurately without writing it", async () => {
     host.when(/^bws /, { stdout: JSON.stringify([{ key: "K", value: "V" }]) });
     const manifest = makeManifest({ secrets_mode: "bitwarden" });
 
     const first = await apply(manifest, { host, bwsToken: "0.token.fixture", dryRun: true });
-    expect(first.changed).toContain(SECRETS_ENV_PATH);
-    expect(host.files.has(SECRETS_ENV_PATH)).toBe(false);
+    expect(first.changed).toContain(HERMES_USER_ENV);
+    expect(host.files.has(HERMES_USER_ENV)).toBe(false);
 
     // Now the file exists with exactly that content: a dry run must say so.
     await apply(manifest, { host, bwsToken: "0.token.fixture" });
     const second = await apply(manifest, { host, bwsToken: "0.token.fixture", dryRun: true });
-    expect(second.changed).not.toContain(SECRETS_ENV_PATH);
+    expect(second.changed).not.toContain(HERMES_USER_ENV);
   });
 
   test("--dry-run probes reality and mutates nothing", async () => {

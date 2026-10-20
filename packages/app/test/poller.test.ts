@@ -55,7 +55,7 @@ describe("the agent fingerprint", () => {
    * not the agent rows, so every agent bound to that profile has a *computed*
    * field that moved and a `version` that did not.
    */
-  test("a profile rotation reaches the agents pinned behind it", async () => {
+  test("a profile edit reaches the agents pinned behind it", async () => {
     const { hermetic, poller, seen } = await harness();
     // The fixture already pins one agent behind its Bedrock profile, so the
     // set that moves is the *delta*, not the whole annotated list.
@@ -63,7 +63,8 @@ describe("the agent fingerprint", () => {
       (await hermetic.agents.list()).filter((a) => a.update_available === true).map((a) => a.name);
     const before = new Set(await stale());
 
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: "sk-ant-FIXTURE-ROTATED" });
+    // A model edit: a key rotation is pushed, not staged, and moves no revision.
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
     await poller.poll();
 
     const moved = (await stale()).filter((name) => !before.has(name));

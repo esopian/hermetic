@@ -46,7 +46,12 @@ describe("createBotOverRpc", () => {
     expect(gw.calls).toEqual([
       {
         method: "profiles.create",
-        params: { name: "scout", description: "Finds things", model: "claude" },
+        params: {
+          name: "scout",
+          description: "Finds things",
+          model: "claude",
+          mirror_credentials: true,
+        },
       },
       {
         method: "profiles.configure",

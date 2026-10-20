@@ -74,9 +74,10 @@ import {
   SECRETS_ENV_PATH,
   SECRETS_UNIT,
   materialiseMemoryLlm,
-  materialiseSecrets,
   memoryLlmFor,
+  settleLegacySecretsEnv,
 } from "./secrets.ts";
+import { syncSecrets } from "../secrets-sync.ts";
 import { materialiseAllFileSecrets, type FileSecretDeps } from "../files/secrets.ts";
 import { ensureShellIntegration } from "./shell.ts";
 
@@ -125,9 +126,14 @@ export {
   SECRETS_ENV_PATH,
   SECRETS_UNIT,
   envLine,
+  managedBlockOf,
+  managedEnvLines,
   materialiseMemoryLlm,
-  materialiseSecrets,
   memoryLlmFor,
+  outsideManagedBlock,
+  settleLegacySecretsEnv,
+  spliceManagedBlock,
+  writeManagedEnv,
 } from "./secrets.ts";
 export { distributionOf, ensureMemoryDeps, importNameOf } from "./memory.ts";
 export {
@@ -352,7 +358,7 @@ export async function apply(
   emit(opEvent("files", 0.56, "checking the terminal shell integration", at()));
   await ensureShellIntegration(host, write, result, dry);
 
-  // ─── 3b. Runtime secrets → tmpfs EnvironmentFile (§6.4, §8.3) ──────────────
+  // ─── 3b. Runtime secrets → the managed block in every Hermes .env (§8.1) ───
   const keyEnv = PROVIDERS[manifest.provider].env;
   if (manifest.secrets_mode === "bitwarden" && !opts.bwsToken) {
     throw new AgentdError(
@@ -370,23 +376,18 @@ export async function apply(
   // provider key to put in it, before either file is touched.
   const memoryLlm = memoryLlmFor(manifest, opts.providerKey);
   /**
-   * **Unconditional**, and that is the change §8.3 needed.
+   * **Unconditional**: the block is written from what the manifest describes,
+   * empty when it describes nothing, so an agent moved from a keyed provider
+   * onto Bedrock loses the previous key from the default `.env` and from every
+   * bot's with the binding that put it there (§8.3).
    *
-   * It used to run only when the manifest *had* something to put in the file,
-   * which made the one case that matters invisible: an agent moved from a keyed
-   * provider onto Bedrock has no key, so the step was skipped, so the previous
-   * provider's key stayed in `secrets.env` and Hermes went on finding it in the
-   * environment. `materialiseSecrets` writes the file the manifest describes —
-   * empty when the manifest describes nothing — so the stale line goes with the
-   * binding that put it there.
-   *
-   * It is the same file `hermetic-secrets.service` writes at boot, with the
-   * same content for the same manifest, so this does not take authorship away
-   * from that unit; it keeps the two in step between boots.
+   * It is the same sync `hermetic-secrets.service` runs at boot and the daemon
+   * runs on a key push (`secrets-sync.ts`), so this does not take authorship
+   * from either; it keeps them in step for this manifest.
    */
   // A function because the units phase calls it again: see `SECRETS_UNIT` there.
-  const materialiseSecretsEnv = () =>
-    materialiseSecrets({
+  const materialiseSecretsEnv = async (): Promise<string[]> => {
+    const synced = await syncSecrets({
       host,
       ...(manifest.secrets_mode === "bitwarden" && opts.bwsToken
         ? { bitwarden: { token: opts.bwsToken, project: opts.bwsProject ?? manifest.name } }
@@ -396,6 +397,9 @@ export async function apply(
         : {}),
       ...(dry ? { dryRun: true } : {}),
     });
+    const legacy = (await settleLegacySecretsEnv(host, manifest, dry)) ? [SECRETS_ENV_PATH] : [];
+    return [...synced.changed, ...legacy];
+  };
   // The memory server's own credential file: written for a service provider
   // (empty for a role-authenticated vendor), removed for any other agent.
   const materialiseMemoryEnv = () =>
@@ -404,11 +408,10 @@ export async function apply(
       memoryLlm,
       ...(dry ? { dryRun: true } : {}),
     });
-  const wroteSecrets = await materialiseSecretsEnv();
-  if (wroteSecrets) {
-    result.changed.push(SECRETS_ENV_PATH);
-    result.contentChanged.push(SECRETS_ENV_PATH);
-    rewritten.add(SECRETS_ENV_PATH);
+  for (const path of await materialiseSecretsEnv()) {
+    result.changed.push(path);
+    result.contentChanged.push(path);
+    rewritten.add(path);
   }
   const wroteMemoryLlm = await materialiseMemoryEnv();
   if (wroteMemoryLlm) {

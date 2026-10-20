@@ -182,6 +182,8 @@ function harness(options: {
   host?: FakeHost;
   /** Called after the first heartbeat write that lands; `serve` settles a swap on it. */
   onFirstWrite?: () => void;
+  /** The managed `.env` block's per-tick catch-up (`secrets-sync.ts`). */
+  secretsTick?: () => Promise<void>;
 }): Harness {
   const host = options.host ?? new FakeHost();
   host.handlers.length = 0;
@@ -346,6 +348,7 @@ function harness(options: {
       ...(options.dashboardTimeoutMs ? { dashboardTimeoutMs: options.dashboardTimeoutMs } : {}),
       onUpdateRequest: (request) => void requested.push(request),
       ...(options.onFirstWrite ? { onFirstWrite: options.onFirstWrite } : {}),
+      ...(options.secretsTick ? { secretsTick: options.secretsTick } : {}),
     }),
     updates: () => ddb.commandCalls(UpdateCommand),
   };
@@ -1291,6 +1294,45 @@ describe("turning readings into metrics", () => {
  * every probe ran — the whole chain a bad release breaks. It is a callback
  * because the heartbeat has no business knowing what an update is.
  */
+describe("the secrets catch-up", () => {
+  test("is started on every tick, and a rejection never costs the tick its write", async () => {
+    let ticks = 0;
+    const h = harness({
+      status: "ready",
+      secretsTick: async () => {
+        ticks += 1;
+        if (ticks === 2) throw new Error("FIXTURE ssm outage");
+      },
+    });
+
+    expect((await h.heartbeat.once()).written).toBe(true);
+    expect((await h.heartbeat.once()).written).toBe(true);
+    expect(ticks).toBe(2);
+  });
+
+  test("a hung one never holds up the row, and is not started twice", async () => {
+    let started = 0;
+    let release!: () => void;
+    const h = harness({
+      status: "ready",
+      secretsTick: () => {
+        started += 1;
+        return new Promise<void>((resolve) => (release = resolve));
+      },
+    });
+
+    expect((await h.heartbeat.once()).written).toBe(true);
+    expect((await h.heartbeat.once()).written).toBe(true);
+    expect(started).toBe(1);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    await h.heartbeat.once();
+    expect(started).toBe(2);
+  });
+});
+
 describe("the first heartbeat write that lands", () => {
   test("is announced exactly once, however many ticks follow", async () => {
     let announced = 0;

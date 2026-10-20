@@ -254,6 +254,29 @@ describe("HermeticdRpc", () => {
     });
   });
 
+  test("secretsSync POSTs /secrets/sync with no body, under the protocol header", async () => {
+    let seen: { url: string; init: RequestInit | undefined } | null = null;
+    const rpc = new HermeticdRpc(agentStore(), {
+      fetch: async (url, init) => {
+        seen = { url, init };
+        return new Response(JSON.stringify({ changed: true, bots: ["scout"] }));
+      },
+    });
+    expect(await rpc.secretsSync("atlas")).toEqual({ changed: true, bots: ["scout"] });
+    expect(seen!.url).toBe(`http://100.64.12.4:${HERMETICD_RPC_PORT}${RPC_PATHS.secretsSync}`);
+    expect(seen!.init?.method).toBe("POST");
+    expect(seen!.init?.body).toBeUndefined();
+    const headers = (seen!.init?.headers ?? {}) as Record<string, string>;
+    expect(headers[RPC_VERSION_HEADER]).toBeDefined();
+  });
+
+  test("an older hermeticd without the sync route is a typed failure", async () => {
+    const rpc = new HermeticdRpc(agentStore(), {
+      fetch: async () => new Response("not found", { status: 404 }),
+    });
+    await expect(rpc.secretsSync("atlas")).rejects.toThrow("HTTP 404");
+  });
+
   test("a non-200 is a typed INTERNAL naming the status", async () => {
     const rpc = new HermeticdRpc(agentStore(), {
       fetch: async () => new Response("nope", { status: 503 }),

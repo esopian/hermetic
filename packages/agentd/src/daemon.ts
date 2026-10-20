@@ -1,5 +1,5 @@
 /**
- * `hermeticd serve` — the systemd service and its five loops. The subcommands
+ * `hermeticd serve` — the systemd service and its six loops. The subcommands
  * that run and exit are in `cli.ts`; `main.ts` is the entrypoint.
  */
 import type { Host } from "./host.ts";
@@ -31,6 +31,7 @@ import {
 import { makeUpdateGate, type UpdateGate } from "./update-request.ts";
 import { makeRequestGate, type RequestGate } from "./request-gate.ts";
 import { convergeOnce, type ConvergeOutcome } from "./converge.ts";
+import { makeSecretsSyncer } from "./secrets-sync.ts";
 import { ensureLoginShell } from "./apply/accounts.ts";
 import type { ApplyRequest } from "@hermetic/core/schema";
 import { redactValue } from "./redact.ts";
@@ -138,6 +139,13 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     );
   });
 
+  /**
+   * The managed `.env` block (§8.1): synced on the first heartbeat tick, when
+   * the provider slot's `Version` moves, when a bot directory appears, and on
+   * the laptop's `POST /secrets/sync`.
+   */
+  const secrets = makeSecretsSyncer({ host, aws: ctx.aws, paramPrefix: ctx.paramPrefix, log });
+
   const heartbeat = makeHeartbeat({
     host,
     aws: ctx.aws,
@@ -147,6 +155,7 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
     onUpdateRequest: gate.onUpdateRequest,
     onApplyRequest: converge.onRequest,
     onFirstWrite: settled,
+    secretsTick: secrets.tick,
   });
 
   // The phones this box pushes to: written by `POST /push/devices`, read by
@@ -197,20 +206,25 @@ export async function serve(host: Host, deps: RunDeps = {}): Promise<void> {
       log,
       mobile,
       ...(files.tailnet ? { files: files.tailnet } : {}),
+      secretsSync: async () => {
+        const synced = await secrets.sync();
+        return { changed: synced.changed.length > 0 || synced.memoryChanged, bots: synced.bots };
+      },
     },
     { log },
   );
   log(`rpc on ${listener.hostname}:${listener.port}`);
 
   const forever = new AbortController();
-  // Five loops, never awaiting each other. The files sweeper never resolves
-  // on its own; it is in the race so it stops with the rest.
+  // Six loops, never awaiting each other. The files sweeper and the profiles
+  // poll never resolve on their own; they are in the race so they stop with the rest.
   const beats = heartbeat.run(forever.signal);
   const updates = updateLoop(host, ctx, gate, forever.signal, filesSettings);
   const converges = convergeLoop(host, ctx, converge, forever.signal);
   const watches = pushWatchLoop(host, ctx, devices, forever.signal);
   const sweeps = files.run(forever.signal);
-  await Promise.race([beats, updates, converges, watches, sweeps]);
+  const profiles = secrets.watchProfiles(forever.signal);
+  await Promise.race([beats, updates, converges, watches, sweeps, profiles]);
 }
 
 /**

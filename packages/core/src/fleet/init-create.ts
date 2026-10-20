@@ -23,7 +23,7 @@ import { clientIdFromSecret } from "../aws/tailscale.ts";
 import { DEFAULT_BEDROCK_MODEL_IDS } from "../aws/index.ts";
 import { writeHermeticPolicy } from "./policy.ts";
 import { foundationResourceCount, foundationTemplateSha256 } from "../aws/cfn-template.ts";
-import { FOUNDATION_VERSION } from "../version.ts";
+import { ARTIFACTS_VERSION, FOUNDATION_VERSION } from "../version.ts";
 import { TAILSCALE_DOWNLOAD_URL } from "./preflight.ts";
 import type { StackSummary } from "../backend/types.ts";
 import type { InitDeps, InitOpOptions, InitRun } from "./init-run.ts";
@@ -247,6 +247,8 @@ export async function* create(
     tailnet,
     tailscale_oauth_client_id,
     min_hermetic_version: hermeticdVersion,
+    // `--skip-artifacts` pushes nothing, so the fleet stays at 0 and is offered the update.
+    ...(parsed.skip_artifacts === true ? {} : { artifacts_version: ARTIFACTS_VERSION }),
     // §6.6: a fleet created by this build is on this build's foundation
     // contract, recorded with the digest of the template that made it — so a
     // template edit that forgot to bump the version still shows up as an

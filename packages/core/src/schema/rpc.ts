@@ -129,6 +129,17 @@ export const RpcHealth = z.object({
 });
 export type RpcHealth = z.infer<typeof RpcHealth>;
 
+/**
+ * `POST /secrets/sync` — what the box rewrote. Counts and names only, never a
+ * value: `changed` is whether any `.env` was rewritten, `bots` the bot names
+ * whose `.env` now holds the current block.
+ */
+export const SecretsSyncResult = z.object({
+  changed: z.boolean(),
+  bots: z.array(z.string()),
+});
+export type SecretsSyncResult = z.infer<typeof SecretsSyncResult>;
+
 /** Serialise one frame as an NDJSON line (server side). */
 export function encodeRpcFrame(frame: RpcFrame): string {
   return `${JSON.stringify(frame)}\n`;

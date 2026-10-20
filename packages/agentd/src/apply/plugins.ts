@@ -54,8 +54,16 @@ async function installedContent(host: Host, path: string): Promise<string | null
   }
 }
 
-/** Stage as `hermes` (exclusive create), then rename over the target as `hermes`. */
-async function writeAsAccount(host: Host, path: string, content: string): Promise<void> {
+/**
+ * Stage as `hermes` (exclusive create, at `mode`), then rename over the target
+ * as `hermes`: a new inode every time, and root never writes under `/data`.
+ */
+export async function writeAsAccount(
+  host: Host,
+  path: string,
+  content: string,
+  mode: string = PLUGIN_FILE_MODE,
+): Promise<void> {
   const staging = stagingPathFor(path);
   const bytes = new TextEncoder().encode(content);
   try {
@@ -65,7 +73,7 @@ async function writeAsAccount(host: Host, path: string, content: string): Promis
       (async function* () {
         yield bytes;
       })(),
-      { mode: PLUGIN_FILE_MODE },
+      { mode },
     );
     // `-T`: never "into" a directory someone made at the name. A rename
     // replaces a symlink at `path` rather than writing through it.

@@ -52,6 +52,8 @@ export function SecretPushDrawer({
     rekeyed: number;
     /** Whether "Re-key running agents" was ticked for this push. */
     rekeyRequested: boolean;
+    pushed?: string[];
+    unreachable?: string[];
   } | null>(null);
 
   const trimmed = slug.trim();
@@ -76,7 +78,13 @@ export function SecretPushDrawer({
       });
       // First thing after the round trip, before anything renders again.
       setValue("");
-      setReceipt({ path: out.path, rekeyed: out.rekeyed?.length ?? 0, rekeyRequested: rekey });
+      setReceipt({
+        path: out.path,
+        rekeyed: out.rekeyed?.length ?? 0,
+        rekeyRequested: rekey,
+        ...(out.pushed === undefined ? {} : { pushed: out.pushed }),
+        ...(out.unreachable === undefined ? {} : { unreachable: out.unreachable }),
+      });
       onPushed();
     } catch (e) {
       setError(toSaveError(e));

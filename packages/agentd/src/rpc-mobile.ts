@@ -81,6 +81,28 @@ export function rpcRefusal(status: number, message: string, code: ErrorCode = "I
   });
 }
 
+/**
+ * A per-peer budget of `perMinute` calls in any sliding minute. The returned
+ * function counts the call and answers true when the peer is over budget. It
+ * remembers at most `LIMITER_PEERS` peers, forgetting the quietest first.
+ */
+export function peerLimiter(perMinute: number, now: () => number): (peerIp: string) => boolean {
+  /** peer → the times of its recent calls, oldest first. */
+  const calls = new Map<string, number[]>();
+  return (peerIp) => {
+    const at = now();
+    const recent = (calls.get(peerIp) ?? []).filter((t) => at - t < MINUTE_MS);
+    recent.push(at);
+    calls.delete(peerIp);
+    calls.set(peerIp, recent);
+    if (calls.size > LIMITER_PEERS) {
+      const oldest = calls.keys().next().value;
+      if (oldest !== undefined) calls.delete(oldest);
+    }
+    return recent.length > perMinute;
+  };
+}
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
     status,
@@ -311,22 +333,7 @@ export type MobileRoutes = (request: Request, url: URL, peer: MobilePeer) => Pro
 
 export function makeMobileRoutes(deps: MobileRoutesDeps): MobileRoutes {
   const say = deps.log ?? (() => {});
-  /** peer → the times of its recent writes, oldest first. */
-  const writes = new Map<string, number[]>();
-
-  /** Counts this write; true when the peer is over its budget. */
-  function overBudget(peerIp: string): boolean {
-    const now = deps.now();
-    const recent = (writes.get(peerIp) ?? []).filter((t) => now - t < MINUTE_MS);
-    recent.push(now);
-    writes.delete(peerIp);
-    writes.set(peerIp, recent);
-    if (writes.size > LIMITER_PEERS) {
-      const oldest = writes.keys().next().value;
-      if (oldest !== undefined) writes.delete(oldest);
-    }
-    return recent.length > PUSH_WRITES_PER_MINUTE;
-  }
+  const overBudget = peerLimiter(PUSH_WRITES_PER_MINUTE, deps.now);
 
   const bodyDeadline = deps.bodyDeadline ?? (() => AbortSignal.timeout(PUSH_BODY_DEADLINE_MS));
 

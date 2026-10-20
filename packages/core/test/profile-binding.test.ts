@@ -153,113 +153,86 @@ describe("two operators writing the same row", () => {
 
 describe("rotating a profile's key reaches the box", () => {
   /**
-   * The whole chain, in the order an operator walks it: rotate, refresh, apply.
-   * Every step is asserted for the thing that has to move *and* the thing that
-   * must not, because the failure this guards against is a rotation that looks
-   * complete from the laptop and never arrives.
+   * A key is pushed live, not staged (§8.1, §8.3): the rotation copies it into
+   * the slot the running binding already reads and pokes the box. Asserted for
+   * the things that must move *and* the things that must not, because the
+   * failure this guards against is a rotation that looks complete from the
+   * laptop and never arrives — or one that re-stages every agent for nothing.
    */
-  test("rotate → refresh → apply moves the slot, the key and the hash", async () => {
+  test("a key-only rotation writes the current slot, bumps no revision, and pokes the box", async () => {
     const { backend, hermetic } = fleet();
     const before = (await backend.store.agents.get(BOUND))!;
     expect(before.profile_revision).toBe(1);
     expect(before.credential_ref).toBe("provider-key-ant00001-r1");
+    const wasBound = backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"));
 
-    // ── rotate ────────────────────────────────────────────────────────────
-    // Every change bumps the revision, a key rotation included: an agent pinned
-    // to revision N is stale the moment anything about the profile moves.
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    const result = await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    expect(result.pushed).toEqual([BOUND]);
+    expect(result.unreachable).toEqual([]);
     const { profiles } = await hermetic.providers.list();
-    expect(profiles.find((p) => p.id === FIXTURE_PROFILE_IDS.anthropic)?.revision).toBe(2);
-    // The agent has not moved: a rotation must not change anything underneath a
-    // box that is still serving.
-    const unmoved = (await backend.store.agents.get(BOUND))!;
-    expect(unmoved.credential_ref).toBe("provider-key-ant00001-r1");
-    expect(unmoved.config_hash).toBe(before.config_hash);
+    expect(profiles.find((p) => p.id === FIXTURE_PROFILE_IDS.anthropic)?.revision).toBe(1);
 
-    // ── refresh ───────────────────────────────────────────────────────────
-    const staged = await hermetic.agents.set({ name: BOUND, refresh_profile: true });
-    expect(staged.pending).toMatchObject({
-      profile_id: FIXTURE_PROFILE_IDS.anthropic,
-      profile_revision: 2,
-      credential_ref: "provider-key-ant00001-r2",
-    });
-    // Staging still changes nothing the *binding* says: the running
-    // configuration names the old slot, and the new slot has not even been
-    // written yet. (`set` does re-render, because it also re-uploads the bundle
-    // the row names — but it renders the binding the row still holds.)
-    const onRow = (await backend.store.agents.get(BOUND))!;
-    expect(onRow.credential_ref).toBe("provider-key-ant00001-r1");
-    expect(backend.params.has(agentSlot(BOUND, "provider-key-ant00001-r2"))).toBe(false);
-    // The document the box is still being asked to run, rendered by this build.
-    const stagedHash = onRow.config_hash!;
-
-    // ── apply ─────────────────────────────────────────────────────────────
-    const plan = await hermetic.plan.rollout({ agents: [BOUND] });
-    await drain(hermetic.apply({ plan, yes: true }));
     const after = (await backend.store.agents.get(BOUND))!;
-
-    expect(after.pending ?? null).toBeNull();
-    expect(after.profile_revision).toBe(2);
-    expect(after.credential_ref).toBe("provider-key-ant00001-r2");
-    // The hash moved, which is the *only* thing a rollout can act on — and the
-    // uploaded bundle is the one the row now names. Compared against the
-    // staged-but-unapplied render rather than the seeded stand-in, so the
-    // difference is the slot and nothing else.
-    expect(after.config_hash).not.toBe(stagedHash);
-    expect(after.resources.config_key).toBe(`config/${BOUND}/${after.config_hash}.tgz`);
-    expect(after.apply_request?.config_hash).toBe(after.config_hash ?? "");
-    expect([...backend.objects.keys()]).toContain(after.resources.config_key!);
-  });
-
-  /**
-   * The credential itself, without naming it. The new slot holds what the
-   * profile's shared slot holds — a copy made on the laptop, with the
-   * operator's credentials, because the instance role cannot read `/hermetic/*`
-   * at all — and the previous slot is still there, because an agent rolled back
-   * to its old binding must still find the credential that binding ran on.
-   */
-  test("the new slot is a copy of the profile's, and the old slot is kept", async () => {
-    const { backend, hermetic } = fleet();
     const shared = sharedSecretPath(
       FIXTURE_CONFIG.fleet_id,
       profileSlotSlug(FIXTURE_PROFILE_IDS.anthropic),
     );
-    const wasBound = backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"));
-    expect(wasBound).toBeDefined();
-
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
-    await hermetic.agents.set({ name: BOUND, refresh_profile: true });
-    await drain(hermetic.apply({ plan: await hermetic.plan.rollout({ agents: [BOUND] }), yes: true }));
-
-    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r2"))).toBe(
+    // The slot the box reads now holds the profile's new key …
+    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"))).toBe(
       backend.params.get(shared),
     );
-    // The rotation really did change the value, rather than re-copying the old
-    // one into a differently named slot.
-    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r2"))).not.toBe(wasBound);
-    // And nothing swept the previous revision: only `destroy` does that (§8.3).
-    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"))).toBe(wasBound);
-    // The row records both slots it owns, so a teardown can account for them.
-    expect((await backend.store.agents.get(BOUND))!.resources.ssm_paths).toContain(
-      agentSlot(BOUND, "provider-key-ant00001-r2"),
-    );
+    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"))).not.toBe(wasBound);
+    // … and nothing about the binding or the rendered document moved.
+    expect(after.credential_ref).toBe("provider-key-ant00001-r1");
+    expect(after.profile_revision).toBe(1);
+    expect(after.config_hash).toBe(before.config_hash);
+    expect(after.pending ?? null).toBeNull();
   });
 
   /**
-   * A second apply with nothing staged must not move the hash again. A rotation
-   * that re-rendered on every converge would report drift on a fleet nobody had
-   * changed, which is the noise that makes a real drift unreadable.
+   * A row staged onto the rotated profile reads the key from its pending slot
+   * once applied, so that slot is copied too; its *running* binding is another
+   * profile's, so its box is not poked.
    */
-  test("a second apply with nothing staged renders the same document", async () => {
+  test("a staged binding's slot gets the new key too, without a poke", async () => {
     const { backend, hermetic } = fleet();
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
-    await hermetic.agents.set({ name: BOUND, refresh_profile: true });
-    await drain(hermetic.apply({ plan: await hermetic.plan.rollout({ agents: [BOUND] }), yes: true }));
-    const settled = (await backend.store.agents.get(BOUND))!.config_hash;
+    const corvid = backend.agents.get("corvid")!;
+    expect(corvid.pending?.profile_id).toBe(FIXTURE_PROFILE_IDS.anthropic);
+    const pendingSlot = agentSlot("corvid", corvid.pending!.credential_ref!);
 
-    await drain(hermetic.apply({ plan: await hermetic.plan.rollout({ agents: [BOUND] }), yes: true }));
+    const result = await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
 
-    expect((await backend.store.agents.get(BOUND))!.config_hash).toBe(settled);
+    expect(backend.params.get(pendingSlot)).toBe(ROTATED);
+    expect(result.pushed).not.toContain("corvid");
+    // The slot its running openrouter binding reads is untouched.
+    expect(backend.params.get(agentSlot("corvid", corvid.credential_ref!))).not.toBe(ROTATED);
+  });
+
+  /** A box that does not answer is reported, never thrown: its heartbeat catches up. */
+  test("an unreachable box is listed, and the rotation still succeeds", async () => {
+    const { backend, hermetic } = fleet();
+    const result = await hermetic.providers.update({
+      profile: "openrouter-cheap",
+      api_key: "sk-or-FIXTURE-ROTATED",
+    });
+    expect(result.pushed).toEqual(["corvid"]);
+    expect(result.unreachable).toEqual(["ibis"]);
+    // The slot is written whether or not the box answered.
+    const ibis = backend.agents.get("ibis")!;
+    expect(backend.params.get(agentSlot("ibis", ibis.credential_ref!))).toBe("sk-or-FIXTURE-ROTATED");
+  });
+
+  /** The model is still staged: an edit to it bumps the revision and moves no slot. */
+  test("a model edit still bumps the revision and pushes nothing", async () => {
+    const { backend, hermetic } = fleet();
+    const wasBound = backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"));
+    const result = await hermetic.providers.update({
+      profile: "anthropic-main",
+      model: "claude-opus-5",
+    });
+    expect(result.profile.revision).toBe(2);
+    expect(result.pushed).toBeUndefined();
+    expect(backend.params.get(agentSlot(BOUND, "provider-key-ant00001-r1"))).toBe(wasBound);
   });
 });
 
@@ -440,7 +413,7 @@ describe("the apply cannot tear", () => {
 
   test("an upload that fails after the credential copy leaves the row fully old", async () => {
     const { backend, hermetic } = fleet();
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
     await hermetic.agents.set({ name: BOUND, refresh_profile: true });
     const before = (await backend.store.agents.get(BOUND))!;
     expect(before.pending).toBeTruthy();
@@ -481,7 +454,7 @@ describe("the apply cannot tear", () => {
       return await update(name, version, patch);
     };
 
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
     await hermetic.agents.set({ name: BOUND, refresh_profile: true });
     const staged = (await backend.store.agents.get(BOUND))!;
     await drain(hermetic.apply({ plan: await hermetic.plan.rollout({ agents: [BOUND] }), yes: true }));
@@ -510,8 +483,8 @@ describe("a staged revision that has moved", () => {
     const before = backend.agents.get("corvid")!;
     expect(before.pending?.profile_revision).toBe(1);
 
-    // Somebody rotates the profile this row is staged onto, after the staging.
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    // Somebody edits the profile this row is staged onto, after the staging.
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
 
     let error: unknown = null;
     try {
@@ -536,7 +509,7 @@ describe("a staged revision that has moved", () => {
 
   test("a recreate consuming the same stale staging refuses too", async () => {
     const { backend, hermetic } = fleet();
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
 
     let error: unknown = null;
     try {
@@ -554,7 +527,7 @@ describe("a staged revision that has moved", () => {
    */
   test("re-staging at the profile's current revision unblocks the apply", async () => {
     const { backend, hermetic } = fleet();
-    await hermetic.providers.update({ profile: "anthropic-main", api_key: ROTATED });
+    await hermetic.providers.update({ profile: "anthropic-main", model: "claude-opus-5" });
     await hermetic.agents.set({ name: "corvid", provider_profile: "anthropic-main" });
 
     await drain(

@@ -496,8 +496,9 @@ export const honchoTiktokenDir = `${MEMORY_SERVICE_ROOT}/honcho/tiktoken`;
  * Where hermeticd materialises the credential a service's model calls use:
  * the agent's provider key, copied under the variable name(s) the manifest's
  * `memory.llm.key_env` lists. tmpfs, root-only, the unit's `EnvironmentFile`
- * — the same place and rules as `secrets.env`, in a file only this unit loads
- * so an alias like `OPENAI_API_KEY` never reaches Hermes's own environment.
+ * — kept off `/data` and out of Hermes's `.env` (where the provider key now
+ * lives, §8.1) in a file only this unit loads, so an alias like
+ * `OPENAI_API_KEY` never reaches Hermes's own environment.
  */
 export const MEMORY_LLM_ENV_PATH = "/run/hermetic/memory-llm.env";
 

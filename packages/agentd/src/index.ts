@@ -80,12 +80,12 @@ export {
   SECRETS_ENV_DIR,
   SECRETS_ENV_PATH,
   apply,
-  materialiseSecrets,
   parseDpkgQuery,
   resetAptIndexState,
   sha256,
 } from "./apply/index.ts";
 export type { ApplyOptions, ApplyResult } from "./apply/index.ts";
+export { listBotHomes, resolveAndSync, syncSecrets } from "./secrets-sync.ts";
 
 export {
   CHROME_MARKER_FILE,

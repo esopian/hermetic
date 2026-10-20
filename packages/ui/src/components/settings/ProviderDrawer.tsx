@@ -12,7 +12,12 @@
  */
 import { useState } from "react";
 import { createProfile, updateProfile } from "../../api/index.ts";
-import type { ProfileView, ProviderCatalog, ProviderId } from "../../api/index.ts";
+import type {
+  ProfileView,
+  ProviderCatalog,
+  ProviderId,
+  ProvidersWriteResult,
+} from "../../api/index.ts";
 import { toSaveError } from "../../logic/settings-logic.ts";
 import type { SaveError } from "../../logic/settings-logic.ts";
 import { canDisableProfile, readyBadge } from "../../logic/provider-logic.ts";
@@ -41,8 +46,11 @@ export function ProviderDrawer({
   /** Opened by "Rotate key": the credential field is what the operator came for. */
   focusKey?: boolean;
   onClose: () => void;
-  /** Re-read profiles and settings; the drawer closes itself after calling it. */
-  onSaved: () => void;
+  /**
+   * Re-read profiles and settings, with the write's result when there is one
+   * (a key rotation's `pushed`/`unreachable`); the drawer closes itself after.
+   */
+  onSaved: (result?: ProvidersWriteResult) => void;
 }) {
   const editing = profile !== null;
   const providers = Object.keys(catalog) as ProviderId[];
@@ -118,8 +126,9 @@ export function ProviderDrawer({
     setSaving(true);
     setError(null);
     try {
+      let result: ProvidersWriteResult | undefined;
       if (editing) {
-        await updateProfile(profile.id, {
+        result = await updateProfile(profile.id, {
           name: trimmedName === profile.name ? undefined : trimmedName,
           model: model.trim() === profile.model ? undefined : model.trim(),
           enabled: enabled === profile.enabled ? undefined : enabled,
@@ -139,7 +148,7 @@ export function ProviderDrawer({
         });
       }
       setApiKey("");
-      onSaved();
+      onSaved(result);
       onClose();
     } catch (e) {
       setError(toSaveError(e));
@@ -306,7 +315,7 @@ export function ProviderDrawer({
       <div className="drawer-foot">
         <div style={{ fontSize: 12, color: "var(--fg2)" }}>
           {editing
-            ? "Agents already bound to this profile keep running their pinned revision until they are updated."
+            ? "A new key is pushed to bound agents at once; other changes wait until each agent is updated."
             : "Creating a profile writes its credential slot first, then the profile."}
         </div>
         <span style={{ display: "flex", gap: 8 }}>
