@@ -332,9 +332,8 @@ function useClipboardImage(active: boolean): boolean {
 }
 
 /**
- * The paste line: what is on the pasteboard and the control that pastes it.
- * iOS 16 and later draw the system paste control (no prompt); before that a
- * plain button reads the image, and iOS asks once.
+ * The paste line: what is on the pasteboard and the system paste control
+ * that pastes it (no prompt).
  */
 function PasteLine({ onPaste }: { onPaste(payload: PastePayload): void }) {
   const t = useTheme();
@@ -352,36 +351,20 @@ function PasteLine({ onPaste }: { onPaste(payload: PastePayload): void }) {
       <Text variant="caption" tone="fg3" numberOfLines={1} style={{ flexShrink: 1 }}>
         Image on the clipboard
       </Text>
-      {Clipboard.isPasteButtonAvailable ? (
-        <Clipboard.ClipboardPasteButton
-          testID="composer-paste-button"
-          acceptedContentTypes={["image"]}
-          imageOptions={PASTE_IMAGE_OPTIONS}
-          displayMode="iconAndLabel"
-          cornerStyle="fixed"
-          backgroundColor={t.c.bg2}
-          foregroundColor={t.c.fg}
-          style={{ width: 104, height: 32 }}
-          onPress={(payload) => {
-            haptic.select();
-            onPaste(payload);
-          }}
-        />
-      ) : (
-        <Button
-          label="Paste image"
-          variant="secondary"
-          compact
-          onPress={() => {
-            void Clipboard.getImageAsync(PASTE_IMAGE_OPTIONS).then(
-              (image) => {
-                if (image) onPaste({ type: "image", ...image });
-              },
-              () => {},
-            );
-          }}
-        />
-      )}
+      <Clipboard.ClipboardPasteButton
+        testID="composer-paste-button"
+        acceptedContentTypes={["image"]}
+        imageOptions={PASTE_IMAGE_OPTIONS}
+        displayMode="iconAndLabel"
+        cornerStyle="fixed"
+        backgroundColor={t.c.bg2}
+        foregroundColor={t.c.fg}
+        style={{ width: 104, height: 32 }}
+        onPress={(payload) => {
+          haptic.select();
+          onPaste(payload);
+        }}
+      />
     </View>
   );
 }
