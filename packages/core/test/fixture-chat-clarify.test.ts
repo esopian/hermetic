@@ -269,6 +269,46 @@ describe("a blocking clarify", () => {
   });
 });
 
+describe("a vault.code request", () => {
+  test("is a code card; the answer continues the turn and is never in the transcript", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_VAULT_CODE");
+    expect(ChatBlock.safeParse(turn.question).success).toBe(true);
+    expect(turn.question.vault_code).toEqual({ site: "github.com", hint: expect.any(String) });
+    expect(await stillPending(turn.next)).toBe(true);
+
+    const answered = await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      answer: "246 810",
+    });
+    expect(answered).toEqual({ status: "ok" });
+    const frames = await drain(turn);
+    expect(frames.at(-1)?.type).toBe("done");
+    expect(lastText(frames)).toBe("Code received. Continuing.");
+    const history = await hermetic.chat.history({ instance: INSTANCE, bot: BOT });
+    for (const record of [JSON.stringify(frames), JSON.stringify(history)])
+      expect(record).not.toMatch(/246\s?810/);
+  });
+
+  test("`skip` continues it with no code", async () => {
+    const { hermetic, session } = await fixtureHermetic();
+    const turn = await untilQuestion(hermetic, "E2E_VAULT_CODE");
+    await hermetic.chat.respond({
+      instance: INSTANCE,
+      bot: BOT,
+      session,
+      kind: "question",
+      request_id: String(turn.question.request_id),
+      skip: true,
+    });
+    expect(lastText(await drain(turn))).toBe("Skipped. Continuing.");
+  });
+});
+
 describe("the clarify result and the stored turn", () => {
   test("a batch's tool result is upstream's `{responses}` JSON, bare labels and a list for multi-select", async () => {
     const { hermetic, session } = await fixtureHermetic();
