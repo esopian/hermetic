@@ -1,0 +1,11 @@
+# Installed by hermeticd apply into $HERMES_HOME/plugins/prme/ for an agent on
+# the prism memory provider, and selected by the managed /etc/hermes/config.yaml
+# (memory.provider: prme). Edit this file in packages/agentd/plugins/prme, never
+# on the box: the next apply rewrites it. The version is the `+plugin-<n>`
+# suffix of MEMORY_SERVICES.prism.pin; change the two together.
+name: prme
+version: "1.0.0"
+description: PRME long-term memory over the box-local PRME API
+author: hermetic
+pip_dependencies:
+  - httpx

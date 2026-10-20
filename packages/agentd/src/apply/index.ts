@@ -59,7 +59,12 @@ import {
   requireKnownUnit,
 } from "./accounts.ts";
 import { ensureAgentVenv } from "./agent-python.ts";
-import { HERMES_PLUGIN_DIR, ensureHermesPlugin } from "./plugins.ts";
+import {
+  HERMES_PLUGIN_DIR,
+  HERMES_PLUGIN_FILES,
+  HERMES_PLUGIN_NAME,
+  ensureBundledPlugin,
+} from "./plugins.ts";
 import { ensureGitSafeDirectory, ensureHermes, ensureHermesRevision } from "./hermes.ts";
 import { ensureNode, ensureWebUi } from "./node-web.ts";
 import { ensureMemoryDeps } from "./memory.ts";
@@ -318,7 +323,10 @@ export async function apply(
   // live turn on the box. The first install arrives with the managed config
   // that enables it, which restarts Hermes anyway; a later plugin edit is
   // picked up at the next restart.
-  if (await ensureHermesPlugin(host, emit, dry)) result.changed.push(HERMES_PLUGIN_DIR);
+  if (
+    await ensureBundledPlugin(host, emit, dry, { name: HERMES_PLUGIN_NAME, files: HERMES_PLUGIN_FILES })
+  )
+    result.changed.push(HERMES_PLUGIN_DIR);
 
   // ─── 3. files ──────────────────────────────────────────────────────────────
   emit(opEvent("files", 0.4, `checking ${manifest.files.length} rendered file(s)`, at()));

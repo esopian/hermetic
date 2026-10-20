@@ -20,11 +20,15 @@ import {
   MEMORY_PROVIDERS,
   MEMORY_PROVIDERS_LIST,
   MEMORY_PROVIDER_CAPABILITY,
+  MEMORY_PRISM_CAPABILITY,
   MEMORY_PROVIDER_IDS,
   MEMORY_SERVICES,
   MEMORY_SERVICE_CAPABILITY,
   MEMORY_SERVICE_UNIT,
   MemoryProviderChoice,
+  PRISM_DATA_DIR,
+  PRISM_FASTEMBED_DIR,
+  PRISM_TIKTOKEN_DIR,
   SettingsSetInput,
   type MemoryLlmKeyEnv,
   StoredMemoryProviderId,
@@ -90,19 +94,25 @@ function expectModelRefused(error: HermeticError | null, provider: string): void
 }
 
 describe("the memory provider catalogue", () => {
-  test("exactly the four providers hermetic can run on the box", () => {
-    expect([...MEMORY_PROVIDER_IDS]).toEqual(["holographic", "hindsight", "openviking", "honcho"]);
+  test("exactly the five providers hermetic can run on the box", () => {
+    expect([...MEMORY_PROVIDER_IDS]).toEqual([
+      "holographic",
+      "hindsight",
+      "openviking",
+      "honcho",
+      "prism",
+    ]);
     expect(MEMORY_PROVIDERS_LIST.map((p) => p.id)).toEqual([...MEMORY_PROVIDER_IDS]);
     expect(MEMORY_PROVIDERS.holographic.kind).toBe("in-process");
     expect(MEMORY_PROVIDERS.holographic.min_mem_gib).toBe(0);
-    for (const id of ["hindsight", "openviking", "honcho"] as const) {
+    for (const id of ["hindsight", "openviking", "honcho", "prism"] as const) {
       expect(MEMORY_PROVIDERS[id].kind).toBe("service");
-      expect(MEMORY_PROVIDERS[id].uses_llm).toBe(true);
+      expect(MEMORY_PROVIDERS[id].uses_llm).toBe(id !== "prism");
       expect(MEMORY_SERVICES[id].pin.length).toBeGreaterThan(0);
       expect(MEMORY_SERVICES[id].port).toBeGreaterThan(1024);
       expect(memoryServiceDir(id)).toBe(`/data/hermes/memory/${id}`);
     }
-    for (const spec of MEMORY_PROVIDERS_LIST) {
+    for (const spec of MEMORY_PROVIDERS_LIST.filter((p) => p.id !== "prism")) {
       expect(spec.docs).toStartWith(
         "https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers",
       );
@@ -463,6 +473,31 @@ describe("renderMemory", () => {
     expect(r.manifestMemory?.llm?.key_env).toEqual(["OPENAI_API_KEY"]);
   });
 
+  test("prism: an environment-only unit, no warm-up, no llm, and Hermes told PRME_API_URL", () => {
+    const r = renderMemory({ ...base, memory: { provider: "prism" } });
+    const python = `${memoryServiceDir("prism")}/venv/bin/python`;
+    expect(r.files.map((f) => f.path)).toEqual([unitPath]);
+    const unit = r.files[0]!.content;
+    for (const line of [
+      `Environment=PRME_DB_PATH=${PRISM_DATA_DIR}/memory.duckdb`,
+      `Environment=PRME_VECTOR_PATH=${PRISM_DATA_DIR}/vectors.usearch`,
+      `Environment=PRME_LEXICAL_PATH=${PRISM_DATA_DIR}/lexical_index`,
+      "Environment=PRME_EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5",
+      `Environment=FASTEMBED_CACHE_PATH=${PRISM_FASTEMBED_DIR}`,
+      `Environment=TIKTOKEN_CACHE_DIR=${PRISM_TIKTOKEN_DIR}`,
+      `ExecStart=${python} -m prme.api --host 127.0.0.1 --port 18010`,
+    ]) {
+      expect(unit).toInclude(`${line}\n`);
+    }
+    // The downloads are hermeticd's, at install: nothing holds the unit's start.
+    expect(unit).not.toInclude("ExecStartPre=");
+    expect(unit).not.toInclude("TimeoutStartSec=");
+    // The directory pack, never the single-file `.prme` one.
+    expect(unit).not.toInclude("PRME_PACK_PATH");
+    expect(r.hermesUnitLines.service).toEqual(["Environment=PRME_API_URL=http://127.0.0.1:18010"]);
+    expect(r.manifestMemory).toEqual({ provider: "prism", pin: MEMORY_SERVICES.prism.pin });
+  });
+
   test("bedrock: no key variable, the region on the server's unit", () => {
     for (const provider of ["hindsight", "openviking"] as const) {
       const r = renderMemory({
@@ -552,6 +587,16 @@ describe("rendering an agent with each memory provider", () => {
     }
     expect(hind.manifest.memory?.pin).toBe(MEMORY_SERVICES.hindsight.pin);
     expect(ov.manifest.memory?.pin).toBe(MEMORY_SERVICES.openviking.pin);
+  });
+
+  test("prism is `prme` to Hermes, `prism` in the manifest, and asks for its own capability", () => {
+    const r = render({ provider: "prism" });
+    expect(file(r, HERMES_MANAGED_CONFIG)).toInclude('memory:\n  provider: "prme"\n');
+    expect(r.manifest.memory).toEqual({ provider: "prism", pin: MEMORY_SERVICES.prism.pin });
+    expect(r.manifest.requires).toEqual(
+      expect.arrayContaining([MEMORY_SERVICE_CAPABILITY, MEMORY_PRISM_CAPABILITY]),
+    );
+    expect(hind.manifest.requires).not.toContain(MEMORY_PRISM_CAPABILITY);
   });
 
   test("the model the server is told is the agent's own", () => {

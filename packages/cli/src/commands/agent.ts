@@ -311,7 +311,7 @@ export function register(program: Command): void {
           "  hermetic providers create --provider openrouter --name cheap --api-key-stdin\n" +
           "\nA memory provider needs no key either: it runs on the box, and one that makes\n" +
           "model calls makes them with the agent's own provider credential. A provider\n" +
-          "that runs a server (hindsight, openviking, honcho) needs a size with room for\n" +
+          "that runs a server (hindsight, openviking, honcho, prism) needs a size with room for\n" +
           "it, or the create is refused before anything exists. honcho also needs an\n" +
           "agent provider with an embeddings endpoint (openai, openrouter, nous, vercel).\n" +
           memoryHelpText(),

@@ -39,9 +39,30 @@
 import { HERMES_ACCOUNT_HOME, HERMES_HOME } from "./hermes.ts";
 import { PROVIDER_IDS, type Provider } from "./providers.ts";
 
-/** External memory provider ids, as Hermes spells them in `memory.provider`. */
-export const MEMORY_PROVIDER_IDS = ["holographic", "hindsight", "openviking", "honcho"] as const;
+/**
+ * External memory provider ids. Hermes spells each the same in
+ * `memory.provider` except `prism` (`hermesMemoryProviderName`).
+ */
+export const MEMORY_PROVIDER_IDS = [
+  "holographic",
+  "hindsight",
+  "openviking",
+  "honcho",
+  "prism",
+] as const;
 export type MemoryProvider = (typeof MEMORY_PROVIDER_IDS)[number];
+
+/**
+ * The name Hermes knows a provider by: the plugin directory under
+ * `$HERMES_HOME/plugins/`, `memory.provider` in the managed config, and what
+ * `hermes-check` reads back. `prism` is `prme` there — PRME is the package's
+ * own name, and Hermes's plugin catalog already has an unrelated `prism`
+ * (a models plugin) that `hermes plugins install prism` would write over the
+ * same directory.
+ */
+export function hermesMemoryProviderName(id: MemoryProvider): string {
+  return id === "prism" ? "prme" : id;
+}
 
 /**
  * The explicit "no external provider" answer a create may give. Distinct from
@@ -242,6 +263,32 @@ export const MEMORY_PROVIDERS: Readonly<Record<MemoryProvider, MemoryProviderSpe
       storage: "on box",
     },
   },
+  prism: {
+    label: "Prism (local server)",
+    summary:
+      "Portable Relational Memory Engine (PRME): hybrid vector and full-text recall over the agent's turns and notes in a local DuckDB pack, served on the box with a local embedding model; no model calls.",
+    kind: "service",
+    min_mem_gib: 4,
+    vendors: PROVIDER_IDS,
+    // `/v1/store` and `/v1/retrieve` embed locally (fastembed) and never call a
+    // model; PRME's LLM extraction (`/v1/ingest`) is not used.
+    // shortcut: raw turns and notes only, no entity/claim extraction; upgrade
+    // to `/v1/ingest` through `memoryLlmFor` once PRME's extraction speaks
+    // every vendor hermetic binds (it knows openai, anthropic and ollama).
+    uses_llm: false,
+    // The plugin (`packages/agentd/plugins/prme`) uses `httpx`, which Hermes ships.
+    pip: [],
+    // Hermes's memory-providers page has no section for it; PRME's own README.
+    docs: "https://github.com/dwamianm/prism#readme",
+    resources: {
+      added_ram: "~0.5 GiB",
+      disk: "~1 GiB",
+      services: 1,
+      model_calls: "none",
+      embeddings: "box",
+      storage: "on box",
+    },
+  },
 };
 
 /** The catalogue in picker order, each entry carrying its id. */
@@ -420,6 +467,21 @@ export function memoryServiceDir(id: MemoryProvider): string {
  */
 export const MEMORY_SERVICE_CONF_DIR = "/etc/hermetic/memory";
 
+/** Where PRME's HTTP API listens on loopback. */
+export const PRISM_PORT = 18010;
+
+/**
+ * PRME's pack — DuckDB file, usearch vectors, tantivy index — fastembed's
+ * model cache and tiktoken's encodings (retrieval packing counts tokens with
+ * `cl100k_base`), under `memoryServiceDir("prism")`; hermeticd makes all three
+ * and warms both caches at install.
+ */
+export const PRISM_DATA_DIR = `${MEMORY_SERVICE_ROOT}/prism/data`;
+export const PRISM_FASTEMBED_DIR = `${MEMORY_SERVICE_ROOT}/prism/fastembed`;
+export const PRISM_TIKTOKEN_DIR = `${MEMORY_SERVICE_ROOT}/prism/tiktoken`;
+/** The embedding model the unit names (`PRME_EMBEDDING_MODEL_NAME`) and hermeticd warms. */
+export const PRISM_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5";
+
 /** openviking's `ov.conf`, the file its unit's `--config` names. */
 export const openvikingConfPath = `${MEMORY_SERVICE_CONF_DIR}/ov.conf`;
 
@@ -577,7 +639,7 @@ export interface MemoryServiceSpec {
   } | null;
 }
 
-export type MemoryServiceId = "hindsight" | "openviking" | "honcho";
+export type MemoryServiceId = "hindsight" | "openviking" | "honcho" | "prism";
 
 export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec>> = {
   hindsight: {
@@ -652,10 +714,65 @@ export const MEMORY_SERVICES: Readonly<Record<MemoryServiceId, MemoryServiceSpec
     plugin: null,
     model: null,
   },
+  prism: {
+    // A prerelease, pinned exactly (`uv` installs an `==` prerelease without
+    // `--prerelease=allow`); upstream declares only `>=` floors, so the server
+    // and its stack are pinned here. `plugin-<n>` is hermeticd's own plugin.
+    pin: "prme==0.16.0a3+plugin-1.0.0",
+    // Off every default a tool or another server binds (8000, 8888, 1933, 18000, 7434).
+    port: PRISM_PORT,
+    python: "3.11",
+    // `[api]` is FastAPI + uvicorn. The rest is PRME's own uv.lock at
+    // v0.16.0a3: the pack's on-disk formats (duckdb, usearch, tantivy) and the
+    // embedding stack's version are what these hold still over a `/data` pack
+    // that outlives the box.
+    packages: [
+      "prme[api]==0.16.0a3",
+      "duckdb==1.4.4",
+      "usearch==2.26.2",
+      "tantivy==0.25.1",
+      "fastembed==0.7.4",
+      "onnxruntime==1.24.2",
+      "tiktoken==0.12.0",
+      "fastapi==0.135.1",
+      "uvicorn==0.42.0",
+      "numpy==2.4.2",
+      "tokenizers==0.22.2",
+      "huggingface-hub==1.4.1",
+      "pydantic==2.12.5",
+      "pydantic-settings==2.13.1",
+    ],
+    extra_index: [],
+    // Each ships cp311 aarch64 wheels; `only_binary` makes a missing one a
+    // failure rather than a compile on a 2-vCPU box.
+    only_binary: [
+      "duckdb",
+      "usearch",
+      "tantivy",
+      "onnxruntime",
+      "tokenizers",
+      "tiktoken",
+      "py-rust-stemmers",
+      "cryptography",
+      "pillow",
+      "numpy",
+    ],
+    command: "python",
+    source: null,
+    apt: [],
+    // Shipped inside hermeticd (`packages/agentd/plugins/prme`), not checked out.
+    plugin: null,
+    // fastembed's `BAAI/bge-small-en-v1.5` is a multi-file ONNX download, not
+    // one file: hermeticd warms it (and tiktoken's encoding) at install
+    // (`ensurePrismCaches`), so neither happens inside a recall.
+    model: null,
+  },
 };
 
 export function memoryServiceOf(id: MemoryProvider): MemoryServiceSpec | null {
-  return id === "hindsight" || id === "openviking" || id === "honcho" ? MEMORY_SERVICES[id] : null;
+  return id === "hindsight" || id === "openviking" || id === "honcho" || id === "prism"
+    ? MEMORY_SERVICES[id]
+    : null;
 }
 
 /**
@@ -674,3 +791,10 @@ export const MEMORY_SERVICE_CAPABILITY = "memory-service";
  * (`StoredManifestMemory`) and leave Hermes pointed at a server nobody runs.
  */
 export const MEMORY_HONCHO_CAPABILITY = "memory-honcho";
+/**
+ * prism's plugin ships inside hermeticd and its pack lives in directories
+ * hermeticd makes. One that predates it reads a manifest naming `prism` as no
+ * provider (`StoredManifestMemory`) and leaves Hermes asking for a `prme`
+ * plugin that is not there — built-in memory, silently.
+ */
+export const MEMORY_PRISM_CAPABILITY = "memory-prism";

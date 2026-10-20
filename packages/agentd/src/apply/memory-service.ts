@@ -25,6 +25,10 @@ import {
   MEMORY_SERVICE_UNIT,
   MEMORY_SERVICE_UNITS,
   OPENVIKING_DATA_DIRS,
+  PRISM_EMBEDDING_MODEL,
+  PRISM_FASTEMBED_DIR,
+  PRISM_TIKTOKEN_DIR,
+  hermesMemoryProviderName,
   hermesPluginDir,
   honchoClientConfPath,
   memoryServiceDir,
@@ -42,6 +46,7 @@ import { must } from "../host.ts";
 import { HERMES_USER } from "./accounts.ts";
 import { UV_ENV } from "./hermes.ts";
 import { ensureHoncho, linkTarget } from "./memory-honcho.ts";
+import { BUNDLED_MEMORY_PLUGINS, ensureBundledPlugin } from "./plugins.ts";
 import {
   ACCOUNT_ENV,
   ACCOUNT_EXEC,
@@ -64,7 +69,8 @@ export const MEMORY_SERVICE_UNIT_PATH = `${UNIT_DIR}/${MEMORY_SERVICE_UNIT}`;
  * has to create anything: Hugging Face's cache for Hindsight's embedding and
  * reranker models; OpenViking's two stores (`OPENVIKING_DATA_DIRS`) and the
  * GGUF model `ensureModel` seeds;
- * honcho's tiktoken cache. (honcho's `src` and `pg` are moved into place
+ * honcho's tiktoken cache; PRME's pack (`PRISM_DATA_DIR`) and the two caches
+ * `ensurePrismCaches` warms. (honcho's `src` and `pg` are moved into place
  * whole, so neither is made here.)
  */
 const SERVICE_SUBDIRS: Readonly<Record<MemoryServiceId, readonly string[]>> = {
@@ -72,10 +78,16 @@ const SERVICE_SUBDIRS: Readonly<Record<MemoryServiceId, readonly string[]>> = {
   // One store per embedding mode, both made so a flip finds its own.
   openviking: [OPENVIKING_DATA_DIRS.local, OPENVIKING_DATA_DIRS.remote, "models"],
   honcho: ["tiktoken"],
+  prism: ["data", "fastembed", "tiktoken"],
 };
 
 function isServiceId(provider: MemoryProvider | undefined): provider is MemoryServiceId {
-  return provider === "hindsight" || provider === "openviking" || provider === "honcho";
+  return (
+    provider === "hindsight" ||
+    provider === "openviking" ||
+    provider === "honcho" ||
+    provider === "prism"
+  );
 }
 
 /** The provider and its pinned server, when the manifest names a service provider at all. */
@@ -120,7 +132,9 @@ export function assertMemoryPin(manifest: AgentConfig): void {
  * 1. the service dir and its subdirectories, the account's, 0750;
  * 2. the venv, and the pinned packages in it, recorded in `MEMORY_PIN_MARKER`;
  * 3. the model file, when the spec seeds one, verified by size and sha256;
- * 4. the Hermes plugin, when the spec names one, at its pinned commit.
+ *    for prism, fastembed's model and tiktoken's encoding (`ensurePrismCaches`);
+ * 4. the Hermes plugin: a catalog checkout at its pinned commit when the spec
+ *    names one, else the one hermeticd ships (`BUNDLED_MEMORY_PLUGINS`), if any.
  *
  * A server built from a source checkout (honcho) replaces 2-4 with its own
  * steps (`memory-honcho.ts`): distro Postgres, a second managed Python, the
@@ -163,13 +177,17 @@ export async function ensureMemoryService(input: {
     });
   }
   const venv = await ensureServiceVenv(host, provider, spec, dir, emit, dry);
-  const model = await ensureModel(host, provider, spec, dir, emit, dry);
+  const model =
+    provider === "prism"
+      ? await ensurePrismCaches(host, spec, dir, venv, emit, dry)
+      : await ensureModel(host, provider, spec, dir, emit, dry);
   const plugin = await ensurePlugin(host, provider, spec, emit, dry);
 
   if (input.result) {
     if (venv) input.result.installed.push(`memory:${spec.pin}`);
     if (model && spec.model) input.result.installed.push(`model:${spec.model.file}`);
-    if (plugin && spec.plugin) input.result.installed.push(`plugin:${provider}@${spec.plugin.sha}`);
+    if (plugin)
+      input.result.installed.push(`plugin:${provider}${spec.plugin ? `@${spec.plugin.sha}` : ""}`);
   }
   return { installed: venv || model || plugin };
 }
@@ -361,27 +379,101 @@ async function ensureModel(
   return true;
 }
 
+/** fastembed's model and tiktoken's encoding, fetched by the venv's own packages. */
+const PRISM_WARM =
+  `from fastembed import TextEmbedding; list(TextEmbedding('${PRISM_EMBEDDING_MODEL}').embed(['warm-up'])); ` +
+  "import tiktoken; tiktoken.get_encoding('cl100k_base')";
+
+/** Written by the account once `PRISM_WARM` succeeded: what it warmed, with which fastembed. */
+export const PRISM_CACHE_MARKER = ".hermetic-caches";
+
 /**
- * The Hermes plugin for the provider, at the commit the spec pins, in
- * `hermesPluginDir(<provider>)`: a sparse checkout of just the plugin's
- * subdirectory (`ensureCheckout`).
+ * prism's two download caches, warmed at install so neither download happens
+ * inside a recall or inside the unit's start. After every venv install (a new
+ * fastembed or tiktoken may name other files), and whenever
+ * `PRISM_CACHE_MARKER` does not name this model, encoding and fastembed pin —
+ * a marker, not a look at the caches, because an interrupted download leaves
+ * a model directory that looks whole. The marker is removed before the
+ * warm-up and written only after it succeeded, like `MEMORY_PIN_MARKER`.
+ * Network, so retried, and a failure fails the apply (honcho's
+ * `ensureTiktoken`) with an error naming this step. Embeds one string as well
+ * as loading the model, so a model that downloads but cannot run fails here
+ * rather than at the first recall.
+ */
+async function ensurePrismCaches(
+  host: Host,
+  spec: MemoryServiceSpec,
+  dir: string,
+  installed: boolean,
+  emit: Emit,
+  dry: boolean,
+): Promise<boolean> {
+  const marker = `${dir}/${PRISM_CACHE_MARKER}`;
+  const fastembed = spec.packages.find((p) => p.startsWith("fastembed==")) ?? "fastembed";
+  const want = `${PRISM_EMBEDDING_MODEL} cl100k_base ${fastembed}`;
+  if (!installed && (await host.readFile(marker))?.trim() === want) return false;
+  emit(
+    opEvent(
+      "packages",
+      0.37,
+      `fetching the prism embedding model ${PRISM_EMBEDDING_MODEL}`,
+      host.now(),
+    ),
+  );
+  if (dry) return true;
+  await must(host, asHermes(["rm", "-f", marker]), ACCOUNT_EXEC);
+  try {
+    await retry(host, NET_ATTEMPTS, NET_RETRY_MS, () =>
+      must(host, asHermes([`${dir}/venv/bin/python`, "-c", PRISM_WARM]), {
+        env: {
+          ...ACCOUNT_ENV,
+          FASTEMBED_CACHE_PATH: PRISM_FASTEMBED_DIR,
+          TIKTOKEN_CACHE_DIR: PRISM_TIKTOKEN_DIR,
+        },
+        ...ACCOUNT_EXEC,
+      }),
+    );
+  } catch (e) {
+    throw new AgentdError(
+      "COMMAND_FAILED",
+      `could not warm the prism caches (the embedding model ${PRISM_EMBEDDING_MODEL} into ` +
+        `${PRISM_FASTEMBED_DIR}, tiktoken's cl100k_base into ${PRISM_TIKTOKEN_DIR}) after ` +
+        `${String(NET_ATTEMPTS)} attempts: ${e instanceof Error ? e.message : String(e)}`,
+      { model: PRISM_EMBEDDING_MODEL, attempts: NET_ATTEMPTS },
+    );
+  }
+  await writeAsHermes(host, marker, `${want}\n`);
+  return true;
+}
+
+/**
+ * The Hermes plugin for the provider, in `hermesPluginDir(<Hermes's name for
+ * it>)`: at the commit the spec pins, a sparse checkout of just the plugin's
+ * subdirectory (`ensureCheckout`); with no pinned checkout, the plugin
+ * hermeticd embeds, written as the account (`ensureBundledPlugin`); with
+ * neither, nothing (Hermes bundles it).
  */
 async function ensurePlugin(
   host: Host,
-  provider: MemoryProvider,
+  provider: MemoryServiceId,
   spec: MemoryServiceSpec,
   emit: Emit,
   dry: boolean,
 ): Promise<boolean> {
   const plugin = spec.plugin;
-  if (plugin === null) return false;
+  const name = hermesMemoryProviderName(provider);
+  if (plugin === null) {
+    const files = BUNDLED_MEMORY_PLUGINS[provider];
+    // Fatal, like a failed checkout: without it Hermes silently runs built-in memory.
+    return files ? ensureBundledPlugin(host, emit, dry, { name, files, fatal: true }) : false;
+  }
   return ensureCheckout(
     host,
     {
       repo: plugin.repo,
       sha: plugin.sha,
       subdir: plugin.subdir,
-      target: hermesPluginDir(provider),
+      target: hermesPluginDir(name),
       label: `the ${provider} Hermes plugin ${plugin.version}`,
     },
     emit,

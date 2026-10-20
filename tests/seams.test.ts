@@ -52,6 +52,7 @@ import {
   HONCHO_PLUGIN_CONFIG_LINK,
   MEMORY_DB_UNIT,
   MEMORY_HONCHO_CAPABILITY,
+  MEMORY_PRISM_CAPABILITY,
   MEMORY_LLM_ENV_PATH,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDER_CAPABILITY,
@@ -69,6 +70,11 @@ import {
   OPENVIKING_DATA_DIRS,
   openvikingConfPath,
   openvikingDataDir,
+  PRISM_EMBEDDING_MODEL,
+  PRISM_FASTEMBED_DIR,
+  PRISM_PORT,
+  PRISM_TIKTOKEN_DIR,
+  hermesMemoryProviderName,
 } from "../packages/core/src/schema/memory.ts";
 import { HERMETIC_VERSION } from "../packages/core/src/version.ts";
 import { HEARTBEAT_ATTRIBUTES } from "../packages/agentd/src/aws.ts";
@@ -860,7 +866,7 @@ describe("seam: the memory provider core names is the one hermeticd configures",
     const holo = render({ provider: "holographic" });
     expect(requiredCapabilities(holo.manifest)).toContain(MEMORY_PROVIDER_CAPABILITY);
     expect(requiredCapabilities(holo.manifest)).not.toContain(MEMORY_SERVICE_CAPABILITY);
-    for (const provider of ["hindsight", "openviking"] as const) {
+    for (const provider of ["hindsight", "openviking", "prism"] as const) {
       const rendered = render({ provider });
       for (const cap of [MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY] as const) {
         expect(requiredCapabilities(rendered.manifest)).toContain(cap);
@@ -946,6 +952,38 @@ describe("seam: the memory provider core names is the one hermeticd configures",
   });
 
   /**
+   * prism: the server listens where the `prme` plugin hermeticd ships is told
+   * to look (`PRME_API_URL`), the box installs the pin the laptop names, and
+   * Hermes loads the plugin by its Hermes name — `prme`, not hermetic's `prism`.
+   */
+  test("prism's server, its plugin's URL, its pin and Hermes's name for it agree", () => {
+    const read = parseManifest(overTheWire(render({ provider: "prism" }).manifest));
+    const unit = read.files.find((f) => f.path === `/etc/systemd/system/${MEMORY_SERVICE_UNIT}`)!;
+    expect(unit.content).toInclude(` -m prme.api --host 127.0.0.1 --port ${String(PRISM_PORT)}\n`);
+    expect(MEMORY_SERVICES.prism.port).toBe(PRISM_PORT);
+    // The server reads the caches and the model hermeticd's install warms (`ensurePrismCaches`).
+    for (const line of [
+      `Environment=PRME_EMBEDDING_MODEL_NAME=${PRISM_EMBEDDING_MODEL}`,
+      `Environment=FASTEMBED_CACHE_PATH=${PRISM_FASTEMBED_DIR}`,
+      `Environment=TIKTOKEN_CACHE_DIR=${PRISM_TIKTOKEN_DIR}`,
+    ]) {
+      expect(unit.content).toInclude(`${line}\n`);
+    }
+    expect(unit.content).not.toInclude("ExecStartPre=");
+    for (const content of hermesUnits(read)) {
+      expect(content).toInclude(`Environment=PRME_API_URL=http://127.0.0.1:${String(PRISM_PORT)}\n`);
+    }
+    expect(read.memory).toEqual({ provider: "prism", pin: MEMORY_SERVICES.prism.pin });
+    expect(read.files.find((f) => f.path === HERMES_MANAGED_CONFIG)!.content).toInclude(
+      'memory:\n  provider: "prme"\n',
+    );
+    expect(hermesMemoryProviderName("prism")).toBe("prme");
+    expect(requiredCapabilities(read)).toContain(MEMORY_PRISM_CAPABILITY);
+    expect(AGENT_CAPABILITY_LIST).toContain(MEMORY_PRISM_CAPABILITY);
+    expect(HERMETICD_CAPABILITIES.has(MEMORY_PRISM_CAPABILITY)).toBe(true);
+  });
+
+  /**
    * The secrets oneshot is the boot sync: it writes the managed block into
    * every Hermes `.env` and recreates `/run/hermetic/memory-llm.env`, which
    * `hermetic-memory.service` names in an unconditional `EnvironmentFile=`.
@@ -969,7 +1007,7 @@ describe("seam: the memory provider core names is the one hermeticd configures",
    * there is one the account could swap for a symlink.
    */
   test("no service provider renders a file under the hermes home", () => {
-    for (const provider of ["hindsight", "openviking"] as const) {
+    for (const provider of ["hindsight", "openviking", "prism"] as const) {
       const read = parseManifest(overTheWire(render({ provider }).manifest));
       const under = read.files.filter((f) => f.path.startsWith(HERMES_ACCOUNT_HOME));
       expect(under.map((f) => f.path)).toEqual([]);
@@ -1234,7 +1272,7 @@ describe("seam: a memory switch restarts what reads the files it moves", () => {
         } as RenderInput).manifest,
       ),
     );
-  const choices = [undefined, "holographic", "hindsight", "openviking", "honcho"] as const;
+  const choices = [undefined, "holographic", "hindsight", "openviking", "honcho", "prism"] as const;
   const docs = choices.map((provider) => render(provider === undefined ? undefined : { provider }));
 
   test("the units that require the secrets oneshot are exactly the ones apply restarts in its place", () => {

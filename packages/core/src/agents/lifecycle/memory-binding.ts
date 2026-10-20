@@ -30,6 +30,7 @@ import { SIZES } from "../../schema/index.ts";
 import {
   MEMORY_PROVIDER_NONE,
   MEMORY_HONCHO_CAPABILITY,
+  MEMORY_PRISM_CAPABILITY,
   MEMORY_PROVIDERS,
   MEMORY_PROVIDER_CAPABILITY,
   MEMORY_SERVICE_CAPABILITY,
@@ -197,7 +198,8 @@ export function assertMemoryModel(
   vendor: Provider,
   model: string,
 ): void {
-  if (provider === null || !isMemoryServiceProvider(provider)) return;
+  // prism hands its server no model.
+  if (provider === null || !isMemoryServiceProvider(provider) || provider === "prism") return;
   memoryLlmFor(provider, vendor, model);
 }
 
@@ -206,12 +208,14 @@ export function assertMemoryModel(
  * in `schema/manifest.ts` asks the same of the rendered document): any
  * provider needs its Python dependencies settled; a service provider also
  * needs the box to install and run the server; honcho also needs the box to
- * know its Postgres, source build and three units (`MEMORY_HONCHO_CAPABILITY`).
+ * know its Postgres, source build and three units (`MEMORY_HONCHO_CAPABILITY`);
+ * prism also needs its bundled plugin (`MEMORY_PRISM_CAPABILITY`).
  */
 export function memoryCapabilities(provider: MemoryProvider | null): AgentCapability[] {
   if (provider === null) return [];
   if (!memoryProviderIsService(provider)) return [MEMORY_PROVIDER_CAPABILITY];
   const out: AgentCapability[] = [MEMORY_PROVIDER_CAPABILITY, MEMORY_SERVICE_CAPABILITY];
   if (provider === "honcho") out.push(MEMORY_HONCHO_CAPABILITY);
+  if (provider === "prism") out.push(MEMORY_PRISM_CAPABILITY);
   return out;
 }

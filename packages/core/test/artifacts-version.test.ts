@@ -28,6 +28,7 @@ import {
 /** Artifacts version → the `sourceFingerprint` of the sources that version ships. */
 const ARTIFACTS_FINGERPRINT: Record<number, string> = {
   1: "f577b064a7c7fb458f659d1676708af863a2a78b012fa03330a35aff5125e2ef",
+  2: "b3971120ebf1e8176cd370acd2fa19ddd67dba320d4313ee10fde2fcd228e8c3",
 };
 
 function gitVisibleFingerprint(root: string): string {

@@ -19,6 +19,11 @@ import {
   MEMORY_SERVICES,
   MEMORY_SERVICE_ROOT,
   MEMORY_SERVICE_UNIT,
+  PRISM_DATA_DIR,
+  PRISM_FASTEMBED_DIR,
+  PRISM_PORT,
+  PRISM_TIKTOKEN_DIR,
+  hermesMemoryProviderName,
   hermesPluginDir,
   memoryServiceDir,
   openvikingConfPath,
@@ -31,6 +36,9 @@ import {
   importNameOf,
 } from "../src/apply/index.ts";
 import { HERMES_VENV_DIR } from "../src/apply/hermes.ts";
+import { PRISM_CACHE_MARKER } from "../src/apply/memory-service.ts";
+import { NET_ATTEMPTS } from "../src/apply/memory-shared.ts";
+import { BUNDLED_MEMORY_PLUGINS } from "../src/apply/plugins.ts";
 import { makeAws } from "../src/aws.ts";
 import { convergeOnce } from "../src/converge.ts";
 import { AgentdError } from "../src/errors.ts";
@@ -72,7 +80,9 @@ const OPENVIKING_DIR = memoryServiceDir("openviking");
 const PLUGIN_DIR = hermesPluginDir("hindsight");
 const MODEL_PATH = `${OPENVIKING_DIR}/models/${MODEL.file}`;
 
-function unitFile(provider: "hindsight" | "openviking"): RenderedFile {
+type ServiceProvider = "hindsight" | "openviking" | "prism";
+
+function unitFile(provider: ServiceProvider): RenderedFile {
   const spec = MEMORY_SERVICES[provider];
   return {
     path: MEMORY_SERVICE_UNIT_PATH,
@@ -86,7 +96,7 @@ function unitFile(provider: "hindsight" | "openviking"): RenderedFile {
 
 /** A service provider's manifest: the fixture's, plus the unit and the server's config. */
 function serviceManifest(
-  provider: "hindsight" | "openviking",
+  provider: ServiceProvider,
   options: {
     vendor?: "anthropic" | "bedrock";
     pin?: string;
@@ -99,11 +109,16 @@ function serviceManifest(
     memory: {
       provider,
       pin: options.pin ?? MEMORY_SERVICES[provider].pin,
-      llm: {
-        vendor,
-        model: "FIXTURE-model",
-        key_env: options.key_env ?? (vendor === "bedrock" ? [] : ["HINDSIGHT_API_LLM_API_KEY"]),
-      },
+      // prism stores without extraction, so its server makes no model calls.
+      ...(provider === "prism"
+        ? {}
+        : {
+            llm: {
+              vendor,
+              model: "FIXTURE-model",
+              key_env: options.key_env ?? (vendor === "bedrock" ? [] : ["HINDSIGHT_API_LLM_API_KEY"]),
+            },
+          }),
     },
     units: [
       "hermeticd.service",
@@ -386,6 +401,212 @@ describe("openviking", () => {
   });
 });
 
+describe("prism", () => {
+  const PRISM = MEMORY_SERVICES.prism;
+  const PRISM_DIR = memoryServiceDir("prism");
+  const PRME_DIR = `${HERMES_HOME}/plugins/prme`;
+  const FILES = BUNDLED_MEMORY_PLUGINS.prism!;
+
+  test("installs the server and the bundled prme plugin, as the account", async () => {
+    const host = new MemoryBox();
+    const result = await apply(serviceManifest("prism"), { host, providerKey: PROVIDER_KEY });
+
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${PRISM_DATA_DIR}$`, 1);
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${PRISM_FASTEMBED_DIR}$`, 1);
+    expectRan(host, `^runuser -u hermes -- install -d -m 0750 ${PRISM_TIKTOKEN_DIR}$`, 1);
+    const pip = ran(
+      host,
+      `^runuser -u hermes -- uv pip install .*--python ${PRISM_DIR}/venv/bin/python`,
+    );
+    expect(pip).toHaveLength(1);
+    const argv = pip[0]!.split(" ");
+    // The server first, then its storage and embedding stack, every one exact.
+    const specs = argv.slice(argv.indexOf("prme[api]==0.16.0a3"));
+    expect(specs).toEqual([...PRISM.packages]);
+    expect(specs.every((p) => /^[a-z[\]-]+==\S+$/.test(p))).toBe(true);
+    expect(specs).toEqual(
+      expect.arrayContaining(["duckdb==1.4.4", "fastembed==0.7.4", "tiktoken==0.12.0"]),
+    );
+    const binaries = argv.flatMap((a, i) => (a === "--only-binary" ? [argv[i + 1]] : []));
+    expect(binaries).toEqual([
+      "duckdb",
+      "usearch",
+      "tantivy",
+      "onnxruntime",
+      "tokenizers",
+      "tiktoken",
+      "py-rust-stemmers",
+      "cryptography",
+      "pillow",
+      "numpy",
+    ]);
+    expect(host.files.get(`${PRISM_DIR}/${MEMORY_PIN_MARKER}`)?.content).toBe(`${PRISM.pin}\n`);
+
+    // Hermes knows the provider as `prme`; the plugin is hermeticd's own, written by the account.
+    expect(hermesPluginDir(hermesMemoryProviderName("prism"))).toBe(PRME_DIR);
+    for (const { name, content } of FILES) {
+      const file = host.files.get(`${PRME_DIR}/${name}`);
+      expect(file?.content).toBe(content);
+      expect(file?.ownership).toBe("hermes:hermes");
+      expect(file?.mode).toBe("0644");
+    }
+    expect(
+      host.streamWrites.filter((w) => w.path.startsWith(`${PRME_DIR}/`)).map((w) => w.user),
+    ).toEqual(["hermes", "hermes"]);
+    expectNotRan(host, /git clone --filter/);
+    expect(result.installed).toEqual(expect.arrayContaining([`memory:${PRISM.pin}`, "plugin:prism"]));
+    expect(result.restarted).toContain(MEMORY_SERVICE_UNIT);
+  });
+
+  const WARM = `^runuser -u hermes -- ${PRISM_DIR}/venv/bin/python -c from fastembed import TextEmbedding; .*import tiktoken`;
+
+  test("warms fastembed's model and tiktoken's encoding at install, into the unit's caches, once", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("prism");
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expectRan(host, WARM, 1);
+    expect(host.commands.join("\n")).toContain("TextEmbedding('BAAI/bge-small-en-v1.5')");
+    // The fake fills the directories the warm-up's env names: the unit's.
+    expect(
+      host.files.has(`${PRISM_FASTEMBED_DIR}/models--qdrant--bge-small-en-v1.5-onnx-q/model.onnx`),
+    ).toBe(true);
+    expect(host.files.has(`${PRISM_TIKTOKEN_DIR}/9b5ad71b2ce5302211f9c61530b329a4922fc6a4`)).toBe(true);
+    // The marker, by the account, only after the warm-up ran.
+    const marker = `${PRISM_DIR}/${PRISM_CACHE_MARKER}`;
+    expect(host.files.get(marker)?.content).toBe(
+      "BAAI/bge-small-en-v1.5 cl100k_base fastembed==0.7.4\n",
+    );
+    expect(host.files.get(marker)?.ownership).toBe("hermes:hermes");
+
+    // Converged: the marker answers, nothing is fetched.
+    host.commands.length = 0;
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expectNotRan(host, WARM);
+
+    // A stale marker (another fastembed) or none warms again.
+    for (const stale of ["BAAI/bge-small-en-v1.5 cl100k_base fastembed==0.7.3\n", null]) {
+      if (stale === null) host.files.delete(marker);
+      else host.seed(marker, stale);
+      host.commands.length = 0;
+      await apply(manifest, { host, providerKey: PROVIDER_KEY });
+      expectRan(host, WARM, 1);
+      expect(host.files.get(marker)?.content).toBe(
+        "BAAI/bge-small-en-v1.5 cl100k_base fastembed==0.7.4\n",
+      );
+    }
+  });
+
+  test("an interrupted download that left caches behind, but no marker, is warmed again", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("prism");
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    // What a killed hf_hub fetch leaves: the model's directory, a partial blob, the encoding.
+    host.files.delete(`${PRISM_DIR}/${PRISM_CACHE_MARKER}`);
+    host.seed(
+      `${PRISM_FASTEMBED_DIR}/models--qdrant--bge-small-en-v1.5-onnx-q/blobs/ab.incomplete`,
+      "",
+    );
+    host.commands.length = 0;
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expectRan(host, WARM, 1);
+  });
+
+  test("a warm-up that keeps failing fails the apply, leaves no marker, and is retried next apply", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("prism");
+    const marker = `${PRISM_DIR}/${PRISM_CACHE_MARKER}`;
+    host.warmFails = true;
+    const failed = await apply(manifest, { host, providerKey: PROVIDER_KEY }).catch((e: unknown) => e);
+    expect(failed).toBeInstanceOf(AgentdError);
+    expect((failed as AgentdError).code).toBe("COMMAND_FAILED");
+    expect((failed as AgentdError).message).toContain("could not warm the prism caches");
+    expectRan(host, WARM, NET_ATTEMPTS);
+    expect(host.files.has(marker)).toBe(false);
+
+    host.warmFails = false;
+    host.commands.length = 0;
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expectRan(host, WARM, 1);
+    expect(host.files.get(marker)?.content).toBe(
+      "BAAI/bge-small-en-v1.5 cl100k_base fastembed==0.7.4\n",
+    );
+  });
+
+  test("a plugin that cannot be written fails the apply, unlike hermetic-files", async () => {
+    const host = new MemoryBox();
+    host.dirs.add(PRME_DIR);
+    host.symlinks.add(PRME_DIR);
+    const refused = await apply(serviceManifest("prism"), { host, providerKey: PROVIDER_KEY }).catch(
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain(PRME_DIR);
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${PRME_DIR}/`))).toEqual([]);
+  });
+
+  test("a second apply on the converged box installs nothing and restarts nothing", async () => {
+    const host = new MemoryBox();
+    const manifest = serviceManifest("prism");
+    await apply(manifest, { host, providerKey: PROVIDER_KEY });
+
+    host.commands.length = 0;
+    host.restarted.length = 0;
+    host.streamWrites.length = 0;
+    const second = await apply(manifest, { host, providerKey: PROVIDER_KEY });
+    expect(host.commands.filter((c) => NETWORK_WORK.test(c))).toEqual([]);
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${PRME_DIR}/`))).toEqual([]);
+    expect(second.installed).toEqual([]);
+    expect(second.restarted).toEqual([]);
+  });
+
+  test("a dry run reports the plugin and writes none of it", async () => {
+    const host = new MemoryBox();
+    const { emit, events } = collector();
+    const plan = await apply(serviceManifest("prism"), {
+      host,
+      emit,
+      providerKey: PROVIDER_KEY,
+      dryRun: true,
+    });
+    expect(plan.installed).toEqual(expect.arrayContaining([`memory:${PRISM.pin}`, "plugin:prism"]));
+    expect(host.streamWrites.filter((w) => w.path.startsWith(`${PRME_DIR}/`))).toEqual([]);
+    expect(host.commands.filter((c) => c.includes(PRME_DIR))).toEqual([]);
+    // The warm-up is reported, not run, and no marker claims it.
+    expect(events.some((e) => e.message.includes("fetching the prism embedding model"))).toBe(true);
+    expectNotRan(host, WARM);
+    expect(host.files.has(`${PRISM_DIR}/${PRISM_CACHE_MARKER}`)).toBe(false);
+  });
+
+  test("the embedded plugin is the one in the source tree, at the pin's plugin version", async () => {
+    const dir = new URL("../plugins/prme/", import.meta.url);
+    for (const { name, content } of FILES) {
+      expect(content).toBe(await Bun.file(new URL(name, dir)).text());
+    }
+    expect(FILES.map((f) => f.name).sort()).toEqual(["__init__.py", "plugin.yaml"]);
+    const manifest = FILES.find((f) => f.name === "plugin.yaml")!.content;
+    expect(manifest).toContain("name: prme\n");
+    const version = /^version: "([^"]+)"$/m.exec(manifest)?.[1];
+    expect(PRISM.pin.endsWith(`+plugin-${version}`)).toBe(true);
+    // Hermes's discovery reads the text, not the module (`_is_memory_provider_dir`).
+    expect(FILES.find((f) => f.name === "__init__.py")!.content).toContain("register_memory_provider");
+  });
+
+  test("the plugin only speaks HTTP: the server is the one process that opens the pack", () => {
+    const init = FILES.find((f) => f.name === "__init__.py")!.content;
+    expect(init).not.toMatch(/^\s*(?:import prme|from prme)\b/m);
+    expect(init).not.toContain("MemoryClient");
+  });
+
+  test("the plugin defaults to the port the unit serves on", () => {
+    const init = FILES.find((f) => f.name === "__init__.py")!.content;
+    expect(init).toContain(`DEFAULT_API_URL = "http://127.0.0.1:${PRISM_PORT}"`);
+  });
+
+  test("hermeticd advertises memory-prism", () => {
+    expect(HERMETICD_CAPABILITIES.has("memory-prism")).toBe(true);
+  });
+});
+
 describe("the pin", () => {
   test("a pin this hermeticd does not install is refused before any command runs", async () => {
     const host = new MemoryBox();
@@ -611,6 +832,18 @@ describe("verify-hermes", () => {
     const memory = drifted.find((c) => c.name === "memory");
     expect(memory?.ok).toBe(false);
     expect(memory?.detail).toContain("openviking");
+  });
+
+  test("prism is selected as prme, the name Hermes knows it by", async () => {
+    const host = new BoxHost();
+    const manifest = makeManifest({ memory: { provider: "prism", pin: MEMORY_SERVICES.prism.pin } });
+    host.seed("/etc/hermes/config.yaml", managed("prme"), "0640");
+    expect((await checkHermes(host, manifest)).find((c) => c.name === "memory")?.ok).toBe(true);
+
+    host.seed("/etc/hermes/config.yaml", managed("prism"), "0640");
+    const memory = (await checkHermes(host, manifest)).find((c) => c.name === "memory");
+    expect(memory?.ok).toBe(false);
+    expect(memory?.detail).toContain("not prme");
   });
 
   test("no memory check without a provider", async () => {
