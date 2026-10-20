@@ -14,6 +14,12 @@
  * so the thing under test is now the thing an operator runs, rather than a
  * source tree run by a development bun.
  *
+ * `--bytecode` (which needs `--format=esm` for the CLI's top-level await) also
+ * skips parsing the bundle at every start: `--version` drops from ~0.5s to
+ * ~0.13s on an 8-core aarch64 box. Without it, a test that spawns three to five
+ * times while `describe.concurrent` keeps twenty spawns in flight ran past the
+ * 5s timeout there. It is the same code, precompiled, not a different program.
+ *
  * One build per test process, shared by every suite in the package: the
  * promise is the lock, so the twenty concurrent tests Bun may have in flight
  * all await the same compile instead of racing twenty of them.
@@ -45,10 +51,13 @@ export function cliBinary(): Promise<string> {
 }
 
 async function compile(): Promise<string> {
-  const proc = Bun.spawn([process.execPath, "build", "--compile", ENTRY, "--outfile", OUT], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const proc = Bun.spawn(
+    [process.execPath, "build", "--compile", "--bytecode", "--format=esm", ENTRY, "--outfile", OUT],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
