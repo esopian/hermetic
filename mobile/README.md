@@ -268,7 +268,7 @@ Coding agents drive Metro and the simulator without anything interactive:
 - In fixture mode, stage a screen by URL instead of a tap (`xcrun simctl openurl booted "<url>"`):
   `hermetic://fixture?pair=1&primary=atlas&avatar=pixel&theme=light&to=%2Fhome` pairs, sets the
   state and opens the route (`src/fixture/drive.ts`), and the chat link takes `?demo=<prompt>`,
-  `?attach=image,file`, `&send=<text>` and `?attachSheet=1`. A build without the fixture ignores
+  `?attach=image,file`, `?paste=image`, `&send=<text>` and `?attachSheet=1`. A build without the fixture ignores
   them all.
 - Bundle checks need no simulator: `CI=1 npx expo export --platform ios --output-dir /tmp/mobile-export`.
 

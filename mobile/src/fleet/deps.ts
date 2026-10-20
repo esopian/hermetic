@@ -89,6 +89,7 @@ export function appFleetDeps(
         demoPrompts: kit.demoPrompts,
         drive: kit.drive,
         sampleFiles: kit.sampleFiles,
+        clipboardImage: kit.clipboardImage,
       },
     };
   }

@@ -11,7 +11,20 @@ jest.mock("expo-haptics", () => ({
   NotificationFeedbackType: { Success: "success", Warning: "warning", Error: "error" },
   ImpactFeedbackStyle: { Light: "light", Medium: "medium", Heavy: "heavy" },
 }));
-jest.mock("expo-clipboard", () => ({ setStringAsync: jest.fn(async () => true) }));
+// The pasteboard holds no image unless a test says otherwise; the paste
+// control is a plain view whose `onPress` a test fires with a payload.
+jest.mock("expo-clipboard", () => {
+  const { View } = require("react-native");
+  return {
+    setStringAsync: jest.fn(async () => true),
+    hasImageAsync: jest.fn(async () => false),
+    getImageAsync: jest.fn(async () => null),
+    addClipboardListener: jest.fn(() => ({ remove: jest.fn() })),
+    isPasteButtonAvailable: true,
+    ContentType: { PLAIN_TEXT: "plain-text", HTML: "html", IMAGE: "image", URL: "url" },
+    ClipboardPasteButton: (props: Record<string, unknown>) => <View {...props} />,
+  };
+});
 // The attachment pickers (`src/client/pick-attachment.ts`): cancelled unless a test says otherwise.
 jest.mock("expo-image-picker", () => ({
   launchImageLibraryAsync: jest.fn(async () => ({ canceled: true, assets: null })),
