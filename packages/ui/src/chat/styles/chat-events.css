@@ -315,6 +315,149 @@
   color: var(--fg3);
 }
 
+/* `re: …` in the header of the bot turn right after a marker, in place of
+   the `↳ responding to` line: the marker above already says what happened. */
+.ch-reply-meta {
+  margin-left: 8px;
+  font: 10.5px var(--mono);
+  color: var(--fg3);
+}
+
+/* An injected goal, nudge, limit or persona: the one thing it is about. */
+.ch-ev-line .subj {
+  display: inline-block;
+  max-width: 58ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--fg);
+}
+
+/* ── markers: an injected boundary between turns ────────────────────────────
+
+   A scheduled wakeup, a handoff, a resumed or compacted context, a model
+   change: drawn on a day divider's centred rule rather than in the gutter,
+   because it is a boundary in the conversation, not work the bot did. The
+   line wraps, unlike a divider's, and the payload folds open centred under it. */
+
+.ch-divider.ch-marker {
+  height: auto;
+  min-height: 34px;
+  padding: 6px 26px;
+  background: transparent;
+  border: 0;
+}
+.ch-divider.ch-marker > span {
+  max-width: 78ch;
+  line-height: 1.5;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ch-divider.ch-marker.bad > span {
+  color: var(--bad);
+}
+.ch-divider.ch-marker.warn > span {
+  color: var(--warn);
+}
+.ch-divider.ch-marker .ch-marker-sub {
+  opacity: 0.75;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ch-marker-more {
+  margin: -4px auto 8px;
+  max-width: 72ch;
+  padding: 0 26px;
+  text-align: center;
+}
+.ch-marker-more:empty {
+  display: none;
+}
+.ch-marker-more .ch-ev-tail,
+.ch-marker-more .ch-ev-actions,
+.ch-marker-more .ch-taskcard {
+  text-align: left;
+}
+/* Inline, not the gutter's inline-flex: centred in a narrow column, the
+   summary's text and its last-line hint would wrap as two ragged columns. */
+.ch-marker-more .ch-ev-more > summary {
+  display: inline;
+}
+.ch-marker-more .ch-ev-more > summary::before {
+  margin-right: 6px;
+}
+
+/* A carried-over task list: a checklist card, not a dump. Done and cancelled
+   items are dimmed and struck, the active one is highlighted. */
+.ch-taskcard {
+  margin: 6px 0 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+}
+.ch-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ch-tasks li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 13px;
+  color: var(--fg);
+}
+.ch-tasks .g {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg3);
+}
+.ch-tasks li.st-active {
+  background: color-mix(in srgb, var(--acc) 12%, transparent);
+}
+.ch-tasks li.st-active .g {
+  color: var(--acc);
+}
+.ch-tasks li.st-active .tx {
+  font-weight: 600;
+}
+.ch-tasks li.st-done .g {
+  color: var(--ok);
+}
+.ch-tasks li.st-done .tx {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+.ch-tasks li.st-cancelled .tx {
+  text-decoration: line-through;
+  opacity: 0.45;
+}
+
+/* ── the operator's skill invocation ─────────────────────────────────────── */
+
+/* `⚡ review` chips, then the instruction typed alongside, on one line. */
+.ch-msg-body.ch-skill-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+}
+.ch-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  font: 12px var(--mono);
+  color: var(--acc);
+  white-space: nowrap;
+}
+
 /* ── a bot that chose not to answer ──────────────────────────────────────── */
 
 /* A reply that was only `NO_REPLY` (`chat-silence.ts`) is not somebody

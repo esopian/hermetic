@@ -69,7 +69,12 @@ import { join } from "node:path";
 import { MemoryInstanceListeningStore } from "../packages/core/src/chat/instance-listening.ts";
 import { createChat } from "../packages/core/src/chat/chat.ts";
 import { MemoryChatSettingsStore } from "../packages/core/src/chat/chat-settings.ts";
-import { REDACTED, SECRET_PATTERNS, redactBlock } from "../packages/core/src/chat/chat-redact.ts";
+import {
+  REDACTED,
+  SECRET_PATTERNS,
+  redactBlock,
+  redactMessage,
+} from "../packages/core/src/chat/chat-redact.ts";
 import type { HermesChatClient } from "../packages/core/src/chat/hermes/hermes-chat.ts";
 import { openHermetic } from "../packages/core/src/open.ts";
 import type { Hermetic } from "../packages/core/src/hermetic.ts";
@@ -582,10 +587,45 @@ function poisonedHistory(instance: string): ChatMessage[] {
           },
           raw: `[IMPORTANT: Background process proc_0123456789ab exited (exit code 1).\nCommand: env\nOutput:\n${s("aws-secret-access-key")}]`,
         },
+        {
+          // An injected notice's structured reading (`injected-notice.ts`): the
+          // heartbeat instruction, a compaction summary and a task list are the
+          // box's words, parsed out of the same text as `raw`.
+          kind: "process_event",
+          event: "todo",
+          outcome: "info",
+          notice: {
+            variant: null,
+            subject: `rotate ${s("slack-token")}`,
+            detail: s("jwt"),
+            body: `summary: ${s("github-token")}`,
+            tasks: [{ status: "active", depth: 0, id: "1", text: `use ${s("stripe-key")}` }],
+          },
+          raw: "[Your active task list was preserved across context compression]",
+        },
       ],
       usage: null,
       error: null,
       incomplete: null,
+    },
+    {
+      // A skill invocation and a messaging reply: the operator's message, with
+      // the skill body and the quoted message lifted into their own fields.
+      id: "msg-4",
+      session: SESSION,
+      role: "user",
+      author: null,
+      at: AT,
+      blocks: [{ kind: "text", markdown: "the diff" }],
+      usage: null,
+      error: null,
+      incomplete: null,
+      skill: {
+        names: ["review"],
+        instruction: `check ${s("npm-token")}`,
+        raw: `[IMPORTANT: The user has invoked the "review" skill …]\n\n${s("google-api-key")}`,
+      },
+      reply_to: { quote: `the key was ${s("sendgrid-key")}` },
     },
   ];
 }
@@ -824,6 +864,39 @@ describe("chat redaction, request cards", () => {
     expect(out.request_id).toBe("fr_0123456789ab");
     expect(JSON.stringify(out.result)).not.toContain(s("github-token"));
     expect(JSON.stringify(out.result)).toContain(REDACTED);
+  });
+});
+
+describe("chat redaction, injected-row fields", () => {
+  test("a notice's reading, a skill and a reply quote are masked", () => {
+    const history = poisonedHistory(INSTANCE);
+    const masked = history.map(redactMessage);
+    const planted = {
+      notice: history[2]?.blocks[1],
+      skill: history[3]?.skill,
+      reply_to: history[3]?.reply_to,
+    };
+    const out = {
+      notice: masked[2]?.blocks[1],
+      skill: masked[3]?.skill,
+      reply_to: masked[3]?.reply_to,
+    };
+    const ids = [
+      "slack-token",
+      "jwt",
+      "github-token",
+      "stripe-key",
+      "npm-token",
+      "google-api-key",
+      "sendgrid-key",
+    ];
+    for (const id of ids) {
+      // The positive control first: each field really carried its sentinel.
+      expect({ id, planted: JSON.stringify(planted).includes(v(id)) }).toEqual({ id, planted: true });
+      expect({ id, leaked: JSON.stringify(out).includes(v(id)) }).toEqual({ id, leaked: false });
+    }
+    expect(out.skill?.names).toEqual(["review"]);
+    expect(out.reply_to?.quote).toBe(`the key was ${REDACTED}`);
   });
 });
 

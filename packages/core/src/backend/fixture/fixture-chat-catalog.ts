@@ -22,6 +22,7 @@ import {
   SCRIBE_BOT_CHAT_TRANSCRIPT,
 } from "./fixture-chat-dms.ts";
 import { KESTREL_EVENTS_SESSION, KESTREL_EVENTS_TRANSCRIPT } from "./fixture-chat-process-events.ts";
+import { KESTREL_INJECTED_SESSION, KESTREL_INJECTED_TRANSCRIPT } from "./fixture-chat-injected.ts";
 
 /* ── prose the transcripts are made of ────────────────────────────────────── */
 
@@ -1207,5 +1208,7 @@ export const FIXTURE_CHAT_TRANSCRIPTS: Readonly<Record<string, readonly ChatMess
   // Background-process events (§9.2), built from upstream's notice text in
   // their own module so the parse is the one the history reader runs.
   [KESTREL_EVENTS_SESSION]: KESTREL_EVENTS_TRANSCRIPT,
+  // Every other row Hermes injects as the user's, mapped by the history reader.
+  [KESTREL_INJECTED_SESSION]: KESTREL_INJECTED_TRANSCRIPT,
   [SCRIBE_BOT_CHAT_SESSION]: SCRIBE_BOT_CHAT_TRANSCRIPT,
 };

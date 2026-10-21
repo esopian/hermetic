@@ -253,6 +253,19 @@ const PROCESS_WORD: Record<string, string> = {
   watch_disabled: "watch disabled",
   delegation: "delegation finished",
   mcp_reload: "MCP servers reloaded",
+  cron: "cron job output",
+  webhook: "webhook delivery",
+  heartbeat: "heartbeat",
+  loop: "loop wakeup",
+  goal: "goal",
+  handoff: "handed off",
+  resume: "turn resumed",
+  nudge: "nudge",
+  iteration_limit: "tool-call limit",
+  compaction: "context compacted",
+  todo: "task list",
+  model_switch: "model switched",
+  personality: "personality",
 };
 
 /** A background event Hermes woke the bot with: one line, output on tap. */
@@ -262,7 +275,7 @@ export function ProcessEventBlock({ block }: { block: ProcessEventBlockType }) {
       ? "ok"
       : block.outcome === "failed"
         ? "bad"
-        : block.outcome === "terminated"
+        : block.outcome === "terminated" || block.outcome === "warn"
           ? "warn"
           : "muted";
   const right = [
@@ -274,6 +287,7 @@ export function ProcessEventBlock({ block }: { block: ProcessEventBlockType }) {
   const subject =
     block.command ??
     block.message ??
+    block.notice?.subject ??
     (block.delegation
       ? `${block.delegation.succeeded} of ${block.delegation.total} tasks succeeded`
       : null);
@@ -285,13 +299,22 @@ export function ProcessEventBlock({ block }: { block: ProcessEventBlockType }) {
       subject={subject}
       collapsible
     >
-      {block.output_tail ? <CodePane text={block.output_tail} lang="output" /> : null}
+      {block.output_tail || block.notice?.body ? (
+        <CodePane text={(block.output_tail ?? block.notice?.body) as string} lang="output" />
+      ) : null}
+      {block.notice?.tasks?.map((task, i) => (
+        <Text key={i} variant="caption" tone="fg2">
+          {`${"  ".repeat(task.depth)}${{ done: "[x]", active: "[>]", pending: "[ ]", cancelled: "[~]", unknown: "[?]" }[task.status]} ${task.text}`}
+        </Text>
+      ))}
       {block.delegation?.tasks.map((task) => (
         <Text key={task.index} variant="caption" tone={task.ok ? "fg2" : "bad"}>
           {`${task.ok ? "✓" : "✕"} ${task.goal ?? `task ${task.index + 1}`}${task.summary ? ` — ${task.summary}` : ""}`}
         </Text>
       ))}
-      {!block.output_tail && !block.delegation ? <CodePane text={block.raw} /> : null}
+      {!block.output_tail && !block.notice?.body && !block.notice?.tasks && !block.delegation ? (
+        <CodePane text={block.raw} />
+      ) : null}
     </Card>
   );
 }

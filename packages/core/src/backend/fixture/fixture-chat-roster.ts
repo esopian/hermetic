@@ -553,6 +553,19 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     turn_count: 12,
   },
   {
+    // Every other row Hermes injects as the user's (`fixture-chat-injected.ts`).
+    id: "sx-kestrel-injected",
+    instance: "kestrel",
+    bot: "default",
+    kind: "thread",
+    origin: "portal",
+    origin_detail: null,
+    title: "Injected rows",
+    last_message_at: at("08:31:40"),
+    unread: 0,
+    turn_count: 24,
+  },
+  {
     id: "sx-kestrel-portal",
     instance: "kestrel",
     bot: "default",

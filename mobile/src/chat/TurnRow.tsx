@@ -102,6 +102,16 @@ function OperatorTurn({
             opacity: pending ? 0.7 : 1,
           }}
         >
+          {message.reply_to ? (
+            <Text variant="caption" tone="fg3" numberOfLines={2}>
+              {`↩ replying to "${message.reply_to.quote}"`}
+            </Text>
+          ) : null}
+          {message.skill ? (
+            <Text variant="caption" mono tone="fg2">
+              {message.skill.names.map((n) => `⚡ ${n}`).join("  ")}
+            </Text>
+          ) : null}
           <PlainText text={text} />
         </View>
       ) : null}

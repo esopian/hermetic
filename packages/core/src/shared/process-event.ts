@@ -22,6 +22,42 @@ export interface ProcessEventLike {
   watch?: { pattern: string; suppressed?: number } | null;
   delegation?: { total: number; succeeded: number } | null;
   dm?: { to_profile: string; reply: string } | null;
+  notice?: { variant?: string | null; subject?: string | null; detail?: string | null } | null;
+}
+
+/** The fixed label for each `nudge` variant (`ProcessNoticeVariant`), never free text. */
+export const NUDGE_LABELS: Readonly<Record<string, string>> = {
+  output_limit: "output limit",
+  network_cut: "network cut",
+  tool_too_large: "tool call too large",
+  reasoning_only: "reasoning only",
+  continue_now: "continue now",
+  fragment: "fragment",
+  dropped_tool_call: "tool call missing",
+  empty_tool_response: "empty reply",
+};
+
+/**
+ * A carried-over task list's counts, the way every head states them
+ * (`1 active · 2 open`): `active` is the item in progress, `open` the ones not
+ * started (pending, or a status upstream printed as `[?]`). Done and cancelled
+ * items are not counted, a done parent kept for its children included.
+ */
+export function todoCounts(tasks: readonly { status: string }[]): { active: number; open: number } {
+  let active = 0;
+  let open = 0;
+  for (const task of tasks) {
+    if (task.status === "active") active += 1;
+    else if (task.status === "pending" || task.status === "unknown") open += 1;
+  }
+  return { active, open };
+}
+
+/** `todoCounts` as every head words it: `1 active · 2 open`, or `nothing open`. */
+export function todoSummary(tasks: readonly { status: string }[]): string {
+  const { active, open } = todoCounts(tasks);
+  const parts = [active ? `${active} active` : null, open ? `${open} open` : null].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "nothing open";
 }
 
 /** The width a command is cut to on an event row, before the ellipsis. */
@@ -62,8 +98,9 @@ export function shortCommand(command: string, max: number = PROCESS_COMMAND_MAX)
 /**
  * True for an event that may be folded into a burst and hidden by the
  * "failures only" density: a clean exit, a termination, a watch match, a
- * one-line notice. A failure, a DM reply and a subagent result are never
- * routine — each always gets its own row.
+ * one-line notice, a `warn` (a resumed turn, the tool-call limit). A failure,
+ * a DM reply and a subagent result are never routine — each always gets its
+ * own row, and only those raise an inbox row.
  */
 export function isRoutineProcessEvent(event: ProcessEventLike): boolean {
   if (event.dm) return false;
@@ -89,6 +126,7 @@ function firstLine(text: string): string {
 export function processEventSentence(event: ProcessEventLike): string {
   if (event.dm) return `↩ ${event.dm.to_profile}: ${firstLine(event.dm.reply)}`;
   const cmd = event.command ? shortCommand(event.command) : (event.process_id ?? "background process");
+  const notice = event.notice;
   switch (event.event) {
     case "completion": {
       if (event.outcome === "ok") return `${cmd} completed`;
@@ -104,6 +142,38 @@ export function processEventSentence(event: ProcessEventLike): string {
       const counted = d ? `${d.succeeded} of ${d.total} finished` : "finished";
       return event.outcome === "failed" ? `■ subagents ${counted}` : `subagents ${counted}`;
     }
+    case "cron": {
+      const job = `cron ${event.message ?? "job"}`;
+      if (notice?.variant === "mirrored") return `${job} mirrored`;
+      return event.outcome === "failed" ? `■ ${job} failed` : `${job} delivered`;
+    }
+    case "webhook":
+      return `webhook ${event.message ?? "delivery"} mirrored`;
+    case "heartbeat":
+      return notice?.detail ? `heartbeat every ${notice.detail}` : "heartbeat";
+    case "loop": {
+      const tick = notice?.detail?.split(" ", 1)[0];
+      return tick ? `loop wakeup ${tick}` : "loop wakeup";
+    }
+    case "goal":
+      return event.outcome === "failed" ? "■ goal gate failed" : "goal continuing";
+    case "handoff":
+      return `handed off from ${notice?.detail ?? "another client"}`;
+    case "resume":
+      if (notice?.variant === "crash") return "turn resumed after a crash";
+      return notice?.detail ? `turn resumed after ${notice.detail}` : "turn resumed";
+    case "nudge":
+      return `nudge: ${NUDGE_LABELS[notice?.variant ?? ""] ?? "continue"}`;
+    case "iteration_limit":
+      return "tool-call limit reached";
+    case "compaction":
+      return "context compacted";
+    case "todo":
+      return "task list carried over";
+    case "model_switch":
+      return notice?.subject ? `model → ${notice.subject}` : "model changed";
+    case "personality":
+      return notice?.variant === "cleared" ? "personality cleared" : "personality set";
     default:
       return firstLine(event.message ?? "") || "background notice";
   }

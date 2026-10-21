@@ -541,8 +541,9 @@ const UnknownBlock = z.object({
  *
  * Hermes wakes a bot by appending a `user`-role row to its session when a
  * background process finishes, a watch pattern matches, an async subagent
- * returns, or the MCP servers reload (`tools/process_registry.py`
- * `format_process_notification`, `gateway/run.py`). Role alternation rules out
+ * returns, the MCP servers reload (`tools/process_registry.py`
+ * `format_process_notification`, `gateway/run.py`), or a cron job delivers its
+ * output to Bot Chat (`cron/scheduler_delivery.py`). Role alternation rules out
  * a system row mid-loop, so the row is stored as the user's. None of them was
  * typed by the operator; `chat/hermes/process-notice.ts` recognises them.
  * Any other `[IMPORTANT: …]` row stays a plain user message.
@@ -553,6 +554,31 @@ export const ProcessEventType = z.enum([
   "watch_disabled",
   "delegation",
   "mcp_reload",
+  "cron",
+  /** A webhook delivery mirrored into the session (`[Webhook delivery: <route>]`). */
+  "webhook",
+  /** A recurring heartbeat instruction firing (`hermes_cli/heartbeat.py`). */
+  "heartbeat",
+  /** A `/loop` wakeup (`hermes_cli/loops.py`). */
+  "loop",
+  /** A standing-goal continuation, or its failed quality gate (`hermes_cli/goals.py`). */
+  "goal",
+  /** The session was handed off from another client (`gateway/run_startup.py`). */
+  "handoff",
+  /** An interrupted turn resumed after a crash or a gateway restart. */
+  "resume",
+  /** One of the loop's fixed `[System: …]` continuation prompts (`agent/conversation_loop.py`). */
+  "nudge",
+  /** The tool-call iteration budget ran out (`agent/context_compressor.py`). */
+  "iteration_limit",
+  /** Earlier turns were compacted into a summary (`agent/context_compressor.py`). */
+  "compaction",
+  /** The active task list re-injected after compaction (`tools/todo_tool.py`). */
+  "todo",
+  /** The chat's model or provider changed (`tui_gateway/server.py`). */
+  "model_switch",
+  /** The personality overlay was set or cleared (`tui_gateway/agent_callbacks.py`). */
+  "personality",
 ]);
 export type ProcessEventType = z.infer<typeof ProcessEventType>;
 
@@ -561,10 +587,76 @@ export type ProcessEventType = z.infer<typeof ProcessEventType>;
  * the thread, the rail, the CLI and the inbox cannot disagree: `ok` (exited 0,
  * every subagent succeeded), `failed` (non-zero exit, failed to start, lost, a
  * subagent that did not succeed), `terminated` (killed by Hermes or SIGTERM),
- * `info` (watch matches and one-line notices).
+ * `info` (watch matches and one-line notices), `warn` (something the operator
+ * should notice but that did not fail: a resumed turn, an oversized tool call,
+ * the tool-call limit).
  */
-export const ProcessOutcome = z.enum(["ok", "failed", "terminated", "info"]);
+export const ProcessOutcome = z.enum(["ok", "failed", "terminated", "info", "warn"]);
 export type ProcessOutcome = z.infer<typeof ProcessOutcome>;
+
+/**
+ * Which fixed form of an injected notice upstream wrote, for the events that
+ * have more than one. A head maps it to a fixed label; never free text.
+ * `mirrored` is a cron or webhook delivery copied into a session it did not
+ * start; `crash`/`gateway` say what interrupted a resumed turn.
+ */
+export const ProcessNoticeVariant = z.enum([
+  "mirrored",
+  "continuing",
+  "gate_failed",
+  "crash",
+  "gateway",
+  "output_limit",
+  "network_cut",
+  "tool_too_large",
+  "reasoning_only",
+  "continue_now",
+  "fragment",
+  "dropped_tool_call",
+  "empty_tool_response",
+  "set",
+  "cleared",
+]);
+export type ProcessNoticeVariant = z.infer<typeof ProcessNoticeVariant>;
+
+/** Upstream's todo markers: `[x]` completed, `[>]` in_progress, `[ ]` pending, `[~]` cancelled, `[?]` anything else. */
+export const ProcessTaskStatus = z.enum(["done", "active", "pending", "cancelled", "unknown"]);
+export type ProcessTaskStatus = z.infer<typeof ProcessTaskStatus>;
+
+const ProcessNoticeTask = z.object({
+  status: ProcessTaskStatus,
+  text: z.string(),
+  /** The item's id as upstream printed it (`2.`), without the dot; null when absent. */
+  id: z.string().nullish(),
+  /** Nesting depth, from upstream's two-space indent per level. */
+  depth: z.number().int().nonnegative(),
+});
+
+/**
+ * The structured reading of an injected notice that is not a process or
+ * delegation result (heartbeat, loop, goal, handoff, resume, nudge, compaction,
+ * todo, model and personality switches, mirrored cron and webhook deliveries).
+ * Every field is what the text states, or null.
+ */
+const ProcessNotice = z.object({
+  variant: ProcessNoticeVariant.nullish(),
+  /**
+   * The one thing the notice is about: the heartbeat instruction, the loop
+   * task, the goal, the handoff title, the re-sent prompt, the tool names of an
+   * oversized call, the new model, the persona's first line.
+   */
+  subject: z.string().nullish(),
+  /**
+   * A short qualifier: the heartbeat interval (`30m`), the loop wakeup
+   * (`#4 · every 5m`), the handoff source (`CLI`), what interrupted a resumed
+   * turn (`gateway restart`), the model's provider.
+   */
+  detail: z.string().nullish(),
+  /** The folded payload: the goal's injected prompt, a gate's output, a compaction summary, the full persona. */
+  body: z.string().nullish(),
+  /** A `todo` notice's items, in upstream's order. */
+  tasks: z.array(ProcessNoticeTask).nullish(),
+});
 
 const ProcessDelegationTask = z.object({
   /** 1-based, as upstream prints it (`TASK 2/3`). */
@@ -599,13 +691,13 @@ const ProcessEventBlock = z.object({
   signal: z.string().nullish(),
   /** The full command line, unshortened. */
   command: z.string().nullish(),
-  /** The output the notice carried (upstream already keeps only a tail), or the matched lines of a watch match. */
+  /** The output the notice carried (upstream already keeps only a tail), the matched lines of a watch match, or a cron job's output. */
   output_tail: z.string().nullish(),
   /** Lines in `output_tail`. */
   output_lines: z.number().int().nonnegative().nullish(),
   /** Only when the notice states it (async delegation). Never estimated here. */
   duration_s: z.number().nonnegative().nullish(),
-  /** The inner text of a one-line notice (`watch_disabled`, `mcp_reload`). */
+  /** The inner text of a one-line notice (`watch_disabled`, `mcp_reload`), or a `cron` job's name. */
   message: z.string().nullish(),
   watch: z
     .object({
@@ -644,6 +736,8 @@ const ProcessEventBlock = z.object({
       warnings: z.array(z.string()),
     })
     .nullish(),
+  /** Set on the events `ProcessNotice` describes; null on process and delegation results. */
+  notice: ProcessNotice.nullish(),
   raw: z.string(),
 });
 export type ProcessEventBlock = z.infer<typeof ProcessEventBlock>;
@@ -901,6 +995,26 @@ export const ChatMessage = z.object({
    * is what the operator typed. Omitted on every other row.
    */
   steered: z.boolean().nullish(),
+  /**
+   * Set on a `user` row that invoked one or more skills (`/review the diff`):
+   * Hermes stores the whole expanded skill body as the user's text
+   * (`agent/skill_commands.py`), typed `display_kind: "skill_invocation"`.
+   * The row's text becomes the instruction the operator typed alongside it;
+   * `raw` keeps the stored text. Omitted on every other row.
+   */
+  skill: z
+    .object({
+      names: z.array(z.string().min(1)).min(1),
+      instruction: z.string().nullable(),
+      raw: z.string(),
+    })
+    .nullish(),
+  /**
+   * Set on a `user` row that replied to an earlier message on a messaging
+   * platform: upstream prefixes `[Replying to: "<quote>"]` (`gateway/run_inbound.py`).
+   * The prefix is lifted here and the row's text is the operator's alone.
+   */
+  reply_to: z.object({ quote: z.string() }).nullish(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
