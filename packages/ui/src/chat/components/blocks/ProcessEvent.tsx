@@ -433,9 +433,19 @@ function Notice({ event, at }: { event: ProcessEventView; at: string | null }) {
   );
 }
 
+/** The `message_agent` call a DM reply answers, when its start is in the loaded transcript. */
+function dmReplyCall(event: ProcessEventView, starts: ProcessEventContextValue["starts"]) {
+  return event.process_id ? starts.get(event.process_id)?.call : undefined;
+}
+
+/** A DM reply with no body and no exchange to open says nothing: desktop draws no notice either. */
+function silentDmReply(event: ProcessEventView, starts: ProcessEventContextValue["starts"]) {
+  return !!event.dm && !event.dm.reply && !dmReplyCall(event, starts);
+}
+
 /**
- * A reply from the bot a DM went to: who and when, never the body or the
- * delivery's plumbing, which stay behind the exchange this opens.
+ * A reply from the bot a DM went to: who and when. The body stays behind the
+ * exchange this opens; with no exchange, behind a "show message" fold as on desktop.
  */
 function DmReply({ event, at }: { event: ProcessEventView; at: string | null }) {
   const context = useProcessEvents();
@@ -446,14 +456,15 @@ function DmReply({ event, at }: { event: ProcessEventView; at: string | null }) 
   // when the replier is not on this instance's roster.
   const replier = botLabel(context.instance, to, resolveDmBot([to], teammates)?.title);
   const start = event.process_id ? context.starts.get(event.process_id) : undefined;
-  const call = start?.call;
+  const call = dmReplyCall(event, context.starts);
+  if (silentDmReply(event, context.starts)) return null;
   const label = <RedactedText text={`Message from ${replier}`} />;
   const warnings = dm.warnings.length;
   return (
     <>
       <div className="ch-dm-mark from">
-        {open && call && start ? (
-          <button type="button" onClick={() => open({ side: "sender", call, at: start.at })}>
+        {open && call ? (
+          <button type="button" onClick={() => open({ side: "sender", call, at: start!.at })}>
             {label} <span aria-hidden="true">⇄</span>
           </button>
         ) : context.instance ? (
@@ -469,6 +480,15 @@ function DmReply({ event, at }: { event: ProcessEventView; at: string | null }) 
         <StartLink event={event} label="sent ↑" />
         <Stamp at={at} />
       </div>
+      {dm.reply && !(open && call) ? (
+        // No exchange holds the body, so it folds here; plain text, as desktop shows it.
+        <details className="ch-ev-more ch-dm-reply">
+          <summary>show message</summary>
+          <div className="ch-dm-reply-body">
+            <RedactedText text={dm.reply} />
+          </div>
+        </details>
+      ) : null}
       {warnings > 0 ? (
         <details className="ch-ev-more">
           <summary className="warnline">{`⚠ ${warnings} tool warning${warnings === 1 ? "" : "s"}`}</summary>
@@ -519,8 +539,9 @@ export function ProcessEventRow({
   entry: Pick<EventEntry, "event"> & { row: { message: { id: string; at: string } } };
   sub?: boolean;
 }) {
-  const { anchors } = useProcessEvents();
+  const { anchors, starts } = useProcessEvents();
   const { event } = entry;
+  if (silentDmReply(event, starts)) return null;
   const message = entry.row.message;
   const pid = event.process_id;
   const anchor = pid && anchors.get(pid) === message.id ? processDomId("event", pid) : undefined;

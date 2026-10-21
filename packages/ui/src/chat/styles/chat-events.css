@@ -106,7 +106,8 @@
   background: var(--bg2);
   color: var(--fg);
 }
-.ch-ev-line .t {
+.ch-ev-line .t,
+.ch-dm-mark.from .t {
   margin-left: auto;
   font-size: 10.5px;
   color: var(--fg3);
@@ -150,6 +151,9 @@
 }
 .ch-ev-more > summary:hover {
   color: var(--fg);
+}
+.ch-ev-more > summary.warnline {
+  color: var(--warn);
 }
 .ch-ev-last {
   color: var(--fg2);

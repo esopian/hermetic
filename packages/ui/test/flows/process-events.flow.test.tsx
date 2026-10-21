@@ -78,13 +78,16 @@ function labelledYou(root: Element): boolean {
   return [root, ...root.querySelectorAll("*")].some((el) => el.textContent?.trim() === "You");
 }
 
-test("a DM reply is a compact notice; its body stays out of the thread", async () => {
-  const log = await openKestrel();
-  // The reply and the delivery's plumbing belong to the exchange, not the main thread.
-  expect(log.textContent).not.toContain('byte-identical" claim since it was new evidence');
+test("a DM reply is a compact notice; its body stays behind a shut fold", async () => {
+  await openKestrel();
   const notice = dmCard();
   expect(notice).not.toBeNull();
-  const row = notice!.closest(".ch-ev")!.textContent;
+  const ev = notice!.closest(".ch-ev")!;
+  // No exchange to open from a terminal delivery, so the body folds under the notice.
+  const fold = ev.querySelector<HTMLDetailsElement>("details.ch-dm-reply")!;
+  expect(fold.open).toBe(false);
+  expect(fold.textContent).toContain('byte-identical" claim since it was new evidence');
+  const row = ev.textContent;
   expect(row).not.toContain("delivered by proc_");
   expect(row).not.toContain("query-file");
   expect(notice!.textContent).toContain("Message from lead-qa");

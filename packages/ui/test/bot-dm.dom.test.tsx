@@ -296,19 +296,35 @@ describe("the receiver's delivery row", () => {
 });
 
 describe("the DM reply notice", () => {
-  const reply = (to_profile: string) => eventOf({ dm: { to_profile, reply: REPLY, warnings: [] } });
-  const renderReply = (to_profile: string) =>
+  const reply = (to_profile: string, body = REPLY) =>
+    eventOf({ dm: { to_profile, reply: body, warnings: [] } });
+  const renderReply = (to_profile: string, body?: string) =>
     render(
       <BotDmContext.Provider value={{ teammates: TEAM, open: () => {} }}>
-        <ProcessEventBlock block={reply(to_profile)} />
+        <ProcessEventBlock block={reply(to_profile, body)} />
       </BotDmContext.Provider>,
     );
 
-  test("names the replier by its roster title, and leaves the body to the exchange", () => {
+  test("names the replier by its roster title", () => {
     const { container } = renderReply("auditor");
     expect(container.querySelector(".ch-dm-mark.from")?.textContent).toBe("Message from NickQABot");
     expect(container.textContent).not.toContain("auditor");
-    expect(container.textContent).not.toContain(REPLY);
+  });
+
+  test("with no exchange to open, shows the body as plain text behind a fold", () => {
+    const body = "Re-QA: **pass**.\n\nSecond paragraph.";
+    const { container } = renderReply("auditor", body);
+    const fold = container.querySelector("details.ch-dm-reply")!;
+    expect(fold.querySelector("summary")?.textContent).toBe("show message");
+    // Verbatim text, newlines kept: no markdown rendered.
+    expect(fold.querySelector(".ch-dm-reply-body")?.textContent).toBe(body);
+    expect(fold.querySelector("strong, p")).toBeNull();
+  });
+
+  test("with no body and no exchange, draws no notice", () => {
+    const { container } = renderReply("auditor", "");
+    expect(container.querySelector(".ch-dm-mark.from")).toBeNull();
+    expect(container.textContent).toBe("");
   });
 
   test("falls back to the profile id for a bot not on the roster", () => {
