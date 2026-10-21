@@ -1,7 +1,8 @@
 /**
  * Files the agent shares with the operator (attachments plan §8.5, scenario E)
  * over the real `bind` and `dispatch` and the fixture backend: `share_file`
- * draws a card per file, an image is shown only once its bytes hash to the
+ * draws a card per file, and so does a reply that names its files only on
+ * `MEDIA:` lines (`E2E_MEDIA_SHARE`, what hermetic's platform hint teaches); an image is shown only once its bytes hash to the
  * shared sha256 (and never read for one when the share names no full digest),
  * Save… goes through the folder dialog into the folder it
  * chose, and a refused share shows the box's words instead of a card.
@@ -56,6 +57,8 @@ function stubFolder(folder: string | null): void {
 
 async function share(
   given: FlowHarness | null = null,
+  trigger = "E2E_FILE_SHARE",
+  count = 2,
 ): Promise<{ pane: Element; cards: () => Element[] }> {
   harness = given ?? (await flowHarness());
   await harness.ctx.hermetic().chat.listen({ instance: "atlas", listening: true });
@@ -69,9 +72,9 @@ async function share(
     { timeout: 4_000 },
   );
   const pane = composer.closest(".ch-thread")!;
-  await userEvent.type(composer, "send me the Q3 numbers E2E_FILE_SHARE{Enter}");
+  await userEvent.type(composer, `send me the Q3 numbers ${trigger}{Enter}`);
   const cards = () => Array.from(pane.querySelectorAll(".ch-share"));
-  await waitFor(() => expect(cards().length).toBe(2), WAIT);
+  await waitFor(() => expect(cards().length).toBe(count), WAIT);
   return { pane, cards };
 }
 
@@ -113,6 +116,43 @@ test("share_file draws one card per file; the chart shows once its sha256 checks
   const csvId = csv.getAttribute("data-share-id") ?? "";
   expect(csvId.startsWith("sh_")).toBe(true);
   expect(contentIds.includes(csvId)).toBe(false);
+}, 20_000);
+
+test("MEDIA: lines alone, with no share_file call, draw a card per file", async () => {
+  const { pane, cards } = await share(null, "E2E_MEDIA_SHARE");
+  expect(pane.querySelector(".ch-share-refused") === null).toBe(true);
+  expect(cards().map((c) => c.querySelector(".ch-attach-item b")?.textContent ?? "")).toEqual([
+    "q3-revenue.png",
+    "q3-revenue.csv",
+  ]);
+  // The lines leave the prose, and the prose on both sides of them stays.
+  const text = pane.textContent ?? "";
+  expect(text).not.toContain("MEDIA:");
+  expect(text).not.toContain("outbox/sh_");
+  expect(text).toContain("the CSV behind it.");
+  expect(text).toContain("September is up 8% on August.");
+
+  // The image is previewed inline, from bytes that hash to the shared digest.
+  const png = () => card(cards(), "q3-revenue.png");
+  await waitFor(
+    () => expect(png()?.querySelector("img.ch-shot")?.getAttribute("src") ?? "").toMatch(/^blob:/),
+    WAIT,
+  );
+  expect(png()!.textContent ?? "").toMatch(/PNG.*q3-revenue\.png.* · sha [0-9a-f]{4}… · on box 24 h/);
+  expect(saveButton(png())?.disabled).toBe(false);
+
+  // The CSV is a card with no preview, and downloads through Save….
+  const csv = () => card(cards(), "q3-revenue.csv");
+  expect(csv()!.querySelector("img") === null).toBe(true);
+  expect(csv()!.textContent ?? "").toMatch(/CSV.*q3-revenue\.csv\d+ B · sha [0-9a-f]{4}…/);
+  const folder = mkdtempSync(join(folders, "media-"));
+  stubFolder(folder);
+  await userEvent.click(saveButton(csv())!);
+  await waitFor(() => expect(csv()?.textContent ?? "").toContain("✓ saved q3-revenue.csv"), WAIT);
+  expect(readdirSync(folder)).toEqual(["q3-revenue.csv"]);
+  expect(
+    readFileSync(join(folder, "q3-revenue.csv"), "utf8").startsWith("month,revenue_usd,orders\n"),
+  ).toBe(true);
 }, 20_000);
 
 test("an image whose bytes do not hash to the shared sha256 is not shown", async () => {
@@ -281,4 +321,177 @@ test("a refusal's tone follows the call: warn is not drawn as bad", () => {
   const note = document.querySelector(".ch-share-refused");
   expect(note?.classList.contains("warn")).toBe(true);
   expect(note?.classList.contains("bad")).toBe(false);
+});
+
+/** The `files.content` requests the page made, with what each was for. */
+const contentCalls = () =>
+  harness!.calls
+    .filter((c) => c.name === "files.content")
+    .map((c) => c.params as { id: string; purpose?: string; expected_sha256?: string });
+
+test("a shared image zooms on a click, and Escape closes it", async () => {
+  const { cards } = await share(null, "E2E_MEDIA_SHARE");
+  const png = () => card(cards(), "q3-revenue.png");
+  await waitFor(
+    () =>
+      expect(png()?.querySelector("button.ch-zoom img")?.getAttribute("src") ?? "").toMatch(/^blob:/),
+    WAIT,
+  );
+  const thumb = png()!.querySelector("img")!.getAttribute("src");
+  await userEvent.click(png()!.querySelector<HTMLButtonElement>("button.ch-zoom")!);
+  const zoomed = () => document.querySelector('[role="dialog"] img.ch-zoom-full');
+  await waitFor(() => expect(zoomed()?.getAttribute("src") ?? "").toBe(thumb ?? "-"), WAIT);
+  expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("true");
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(zoomed() === null).toBe(true), WAIT);
+  // The picture was read once, for the card; zooming reads nothing more.
+  expect(contentCalls().filter((c) => c.id === png()!.getAttribute("data-share-id")).length).toBe(1);
+}, 20_000);
+
+test("E2E_MEDIA_KINDS: audio and video play, a text file previews, a laptop path stays prose", async () => {
+  const { pane, cards } = await share(null, "E2E_MEDIA_KINDS", 3);
+  // Spaced names, from bare, backticked and quoted lines, each read whole.
+  expect(cards().map((c) => c.querySelector(".ch-attach-item b")?.textContent ?? "")).toEqual([
+    "standup recap.wav",
+    "build preview.webm",
+    "release notes.md",
+  ]);
+  expect(cards().map((c) => c.getAttribute("data-media-kind"))).toEqual(["audio", "video", "file"]);
+
+  // Audio and video play from blob: URLs this page minted, read for playback.
+  const audio = () => card(cards(), "standup recap.wav")?.querySelector("audio");
+  const video = () => card(cards(), "build preview.webm")?.querySelector("video");
+  await waitFor(() => expect(audio()?.getAttribute("src") ?? "").toMatch(/^blob:/), WAIT);
+  await waitFor(() => expect(video()?.getAttribute("src") ?? "").toMatch(/^blob:/), WAIT);
+  expect(audio()!.hasAttribute("controls")).toBe(true);
+  expect(video()!.hasAttribute("controls")).toBe(true);
+  const played = contentCalls().filter((c) => c.purpose === "playback");
+  expect(played.map((c) => c.id).sort()).toEqual(
+    [audio(), video()]
+      .map((el) => el!.closest(".ch-share")!.getAttribute("data-share-id") ?? "")
+      .sort(),
+  );
+  expect(played.every((c) => /^[0-9a-f]{64}$/.test(c.expected_sha256 ?? ""))).toBe(true);
+
+  // The text file is a card with Preview and Save…, read only when Preview is pressed.
+  const notes = () => card(cards(), "release notes.md")!;
+  expect(notes().querySelector("audio, video, img") === null).toBe(true);
+  expect(saveButton(notes())?.textContent).toBe("Save…");
+  expect(contentCalls().some((c) => c.purpose === "text")).toBe(false);
+  await userEvent.click(notes().querySelector<HTMLButtonElement>("button.ch-share-preview")!);
+  await waitFor(
+    () =>
+      expect(notes().querySelector("pre.ch-share-text")?.textContent ?? "").toContain(
+        "# Release notes",
+      ),
+    WAIT,
+  );
+  expect(
+    contentCalls()
+      .filter((c) => c.purpose === "text")
+      .map((c) => c.id),
+  ).toEqual([notes().getAttribute("data-share-id") ?? ""]);
+  await userEvent.click(notes().querySelector<HTMLButtonElement>("button.ch-share-preview")!);
+  await waitFor(() => expect(notes().querySelector("pre.ch-share-text") === null).toBe(true), WAIT);
+
+  // The laptop path is not this box's file: prose, never a card or a fetch.
+  const text = pane.textContent ?? "";
+  expect(text).toContain("MEDIA:/Users/nobody/Desktop/elsewhere.png");
+  expect(text).toContain("That last one is on your laptop, not on this box.");
+  expect(text).not.toContain("outbox/sh_");
+  expect(text).not.toContain("/data/hermes/work");
+  expect(pane.querySelector("img") === null).toBe(true);
+}, 20_000);
+
+/** A `MEDIA:` outbox chip of any type. */
+function mediaChip(name: string, mime: string, sha256: string | null) {
+  return (
+    <Block
+      now={Date.now()}
+      instance="atlas"
+      block={{
+        kind: "attachment",
+        name,
+        mime,
+        bytes: 4096,
+        href: `outbox/sh_00000000clip/${name}`,
+        file_id: "sh_00000000clip",
+        sha256,
+      }}
+    />
+  );
+}
+
+test("audio or video naming no full sha256 is never read to play; Save… stays", async () => {
+  server = fakeServer({
+    "files.content": () => ({ mime: "audio/wav", data_b64: btoa("FIXTURE-wav") }),
+  });
+  for (const [name, mime] of [
+    ["memo.wav", "audio/wav"],
+    ["clip.mp4", "video/mp4"],
+  ] as const) {
+    render(mediaChip(name, mime, null));
+    const shareCard = () => document.querySelector(".ch-share");
+    await waitFor(() =>
+      expect(shareCard()?.textContent ?? "").toContain("no playback without a verified sha256"),
+    );
+    expect(shareCard()!.querySelector("audio, video") === null).toBe(true);
+    expect(saveButton(shareCard() ?? undefined)?.disabled).toBe(false);
+    cleanup();
+  }
+  expect(server.to("files.content").length).toBe(0);
+});
+
+test("a video too large to play here says so and offers Save…", async () => {
+  server = fakeServer({
+    "files.content": () => {
+      throw new HermeticError("FILE_TOO_LARGE", "atlas: the file is too large to preview");
+    },
+  });
+  render(mediaChip("long.webm", "video/webm", "c".repeat(64)));
+  const shareCard = () => document.querySelector(".ch-share");
+  await waitFor(() =>
+    expect(shareCard()?.textContent ?? "").toContain("too large to play here — Save… instead"),
+  );
+  expect(shareCard()!.querySelector("video") === null).toBe(true);
+  const [call] = server.to("files.content");
+  expect((call?.params as { purpose?: string } | undefined)?.purpose).toBe("playback");
+});
+
+test("bytes that do not hash to the shared sha256 are never played", async () => {
+  server = fakeServer({
+    "files.content": () => {
+      throw new HermeticError("FILE_DIGEST_MISMATCH", "atlas: the shared file changed");
+    },
+  });
+  render(mediaChip("memo.ogg", "audio/ogg", "d".repeat(64)));
+  const shareCard = () => document.querySelector(".ch-share");
+  await waitFor(() => expect(shareCard()?.textContent ?? "").toContain("playback withheld"));
+  expect(shareCard()!.querySelector("audio") === null).toBe(true);
+});
+
+test("a file that is neither media nor text has no preview button, only Save…", () => {
+  server = fakeServer({});
+  render(mediaChip("report.pdf", "application/pdf", "e".repeat(64)));
+  const shareCard = document.querySelector(".ch-share")!;
+  expect(shareCard.querySelector("button.ch-share-preview") === null).toBe(true);
+  expect(saveButton(shareCard)?.textContent).toBe("Save…");
+  expect(server.to("files.content").length).toBe(0);
+});
+
+test("a clip the engine cannot decode falls back to Save…", async () => {
+  server = fakeServer({
+    "files.content": () => ({ mime: "video/webm", data_b64: btoa("FIXTURE-not-a-clip") }),
+  });
+  render(mediaChip("broken.webm", "video/webm", "f".repeat(64)));
+  const shareCard = () => document.querySelector(".ch-share");
+  await waitFor(() =>
+    expect(shareCard()?.querySelector("video")?.getAttribute("src") ?? "").toMatch(/^blob:/),
+  );
+  shareCard()!.querySelector("video")!.dispatchEvent(new Event("error"));
+  await waitFor(() =>
+    expect(shareCard()?.textContent ?? "").toContain("this app cannot play this file — Save… instead"),
+  );
+  expect(shareCard()!.querySelector("video") === null).toBe(true);
+  expect(saveButton(shareCard() ?? undefined)?.disabled).toBe(false);
 });

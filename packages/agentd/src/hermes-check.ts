@@ -67,6 +67,7 @@ import {
   PROVIDERS,
   browserCdpUrl,
   hermesConfigGetArgv,
+  hermesMemoryProviderName,
   providerNeedsKey,
 } from "@hermetic/core/shared";
 import type { Host } from "./host.ts";
@@ -321,14 +322,14 @@ export async function checkHermes(host: Host, manifest: AgentConfig): Promise<He
    */
   if (manifest.memory) {
     const named = keyValue(managed, "memory", "provider");
+    const want = hermesMemoryProviderName(manifest.memory.provider);
     checks.push({
       name: "memory",
-      ok: named === manifest.memory.provider,
+      ok: named === want,
       detail:
-        named === manifest.memory.provider
+        named === want
           ? `${HERMES_MANAGED_CONFIG} selects memory provider ${named}`
-          : `${HERMES_MANAGED_CONFIG} selects memory provider ${named ?? "(none)"}, ` +
-            `not ${manifest.memory.provider}`,
+          : `${HERMES_MANAGED_CONFIG} selects memory provider ${named ?? "(none)"}, not ${want}`,
     });
   }
 

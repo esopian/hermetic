@@ -14,6 +14,7 @@ import {
   fixtureKit,
 } from "../../src/fixture/index.ts";
 import { createHermeticClient } from "../../src/client/client.ts";
+import { pasteAttachments } from "../../src/client/paste.ts";
 import { isShareAttachment, isShareTool } from "../../src/client/share-logic.ts";
 import type { DemoPrompt } from "../../src/fleet/FleetProvider.tsx";
 import { readPairingLink } from "../../src/fleet/pairing.ts";
@@ -438,5 +439,24 @@ describe("fixture: sample files for ?attach=", () => {
     const png = written.get("fixture-sample.png");
     expect([...(png ?? []).slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     for (const f of samples ?? []) expect(f.size).toBe(written.get(f.name)?.byteLength);
+  });
+});
+
+describe("fixture: the clipboard picture for ?paste=image", () => {
+  test("the canned PNG as the paste control answers it, which the paste path takes as one image", async () => {
+    const k = fixtureKit("1", () => NOW);
+    const pasted = await k?.clipboardImage();
+    expect(pasted?.type).toBe("image");
+    expect(pasted?.data.startsWith("data:image/png;base64,")).toBe(true);
+    expect(pasted?.size.width).toBeGreaterThan(0);
+    const written: string[] = [];
+    const items = pasted
+      ? await pasteAttachments(pasted, async (name) => {
+          written.push(name);
+          return { uri: `file:///cache/${name}`, size: 1 };
+        })
+      : [];
+    expect(items.map((a) => [a.kind, a.mime, a.status])).toEqual([["image", "image/png", "picked"]]);
+    expect(written).toHaveLength(1);
   });
 });

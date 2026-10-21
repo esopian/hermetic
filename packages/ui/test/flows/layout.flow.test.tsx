@@ -125,6 +125,7 @@ describe("the dashboard's layout, over a real head", () => {
     expect(window.localStorage.getItem("hermetic.layout")).toBe("board");
   });
 
+  // Five full harness boots, ~1s each (5.1-5.8s measured on an 8-core aarch64 box).
   test("the account header is present on every page", async () => {
     for (const hash of PAGES) {
       gotoHash(hash);
@@ -139,5 +140,5 @@ describe("the dashboard's layout, over a real head", () => {
       await harness.restore();
       harness = null;
     }
-  });
+  }, 20_000);
 });

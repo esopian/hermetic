@@ -37,9 +37,9 @@ describe("isIntentionalSilence", () => {
     "Use [SILENT] when no answer is needed.",
     "status: 静默 means the lane is quiet",
     "[SILENT] is mentioned here, but this is a real answer.",
-    // Brackets are structural: a malformed marker is not stripped into a bare one.
-    "[SILENT",
-    "SILENT]",
+    // A malformed marker inside prose is still prose.
+    "Reply [SILENT if nothing changed.",
+    "[SILENT then more words",
   ])("%p is not silence", (text) => {
     expect(isIntentionalSilence(text)).toBe(false);
   });
@@ -69,7 +69,17 @@ describe("isIntentionalSilence", () => {
     expect(isIntentionalSilence("~NO_REPLY~")).toBe(false);
     expect(isIntentionalSilence("`NO_REPLY`")).toBe(false);
     expect(isIntentionalSilence("$NO_REPLY$")).toBe(false);
-    expect(isIntentionalSilence("*[SILENT*")).toBe(false);
+    // Brackets are never stripped, but a missing one is restored (below).
+    expect(isIntentionalSilence("*[SILENT*")).toBe(true);
+  });
+
+  // Hermetic's own rule, not upstream's: upstream delivers these as text
+  // (NousResearch/hermes-agent #51438, #5023).
+  test("a malformed or bracket-less SILENT marker does not leak as text", () => {
+    for (const text of ["[SILENT", "SILENT]", " [silent ", "[SILENT.", "SILENT", "[静默", "沉默]"])
+      expect(isIntentionalSilence(text)).toBe(true);
+    expect(isIntentionalSilence("[[SILENT")).toBe(false);
+    expect(isIntentionalSilence("[NO_REPLY")).toBe(false);
   });
 
   test("whitespace is Python's set, not JavaScript's", () => {

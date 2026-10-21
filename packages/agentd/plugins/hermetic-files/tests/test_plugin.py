@@ -687,6 +687,17 @@ class MediaHookTest(PluginTestCase):
         self.assertEqual(out, f"MEDIA:{OUTBOX}/sh_000000000001/a.pdf\ntext\nMEDIA:{OUTBOX}/sh_000000000001/a.pdf")
         self.assertEqual(self.shared(), ["/data/hermes/a.pdf"])
 
+    def test_a_spaced_path_and_its_normalized_variants_are_one_share(self) -> None:
+        home = os.path.expanduser("~")
+        text = (
+            f"MEDIA:{home}/AI Brain/report.pdf\n"
+            f'MEDIA:"{home}//AI Brain/./report.pdf"\n'
+            "  **MEDIA: `~/AI Brain/report.pdf`**"
+        )
+        line = f"MEDIA:{OUTBOX}/sh_000000000001/report.pdf"
+        self.assertEqual(self.hook(text), "\n".join([line] * 3))
+        self.assertEqual(self.shared(), [f"{home}/AI Brain/report.pdf"])
+
     def test_at_most_ten_shares_per_turn(self) -> None:
         text = "\n".join(f"MEDIA:/data/hermes/f{i}.pdf" for i in range(12))
         out = (self.hook(text) or "").split("\n")

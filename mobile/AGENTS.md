@@ -48,7 +48,8 @@ everything from `mobile/` with bun. Run `bun install` at the repo root first: Me
   `hermetic://fixture?pair=1&listen=a,b&primary=a&createBot=a:bot[:Title]&avatar=pixel&theme=light&to=<encoded route>`
   sets the state, creates a bot, and opens a route (the new bot's chat when no `to` is given;
   grammar in `src/fixture/drive.ts`), and the chat link takes
-  `?attach=image,file` (the kit's canned files into the tray), `&send=<text>` (sent as the Send
+  `?attach=image,file` (the kit's canned files into the tray), `?paste=image` (the kit's canned
+  clipboard picture through the composer's paste path), `&send=<text>` (sent as the Send
   button does) and `?attachSheet=1` (opens the attach sheet). Nothing
   outside `src/fixture/` may know about it.
 - Real: the Tailscale app signed into the fleet's tailnet, then scan the QR from

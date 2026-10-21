@@ -213,3 +213,18 @@ export async function pickDocument(limit: number = ATTACHMENTS_PER_TURN): Promis
 export async function readBytes(uri: string): Promise<Uint8Array> {
   return await new File(uri).bytes();
 }
+
+/**
+ * Decode `base64` natively into the app's cache under `name` and answer its
+ * `file://` URI and size: a pasted picture (`paste.ts`) becomes a cache copy
+ * like a picked photo's, so `readBytes` and `discardPicked` treat it the same.
+ */
+export async function writeToCache(
+  name: string,
+  base64: string,
+): Promise<{ uri: string; size: number }> {
+  const file = new File(Paths.cache, name);
+  file.create({ intermediates: true, overwrite: true });
+  file.write(base64, { encoding: "base64" });
+  return { uri: file.uri, size: file.size ?? 0 };
+}

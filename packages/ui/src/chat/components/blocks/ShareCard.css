@@ -15,8 +15,120 @@
 .ch-share .ch-share-item > span {
   min-width: 0;
 }
+.ch-share .ch-share-item > .ch-share-actions {
+  display: flex;
+  gap: 6px;
+}
+.ch-share-preview[aria-expanded="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
 
-.ch-share-save {
+/* A shared image: a button around the picture, so a click zooms it. */
+.ch-share .ch-zoom {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-basis: 100%;
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: zoom-in;
+  text-align: left;
+}
+.ch-share .ch-zoom:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.ch-zoom-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.72);
+  cursor: zoom-out;
+}
+.ch-zoom-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 92vw;
+  max-height: 92vh;
+  outline: none;
+  cursor: default;
+}
+/* Fit to the window, scaling a small picture up as well as a large one down. */
+.ch-zoom-full {
+  display: block;
+  width: 92vw;
+  height: calc(92vh - 40px);
+  object-fit: contain;
+}
+.ch-zoom-close {
+  appearance: none;
+  -webkit-appearance: none;
+  order: -1;
+  border: 2px solid var(--fg);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.ch-zoom-close:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
+/* A player or a text preview takes a line of its own above or below the row. */
+.ch-share-media {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+/* Audio and video the agent shared: the engine's player, sized like a preview. */
+.ch-share-audio {
+  display: block;
+  width: min(100%, 520px);
+  height: 40px;
+}
+/* Scaled to the preview width, a small clip up as well as a large one down. */
+.ch-share-video {
+  display: block;
+  width: min(100%, 520px);
+  height: auto;
+  max-height: 320px;
+  background: var(--bg3);
+}
+
+/* A text share's contents, drawn as text, scrolled inside the card. */
+.ch-share-text {
+  max-width: min(100%, 520px);
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ch-share-save,
+.ch-share-preview {
   appearance: none;
   -webkit-appearance: none;
   border: 2px solid var(--fg);
@@ -31,15 +143,18 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.ch-share-save:hover:not(:disabled) {
+.ch-share-save:hover:not(:disabled),
+.ch-share-preview:hover:not(:disabled) {
   background: var(--fg);
   color: var(--bg);
 }
-.ch-share-save:focus-visible {
+.ch-share-save:focus-visible,
+.ch-share-preview:focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: 1px;
 }
-.ch-share-save:disabled {
+.ch-share-save:disabled,
+.ch-share-preview:disabled {
   border-color: var(--line2);
   color: var(--fg3);
   cursor: default;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FILES_LIMITS } from "../shared/files.ts";
+import { CONTENT_PURPOSES, FILES_LIMITS } from "../shared/files.ts";
 import {
   FileEntryId,
   FileId,
@@ -137,12 +137,14 @@ export type FilesEntryRefInput = z.infer<typeof FilesEntryRefInput>;
 
 /**
  * An entry whose bytes a preview reads (`files.content`): a committed (inbox)
- * file's thumbnail (`f_…`), or a share card's image (`sh_…`), which the box's
- * content route serves alike.
+ * file's thumbnail (`f_…`), or a share card's image, audio or video to play,
+ * or text to show (`sh_…`), which the box's content route serves alike.
  */
 export const FilesContentInput = z.object({
   instance: AgentName,
   id: FileEntryId,
+  /** What the bytes are read for; each purpose admits its own types under its own cap. */
+  purpose: z.enum(CONTENT_PURPOSES).default("image"),
   /** A share card's pinned digest; verified in the main process before bytes reach the page. */
   expected_sha256: Sha256.optional(),
 });

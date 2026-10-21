@@ -7,6 +7,7 @@
  */
 import type { AvatarStyle } from "@hermetic/core/shared";
 import type { PickedFile } from "../client/attachments.ts";
+import type { PastedImage } from "../client/paste.ts";
 import type { TailscaleStatus } from "../gateway/tailscale.ts";
 import type { SchemeName } from "../theme/tokens.ts";
 
@@ -52,6 +53,8 @@ export interface FixtureControls {
   drive?: (params: FixtureDriveParams, actions: FixtureDriveActions) => Promise<string>;
   /** Canned attachments (an image, then a text file) for the conversation's `?attach=` link. */
   sampleFiles?: () => Promise<PickedFile[]>;
+  /** A canned clipboard picture, as the paste control answers it, for the conversation's `?paste=image` link. */
+  clipboardImage?: () => Promise<PastedImage>;
   tailscale: {
     get(): Exclude<TailscaleStatus, "unknown">;
     set(s: Exclude<TailscaleStatus, "unknown">): void;

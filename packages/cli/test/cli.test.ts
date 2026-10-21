@@ -4,7 +4,7 @@
  * `hermetic … --json | jq` work while the account header is still visible.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { cpSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILD_VERSIONS, runRecorderFor } from "@hermetic/core";
@@ -13,9 +13,15 @@ import type { Run as CoreRun } from "@hermetic/core";
 import { cliBinary, seedFixtureHome } from "./cli-binary.ts";
 import { createInputFrom } from "../src/commands/agent.ts";
 
-/** Every spawned CLI writes its `runs` log here, never into the real ~/.hermetic. */
+/** The shared home, for the tests that read its `runs` log back; never the real ~/.hermetic. */
 const HOME = mkdtempSync(join(tmpdir(), "hermetic-cli-test-"));
-beforeAll(() => seedFixtureHome(HOME));
+/**
+ * A seeded home no test writes to, copied for each `run`. Under the per-process
+ * home `tests/preload.ts` removes at the end of the run, like the binary.
+ */
+const SCRATCH = process.env["HERMETIC_HOME"] ?? tmpdir();
+const PRISTINE = mkdtempSync(join(SCRATCH, "hermetic-cli-pristine-"));
+beforeAll(() => Promise.all([seedFixtureHome(HOME), seedFixtureHome(PRISTINE)]));
 
 interface Run {
   code: number;
@@ -23,11 +29,24 @@ interface Run {
   stderr: string;
 }
 
-async function run(...args: string[]): Promise<Run> {
+/**
+ * A spawn in a fresh copy of the seeded home. Every CLI process writes its run
+ * to the home's SQLite file, and with twenty concurrent tests on one shared
+ * home a spawn could wait out the whole 5s `busy_timeout` on that file. Each
+ * run is a fresh fixture anyway; a test that reads the run log afterwards
+ * spawns into `HOME` with `runIn` instead.
+ */
+function run(...args: string[]): Promise<Run> {
+  const home = mkdtempSync(join(SCRATCH, "hermetic-cli-fresh-"));
+  cpSync(PRISTINE, home, { recursive: true });
+  return runIn(home, ...args);
+}
+
+async function runIn(home: string, ...args: string[]): Promise<Run> {
   const proc = Bun.spawn([await cliBinary(), ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, HERMETIC_FIXTURE: "1", HERMETIC_NO_TTY: "1", HERMETIC_HOME: HOME },
+    env: { ...process.env, HERMETIC_FIXTURE: "1", HERMETIC_NO_TTY: "1", HERMETIC_HOME: home },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -531,6 +550,7 @@ describe.concurrent("settings and providers", () => {
     expect(result.settings.agent_defaults?.model).toBe("claude-sonnet-5");
   });
 
+  // Two to five spawns each, ~1s apiece with twenty tests in flight (2.8-5.0s measured).
   test("set --approvals writes the fleet-wide starting mode, and refuses a typo", async () => {
     const { code, stdout } = await run("settings", "set", "--approvals", "manual", "--json");
     expect(code).toBe(0);
@@ -539,7 +559,7 @@ describe.concurrent("settings and providers", () => {
     const bad = await run("settings", "set", "--approvals", "sometimes");
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("approvals_mode");
-  });
+  }, 15_000);
 
   test("set --default-memory-provider writes the fleet default, and none clears it", async () => {
     const set = await run("settings", "set", "--default-memory-provider", "holographic", "--json");
@@ -557,7 +577,7 @@ describe.concurrent("settings and providers", () => {
     const bad = await run("settings", "set", "--default-memory-provider", "supermemory");
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("default_memory_provider");
-  });
+  }, 15_000);
 
   test("settings show names the default memory provider, or none", async () => {
     const { code, stdout } = await run("settings", "show");
@@ -597,7 +617,7 @@ describe.concurrent("settings and providers", () => {
     const cap = await run("settings", "set", "--files-require-cap", "maybe");
     expect(cap.code).toBe(2);
     expect(cap.stderr).toContain("require_cap");
-  });
+  }, 15_000);
 
   test("a profile the fleet does not have is NOT_FOUND, on stderr", async () => {
     const { code, stderr } = await run("settings", "set", "--default-profile", "nope");
@@ -1073,7 +1093,8 @@ describe.concurrent("agent set · the Hermes settings", () => {
  */
 describe.concurrent("agent create · the credential the profile already holds", () => {
   test("a profile-bound create needs no prompt, and never echoes the value", async () => {
-    const { code, stdout, stderr } = await run(
+    const { code, stdout, stderr } = await runIn(
+      HOME,
       "agent",
       "create",
       "kite",
@@ -1278,7 +1299,7 @@ describe("the local run log", () => {
    * core-gap list.
    */
   test("a successful command is recorded with its output", async () => {
-    await run("agent", "status", "atlas");
+    await runIn(HOME, "agent", "status", "atlas");
     const recorder = runRecorderFor({ home: HOME, fixture: true });
     try {
       const rows = await recorder.list({ limit: 50 });
@@ -1294,7 +1315,7 @@ describe("the local run log", () => {
   });
 
   test("a failed command is recorded with the status it failed on", async () => {
-    await run("agent", "status", "nosuchagent");
+    await runIn(HOME, "agent", "status", "nosuchagent");
     const recorder = runRecorderFor({ home: HOME, fixture: true });
     try {
       const rows = await recorder.list({ limit: 50 });
@@ -1309,7 +1330,7 @@ describe("the local run log", () => {
     // The bug: `runs --json` printed every row's log, and its own output was
     // then recorded as the next row's log, so five invocations went
     // 295 → 871 → 2120 → 4899 → 11290 bytes and kept squaring.
-    for (let i = 0; i < 5; i += 1) await run("runs", "--json");
+    for (let i = 0; i < 5; i += 1) await runIn(HOME, "runs", "--json");
     const recorder = runRecorderFor({ home: HOME, fixture: true });
     try {
       const rows = (await recorder.list({ limit: 50 })).filter((r) => r.command === "runs");
@@ -1321,8 +1342,8 @@ describe("the local run log", () => {
   });
 
   test("no row's captured output exceeds the cap", async () => {
-    await run("agent", "ps");
-    await run("agent", "history", "atlas");
+    await runIn(HOME, "agent", "ps");
+    await runIn(HOME, "agent", "history", "atlas");
     const recorder = runRecorderFor({ home: HOME, fixture: true });
     try {
       for (const row of await recorder.list({ limit: 200 })) {
@@ -1473,15 +1494,15 @@ describe.concurrent("upgrade --now: converge the box in place", () => {
   });
 
   test("`upgrade --hermeticd V --now --no-rollout` fails the schema with 2", async () => {
-    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now", "--no-rollout");
+    const { code, stderr } = await run("upgrade", "--hermeticd", "0.8.3", "--now", "--no-rollout");
     expect(code).toBe(2);
     expect(stderr).toContain("--now and --no-rollout contradict each other");
   });
 
   test("`upgrade --hermeticd V --now` asks every running box to take it", async () => {
-    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.2", "--now");
+    const { code, stdout, stderr } = await run("upgrade", "--hermeticd", "0.8.3", "--now");
     expect(code).toBe(0);
-    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.2 now");
+    expect(`${stdout}${stderr}`).toContain("to take hermeticd 0.8.3 now");
   });
 
   test("`artifacts push V --no-rollout` publishes and asks no box", async () => {
@@ -1744,15 +1765,15 @@ describe("inbox settings --terminal-alerts", () => {
    * on at the end: the home is shared by every test in this file.
    */
   test("off persists, prints, and is read back; on restores it", async () => {
-    const off = await run("inbox", "settings", "--terminal-alerts", "off");
+    const off = await runIn(HOME, "inbox", "settings", "--terminal-alerts", "off");
     expect(off.code).toBe(0);
     expect(off.stdout).toContain("terminal alerts: off\n");
 
-    const read = await run("inbox", "settings", "--json");
+    const read = await runIn(HOME, "inbox", "settings", "--json");
     expect(read.code).toBe(0);
     expect(JSON.parse(read.stdout)).toMatchObject({ terminal_alerts: false });
 
-    const on = await run("inbox", "settings", "--terminal-alerts", "on", "--json");
+    const on = await runIn(HOME, "inbox", "settings", "--terminal-alerts", "on", "--json");
     expect(on.code).toBe(0);
     expect(JSON.parse(on.stdout)).toMatchObject({ terminal_alerts: true });
   });

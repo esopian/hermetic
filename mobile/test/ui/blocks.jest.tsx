@@ -309,11 +309,9 @@ describe("turn rows", () => {
           <TurnRow
             key={row.message.id}
             row={row}
-            fleetId="fxtr0001"
             instance="atlas"
             bot="scribe"
             botTitle="Scribe"
-            status="ready"
             now={NOW}
           />
         ))}
@@ -325,13 +323,31 @@ describe("turn rows", () => {
     expect(screen.getByText("you")).toBeTruthy();
   });
 
+  test("no row draws an avatar or the ME mark: the bar names the bot", async () => {
+    const rows = turnRows(
+      [
+        msg({ id: "u1", role: "user", text: "hello bot", at: "2026-10-13T11:59:00.000Z" }),
+        msg({ id: "b1", text: "hello", at: "2026-10-13T11:59:30.000Z" }),
+      ],
+      NOW,
+    );
+    await renderUi(
+      <View>
+        {rows.map((row) => (
+          <TurnRow key={row.message.id} row={row} instance="atlas" bot="scribe" now={NOW} />
+        ))}
+      </View>,
+      scope(),
+    );
+    expect(screen.queryByTestId(/^avatar-/)).toBeNull();
+    expect(screen.queryByText("ME")).toBeNull();
+    expect(screen.getByText("You")).toBeTruthy();
+  });
+
   test("a local prompt reads sending…", async () => {
     const [row] = turnRows([msg({ id: "local:1", role: "user", text: "hi" })], NOW);
     if (!row) throw new Error("no row");
-    await renderUi(
-      <TurnRow row={row} fleetId="f" instance="atlas" bot="scribe" status="ready" now={NOW} />,
-      scope(),
-    );
+    await renderUi(<TurnRow row={row} instance="atlas" bot="scribe" now={NOW} />, scope());
     expect(screen.getByText("sending…")).toBeTruthy();
   });
 });

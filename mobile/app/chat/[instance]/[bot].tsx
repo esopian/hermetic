@@ -13,9 +13,11 @@
  * list, `DemoSheet`), and `?demo=<prompt>` sends that prompt once on open, so
  * `xcrun simctl openurl booted "hermetic://chat/<instance>/<bot>?demo=…"`
  * raises any block without a tap. The same goes for the attachment states:
- * `?attach=image,file` puts the kit's canned files in the tray, `&send=<text>`
- * then sends them as the Send button does, and `?attachSheet=1` opens the
- * attach sheet. A build without the fixture has no list and ignores all four.
+ * `?attach=image,file` puts the kit's canned files in the tray, `?paste=image`
+ * pastes the kit's canned clipboard picture through the composer's paste path,
+ * `&send=<text>` then sends them as the Send button does, and `?attachSheet=1`
+ * opens the attach sheet. A build without the fixture has no list and ignores
+ * all five.
  */
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -61,7 +63,9 @@ import {
   pickFromLibrary,
   readBytes,
   takePhoto,
+  writeToCache,
 } from "../../../src/client/pick-attachment.ts";
+import { type PastePayload, pasteAttachments } from "../../../src/client/paste.ts";
 import { markConversationRead } from "../../../src/client/read.ts";
 import { useFleetContext } from "../../../src/fleet/FleetProvider.tsx";
 import {
@@ -113,6 +117,7 @@ export default function Conversation() {
     fresh?: string;
     demo?: string;
     attach?: string;
+    paste?: string;
     send?: string;
     attachSheet?: string;
   }>();
@@ -530,6 +535,35 @@ export default function Conversation() {
     },
     [attachments],
   );
+  // A picture pasted from the clipboard joins the tray as a picked photo does.
+  // Settles once the picture is in the tray; a failure rejects, for the caller to show.
+  const pasteImage = useCallback(
+    async (payload: PastePayload) => {
+      if (uploading()) return;
+      if (roomFor(attachments) === 0)
+        throw new HermeticError(
+          ATTACHMENT_LIMIT as ErrorCode,
+          "the draft holds as many files as a message may carry",
+        );
+      const pasted = await pasteAttachments(payload, writeToCache);
+      if (!alive.current) {
+        pasted.forEach(discardPicked);
+        return;
+      }
+      if (pasted.length > 0) dispatchAttachments({ type: "add", items: pasted });
+    },
+    [attachments],
+  );
+  const onPaste = useCallback(
+    (payload: PastePayload) => {
+      pasteImage(payload).catch((e: unknown) => {
+        haptic.error();
+        const copy = errorCopy(e);
+        Alert.alert(copy.title, copy.detail);
+      });
+    },
+    [pasteImage],
+  );
   const onSend = useCallback(
     (text: string) => {
       if (!client || sendBusy.current) return;
@@ -707,11 +741,37 @@ export default function Conversation() {
     })();
   }, [attachParam, sampleFiles, attachments]);
 
+  // `?paste=image` (fixture builds only): the kit's canned clipboard picture
+  // through the paste control's path (`pasteImage`), once; `&send=` waits for it.
+  const clipboardImage = demoPrompts ? (fixture?.clipboardImage ?? null) : null;
+  const pasteParam = clipboardImage && params.paste === "image" ? params.paste : null;
+  const pasteTaken = useRef<string | null>(null);
+  const [pastedFor, setPastedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pasteParam) {
+      pasteTaken.current = null;
+      return;
+    }
+    if (!clipboardImage || pasteTaken.current === pasteParam) return;
+    pasteTaken.current = pasteParam;
+    void (async () => {
+      try {
+        await pasteImage(await clipboardImage());
+      } catch (e) {
+        const copy = errorCopy(e);
+        Alert.alert(copy.title, copy.detail);
+      }
+      setPastedFor(pasteParam);
+      router.setParams({ paste: undefined });
+    })();
+  }, [pasteParam, clipboardImage, pasteImage]);
+
   // `&send=<text>` (fixture builds only): once the transcript is read and any
-  // `?attach=` files are in the tray, the Send button's path (stage, then send) once.
+  // `?attach=` or `?paste=` files are in the tray, the Send button's path (stage, then send) once.
   const sendParam = demoPrompts && typeof params.send === "string" && params.send ? params.send : null;
   const sendTaken = useRef<string | null>(null);
-  const attachSettled = !attachParam || attachedFor === attachParam;
+  const attachSettled =
+    (!attachParam || attachedFor === attachParam) && (!pasteParam || pastedFor === pasteParam);
   useEffect(() => {
     if (!sendParam) {
       sendTaken.current = null;
@@ -797,11 +857,9 @@ export default function Conversation() {
         ) : (
           <Transcript
             items={items}
-            fleetId={fleetId}
             instance={target.instance}
             bot={target.bot}
             botTitle={botTitle}
-            status={avatarStatus}
             now={now}
             activity={view?.activity ?? "idle"}
             released={released}
@@ -849,6 +907,7 @@ export default function Conversation() {
               attachments={attachments}
               canAttach={files ? (filesCapability === "no" ? "no-service" : true) : false}
               onAttach={onAttach}
+              onPaste={onPaste}
               onRemoveAttachment={removeAttachment}
               onRetryAttachment={(local_id) => dispatchAttachments({ type: "retry", local_id })}
             />

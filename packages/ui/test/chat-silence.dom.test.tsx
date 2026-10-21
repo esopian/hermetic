@@ -83,6 +83,16 @@ describe("intentional silence in the thread", () => {
     expect(container.querySelector(".ch-msg-body")?.textContent).not.toContain("静默");
   });
 
+  test("a malformed or bracket-less SILENT marker does not leak as text", () => {
+    for (const markdown of ["[SILENT", "SILENT]", "SILENT"]) {
+      const { container } = message([{ kind: "text", markdown }]);
+      expect(container.querySelector(".ch-silent")).not.toBeNull();
+      expect(container.querySelector(".ch-msg")).toBeNull();
+      expect(container.textContent).not.toContain("SILENT");
+      cleanup();
+    }
+  });
+
   test("prose that only mentions a marker is drawn as prose", () => {
     const { container } = message([
       { kind: "text", markdown: "Use NO_REPLY when no answer is needed." },
