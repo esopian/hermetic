@@ -1354,6 +1354,42 @@ describe("chat.observe: a session that compressed under the watch", () => {
   });
 });
 
+/**
+ * Each plain hint costs the consumer one durable read, and a streaming turn
+ * broadcasts far faster than a read completes. Events buffered while the
+ * consumer was busy are one hint per session, not one per event.
+ */
+describe("chat.observe: a burst of events while the consumer reads", () => {
+  test("collapses to one hint per session", async () => {
+    const burst = [
+      ...Array.from({ length: 50 }, (_, seq) => ({ session_id: "sess-a", type: "message.delta", seq })),
+      { session_id: "sess-b", type: "message.delta" },
+      { session_id: "sess-a", type: "message.complete" },
+    ];
+    const observe = createChatObserve({
+      connect: () =>
+        Promise.resolve({
+          request: () => Promise.resolve(null),
+          events: (async function* () {
+            yield* burst;
+          })(),
+          arrived: () => 1,
+          close: () => undefined,
+        }),
+    });
+    const box = { instance: "atlas", baseUrl: "https://atlas.example.ts.net", fleet_id: "fxtr0001" };
+    const it = observe.observe(box, "default")[Symbol.asyncIterator]();
+    // The first pull arms the socket's pump; let it buffer the whole burst, as
+    // it does while the consumer is out on a read.
+    const first = it.next();
+    await Bun.sleep(10);
+    const out: ChatObserveHint[] = [(await first).value];
+    for (let r = await it.next(); r.done !== true; r = await it.next()) out.push(r.value);
+    expect(out.length).toBeLessThanOrEqual(3);
+    expect(new Set(out.map((h) => h.session))).toEqual(new Set(["sess-a", "sess-b"]));
+  });
+});
+
 /* ── §9.2: the one payload a hint carries ─────────────────────────────────── */
 
 /**

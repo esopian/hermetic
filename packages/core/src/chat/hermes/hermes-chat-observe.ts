@@ -119,30 +119,39 @@ export function createChatObserve(deps: ChatObserveAdapterDeps) {
         );
         for (const { stored, block } of changed) yield { session: stored, subagent: block };
       }
-      for await (const { event, held } of merged.drain()) {
+      for await (const first of merged.drain()) {
         if (opts.signal?.aborted) return;
-        // Always the runtime id: it is what the subagent ledgers are keyed by.
-        const session = str(event.session_id);
-        const type = str(event.type);
-        if (ledgers && session && type && isSubagentEvent(type)) {
-          const child = observedSubagent(ledgers, watch, {
-            runtime: session,
-            type,
-            payload: rec(event.payload) ?? {},
-            seq: num(event.seq) ?? 0,
-          });
-          if (child) {
-            yield { session: child.stored, subagent: child.block };
+        // Everything buffered while the consumer was reading is one batch. A
+        // streaming turn broadcasts faster than a durable read completes, and
+        // each plain hint costs one read, so hint-per-event built a backlog the
+        // watch drained for minutes after the turn ended. One plain hint per
+        // session, after the batch's subagent blocks, wakes the same read.
+        const plain = new Set<string | null>();
+        for (const { event, held } of [first, ...merged.take()]) {
+          // Always the runtime id: it is what the subagent ledgers are keyed by.
+          const session = str(event.session_id);
+          const type = str(event.type);
+          if (ledgers && session && type && isSubagentEvent(type)) {
+            const child = observedSubagent(ledgers, watch, {
+              runtime: session,
+              type,
+              payload: rec(event.payload) ?? {},
+              seq: num(event.seq) ?? 0,
+            });
+            if (child) {
+              yield { session: child.stored, subagent: child.block };
+              continue;
+            }
+          }
+          // Already filtered by its stored id on the way in.
+          if (held) {
+            plain.add(held.stored);
             continue;
           }
+          if (session !== null && !concerns(session, opts)) continue;
+          plain.add(session);
         }
-        // Already filtered by its stored id on the way in.
-        if (held) {
-          yield { session: held.stored };
-          continue;
-        }
-        if (session !== null && !concerns(session, opts)) continue;
-        yield { session };
+        for (const session of plain) yield { session };
       }
     } finally {
       unsubscribe();
