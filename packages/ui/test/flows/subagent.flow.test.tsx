@@ -11,7 +11,9 @@
  * next tool preview and ends a stopped child `interrupted`.
  *
  * The fixture is paced (`chatDelayMs`) so a child is still running when the
- * page acts on it.
+ * page acts on it. Each child step is then 180ms, so a test spends seconds in
+ * the fixture's own sleeps (the parallel delegation's 21 steps alone are
+ * 3.8s) and takes 3-6s unloaded: past Bun's 5s default, hence 20s.
  */
 import { cleanup, screen, userEvent, waitFor, within } from "../dom.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -79,7 +81,7 @@ test("a synchronous delegation: one line that runs, then settles under the call"
   expect(lines()).toHaveLength(1);
   expect(lines()[0]?.dataset.verdict).toBe("done");
   expect(lines()[0]?.querySelector(".sa-act")?.textContent?.length).toBeGreaterThan(0);
-});
+}, 20_000);
 
 test("a parallel delegation: a header, three lines, and the timeout reads as failed", async () => {
   const composer = await openScribe();
@@ -92,7 +94,7 @@ test("a parallel delegation: a header, three lines, and the timeout reads as fai
   expect(fio.classList.contains("bad")).toBe(true);
   expect(fio.querySelector(".sa-act.error")?.textContent).toContain("Timed out after 30s");
   expect(document.querySelector(".sa-head-f")?.textContent).toMatch(/^3 of 3 done/);
-});
+}, 20_000);
 
 test("a background delegation: lines keep moving after the turn, then the results turn lands", async () => {
   const composer = await openScribe();
@@ -111,7 +113,7 @@ test("a background delegation: lines keep moving after the turn, then the result
   // Never duplicated by the re-read that ended the turn.
   expect(lines().length).toBeGreaterThan(0);
   expect(new Set(lines().map((el) => el.dataset.subagentId)).size).toBe(lines().length);
-});
+}, 20_000);
 
 test("a steer from the modal is queued, then likely applied when the child's next call echoes it", async () => {
   const composer = await openScribe();
@@ -131,7 +133,7 @@ test("a steer from the modal is queued, then likely applied when the child's nex
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(calls("chat.abort")).toHaveLength(0);
   await waitFor(() => expect(turnRunning()).toBe(false), WAIT);
-});
+}, 20_000);
 
 test("Stop from the modal is requested, then the child is stopped by you and the turn goes on", async () => {
   const composer = await openScribe();
@@ -152,4 +154,4 @@ test("Stop from the modal is requested, then the child is stopped by you and the
   // The parent turn carried on to its own answer.
   await waitFor(() => expect(turnRunning()).toBe(false), WAIT);
   expect(pageText()).toContain("tasks finished");
-});
+}, 20_000);

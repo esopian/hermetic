@@ -536,30 +536,33 @@ export default function Conversation() {
     [attachments],
   );
   // A picture pasted from the clipboard joins the tray as a picked photo does.
-  const onPaste = useCallback(
-    (payload: PastePayload) => {
-      void (async () => {
-        if (uploading()) return;
-        try {
-          if (roomFor(attachments) === 0)
-            throw new HermeticError(
-              ATTACHMENT_LIMIT as ErrorCode,
-              "the draft holds as many files as a message may carry",
-            );
-          const pasted = await pasteAttachments(payload, writeToCache);
-          if (!alive.current) {
-            pasted.forEach(discardPicked);
-            return;
-          }
-          if (pasted.length > 0) dispatchAttachments({ type: "add", items: pasted });
-        } catch (e) {
-          haptic.error();
-          const copy = errorCopy(e);
-          Alert.alert(copy.title, copy.detail);
-        }
-      })();
+  // Settles once the picture is in the tray; a failure rejects, for the caller to show.
+  const pasteImage = useCallback(
+    async (payload: PastePayload) => {
+      if (uploading()) return;
+      if (roomFor(attachments) === 0)
+        throw new HermeticError(
+          ATTACHMENT_LIMIT as ErrorCode,
+          "the draft holds as many files as a message may carry",
+        );
+      const pasted = await pasteAttachments(payload, writeToCache);
+      if (!alive.current) {
+        pasted.forEach(discardPicked);
+        return;
+      }
+      if (pasted.length > 0) dispatchAttachments({ type: "add", items: pasted });
     },
     [attachments],
+  );
+  const onPaste = useCallback(
+    (payload: PastePayload) => {
+      pasteImage(payload).catch((e: unknown) => {
+        haptic.error();
+        const copy = errorCopy(e);
+        Alert.alert(copy.title, copy.detail);
+      });
+    },
+    [pasteImage],
   );
   const onSend = useCallback(
     (text: string) => {
@@ -739,7 +742,7 @@ export default function Conversation() {
   }, [attachParam, sampleFiles, attachments]);
 
   // `?paste=image` (fixture builds only): the kit's canned clipboard picture
-  // through the paste control's path (`onPaste`), once.
+  // through the paste control's path (`pasteImage`), once; `&send=` waits for it.
   const clipboardImage = demoPrompts ? (fixture?.clipboardImage ?? null) : null;
   const pasteParam = clipboardImage && params.paste === "image" ? params.paste : null;
   const pasteTaken = useRef<string | null>(null);
@@ -753,7 +756,7 @@ export default function Conversation() {
     pasteTaken.current = pasteParam;
     void (async () => {
       try {
-        onPaste(await clipboardImage());
+        await pasteImage(await clipboardImage());
       } catch (e) {
         const copy = errorCopy(e);
         Alert.alert(copy.title, copy.detail);
@@ -761,7 +764,7 @@ export default function Conversation() {
       setPastedFor(pasteParam);
       router.setParams({ paste: undefined });
     })();
-  }, [pasteParam, clipboardImage, onPaste]);
+  }, [pasteParam, clipboardImage, pasteImage]);
 
   // `&send=<text>` (fixture builds only): once the transcript is read and any
   // `?attach=` or `?paste=` files are in the tray, the Send button's path (stage, then send) once.

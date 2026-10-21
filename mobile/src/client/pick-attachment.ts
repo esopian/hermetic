@@ -215,13 +215,16 @@ export async function readBytes(uri: string): Promise<Uint8Array> {
 }
 
 /**
- * Write `bytes` into the app's cache under `name` and answer its `file://` URI:
- * a pasted picture (`paste.ts`) becomes a cache copy like a picked photo's, so
- * `readBytes` and `discardPicked` treat it the same.
+ * Decode `base64` natively into the app's cache under `name` and answer its
+ * `file://` URI and size: a pasted picture (`paste.ts`) becomes a cache copy
+ * like a picked photo's, so `readBytes` and `discardPicked` treat it the same.
  */
-export async function writeToCache(name: string, bytes: Uint8Array): Promise<string> {
+export async function writeToCache(
+  name: string,
+  base64: string,
+): Promise<{ uri: string; size: number }> {
   const file = new File(Paths.cache, name);
   file.create({ intermediates: true, overwrite: true });
-  file.write(bytes);
-  return file.uri;
+  file.write(base64, { encoding: "base64" });
+  return { uri: file.uri, size: file.size ?? 0 };
 }

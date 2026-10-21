@@ -453,7 +453,7 @@ describe("fixture: the clipboard picture for ?paste=image", () => {
     const items = pasted
       ? await pasteAttachments(pasted, async (name) => {
           written.push(name);
-          return `file:///cache/${name}`;
+          return { uri: `file:///cache/${name}`, size: 1 };
         })
       : [];
     expect(items.map((a) => [a.kind, a.mime, a.status])).toEqual([["image", "image/png", "picked"]]);
