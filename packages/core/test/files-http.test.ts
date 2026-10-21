@@ -298,7 +298,7 @@ describe("HermeticdFiles.content", () => {
     expect(e.code).toBe("ABORTED");
   });
 
-  test("imagesOnly refuses a non-image from its Content-Type, without reading the body", async () => {
+  test("an image purpose refuses a non-image from its Content-Type, without reading the body", async () => {
     let pulled = false;
     const files = new HermeticdFiles(agentStore(), {
       fetch: async () =>
@@ -318,7 +318,7 @@ describe("HermeticdFiles.content", () => {
         ),
     });
     const e = await refusal(
-      files.content("atlas", "f_abcdefabcdef", { maxBytes: 1024, imagesOnly: true }),
+      files.content("atlas", "f_abcdefabcdef", { maxBytes: 1024, purpose: "image" }),
     );
     expect(e.code).toBe("FILE_TYPE_REJECTED");
     expect(pulled).toBe(false);

@@ -12,7 +12,8 @@ import { attachmentErrorText, useDraftAttachments } from "../src/chat/chat-attac
 import type { AttachmentsApi, AttachmentsControl } from "../src/chat/chat-attachments.ts";
 import { fresh, key } from "../src/chat/chat-conversation-record.ts";
 import type { Conversation } from "../src/chat/chat-conversation-record.ts";
-import { safeImageSrc } from "../src/chat/chat-logic.ts";
+import { safeImageSrc, safeMediaSrc } from "../src/chat/chat-logic.ts";
+import { AttachmentBlock } from "../src/chat/components/blocks/Attachment.tsx";
 import {
   isMintedBlobUrl,
   mintBlobUrl,
@@ -159,6 +160,38 @@ describe("pure helpers", () => {
     expect(safeImageSrc("blob:https://elsewhere/abc")).toBeNull();
     revokeBlobUrl(url);
     expect(safeImageSrc(url)).toBeNull();
+  });
+  test("safeMediaSrc takes only a blob: URL this page minted: no path, no data:, no box URL", () => {
+    const url = mintBlobUrl(new Blob(["x"], { type: "audio/wav" }));
+    expect(safeMediaSrc(url)).toBe(url);
+    expect(safeMediaSrc("/fonts/x.woff2")).toBeNull();
+    expect(safeMediaSrc("data:audio/wav;base64,AAAA")).toBeNull();
+    expect(safeMediaSrc("https://atlas.tail0000.ts.net/outbox/a.wav")).toBeNull();
+    expect(safeMediaSrc("file:///data/hermes/work/a.wav")).toBeNull();
+    expect(safeMediaSrc("blob:https://elsewhere/abc")).toBeNull();
+    revokeBlobUrl(url);
+    expect(safeMediaSrc(url)).toBeNull();
+  });
+});
+
+// NousResearch/hermes-agent #71559: a URL's path shape is not authorization.
+describe("media the page did not read", () => {
+  test("a /relay/media/ URL from another origin does not render as authenticated media", () => {
+    for (const href of [
+      "https://evil.example/relay/media/abc.png",
+      "//evil.example/relay/media/abc.png",
+      "https://cdn.example/files/relay/media/clip.mp4",
+    ]) {
+      expect(safeImageSrc(href)).toBeNull();
+      expect(safeMediaSrc(href)).toBeNull();
+      for (const mime of ["image/png", "video/mp4", "audio/ogg"]) {
+        const { container } = render(
+          <AttachmentBlock block={{ kind: "attachment", name: "abc.png", mime, bytes: 9, href }} />,
+        );
+        expect(container.querySelector("img, audio, video, source")).toBeNull();
+        cleanup();
+      }
+    }
   });
 });
 

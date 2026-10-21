@@ -71,7 +71,9 @@ import {
   FilesStageApiInput,
   FILES_LIMITS,
   HermeticError,
-  isImageMime,
+  contentPurposeAllows,
+  contentPurposeBytes,
+  purposeRefusal,
 } from "@hermetic/core";
 import type {
   FilesGetApiInput as FilesGetApiInputType,
@@ -434,28 +436,30 @@ export async function discard(ctx: HandlerContext, params: unknown) {
 }
 
 /**
- * An image's bytes, for a preview: a committed (inbox) file's thumbnail (`f_…`)
- * or a share card's image (`sh_…`). Images only, and no larger than Hermes
- * takes one: anything else is refused from the box's response headers
- * (`Content-Type`, `Content-Length`), before its body is read.
+ * An entry's bytes for the page to show: a committed (inbox) file's thumbnail
+ * (`f_…`), or a share card's image, audio or video to play, or text to show
+ * (`sh_…`). Each `purpose` admits only its own types, under its own cap
+ * (`contentPurposeBytes`): anything else is refused from the box's response
+ * headers (`Content-Type`, `Content-Length`), before its body is read. The
+ * page turns the answer into a `blob:` URL it minted; it never names a path.
  */
 export async function content(
   ctx: HandlerContext,
   params: unknown,
 ): Promise<{ mime: string; data_b64: string }> {
-  const { instance, id, expected_sha256 } = parseInput(FilesContentInput, params);
-  const file = await ctx.hermetic().files.internal.content(instance, id, FILES_LIMITS.imageBytes, {
+  const { instance, id, expected_sha256, purpose } = parseInput(FilesContentInput, params);
+  const file = await ctx.hermetic().files.internal.content(instance, id, contentPurposeBytes(purpose), {
     signal: ctx.signal,
-    imagesOnly: true,
+    purpose,
   });
   // Core already refused it from the headers; checked again on what was read.
-  if (!isImageMime(file.mime)) {
-    throw new HermeticError("FILE_TYPE_REJECTED", `${instance}: only images have a preview`, {
+  if (!contentPurposeAllows(purpose, file.mime)) {
+    throw new HermeticError("FILE_TYPE_REJECTED", `${instance}: ${purposeRefusal(purpose)}`, {
       name: instance,
     });
   }
   if (expected_sha256 !== undefined && file.sha256 !== expected_sha256) {
-    throw new HermeticError("FILE_DIGEST_MISMATCH", `${instance}: the shared image changed`, {
+    throw new HermeticError("FILE_DIGEST_MISMATCH", `${instance}: the shared file changed`, {
       name: instance,
     });
   }

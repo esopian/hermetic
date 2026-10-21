@@ -13,7 +13,8 @@
  * response must be a marker, give or take whitespace, case and stray edge
  * punctuation. Prose that merely mentions a marker is a real answer, and an
  * empty response is not silence (upstream treats that as a failure). Square
- * brackets are structural, so `[SILENT` is not `SILENT`.
+ * brackets are structural, so `[SILENT` is not `SILENT` — but it is `[SILENT]`
+ * missing its bracket, which hermetic (unlike upstream) reads as silence.
  *
  * Python's string semantics are reproduced rather than approximated: length is
  * counted in code points, `str.strip()`/`str.split()` use Python's whitespace
@@ -92,7 +93,24 @@ function canonicalCandidates(text: unknown): string[] {
  * caller's, because only the caller knows whether the turn failed.
  */
 export function isIntentionalSilence(text: unknown): boolean {
-  return canonicalCandidates(text).some((candidate) => TOKENS.has(candidate));
+  return canonicalCandidates(text).some(
+    (candidate) => TOKENS.has(candidate) || TOKENS.has(rebracketed(candidate)),
+  );
+}
+
+/**
+ * A marker missing one of its brackets (`[SILENT`, `SILENT]`) with the bracket
+ * restored, else `candidate` as it was. This is hermetic's own rule, not
+ * upstream's: upstream delivers a malformed marker as text (#51438), and the
+ * page would draw a control token as the bot's words. The whole response must
+ * still be the marker, so prose that mentions `[SILENT` is still prose.
+ */
+function rebracketed(candidate: string): string {
+  const opens = candidate.startsWith("[");
+  const closes = candidate.endsWith("]");
+  if (opens && !closes) return `${candidate}]`;
+  if (closes && !opens) return `[${candidate}`;
+  return candidate;
 }
 
 /**

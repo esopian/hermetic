@@ -363,7 +363,7 @@ describe("files.internal", () => {
     expect(backend.files.entry("atlas", old)).toBeUndefined();
   });
 
-  test("content with imagesOnly refuses a non-image", async () => {
+  test("content for an image refuses a non-image", async () => {
     const { hermetic } = open();
     const events = await drain(
       hermetic.files.stage({ instance: "atlas", source: { path: writeTemp("notes.pdf", PDF) } }),
@@ -373,7 +373,7 @@ describe("files.internal", () => {
     await hermetic.files.internal.commit("atlas", last.file.id, "s1");
     const e = await refusal(
       hermetic.files.internal.content("atlas", last.file.id, FILES_LIMITS.imageBytes, {
-        imagesOnly: true,
+        purpose: "image",
       }),
     );
     expect(e.code).toBe("FILE_TYPE_REJECTED");

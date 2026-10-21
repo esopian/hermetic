@@ -32,7 +32,9 @@ import {
   FILES_NAME_HEADER,
   FILES_NOT_SECRET_HEADER,
   FILES_SECRET_AS_HEADER,
-  isImageMime,
+  type ContentPurpose,
+  contentPurposeAllows,
+  purposeRefusal,
 } from "../shared/files.ts";
 import { filesRefusal } from "../files/errors.ts";
 import { hermeticdBase, type HermeticdRpcOptions } from "./rpc.ts";
@@ -440,17 +442,17 @@ export async function readVerified(
   res: Response,
   agent: string,
   maxBytes: number,
-  opts: { signal?: AbortSignal | undefined; imagesOnly?: boolean | undefined } = {},
+  opts: { signal?: AbortSignal | undefined; purpose?: ContentPurpose | undefined } = {},
 ): Promise<FilesContent> {
   const mismatch = (why: string): HermeticError =>
     new HermeticError("FILE_DIGEST_MISMATCH", `${agent}: ${why}`, { name: agent });
   const mime =
     (res.headers.get("content-type") ?? "application/octet-stream").split(";")[0]?.trim() ||
     "application/octet-stream";
-  // Read from the headers, so a file that is not an image costs no body.
-  if (opts.imagesOnly && !isImageMime(mime)) {
+  // Read from the headers, so a file of a type the purpose does not admit costs no body.
+  if (opts.purpose !== undefined && !contentPurposeAllows(opts.purpose, mime)) {
     await res.body?.cancel().catch(() => {});
-    throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: only images have a preview`, {
+    throw new HermeticError("FILE_TYPE_REJECTED", `${agent}: ${purposeRefusal(opts.purpose)}`, {
       name: agent,
     });
   }
