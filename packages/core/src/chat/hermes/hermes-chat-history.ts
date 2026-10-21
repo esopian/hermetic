@@ -29,7 +29,18 @@ import {
   readMediaShares,
   type ListOutbox,
 } from "./hermes-chat-media.ts";
-import { parseProcessNotice } from "./process-notice.ts";
+import {
+  isCompactionContinueMarker,
+  isFailedTurn,
+  parseReplyContext,
+  parseSkillInvocation,
+} from "./injected-notice.ts";
+import {
+  parseLeadingNotice,
+  parseProcessNotice,
+  parseTrailingNotice,
+  type LeadingNotice,
+} from "./process-notice.ts";
 import { STEER_DISPLAY_KIND, unwrapSteer } from "./steer-marker.ts";
 import {
   arr,
@@ -174,7 +185,7 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
   let lastTurnRow = -1;
   for (const [index, entry] of rows.entries()) {
     const row = rec(entry);
-    if (!row || row.display_kind === "hidden") continue;
+    if (!row || !visible(row)) continue;
     if (row.role !== "tool") lastTurnRow = index;
     for (const value of arr(row.tool_calls)) {
       const call = rec(value);
@@ -188,16 +199,26 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
   /** The previous mapped row's `at`, carried forward for a row the box left unstamped. */
   let carried: string | null = null;
   for (const [index, entry] of rows.entries()) {
-    const row = rec(entry);
-    if (!row || row.display_kind === "hidden") continue;
-    const durableId = num(row.id) ?? num(row.row_id);
+    const original = rec(entry);
+    if (!original || !visible(original)) continue;
+    const durableId = num(original.id) ?? num(original.row_id);
     // Upstream's `TranscriptMessage.row_id` is the documented durable rewind
     // target; some builds send it as a string rather than a number.
-    const rowRef = str(row.row_id);
-    const stamped = isoOrNull(row.at ?? row.timestamp ?? row.created_at);
+    const rowRef = str(original.row_id);
+    const stamped = isoOrNull(original.at ?? original.timestamp ?? original.created_at);
     const at: string = stamped ?? carried ?? HISTORY_EPOCH;
     carried = at;
-    const role = messageRole(str(row.role));
+    const role = messageRole(str(original.role));
+    const kind = str(original.display_kind);
+    // Computed from the row as upstream stored it, whatever is split off below.
+    const id =
+      str(original.id) ??
+      str(original.message_id) ??
+      (durableId !== null
+        ? `${session}:${durableId}`
+        : rowRef !== null
+          ? `${session}:${rowRef}`
+          : rowId(session, original, stamped));
     // A background-process notice Hermes injected as the user's row: the
     // operator never typed it, so it is a system event, not "You". Only the
     // role and blocks change — the id below is computed from the row exactly
@@ -206,13 +227,39 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // Hermes' out-of-band marker: the text without the marker, flagged
     // `steered`. Checked first, so neither the notice nor the delivery reading
     // below ever sees the marker. The id, again, comes from the raw row.
-    const steer = role === "user" ? steerOf(row) : null;
-    const notice = role === "user" && !steer ? processNoticeOf(row) : null;
+    const steer = role === "user" ? steerOf(original) : null;
+    // A hidden row only gets this far as a compaction summary, whatever its role.
+    const lead = kind === "hidden" || (role === "user" && !steer) ? leadingNoticeOf(original) : null;
+    // A notice that opens a row the operator also wrote in (a gateway recovery
+    // note before their new message, a compaction summary merged into their
+    // ask): the notice goes first under `<id>:notice`, and the operator's part
+    // is mapped below as if it were the whole row, keeping the row's own id.
+    const split = lead !== null && hasContent(lead.rest);
+    if (split) {
+      out.push({
+        id: `${id}:notice`,
+        session,
+        role: "system",
+        author: authorRef(box, original.author ?? original.from),
+        at,
+        blocks: [lead.block],
+        usage: null,
+        error: null,
+        incomplete: null,
+      });
+    }
+    const row = split ? { ...original, display_content: lead.rest } : original;
+    const notice = lead && !split ? lead.block : null;
+    // Hermes' boundary row closing a failed turn: not the bot speaking, so it
+    // is the message's failure, drawn the way a live failed turn is.
+    const failedText = role === "bot" && isFailedTurn(kind, singleText(row)) ? singleText(row) : null;
     const blocks = notice
       ? [notice]
-      : steer && steer.text !== null
-        ? [{ kind: "text" as const, markdown: steer.text }]
-        : durableHistoryBlocks(row, calls, completed, index === lastTurnRow);
+      : failedText !== null
+        ? []
+        : steer && steer.text !== null
+          ? [{ kind: "text" as const, markdown: steer.text }]
+          : durableHistoryBlocks(row, calls, completed, index === lastTurnRow);
     // Another bot's `message_agent` delivery, likewise on the user role: the
     // signature becomes `from_bot` and the text keeps only the message. The key
     // is omitted rather than null on every other row, so their shape is as before.
@@ -223,17 +270,37 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // a notice or another bot's delivery never had attachments of ours, and a
     // framing block in one is that sender's text, not chips. A steer carried
     // only typed text, never a framed attachment.
-    const shown = delivery ? delivery.blocks : blocks;
     const operator = role === "user" && !notice && !delivery && !steer;
+    // A skill invocation and a messaging reply stay the operator's message;
+    // only Hermes' scaffolding around what they typed is lifted into a field.
+    const stored = operator ? singleText(row) : null;
+    // The task list compaction folded onto the end of the operator's row: their
+    // text stays theirs, and the list follows it as its own event. On string
+    // content it follows a blank line; on multimodal content
+    // `_append_text_to_content` adds it as the last part. A steer or another
+    // bot's delivery is not operator text, so a list folded onto one stays put.
+    const trailing = stored !== null ? parseTrailingNotice(stored) : null;
+    const lastPart = operator && stored === null ? blocks.at(-1) : undefined;
+    const partList = lastPart?.kind === "text" ? parseProcessNotice(lastPart.markdown) : null;
+    const todoPart = partList?.event === "todo" ? partList : null;
+    const after = trailing?.block ?? todoPart;
+    const typed = trailing ? trailing.text : stored;
+    const skill = typed !== null ? parseSkillInvocation(typed) : null;
+    const reply = typed !== null && !skill ? parseReplyContext(typed) : null;
+    const shown = skill
+      ? textBlocks(skill.instruction)
+      : reply
+        ? textBlocks(reply.text)
+        : trailing
+          ? textBlocks(trailing.text)
+          : todoPart
+            ? blocks.slice(0, -1)
+            : delivery
+              ? delivery.blocks
+              : blocks;
+    const error = str(row.error) ?? failedText;
     out.push({
-      id:
-        str(row.id) ??
-        str(row.message_id) ??
-        (durableId !== null
-          ? `${session}:${durableId}`
-          : rowRef !== null
-            ? `${session}:${rowRef}`
-            : rowId(session, row, stamped)),
+      id,
       session,
       role: notice ? "system" : role,
       author: authorRef(box, row.author ?? row.from),
@@ -246,12 +313,29 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
           ? readMediaShares(shown)
           : shown,
       usage: mapUsage(rec(row.usage)),
-      error: str(row.error),
-      ...failureOf(row),
-      incomplete: row.incomplete === true ? true : null,
+      error,
+      ...failureOf(row, error),
+      // A failed turn did not complete, as a live failure ends `incomplete`.
+      incomplete: row.incomplete === true || failedText !== null ? true : null,
       ...(delivery ? { from_bot: delivery.from } : {}),
       ...(steer ? { steered: true } : {}),
+      ...(skill && typed !== null ? { skill: { ...skill, raw: typed } } : {}),
+      ...(reply ? { reply_to: { quote: reply.quote } } : {}),
     });
+    if (after) {
+      out.push({
+        // A row already split around a leading notice holds `:notice`.
+        id: split ? `${id}:notice:after` : `${id}:notice`,
+        session,
+        role: "system",
+        author: null,
+        at,
+        blocks: [after],
+        usage: null,
+        error: null,
+        incomplete: null,
+      });
+    }
   }
   return out;
 }
@@ -262,8 +346,10 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
  * (`tui_gateway/session_history.py` `_fail_inflight_turn`). Omitted rather
  * than null on every other row, so their shape is as before.
  */
-function failureOf(row: Record<string, unknown>): Partial<Pick<ChatMessage, "failure">> {
-  const error = str(row.error);
+function failureOf(
+  row: Record<string, unknown>,
+  error: string | null,
+): Partial<Pick<ChatMessage, "failure">> {
   if (!error) return {};
   return { failure: chatFailure(CHAT_ERROR_CODES.TURN_FAILED, error, row.error_surface) };
 }
@@ -339,16 +425,69 @@ function canonical(value: unknown): string {
 }
 
 /**
- * The `process_event` block for a row whose whole text is one of Hermes'
- * injected notices, or null. Upstream stores the notice as plain string
- * content; a single text part is accepted too, so a build that wraps content
- * in parts does not bring "You" back.
+ * The notice a row opens with (`process-notice.ts`), and the content after it
+ * that is still the operator's, or null. Upstream stores a notice as plain
+ * string content; a single text part is accepted too, so a build that wraps
+ * content in parts does not bring "You" back.
+ *
+ * A compaction summary is read from `content`, not `display_content`: the
+ * dashboard keeps the whole carrier there and projects only the content the
+ * summary was merged into as `display_content`, dropping `display_kind`
+ * (`hermes_cli/web_routers/sessions.py` `_project_for_display`); a standalone
+ * summary comes typed `hidden` instead, and is still the compaction event.
+ * Every other hidden row stays dropped.
  */
-export function processNoticeOf(row: Record<string, unknown>): ProcessEventBlock | null {
-  const content = row.display_content ?? row.content ?? row.text;
-  if (typeof content === "string") return parseProcessNotice(content);
+function leadingNoticeOf(
+  row: Record<string, unknown>,
+): { block: ProcessEventBlock; rest: unknown } | null {
+  const kind = str(row.display_kind);
+  const physical = joinedText(row.content ?? row.text);
+  const carrier: LeadingNotice | null = physical === null ? null : parseLeadingNotice(physical, kind);
+  if (carrier?.block.event === "compaction") {
+    return {
+      block: carrier.block,
+      rest: kind === "hidden" ? null : (row.display_content ?? carrier.rest),
+    };
+  }
+  if (kind === "hidden") return null;
   const text = singleText(row);
-  return text ? parseProcessNotice(text) : null;
+  return text === null ? null : parseLeadingNotice(text, kind);
+}
+
+/**
+ * Whether a row reaches the transcript at all: a hidden row only as a
+ * compaction summary, and never compaction's filler `Continue from the
+ * compressed conversation context above…` row, which nobody typed and which
+ * says nothing the summary's event does not.
+ */
+function visible(row: Record<string, unknown>): boolean {
+  if (row.display_kind === "hidden") return leadingNoticeOf(row) !== null;
+  return !(row.role === "user" && isCompactionContinueMarker(singleText(row) ?? ""));
+}
+
+/**
+ * Every text part of a content value joined by newlines, as upstream's
+ * `_content_text_for_contains` reads a multi-part carrier for its summary and
+ * delimiter (`context_compressor.py:1340`, :4365-4398); null when it has none.
+ */
+function joinedText(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  const texts = arr(content)
+    .map((part) =>
+      typeof part === "string" ? part : (str(rec(part)?.text) ?? str(rec(part)?.content)),
+    )
+    .filter((text): text is string => !!text);
+  return texts.length > 0 ? texts.join("\n") : null;
+}
+
+/** Whether content split off a notice holds anything: a non-blank string or a non-empty part list. */
+function hasContent(value: unknown): boolean {
+  return typeof value === "string" ? value.trim() !== "" : arr(value).length > 0;
+}
+
+/** One text block, or none for an absent or empty text. */
+function textBlocks(text: string | null): ChatBlock[] {
+  return text ? [{ kind: "text", markdown: text }] : [];
 }
 
 /**
@@ -367,7 +506,11 @@ function steerOf(row: Record<string, unknown>): { text: string | null } | null {
 
 /** A row's whole text when it is one string or a single text part, else null. */
 function singleText(row: Record<string, unknown>): string | null {
-  const content = row.display_content ?? row.content ?? row.text;
+  return textOf(row.display_content ?? row.content ?? row.text);
+}
+
+/** A content value's whole text when it is one string or a single text part, else null. */
+function textOf(content: unknown): string | null {
   if (typeof content === "string") return content;
   const parts = arr(content);
   if (parts.length !== 1) return null;

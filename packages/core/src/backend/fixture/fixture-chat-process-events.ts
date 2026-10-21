@@ -216,6 +216,12 @@ const NOTICES = {
     "--- ✓ TASK 3/3: Draft parser cases  (status=completed, api_calls=4, 97.0s) ---",
     "Drafted 19 cases: one per formatter branch, three negatives, and the DM example.",
   ),
+  cron: lines(
+    '[Cronjob "pr-checkin" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]',
+    "",
+    "#97 BEHIND, audit and ci failing",
+    "#110 DIRTY, needs a rebase onto master",
+  ),
 } as const;
 
 /** The block for a notice, failing loudly if the parser stops recognising it. */
@@ -268,8 +274,9 @@ const text = (markdown: string): ChatBlock => ({ kind: "text", markdown });
 /**
  * The transcript, in the order a box would have written it: the operator's
  * request, the turn that starts three background commands, then the notices
- * as each finishes — interleaved with the bot's reply to the DM, and ending on
- * a burst of four with no turn between them.
+ * as each finishes — interleaved with the bot's reply to the DM and a cron
+ * job's output with the bot's summary of it, and ending on a burst of four
+ * with no turn between them.
  */
 export const KESTREL_EVENTS_TRANSCRIPT: readonly ChatMessage[] = [
   {
@@ -318,6 +325,18 @@ export const KESTREL_EVENTS_TRANSCRIPT: readonly ChatMessage[] = [
       ),
     ],
     usage: usage(10_420, 58, 0.0034, "claude-sonnet-5"),
+    error: null,
+    incomplete: null,
+  },
+  eventRow(13, "00:23:05", NOTICES.cron),
+  {
+    id: "mx-kestrel-events-14",
+    session: SESSION,
+    role: "bot",
+    author: KESTREL,
+    at: at("00:23:14"),
+    blocks: [text("The PR check-in found two PRs to rebase: #97 and #110. Nothing else needs action.")],
+    usage: usage(11_020, 41, 0.0029, "claude-sonnet-5"),
     error: null,
     incomplete: null,
   },

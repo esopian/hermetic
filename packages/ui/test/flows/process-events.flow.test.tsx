@@ -122,6 +122,19 @@ test("no event row is labelled You; the operator's prompt is", async () => {
   );
 });
 
+test("a cron job's output is a marker naming the job, and the reply answers it", async () => {
+  const log = await openKestrel();
+  const marker = log.querySelector<HTMLElement>('.ch-marker-row[data-process-event="cron"]');
+  expect(marker).not.toBeNull();
+  expect(marker!.querySelector(".ch-marker")!.textContent).toContain("cron · pr-checkin · delivered");
+  expect(marker!.querySelector("summary")!.textContent).toContain("output · 2 lines");
+  // Not a gutter row, so never in a burst.
+  expect(log.querySelector('.ch-ev[data-process-event="cron"]')).toBeNull();
+  const reply = log.querySelector<HTMLElement>('[data-chat-message="mx-kestrel-events-14"]');
+  expect(reply!.querySelector(".ch-reply-meta")!.textContent).toBe("re: cron pr-checkin");
+  expect(reply!.querySelector(".ch-inreply")).toBeNull();
+});
+
 test("an eventful thread has one rendering and no density switch", async () => {
   // A density the old switch stored for this thread must not hide anything now.
   window.localStorage.setItem(

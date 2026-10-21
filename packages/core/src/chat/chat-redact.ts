@@ -490,6 +490,21 @@ function redactProcessEvent(block: Extract<ChatBlock, { kind: "process_event" }>
           warnings: block.dm.warnings.map(redactText),
         }
       : block.dm,
+    notice: block.notice
+      ? {
+          ...block.notice,
+          subject: redactOptional(block.notice.subject),
+          detail: redactOptional(block.notice.detail),
+          body: redactOptional(block.notice.body),
+          tasks: block.notice.tasks
+            ? block.notice.tasks.map((task) => ({
+                ...task,
+                text: redactText(task.text),
+                id: redactOptional(task.id),
+              }))
+            : block.notice.tasks,
+        }
+      : block.notice,
     raw: redactText(block.raw),
   };
 }
@@ -575,7 +590,22 @@ function redactMessageError(message: ChatMessage): ChatMessage {
 }
 
 export function redactMessage(message: ChatMessage): ChatMessage {
-  return redactMessageError({ ...message, blocks: message.blocks.map(redactBlock) });
+  return redactMessageError({
+    ...message,
+    blocks: message.blocks.map(redactBlock),
+    // A skill row's stored text is the whole skill body; the quote is another
+    // message's text. Both are the box's words beside the operator's.
+    ...(message.skill
+      ? {
+          skill: {
+            names: message.skill.names.map(redactText),
+            instruction: redactOptional(message.skill.instruction),
+            raw: redactText(message.skill.raw),
+          },
+        }
+      : {}),
+    ...(message.reply_to ? { reply_to: { quote: redactText(message.reply_to.quote) } } : {}),
+  });
 }
 
 /**

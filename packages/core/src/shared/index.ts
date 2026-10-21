@@ -47,10 +47,13 @@ export type { SessionOriginName } from "./session-origins.ts";
 
 // --- Background-process events in chat (§9.2) ----------------------------
 export {
+  NUDGE_LABELS,
   PROCESS_COMMAND_MAX,
   isRoutineProcessEvent,
   processEventSentence,
   shortCommand,
+  todoCounts,
+  todoSummary,
 } from "./process-event.ts";
 export type { ProcessEventLike } from "./process-event.ts";
 

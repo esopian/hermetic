@@ -503,6 +503,84 @@ describe.concurrent("the transcript", () => {
     });
   });
 
+  describe("injected notices", () => {
+    const ev = (
+      event: ProcessEventBlock["event"],
+      notice: ProcessEventBlock["notice"],
+      over: Partial<ProcessEventBlock> = {},
+    ) =>
+      messageLines(
+        message({
+          role: "system",
+          blocks: [{ kind: "process_event", event, outcome: "info", raw: "x", notice, ...over }],
+        }),
+        NOW,
+      );
+
+    test("each kind leads with its word and a one-line status from the notice", () => {
+      expect(ev("heartbeat", { detail: "30m", subject: "check mail" })[0]).toBe(
+        "3h ago  event ■ heartbeat every 30m — check mail",
+      );
+      expect(ev("goal", { variant: "gate_failed", subject: "ship it" })[0]).toBe(
+        "3h ago  event ■ goal gate failed — ship it",
+      );
+      expect(ev("resume", { variant: "crash" }, { outcome: "warn" })[0]).toBe(
+        "3h ago  event ■ resume after a crash",
+      );
+      expect(ev("resume", { variant: "gateway", detail: "gateway restart" })[0]).toBe(
+        "3h ago  event ■ resume after gateway restart",
+      );
+      expect(ev("nudge", { variant: "tool_too_large" })[0]).toBe(
+        "3h ago  event ■ nudge tool call too large",
+      );
+      expect(ev("model_switch", { subject: "gpt-5", detail: "openai" })[0]).toBe(
+        "3h ago  event ■ model gpt-5 · openai",
+      );
+      expect(ev("personality", { variant: "cleared" })[0]).toBe("3h ago  event ■ personality cleared");
+      expect(ev("webhook", { variant: "mirrored" }, { message: "deploys" })[0]).toBe(
+        "3h ago  event ■ webhook deploys mirrored",
+      );
+    });
+
+    test("a todo counts open work and prints its tasks as a checklist", () => {
+      const task = (status: "done" | "active" | "pending" | "cancelled", text: string, depth = 0) => ({
+        status,
+        text,
+        depth,
+      });
+      expect(
+        ev("todo", {
+          tasks: [
+            task("done", "a"),
+            task("active", "b"),
+            task("pending", "c", 1),
+            task("cancelled", "d"),
+          ],
+        }),
+      ).toEqual([
+        "3h ago  event ■ todo 1 active · 1 open",
+        "  [x] a",
+        "  [>] b",
+        "    [ ] c",
+        "  [~] d",
+      ]);
+    });
+
+    test("a skill invocation and a reply quote print under the operator's head", () => {
+      const lines = messageLines(
+        message({
+          role: "user",
+          blocks: [{ kind: "text", markdown: "the diff" }],
+          skill: { names: ["review"], instruction: "the diff", raw: "…" },
+          reply_to: { quote: "ship?" },
+        }),
+        NOW,
+      );
+      // The instruction prints once, as the message's text; the skill line is the chips.
+      expect(lines).toEqual(["3h ago  user", '  ↩ "ship?"', "  /review", "  the diff"]);
+    });
+  });
+
   test("a turn that stopped early says so, and an error is printed under it", () => {
     const broken = message({ incomplete: true, error: "the model refused" });
     const lines = messageLines(broken, NOW);

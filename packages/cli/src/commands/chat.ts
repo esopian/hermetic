@@ -35,7 +35,7 @@ import {
   ERROR_CODES,
   HermeticError,
 } from "@hermetic/core";
-import { FILES_LIMITS, shortCommand } from "@hermetic/core/shared";
+import { FILES_LIMITS, NUDGE_LABELS, shortCommand, todoSummary } from "@hermetic/core/shared";
 import type {
   Bot,
   ChatBlock,
@@ -161,8 +161,76 @@ function processKind(block: ProcessEventBlock): string {
       return "watch";
     case "delegation":
       return "subagents";
+    case "cron":
+      return "cron";
+    case "iteration_limit":
+      return "limit";
+    case "model_switch":
+      return "model";
+    case "webhook":
+    case "heartbeat":
+    case "loop":
+    case "goal":
+    case "handoff":
+    case "resume":
+    case "nudge":
+    case "compaction":
+    case "todo":
+    case "personality":
+      return block.event;
     default:
       return "notice";
+  }
+}
+
+const TASK_MARK = {
+  done: "[x]",
+  active: "[>]",
+  pending: "[ ]",
+  cancelled: "[~]",
+  unknown: "[?]",
+} as const;
+
+/** The one-line status of an injected notice (`ProcessNotice`), "" when the event has none. */
+function noticeStatus(block: ProcessEventBlock): string {
+  const n = block.notice;
+  const subject = n?.subject ?? "";
+  const dash = (lead: string) => [lead, subject].filter((p) => p !== "").join(" — ");
+  switch (block.event) {
+    case "cron":
+    case "webhook": {
+      const name = block.message ?? (block.event === "cron" ? "job" : "route");
+      if (n?.variant === "mirrored") return `${name} mirrored`;
+      return `${name} ${block.outcome === "failed" ? "failed" : "delivered"}`;
+    }
+    case "heartbeat":
+      return dash(n?.detail ? `every ${n.detail}` : "");
+    case "loop":
+      return dash(n?.detail ?? "");
+    case "goal":
+      return dash(n?.variant === "gate_failed" ? "gate failed" : "continuing");
+    case "handoff":
+      return dash(n?.detail ? `from ${n.detail}` : "");
+    case "resume":
+      return n?.variant === "crash"
+        ? "after a crash"
+        : n?.detail
+          ? `after ${n.detail}`
+          : "after an interruption";
+    case "nudge":
+      return (n?.variant && NUDGE_LABELS[n.variant]) || "nudged";
+    case "iteration_limit":
+      return "tool-call limit reached";
+    case "compaction":
+      return "earlier turns summarised";
+    case "todo":
+      return todoSummary(n?.tasks ?? []);
+    case "model_switch":
+      return [subject, n?.detail ?? ""].filter((p) => p !== "").join(" · ");
+    case "personality":
+      return n?.variant === "cleared" ? "cleared" : dash("set");
+    default:
+      return "";
   }
 }
 
@@ -214,7 +282,7 @@ function processEventLines(block: ProcessEventBlock, self: string): { head: stri
       status = block.status ?? block.outcome;
       break;
     default:
-      status = firstLine(block.message ?? block.raw) || block.outcome;
+      status = noticeStatus(block) || firstLine(block.message ?? block.raw) || block.outcome;
   }
   const command = block.command ? shortCommand(block.command) : "";
   const duration = block.duration_s == null ? "" : `duration ${formatAge(block.duration_s * 1000)}`;
@@ -222,7 +290,10 @@ function processEventLines(block: ProcessEventBlock, self: string): { head: stri
     .filter((part) => part !== "")
     .join("  ");
   const tail = block.outcome === "failed" ? lastLine(block.output_tail ?? block.delegation?.error) : "";
-  return { head, detail: tail === "" ? [] : [tail] };
+  const tasks = (block.notice?.tasks ?? []).map(
+    (t) => `${"  ".repeat(t.depth)}${TASK_MARK[t.status]} ${t.text}`,
+  );
+  return { head, detail: [...(tail === "" ? [] : [tail]), ...tasks] };
 }
 
 /**
@@ -402,6 +473,13 @@ export function messageLines(
     .filter((b) => b.kind !== "process_event")
     .flatMap((b) => blockLines(b, agent));
   const body = [
+    ...(message.reply_to ? [`↩ "${message.reply_to.quote}"`] : []),
+    ...(message.skill
+      ? [
+          // The chips only: the instruction is the message's own text block below.
+          message.skill.names.map((n) => `/${n}`).join(" "),
+        ]
+      : []),
     ...(parsed[0]?.detail ?? []),
     ...parsed.slice(1).flatMap((p) => [p.head, ...p.detail]),
     ...rest,

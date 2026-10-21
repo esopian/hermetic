@@ -21,6 +21,10 @@ const batchHead = (n: number) =>
 const singleHead = (status: string) =>
   `[ASYNC DELEGATION COMPLETE — deleg_s1]\nA background subagent you dispatched earlier has finished. You may have moved on since dispatching it; the full task source is below so you can act on the result or re-dispatch if things have changed.\n\nDispatched: 2026-09-29 00:20:00 (2m ago)\nOriginal goal: Find every user-role renderer\nand list them\nContext you provided: packages/ui only\nRole: leaf   Model: claude\nStatus: ${status}   API calls: 7   Duration: 93.2s\n--- RESULT ---\n`;
 
+/** `cron/scheduler_delivery.py` `_deliver_to_bot_chat`'s wrapper, verbatim. */
+const cron = (name: string, content: string) =>
+  `[Cronjob "${name}" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]\n\n${content}`;
+
 type Case = [name: string, text: string, expected: Record<string, unknown>];
 
 const CASES: Case[] = [
@@ -208,6 +212,30 @@ const CASES: Case[] = [
     },
   ],
   [
+    "cron output",
+    cron(
+      "plan-notify-1792562478",
+      "[digest 2026-10-21T06:01Z] TEST: notify path check\nno action needed\n",
+    ),
+    {
+      event: "cron",
+      outcome: "info",
+      message: "plan-notify-1792562478",
+      output_tail: "[digest 2026-10-21T06:01Z] TEST: notify path check\nno action needed",
+      output_lines: 2,
+    },
+  ],
+  [
+    "cron failure copy, a quote in the job name",
+    cron('say "hi"', "⚠️ Cron 'say \"hi\"' failed: the job stalled — it stopped doing anything."),
+    { event: "cron", outcome: "failed", message: 'say "hi"', output_lines: 1 },
+  ],
+  [
+    "cron with no output",
+    cron("empty", "").trimEnd(),
+    { event: "cron", outcome: "info", message: "empty", output_tail: "", output_lines: 0 },
+  ],
+  [
     "batch error branch",
     `${batchHead(3)}\n--- ERROR ---\nThe batch did not complete successfully: worker pool exhausted`,
     {
@@ -249,6 +277,7 @@ describe("parseProcessNotice", () => {
     ["a multi-line bracket", "[IMPORTANT: first line\nsecond line]"],
     ["an inner bracket", "[IMPORTANT: see [this] first]"],
     ["an MCP lookalike across lines", "[IMPORTANT: MCP servers have been reloaded.]\nand then [more]"],
+    ["a cron lookalike with a different sentence", '[Cronjob "x" output — hello]\n\nbody'],
   ])("%s is not a notice", (_name, text) => {
     expect(parseProcessNotice(text)).toBeNull();
   });
@@ -331,6 +360,10 @@ describe("processNoticePreview", () => {
     expect(processNoticePreview("[ASYNC DELEGATION BATCH COMPLETE — deleg_1] A back...")).toBe(
       "subagents finished",
     );
+    expect(processNoticePreview(upstreamPreview(cron("plan-notify-1792562478", "x")))).toBe(
+      "cron plan-notify-1792562478 delivered",
+    );
+    expect(processNoticePreview(`[Cronjob "${"n".repeat(60)}...`)).toBe("cron job delivered");
     expect(processNoticePreview("hello there")).toBeNull();
     expect(
       processNoticePreview('[IMPORTANT: The user has invoked the "review" skill, indic...'),

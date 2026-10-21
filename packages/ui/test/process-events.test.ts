@@ -14,15 +14,18 @@ import {
   fmtSpan,
   highlightParts,
   lastLine,
+  markerView,
+  noticeLine,
   outputLines,
   previewText,
   processDomId,
   processStarts,
   shortProcessId,
   spanMs,
+  taskCounts,
   threadItems,
 } from "../src/chat/process-events.ts";
-import type { ThreadItem } from "../src/chat/process-events.ts";
+import type { ProcessEventView, ThreadItem } from "../src/chat/process-events.ts";
 import { PIDS, T0, at, eventMessage, eventOf, kestrelEvents } from "./process-event-fixtures.ts";
 
 const NOW = T0 + 3_600_000;
@@ -34,8 +37,8 @@ const shape = (list: ThreadItem<ChatMessageView>[]): string[] =>
   list.map((item) =>
     item.kind === "burst"
       ? `burst(${item.entries.map((e) => e.row.message.id).join(",")})`
-      : item.kind === "event"
-        ? `event(${item.row.message.id})`
+      : item.kind === "event" || item.kind === "marker"
+        ? `${item.kind}(${item.row.message.id})`
         : `turn(${item.row.message.id})`,
   );
 
@@ -64,6 +67,17 @@ describe("bursts", () => {
       eventMessage("c", 3),
     ]);
     expect(shape(list)).toEqual(["event(a)", "event(b)", "event(c)"]);
+  });
+
+  test("a warn row keeps its own row and splits a run, as a failure does", () => {
+    const list = items([
+      eventMessage("a", 1),
+      eventMessage("b", 2),
+      eventMessage("w", 3, { event: "nudge", outcome: "warn", process_id: null }),
+      eventMessage("c", 4),
+      eventMessage("d", 5),
+    ]);
+    expect(shape(list)).toEqual(["burst(a,b)", "event(w)", "burst(c,d)"]);
   });
 
   test("a delegation result and a DM reply always get their own row", () => {
@@ -140,6 +154,191 @@ describe("responding to", () => {
       prompt,
     ]);
     expect(list[1]!.kind === "turn" && list[1]!.inReply).toBeNull();
+  });
+});
+
+describe("markers", () => {
+  const notice = (over: Record<string, unknown>) => ({
+    variant: null,
+    subject: null,
+    detail: null,
+    body: null,
+    tasks: null,
+    ...over,
+  });
+  const marker = (id: string, seconds: number, over: Partial<ProcessEventView> = {}) =>
+    eventMessage(id, seconds, {
+      event: "heartbeat",
+      outcome: "info",
+      process_id: null,
+      status: null,
+      exit_code: null,
+      command: null,
+      notice: notice({ detail: "30m", subject: "Check the deploy queue" }),
+      ...over,
+    } as Partial<ProcessEventView>);
+  const reply = (id: string, seconds: number) =>
+    ({
+      id,
+      session: "sx-kestrel-events",
+      role: "bot",
+      author: null,
+      at: at(seconds),
+      blocks: [{ kind: "text", markdown: "on it" }],
+    }) as ChatMessageView;
+
+  test("a marker never joins a burst, and breaks a running one", () => {
+    const list = items([
+      eventMessage("a", 1),
+      eventMessage("b", 2),
+      marker("hb", 3),
+      eventMessage("c", 4),
+      eventMessage("d", 5),
+      marker("cron", 6, { event: "cron", message: "pr-checkin", notice: null }),
+      marker("hb2", 7),
+    ]);
+    expect(shape(list)).toEqual([
+      "burst(a,b)",
+      "marker(hb)",
+      "burst(c,d)",
+      "marker(cron)",
+      "marker(hb2)",
+    ]);
+  });
+
+  test("the reply after a marker says re: and not responding to; after a gutter event, the reverse", () => {
+    const list = items([
+      marker("hb", 1),
+      reply("r1", 2),
+      eventMessage("a", 3),
+      reply("r2", 4),
+      marker("loop", 5, { event: "loop", notice: notice({ detail: "#4 · every 5m" }) }),
+      reply("r3", 6),
+    ]);
+    const turn = (id: string) => {
+      const item = list.find((i) => i.kind === "turn" && i.row.message.id === id);
+      return item?.kind === "turn" ? { re: item.re, inReply: item.inReply } : null;
+    };
+    expect(turn("r1")).toEqual({ re: "heartbeat", inReply: null });
+    expect(turn("r2")?.re).toBeNull();
+    expect(turn("r2")?.inReply).not.toBeNull();
+    expect(turn("r3")).toEqual({ re: "/loop #4", inReply: null });
+  });
+
+  test("an operator turn after a marker carries no re:", () => {
+    const prompt = { ...kestrelEvents()[0]!, id: "p2", at: at(2) } as ChatMessageView;
+    const list = items([marker("hb", 1), prompt]);
+    expect(list[1]!.kind === "turn" && list[1]!.re).toBeNull();
+  });
+
+  test("marker copy per event, with tones", () => {
+    const view = (over: Partial<ProcessEventView>) => {
+      const m = markerView(eventOf({ process_id: null, ...over }));
+      return [m.text, m.sub, m.tone];
+    };
+    expect(view({ event: "cron", outcome: "info", message: "pr-checkin" })).toEqual([
+      "cron · pr-checkin",
+      "delivered",
+      "",
+    ]);
+    expect(view({ event: "cron", outcome: "failed", message: "docgen" })).toEqual([
+      "cron · docgen",
+      "failed",
+      "bad",
+    ]);
+    expect(
+      view({
+        event: "webhook",
+        outcome: "info",
+        message: "github-push",
+        notice: notice({ variant: "mirrored" }),
+      }),
+    ).toEqual(["webhook · github-push", "mirrored", ""]);
+    expect(
+      view({
+        event: "resume",
+        outcome: "warn",
+        notice: notice({ variant: "crash", subject: "rebase #108" }),
+      }),
+    ).toEqual(["turn resumed after a crash", "re-sent: “rebase #108”", "warn"]);
+    expect(
+      view({
+        event: "resume",
+        outcome: "warn",
+        notice: notice({ variant: "gateway", detail: "gateway restart" }),
+      }),
+    ).toEqual(["turn resumed after gateway restart", null, "warn"]);
+    expect(
+      view({
+        event: "handoff",
+        outcome: "info",
+        notice: notice({ detail: "CLI", subject: "refactor auth" }),
+      }),
+    ).toEqual(["handed off from CLI", "“refactor auth”", ""]);
+    expect(
+      view({
+        event: "model_switch",
+        outcome: "info",
+        notice: notice({ subject: "gpt-5", detail: "openai" }),
+      }),
+    ).toEqual(["model → gpt-5", "openai", ""]);
+  });
+
+  test("task counts leave out done and cancelled items, a kept done parent included", () => {
+    const task = (status: string, depth = 0) => ({ status, text: status, id: null, depth });
+    expect(
+      taskCounts([
+        task("done"),
+        task("active", 1),
+        task("pending", 1),
+        task("pending"),
+        task("cancelled"),
+      ] as never),
+    ).toBe("1 active · 2 open");
+    expect(taskCounts([task("done")] as never)).toBe("nothing open");
+  });
+});
+
+describe("injected gutter notices", () => {
+  test("fixed status labels, a subject, and the payload folded", () => {
+    const line = (over: Partial<ProcessEventView>) =>
+      noticeLine(eventOf({ process_id: null, ...over }));
+    expect(
+      line({
+        event: "goal",
+        outcome: "info",
+        notice: { variant: "continuing", subject: "ship it", body: "keep going" },
+      }),
+    ).toEqual({
+      status: "continuing",
+      subject: "ship it",
+      fold: { label: "injected prompt", text: "keep going" },
+    });
+    expect(
+      line({
+        event: "goal",
+        outcome: "failed",
+        notice: { variant: "gate_failed", subject: "ship it", body: "exit 1" },
+      })?.status,
+    ).toBe("gate failed");
+    expect(
+      line({
+        event: "nudge",
+        outcome: "warn",
+        notice: { variant: "tool_too_large", subject: "patch, write_file" },
+      }),
+    ).toMatchObject({ status: "tool call too large", subject: "patch, write_file" });
+    expect(line({ event: "iteration_limit", outcome: "warn" })).toMatchObject({
+      status: "tool-call limit reached",
+      subject: "asked for a final summary",
+    });
+    expect(
+      line({ event: "personality", outcome: "info", notice: { variant: "cleared" } }),
+    ).toMatchObject({
+      status: "cleared",
+      subject: "default style",
+    });
+    expect(line({ event: "completion" })).toBeNull();
   });
 });
 

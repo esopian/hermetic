@@ -150,6 +150,8 @@ export const Message = memo(function Message({
    * (`threadItems`): Hermes woke the bot with that event, so this is its reply.
    */
   inReply = null,
+  /** What this turn answers, when it directly follows a marker (`threadItems`): `re: …` in the header. */
+  re = null,
   /**
    * The box's word on a turn running in the conversation, for the newest bot
    * turn only (`Thread`): how a tool call with no result yet reads. Absent on
@@ -166,6 +168,7 @@ export const Message = memo(function Message({
   streaming?: boolean;
   activity?: TurnActivity;
   inReply?: string | null;
+  re?: string | null;
   remoteBusy?: boolean | null;
 }) {
   const { message, continuation } = row;
@@ -206,7 +209,10 @@ export const Message = memo(function Message({
   const clock = Math.max((asks ? use(ClockContext) : null) ?? 0, Date.now());
   const open = asks ? openRequests(message.blocks, closed, released, clock) : [];
   useWakeAt(nextExpiry(open, clock));
-  if (message.blocks.length === 0 && !broken && !message.usage) return null;
+  // A skill invoked with no instruction has no text block, and is still the operator's turn.
+  const skill = mine ? (message.skill ?? null) : null;
+  const replyTo = mine ? (message.reply_to ?? null) : null;
+  if (message.blocks.length === 0 && !broken && !message.usage && !skill) return null;
   const blocks = message.blocks.filter(
     (block) =>
       (block.kind !== "text" || block.markdown.trim().length > 0) &&
@@ -368,6 +374,11 @@ export const Message = memo(function Message({
             <RedactedText text={`↳ responding to ${inReply}`} />
           </div>
         ) : null}
+        {replyTo ? (
+          <div className="ch-inreply ch-replyto">
+            <RedactedText text={`↩ replying to “${replyTo.quote}”`} />
+          </div>
+        ) : null}
         <div className="ch-msg-head">
           <span className="ch-msg-who">{who}</span>
           {steered ? (
@@ -379,9 +390,20 @@ export const Message = memo(function Message({
             </span>
           ) : null}
           <span className="ch-msg-meta">{meta}</span>
+          {re ? (
+            <span className="ch-reply-meta">
+              <RedactedText text={`re: ${re}`} />
+            </span>
+          ) : null}
           <InspectMessageButton message={message.id} />
         </div>
-        <div className="ch-msg-body">
+        <div className={`ch-msg-body${skill ? " ch-skill-body" : ""}`}>
+          {skill?.names.map((name) => (
+            <span key={name} className="ch-skill-chip">
+              {"⚡ "}
+              <RedactedText text={name} />
+            </span>
+          ))}
           {/*
             A turn is now one article built out of several source rows
             (`chat-turns.ts`), so the boundary `Thread` puts around the row is

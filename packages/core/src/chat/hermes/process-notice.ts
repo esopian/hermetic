@@ -3,23 +3,34 @@
  * `process_event` block (`schema/chat.ts`).
  *
  * Hermes wakes a bot by appending a `user`-role row when a background process
- * finishes, a watch pattern matches, an async subagent returns or the MCP
- * servers reload. The operator typed none of them, so the history reader turns
- * each into a `system` message carrying one of these blocks instead of letting
- * the thread label it "You".
+ * finishes, a watch pattern matches, an async subagent returns, the MCP
+ * servers reload or a cron job delivers its output to Bot Chat. The operator
+ * typed none of them, so the history reader turns each into a `system` message
+ * carrying one of these blocks instead of letting the thread label it "You".
  *
  * Every shape here is copied from upstream's formatters, not inferred from
  * samples: `tools/process_registry.py` `format_process_notification` and
  * `_format_async_delegation`, the watch-disabled message in the same file, and
- * the MCP reload notice in `gateway/run.py` and `cli.py`. Recognition is
+ * the MCP reload notice in `gateway/run.py` and `cli.py`, and the cron wrapper
+ * in `cron/scheduler_delivery.py` `_deliver_to_bot_chat`. Recognition is
  * anchored at the start of the row — a user quoting a notice mid-message is
  * still the user speaking — and a field the text does not state is left null
  * rather than guessed.
+ *
+ * The other rows Hermes injects — wakeups, recovery notes, the agent loop's
+ * nudges, compaction, model and personality switches, mirrored deliveries —
+ * are read by `injected-notice.ts` and become the same block here.
  *
  * Pure: no I/O, no clock, so the same row always yields the same block.
  */
 import { processEventSentence } from "../../shared/process-event.ts";
 import type { ProcessEventBlock, ProcessOutcome } from "../../schema/index.ts";
+import {
+  parseTrailingTodo,
+  previewInjectedNotice,
+  readInjectedNotice,
+  type InjectedReading,
+} from "./injected-notice.ts";
 
 type Delegation = NonNullable<ProcessEventBlock["delegation"]>;
 type DelegationTask = Delegation["tasks"][number];
@@ -72,6 +83,16 @@ const MCP_RELOAD = /^\[IMPORTANT: (MCP servers have been reloaded\.[^\]\n]*)\]$/
 
 const DELEGATION_SINGLE = /^\[ASYNC DELEGATION COMPLETE — ([^\]\n]+)\]\n/;
 const DELEGATION_BATCH = /^\[ASYNC DELEGATION BATCH COMPLETE — ([^\]\n]+)\]\n/;
+
+/**
+ * `_deliver_to_bot_chat`'s wrapper. Upstream does not escape the job name, so
+ * it is read lazily up to the fixed sentence; the output follows a blank line.
+ */
+const CRON =
+  /^\[Cronjob "([\s\S]*?)" output — scheduled job, not the user\. Review it, act on anything that needs action, and summarize for the chat\.\](?:\n\n([\s\S]*))?$/;
+
+/** The failure copy a cron job delivers (`scheduler_failure_copy.py`, `scheduler.py`'s watchdog and monitor). */
+const CRON_FAILED = /^⚠️?\s*Cron (?:watchdog |monitor )?'[^\n]*?' (?:script |source )?failed\b/;
 
 /**
  * A bot-to-bot DM delivery (`tools/bot_mode_dm.py --run-delivery … hermes -p
@@ -308,16 +329,93 @@ function parseDelegationBatch(raw: string, text: string): ProcessEventBlock | nu
   };
 }
 
+function parseCron(raw: string, text: string): ProcessEventBlock | null {
+  const m = CRON.exec(text);
+  if (!m) return null;
+  const output = m[2] ?? "";
+  return {
+    ...blank(raw, "cron", CRON_FAILED.test(output) ? "failed" : "info"),
+    message: m[1] || null,
+    ...tail(output),
+  };
+}
+
+/** The block for one of `injected-notice.ts`'s readings. */
+function injectedBlock(raw: string, read: InjectedReading): ProcessEventBlock {
+  return {
+    ...blank(raw, read.event, read.outcome),
+    message: read.message ?? null,
+    ...(read.output === undefined ? {} : tail(read.output)),
+    notice: read.notice,
+  };
+}
+
+/** A notice, and the operator's own text that followed it in the same row (null when none). */
+export interface LeadingNotice {
+  block: ProcessEventBlock;
+  rest: string | null;
+}
+
+/**
+ * The notice a row opens with, and whatever the operator wrote after it: a
+ * gateway recovery note can carry the user's new message, and a merged
+ * compaction summary the real content it was folded into. `displayKind` is
+ * the row's upstream type, which decides first (`injected-notice.ts`).
+ */
+export function parseLeadingNotice(
+  text: string,
+  displayKind: string | null = null,
+): LeadingNotice | null {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\s+$/, "");
+  const read = readInjectedNotice(normalized, displayKind);
+  if (read) return { block: injectedBlock(text, read), rest: read.rest ?? null };
+  const block = parseBackgroundNotice(text, normalized);
+  return block ? { block, rest: null } : null;
+}
+
+/**
+ * A notice Hermes appended to the end of the operator's own row — the task
+ * list compaction folds into a real user turn — and the operator's text before
+ * it, or null. Never a whole-row notice: `parseProcessNotice` reads those.
+ */
+export function parseTrailingNotice(text: string): { block: ProcessEventBlock; text: string } | null {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\s+$/, "");
+  const found = parseTrailingTodo(normalized);
+  if (!found) return null;
+  // Both halves are cut from the row as stored, not the normalised copy.
+  const cut = originalIndex(text, found.text.length);
+  return {
+    block: injectedBlock(text.slice(cut).trim(), found.read),
+    text: text.slice(0, cut).trimEnd(),
+  };
+}
+
+/** The index in `text` of position `at` in its CRLF-normalised copy. */
+function originalIndex(text: string, at: number): number {
+  let seen = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (seen === at) return i;
+    if (!(text[i] === "\r" && text[i + 1] === "\n")) seen += 1;
+  }
+  return text.length;
+}
+
 /**
  * The `process_event` block for one of Hermes' injected notices, or null when
  * `text` is anything else — including prose that merely quotes a notice.
  */
-export function parseProcessNotice(text: string): ProcessEventBlock | null {
-  const raw = text;
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\s+$/, "");
+export function parseProcessNotice(
+  text: string,
+  displayKind: string | null = null,
+): ProcessEventBlock | null {
+  return parseLeadingNotice(text, displayKind)?.block ?? null;
+}
+
+function parseBackgroundNotice(raw: string, normalized: string): ProcessEventBlock | null {
   if (normalized.startsWith("[ASYNC DELEGATION ")) {
     return parseDelegationBatch(raw, normalized) ?? parseDelegationSingle(raw, normalized);
   }
+  if (normalized.startsWith("[Cronjob ")) return parseCron(raw, normalized);
   if (!normalized.startsWith("[IMPORTANT:") || !normalized.endsWith("]")) return null;
   const parsed = parseCompletion(raw, normalized) ?? parseWatchMatch(raw, normalized);
   if (parsed) return parsed;
@@ -419,6 +517,12 @@ export function processNoticePreview(text: string): string | null {
   if (flat.startsWith("[ASYNC DELEGATION")) {
     return processEventSentence(blank(text, "delegation", "info"));
   }
+  // Only the name, when it made it in: a cut-off output could hide the failure copy.
+  const cron = /^\[Cronjob "(?:(.*?)" output — )?/.exec(flat);
+  if (cron) return processEventSentence({ ...blank(text, "cron", "info"), message: cron[1] || null });
+  // Upstream cuts at 60 characters and appends `...` (`hermes_state_common.py:146`).
+  const injected = previewInjectedNotice(flat, text.length >= 63 && text.endsWith("..."));
+  if (injected) return processEventSentence(injectedBlock(text, injected));
   if (!flat.startsWith("[IMPORTANT:")) return null;
   const head = PREVIEW_HEAD.exec(flat);
   if (head) return previewHead(text, head[1] ?? "", head[2] ?? "");

@@ -370,6 +370,12 @@
 [data-skin="soft"] .ch-divider hr {
   border-color: var(--line);
 }
+/* An injected marker keeps the divider's rule but wraps (`chat-events.css`). */
+[data-skin="soft"] .ch-divider.ch-marker {
+  height: auto;
+  min-height: 44px;
+  padding: 6px 26px;
+}
 [data-skin="soft"] .ch-event {
   border-bottom: 0;
   padding: 7px 26px;

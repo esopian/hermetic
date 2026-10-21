@@ -12,6 +12,11 @@
  *   them, fold into one `n events` row. A failure, a DM reply and a subagent
  *   result are never routine (`isRoutineProcessEvent`), so each keeps its own
  *   row and breaks a burst.
+ * - **Markers.** A boundary rather than work — a cron or webhook delivery, a
+ *   heartbeat, a loop wakeup, a handoff, a resumed or compacted context, a
+ *   carried-over task list, a model switch (`isMarkerEvent`) — is drawn as a
+ *   centred marker between turns. It never joins a burst, and the bot turn
+ *   right after it says `re: …` in its header instead of `↳ responding to`.
  * - **Links.** A `terminal` call started in the background names its process
  *   in its result; the event names the same id. The two rows link to each other
  *   only when both are in the loaded transcript, and the event's duration is
@@ -20,7 +25,12 @@
  * Everything here is pure and keyed on shapes, so it is tested without
  * mounting anything (`packages/ui/test/process-events.test.ts`).
  */
-import { isRoutineProcessEvent, processEventSentence } from "@hermetic/core/shared";
+import {
+  isRoutineProcessEvent,
+  NUDGE_LABELS,
+  processEventSentence,
+  todoSummary,
+} from "@hermetic/core/shared";
 import type { ChatBlockOf } from "../api/index.ts";
 import { messageAgentCall } from "./bot-dm.ts";
 import type { BlockLike, MessageLike } from "./chat-logic.ts";
@@ -58,8 +68,12 @@ export type ThreadItem<M extends MessageLike = MessageLike> =
       row: TurnRow<M>;
       /** `↳ responding to …`, when this bot turn directly follows an event row. */
       inReply: string | null;
+      /** `re: …` in the header, when this bot turn directly follows a marker. */
+      re: string | null;
     }
   | ({ kind: "event" } & EventEntry<M>)
+  /** An event drawn as a centred marker between turns (`isMarkerEvent`); never in a burst. */
+  | ({ kind: "marker" } & EventEntry<M>)
   | {
       kind: "burst";
       /** The first event's source id, which does not move as the burst grows. */
@@ -108,7 +122,14 @@ export function threadItems<M extends MessageLike>(rows: readonly TurnRow<M>[]):
   };
   for (const row of rows) {
     const event = processEventOf(row.message);
-    if (event && isRoutineProcessEvent(event)) {
+    if (event && isMarkerEvent(event)) {
+      flush();
+      items.push({ kind: "marker", row, event });
+      continue;
+    }
+    // A warn (an oversized tool call, the tool-call limit) is routine to core
+    // but should be noticed, so it keeps its own row here, as a failure does.
+    if (event && isRoutineProcessEvent(event) && event.outcome !== "warn") {
       // A day boundary inside a run starts a new one: a burst is drawn under
       // one divider, and that would put a later day's events under an earlier one.
       if (run.length > 0 && row.divider !== null) flush();
@@ -121,14 +142,112 @@ export function threadItems<M extends MessageLike>(rows: readonly TurnRow<M>[]):
       continue;
     }
     const previous = items[items.length - 1];
-    const inReply =
-      previous && previous.kind !== "turn" && row.message.role === "bot"
-        ? respondingTo(previous)
-        : null;
-    items.push({ kind: "turn", row, inReply });
+    const bot = previous !== undefined && row.message.role === "bot";
+    const re = bot && previous.kind === "marker" ? markerRe(previous.event) : null;
+    const inReply = bot && previous.kind !== "turn" ? respondingTo(previous) : null;
+    items.push({ kind: "turn", row, inReply, re });
   }
   flush();
   return items;
+}
+
+/* ── markers: injected events drawn between turns ───────────────────────── */
+
+/**
+ * The events drawn as a centred marker between turns rather than a gutter row:
+ * a boundary in the conversation (a scheduled wakeup, a handoff, a resumed or
+ * compacted context, a model change) rather than work the bot did. A UI
+ * decision keyed on the event type; core stays presentation-free.
+ */
+const MARKER_EVENTS: ReadonlySet<ProcessEventView["event"]> = new Set([
+  "cron",
+  "webhook",
+  "heartbeat",
+  "loop",
+  "handoff",
+  "resume",
+  "compaction",
+  "todo",
+  "model_switch",
+]);
+
+export function isMarkerEvent(event: ProcessEventView): boolean {
+  return MARKER_EVENTS.has(event.event) && !event.dm;
+}
+
+export type MarkerTone = "bad" | "warn" | "";
+
+export interface MarkerView {
+  text: string;
+  sub: string | null;
+  tone: MarkerTone;
+}
+
+type NoticeTask = NonNullable<NonNullable<ProcessEventView["notice"]>["tasks"]>[number];
+
+/** `1 active · 2 open`: done and cancelled items are not counted, a kept done parent included. */
+export function taskCounts(tasks: readonly NoticeTask[]): string {
+  return todoSummary(tasks);
+}
+
+const quoted = (text: string | null | undefined): string | null => (text ? `“${text}”` : null);
+
+/** A marker's line: `text · sub`, and its colour. Fixed copy, plus only what the notice stated. */
+export function markerView(event: ProcessEventView): MarkerView {
+  const n = event.notice;
+  const tone: MarkerTone = event.outcome === "failed" ? "bad" : event.outcome === "warn" ? "warn" : "";
+  const view = (text: string, sub: string | null = null): MarkerView => ({ text, sub, tone });
+  switch (event.event) {
+    case "cron":
+      return view(
+        `cron · ${event.message ?? "job"}`,
+        event.outcome === "failed" ? "failed" : n?.variant === "mirrored" ? "mirrored" : "delivered",
+      );
+    case "webhook":
+      return view(`webhook · ${event.message ?? "delivery"}`, "mirrored");
+    case "heartbeat":
+      return view(n?.detail ? `heartbeat · every ${n.detail}` : "heartbeat", n?.subject ?? null);
+    case "loop":
+      return view(n?.detail ? `loop wakeup ${n.detail}` : "loop wakeup", n?.subject ?? null);
+    case "handoff":
+      return view(`handed off from ${n?.detail ?? "another client"}`, quoted(n?.subject));
+    case "resume":
+      if (n?.variant === "crash")
+        return view("turn resumed after a crash", n.subject ? `re-sent: ${quoted(n.subject)}` : null);
+      return view(n?.detail ? `turn resumed after ${n.detail}` : "turn resumed");
+    case "compaction":
+      return view("context compacted", "earlier turns summarised");
+    case "todo":
+      return view("task list carried over", taskCounts(n?.tasks ?? []));
+    case "model_switch":
+      return view(`model → ${n?.subject ?? "changed"}`, n?.detail ?? null);
+    default:
+      return view(processEventSentence(event).replace(/^■\s*/, ""));
+  }
+}
+
+/** What the bot turn right after a marker says it answers: `re: <this>`. */
+export function markerRe(event: ProcessEventView): string {
+  switch (event.event) {
+    case "cron":
+      return `cron ${event.message ?? "job"}`;
+    case "webhook":
+      return `webhook ${event.message ?? "delivery"}`;
+    case "loop": {
+      const wakeup = /#\d+/.exec(event.notice?.detail ?? "")?.[0];
+      return wakeup ? `/loop ${wakeup}` : "/loop";
+    }
+    case "resume":
+      return "resumed turn";
+    case "compaction":
+      return "compacted context";
+    case "todo":
+      return "task list";
+    case "model_switch":
+      return "model switch";
+    default:
+      return event.event;
+  }
 }
 
 /* ── the burst's one line ────────────────────────────────────────────────── */
@@ -178,7 +297,7 @@ export function shortProcessId(id: string): string {
 
 /** The status square's colour. A watch match is the one warn: something asked to be told. */
 export function eventTone(event: ProcessEventView): EventTone {
-  if (event.event === "watch_match") return "warn";
+  if (event.event === "watch_match" || event.outcome === "warn") return "warn";
   if (event.outcome === "ok") return "ok";
   if (event.outcome === "failed") return "bad";
   return "mute";
@@ -196,6 +315,22 @@ export function eventKind(event: ProcessEventView): string {
       return "subagents";
     case "mcp_reload":
       return "mcp";
+    case "iteration_limit":
+      return "limit";
+    case "model_switch":
+      return "model";
+    case "cron":
+    case "webhook":
+    case "heartbeat":
+    case "loop":
+    case "goal":
+    case "handoff":
+    case "resume":
+    case "nudge":
+    case "compaction":
+    case "todo":
+    case "personality":
+      return event.event;
     default:
       return "notice";
   }
@@ -211,6 +346,50 @@ export function eventStatus(event: ProcessEventView): string {
   const status = event.status?.trim();
   if (status) return status;
   return event.outcome === "terminated" ? "terminated" : event.outcome === "failed" ? "failed" : "";
+}
+
+export interface NoticeLine {
+  status: string;
+  subject: string | null;
+  /** The folded payload and its label; the raw notice when the event states no body. */
+  fold: { label: string; text: string };
+}
+
+/**
+ * The gutter line of an injected notice drawn as an event (goal, nudge,
+ * iteration limit, personality): a fixed status word, the one thing it is
+ * about, and its payload folded. Null for every other event.
+ */
+export function noticeLine(event: ProcessEventView): NoticeLine | null {
+  const n = event.notice;
+  const raw = { label: "injected prompt", text: event.raw };
+  switch (event.event) {
+    case "goal": {
+      const gate = n?.variant === "gate_failed" || event.outcome === "failed";
+      return {
+        status: gate ? "gate failed" : "continuing",
+        subject: n?.subject ?? null,
+        fold: n?.body ? { label: gate ? "gate output" : "injected prompt", text: n.body } : raw,
+      };
+    }
+    case "nudge":
+      return {
+        status: (n?.variant && NUDGE_LABELS[n.variant]) || "continuation",
+        subject: n?.subject ?? null,
+        fold: raw,
+      };
+    case "iteration_limit":
+      return { status: "tool-call limit reached", subject: "asked for a final summary", fold: raw };
+    case "personality":
+      if (n?.variant === "cleared") return { status: "cleared", subject: "default style", fold: raw };
+      return {
+        status: "set",
+        subject: n?.subject ?? null,
+        fold: n?.body ? { label: "persona", text: n.body } : raw,
+      };
+    default:
+      return null;
+  }
 }
 
 /* ── output ──────────────────────────────────────────────────────────────── */

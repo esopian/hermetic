@@ -39,13 +39,16 @@ import {
   eventTone,
   fmtSpan,
   highlightParts,
+  isMarkerEvent,
   lastLine,
+  markerView,
+  noticeLine,
   outputLines,
   processDomId,
   shortProcessId,
   spanMs,
 } from "../../process-events.ts";
-import type { EventEntry, ProcessEventView } from "../../process-events.ts";
+import type { EventEntry, NoticeLine, ProcessEventView } from "../../process-events.ts";
 import { Face } from "../Face.tsx";
 import { RedactedText } from "../RedactedText.tsx";
 import { TextBlock } from "./Text.tsx";
@@ -206,7 +209,7 @@ function Raw({ raw, label = "raw notification" }: { raw: string; label?: string 
 
 /* ── output: folded, with the last line as the hint ───────────────────────── */
 
-function Output({ event }: { event: ProcessEventView }) {
+export function Output({ event }: { event: ProcessEventView }) {
   const [all, setAll] = useState(false);
   const lines = outputLines(event.output_tail);
   if (lines.length === 0) return null;
@@ -357,6 +360,64 @@ function Delegation({ event, at }: { event: ProcessEventView; at: string | null 
   );
 }
 
+/**
+ * A marker event (`isMarkerEvent`) drawn outside the thread, by the generic
+ * block switch: the marker's words on one line, its output folded. The thread
+ * draws the same events as markers between turns (`InjectedMarker`).
+ */
+function MarkerLine({ event, at }: { event: ProcessEventView; at: string | null }) {
+  const view = markerView(event);
+  return (
+    <>
+      <div className="ch-ev-line">
+        <span className="k">{eventKind(event)}</span>
+        <span className={`st ${eventTone(event)}`}>
+          <RedactedText text={view.text} />
+        </span>
+        {view.sub ? (
+          <span>
+            <RedactedText text={view.sub} />
+          </span>
+        ) : null}
+        <Stamp at={at} />
+      </div>
+      <Output event={event} />
+    </>
+  );
+}
+
+/** Goal, nudge, iteration limit and personality: kicker, fixed status, subject, payload folded. */
+function InjectedNotice({
+  event,
+  line,
+  at,
+}: {
+  event: ProcessEventView;
+  line: NoticeLine;
+  at: string | null;
+}) {
+  return (
+    <>
+      <div className="ch-ev-line">
+        <span className="k">{eventKind(event)}</span>
+        <span className={`st ${eventTone(event)}`}>{line.status}</span>
+        {line.subject ? (
+          <span className="subj" title={line.subject}>
+            <RedactedText text={line.subject} />
+          </span>
+        ) : null}
+        <Stamp at={at} />
+      </div>
+      <details className="ch-ev-more">
+        <summary>{line.fold.label}</summary>
+        <pre className={`ch-ev-tail${event.outcome === "failed" ? " bad" : ""}`}>
+          <RedactedText text={line.fold.text} />
+        </pre>
+      </details>
+    </>
+  );
+}
+
 /** MCP reload and watch disabled: one muted line. */
 function Notice({ event, at }: { event: ProcessEventView; at: string | null }) {
   const text = firstLine(event.message) || firstLine(event.raw);
@@ -457,6 +518,9 @@ export function ProcessEventBlock({
   at?: string | null;
 }) {
   if (block.dm) return <DmReply event={block} at={at} />;
+  if (isMarkerEvent(block)) return <MarkerLine event={block} at={at} />;
+  const line = noticeLine(block);
+  if (line) return <InjectedNotice event={block} line={line} at={at} />;
   switch (block.event) {
     case "completion":
       return <Completion event={block} at={at} />;

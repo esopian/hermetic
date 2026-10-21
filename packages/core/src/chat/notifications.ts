@@ -963,6 +963,8 @@ function processEventTitle(
 ): string {
   const name = `${where.title ?? where.bot} on ${where.instance}`;
   if (block.dm) return `${block.dm.to_profile} replied to ${name}`;
+  if (block.event === "cron") return `A scheduled job failed on ${name}`;
+  if (block.event === "goal") return `A goal's quality gate failed on ${name}`;
   if (block.event === "delegation") {
     return `Subagents finished for ${name}${block.outcome === "failed" ? " with failures" : ""}`;
   }

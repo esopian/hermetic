@@ -25,6 +25,7 @@ import { DisclosureRowContext } from "../disclosures.ts";
 import type { Pin } from "../stick-to-bottom.ts";
 import { VirtualLog } from "../virtual/VirtualLog.tsx";
 import type { VirtualItem, VirtualLogHandle } from "../virtual/VirtualLog.tsx";
+import { InjectedMarker } from "./blocks/InjectedMarker.tsx";
 import { ProcessBurst, ProcessEventRow } from "./blocks/ProcessEvent.tsx";
 import { Message } from "./Message.tsx";
 import { RowBoundary } from "./RowBoundary.tsx";
@@ -172,8 +173,10 @@ interface RowProps extends ThreadIdentity {
  */
 function sameItem(a: Item, b: Item): boolean {
   if (a === b) return true;
-  if (a.kind === "turn") return b.kind === "turn" && a.row === b.row && a.inReply === b.inReply;
-  if (a.kind === "event") return b.kind === "event" && a.row === b.row && a.event === b.event;
+  if (a.kind === "turn")
+    return b.kind === "turn" && a.row === b.row && a.inReply === b.inReply && a.re === b.re;
+  if (a.kind === "event" || a.kind === "marker")
+    return b.kind === a.kind && a.row === b.row && a.event === b.event;
   return (
     b.kind === "burst" &&
     a.key === b.key &&
@@ -239,6 +242,8 @@ const TranscriptRow = memo(function TranscriptRow({
           <ProcessBurst entries={item.entries} />
         ) : item.kind === "event" ? (
           <ProcessEventRow entry={item} />
+        ) : item.kind === "marker" ? (
+          <InjectedMarker entry={item} />
         ) : (
           <Message
             row={item.row}
@@ -250,6 +255,7 @@ const TranscriptRow = memo(function TranscriptRow({
             streaming={streaming}
             activity={activity}
             inReply={item.inReply}
+            re={item.re}
             remoteBusy={remoteBusy}
           />
         )}
