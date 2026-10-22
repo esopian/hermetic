@@ -105,15 +105,25 @@ export function Composer({
   context?: ContextUsage | null;
 }) {
   const [localText, setLocalText] = useState("");
-  /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
-  const [stopped, setStopped] = useState<"stopping" | "stopped" | null>(null);
-  useEffect(() => {
-    setStopped((s) => (working ? (s === "stopped" ? null : s) : s === "stopping" ? "stopped" : s));
-  }, [working]);
   const input = useRef<HTMLTextAreaElement>(null);
   // Switching back to the app lands the caret here, so a paste goes in.
   useFocusOnReturn(input, editable);
   const chat = useChatIfAvailable();
+  // The Thread is reused across conversations, so a Stop belongs to the one it was pressed in.
+  const convo = chat?.selection
+    ? JSON.stringify([chat.selection.instance, chat.selection.bot, chat.selection.session])
+    : "";
+  /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
+  const [stop, setStop] = useState<{ convo: string; phase: "stopping" | "stopped" } | null>(null);
+  const stopped = stop?.convo === convo ? stop.phase : null;
+  useEffect(() => {
+    setStop((s) => {
+      if (s?.convo !== convo) return null;
+      if (working) return s.phase === "stopped" ? null : s;
+      if (s.phase === "stopping") return { convo, phase: "stopped" };
+      return s;
+    });
+  }, [working, convo]);
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
@@ -630,7 +640,7 @@ export function Composer({
             title={sending ? "Stop the turn (Esc)" : "Stop the agent's turn, started elsewhere"}
             disabled={stopped === "stopping"}
             onClick={() => {
-              setStopped("stopping");
+              setStop({ convo, phase: "stopping" });
               onAbort();
             }}
           >

@@ -12,7 +12,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "./dom.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ChatMessageView, ChatObserveView, ChatSteerResult } from "../src/api/index.ts";
-import { ATLAS, arrival, deliver, harness, messageOf, mount } from "./chat-observe-fixtures.tsx";
+import {
+  ATLAS,
+  arrival,
+  deliver,
+  harness,
+  messageOf,
+  mount,
+  swarmWith,
+} from "./chat-observe-fixtures.tsx";
 import type { Harness } from "./chat-observe-fixtures.tsx";
 import { sendable } from "./chat-fixtures.tsx";
 import { Thread } from "../src/chat/components/Thread.tsx";
@@ -100,6 +108,47 @@ describe("a turn the box reports, started elsewhere", () => {
     await deliver(r.h, busy(true));
     expect(screen.queryByText("Stopped")).toBeNull();
     expect(screen.getByText("agent is working")).toBeTruthy();
+  });
+
+  /** A Stop pressed on atlas whose abort never answers, with beta beside it. */
+  async function stoppingOnA(betaBusy: boolean) {
+    const r = recording();
+    r.h.swarms = [swarmWith("atlas", ["atlas", "beta"])];
+    r.h.api.abortTurn = () => new Promise(() => {});
+    const v = await open(r.h);
+    const beta = { instance: "atlas", bot: "beta", session: "s1" };
+    if (betaBusy) {
+      // Visited first, so beta is watched when its busy frame arrives.
+      await act(async () => {
+        v.held.store?.select("atlas", "beta");
+      });
+      await deliver(r.h, { ...busy(true), bot: "beta" } as ChatObserveView, beta);
+      await screen.findByText("agent is working");
+      await act(async () => {
+        v.held.store?.select("atlas", "atlas");
+      });
+    }
+    await deliver(r.h, busy(true));
+    fireEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+    expect(screen.getByText("stopping…")).toBeTruthy();
+    await act(async () => {
+      v.held.store?.select("atlas", "beta");
+    });
+  }
+
+  test("a Stop on one conversation does not disable Stop on a working one", async () => {
+    await stoppingOnA(true);
+    await waitFor(() => expect(screen.getByText("agent is working")).toBeTruthy());
+    expect(screen.queryByText("stopping…")).toBeNull();
+    const stop = screen.getByRole("button", { name: "Stop turn" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+  });
+
+  test("a Stop on one conversation never says Stopped on an idle one", async () => {
+    await stoppingOnA(false);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull());
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText("stopping…")).toBeNull();
   });
 
   test("the queue drains once the box says it is idle, sent with queued: true", async () => {
