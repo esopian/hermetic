@@ -350,7 +350,7 @@ scene({
         ],
         [
           "warn",
-          "<b>Unsigned app builds.</b> The updater verifies only by TLS, so updates are a notice and a manual DMG install until releases are signed. <span class='m'>§3.6</span>",
+          "<b>One key signs every app update.</b> The app installs an update only if its Ed25519 signature verifies, so whoever holds the release key, or approves a release run, ships to every install. Apps from v0.3.1 and earlier update by hand. <span class='m'>§3.6</span>",
           3,
         ],
         [
@@ -386,7 +386,7 @@ scene({
       r: ["design.md §7.2"],
     },
     {
-      c: "Known code gaps are pinned rather than forgotten: a chat request without a fleet target is a failing test with an owner, and app updates wait on signed releases.",
+      c: "Known code gaps are pinned rather than forgotten: a chat request without a fleet target is a failing test with an owner. App updates install only after their signature checks out against one release key, so that key is the thing to guard.",
       r: ["packages/app/test/fleet-target.test.ts", "design.md §3.6"],
     },
     {

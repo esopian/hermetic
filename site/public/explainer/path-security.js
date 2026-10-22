@@ -508,11 +508,11 @@
     ],
     [
       "Hermetic.app",
-      "GitHub Release DMG",
-      "unsigned; the updater checks TLS only, so an update is a notice and a manual install",
-      "warn",
+      "GitHub Release: the DMG, or an update the app downloads",
+      "Developer ID and notarised; an update installs only if its signature verifies",
+      "ok",
       [],
-      2,
+      1,
     ],
   ];
   scene({
@@ -540,12 +540,17 @@
         r: ["design.md §1 · §3.6"],
       },
       {
-        c: "hermetic's own code, Hermes and Chrome are pinned: content-addressed in the fleet bucket, verified on the box, and a manifest naming objects outside its release is refused.",
-        r: ["release/artifacts-manifest.ts", "release/hermes-mirror.ts", "release/browser-mirror.ts"],
+        c: "hermetic's own code, Hermes and Chrome are pinned: content-addressed in the fleet bucket, verified on the box, and a manifest naming objects outside its release is refused. The app on your laptop installs an update only after its signature verifies against the release key compiled into it.",
+        r: [
+          "release/artifacts-manifest.ts",
+          "release/hermes-mirror.ts",
+          "release/browser-mirror.ts",
+          "release/app-update-signature.ts",
+        ],
       },
       {
-        c: "The rest is ordinary trust: Tailscale auto-updates with no pin, the apt, Python and npm packages a box installs come from public sources outside the dependency audit, and app builds are unsigned.",
-        r: ["design.md §6.3 · Tailscale keeps itself current", "§11 · audit", "§3.6"],
+        c: "The rest is ordinary trust: Tailscale auto-updates with no pin, and the apt, Python and npm packages a box installs come from public sources outside the dependency audit.",
+        r: ["design.md §6.3 · Tailscale keeps itself current", "§11 · audit"],
       },
       {
         c: "And digests aren't signatures: the bucket is the root of trust. Whoever can write it with operator credentials — scenario two — decides what every box runs next.",
@@ -919,7 +924,7 @@
             seal: "app",
           },
           {
-            c: "Nothing else on the laptop can talk to the app. On the record: builds are unsigned, so an update is a notice and a manual install.",
+            c: "Nothing else on the laptop can talk to the app, and the app replaces itself only with an update whose signature verifies against the release key built into it.",
             r: ["design.md §3.6"],
           },
         ],
@@ -1059,7 +1064,7 @@
             r: ["design.md §7.2"],
           },
           {
-            c: "Known code gaps are pinned, not forgotten: <code>chat.turn</code> carries no fleet target — a failing test with an owner — and app builds are unsigned.",
+            c: "Known code gaps are pinned, not forgotten: <code>chat.turn</code> carries no fleet target — a failing test with an owner. App updates install only after their signature checks out against one release key, so that key is the thing to guard.",
             r: ["packages/app/test/fleet-target.test.ts", "design.md §3.6"],
           },
           {
