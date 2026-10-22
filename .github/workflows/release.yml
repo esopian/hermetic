@@ -99,7 +99,57 @@ jobs:
           sudo rm -rf ~/Library/Android/sdk /usr/local/share/dotnet /Library/Frameworks/Mono.framework \
             ~/.rustup ~/.cargo /usr/local/lib/node_modules ~/Library/Developer/CoreSimulator/Caches
           df -h / | tail -1
+      # Hutch signs with the identity ELECTROBUN_DEVELOPER_ID names, so the
+      # Developer ID certificate has to sit in a keychain codesign searches: a
+      # throwaway one, gone with the runner. An unsigned build is refused here
+      # rather than published — quarantined, its ad-hoc launcher reads to
+      # Gatekeeper as "damaged" and macOS offers only "Move to Trash".
+      - name: Import the Developer ID certificate and notary key
+        env:
+          CERT_P12: ${{ secrets.MACOS_SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CERT_P12}" ] || [ -z "${API_KEY_P8}" ]; then
+            echo "signing secrets are not set (CONTRIBUTING.md \"Signing\"); refusing to build an unsigned release" >&2
+            exit 1
+          fi
+          keychain="${RUNNER_TEMP}/signing.keychain-db"
+          keychain_pass=$(openssl rand -hex 16)
+          security create-keychain -p "${keychain_pass}" "${keychain}"
+          security set-keychain-settings -lut 21600 "${keychain}"
+          security unlock-keychain -p "${keychain_pass}" "${keychain}"
+          printf '%s' "${CERT_P12}" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security import "${RUNNER_TEMP}/cert.p12" -k "${keychain}" -P "${CERT_PASSWORD}" -T /usr/bin/codesign
+          rm "${RUNNER_TEMP}/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "${keychain_pass}" "${keychain}" > /dev/null
+          security list-keychains -d user -s "${keychain}" login.keychain-db
+          (umask 077 && printf '%s' "${API_KEY_P8}" > "${RUNNER_TEMP}/AuthKey.p8")
+      # Setting ELECTROBUN_DEVELOPER_ID and ELECTROBUN_APPLEAPIKEY is what turns
+      # `mac.codesign` and `mac.notarize` on (packages/app/electrobun.config.ts).
       - run: bun run app:build
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ secrets.ELECTROBUN_APPLEAPIISSUER }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.ELECTROBUN_APPLEAPIKEY }}
+          ELECTROBUN_APPLEAPIKEYPATH: ${{ runner.temp }}/AuthKey.p8
+
+      # What a downloader's Mac checks, asked of the DMG that is about to ship:
+      # a valid Developer ID signature over the whole bundle, a stapled
+      # notarisation ticket, and Gatekeeper's verdict.
+      - name: Verify the DMG's app is signed and notarised
+        shell: bash
+        run: |
+          set -euo pipefail
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "${mnt}" packages/app/artifacts/macos-arm64-Hermetic.dmg
+          trap 'hdiutil detach "${mnt}" -quiet' EXIT
+          codesign --verify --deep --strict --verbose=2 "${mnt}/Hermetic.app"
+          xcrun stapler validate "${mnt}/Hermetic.app"
+          spctl --assess --type execute --verbose=2 "${mnt}/Hermetic.app"
 
       - name: Publish the GitHub Release
         env:

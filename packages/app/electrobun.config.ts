@@ -23,6 +23,19 @@ import { viewBuild } from "./view-build.ts";
 /** Set by `scripts/dev-hmr.ts`, which also starts the server it names. */
 const hmr = (process.env["HERMETIC_VIEW_URL"] ?? "") !== "";
 
+/**
+ * Hutch signs and notarises only when `mac.codesign`/`mac.notarize` are true
+ * (both default false); the `ELECTROBUN_*` variables alone change nothing. So
+ * the environment decides the flags: a Developer ID turns signing on, and an
+ * App Store Connect API key (or an Apple ID) on top turns notarisation on. A
+ * local build without them stays ad-hoc signed and needs no edit here.
+ */
+const codesign = (process.env["ELECTROBUN_DEVELOPER_ID"] ?? "") !== "";
+const notarize =
+  codesign &&
+  ((process.env["ELECTROBUN_APPLEAPIKEY"] ?? "") !== "" ||
+    (process.env["ELECTROBUN_APPLEID"] ?? "") !== "");
+
 export default {
   app: { name: "Hermetic", identifier: "sh.hermetic.app", version: pkg.version },
   runtime: { exitOnLastWindowClosed: true },
@@ -58,11 +71,15 @@ export default {
     // The renderer keys (`bundleCEF`, `defaultRenderer`, `chromiumFlags`) come
     // from `renderer.ts`: CEF with a loopback DevTools port in a dev build,
     // WKWebView and no CEF in canary and stable.
-    mac: { createDmg: false, icons: "assets/icon.iconset", ...macRenderer(process.env) },
-    // Code signing and notarisation are driven by ELECTROBUN_DEVELOPER_ID /
-    // ELECTROBUN_APPLEID / ELECTROBUN_APPLEIDPASS / ELECTROBUN_TEAMID, so an
-    // unsigned local build needs no edit here and a release needs no secret in
-    // the repository.
+    // `codesign` and `notarize` follow the environment (see their definitions
+    // above), so a release needs no secret in the repository.
+    mac: {
+      createDmg: false,
+      codesign,
+      notarize,
+      icons: "assets/icon.iconset",
+      ...macRenderer(process.env),
+    },
   },
   // Build hooks are top-level, not `build.hooks`: a `build.hooks` key is
   // silently ignored by the builder, which is why the sidecars never staged.
