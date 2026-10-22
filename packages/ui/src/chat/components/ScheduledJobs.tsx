@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   routinesList,
-  routinesCreate,
   routinesUpdate,
   routinesDelete,
   routinesRun,
@@ -11,12 +11,26 @@ import type { BotRoutineView, ChatMessageView } from "../../api/index.ts";
 import { isVisible } from "../../lib/visibility.ts";
 import { gateFor, useBotCapabilities } from "../bot-capabilities.ts";
 import { useCronCallFinished } from "../cron-tools.ts";
-import { BotModeDialog, BotField } from "./BotModeDialog.tsx";
+import {
+  LAPTOP_ZONE,
+  dayLabel,
+  describeSchedule,
+  formatStamp,
+  formatTime,
+  laptopTime,
+  relative,
+  runTone,
+} from "../routine-schedule.ts";
+import { BotModeDialog } from "./BotModeDialog.tsx";
 import { CapabilityNote, gateControl } from "./CapabilityNote.tsx";
 import { Face } from "./Face.tsx";
+import { RoutineDrawer } from "./RoutineDrawer.tsx";
+import { RoutineHistory } from "./RoutineHistory.tsx";
 
 /** How often an open rail re-reads the registry, for jobs changed anywhere else. */
 export const ROUTINES_POLL_MS = 60_000;
+/** Runs drawn as squares in an open row. */
+const STRIP_RUNS = 14;
 
 /** The platform interval, returning its cancel like `ChatTiming.setInterval`. */
 const platformInterval = (fn: () => void, ms: number): (() => void) => {
@@ -44,13 +58,17 @@ export function ScheduledJobs({
   setInterval?: (fn: () => void, ms: number) => () => void;
 }) {
   const [jobs, setJobs] = useState<BotRoutineView[]>([]),
+    // shortcut: a profile with no `timezone` runs on the box's clock, assumed UTC
+    // (the EC2 image default); read the box's zone if an image ever changes it.
+    [zone, setZone] = useState("UTC"),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
     [version, setVersion] = useState(0),
     [busy, setBusy] = useState(false);
-  const [edit, setEdit] = useState<BotRoutineView | "new" | null>(null),
+  const [open, setOpen] = useState<string | null>(null),
+    [edit, setEdit] = useState<BotRoutineView | "new" | null>(null),
     [remove, setRemove] = useState<BotRoutineView | null>(null),
-    [history, setHistory] = useState<Awaited<ReturnType<typeof routinesHistory>> | null>(null);
+    [history, setHistory] = useState<BotRoutineView | null>(null);
   const target = { instance, bot };
   /**
    * The routine registry is probed before it is read. A gateway without one
@@ -106,7 +124,9 @@ export function ScheduledJobs({
     setError("");
     routinesList({ instance, bot }, controller.signal)
       .then((r) => {
-        if (!controller.signal.aborted) setJobs(r.jobs);
+        if (controller.signal.aborted) return;
+        setJobs(r.jobs);
+        setZone(r.timezone ?? "UTC");
       })
       .catch((e) => {
         if (!controller.signal.aborted) setError(e.message);
@@ -129,6 +149,12 @@ export function ScheduledJobs({
       setBusy(false);
     }
   }
+  const now = Date.now();
+  const upcoming = jobs
+    .filter((j) => !j.paused && j.next_run_at)
+    .map((j) => Date.parse(j.next_run_at ?? ""))
+    .sort((a, b) => a - b)[0];
+  const run = (job: BotRoutineView) => void act(() => routinesRun({ ...target, id: job.id }));
   return (
     <aside className="ch-ctx bm-jobs" aria-label="Scheduled jobs">
       <div className="ch-ctx-head">
@@ -159,9 +185,11 @@ export function ScheduledJobs({
                 ? "Routines not read"
                 : jobs.length === 0
                   ? "no routines"
-                  : jobs.length === 1
-                    ? "1 routine"
-                    : `${jobs.length} routines`}
+                  : `${jobs.length === 1 ? "1 routine" : `${jobs.length} routines`}${
+                      upcoming
+                        ? ` · next ${dayLabel(upcoming, zone, now, true).toLowerCase()} ${formatTime(upcoming, zone)}`
+                        : ""
+                    }`}
             </p>
           </div>
         </div>
@@ -173,56 +201,34 @@ export function ScheduledJobs({
               {error}
             </p>
           ) : null}
-          {jobs.map((job) => (
-            <article className="bm-job" key={job.id}>
-              <h3>
-                <i className={job.paused ? "paused" : ""} />
-                {job.name}
-              </h3>
-              <p className="mono">{job.schedule}</p>
-              <p className="bm-note">
-                {job.deliver === "bot"
-                  ? "Delivers to Bot Chat"
-                  : job.deliver === "local"
-                    ? "Separate run history"
-                    : "Custom delivery"}
-              </p>
-              <p className="bm-note">{job.paused ? "Paused" : (job.last_status ?? "Scheduled")}</p>
-              <div className="bm-job-actions">
-                <button
-                  disabled={busy}
-                  type="button"
-                  onClick={() => void act(() => routinesRun({ ...target, id: job.id }))}
+          {jobs.length ? (
+            <div className="rt-list">
+              {jobs.map((job) => (
+                <RoutineRow
+                  key={job.id}
+                  job={job}
+                  zone={zone}
+                  now={now}
+                  open={open === job.id}
+                  onToggle={() => setOpen(open === job.id ? null : job.id)}
                 >
-                  Run now
-                </button>
-                <button
-                  disabled={busy}
-                  type="button"
-                  onClick={() =>
-                    void act(() => routinesUpdate({ ...target, id: job.id, paused: !job.paused }))
-                  }
-                >
-                  {job.paused ? "Resume" : "Pause"}
-                </button>
-                <button type="button" disabled={busy} onClick={() => setEdit(job)}>
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    void act(async () => setHistory(await routinesHistory({ ...target, id: job.id })))
-                  }
-                >
-                  History
-                </button>
-                <button type="button" disabled={busy} onClick={() => setRemove(job)}>
-                  Remove
-                </button>
-              </div>
-            </article>
-          ))}
+                  <RoutineDetail
+                    job={job}
+                    zone={zone}
+                    now={now}
+                    busy={busy}
+                    onRun={() => run(job)}
+                    onPause={() =>
+                      void act(() => routinesUpdate({ ...target, id: job.id, paused: !job.paused }))
+                    }
+                    onEdit={() => setEdit(job)}
+                    onHistory={() => setHistory(job)}
+                    onRemove={() => setRemove(job)}
+                  />
+                </RoutineRow>
+              ))}
+            </div>
+          ) : null}
           {gate.allowed && !loading && !error && !jobs.length ? (
             <p className="bm-note">No routines yet. Give this bot a recurring task.</p>
           ) : null}
@@ -238,66 +244,21 @@ export function ScheduledJobs({
         <div className="ch-ctx-sec">
           <div className="kicker">Work that comes back to you</div>
           <p className="bm-note">
-            Jobs run on the instance, even with this portal closed. Choose explicit delivery to Bot Chat
-            when creating a routine.
+            Jobs run on the instance, even with this app closed. Times are in the instance’s timezone (
+            {zone}).
           </p>
         </div>
       </div>
       {edit ? (
-        <BotModeDialog
-          title={edit === "new" ? "New scheduled job" : "Edit scheduled job"}
+        <RoutineDrawer
+          instance={instance}
+          bot={bot}
+          title={title}
+          job={edit === "new" ? null : edit}
+          zone={zone}
           onClose={() => setEdit(null)}
-          submit={edit === "new" ? "Create job" : "Save job"}
-          onSubmit={async (data) => {
-            const fields = {
-              name: String(data.get("name")),
-              prompt: String(data.get("prompt")),
-              schedule: String(data.get("schedule")),
-            };
-            const deliver = data.get("deliver") === "bot" ? ("bot" as const) : ("local" as const);
-            if (edit === "new") await routinesCreate({ ...target, ...fields, deliver });
-            else
-              await routinesUpdate({
-                ...target,
-                id: edit.id,
-                ...fields,
-                ...(data.get("deliver") === "other" ? {} : { deliver }),
-              });
-            setVersion((v) => v + 1);
-          }}
-        >
-          <BotField label="Job name" name="name" value={edit === "new" ? "" : edit.name} required />
-          <BotField
-            label="Instructions"
-            name="prompt"
-            value={edit === "new" ? "" : edit.prompt}
-            textarea
-            required
-          />
-          <BotField
-            label="Schedule"
-            name="schedule"
-            value={edit === "new" ? "0 8 * * *" : edit.schedule}
-            required
-          />
-          <p className="bm-note">
-            Cron expression or schedule supported by Hermes. Uses the instance’s configured timezone.
-          </p>
-          <label className="bm-field">
-            Delivery
-            <select
-              className="wiz-input"
-              name="deliver"
-              defaultValue={edit === "new" ? "local" : edit.deliver}
-            >
-              {edit !== "new" && edit.deliver === "other" ? (
-                <option value="other">Keep existing destination</option>
-              ) : null}
-              <option value="local">Separate run history</option>
-              <option value="bot">Bot Chat</option>
-            </select>
-          </label>
-        </BotModeDialog>
+          onSaved={() => setVersion((v) => v + 1)}
+        />
       ) : null}
       {remove ? (
         <BotModeDialog
@@ -310,26 +271,213 @@ export function ScheduledJobs({
           }}
         >
           <p>
-            Remove “{remove.name}” from {bot} on {instance}? Future scheduled runs will stop.
+            Remove “{remove.name}” from {bot} on {instance}?{" "}
+            {remove.next_run_at && !remove.paused
+              ? `Its next run (${formatStamp(Date.parse(remove.next_run_at), zone)}) and every later one stop.`
+              : "Future scheduled runs will stop."}
           </p>
+          <p className="bm-note">Results already delivered to the chat stay there.</p>
         </BotModeDialog>
       ) : null}
       {history ? (
-        <BotModeDialog title="Job run history" onClose={() => setHistory(null)}>
-          {history.runs.length ? (
-            history.runs.map((run) => (
-              <article className="bm-job" key={run.id}>
-                <b>{run.status}</b>
-                <p>{run.started_at}</p>
-                <p>{run.text}</p>
-                {run.error ? <p role="alert">{run.error}</p> : null}
-              </article>
-            ))
-          ) : (
-            <p>No runs recorded yet.</p>
-          )}
-        </BotModeDialog>
+        <RoutineHistory
+          instance={instance}
+          bot={bot}
+          job={history}
+          zone={zone}
+          busy={busy}
+          onRun={() => run(history)}
+          onClose={() => setHistory(null)}
+        />
       ) : null}
     </aside>
+  );
+}
+
+function RoutineRow({
+  job,
+  zone,
+  now,
+  open,
+  onToggle,
+  children,
+}: {
+  job: BotRoutineView;
+  zone: string;
+  now: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const next = !job.paused && job.next_run_at ? Date.parse(job.next_run_at) : null;
+  // A job that never ran has only a scheduler `state` ("scheduled") where a
+  // run result would be; that is not a success.
+  const tone = job.paused ? "paused" : job.last_run_at ? runTone(job.last_status) : "idle";
+  return (
+    <>
+      <button
+        type="button"
+        className={`rt-row${open ? " open" : ""}`}
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <i className={`rt-sq ${tone}`} aria-hidden="true" />
+        <span className="rt-main">
+          <span className="rt-name">{job.name}</span>
+          <span className="rt-when">{describeSchedule(job.schedule, zone)}</span>
+        </span>
+        <span className="rt-next">
+          {job.paused ? (
+            <small>paused</small>
+          ) : next ? (
+            <>
+              {formatTime(next, zone)}
+              <small>{dayLabel(next, zone, now, true)}</small>
+            </>
+          ) : (
+            <small>—</small>
+          )}
+        </span>
+      </button>
+      {open ? children : null}
+    </>
+  );
+}
+
+function RoutineDetail({
+  job,
+  zone,
+  now,
+  busy,
+  onRun,
+  onPause,
+  onEdit,
+  onHistory,
+  onRemove,
+}: {
+  job: BotRoutineView;
+  zone: string;
+  now: number;
+  busy: boolean;
+  onRun: () => void;
+  onPause: () => void;
+  onEdit: () => void;
+  onHistory: () => void;
+  onRemove: () => void;
+}) {
+  const [runs, setRuns] = useState<Awaited<ReturnType<typeof routinesHistory>>["runs"] | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    routinesHistory(
+      { instance: job.instance, bot: job.bot, id: job.id, limit: STRIP_RUNS },
+      controller.signal,
+    )
+      .then((r) => {
+        if (!controller.signal.aborted) setRuns(r.runs);
+      })
+      // The strip is a glance; History shows the error if the read fails there too.
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [job.instance, job.bot, job.id, job.last_run_at]);
+  const next = !job.paused && job.next_run_at ? Date.parse(job.next_run_at) : null;
+  const last = job.last_run_at ? Date.parse(job.last_run_at) : null;
+  const laptop = next ? laptopTime(next, zone, LAPTOP_ZONE) : "";
+  const strip = runs ? [...runs].reverse() : [];
+  const failed = strip.filter((r) => runTone(r.status) === "bad").length;
+  return (
+    <div className="rt-det">
+      <p className="rt-prompt">{job.prompt}</p>
+      <dl className="rt-meta">
+        <dt>When</dt>
+        <dd>
+          {describeSchedule(job.schedule, zone)} <code className="rt-cron">{job.schedule}</code>
+        </dd>
+        <dt>Next</dt>
+        <dd>
+          {job.paused ? (
+            "Paused"
+          ) : next ? (
+            <>
+              {dayLabel(next, zone, now)}, {formatTime(next, zone)}{" "}
+              <span className="rt-dim">· {relative(next, now)}</span>
+              {laptop ? <span className="rt-dim rt-block">{laptop}</span> : null}
+            </>
+          ) : (
+            "No further runs"
+          )}
+        </dd>
+        <dt>Last</dt>
+        <dd>
+          {last ? (
+            <>
+              <span className={`rt-st ${runTone(job.last_status)}`}>{job.last_status ?? "ran"}</span>{" "}
+              {formatStamp(last, zone)}
+            </>
+          ) : (
+            "Never run"
+          )}
+        </dd>
+        <dt>To</dt>
+        <dd>
+          {job.deliver === "bot"
+            ? "Bot Chat"
+            : job.deliver === "local"
+              ? "Run history"
+              : "Custom delivery"}
+          {job.continuity ? " · continues from last run" : ""}
+        </dd>
+        {job.repeat.times ? (
+          <>
+            <dt>Runs</dt>
+            <dd>
+              {job.repeat.completed} of {job.repeat.times} ·{" "}
+              {Math.max(0, job.repeat.times - job.repeat.completed)} left
+            </dd>
+          </>
+        ) : null}
+      </dl>
+      {strip.length ? (
+        <>
+          <div className="rt-strip" role="img" aria-label={`Last ${strip.length} runs`}>
+            {strip.map((r) => (
+              <i
+                key={r.id}
+                className={runTone(r.status)}
+                title={`${r.started_at ? formatStamp(Date.parse(r.started_at), zone) : "—"} · ${r.status}`}
+              />
+            ))}
+          </div>
+          <p className="rt-strip-l">
+            last {strip.length} run{strip.length === 1 ? "" : "s"} · {strip.length - failed} ok
+            {failed ? <b> · {failed} failed</b> : null}
+          </p>
+        </>
+      ) : null}
+      <button type="button" className="rt-primary" disabled={busy} onClick={onRun}>
+        {busy ? "Working…" : "▶ Run now"}
+      </button>
+      <div className="rt-acts">
+        <button type="button" disabled={busy} onClick={onPause}>
+          <span aria-hidden="true">{job.paused ? "↺" : "‖"}</span>
+          {job.paused ? "Resume" : "Pause"}
+        </button>
+        <button type="button" disabled={busy} onClick={onEdit}>
+          <span aria-hidden="true">✎</span>Edit
+        </button>
+        <button type="button" onClick={onHistory}>
+          <span aria-hidden="true">≡</span>History
+        </button>
+        <button
+          type="button"
+          className="rm"
+          disabled={busy}
+          onClick={onRemove}
+          aria-label={`Remove ${job.name}`}
+          title="Remove…"
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+    </div>
   );
 }

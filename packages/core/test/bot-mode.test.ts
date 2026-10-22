@@ -617,7 +617,7 @@ const MODERN_GATEWAY = {
 };
 interface GatewayStub {
   rpc?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-  rest?: (method: string, path: string) => Promise<unknown>;
+  rest?: (method: string, path: string, body?: unknown) => Promise<unknown>;
 }
 function gateway(stub: GatewayStub = {}) {
   const calls: string[] = [];
@@ -634,9 +634,9 @@ function gateway(stub: GatewayStub = {}) {
       calls.push(method);
       return stub.rpc ? stub.rpc(method, params) : answer(method);
     },
-    botModeRest: async (_box, method, path) => {
+    botModeRest: async (_box, method, path, body) => {
       calls.push(`${method} ${path}`);
-      return stub.rest ? stub.rest(method, path) : [];
+      return stub.rest ? stub.rest(method, path, body) : [];
     },
   };
   const listening = new MemoryInstanceListeningStore();
@@ -911,6 +911,132 @@ describe("tolerant reads of a gateway's own fields", () => {
     const [run] = (await g.routines.history({ instance: "atlas", bot: "default", id: "job-1" })).runs;
     expect(run?.status).toBe("failed");
     expect(run?.text).toBe("Nightly");
+  });
+});
+
+describe("routine run caps, continuity and the profile's clock", () => {
+  const REF = { instance: "atlas", bot: "default" };
+  test("list reads the schedule upstream accepts back, the cap, continuity and the zone", async () => {
+    const g = gateway({
+      rest: async (_m, path) =>
+        path.startsWith("/api/config")
+          ? { timezone: "Asia/Kolkata" }
+          : [
+              {
+                id: "a",
+                name: "A",
+                prompt: "p",
+                schedule: { kind: "cron", expr: "0 9 * * 1", display: "every monday 9am" },
+                repeat: { times: 5, completed: 2 },
+                context_from: ["self"],
+              },
+              {
+                id: "b",
+                name: "B",
+                prompt: "p",
+                schedule: { kind: "interval", minutes: 120, display: "every 120m" },
+              },
+              {
+                id: "c",
+                name: "C",
+                prompt: "p",
+                schedule: { kind: "once", run_at: "2026-10-23T10:00:00+05:30" },
+                context_from: "job-x",
+              },
+            ],
+    });
+    const { jobs, timezone } = await g.routines.list(REF);
+    expect(timezone).toBe("Asia/Kolkata");
+    expect(jobs.map((j) => j.schedule)).toEqual([
+      "0 9 * * 1",
+      "every 120m",
+      "2026-10-23T10:00:00+05:30",
+    ]);
+    expect(jobs[0]).toMatchObject({ repeat: { times: 5, completed: 2 }, continuity: true });
+    expect(jobs[1]).toMatchObject({ repeat: { times: null, completed: 0 }, continuity: false });
+    expect(jobs[2]?.continuity).toBe(false);
+  });
+  test("an unreadable or unknown zone is null, and never fails the list", async () => {
+    const broken = gateway({
+      rest: async (_m, path) => {
+        if (path.startsWith("/api/config")) throw new HermeticError("FORBIDDEN", "no");
+        return [];
+      },
+    });
+    expect((await broken.routines.list(REF)).timezone).toBeNull();
+    const bogus = gateway({
+      rest: async (_m, path) => (path.startsWith("/api/config") ? { timezone: "Mars/Olympus" } : []),
+    });
+    expect((await bogus.routines.list(REF)).timezone).toBeNull();
+  });
+  test("create sends continuity as context_from self and sets the cap with a follow-up update", async () => {
+    const bodies: unknown[] = [];
+    const g = gateway({
+      rest: async (method, _path, body) => {
+        bodies.push([method, body]);
+        return {
+          id: "job-1",
+          name: "A",
+          prompt: "p",
+          schedule: "0 8 * * *",
+          repeat: { times: method === "PUT" ? 3 : null, completed: 0 },
+        };
+      },
+    });
+    const job = await g.routines.create({
+      ...REF,
+      name: "A",
+      prompt: "p",
+      schedule: "0 8 * * *",
+      repeat: 3,
+      continuity: true,
+    });
+    expect(bodies[0]).toEqual([
+      "POST",
+      { name: "A", prompt: "p", schedule: "0 8 * * *", deliver: "local", context_from: ["self"] },
+    ]);
+    expect(bodies[1]).toEqual(["PUT", { updates: { repeat: 3 } }]);
+    expect(job.repeat.times).toBe(3);
+  });
+  test("a cap that does not land removes the job it was meant for", async () => {
+    const g = gateway({
+      rest: async (method) => {
+        if (method === "PUT") throw new HermeticError("CHAT_PROTOCOL", "repeat rejected");
+        return { id: "job-1" };
+      },
+    });
+    await expect(
+      g.routines.create({ ...REF, name: "A", prompt: "p", schedule: "0 8 * * *", repeat: 3 }),
+    ).rejects.toThrow("repeat rejected");
+    expect(g.calls).toContain("DELETE /api/cron/jobs/job-1?profile=default");
+  });
+  test("if that removal fails too, the error says the job runs uncapped", async () => {
+    const g = gateway({
+      rest: async (method) => {
+        if (method === "PUT" || method === "DELETE")
+          throw new HermeticError("CHAT_PROTOCOL", "repeat rejected");
+        return { id: "job-1" };
+      },
+    });
+    const e = await failureOf(
+      g.routines.create({ ...REF, name: "A", prompt: "p", schedule: "0 8 * * *", repeat: 3 }),
+    );
+    expect(e.message).toContain("was created without its run cap");
+  });
+  test("toggling continuity keeps the jobs a routine chains from", async () => {
+    const bodies: unknown[] = [];
+    const g = gateway({
+      rest: async (method, _path, body) => {
+        if (method === "PUT") bodies.push(body);
+        return { id: "job-1", context_from: ["job-x", "self"] };
+      },
+    });
+    await g.routines.update({ ...REF, id: "job-1", continuity: false });
+    await g.routines.update({ ...REF, id: "job-1", continuity: true, repeat: null });
+    expect(bodies).toEqual([
+      { updates: { context_from: ["job-x"] } },
+      { updates: { repeat: null, context_from: ["job-x", "self"] } },
+    ]);
   });
 });
 

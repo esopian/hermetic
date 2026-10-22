@@ -1,0 +1,493 @@
+/* Scheduled jobs (#115): the rail's compact list, the edit drawer and the run
+   history drawer. Status squares use the shared colour meanings — ok, bad,
+   accent for in progress, fg3 for paused or never run. */
+
+/* ── the rail ─────────────────────────────────────────────────────────────── */
+
+.rt-list {
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.rt-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.rt-row:hover {
+  background: var(--bg2);
+}
+.rt-row.open {
+  background: var(--sel);
+  box-shadow: inset 2px 0 var(--acc);
+}
+.rt-main {
+  min-width: 0;
+}
+.rt-name,
+.rt-when {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rt-name {
+  font: 800 12.5px var(--sans);
+}
+.rt-when {
+  font: 11px var(--sans);
+  color: var(--fg2);
+}
+.rt-next {
+  text-align: right;
+  font: 11px var(--mono);
+}
+.rt-next small {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+.rt-sq {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: var(--fg3);
+}
+.rt-sq.ok {
+  background: var(--ok);
+}
+.rt-sq.bad {
+  background: var(--bad);
+}
+.rt-sq.run {
+  background: var(--acc);
+  animation: hpulse 1.2s infinite;
+}
+.rt-sq.idle {
+  background: transparent;
+  outline: 1px solid var(--fg3);
+  outline-offset: -1px;
+}
+.rt-det {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+}
+.rt-prompt {
+  margin: 0 0 10px;
+  font: 12px / 1.5 var(--sans);
+  color: var(--fg2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rt-meta {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 3px 8px;
+  margin: 0 0 10px;
+  font: 10.5px / 1.5 var(--mono);
+}
+.rt-meta dt {
+  padding-top: 2px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg3);
+}
+.rt-meta dd {
+  margin: 0;
+  color: var(--fg2);
+}
+.rt-cron {
+  font: 10px var(--mono);
+  color: var(--fg2);
+  border: 1px solid var(--line2);
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.rt-dim {
+  color: var(--text-muted);
+}
+.rt-block {
+  display: block;
+}
+.rt-st.ok {
+  color: var(--text-ok);
+}
+.rt-st.bad {
+  color: var(--bad);
+}
+.rt-st.run {
+  color: var(--text-accent);
+}
+.rt-strip {
+  display: flex;
+  gap: 3px;
+}
+.rt-strip i {
+  width: 13px;
+  height: 13px;
+  background: var(--fg3);
+}
+.rt-strip i.ok {
+  background: var(--ok);
+}
+.rt-strip i.bad {
+  background: var(--bad);
+}
+.rt-strip i.run {
+  background: var(--acc);
+}
+.rt-strip-l {
+  margin: 4px 0 0;
+  font: 9.5px var(--mono);
+  color: var(--text-muted);
+}
+.rt-strip-l b {
+  color: var(--bad);
+  font-weight: 400;
+}
+/* One primary action, then the rest as a joined row with Remove set apart. */
+.rt-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  margin-top: 12px;
+  border: 2px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  font: 900 11px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rt-primary:hover:not(:disabled) {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: var(--acc-fg);
+}
+.rt-primary:disabled {
+  background: transparent;
+  color: var(--text-accent);
+  border-color: var(--acc);
+  cursor: default;
+}
+.rt-acts {
+  display: flex;
+  margin-top: 6px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+}
+.rt-acts button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--fg2);
+  font: 10.5px var(--mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rt-acts button + button {
+  border-left: 1px solid var(--line2);
+}
+.rt-acts button:hover:not(:disabled) {
+  background: var(--bg3);
+  color: var(--fg);
+}
+.rt-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rt-acts button.rm {
+  flex: none;
+  width: 34px;
+  color: var(--bad);
+}
+.rt-acts button.rm:hover:not(:disabled) {
+  background: var(--bad);
+  color: var(--danger-text);
+}
+
+/* ── drawers ──────────────────────────────────────────────────────────────── */
+
+.rt-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+}
+.rt-left {
+  padding: 20px 28px;
+}
+.rt-right {
+  padding: 20px;
+  border-left: 1px solid var(--line);
+  background: var(--bg2);
+}
+.rt-step {
+  margin-bottom: 24px;
+}
+.rt-step h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  font: 900 13px var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.rt-step h3 i {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--fg);
+  font: 700 11px var(--mono);
+  font-style: normal;
+}
+.rt-input {
+  height: 40px;
+  font: 14px var(--sans);
+}
+textarea.rt-input {
+  height: auto;
+  padding: 10px 12px;
+  resize: vertical;
+  line-height: 1.5;
+}
+/* The native time, date and number controls draw differently per engine; the
+   box, font and colour are ours, the picker glyph is the platform's. */
+.rt-input[type="time"],
+.rt-input[type="date"],
+.rt-input[type="number"],
+.rt-mono {
+  font: 13px var(--mono);
+  color-scheme: dark;
+}
+[data-theme="light"] .rt-input[type="time"],
+[data-theme="light"] .rt-input[type="date"] {
+  color-scheme: light;
+}
+.bm-field select.rt-input {
+  width: auto;
+  font: 13px var(--mono);
+}
+/* Beats `.bm-field .wiz-input`'s full width. */
+.bm-field .rt-num {
+  width: 96px;
+}
+.rt-row-in {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rt-row-in .rt-input[type="time"],
+.rt-row-in .rt-input[type="date"] {
+  width: auto;
+}
+.rt-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.rt-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.rt-chip {
+  padding: 6px 9px;
+  border: 1px solid var(--line2);
+  background: transparent;
+  color: var(--fg2);
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.rt-chip:hover {
+  border-color: var(--fg2);
+  color: var(--fg);
+}
+.rt-chip[aria-pressed="true"] {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+.rt-dest {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.rt-dest-card {
+  padding: 10px;
+  border: 1px solid var(--line2);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.rt-dest-card b {
+  display: block;
+  font-size: 13px;
+}
+.rt-dest-card small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.rt-dest-card[aria-pressed="true"] {
+  border: 2px solid var(--fg);
+  padding: 9px;
+  background: var(--bg2);
+}
+.rt-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font: 13px / 1.45 var(--sans);
+  cursor: pointer;
+}
+.rt-check input {
+  margin-top: 3px;
+  accent-color: var(--acc);
+}
+.rt-check small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.rt-big {
+  margin: 8px 0;
+  font: 900 19px / 1.25 var(--sans);
+  letter-spacing: -0.015em;
+}
+.rt-gap {
+  display: block;
+  margin: 18px 0 6px;
+}
+.rt-flush {
+  margin: 0;
+  padding: 0;
+}
+.rt-small {
+  margin: 4px 0 0;
+  font: 10.5px var(--sans);
+}
+.rt-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.rt-week span {
+  display: block;
+  text-align: center;
+  font: 9px var(--mono);
+  color: var(--fg3);
+}
+.rt-week-col {
+  display: grid;
+  grid-template-rows: repeat(24, 4px);
+  gap: 1px;
+}
+.rt-week-col i {
+  background: var(--line);
+}
+.rt-week-col i.on {
+  background: var(--acc);
+}
+.rt-next5 {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 11.5px var(--mono);
+}
+.rt-next5 li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.rt-next5 small {
+  color: var(--text-muted);
+}
+.rt-foot-acts {
+  display: flex;
+  gap: 10px;
+}
+.rt-foot-acts .btn {
+  min-height: 44px;
+}
+.rt-tiles {
+  grid-template-columns: repeat(4, 1fr);
+  margin: 16px 28px;
+}
+.rt-split {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+}
+.rt-runs {
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+.rt-pad {
+  padding: 0 14px;
+}
+.rt-run {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg2);
+  font: 11px var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+.rt-run[aria-selected="true"] {
+  background: var(--sel);
+  color: var(--fg);
+  box-shadow: inset 2px 0 var(--acc);
+}
+.rt-out {
+  padding: 16px 20px;
+  overflow: auto;
+}
+.rt-out-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  font: 11px var(--mono);
+  color: var(--fg2);
+}
+.rt-pre {
+  margin: 12px 0;
+  white-space: pre-wrap;
+  font: 13px / 1.6 var(--sans);
+  color: var(--fg);
+}

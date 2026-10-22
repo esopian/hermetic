@@ -35,6 +35,10 @@ const JOB = {
   deliver: "local",
   paused: false,
   last_status: null,
+  next_run_at: null,
+  last_run_at: null,
+  repeat: { times: null, completed: 0 },
+  continuity: false,
 };
 
 let server: FakeServer | null = null;
@@ -69,7 +73,8 @@ function serve(): FakeServer {
         room_driver: "supported",
       },
     },
-    [JOBS]: { instance: INSTANCE, bot: BOT, jobs: [JOB] },
+    [JOBS]: { instance: INSTANCE, bot: BOT, jobs: [JOB], timezone: null },
+    "routines.history": { runs: [] },
     "routines.delete": { instance: INSTANCE, bot: BOT, id: JOB.id, deleted: true },
   });
   return server;
@@ -196,7 +201,8 @@ describe("the rail's own changes", () => {
   test("removing a job still re-reads the registry", async () => {
     serve();
     await mounted(rail({}));
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: /Morning digest/, expanded: false }));
+    fireEvent.click(await screen.findByRole("button", { name: `Remove ${JOB.name}` }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove job" }));
     await waitFor(() => expect(server?.to("routines.delete").length).toBe(1));
     await waitFor(() => expect(server?.to(JOBS).length).toBe(2));
