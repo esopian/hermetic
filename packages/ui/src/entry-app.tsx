@@ -55,6 +55,8 @@ import "./chat/styles/bot-dm.css";
 // GFM tables, thematic breaks, task boxes and math, scoped to `.ch-msg-body`.
 import "./chat/styles/chat-markdown.css";
 import "./chat/styles/bot-mode.css";
+// Scheduled jobs: the rail list and its edit and history drawers.
+import "./chat/styles/routines.css";
 // The stream inspector and its dashed entry points (developer tools). After
 // bot-mode.css, whose narrow-window grid it overrides while open.
 import "./chat/styles/chat-inspector.css";

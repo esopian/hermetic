@@ -774,18 +774,33 @@ export function createBotMode(
   };
   const path = (p: { bot: string; id?: string }, suffix = "") =>
     `/api/cron/jobs${p.id ? `/${encodeURIComponent(p.id)}` : ""}${suffix}?profile=${encodeURIComponent(p.bot)}`;
+  /**
+   * The schedule as a string the gateway accepts back, so an edit round-trips:
+   * a cron job's expression rather than its display (upstream keeps "every
+   * monday 9am" as the display of `0 9 * * 1`), an interval in minutes and a
+   * one-shot's run time.
+   */
+  function scheduleText(r: Record<string, unknown>): string {
+    if (typeof r.schedule === "string") return r.schedule;
+    const s = record(r.schedule);
+    if (s.kind === "cron" && typeof s.expr === "string") return s.expr;
+    if (s.kind === "interval" && typeof s.minutes === "number") return `every ${s.minutes}m`;
+    if (s.kind === "once" && typeof s.run_at === "string") return s.run_at;
+    return text(s.display, text(s.value, text(s.expr, JSON.stringify(s))));
+  }
+  const contextFrom = (v: unknown) =>
+    (Array.isArray(v) ? v : typeof v === "string" ? [v] : []).filter(
+      (x): x is string => typeof x === "string",
+    );
   function routine(p: { instance: string; bot: string }, v: unknown): S.BotRoutine {
     const r = record(v),
-      schedule = record(r.schedule);
+      repeat = record(r.repeat);
     return S.BotRoutine.parse({
       ...p,
       id: text(r.id),
       name: text(r.name, "Scheduled job").replace(/^\[bot:[^\]]+\]\s*/, ""),
       prompt: text(r.prompt),
-      schedule:
-        typeof r.schedule === "string"
-          ? r.schedule
-          : text(schedule.display, text(schedule.value, text(schedule.expr, JSON.stringify(schedule)))),
+      schedule: scheduleText(r),
       deliver:
         r.deliver === "bot-chat" ? "bot" : r.deliver === "local" || !r.deliver ? "local" : "other",
       paused: r.enabled === false || r.state === "paused",
@@ -801,36 +816,85 @@ export function createBotMode(
           : typeof r.state === "string"
             ? r.state
             : null,
+      repeat: {
+        times: typeof repeat.times === "number" && repeat.times > 0 ? repeat.times : null,
+        completed: typeof repeat.completed === "number" ? repeat.completed : 0,
+      },
+      continuity: contextFrom(r.context_from).some((ref) => ref.toLowerCase() === "self"),
     });
+  }
+  /** An IANA zone the gateway configured, or null when Hermes runs on the box's own clock. */
+  function zoneOrNull(v: unknown): string | null {
+    if (typeof v !== "string" || !v.trim()) return null;
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: v.trim() });
+      return v.trim();
+    } catch {
+      return null;
+    }
   }
   const routines = {
     list: operation(S.RoutinesListInput, async (p, o) => {
-      const r = await rest(p.instance, "GET", path(p), undefined, o);
+      const [r, config] = await Promise.all([
+        rest(p.instance, "GET", path(p), undefined, o),
+        // The profile's `timezone` is the clock its schedules run on. A failed
+        // read is not a failed list: the jobs are still right, only their zone
+        // is unknown.
+        rest(p.instance, "GET", `/api/config?profile=${encodeURIComponent(p.bot)}`, undefined, o).catch(
+          () => null,
+        ),
+      ]);
       const jobs = Array.isArray(r) ? r : record(r).jobs;
       if (!Array.isArray(jobs)) return unsupported("Gateway returned no routine registry");
-      return { jobs: records(jobs).map((v) => routine(p, v)) };
+      return {
+        jobs: records(jobs).map((v) => routine(p, v)),
+        timezone: zoneOrNull(record(config).timezone),
+      };
     }),
-    create: operation(S.RoutineCreateInput, async (p, o) =>
-      routine(
-        p,
-        await rest(
-          p.instance,
-          "POST",
-          path(p),
-          {
-            name: p.name,
-            prompt: p.prompt,
-            schedule: p.schedule,
-            deliver: p.deliver === "bot" ? "bot-chat" : "local",
-          },
-          o,
-        ),
-      ),
-    ),
+    create: operation(S.RoutineCreateInput, async (p, o) => {
+      const job = await rest(
+        p.instance,
+        "POST",
+        path(p),
+        {
+          name: p.name,
+          prompt: p.prompt,
+          schedule: p.schedule,
+          deliver: p.deliver === "bot" ? "bot-chat" : "local",
+          ...(p.continuity ? { context_from: ["self"] } : {}),
+        },
+        o,
+      );
+      if (!p.repeat) return routine(p, job);
+      // Upstream's create body has no run cap (`CronJobCreate`); `update_job`
+      // takes one. A cap that did not land would leave a job running forever
+      // that was asked to stop, so the job goes with it.
+      const id = text(record(job).id);
+      try {
+        return routine(
+          p,
+          await rest(p.instance, "PUT", path({ ...p, id }), { updates: { repeat: p.repeat } }, o),
+        );
+      } catch (e) {
+        const removed = await rest(p.instance, "DELETE", path({ ...p, id }), undefined, o).then(
+          () => true,
+          () => false,
+        );
+        if (removed || !(e instanceof HermeticError)) throw e;
+        throw new HermeticError(e.code, `${e.message}. “${p.name}” was created without its run cap.`);
+      }
+    }),
     update: operation(S.RoutineUpdateInput, async (p, o) => {
-      const { instance, bot, id, paused, deliver, ...updates } = p;
+      const { instance, bot, id, paused, deliver, continuity, ...updates } = p;
       let r: unknown;
-      if (Object.keys(updates).length || deliver !== undefined)
+      // `context_from` may also chain other jobs; continuity adds or drops only "self".
+      const context =
+        continuity === undefined
+          ? undefined
+          : contextFrom(record(await rest(instance, "GET", path(p), undefined, o)).context_from)
+              .filter((ref) => ref.toLowerCase() !== "self")
+              .concat(continuity ? ["self"] : []);
+      if (Object.keys(updates).length || deliver !== undefined || context !== undefined)
         r = await rest(
           instance,
           "PUT",
@@ -839,6 +903,7 @@ export function createBotMode(
             updates: {
               ...updates,
               ...(deliver ? { deliver: deliver === "bot" ? "bot-chat" : "local" } : {}),
+              ...(context ? { context_from: context } : {}),
             },
           },
           o,
