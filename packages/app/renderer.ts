@@ -1,8 +1,9 @@
 /**
- * Which webview renderer a build gets: CEF in development, WKWebView in a
- * release.
+ * Which webview renderer a build gets: CEF in development, the system WebKit
+ * (WKWebView on macOS, WebKitGTK on Linux) in a release.
  *
- * A release ships the system WKWebView — it is what the app is designed and
+ * A release ships the system WebKit (WKWebView on macOS, WebKitGTK on Linux) —
+ * it is what the app is designed and
  * signed against, and bundling Chromium would add a few hundred megabytes to a
  * download that has no use for it. Development defaults to CEF for one reason:
  * Chromium speaks the DevTools protocol, so a coding agent (or Playwright, or
@@ -73,17 +74,19 @@ export function cdpPort(env: Record<string, string | undefined>): number {
   return port;
 }
 
+// The two wrappers exist to name the two config keys; they do not differ.
+
 /** The renderer keys for `build.mac`: CEF by default in a dev build. */
 export function macRenderer(env: Record<string, string | undefined>): RendererKeys {
-  return rendererKeys(env, "cef");
+  return rendererKeys(env);
 }
 
 /** The renderer keys for `build.linux`: CEF by default in a dev build. */
 export function linuxRenderer(env: Record<string, string | undefined>): RendererKeys {
-  return rendererKeys(env, "cef");
+  return rendererKeys(env);
 }
 
-function rendererKeys(env: Record<string, string | undefined>, devDefault: Renderer): RendererKeys {
+function rendererKeys(env: Record<string, string | undefined>): RendererKeys {
   const buildEnv = env[BUILD_ENV] ?? "";
   const asked = requested(env);
   if (buildEnv !== "dev") {
@@ -94,7 +97,7 @@ function rendererKeys(env: Record<string, string | undefined>, devDefault: Rende
     }
     return NATIVE;
   }
-  if ((asked ?? devDefault) === "native") return NATIVE;
+  if (asked === "native") return NATIVE;
   return {
     bundleCEF: true,
     defaultRenderer: "cef",
