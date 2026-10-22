@@ -8,7 +8,7 @@
  * The app downloads that file and refuses to install a build it does not
  * verify against the public key it was built with.
  *
- * The private key arrives only as `UPDATE_SIGNING_KEY` (a repository secret)
+ * The private key arrives only as `UPDATE_SIGNING_KEY` (a `release` environment secret)
  * and is never written or printed. Each signature is checked against the
  * compiled-in public key before it is written, so a secret that does not match
  * the key in the source fails the release here instead of shipping updates no

@@ -1,6 +1,6 @@
 /**
  * The update-signing private key lives in exactly two places: the
- * `UPDATE_SIGNING_KEY` repository secret and the maintainer's offline backup.
+ * `UPDATE_SIGNING_KEY` secret of the `release` environment and the maintainer's offline backup.
  * Never in the tree (CONTRIBUTING.md "Update signing").
  *
  * Every Ed25519 private key in PKCS#8 form starts with the same 16 bytes, so

@@ -6,7 +6,7 @@
  * cache key, not a digest), so this is the only thing standing between "can
  * publish a GitHub release asset" and "can replace the app on every install".
  * The release workflow signs each update with the Ed25519 private key held as
- * the `UPDATE_SIGNING_KEY` repository secret (`scripts/sign-update.ts`); the
+ * the `release` environment's `UPDATE_SIGNING_KEY` secret (`scripts/sign-update.ts`); the
  * public half is compiled in below. Nothing about it is OS-specific.
  *
  * What is signed is a short text statement rather than the archive itself:
