@@ -110,6 +110,19 @@ describe("a turn the box reports, started elsewhere", () => {
     expect(screen.getByText("agent is working")).toBeTruthy();
   });
 
+  test("a Stop whose abort fails never says Stopped", async () => {
+    const r = recording();
+    r.h.api.abortTurn = async () => {
+      throw new Error("the box did not answer");
+    };
+    await open(r.h);
+    await deliver(r.h, busy(true));
+    fireEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+    await screen.findByText("the box did not answer");
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText("stopping…")).toBeNull();
+  });
+
   /** A Stop pressed on atlas whose abort never answers, with beta beside it. */
   async function stoppingOnA(betaBusy: boolean) {
     const r = recording();

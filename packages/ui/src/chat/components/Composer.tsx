@@ -115,15 +115,17 @@ export function Composer({
     : "";
   /** A Stop pressed here: `stopping` until the turn ends, `stopped` until the next one starts. */
   const [stop, setStop] = useState<{ convo: string; phase: "stopping" | "stopped" } | null>(null);
+  const abortFailed = chat?.turnError?.code === "ABORT_FAILED";
   const stopped = stop?.convo === convo ? stop.phase : null;
   useEffect(() => {
     setStop((s) => {
       if (s?.convo !== convo) return null;
       if (working) return s.phase === "stopped" ? null : s;
-      if (s.phase === "stopping") return { convo, phase: "stopped" };
+      // "Stopped" only once the stop landed; a failed abort says so in the thread instead.
+      if (s.phase === "stopping") return abortFailed ? null : { convo, phase: "stopped" };
       return s;
     });
-  }, [working, convo]);
+  }, [working, convo, abortFailed]);
   const fleetId = useFleetIfAvailable()?.meta?.config?.fleet_id ?? "";
   const text = chat ? chat.draft : localText;
   const setText = chat ? chat.setDraft : setLocalText;
