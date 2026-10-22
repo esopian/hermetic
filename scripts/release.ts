@@ -70,9 +70,18 @@ export function setVersion(pkgText: string, version: string): string {
   return pkgText.replace(pattern, `$1${version}$2`);
 }
 
+/**
+ * The update's signature (`scripts/sign-update.ts`). Named for the build's
+ * Electrobun hash, which is only known once it is built, so it is matched by
+ * shape; without it no installed app will install this release.
+ */
+const SIGNATURE_ASSET = /^stable-macos-arm64-[a-z0-9]+\.sig$/;
+
 /** The expected assets a published release is missing. */
 export function missingAssets(names: readonly string[]): string[] {
-  return EXPECTED_ASSETS.filter((a) => !names.includes(a));
+  const missing: string[] = EXPECTED_ASSETS.filter((a) => !names.includes(a));
+  if (!names.some((n) => SIGNATURE_ASSET.test(n))) missing.push("stable-macos-arm64-<hash>.sig");
+  return missing;
 }
 
 type Options = { spec: string; skipCheck: boolean; yes: boolean; watch: boolean; dryRun: boolean };

@@ -50,6 +50,10 @@ export type RequestName =
   | "app.notify"
   // And opens this one: a link in the operator's browser (`lib/open-external.ts`).
   | "app.openExternal"
+  // What this build is, the update check and the verified install (Settings › About & updates, `api/app.ts`).
+  | "app.info"
+  | "app.checkForUpdate"
+  | "app.installUpdate"
   // The in-app terminal (issue #18, `api/terminal.ts`): the app's own session
   // table, so machinery rather than core methods. `terminal.attach` is a
   // stream (`StreamName`), not a request.

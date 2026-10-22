@@ -23,6 +23,14 @@ jobs:
     name: publish
     runs-on: macos-14
     timeout-minutes: 30
+    # The `release` environment holds every secret this job reads: the
+    # Developer ID certificate and notary key, and UPDATE_SIGNING_KEY, the key
+    # every installed app trusts to replace itself. GitHub hands an
+    # environment's secrets only to a job that names it, only on a `v*` tag
+    # (its deployment policy), and only after a required reviewer approves the
+    # run — so no other workflow, branch or pull request can read them. The
+    # repository holds no secrets of its own.
+    environment: release
     permissions:
       # contents: write — publishes the GitHub Release and uploads packages/app/artifacts/*
       contents: write
@@ -150,6 +158,18 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${mnt}/Hermetic.app"
           xcrun stapler validate "${mnt}/Hermetic.app"
           spctl --assess --type execute --verbose=2 "${mnt}/Hermetic.app"
+
+      # The app installs an update only if this signature verifies against the
+      # public key compiled into it (packages/core/src/release/
+      # app-update-signature.ts). The script refuses to run without the secret,
+      # and refuses a secret that does not match that key, so a release never
+      # ships updates no installed app can verify. The `.sig` files land in
+      # packages/app/artifacts/ and are published with everything else.
+      - name: Sign the update artifacts
+        env:
+          # An environment secret (`release`, above), not a repository one.
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: bun scripts/sign-update.ts packages/app/artifacts
 
       - name: Publish the GitHub Release
         env:

@@ -61,6 +61,9 @@ export const SETTINGS_SECTIONS = [
   // the group, and shown in every build — nothing it gates depends on a dev
   // renderer.
   { id: "developer", label: "Developer", group: "laptop" },
+  // The installed build's version and the update check. Last: it is about the
+  // app itself, not anything it manages.
+  { id: "about", label: "About & updates", group: "laptop" },
   { id: "account", label: "Account & fleets", group: "account" },
   { id: "danger", label: "Danger zone", group: "danger", tone: "danger" },
 ] as const satisfies ReadonlyArray<{

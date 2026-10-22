@@ -26,12 +26,23 @@ import type { StreamRegistry } from "./streams.ts";
  * `createNotifier`, `createUpdater`, `installCli` and `Utils`.
  */
 export interface NativeDeps {
-  /** What this build is: version, update channel, and where its state and log live. */
-  info(): { version: string; channel: string; home: string; logPath: string | null };
+  /**
+   * What this build is: version, update channel, where its state and log live,
+   * and the release page a newer build is downloaded from (`main/updates.ts`).
+   */
+  info(): {
+    version: string;
+    channel: string;
+    home: string;
+    logPath: string | null;
+    releasesUrl: string;
+  };
   /** Hands a URL to the operator's browser (`Utils.openExternal`). */
   openExternal(url: string): void;
   /** One update check, now — the menu's "Check for Updates…" (`main/updates.ts`). */
   checkForUpdate(): Promise<void>;
+  /** Installs the downloaded, verified update and restarts; `started` is false when there is none. */
+  installUpdate(): Promise<{ started: boolean }>;
   /** Writes the `hermetic` shim onto `PATH`, elevating once if it must (`main/cli-install.ts`). */
   installCli(): Promise<{ path: string; elevated: boolean }>;
   /** Raises a desktop banner (`main/notify.ts`); the page decides whether to. */
