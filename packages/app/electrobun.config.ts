@@ -17,7 +17,7 @@
  */
 import type { ElectrobunConfig } from "electrobun/bun";
 import pkg from "../../package.json" with { type: "json" };
-import { macRenderer } from "./renderer.ts";
+import { linuxRenderer, macRenderer } from "./renderer.ts";
 import { viewBuild } from "./view-build.ts";
 
 /** Set by `scripts/dev-hmr.ts`, which also starts the server it names. */
@@ -68,9 +68,9 @@ export default {
     // `assets/icon.iconset` is rendered from `assets/icon-1024.png` with `sips`
     // (16 to 512, @1x and @2x); regenerate the set from that file, never edit
     // the sizes by hand.
-    // The renderer keys (`bundleCEF`, `defaultRenderer`, `chromiumFlags`) come
-    // from `renderer.ts`: CEF with a loopback DevTools port in a dev build,
-    // WKWebView and no CEF in canary and stable.
+    // On macOS, the renderer keys (`bundleCEF`, `defaultRenderer`,
+    // `chromiumFlags`) come from `renderer.ts`: CEF with a loopback DevTools
+    // port in a dev build, WKWebView and no CEF in canary and stable.
     // `codesign` and `notarize` follow the environment (see their definitions
     // above), so a release needs no secret in the repository.
     mac: {
@@ -80,6 +80,9 @@ export default {
       icons: "assets/icon.iconset",
       ...macRenderer(process.env),
     },
+    // The same keys for Linux: CEF and its DevTools port in a dev build, and
+    // WebKitGTK when `HERMETIC_RENDERER=native` opts out.
+    linux: linuxRenderer(process.env),
   },
   // Build hooks are top-level, not `build.hooks`: a `build.hooks` key is
   // silently ignored by the builder, which is why the sidecars never staged.
