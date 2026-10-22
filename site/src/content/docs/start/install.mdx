@@ -17,13 +17,8 @@ hermetic ships as a macOS desktop app. The `hermetic` CLI is bundled inside it. 
 
 1. Download `macos-arm64-Hermetic.dmg` from the [latest release](https://github.com/esopian/hermetic/releases/latest).
 2. Open it and drag `Hermetic.app` into `/Applications`.
-3. Clear the quarantine flag once:
 
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Hermetic.app
-   ```
-
-The build is unsigned. It has only an ad-hoc signature, so macOS quarantines it on first open and offers only "Move to Trash" until the flag is cleared. {/* design.md §3.6; README.md "Install" */}
+The app is signed with a Developer ID and notarised by Apple, so it opens like any other Mac app. v0.3.0 and earlier were not: if one of those reports that it is damaged, clear the quarantine flag once with `xattr -dr com.apple.quarantine /Applications/Hermetic.app`. {/* design.md §3.6; README.md "Install" */}
 
 ## Install the CLI
 

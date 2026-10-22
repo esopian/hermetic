@@ -9,13 +9,7 @@ hermetic manages a fleet of Hermes agents on AWS. Every agent is sealed — no p
 hermetic is a macOS desktop app. Download `macos-arm64-Hermetic.dmg` from the [latest release](https://github.com/esopian/hermetic/releases/latest), open it, and drag `Hermetic.app` into `/Applications`.
 
 - **macOS on Apple silicon (arm64) only.** There is no Intel or Linux build.
-- **The build is unsigned.** There is no Apple Developer ID yet, so the app carries only an ad-hoc signature and macOS quarantines it on first open. Clear the quarantine flag once, after moving it into `/Applications`:
-
-  ```
-  xattr -dr com.apple.quarantine /Applications/Hermetic.app
-  ```
-
-  Without that, macOS refuses to launch it and offers only "Move to Trash".
+- **Signed and notarised.** Releases from v0.3.1 on are signed with a Developer ID and notarised by Apple, so the app opens normally. v0.3.0 and earlier were ad-hoc signed only: macOS calls them "damaged" and offers only "Move to Trash" until the quarantine flag is cleared with `xattr -dr com.apple.quarantine /Applications/Hermetic.app`.
 - **It updates itself** from the same release page — the app checks on launch and every six hours, downloads a patch when the gap is one release and the whole archive otherwise, and applies it on the next restart. You never download a second DMG. The check is unauthenticated, so it only works once `esopian/hermetic` is a public repository; while the repository is private, update yourself by downloading the newer DMG.
 - **The `hermetic` CLI comes from the app.** There is no separate download: the app bundles the binary and its menu's **Install Command Line Tool…** item writes a shim at `/usr/local/bin/hermetic` pointing at it. Run it once and `hermetic` is on your PATH, kept current by the app's own updates.
 
