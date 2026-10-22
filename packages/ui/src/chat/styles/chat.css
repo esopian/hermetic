@@ -2839,12 +2839,10 @@ body:has(.app > .ch-body) {
   grid-column: 1;
   grid-row: 1;
   /* A grid item will not shrink below its content otherwise, and a long
-     queued line would push the send button out of the composer. */
+     queued line would widen the composer past its column. */
   min-width: 0;
 }
-.ch-input-wrap:has(> .ch-queue) > .ch-input,
-.ch-input-wrap:has(> .ch-queue) > .ch-input-box,
-.ch-input-wrap:has(> .ch-queue) > .ch-send {
+.ch-input-wrap:has(> .ch-queue) > .ch-input-box {
   grid-row: 2;
 }
 .ch-queue {
