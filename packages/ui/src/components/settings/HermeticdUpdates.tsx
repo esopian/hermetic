@@ -36,11 +36,11 @@ const DESC_OFF =
 /**
  * §6.6's opt-in, off by default (`autoUpgrade` from core): the app's own fleet
  * update. The row's line is clipped to one line, so the part that matters —
- * On restarts Hermes on some boxes unasked — leads, and the whole rule rides
+ * turning it on restarts Hermes on some boxes unasked — leads, and the whole rule rides
  * in the row's tooltip.
  */
 const UPGRADE_ON = "Restarts Hermes on agents whose config changed.";
-const UPGRADE_OFF = "On restarts Hermes where an agent's config changed.";
+const UPGRADE_OFF = "You run fleet updates. When on, it restarts Hermes where config changed.";
 const UPGRADE_FULL =
   "On: when this app is a newer build than the one that last updated the fleet, it runs the fleet update itself — hermeticd and every agent's config. Hermes restarts on agents whose config changed. It never runs a foundation update and never moves the fleet to an older build. Off: fleet updates start only when you run them.";
 
