@@ -13,9 +13,10 @@
  *
  * - a **watch match** opens by default, with the pattern marked in the lines
  *   that matched, because being told is what the watch was for;
- * - a **DM reply** is another bot talking, so it is drawn as that bot — its
- *   face, its name, its reply as markdown — with the delivery details as a
- *   header, the tool warnings split off below, and a link to its own thread;
+ * - a **DM reply** is one "Message from <bot>" line, as Hermes Desktop draws
+ *   it: the reply itself lives in the exchange (`BotExchange.tsx`) the line
+ *   opens, or, with no `message_agent` call to open it from, in the replier's
+ *   own thread the line links to;
  * - an **async delegation** is a count of subagents and one folded line each.
  *
  * Nothing on a row is estimated. A duration is shown only when upstream stated
@@ -30,6 +31,7 @@ import { fmtClock } from "../../../logic/format.ts";
 import { chatHash } from "../../chat-routing.ts";
 import { botLabel } from "../../chat-presentation.ts";
 import { resolveDmBot } from "../../bot-dm.ts";
+import type { MessageAgentCall } from "../../bot-dm.ts";
 import { useBotDm } from "../BotDm.tsx";
 import {
   FAILURE_TAIL_LINES,
@@ -50,9 +52,8 @@ import {
   spanMs,
 } from "../../process-events.ts";
 import type { EventEntry, NoticeLine, ProcessEventView } from "../../process-events.ts";
-import { Face } from "../Face.tsx";
+import type { Face } from "../Face.tsx";
 import { RedactedText } from "../RedactedText.tsx";
-import { TextBlock } from "./Text.tsx";
 
 /* ── what an event row needs to know about the thread around it ──────────── */
 
@@ -64,7 +65,7 @@ export interface ProcessEventContextValue {
   botTitle?: string | null;
   status: Parameters<typeof Face>[0]["status"];
   /** Background starts in the loaded transcript, by process id (`processStarts`). */
-  starts: ReadonlyMap<string, { at: string }>;
+  starts: ReadonlyMap<string, { at: string; call?: MessageAgentCall }>;
   /** The drawn event row each process id lands on (`eventAnchors`). */
   anchors: ReadonlyMap<string, string>;
 }
@@ -475,80 +476,71 @@ function Notice({ event, at }: { event: ProcessEventView; at: string | null }) {
   );
 }
 
-/** A reply from the bot a DM went to, drawn as that bot talking. */
+/** The `message_agent` call a DM reply answers, when its start is in the loaded transcript. */
+function dmReplyCall(event: ProcessEventView, starts: ProcessEventContextValue["starts"]) {
+  return event.process_id ? starts.get(event.process_id)?.call : undefined;
+}
+
+/** A DM reply with no body and no exchange to open says nothing: desktop draws no notice either. */
+function silentDmReply(event: ProcessEventView, starts: ProcessEventContextValue["starts"]) {
+  return !!event.dm && !event.dm.reply && !dmReplyCall(event, starts);
+}
+
+/**
+ * A reply from the bot a DM went to: who and when. The body stays behind the
+ * exchange this opens; with no exchange, behind a "show message" fold as on desktop.
+ */
 function DmReply({ event, at }: { event: ProcessEventView; at: string | null }) {
   const context = useProcessEvents();
   const dm = event.dm!;
-  const span = useSpan(event, at);
-  const { teammates } = useBotDm();
+  const { teammates, open } = useBotDm();
   const to = dm.to_profile;
   // Named by its roster title, as everywhere else a bot speaks; the profile id
   // when the replier is not on this instance's roster.
   const replier = botLabel(context.instance, to, resolveDmBot([to], teammates)?.title);
-  const delivery = [
-    event.process_id ? `delivered by ${event.process_id}` : null,
-    event.exit_code != null ? `exit ${event.exit_code}` : null,
-    span,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const start = event.process_id ? context.starts.get(event.process_id) : undefined;
+  const call = dmReplyCall(event, context.starts);
+  if (silentDmReply(event, context.starts)) return null;
+  const label = <RedactedText text={`Message from ${replier}`} />;
   const warnings = dm.warnings.length;
   return (
-    <div className="ch-ev-dm">
-      <div className="ch-ev-dm-head">
-        <span className="k">↩ DM reply</span>
-        <span>{`${replier} → ${botLabel(context.instance, context.bot, context.botTitle)}`}</span>
-        {delivery ? <span className="dim">{`· ${delivery}`}</span> : null}
+    <>
+      <div className="ch-dm-mark from">
+        {open && call ? (
+          <button type="button" onClick={() => open({ side: "sender", call, at: start!.at })}>
+            {label} <span aria-hidden="true">⇄</span>
+          </button>
+        ) : context.instance ? (
+          <a
+            className="ch-dm-mark-static"
+            href={chatHash({ instance: context.instance, bot: to, session: null })}
+          >
+            {label} <span aria-hidden="true">→</span>
+          </a>
+        ) : (
+          <span className="ch-dm-mark-static">{label}</span>
+        )}
         <StartLink event={event} label="sent ↑" />
         <Stamp at={at} />
       </div>
-      <div className="ch-ev-dm-body">
-        {context.fleetId ? (
-          <Face
-            fleetId={context.fleetId}
-            instance={context.instance}
-            bot={to}
-            size={30}
-            status={context.status}
-            square={false}
-          />
-        ) : (
-          <span />
-        )}
-        <div>
-          <div className="ch-ev-dm-who">
-            <span className="ch-msg-who">
-              <RedactedText text={replier} />
-            </span>
-            {context.instance ? (
-              <span className="ch-msg-meta">{`${context.instance}/${to}`}</span>
-            ) : null}
+      {dm.reply && !(open && call) ? (
+        // No exchange holds the body, so it folds here; plain text, as desktop shows it.
+        <details className="ch-ev-more ch-dm-reply">
+          <summary>show message</summary>
+          <div className="ch-dm-reply-body">
+            <RedactedText text={dm.reply} />
           </div>
-          <div className="ch-msg-body ch-ev-dm-reply">
-            <TextBlock block={{ kind: "text", markdown: dm.reply }} />
-          </div>
-        </div>
-      </div>
-      <div className="ch-ev-dm-foot">
-        {warnings > 0 ? (
-          <details className="ch-ev-more">
-            <summary className="warnline">{`⚠ ${warnings} tool warning${warnings === 1 ? "" : "s"}`}</summary>
-            <pre className="ch-ev-tail warn">
-              <RedactedText text={dm.warnings.join("\n")} />
-            </pre>
-          </details>
-        ) : null}
-        <Raw raw={event.raw} />
-        {context.instance ? (
-          <a
-            className="ch-ev-jump"
-            href={chatHash({ instance: context.instance, bot: to, session: null })}
-          >
-            {`open ${replier}'s thread →`}
-          </a>
-        ) : null}
-      </div>
-    </div>
+        </details>
+      ) : null}
+      {warnings > 0 ? (
+        <details className="ch-ev-more">
+          <summary className="warnline">{`⚠ ${warnings} tool warning${warnings === 1 ? "" : "s"}`}</summary>
+          <pre className="ch-ev-tail warn">
+            <RedactedText text={dm.warnings.join("\n")} />
+          </pre>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -591,8 +583,9 @@ export function ProcessEventRow({
   entry: Pick<EventEntry, "event"> & { row: { message: { id: string; at: string } } };
   sub?: boolean;
 }) {
-  const { anchors } = useProcessEvents();
+  const { anchors, starts } = useProcessEvents();
   const { event } = entry;
+  if (silentDmReply(event, starts)) return null;
   const message = entry.row.message;
   const pid = event.process_id;
   const anchor = pid && anchors.get(pid) === message.id ? processDomId("event", pid) : undefined;

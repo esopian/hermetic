@@ -172,10 +172,12 @@ operate the window an operator would see. `app:build:canary` and `app:build:stab
 WKWebView and bundle no CEF. `packages/app/renderer.ts` chooses per build, and the rules that keep
 the two renderers interchangeable are in `AGENTS.md` ("Renderers"). The first CEF dev build
 downloads Electrobun's CEF runtime into `~/.hutch` (about 300 MB, once per Electrobun version).
+On Linux a dev build defaults to CEF too, so the first Linux dev build pays the same roughly
+300 MB download; `HERMETIC_RENDERER=native` there builds against WebKitGTK instead.
 
 | Variable | Effect (dev builds only) |
 | -------- | ------------------------ |
-| `HERMETIC_RENDERER=native` | Build the dev app on WKWebView with no CEF and no DevTools port: the renderer that ships |
+| `HERMETIC_RENDERER=native` | Build the dev app on the system WebKit (WKWebView on macOS, WebKitGTK on Linux) with no CEF and no DevTools port: the renderer that ships |
 | `HERMETIC_CDP_PORT=<port>` | Move the DevTools port; `app:cdp` reads the same variable |
 
 `bun run app:cdp` (`scripts/app-cdp.ts`) drives the app over plain CDP, with no dependencies:

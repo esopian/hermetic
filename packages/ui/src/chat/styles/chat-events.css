@@ -107,7 +107,7 @@
   color: var(--fg);
 }
 .ch-ev-line .t,
-.ch-ev-dm-head .t {
+.ch-dm-mark.from .t {
   margin-left: auto;
   font-size: 10.5px;
   color: var(--fg3);
@@ -151,6 +151,9 @@
 }
 .ch-ev-more > summary:hover {
   color: var(--fg);
+}
+.ch-ev-more > summary.warnline {
+  color: var(--warn);
 }
 .ch-ev-last {
   color: var(--fg2);
@@ -246,65 +249,6 @@
 }
 .ch-ev.sub > .ch-ev-gut::before {
   display: none;
-}
-
-/* ── a DM reply: another bot talking ─────────────────────────────────────── */
-
-.ch-ev-dm {
-  margin: 4px 0 2px;
-  border: 1px solid var(--line2);
-  background: var(--bg);
-}
-.ch-ev-dm-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg2);
-  font: 10.5px var(--mono);
-  color: var(--fg2);
-}
-.ch-ev-dm-head .k {
-  font: 700 9.5px var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--acc);
-}
-.ch-ev-dm-body {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 12px;
-  padding: 12px 14px;
-}
-.ch-ev-dm-who {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-}
-.ch-ev-dm-body .ch-msg-body.ch-ev-dm-reply {
-  margin-top: 3px;
-}
-.ch-ev-dm-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 16px;
-  padding: 6px 12px;
-  border-top: 1px solid var(--line);
-  font: 10.5px var(--mono);
-  color: var(--fg3);
-}
-.ch-ev-dm-foot .ch-ev-more {
-  margin-top: 0;
-}
-.ch-ev-dm-foot .ch-ev-more[open] {
-  flex-basis: 100%;
-}
-.ch-ev-dm-foot .warnline {
-  color: var(--warn);
 }
 
 /* ── the bot turn an event woke ──────────────────────────────────────────── */
