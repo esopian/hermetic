@@ -310,7 +310,9 @@ function RoutineRow({
   children: ReactNode;
 }) {
   const next = !job.paused && job.next_run_at ? Date.parse(job.next_run_at) : null;
-  const tone = job.paused ? "paused" : runTone(job.last_status);
+  // A job that never ran has only a scheduler `state` ("scheduled") where a
+  // run result would be; that is not a success.
+  const tone = job.paused ? "paused" : job.last_run_at ? runTone(job.last_status) : "idle";
   return (
     <>
       <button

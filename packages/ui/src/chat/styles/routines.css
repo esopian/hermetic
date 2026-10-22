@@ -285,11 +285,12 @@ textarea.rt-input {
 [data-theme="light"] .rt-input[type="date"] {
   color-scheme: light;
 }
-select.rt-input {
+.bm-field select.rt-input {
   width: auto;
   font: 13px var(--mono);
 }
-.rt-num {
+/* Beats `.bm-field .wiz-input`'s full width. */
+.bm-field .rt-num {
   width: 96px;
 }
 .rt-row-in {

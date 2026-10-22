@@ -54,34 +54,35 @@ afterEach(() => {
 });
 afterEach(resetBotCapabilityMemo);
 
-function serve(): FakeServer {
-  server = fakeServer({
-    "bots.capabilities": {
-      instance: INSTANCE,
-      profiles: true,
-      routines: true,
-      hosted_rooms: true,
-      room_driver: true,
-      room_methods: [],
-      protocol_version: 2,
-      room_features: [],
-      membership_edit: false,
-      cross_instance_rooms: false,
-      cross_instance_relay: false,
-      reason: null,
-      detail: { profiles: null, routines: null, hosted_rooms: null, room_driver: null },
-      status: {
-        profiles: "supported",
-        routines: "supported",
-        hosted_rooms: "supported",
-        room_driver: "supported",
-      },
+const ROUTES = {
+  "bots.capabilities": {
+    instance: INSTANCE,
+    profiles: true,
+    routines: true,
+    hosted_rooms: true,
+    room_driver: true,
+    room_methods: [],
+    protocol_version: 2,
+    room_features: [],
+    membership_edit: false,
+    cross_instance_rooms: false,
+    cross_instance_relay: false,
+    reason: null,
+    detail: { profiles: null, routines: null, hosted_rooms: null, room_driver: null },
+    status: {
+      profiles: "supported",
+      routines: "supported",
+      hosted_rooms: "supported",
+      room_driver: "supported",
     },
-    "routines.list": { jobs: [JOB], timezone: "America/Los_Angeles" },
-    "routines.history": { runs: RUNS },
-    "routines.create": JOB,
-    "routines.update": JOB,
-  });
+  },
+  "routines.list": { jobs: [JOB], timezone: "America/Los_Angeles" },
+  "routines.history": { runs: RUNS },
+  "routines.create": JOB,
+  "routines.update": JOB,
+};
+function serve(): FakeServer {
+  server = fakeServer(ROUTES);
   return server;
 }
 const params = (name: Parameters<FakeServer["to"]>[0]) =>
@@ -105,6 +106,20 @@ describe("the compact row", () => {
     for (const name of ["▶ Run now", "Pause", "Edit", "History", "Remove Morning digest"])
       expect(screen.getByRole("button", { name })).toBeTruthy();
   });
+});
+
+test("a job that has never run is not drawn as a success", async () => {
+  server = fakeServer({
+    ...ROUTES,
+    "routines.list": {
+      jobs: [{ ...JOB, last_run_at: null, last_status: "scheduled" }],
+      timezone: null,
+    },
+  });
+  render(<ScheduledJobs instance={INSTANCE} bot={BOT} title="Atlas" fleetId="fxtr0001" />);
+  const row = await screen.findByRole("button", { name: /Morning digest/, expanded: false });
+  expect(row.querySelector(".rt-sq")?.className).toBe("rt-sq idle");
+  expect(screen.getByText(/instance’s timezone \(UTC\)/)).toBeTruthy();
 });
 
 describe("the edit drawer", () => {
