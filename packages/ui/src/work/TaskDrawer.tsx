@@ -20,7 +20,7 @@ import { Drawer } from "../components/Drawer.tsx";
 import { Popover } from "../components/Popover.tsx";
 import { fmtDuration } from "../logic/format.ts";
 import { CreateTaskDrawer } from "./CreateTaskDrawer.tsx";
-import { Pill, Track, ago, cliEcho } from "./parts.tsx";
+import { Pill, ScratchGone, Track, ago, cliEcho } from "./parts.tsx";
 import { useTaskDetail, useWork } from "./work-state.tsx";
 import type { TaskRef } from "./work-state.tsx";
 
@@ -586,7 +586,7 @@ function StateCallout({
       if (t.workspace_kind === "scratch")
         return (
           <div className="callout warn">
-            <b>The output is gone.</b> This ran in a scratch workspace, which is deleted on completion.
+            <ScratchGone />
           </div>
         );
       return (

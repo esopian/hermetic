@@ -111,7 +111,6 @@ export function fixtureKanbanTurn(
         "I'll put that on the board so a worker picks it up.",
         call("running", null),
         call("ok", { task_id: id, status: "triage", subscribed: true }),
-        "Filed — I'll report back here when it is done.",
       ]),
     ];
   };

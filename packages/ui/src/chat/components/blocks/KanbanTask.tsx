@@ -22,7 +22,7 @@ import {
 import { fmtDuration } from "../../../logic/format.ts";
 import { isVisible } from "../../../lib/visibility.ts";
 import { useOpenKanbanTask } from "../../../work/open-task.ts";
-import { ago } from "../../../work/parts.tsx";
+import { ScratchGone, ago } from "../../../work/parts.tsx";
 import { useProcessEvents } from "./ProcessEvent.tsx";
 
 /** How often a card still moving is re-read: Hermes' own notice poll is 5 s. */
@@ -125,7 +125,16 @@ function Live({
       return <Row sq="acc pulse">A reviewer agent is checking the work.</Row>;
     case "done":
       // shortcut: the task row names no output files, so none are listed; add them if the detail ever carries them.
-      return <Row sq="ok">{t.latest_summary ?? "Done."}</Row>;
+      return (
+        <>
+          <Row sq="ok">{t.latest_summary ?? "Done."}</Row>
+          {t.workspace_kind === "scratch" ? (
+            <Row sq="warn">
+              <ScratchGone />
+            </Row>
+          ) : null}
+        </>
+      );
     case "archived":
       return <Row sq="">Archived.</Row>;
     default:

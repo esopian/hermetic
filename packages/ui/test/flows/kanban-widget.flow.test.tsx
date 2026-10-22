@@ -48,6 +48,14 @@ test("a kanban_create call is a live task card that reaches done, then the notic
   expect(within(card).getByText(id)).toBeTruthy();
   expect(within(card).getByText(TITLE)).toBeTruthy();
   await waitFor(() => expect(within(card).getByText("scratch")).toBeTruthy(), { timeout: 4_000 });
+  // One line of text, then the card, and nothing said after it.
+  const body = card.closest(".ch-msg-body");
+  expect(body?.textContent?.startsWith("I'll put that on the board so a worker picks it up.")).toBe(
+    true,
+  );
+  expect(body?.lastElementChild?.contains(card)).toBe(true);
+  // Scratch is deleted only on completion: no warning while the card is still moving.
+  expect(within(card).queryByText("The output is gone.")).toBeNull();
 
   // The board walks the card to done at +8 s; the widget's 5 s poll sees it by +10 s.
   await waitFor(() => expect(card.querySelector(".ch-kt-st")?.textContent).toBe("done"), {
@@ -57,6 +65,7 @@ test("a kanban_create call is a live task card that reaches done, then the notic
   expect(card.classList.contains("ok")).toBe(true);
   expect(within(card).getByText(/Created a 3-line haiku about kanban boards/)).toBeTruthy();
   expect(within(card).getByText("1 run")).toBeTruthy();
+  expect(within(card).getByText("The output is gone.")).toBeTruthy();
 
   // Hermes' notice is an event row with Open task, never the operator's message.
   const openTask = await screen.findByRole("button", { name: "Open task" }, { timeout: 4_000 });

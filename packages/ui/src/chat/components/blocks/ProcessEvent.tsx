@@ -433,18 +433,21 @@ function KanbanNotice({ event, at }: { event: ProcessEventView; at: string | nul
   return (
     <>
       <div className="ch-ev-line">
-        <span className="k">kanban</span>
         <span>{`${Array.from(event.raw)[0] ?? ""} Kanban ${taskId ?? ""}`.trim()}</span>
         {n?.assignee ? <span className="dim">{`@${n.assignee}`}</span> : null}
         {n?.board ? <span className="dim">{`[${n.board}]`}</span> : null}
         <Stamp at={at} />
       </div>
-      <div className={`ch-ev-last${tone === "bad" ? " bad" : ""}`}>
-        <RedactedText text={n ? kanbanNoticeWhat(n) : firstLine(event.raw)} />
+      <div className="ch-ev-line">
+        <span className={tone === "bad" ? "st bad" : undefined}>
+          <RedactedText text={n ? kanbanNoticeWhat(n) : firstLine(event.raw)} />
+        </span>
       </div>
       {n?.body ? (
-        <div className="ch-ev-last dim">
-          <RedactedText text={n.body} />
+        <div className="ch-ev-line">
+          <span>
+            <RedactedText text={n.body} />
+          </span>
         </div>
       ) : null}
       {taskId && instance ? (

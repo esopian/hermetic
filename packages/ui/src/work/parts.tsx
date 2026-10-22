@@ -57,6 +57,15 @@ export function Who({ name }: { name: string | null }) {
   );
 }
 
+/** A done card that ran in scratch: upstream deletes the workspace on completion, and its files with it. */
+export function ScratchGone() {
+  return (
+    <>
+      <b>The output is gone.</b> This ran in a scratch workspace, which is deleted on completion.
+    </>
+  );
+}
+
 /** The CLI command that does what the drawer just did. */
 export function cliEcho(verb: string, input: Record<string, unknown>): string {
   return `$ hermetic kanban ${verb} --input '${JSON.stringify(input)}'`;
