@@ -17,6 +17,7 @@ import type { FoundationMigration } from "../foundation-migrations.ts";
 import { FOUNDATION_VERSION } from "../../version.ts";
 import { foundationTemplateSha256 } from "../../aws/cfn-template.ts";
 import type { CoreContext } from "../../context.ts";
+import type { ConfigUpdateDeps } from "../config-update.ts";
 
 /**
  * The statuses an agent must not be in for a foundation update to start. Each
@@ -45,7 +46,8 @@ export const PHASE = {
   stack: [0.3, 0.62],
   artifacts: [0.62, 0.76],
   migrate: [0.76, 0.82],
-  rollout: [0.82, 0.99],
+  rollout: [0.82, 0.9],
+  config: [0.9, 0.99],
 } as const;
 
 /**
@@ -95,6 +97,12 @@ export interface FoundationDeps {
    */
   rolloutWaitMs?: number;
   rolloutPollMs?: number;
+  /**
+   * The config phase's deps (`fleet/config-update.ts`): §8.3's staged-change
+   * step and the converge timings. `hermetic.ts` always passes it; a test that
+   * builds `createFoundation` by hand without it gets no config phase.
+   */
+  config?: Omit<ConfigUpdateDeps, "ctx">;
   changeSetPollMs?: number;
   changeSetTimeoutMs?: number;
   /** How often the stack wait says "still updating"; tests shorten it. */

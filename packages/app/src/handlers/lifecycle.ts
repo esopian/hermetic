@@ -25,7 +25,13 @@ import { parseInput } from "../validation.ts";
 import type { HandlerContext } from "./ctx.ts";
 import type { Handler } from "./dispatch.ts";
 import { requireInitAllowed } from "./init.ts";
-import { TEARDOWN_PLANNING, afterTeardown, requireWritable, unconfirmed } from "./shared.ts";
+import {
+  TEARDOWN_PLANNING,
+  afterTeardown,
+  holdFoundationUpdate,
+  requireWritable,
+  unconfirmed,
+} from "./shared.ts";
 
 export const initSchema = declareRpc("init", InitInput);
 export const artifactsPushSchema = declareRpc("artifacts.push", ArtifactsPushApiInput);
@@ -185,11 +191,10 @@ export async function foundationUpdate(ctx: HandlerContext, params: unknown): Pr
   const op = ops.start("foundation.update", null, (signal, opId) =>
     h.foundation.update(input, { signal, opId }),
   );
-  state.beginFoundationUpdate(op.id);
-  // Not awaited: the caller is answered 202 like every other op, and the slot is
-  // released however the op ends — including `error` and `aborted`, since a
-  // failed update leaves the fleet exactly where it was (§6.6).
-  void ops.wait(op.id).finally(() => state.endFoundationUpdate());
+  // Not awaited: the caller is answered 202 like every other op. The slot is
+  // released at the `config` phase, or however the op ends — including `error`
+  // and `aborted`, since a failed update leaves the fleet where it was (§6.6).
+  holdFoundationUpdate(ctx, op.id);
   return accepted(op);
 }
 

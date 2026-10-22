@@ -9,6 +9,7 @@
 import { isInitialized } from "../api/index.ts";
 import type { Meta } from "../api/index.ts";
 import { DEFAULT_TAILNET } from "../logic/format.ts";
+import { foundationBehind } from "../logic/foundation-logic.ts";
 import { FleetMenu, openFleetLabel } from "./FleetMenu.tsx";
 
 /** Grey means "nothing live here": fixture data, or no fleet bound yet. */
@@ -32,13 +33,25 @@ function uninitializedLabel(meta: Meta | null): string {
  * offering "update available" there would point at a button that cannot work.
  * Upgrading hermetic is the fix, and that is what this says.
  */
-export function foundationPill(meta: Meta | null): { label: string; title: string } | null {
+export function foundationPill(
+  meta: Meta | null,
+): { label: string; title: string; neutral?: boolean } | null {
   const foundation = meta?.foundation;
   if (!foundation) return null;
   if (foundation.tool_outdated) {
     return {
       label: "hermetic build outdated",
       title: `the fleet's foundation is v${foundation.fleet.foundation_version} and this build only knows v${foundation.available.foundation_version}; upgrade hermetic`,
+    };
+  }
+  // A config-only update (§6.6 `update`): the fleet itself is current, so the
+  // pill says what is actually on offer and does not wear the warn colour.
+  if (foundation.update_available && !foundationBehind(foundation)) {
+    const n = foundation.agents.filter((a) => a.config === "update").length;
+    return {
+      label: "config update available",
+      title: `${n === 1 ? "1 agent has" : `${String(n)} agents have`} a newer config from this build; Update applies it`,
+      neutral: true,
     };
   }
   if (foundation.update_available) {
@@ -102,7 +115,7 @@ export function EnvStrip({
       {pill ? (
         <button
           type="button"
-          className="pill-warn"
+          className={pill.neutral ? "pill-warn pill-neutral" : "pill-warn"}
           title={pill.title}
           disabled={!onOpenFoundation}
           onClick={() => onOpenFoundation?.()}

@@ -174,6 +174,30 @@ describe("the fleet manifest carries auto_update_hermeticd from the row", () => 
   }
 });
 
+// ─── settings.set auto_upgrade (laptop-only, §6.6) ───────────────────────────
+
+describe("settings.set auto_upgrade", () => {
+  test("off by default, round-trips, and never touches the bucket", async () => {
+    const { backend, hermetic } = fleet();
+    expect((await hermetic.settings.get()).settings.auto_upgrade ?? false).toBe(false);
+    backend.resetMutations();
+
+    const on = await hermetic.settings.set({ auto_upgrade: true });
+
+    expect(on.settings.auto_upgrade).toBe(true);
+    expect(backend.fleetItem!.settings!.auto_upgrade).toBe(true);
+    expect((await hermetic.settings.get()).settings.auto_upgrade).toBe(true);
+    // No box reads it, so the manifest is neither republished nor carries it.
+    expect(backend.mutations.filter((m) => m.startsWith("artifacts."))).toEqual([]);
+    expect(await readFleetManifest(backend.artifacts)).not.toHaveProperty("auto_upgrade");
+    const history = await backend.store.events.query("_fleet");
+    expect(history.some((e) => e.detail?.includes("auto_upgrade on") === true)).toBe(true);
+
+    await hermetic.settings.set({ auto_upgrade: false });
+    expect((await hermetic.settings.get()).settings.auto_upgrade).toBe(false);
+  });
+});
+
 // ─── settings.set republishes it ─────────────────────────────────────────────
 
 describe("settings.set auto_update_hermeticd", () => {

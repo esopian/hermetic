@@ -83,6 +83,28 @@ export function requireWritable(state: AppState): void {
 }
 
 /**
+ * Claim the foundation-update slot for `opId` and give it back once the update
+ * no longer owns the fleet (§6.6): at its first `config`-phase event, or when
+ * it ends however it ends. Core releases `_fleet.lock` before that phase and
+ * then converges agents one by one, each under its own lock, for minutes; an
+ * app still refusing every agent mutation then would be stricter than core
+ * for no reason. The op itself runs on, and stays visible in Runs.
+ */
+export function holdFoundationUpdate({ state, ops }: HandlerContext, opId: string): void {
+  state.beginFoundationUpdate(opId);
+  // A later update may have claimed the slot since; that one is not ours to clear.
+  const release = () => {
+    if (state.foundationUpdateOpId === opId) state.endFoundationUpdate();
+  };
+  void ops.wait(opId).finally(release);
+  void (async () => {
+    for await (const m of ops.follow(opId)) {
+      if (m.type === "event" && m.event.phase === "config") return release();
+    }
+  })();
+}
+
+/**
  * What holds the teardown slot between "the operator confirmed" and "the op
  * exists" (§4.7).
  *

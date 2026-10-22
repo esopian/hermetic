@@ -11,7 +11,7 @@
  * tailnet policy) gets no square at all rather than a guess.
  */
 import type { Meta, SettingsResult } from "../../api/index.ts";
-import { grantNeedsUpdate } from "../../logic/foundation-logic.ts";
+import { foundationBehind, grantNeedsUpdate } from "../../logic/foundation-logic.ts";
 import type { FleetListEntry } from "../../nav/fleet-switch.ts";
 import type { SettingsSection } from "../../nav/settings-nav.ts";
 import type { ProfilesState } from "../../state/state.tsx";
@@ -77,9 +77,11 @@ export function railStatus({
 
   const foundation = meta?.foundation;
   if (foundation) {
+    // `foundationBehind`, not `update_available`: an update that only moves
+    // agents' config (§6.6 `update`) is on offer, not a fault, and stays `ok`.
     const behind =
       foundation.tool_outdated ||
-      foundation.update_available ||
+      foundationBehind(foundation) ||
       grantNeedsUpdate(foundation.stale_bedrock_grants) ||
       foundation.in_progress !== null;
     out.foundation = {
@@ -90,7 +92,9 @@ export function railStatus({
           ? "this build is older than the fleet's foundation"
           : behind
             ? "an update is available"
-            : "up to date",
+            : foundation.update_available
+              ? "a config update is available"
+              : "up to date",
       meta: `v${foundation.fleet.foundation_version}`,
     };
   }

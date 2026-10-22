@@ -112,6 +112,9 @@ export function renderFoundationStatus(status: FoundationStatus): string {
     `ami id            ${status.fleet.ami_id}`,
     `update available  ${status.update_available ? "yes" : "no"}`,
     `tool outdated     ${status.tool_outdated ? "yes" : "no"}`,
+    // §6.6: against the build that last published here. Only a newer one
+    // offers its config as an update; an older one is told so instead.
+    `this build        ${BUILD_ORDER_LINE[status.build_order ?? "unknown"]}`,
     `in progress       ${
       status.in_progress
         ? `locked by ${status.in_progress.owner} until ${status.in_progress.expires}`
@@ -143,6 +146,9 @@ export function renderFoundationStatus(status: FoundationStatus): string {
           // still booting — and calling it "behind" sends an operator looking
           // for a rollout that never failed.
           a.current === null ? "unknown" : a.current ? "current" : "behind",
+          // The config verdict as core names it: `update` is an offer from this
+          // build, `drifted` a box that did not apply what it was sent.
+          a.config ?? "unknown",
           // Pin, and — when the box disagrees — what it actually answers with.
           // They differ between `upgrade --hermes` and the recreate that makes
           // it true, which is the window this column used to render as fact.
@@ -151,12 +157,19 @@ export function renderFoundationStatus(status: FoundationStatus): string {
             : (a.hermes_version ?? "-"),
           a.last_heartbeat ?? "-",
         ]),
-        ["AGENT", "STATUS", "HERMETICD", "STATE", "HERMES", "LAST HEARTBEAT"],
+        ["AGENT", "STATUS", "HERMETICD", "STATE", "CONFIG", "HERMES", "LAST HEARTBEAT"],
       ),
     );
   }
   return lines.join("\n");
 }
+
+const BUILD_ORDER_LINE: Readonly<Record<NonNullable<FoundationStatus["build_order"]>, string>> = {
+  newer: "newer than the build that last published this fleet",
+  same: "the build that last published this fleet",
+  older: "older than the build that last published this fleet; it offers no config update",
+  unknown: "not ordered against the build that last published this fleet",
+};
 
 export function register(program: Command): void {
   const foundation = new Cmd("foundation").description(

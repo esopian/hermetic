@@ -11,6 +11,7 @@
  * `seedFixtureAgents` in `memory.ts` is the only reader.
  */
 import type { Agent, MemoryProvider } from "../../schema/index.ts";
+import { BUILD_VERSIONS } from "../../build-versions.ts";
 
 /** The health snapshot of a box with nothing wrong with it. */
 const HEALTHY = { hermes: true, tailscale: true, disk: true } as const;
@@ -56,6 +57,12 @@ export interface SeedSpec {
    * than only in a test.
    */
   config_drifted?: boolean;
+  /**
+   * Set for the one `main` seed on this build's Hermes pin whose box applied an
+   * older build's render (stood in for by one managed Hermes setting): the
+   * neutral `update` verdict (§6.6), and the work `auto_upgrade` has on `main`.
+   */
+  config_update?: boolean;
   /**
    * Set for the one seed whose hermeticd is too old to report which binary it is
    * running (§6.6). Its row carries no `running_hermeticd_sha256`, so
@@ -229,7 +236,7 @@ export const SEEDS: readonly SeedSpec[] = [
     status: "ready",
     size: "small",
     ip: "100.64.12.31",
-    hermes: "0.21.0",
+    hermes: BUILD_VERSIONS.hermes,
     hermeticd: "0.8.3",
     cpu: 8,
     mem: 27,
@@ -245,6 +252,7 @@ export const SEEDS: readonly SeedSpec[] = [
     provider: "openrouter",
     profile: "openrouter",
     memory: "honcho",
+    config_update: true,
   },
   {
     name: "juniper",

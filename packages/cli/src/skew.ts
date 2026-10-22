@@ -89,6 +89,11 @@ export function skewReport(
   // `pending` never interrupts: the agents it is about are already fixing
   // themselves, so the loudest it gets is a line an operator can ignore.
   if (skew.severity === "pending") return [`◦ ${where} — ${skew.message}`];
+  // `update` is an offer, not a fault: the same quiet line, plus the command
+  // that takes it, on a write as on a read.
+  if (skew.severity === "update") {
+    return [`◦ ${where} — ${skew.message}${skew.fix ? ` (${skew.fix})` : ""}`];
+  }
 
   /**
    * `drifted` is drawn like `degraded`: a line on a read, the block on a write.

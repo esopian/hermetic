@@ -41,6 +41,7 @@ import { dispatch } from "../handlers/dispatch.ts";
 import { createStreamRegistry } from "../handlers/streams.ts";
 import type { HandlerContext } from "../handlers/ctx.ts";
 import { createAppLog, installLogCrashFlush } from "../log.ts";
+import { type AutoUpgrade, createAutoUpgrade } from "../auto-upgrade.ts";
 import { OpRegistry } from "../ops.ts";
 import { resumePendingOps } from "../resume.ts";
 import { openState } from "../state.ts";
@@ -131,6 +132,9 @@ if (process.env[STAGES_ENV] === undefined) process.env[STAGES_ENV] = paths.stage
  */
 let chatWatchdog: ChatWatchdog | null = null;
 
+/** Bound for the same reason: `auto-upgrade.ts` needs the ops registry, built below. */
+let autoUpgrader: AutoUpgrade | null = null;
+
 /**
  * A laptop that has never run `init` still gets a window — that is what the
  * wizard is for. `NOT_INITIALIZED` is an outcome here, not a failure.
@@ -142,6 +146,7 @@ const state = await openState({
   pollerHooks: {
     onReachable: (names) => void chatWatchdog?.reachable(names),
     onRoster: (swarms) => void chatWatchdog?.roster(swarms),
+    onFoundationStatus: (status) => void autoUpgrader?.check(status),
   },
 });
 
@@ -164,6 +169,12 @@ const ops = new OpRegistry({
   log,
   target: () => state.runTarget,
 });
+
+/**
+ * §6.6: the fleet's opt-in automatic update, run here and never from the CLI.
+ * Fed by the poller's advisory tick above and by every `meta.get` below.
+ */
+autoUpgrader = createAutoUpgrade({ state, ops, log });
 
 /**
  * The conversations this process watches, held here rather than by a window so
@@ -413,6 +424,7 @@ const windows = createWindows({
       opts: { fixture, ops, chatOwner, log },
       streams: createStreamRegistry(),
       terminals,
+      autoUpgrade: autoUpgrader,
       /**
        * What makes this head the desktop one: the same five capabilities the
        * HTTP head has none of, so `handlers/app.ts` answers instead of

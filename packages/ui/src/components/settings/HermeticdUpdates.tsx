@@ -11,9 +11,13 @@
  *
  * The value shown is `autoUpdateHermeticd(settings)` from core: absent means
  * on, and that default is core's to state, not this file's.
+ *
+ * Beside it, the same kind of row for §6.6's `auto_upgrade` (absent means off,
+ * `autoUpgrade`): whether the desktop app runs the fleet update itself when it
+ * is a newer build.
  */
 import { useState } from "react";
-import { autoUpdateHermeticd } from "@hermetic/core/shared";
+import { autoUpdateHermeticd, autoUpgrade } from "@hermetic/core/shared";
 import { setSettings } from "../../api/index.ts";
 import type { SettingsResult } from "../../api/index.ts";
 import { isConflict, toSaveError } from "../../logic/settings-logic.ts";
@@ -29,6 +33,19 @@ const DESC_ON = "New releases reach running agents within minutes.";
 const DESC_OFF =
   "Each agent takes a new release at its nightly update (03:xx UTC), or when run with --now.";
 
+/**
+ * §6.6's opt-in, off by default (`autoUpgrade` from core): the app's own fleet
+ * update. The row's line is clipped to one line, so the part that matters —
+ * On restarts Hermes on some boxes unasked — leads, and the whole rule rides
+ * in the row's tooltip.
+ */
+const UPGRADE_ON = "Restarts Hermes on agents whose config changed.";
+const UPGRADE_OFF = "On restarts Hermes where an agent's config changed.";
+const UPGRADE_FULL =
+  "On: when this app is a newer build than the one that last updated the fleet, it runs the fleet update itself — hermeticd and every agent's config. Hermes restarts on agents whose config changed. It never runs a foundation update and never moves the fleet to an older build. Off: fleet updates start only when you run them.";
+
+type Field = "auto_update_hermeticd" | "auto_upgrade";
+
 export function HermeticdUpdates({
   settings,
   onSaved,
@@ -43,18 +60,66 @@ export function HermeticdUpdates({
   /** Why the control is unavailable right now (a foundation update holds the fleet), if it is. */
   disabledReason?: string | null;
 }) {
+  if (settings === null) return null;
+  const shared = { settings, onSaved, onRefresh, disabledReason: disabledReason ?? null };
+  return (
+    <Block title="hermeticd updates">
+      <SwitchRow
+        {...shared}
+        field="auto_update_hermeticd"
+        label="Auto-update hermeticd"
+        current={autoUpdateHermeticd(settings.settings)}
+        descOn={DESC_ON}
+        descOff={DESC_OFF}
+      />
+      <SwitchRow
+        {...shared}
+        field="auto_upgrade"
+        label="Auto-upgrade fleet"
+        current={autoUpgrade(settings.settings)}
+        descOn={UPGRADE_ON}
+        descOff={UPGRADE_OFF}
+        descTitle={UPGRADE_FULL}
+      />
+    </Block>
+  );
+}
+
+/** One instant-save On/Off over one boolean field of the fleet settings. */
+function SwitchRow({
+  settings,
+  onSaved,
+  onRefresh,
+  disabledReason,
+  field,
+  label,
+  current,
+  descOn,
+  descOff,
+  descTitle,
+}: {
+  settings: SettingsResult;
+  onSaved: (next: SettingsResult) => void;
+  onRefresh: () => Promise<void>;
+  disabledReason: string | null;
+  field: Field;
+  label: string;
+  current: boolean;
+  descOn: string;
+  descOff: string;
+  /** The whole explanation, when the one clipped line cannot hold it. */
+  descTitle?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<SaveError | null>(null);
   /** The write landed but its follow-on did not (the manifest republish); core names the fix. */
   const [warning, setWarning] = useState<string | null>(null);
   const [ticked, flash] = useSavedTick();
 
-  if (settings === null) return null;
-  const current = autoUpdateHermeticd(settings.settings);
   // `persisted: false` is a fleet nobody has written settings for: the write
   // says `null` ("there was none"), not the synthesized version number.
   const expected = settings.persisted ? settings.settings.version : null;
-  const locked = busy || (disabledReason ?? null) !== null;
+  const locked = busy || disabledReason !== null;
 
   async function choose(next: boolean) {
     if (next === current || locked) return;
@@ -62,10 +127,7 @@ export function HermeticdUpdates({
     setError(null);
     setWarning(null);
     try {
-      const result = await setSettings({
-        auto_update_hermeticd: next,
-        expected_version: expected,
-      });
+      const result = await setSettings({ [field]: next, expected_version: expected });
       // The setting saved either way, so the shell holds the new document. A
       // warning means the boxes have not heard yet: say that, not "✓ saved".
       onSaved(result);
@@ -84,10 +146,14 @@ export function HermeticdUpdates({
     }
   }
 
-  const idle = current ? DESC_ON : DESC_OFF;
+  const idle = current ? descOn : descOff;
   const desc =
     error === null ? (
-      idle
+      descTitle === undefined ? (
+        idle
+      ) : (
+        <span title={descTitle}>{idle}</span>
+      )
     ) : (
       <span className="st-err">
         {isConflict(error)
@@ -97,11 +163,11 @@ export function HermeticdUpdates({
     );
 
   return (
-    <Block title="hermeticd updates">
+    <>
       <SettingRow
-        label="Auto-update hermeticd"
+        label={label}
         desc={desc}
-        field="auto_update_hermeticd"
+        field={field}
         state={
           <>
             {ticked ? null : <RowNote>saves at once</RowNote>}
@@ -112,7 +178,7 @@ export function HermeticdUpdates({
         <div
           className="seg st-seg st-w"
           role="group"
-          aria-label="Auto-update hermeticd"
+          aria-label={label}
           title={disabledReason ?? undefined}
         >
           {STATES.map((s) => (
@@ -133,6 +199,6 @@ export function HermeticdUpdates({
           <span className="mono">{warning}</span>
         </Callout>
       )}
-    </Block>
+    </>
   );
 }

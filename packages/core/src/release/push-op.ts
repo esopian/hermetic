@@ -10,6 +10,8 @@
  * the lock is given back — it can wait minutes, and holding the fleet lock that
  * long would refuse every agent operation for nothing — and it never fails the
  * push: the release is published whatever the boxes do (`followRelease`).
+ * Last, the config phase (`fleet/config-update.ts`) converges every agent
+ * whose re-rendered config changed, under the same never-fails rule.
  *
  * `init` publishes through `pushAndPublish` directly and never comes here: a
  * fleet being created has no running box to ask.
@@ -20,13 +22,15 @@ import {
   autoUpdateHermeticd,
   FLEET_KEY,
 } from "../schema/index.ts";
-import type { ArtifactsPushInput, FleetItem, OpEvent } from "../schema/index.ts";
+import type { Agent, ArtifactsPushInput, FleetItem, OpEvent } from "../schema/index.ts";
 import { checkAbort } from "../abort.ts";
 import { ARTIFACTS_VERSION } from "../version.ts";
 import { evt } from "../events.ts";
 import { LOCK_TTL_MS } from "../fleet/fleet-lock.ts";
 import { pushAndPublish } from "../fleet/init-release.ts";
 import { followRelease, releaseIdentityOf } from "../fleet/hermeticd-rollout.ts";
+import { configUpdate } from "../fleet/config-update.ts";
+import { compareBuild } from "../fleet/build-order.ts";
 import type { CoreContext } from "../context.ts";
 import type { OpOptions } from "../hermetic-deps.ts";
 import { readFleetManifest, withFleetLock } from "./artifacts-manifest.ts";
@@ -43,11 +47,16 @@ export interface ArtifactsPushDeps {
    */
   rolloutWaitMs?: number | undefined;
   rolloutPollMs?: number | undefined;
+  /** The config phase's rollout deps (`fleet/config-update.ts`): §8.3's staged-change step and the converge timings. */
+  applyPending: (agent: Agent) => Promise<Agent>;
+  convergeTimeoutMs?: number | undefined;
+  convergePollMs?: number | undefined;
 }
 
-/** Where on the progress bar each half sits. */
+/** Where on the progress bar each part sits. */
 const PUSH = [0.05, 0.55] as const;
-const ROLLOUT = [0.6, 0.99] as const;
+const ROLLOUT = [0.6, 0.8] as const;
+const CONFIG = [0.8, 0.99] as const;
 
 export function createArtifactsPush(deps: ArtifactsPushDeps) {
   const { ctx } = deps;
@@ -97,8 +106,15 @@ export function createArtifactsPush(deps: ArtifactsPushDeps) {
         if (parsed.path !== undefined || parsed.bytes !== undefined || parsed.version !== undefined) {
           return { pushed, locked, before, unrecorded: false };
         }
+        const local = ctx.buildIdentity();
         const written = await backend.store.fleet.updateFleet(
-          { artifacts_version: ARTIFACTS_VERSION },
+          {
+            artifacts_version: ARTIFACTS_VERSION,
+            // §6.6: which build last published, beside what it published —
+            // never moved backwards, or an older build's next push would read
+            // as `same` and push its older config.
+            ...(compareBuild(local, locked.published_by) === "older" ? {} : { published_by: local }),
+          },
           { now: now(), owner },
         );
         return { pushed, locked, before, unrecorded: written === null };
@@ -151,6 +167,27 @@ export function createArtifactsPush(deps: ArtifactsPushDeps) {
         // Not `artifacts push --now`: that would push again (and may rebuild)
         // when all that is wanted is to ask the boxes for what is published.
         nowCommand: `hermetic upgrade --hermeticd ${pushed.version} --now`,
+        signal: opts.signal,
+      },
+    );
+    /**
+     * The other half of updating the fleet: every agent whose config this build
+     * renders differently converges onto it. After the rollout, so a box that
+     * just took the release can apply a config needing it; ordered against the
+     * build that published *before* this push (`locked`, read under the lock).
+     */
+    yield* configUpdate(
+      {
+        ctx,
+        applyPending: deps.applyPending,
+        ...(deps.convergeTimeoutMs === undefined ? {} : { convergeTimeoutMs: deps.convergeTimeoutMs }),
+        ...(deps.convergePollMs === undefined ? {} : { convergePollMs: deps.convergePollMs }),
+      },
+      {
+        phase: "config",
+        progress: CONFIG,
+        publishedBefore: locked.published_by,
+        rollout: parsed.rollout,
         signal: opts.signal,
       },
     );

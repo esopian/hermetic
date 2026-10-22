@@ -25,7 +25,7 @@ import { requirePlanTarget, requireTarget, withTarget } from "../target.ts";
 import { parseInput } from "../validation.ts";
 import type { HandlerContext } from "./ctx.ts";
 import type { Handler } from "./dispatch.ts";
-import { TEARDOWN_PLANNING, afterTeardown, requireWritable } from "./shared.ts";
+import { TEARDOWN_PLANNING, afterTeardown, holdFoundationUpdate, requireWritable } from "./shared.ts";
 
 export const planDestroySchema = declareRpc("plan.destroy", PlanDestroyInput);
 export const planRecreateSchema = declareRpc("plan.recreate", PlanRecreateInput);
@@ -163,8 +163,7 @@ export async function apply(ctx: HandlerContext, params: unknown): Promise<Accep
   // same slot the update handler does — otherwise the second half of the mutual
   // exclusion is missing and an agent mutation lands mid-update.
   if (input.plan.kind === "foundation") {
-    state.beginFoundationUpdate(op.id);
-    void ops.wait(op.id).finally(() => state.endFoundationUpdate());
+    holdFoundationUpdate(ctx, op.id);
   }
   return accepted(op);
 }

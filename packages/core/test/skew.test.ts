@@ -29,15 +29,37 @@ describe("configVerdict", () => {
     expect(configVerdict({ config_hash: "b", applied_config_hash: "a" })).toBe("drifted");
   });
 
-  test("a fresh render overrides matching stored hashes", () => {
+  test("a fresh render over matching stored hashes is an update, not drift", () => {
+    const row = {
+      status: "ready" as const,
+      config_hash: "old",
+      applied_config_hash: "old",
+      rendered_config_hash: "new",
+    };
+    expect(configVerdict(row)).toBe("update");
+    expect(configVerdict(row, "newer")).toBe("update");
+    expect(configVerdict(row, "same")).toBe("update");
+    expect(configVerdict(row, "unknown")).toBe("update");
+  });
+
+  test("an older build never offers its render as an update", () => {
+    const row = { status: "ready" as const, config_hash: "old", applied_config_hash: "old" };
+    expect(configVerdict({ ...row, rendered_config_hash: "new" }, "older")).toBe("current");
+    // Real drift is still drift, whichever build reads it.
     expect(
-      configVerdict({
-        status: "ready",
-        config_hash: "old",
-        applied_config_hash: "old",
-        rendered_config_hash: "new",
-      }),
+      configVerdict({ ...row, applied_config_hash: "x", rendered_config_hash: "new" }, "older"),
     ).toBe("drifted");
+  });
+
+  test("drifted means the box disagrees with its own row, whatever the render", () => {
+    const row = { status: "ready" as const, config_hash: "new", applied_config_hash: "old" };
+    expect(configVerdict(row)).toBe("drifted");
+    expect(configVerdict({ ...row, rendered_config_hash: "new" })).toBe("drifted");
+    expect(configVerdict({ ...row, rendered_config_hash: "newer" }, "newer")).toBe("drifted");
+    // Agreeing with both the row and the render is current.
+    expect(configVerdict({ ...row, applied_config_hash: "new", rendered_config_hash: "new" })).toBe(
+      "current",
+    );
   });
 
   test("a missing half is unknown, never a guess in either direction", () => {
@@ -374,7 +396,14 @@ describe("drifted: a config nothing is applying", () => {
   });
 
   test("the severities are declared in ascending order", () => {
-    expect(SkewSeverity.options).toEqual(["none", "pending", "drifted", "degraded", "blocked"]);
+    expect(SkewSeverity.options).toEqual([
+      "none",
+      "pending",
+      "update",
+      "drifted",
+      "degraded",
+      "blocked",
+    ]);
   });
 });
 
@@ -419,5 +448,48 @@ describe("isConverging", () => {
 
   test("the window covers a Hermes upgrade plus the rollout's own wait", () => {
     expect(CONVERGING_WINDOW_MS).toBe(15 * 60_000);
+  });
+});
+
+describe("update: a newer config from this build", () => {
+  const current = (agents: SkewAgent[], over: Partial<SkewInput> = {}): SkewInput => ({
+    fleetVersion: 2,
+    expectedVersion: 2,
+    toolOutdated: false,
+    updateAvailable: false,
+    agents,
+    ...over,
+  });
+
+  test("is neutral, counts only the agents it offers, and names the Update", () => {
+    const skew = computeSkew(
+      current([agent(), agent({ config: "update" }), agent({ config: "update" })]),
+    );
+    expect(skew.severity).toBe("update");
+    expect(skew.message).toBe(SKEW_MESSAGE.update);
+    expect(skew.fix).toBe(SKEW_FIX);
+    expect(skew.headline).toBe(
+      "foundation v2 is current · 2 agents have a config update from this build",
+    );
+    expect(skew.agents_affected).toBe(2);
+    // An update is not drift.
+    expect(skew.agents_drifted).toBe(0);
+  });
+
+  test("real drift outranks it, and a foundation update outranks both", () => {
+    const agents = [agent({ config: "update" }), agent({ config: "drifted" })];
+    expect(computeSkew(current(agents)).severity).toBe("drifted");
+    expect(computeSkew(current(agents, { updateAvailable: true })).severity).toBe("degraded");
+  });
+
+  test("it outranks an agent still catching up", () => {
+    const skew = computeSkew(current([agent({ config: "update" }), agent({ current: false })]));
+    expect(skew.severity).toBe("update");
+    expect(skew.agents_affected).toBe(1);
+  });
+
+  test("an agent that is not reporting is not offered one", () => {
+    const skew = computeSkew(current([agent({ status: "creating", config: "update" })]));
+    expect(skew.severity).toBe("none");
   });
 });

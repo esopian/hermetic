@@ -93,6 +93,11 @@ export function register(program: Command): void {
         "leave a newly pushed hermeticd to each box's nightly update",
       )
       .option(
+        "--auto-upgrade",
+        "let the desktop app run the fleet update itself when it is a newer build",
+      )
+      .option("--no-auto-upgrade", "leave the fleet update to an operator (the default)")
+      .option(
         "--default-memory-provider <provider|none>",
         `the Hermes external memory provider a create with no --memory gets: ${MEMORY_PROVIDER_IDS.join(" | ")} | none`,
       )
@@ -113,11 +118,16 @@ export function register(program: Command): void {
           "  hermetic settings set --size large --volume-gib 200\n" +
           "  hermetic settings set --model claude-sonnet-5 --expected-version 3\n" +
           "  hermetic settings set --no-auto-update-hermeticd\n" +
+          "  hermetic settings set --auto-upgrade\n" +
           "  hermetic settings set --default-memory-provider holographic\n" +
           "  hermetic settings set --default-memory-provider none\n" +
           "  hermetic settings set --files-require-cap on --files-retention-days 14\n" +
           "\nSwitching hermeticd auto-update, or changing a files setting, republishes the\n" +
           "fleet manifest, which is how the boxes hear about it (§6.5).\n" +
+          "\n--auto-upgrade is read only by the desktop app: on, it runs the fleet update\n" +
+          "(hermeticd and every agent's config, restarting Hermes where a config\n" +
+          "changed) when it is a newer build than the one that last updated the fleet.\n" +
+          "It never runs a foundation update and never moves the fleet backwards (§6.6).\n" +
           "\nThe default memory provider is read once, when an agent is created, and\n" +
           "pinned on it: changing it moves no existing agent. A create that inherits a\n" +
           "provider whose server does not fit its size is refused (pass --memory none,\n" +
@@ -163,6 +173,7 @@ export function register(program: Command): void {
           // Both spellings are defined, so Commander leaves this undefined
           // unless one of them was given.
           ...defined({ auto_update_hermeticd: opts["autoUpdateHermeticd"] }),
+          ...defined({ auto_upgrade: opts["autoUpgrade"] }),
           // `none` clears the default back to built-in memory only: the wire
           // says that with `null`, which no flag value can spell directly.
           ...defined({

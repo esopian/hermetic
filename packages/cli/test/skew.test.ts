@@ -65,6 +65,16 @@ describe("skewReport", () => {
     expect(lines[0]?.startsWith("◦")).toBe(true);
   });
 
+  test("update is one neutral line naming the Update, even on a write", () => {
+    const lines = skewReport(skew({ severity: "update", fix: "hermetic foundation update" }), {
+      loud: true,
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.startsWith("◦")).toBe(true);
+    expect(lines[0]).toContain("(hermetic foundation update)");
+    expect(lines[0]).not.toContain("⚠");
+  });
+
   describe("drifted", () => {
     const drifted = skew({
       severity: "drifted",

@@ -7,7 +7,9 @@ import { foundationPhases, phaseLabel } from "../src/lib/useOp.ts";
 import {
   bedrockGrantLine,
   closeBlocked,
+  configChangeView,
   continueGate,
+  foundationBehind,
   grantNeedsUpdate,
   hermesLine,
   hermeticdLine,
@@ -23,7 +25,16 @@ import type { FoundationStatus, Meta } from "../src/api/index.ts";
  * source of truth. If core reorders or renames a phase, this fails — and the
  * drawer's rail would otherwise have shown steps the op never emits.
  */
-const CORE_PHASES = ["preflight", "archive", "stack", "artifacts", "migrate", "rollout", "done"];
+const CORE_PHASES = [
+  "preflight",
+  "archive",
+  "stack",
+  "artifacts",
+  "migrate",
+  "rollout",
+  "config",
+  "done",
+];
 
 function status(over: Partial<FoundationStatus> = {}): FoundationStatus {
   return {
@@ -111,6 +122,21 @@ describe("foundationPill", () => {
     expect(pill?.label).toBe("foundation update available");
     expect(pill?.title).toContain("v0 → v1");
     expect(pill?.title).toContain("0.4.0 → 0.4.1");
+  });
+
+  test("a config-only update is a neutral pill that counts the agents, not a foundation one", () => {
+    const agent = { name: "corvid", status: "ready", current: true, config: "update" };
+    const pill = foundationPill(
+      meta(
+        status({
+          update_available: true,
+          agents: [agent, { ...agent, name: "atlas", config: "current" }],
+        } as Partial<FoundationStatus>),
+      ),
+    );
+    expect(pill?.label).toBe("config update available");
+    expect(pill?.neutral).toBe(true);
+    expect(pill?.title).toContain("1 agent has");
   });
 
   test("a tool behind its own fleet says so instead — that is the actionable one", () => {
@@ -220,6 +246,59 @@ describe("closeBlocked", () => {
   });
 });
 
+describe("foundationBehind", () => {
+  const f = status({ update_available: true });
+  test("equal versions are not behind, whatever update_available says", () => {
+    expect(foundationBehind(f)).toBe(false);
+  });
+  test("any of the four foundation axes is", () => {
+    expect(foundationBehind({ ...f, available: { ...f.available, foundation_version: 2 } })).toBe(true);
+    expect(
+      foundationBehind({ ...f, available: { ...f.available, template_sha256: "b".repeat(64) } }),
+    ).toBe(true);
+    expect(foundationBehind({ ...f, available: { ...f.available, hermeticd_version: "0.4.2" } })).toBe(
+      true,
+    );
+    expect(foundationBehind({ ...f, available: { ...f.available, artifacts_version: 3 } })).toBe(true);
+  });
+});
+
+describe("configChangeView", () => {
+  const change = {
+    name: "corvid",
+    from: "a".repeat(64),
+    to: "b".repeat(64),
+    deferred: null,
+    pending: null,
+    files: ["/etc/hermes/config.yaml"],
+    manifest: ["commands", "units"],
+    note: null,
+  };
+  test("short hashes, then files, then manifest fields", () => {
+    expect(configChangeView(change)).toEqual({
+      hashes: `${"a".repeat(12)} → ${"b".repeat(12)}`,
+      details: ["/etc/hermes/config.yaml", "manifest: commands, units"],
+    });
+  });
+  test("a box with no applied hash, a deferral, a staged change and an unreadable bundle", () => {
+    const v = configChangeView({
+      ...change,
+      from: null,
+      deferred: "stopped",
+      pending: "openrouter → anthropic",
+      files: null,
+      manifest: [],
+      note: "applied bundle unavailable",
+    });
+    expect(v.hashes).toBe(`— → ${"b".repeat(12)}`);
+    expect(v.details).toEqual([
+      "deferred: stopped",
+      "staged: openrouter → anthropic",
+      "applied bundle unavailable",
+    ]);
+  });
+});
+
 describe("continueGate", () => {
   const gate = (
     over: Partial<Parameters<typeof continueGate>[0]> = {},
@@ -233,6 +312,15 @@ describe("continueGate", () => {
 
   test("a read plan against an out-of-date fleet may continue", () => {
     expect(gate()).toEqual({ allowed: true, reason: null });
+  });
+
+  test("a build older than the fleet's last publisher is refused", () => {
+    const g = gate(
+      {},
+      { update_available: true, tool_outdated: false, in_progress: null, build_order: "older" },
+    );
+    expect(g.allowed).toBe(false);
+    expect(g.reason).toContain("older than the one that last updated the fleet");
   });
 
   test("no plan yet, or a plan that failed to read, may not", () => {

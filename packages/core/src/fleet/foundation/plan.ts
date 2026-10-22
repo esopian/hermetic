@@ -9,6 +9,8 @@ import { migrationsBetween } from "../foundation-migrations.ts";
 import { ROLLOUT_STATUSES, foundationHelpers, type FoundationCtx } from "./shared.ts";
 import { BUILD_VERSIONS } from "../../build-versions.ts";
 import type { createChangeSet } from "./change-set.ts";
+import { configChanges } from "../config-update.ts";
+import { compareBuild } from "../build-order.ts";
 
 /**
  * The foundation version whose template first gave a `nat` fleet's NAT instance
@@ -16,6 +18,10 @@ import type { createChangeSet } from "./change-set.ts";
  * auto-assigned public address for the EIP, which `plan` warns about.
  */
 const NAT_EIP_VERSION = 6;
+
+/** Why a build behind the fleet's publisher converges nothing (`compareBuild`). */
+const OLDER_BUILD =
+  "this build is older than the one that last published to this fleet — update hermetic";
 
 /** `1 agent`, `3 agents`: the step titles count things, and `agent(s)` reads as a form. */
 function count(n: number, one: string, many = `${one}s`): string {
@@ -246,6 +252,34 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
     });
 
     /**
+     * The update's last phase (`fleet/config-update.ts`): every agent whose
+     * config this build renders differently, with why any will not converge.
+     * Only changed agents are listed; `pushing`, because the update publishes
+     * this build's release before it gets here. A build older than the fleet's
+     * publisher converges nothing, and the plan says so.
+     */
+    const older = compareBuild(core.buildIdentity(), fleet.published_by) === "older";
+    const config_changes = (await configChanges(core, fleet, { pushing: true })).map((c) =>
+      older ? { ...c, deferred: OLDER_BUILD } : c,
+    );
+    const converge = older ? [] : config_changes.filter((c) => c.deferred === null);
+    const held = config_changes.length - converge.length;
+    steps.push({
+      id: "config",
+      description: older
+        ? "converge no agent's config: this build is older than the one that last published to the fleet"
+        : `converge ${count(converge.length, "agent")} whose config changed${converge.length > 0 ? ` (${converge.map((c) => c.name).join(", ")})` : ""}; ${String(held)} deferred`,
+      destructive: false,
+      title: older
+        ? "Config left as published"
+        : `Converge ${count(converge.length, "agent")}${held > 0 ? `, ${String(held)} deferred` : ""}`,
+      ...(converge.length === 0 ? {} : { details: converge.map((c) => c.name) }),
+    });
+    if (older) {
+      warnings.push(`${OLDER_BUILD}; the update converges no agent's config`);
+    }
+
+    /**
      * §5: the one-off egress-address change a `nat` fleet crossing into v6 pays.
      *
      * v6's template gives the NAT instance a stable Elastic IP (`NatEip` plus
@@ -307,6 +341,7 @@ export function createPlan(ctx: FoundationCtx, changeSet: ReturnType<typeof crea
       steps,
       warnings,
       release,
+      config_changes,
       summary: {
         account_id: config.account_id,
         region: config.region,

@@ -232,9 +232,20 @@ describe("SettingsShell", () => {
     for (const id of ["secrets", "policy", "diagnostics", "runs"]) {
       expect(item(out, id)).toContain('class="st-nosq"');
     }
-    // An update available turns the foundation square to warn.
-    const behind = shell("account", { foundation: { ...current, update_available: true } });
+    // A fleet behind this build turns the foundation square to warn…
+    const behind = shell("account", {
+      foundation: {
+        ...current,
+        update_available: true,
+        // A template the fleet does not carry: the stack itself is behind.
+        available: { ...current.available, template_sha256: "f".repeat(64) },
+      },
+    });
     expect(item(behind, "foundation")).toContain('class="sq warn"');
+    // …while a config-only update (§6.6 `update`) is on offer, not a fault.
+    const configOnly = shell("account", { foundation: { ...current, update_available: true } });
+    expect(item(configOnly, "foundation")).toContain('class="sq ok"');
+    expect(item(configOnly, "foundation")).toContain("a config update is available");
   });
 
   test("every page states its scope once: fleet-wide, this laptop, or read-only", () => {

@@ -266,6 +266,7 @@ export {
 export {
   FLEET_MANIFEST_KEY,
   autoUpdateHermeticd,
+  autoUpgrade,
   isChromeRef,
   isReleaseObjectKey,
   orderStages,

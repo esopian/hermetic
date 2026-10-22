@@ -3,7 +3,7 @@
 exports[`--json output is a golden contract agent ps 1`] = `
 [
   {
-    "applied_config_hash": "fixture010000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -83,7 +83,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture010000000",
+    "config_hash": "<render>",
     "created_at": "2026-07-22T14:05:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "ready",
@@ -115,7 +115,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/atlas/fixture010000000.tgz",
+      "config_key": "config/atlas/<render>.tgz",
       "instance_id": "i-fixture00000000001",
       "ssm_paths": [
         "/hermes/fxtr0001/atlas/ts-key",
@@ -138,7 +138,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000001",
   },
   {
-    "applied_config_hash": "fixture020000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -218,7 +218,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture020000000",
+    "config_hash": "<render>",
     "created_at": "2026-07-22T16:40:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "credential_ref": "provider-key-rtr00002-r1",
@@ -259,7 +259,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "openrouter",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/corvid/fixture020000000.tgz",
+      "config_key": "config/corvid/<render>.tgz",
       "instance_id": "i-fixture00000000002",
       "ssm_paths": [
         "/hermes/fxtr0001/corvid/ts-key",
@@ -283,7 +283,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000002",
   },
   {
-    "applied_config_hash": "fixture030000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.4.0",
@@ -363,7 +363,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture030000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-20T08:12:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "degraded",
@@ -388,7 +388,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/ember/fixture030000000.tgz",
+      "config_key": "config/ember/<render>.tgz",
       "instance_id": "i-fixture00000000003",
       "ssm_paths": [
         "/hermes/fxtr0001/ember/ts-key",
@@ -411,7 +411,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000003",
   },
   {
-    "applied_config_hash": "fixture040000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -491,7 +491,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture040000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-23T11:30:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "ready",
@@ -517,7 +517,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/fathom/fixture040000000.tgz",
+      "config_key": "config/fathom/<render>.tgz",
       "instance_id": "i-fixture00000000004",
       "ssm_paths": [
         "/hermes/fxtr0001/fathom/ts-key",
@@ -540,7 +540,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000004",
   },
   {
-    "applied_config_hash": "fixture050000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -620,7 +620,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture050000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-24T09:55:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "ready",
@@ -647,7 +647,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/granite/fixture050000000.tgz",
+      "config_key": "config/granite/<render>.tgz",
       "instance_id": "i-fixture00000000005",
       "ssm_paths": [
         "/hermes/fxtr0001/granite/ts-key",
@@ -750,7 +750,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture060000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-25T13:20:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "error",
@@ -775,7 +775,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/heron/fixture060000000.tgz",
+      "config_key": "config/heron/<render>.tgz",
       "instance_id": "i-fixture00000000006",
       "ssm_paths": [
         "/hermes/fxtr0001/heron/ts-key",
@@ -798,7 +798,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000006",
   },
   {
-    "applied_config_hash": "fixture070000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -878,7 +878,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture070000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-26T07:45:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "credential_ref": "provider-key-rtr00002-r1",
@@ -889,7 +889,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       "tailscale": true,
     },
     "heartbeat_age_ms": 18000,
-    "hermes_version": "0.21.0",
+    "hermes_version": "<build hermes>",
     "hermeticd_version": "0.8.3",
     "instance_id": "i-fixture00000000007",
     "instance_type": "r8g.large",
@@ -910,7 +910,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "openrouter",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/ibis/fixture070000000.tgz",
+      "config_key": "config/ibis/<render>.tgz",
       "instance_id": "i-fixture00000000007",
       "ssm_paths": [
         "/hermes/fxtr0001/ibis/ts-key",
@@ -919,7 +919,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       "volume_id": "vol-fixture00000000007",
     },
     "root_gib": 20,
-    "running_hermes_version": "0.21.0",
+    "running_hermes_version": "<build hermes>",
     "running_hermeticd_sha256": "3bdbb4fe8397cd2b842430b39ccff01a8663c751945ef5e9a09e267fb8b1d359",
     "secrets_mode": "none",
     "size": "small",
@@ -1014,7 +1014,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture080000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-12T18:00:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "stopped",
@@ -1039,7 +1039,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/juniper/fixture080000000.tgz",
+      "config_key": "config/juniper/<render>.tgz",
       "instance_id": "i-fixture00000000008",
       "ssm_paths": [
         "/hermes/fxtr0001/juniper/ts-key",
@@ -1062,7 +1062,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000008",
   },
   {
-    "applied_config_hash": "fixture090000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -1142,7 +1142,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture090000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-29T10:10:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "credential_ref": "provider-key-ant00001-r1",
@@ -1171,7 +1171,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "anthropic",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/kestrel/fixture090000000.tgz",
+      "config_key": "config/kestrel/<render>.tgz",
       "instance_id": "i-fixture00000000009",
       "ssm_paths": [
         "/hermes/fxtr0001/kestrel/ts-key",
@@ -1196,7 +1196,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "volume_id": "vol-fixture00000000009",
   },
   {
-    "applied_config_hash": "fixture100000000",
+    "applied_config_hash": "<render>",
     "bootstrap": {
       "current": null,
       "hermeticd_version": "0.8.3",
@@ -1276,7 +1276,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture100000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-31T21:15:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "unreachable",
@@ -1303,7 +1303,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "bedrock",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/lumen/fixture100000000.tgz",
+      "config_key": "config/lumen/<render>.tgz",
       "instance_id": "i-fixture00000000010",
       "ssm_paths": [
         "/hermes/fxtr0001/lumen/ts-key",
@@ -1406,7 +1406,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
       },
     ],
     "command": null,
-    "config_hash": "fixture110000000",
+    "config_hash": "<render>",
     "created_at": "2026-08-04T12:00:00.000Z",
     "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
     "display_status": "stopped",
@@ -1431,7 +1431,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
     "provider": "nous",
     "region": "us-west-2",
     "resources": {
-      "config_key": "config/marrow/fixture110000000.tgz",
+      "config_key": "config/marrow/<render>.tgz",
       "instance_id": "i-fixture00000000011",
       "ssm_paths": [
         "/hermes/fxtr0001/marrow/ts-key",
@@ -1459,7 +1459,7 @@ exports[`--json output is a golden contract agent ps 1`] = `
 
 exports[`--json output is a golden contract agent status atlas 1`] = `
 {
-  "applied_config_hash": "fixture010000000",
+  "applied_config_hash": "<render>",
   "bootstrap": {
     "current": null,
     "hermeticd_version": "0.8.3",
@@ -1539,7 +1539,7 @@ exports[`--json output is a golden contract agent status atlas 1`] = `
     },
   ],
   "command": null,
-  "config_hash": "fixture010000000",
+  "config_hash": "<render>",
   "created_at": "2026-07-22T14:05:00.000Z",
   "created_by": "arn:aws:sts::123456789012:assumed-role/hermetic-operator/evan",
   "display_status": "ready",
@@ -1571,7 +1571,7 @@ exports[`--json output is a golden contract agent status atlas 1`] = `
   "provider": "bedrock",
   "region": "us-west-2",
   "resources": {
-    "config_key": "config/atlas/fixture010000000.tgz",
+    "config_key": "config/atlas/<render>.tgz",
     "instance_id": "i-fixture00000000001",
     "ssm_paths": [
       "/hermes/fxtr0001/atlas/ts-key",

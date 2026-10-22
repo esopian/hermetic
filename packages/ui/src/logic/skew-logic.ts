@@ -18,10 +18,10 @@
  */
 
 /** Mirrors core's `SkewSeverity`; pinned by `test/skew-logic.test.ts`. */
-export type SkewSeverity = "none" | "pending" | "drifted" | "degraded" | "blocked";
+export type SkewSeverity = "none" | "pending" | "update" | "drifted" | "degraded" | "blocked";
 
 /** Mirrors core's `ConfigVerdict`. */
-export type ConfigVerdict = "current" | "drifted" | "unknown";
+export type ConfigVerdict = "current" | "update" | "drifted" | "unknown";
 
 /** `FoundationStatus["skew"]`, narrowed to what these rules read. */
 export interface SkewView {
@@ -73,7 +73,8 @@ export interface Band {
   /**
    * Which severity drew it. The band is what the dismissal is keyed on
    * (`dismissKey`), and what decides whether its fix is a button in this app
-   * (`degraded`'s, which Settings performs) or a command to run (`drifted`'s).
+   * (`degraded`'s and `update`'s, which Settings performs) or a command to run
+   * (`drifted`'s).
    */
   severity: Exclude<SkewSeverity, "none">;
   tone: BandTone;
@@ -100,6 +101,8 @@ const TONE: Record<Exclude<SkewSeverity, "none">, BandTone> = {
   blocked: "bad",
   degraded: "warn",
   drifted: "warn",
+  // An update on offer, not a fault: every box applied what it was sent.
+  update: "muted",
   pending: "muted",
 };
 
@@ -108,6 +111,7 @@ const HEADLINE: Record<Exclude<SkewSeverity, "none">, string> = {
   blocked: "This fleet is ahead of your hermetic build",
   degraded: "This fleet is behind your hermetic build",
   drifted: "Config not applied",
+  update: "Config update available",
   pending: "Agents are catching up",
 };
 
@@ -163,7 +167,7 @@ export function agentBand(
    */
   const stale = [
     ...(row?.current === false ? ["its hermeticd release"] : []),
-    ...(row?.config === "drifted" ? ["its config"] : []),
+    ...(row?.config === "drifted" || row?.config === "update" ? ["its config"] : []),
   ];
   if (!base && stale.length === 0) return null;
   if (!base && row?.config === "drifted") {
@@ -217,7 +221,9 @@ export function agentBand(
         ? "Agents are still taking the new release"
         : status?.skew?.severity === "drifted"
           ? "Some agents have not applied their config"
-          : "This fleet was built by an older hermetic";
+          : status?.skew?.severity === "update"
+            ? "This build has a newer config for some agents"
+            : "This fleet was built by an older hermetic";
   return {
     ...base,
     headline:
@@ -273,6 +279,9 @@ export function configLabel(verdict: ConfigVerdict | null | undefined): {
   warn: boolean;
 } {
   if (verdict === "drifted") return { label: "drifted", warn: true };
+  // This build renders something newer for a box that applied what it was
+  // sent: an update on offer, never a warning.
+  if (verdict === "update") return { label: "update", warn: false };
   if (verdict === "current") return { label: "current", warn: false };
   // Not "current", and not a warning either: an agent that has never reported
   // an applied config is not known to be either, and both other answers would

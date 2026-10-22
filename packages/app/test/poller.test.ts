@@ -211,7 +211,12 @@ describe("the stage board", () => {
  * that it cannot take the fleet view down with it.
  */
 describe("the advisory tick", () => {
-  function advisory(over: { foundation?: () => Promise<unknown> } = {}) {
+  function advisory(
+    over: {
+      foundation?: () => Promise<unknown>;
+      hooks?: ConstructorParameters<typeof FleetPoller>[2];
+    } = {},
+  ) {
     const calls = { agents: 0, foundation: 0, volumes: 0 };
     let clock = 1_000_000;
     const stub = {
@@ -238,11 +243,20 @@ describe("the advisory tick", () => {
         list: async () => ({ notifications: [], unread: 0, needs_action: 0, mutes: [] }),
       },
     } as unknown as Hermetic;
-    const poller = new FleetPoller(stub, () => clock);
+    const poller = new FleetPoller(stub, () => clock, over.hooks);
     const seen: FleetEvent[] = [];
     poller.subscribe((e) => seen.push(e));
     return { poller, seen, calls, advance: (ms: number) => void (clock += ms) };
   }
+
+  test("lends a status it read to onFoundationStatus, and only one it read", async () => {
+    const statuses: unknown[] = [];
+    const hooks = { onFoundationStatus: (s: unknown) => void statuses.push(s) };
+    await advisory({ foundation: async () => ({ build_order: "newer" }), hooks }).poller.poll();
+    expect(statuses).toEqual([{ build_order: "newer" }]);
+    await advisory({ foundation: () => Promise.reject(new Error("down")), hooks }).poller.poll();
+    expect(statuses).toHaveLength(1);
+  });
 
   test("runs on the first poll, and then only on its own interval", async () => {
     const { poller, calls, advance } = advisory();

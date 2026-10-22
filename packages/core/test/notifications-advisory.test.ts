@@ -238,28 +238,29 @@ describe("fleet.advisory: an agent needs this build's config", () => {
   test("startup status raises one row and resolves it after rollout", async () => {
     const backend = seedFixtureAgents(seedFixtureFoundation(new MemoryBackend()));
     const agent = [...backend.agents.values()].find((row) => row.status === "ready")!;
-    backend.agents.set(agent.name, {
-      ...agent,
-      config_hash: "old",
-      applied_config_hash: "old",
-    });
-    const store = new MemoryNotificationStore();
-    const hermetic = core(backend, store);
-    const key = `${ADVISORY_PREFIX}${ADVISORY_CONFIG_ROLLOUT}:${agent.name}`;
-
-    await hermetic.foundation.status();
-    await hermetic.foundation.status();
-    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).toContain(key);
-    expect(rows(store).filter((row) => row.key === key)).toHaveLength(1);
-
     const rendered = testContext(backend).renderFor(
       agent,
       backend.fleetItem!.region,
       backend.fleetItem!.tailnet,
     ).config_hash;
+    const store = new MemoryNotificationStore();
+    const hermetic = core(backend, store);
+    const key = `${ADVISORY_PREFIX}${ADVISORY_CONFIG_ROLLOUT}:${agent.name}`;
+
+    // A config update from this build is not drift: no rollout row for it.
+    backend.agents.set(agent.name, { ...agent, config_hash: "old", applied_config_hash: "old" });
+    await hermetic.foundation.status();
+    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).not.toContain(key);
+
+    // The box did not apply what its row names, and nothing is applying it.
+    backend.agents.set(agent.name, { ...agent, config_hash: rendered, applied_config_hash: "old" });
+    await hermetic.foundation.status();
+    await hermetic.foundation.status();
+    expect(openKeys(store, ADVISORY_CONFIG_ROLLOUT)).toContain(key);
+    expect(rows(store).filter((row) => row.key === key)).toHaveLength(1);
+
     backend.agents.set(agent.name, {
       ...backend.agents.get(agent.name)!,
-      config_hash: rendered,
       apply_request: {
         id: "apply-1",
         config_hash: rendered,

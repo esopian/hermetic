@@ -11,6 +11,7 @@ export {
   STAGE_FILE_RE,
   orderStages,
   autoUpdateHermeticd,
+  autoUpgrade,
 } from "../shared/release.ts";
 export { FLEET_KEY, cloudName, legacyCloudNames } from "../shared/naming.ts";
 export { FILES_APP_CAP, FILES_RETENTION_DAYS, resolveFilesSettings } from "../shared/files.ts";
@@ -63,6 +64,17 @@ export type FleetFilesSettings = z.infer<typeof FleetFilesSettings>;
  */
 export const NetworkMode = z.enum(["public", "nat"]);
 export type NetworkMode = z.infer<typeof NetworkMode>;
+
+/**
+ * One build of hermetic, as far as it can say: the tool version it was stamped
+ * with (`HERMETIC_VERSION`, `0.0.0-dev` on a source run) and, from a git
+ * checkout, `git rev-list --count HEAD`. `compareBuild` orders two of them.
+ */
+export const BuildIdentity = z.object({
+  hermetic_version: z.string().min(1).max(64),
+  build_number: z.number().int().positive().optional(),
+});
+export type BuildIdentity = z.infer<typeof BuildIdentity>;
 
 /** Per-fleet defaults a new agent inherits when flags are omitted (§10). */
 export const FleetDefaults = z.object({
@@ -175,6 +187,20 @@ export const FleetSettings = z.object({
    */
   auto_update_hermeticd: z.boolean().optional(),
   /**
+   * Whether the desktop app runs the fleet's update on its own when it is a
+   * strictly newer build than the one that last published to the fleet (§6.6):
+   * the same `artifacts push` an operator would start from the Update button,
+   * pushing hermeticd and every agent's re-rendered config, as a normal op in
+   * the Runs view. Never a foundation update, and never from the CLI.
+   *
+   * Optional, and absent reads as `false` (`autoUpgrade`): off by default,
+   * because a config that changed restarts Hermes on that box. Not copied into
+   * the fleet manifest — no box reads it; only the laptop acts on it.
+   * Independent of `auto_update_hermeticd`, which is how fast boxes take a
+   * release once one is published.
+   */
+  auto_upgrade: z.boolean().optional(),
+  /**
    * The files service's fleet-wide settings: whether a tailnet caller needs
    * the `FILES_APP_CAP` grant, the per-file cap, and how long the inbox keeps a
    * file. Optional, and absent reads as the defaults (`resolveFilesSettings`):
@@ -277,6 +303,20 @@ export const FleetItem = z.object({
    * that knows the field reports as an available update (§6.6).
    */
   artifacts_version: z.number().int().nonnegative().optional(),
+  /**
+   * Which build of hermetic last published to this fleet — written beside
+   * `artifacts_version` by every push of this build's own bundle (`artifacts
+   * push`, `foundation update`, `init --create`).
+   *
+   * It is what lets two laptops on different builds share a fleet without
+   * flapping: `compareBuild` (`fleet/build-order.ts`) orders this against the
+   * reading build, so only a strictly newer build offers the agents a config
+   * update or runs `auto_upgrade`, and an older one is told it is older rather
+   * than offering to move the fleet backwards. `artifacts_version` cannot do it
+   * alone: a render change moves no hermeticd byte. Absent on a fleet no build
+   * that knows the field has published to, which orders as `unknown`.
+   */
+  published_by: BuildIdentity.optional(),
   /**
    * The item's own revision counter (§4.4) — the optimistic-concurrency key an
    * agent row has had all along, arriving late on `_fleet` because this item

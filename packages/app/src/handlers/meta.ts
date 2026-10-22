@@ -102,7 +102,7 @@ async function devtoolsGate(hermetic: HandlerContext["hermetic"]): Promise<{ ena
  * needs every one of these fields again, and a second round trip to fetch
  * them would be a second round trip that could disagree with the first).
  */
-export function createMetaBody({ state, hermetic, fixture, opts }: HandlerContext) {
+export function createMetaBody({ state, hermetic, fixture, opts, autoUpgrade }: HandlerContext) {
   return async () => {
     const versions = {
       hermeticd_version: opts.hermeticdVersion ?? BUILD_VERSIONS.hermeticd,
@@ -194,6 +194,9 @@ export function createMetaBody({ state, hermetic, fixture, opts }: HandlerContex
     const settings = await hermetic()
       .settings.get()
       .catch(() => null);
+    // §6.6: a page refresh is a refresh of these two facts; not awaited, so
+    // the header never waits on the decision.
+    if (foundation !== null) void autoUpgrade?.check(foundation, settings?.settings ?? null);
     return {
       initialized: true as const,
       home: state.home,

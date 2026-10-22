@@ -17,6 +17,7 @@ import { settingsOf } from "../../profiles/settings.ts";
 import { pendingApplied } from "../../profiles/profile-binding.ts";
 import { HermeticError } from "../../errors.ts";
 import { computeSkew, configVerdict, isConverging } from "../skew.ts";
+import { compareBuild } from "../build-order.ts";
 import type { FoundationCtx } from "./shared.ts";
 import { BUILD_VERSIONS } from "../../build-versions.ts";
 import { ARTIFACTS_VERSION } from "../../version.ts";
@@ -262,13 +263,26 @@ export function createStatus(ctx: FoundationCtx) {
             agents,
             granted: fleet.bedrock_model_ids,
           });
-    /** The same pure prospective render as plan.rollout, including staged bindings. */
+    /**
+     * The same pure prospective render as plan.rollout, including staged
+     * bindings. Not for an agent held on another Hermes pin: every render pins
+     * this build's ref, so its hash never matches, and the update defers it
+     * (`updateDeferral`) — an `update` nothing would ever clear. It is judged
+     * on its stored hashes alone.
+     */
     const renderedHashes = new Map(
-      agents.map((agent) => [
-        agent.name,
-        core.renderFor(pendingApplied(agent), fleet.region, fleet.tailnet).config_hash,
-      ]),
+      agents
+        .filter((agent) => agent.hermes_version === core.hermesVersion)
+        .map((agent) => [
+          agent.name,
+          core.renderFor(pendingApplied(agent), fleet.region, fleet.tailnet).config_hash,
+        ]),
     );
+    /**
+     * This build against the one that last published to the fleet. An older
+     * build's render is not an update for anyone, so it never offers one.
+     */
+    const buildOrder = compareBuild(core.buildIdentity(), fleet.published_by);
     /** Compare the box with this build, not merely with the row's last render. */
     const agentRows = agents
       .map((a) => ({
@@ -293,7 +307,7 @@ export function createStatus(ctx: FoundationCtx) {
           a.last_heartbeat == null || a.hermeticd_version == null
             ? null
             : a.hermeticd_version === hermeticdVersion,
-        config: configVerdict({ ...a, rendered_config_hash: renderedHashes.get(a.name) }),
+        config: configVerdict({ ...a, rendered_config_hash: renderedHashes.get(a.name) }, buildOrder),
         hermes_version: a.hermes_version ?? null,
         running_hermes_version: a.running_hermes_version ?? null,
         last_heartbeat: a.last_heartbeat ?? null,
@@ -310,12 +324,9 @@ export function createStatus(ctx: FoundationCtx) {
      * whose clock is frozen — reads the same age every time.
      */
     const nowMs = now().getTime();
-    const converging = new Set(
-      agents
-        .filter((a) => a.config_hash === renderedHashes.get(a.name) && isConverging(a, nowMs))
-        .map((a) => a.name),
-    );
-    const updateAvailable =
+    const converging = new Set(agents.filter((a) => isConverging(a, nowMs)).map((a) => a.name));
+    /** The fleet itself is behind this build; config updates are folded in below. */
+    const foundationUpdate =
       current.foundation_version < available.foundation_version ||
       current.template_sha256 !== available.template_sha256 ||
       current.hermeticd_version !== available.hermeticd_version ||
@@ -323,6 +334,7 @@ export function createStatus(ctx: FoundationCtx) {
       // downgrade to this build's older bundle.
       current.artifacts_version < available.artifacts_version;
     const toolOutdated = current.foundation_version > available.foundation_version;
+    const configUpdate = agentRows.some((row) => row.config === "update");
     const result = {
       fleet: current,
       available,
@@ -337,8 +349,13 @@ export function createStatus(ctx: FoundationCtx) {
        * foundation version and behind on hermeticd is exactly the state a
        * half-upgraded team is in — and a head that wants "offer the update
        * button" reads both. Hiding one behind the other made the flag lie.
+       *
+       * Also true when only an agent's config is behind this build's render
+       * (`config: "update"`): the same Update converges it, so the button must
+       * be offered for it.
        */
-      update_available: updateAvailable,
+      update_available: foundationUpdate || configUpdate,
+      build_order: buildOrder,
       tool_outdated: toolOutdated,
       in_progress: lockIsLive(fleet) ? (fleet.lock ?? null) : null,
       /**
@@ -350,7 +367,8 @@ export function createStatus(ctx: FoundationCtx) {
         fleetVersion: current.foundation_version,
         expectedVersion: available.foundation_version,
         toolOutdated,
-        updateAvailable,
+        // Unfolded: a config-only update is severity `update`, not `degraded`.
+        updateAvailable: foundationUpdate,
         artifacts: { fleet: current.artifacts_version, expected: available.artifacts_version },
         agents: agentRows.map((row) => ({ ...row, converging: converging.has(row.name) })),
       }),
@@ -373,6 +391,7 @@ export function createStatus(ctx: FoundationCtx) {
     };
     observeStatusAdvisories(
       result,
+      foundationUpdate,
       agentRows
         .filter((row) => row.config === "drifted" && !converging.has(row.name))
         .map((row) => row.name),
@@ -390,14 +409,20 @@ export function createStatus(ctx: FoundationCtx) {
    * empty list would resolve every open Bedrock row as though the grant had
    * been fixed.
    */
-  function observeStatusAdvisories(status: FoundationStatus, rolloutAgents: readonly string[]): void {
+  function observeStatusAdvisories(
+    status: FoundationStatus,
+    foundationUpdate: boolean,
+    rolloutAgents: readonly string[],
+  ): void {
     const notifications = core.notifications;
     if (notifications === undefined) return;
     observeAdvisories(
       notifications,
       ADVISORY_FOUNDATION_UPDATE,
       foundationUpdateAdvisories({
-        update_available: status.update_available,
+        // Not `status.update_available`: a config-only update has no foundation
+        // reason to name, and is not a "Foundation update available" row.
+        update_available: foundationUpdate,
         current: status.fleet,
         available: status.available,
       }),
