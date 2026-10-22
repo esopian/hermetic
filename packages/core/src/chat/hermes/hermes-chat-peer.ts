@@ -21,7 +21,7 @@ import {
 } from "./hermes-chat-types.ts";
 import type { ChatConnection } from "./hermes-chat-connect.ts";
 import type { RequestPool } from "./hermes-chat-pool.ts";
-import { describe, discardBody, stripToken } from "./hermes-chat-wire.ts";
+import { describe, discardBody, record, stripToken } from "./hermes-chat-wire.ts";
 
 /** What `createChatPeer` needs, and nothing more. */
 export interface ChatPeerDeps {
@@ -43,7 +43,7 @@ export function createChatPeer(deps: ChatPeerDeps) {
     method: string,
     path: string,
     body?: unknown,
-    opts: HermesChatOptions = {},
+    opts: HermesChatOptions & { detail?: boolean } = {},
   ): Promise<unknown> {
     if (!path.startsWith("/api/") || path.startsWith("//"))
       throw new HermeticError("VALIDATION", "Invalid dashboard path");
@@ -76,7 +76,15 @@ export function createChatPeer(deps: ChatPeerDeps) {
         continue;
       }
       if (!response.ok) {
-        discardBody(response);
+        // Opt-in (kanban): a refused write's FastAPI `detail` says why, e.g.
+        // "blocked by parent(s) not done", and a 404's names the task ("task
+        // t_… not found") so a deleted card reads apart from a missing board.
+        // Everyone else keeps the bare status.
+        let why = "";
+        if (opts.detail && [400, 404, 409].includes(response.status)) {
+          const detail = record(await response.json().catch(() => null)).detail;
+          if (typeof detail === "string") why = `: ${detail}`;
+        } else discardBody(response);
         throw new HermeticError(
           response.status === 404
             ? "NOT_FOUND"
@@ -85,7 +93,7 @@ export function createChatPeer(deps: ChatPeerDeps) {
               : response.status === 403
                 ? "FORBIDDEN"
                 : "CHAT_PROTOCOL",
-          `${box.instance}: dashboard ${method} failed (HTTP ${response.status})`,
+          `${box.instance}: dashboard ${method} failed (HTTP ${response.status})${why}`,
         );
       }
       return response.json();

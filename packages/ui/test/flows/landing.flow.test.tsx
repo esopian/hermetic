@@ -61,7 +61,7 @@ test("a launch with no hash lands on Chat", async () => {
   expect(screen.queryByText(NONE_LISTENING)).toBeNull();
 });
 
-test("the view nav reads Chat, Fleet, Settings", async () => {
+test("the view nav reads Chat, Work, Fleet, Settings", async () => {
   harness = await flowHarness();
   mountPortal();
 
@@ -69,7 +69,7 @@ test("the view nav reads Chat, Fleet, Settings", async () => {
   const labels = within(views())
     .getAllByRole("button")
     .map((b) => (b.textContent ?? "").trim().split(/\s+/)[0]);
-  expect(labels).toEqual(["Chat", "Fleet", "Settings"]);
+  expect(labels).toEqual(["Chat", "Work", "Fleet", "Settings"]);
 });
 
 test("the fleet is still reachable by its own hash", async () => {

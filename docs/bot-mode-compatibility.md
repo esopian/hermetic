@@ -56,6 +56,39 @@ Recovering a failed conversation is targeted. `chat.observe.resume` (`ChatOwner.
 
 Fixture mode has a staging surface for demonstrating an external arrival, since `bun run dev:fixture` has no gateway to produce one: `hermetic.fixture.chat.inject`/`.hint`, reachable as the `fixture.chat.inject` and `fixture.chat.hint` requests (`packages/app/src/handlers/fixture.ts`). `inject` appends a `user` row to the fixture box's transcript and announces it on open hint streams; `hint` announces without appending, for a row already there. Both are fixture-only by two guards, with a third layer bounding the blast radius: construction builds no `fixture` namespace outside fixture mode, and an explicitly-constructed control surface with `fixture: false` throws `UNSUPPORTED` before the input is read, while the methods themselves can reach only an in-memory activity table with no AWS client or config behind it. Neither is a `PUBLIC_METHOD` or a CLI verb; both are `MACHINERY_RPC` entries, which is how the parity test knows they exist without expecting a core method behind them. Source: `packages/app/test/handlers/dispatch.test.ts`.
 
+## Kanban
+
+The board is the box's dashboard plugin over HTTP, not gateway RPC. Upstream registers no kanban method on `/api/ws` (`tui_gateway/`), so `kanban.*` is a REST adapter in core (`packages/core/src/chat/kanban.ts`) on the same authenticated session-token client the routine and profile routes use (`botModeRest`). The page and the CLI never see the upstream shapes; core maps them to the `Kanban*` schemas.
+
+| Operation | Dashboard contract |
+|---|---|
+| Read the board | `GET /api/plugins/kanban/board` |
+| Read a card | `GET /api/plugins/kanban/tasks/<id>` |
+| Create a card | `POST /api/plugins/kanban/tasks` |
+| Move, unblock or archive a card | `PATCH /api/plugins/kanban/tasks/<id>` with `{status}` |
+| Delete a card | `DELETE /api/plugins/kanban/tasks/<id>` |
+| Comment | `POST /api/plugins/kanban/tasks/<id>/comments` |
+| Assign or park | `POST /api/plugins/kanban/tasks/<id>/reassign` |
+| Read the worker log | `GET /api/plugins/kanban/tasks/<id>/log` |
+| Read the box's profiles | `GET /api/plugins/kanban/profiles` |
+| List boards | `GET /api/plugins/kanban/boards` |
+
+Only the box's current (default) board is used; there is no board switcher. The board slug and the profiles are cached for five minutes per instance.
+
+**The capability probe is the board read itself.** A 200 from `GET /board` is `on`. A 404, 403 or 409 is the plugin's answer that it is off or that this Hermes predates the board API, and it is `off`, with the fix `hermes plugins enable kanban` run on the box; hermetic offers no enable action. A reply that is not JSON, or has no columns, is a protocol failure (`CHAT_PROTOCOL`) and is `unknown`, not `off`. A box that cannot be reached, or does not answer within 8 s, is `unreachable`; its last good tasks are returned with `stale_since`. As with `bots.capabilities`, a refusal is never retried on another route.
+
+**Unblock is a comment and a status patch.** Upstream turns `PATCH {status: ready}` into its own unblock for a `blocked` or `scheduled` card, so `kanban.unblock` posts the answer as a comment by `hermetic`, then sends the patch. `running` cannot be set by a patch; upstream refuses it. A delete is a direct `DELETE` behind a `confirm: true` literal in the request; Archive is the reversible alternative.
+
+**What the chat sees.** A `kanban_create` tool call is rendered as a card widget keyed on the `task_id` of its result, and Hermes' notice rows (`session_notifications.py`, `_KANBAN_EVENT_FORMATTERS`) as `kanban` events, matched on `^[✔⏸✖⏱🔄] ([board] )?(@assignee )?Kanban t_xxxxxxxx` at the start of a `user` row with no `display_kind`. Live, the same text arrives as `status.update` with `kind: "process"`; hermetic does not turn that frame into a row and reads the stored one on the next history refresh.
+
+**Known gaps at `v2026.9.24` (0.21.5), recorded rather than worked around:**
+
+- A card created by REST has no session link, so a card made from the dashboard never notifies a chat. Only a card an agent files with `kanban_create` in a conversation notifies it.
+- Compression rekeys the session and leaves the `tui` subscription on the old key, so notices for cards created before a `/compact` stop arriving.
+- The kanban toolset is opt-in per profile (`toolsets: [kanban]`); an agent calls `kanban_create` only when it is enabled.
+- Comments, review requests and a run starting are silent kinds with no notice. The widget and the open card poll the board API (5 s) because there is nothing to wait for, and the board view polls every 10 s.
+- Hermetic does not use an `/events` WebSocket yet; polling is the shortcut, to upgrade if latency matters.
+
 ## Requests, failures and delegated work
 
 **Composer keys differ from Desktop on purpose.** Desktop's Enter is steer/submit and Mod+Enter is queue. Enter over an open clarify skips it with an empty answer (`store/clarify.ts:200-215`, `use-composer-submit.ts:233-235`) and then redirects the text (`session.redirect`); Mod+Enter never skips, and the text waits in the local queue until the card is answered (`use-composer-queue.ts:184`; `store/clarify.test.ts:90-131`). Desktop never sends composer text as the answer. Hermetic keeps its own keys: Enter queues, ⌘Enter steers, and send-now on a queued row steers. The action decides, not the key: queueing never skips an open clarify, steering skips it with an empty answer and then steers, and a hint under the composer says so ("A question is waiting — Enter queues until it is answered · ⌘Enter skips it and steers"). Hermetic differs from Desktop in settling the card only once the skip is acknowledged, and leaving it answerable if the skip could not be sent. There is no bound of its own on a parked turn: the head's no-output deadline stands down while a request is open, the gateway's `agent.clarify_timeout` and `approvals.timeout` bound the box side, and Stop is the operator's bound. A choice clicked on a settled single-question card only drafts `Re: "<question>" — my answer: <choice>` into the composer and never sends.

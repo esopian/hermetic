@@ -23,6 +23,7 @@ import { CommandBlock } from "./Command.tsx";
 import { FileRequestBlock } from "./FileRequest.tsx";
 import { HermeticBlock } from "./Hermetic.tsx";
 import { isRequestTool } from "../../file-request-logic.ts";
+import { KanbanTaskBlock, isKanbanTaskTool } from "./KanbanTask.tsx";
 import { ProcessEventBlock } from "./ProcessEvent.tsx";
 import { QuestionBlock } from "./Question.tsx";
 import { ReasoningBlock } from "./Reasoning.tsx";
@@ -98,6 +99,12 @@ export const Block = memo(function Block({
         <ActivityGroup blocks={[block]} streaming={streaming} />
       );
     case "tool":
+      // A kanban card the agent filed is a task card.
+      if (isKanbanTaskTool(block)) {
+        return (
+          <KanbanTaskBlock block={block as ChatBlockOf<"tool">} {...(instance ? { instance } : {})} />
+        );
+      }
       // A file the agent shared is a card with Save…, or the box's refusal.
       if (isShareTool(block)) {
         return (

@@ -18,7 +18,13 @@
  *
  * Pure: no I/O, no clock.
  */
-import type { ProcessEventBlock, ProcessNoticeVariant, ProcessTaskStatus } from "../../schema/index.ts";
+import type {
+  KanbanNoticeKind,
+  ProcessEventBlock,
+  ProcessNoticeVariant,
+  ProcessTaskStatus,
+} from "../../schema/index.ts";
+import { KANBAN_NOTICE_RE } from "../../shared/kanban.ts";
 
 type Notice = NonNullable<ProcessEventBlock["notice"]>;
 type Task = NonNullable<Notice["tasks"]>[number];
@@ -382,6 +388,59 @@ function parsePersona(text: string): InjectedReading | null {
   });
 }
 
+/* ── kanban cards ─────────────────────────────────────────────────────────── */
+
+/**
+ * `tui_gateway/session_notifications.py:302-342` `_KANBAN_EVENT_FORMATTERS`:
+ * each kind's glyph and the suffix after `Kanban <id>`, with the part a head
+ * shows as `detail`. ✖ is two kinds, told apart by the suffix.
+ */
+const KANBAN_SUFFIXES: readonly (readonly [KanbanNoticeKind, string, RegExp])[] = [
+  ["completed", "✔", /^ done — (.*)$/],
+  ["blocked", "⏸", /^ blocked(?:: (.*))?$/],
+  ["gave_up", "✖", /^ gave up after repeated spawn failures()$/],
+  ["crashed", "✖", /^ worker crashed \(pid gone\); dispatcher will retry()$/],
+  ["timed_out", "⏱", /^ timed out \((max_runtime=\d+s)\); will retry$/],
+  ["status", "🔄", /^ → (.*)$/],
+];
+
+/**
+ * A card's notice: ✔ ok, ✖ failed, the rest warn. The line after it (a done
+ * card's summary, a gave-up card's error) is the `body`. A suffix this build
+ * does not know keeps the glyph's outcome, a null `kanban_kind` and the suffix
+ * as `detail`, so a wording change upstream still never reads as the operator.
+ *
+ * Upstream sends a batch of notices as one row joined by newlines
+ * (`session_notifications.py:454`): the body stops at the next notice line,
+ * and the notices from there on are the reading's `rest`, read again by the
+ * history mapper as rows of their own.
+ *
+ * shortcut: the row comes from the history re-read after the wake turn, not the
+ * live `status.update kind:"process"` (an activity hint today); upgrade if the
+ * row lags.
+ */
+function parseKanban(text: string): InjectedReading | null {
+  const [head = "", ...after] = text.split("\n");
+  const m = KANBAN_NOTICE_RE.exec(head);
+  if (!m) return null;
+  const next = after.findIndex((line) => KANBAN_NOTICE_RE.test(line));
+  const own = next === -1 ? after : after.slice(0, next);
+  const [, glyph, board, assignee, taskId, suffix = ""] = m;
+  const known = KANBAN_SUFFIXES.find(([, g, re]) => g === glyph && re.test(suffix));
+  const detail = known ? known[2].exec(suffix)?.[1] : suffix.trim();
+  return {
+    ...reading("kanban", glyph === "✔" ? "ok" : glyph === "✖" ? "failed" : "warn", {
+      task_id: taskId ?? null,
+      board: board ?? null,
+      assignee: assignee ?? null,
+      kanban_kind: known?.[0] ?? null,
+      detail: detail || null,
+      body: own.join("\n").trim() || null,
+    }),
+    rest: next === -1 ? null : after.slice(next).join("\n"),
+  };
+}
+
 /* ── dispatch ─────────────────────────────────────────────────────────────── */
 
 /**
@@ -409,6 +468,7 @@ const PARSERS: readonly ((text: string) => InjectedReading | null)[] = [
   parseTodo,
   parseModel,
   parsePersona,
+  parseKanban,
 ];
 
 /** The reading for `text` (already CRLF-normalised and right-trimmed), or null when it is none of these. */
@@ -509,6 +569,9 @@ function mirrorPreview(flat: string, event: "cron" | "webhook", head: string): I
  */
 export function previewInjectedNotice(flat: string, cut: boolean): InjectedReading | null {
   for (const [head, read] of PREVIEW_HEADS) if (flat.startsWith(head)) return read(flat);
+  // shortcut: a preview cut before the card's id reads as the operator's; upgrade if long board slugs make that common.
+  const kanban = parseKanban(flat);
+  if (kanban) return kanban;
   // The todo header (65 characters) shows whole, or as upstream's cut of it.
   const todoHead = TODO_HEADER.trimEnd();
   if (flat.startsWith(todoHead) || (cut && todoHead.startsWith(flat))) return reading("todo", "info");

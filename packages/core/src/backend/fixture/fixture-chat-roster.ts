@@ -364,7 +364,7 @@ export const FIXTURE_CHAT_SESSIONS: readonly Session[] = [
     title: "Reading the volume report",
     last_message_at: at("08:40:11"),
     unread: 0,
-    turn_count: 2,
+    turn_count: 4,
   },
   {
     id: "sx-atlas-cli",

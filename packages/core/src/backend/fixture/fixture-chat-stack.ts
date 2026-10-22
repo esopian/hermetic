@@ -31,6 +31,11 @@ import {
 import type { FixtureControls } from "./fixture-controls.ts";
 import { createFixtureControls } from "./fixture-controls.ts";
 import { withFixtureDevtap } from "./fixture-devtap.ts";
+import {
+  createFixtureKanbanStore,
+  withFixtureKanban,
+  type FixtureKanbanStore,
+} from "./fixture-kanban.ts";
 import type { TapSource } from "../../chat/devtap.ts";
 
 export interface FixtureChatStack {
@@ -38,6 +43,8 @@ export interface FixtureChatStack {
   hermes: HermesChatClient | null;
   /** `hermetic.fixture`, or null when this is not fixture mode. */
   controls: FixtureControls | null;
+  /** The boxes' kanban boards; the same store the chat client's `opts.kanban` holds. */
+  kanban: FixtureKanbanStore | null;
 }
 
 /** The pacing knobs a head may set on the fixture adapter (`OpenOptions.fixtureOptions`). */
@@ -54,12 +61,17 @@ export function createFixtureChatStack(
   pacing: FixtureChatPacing = {},
   backend: FixtureChatBackend = {},
 ): FixtureChatStack {
-  if (!fixture) return { hermes: null, controls: null };
+  if (!fixture) return { hermes: null, controls: null, kanban: null };
   const activity = createFixtureChatActivity();
   const { devtap, ...files } = backend;
-  const client = withFixtureBotMode(fixtureChatClient({ activity, ...pacing, ...files }), { activity });
+  const kanban = createFixtureKanbanStore();
+  const client = withFixtureKanban(
+    withFixtureBotMode(fixtureChatClient({ activity, kanban, ...pacing, ...files }), { activity }),
+    kanban,
+  );
   return {
     hermes: devtap === undefined ? client : withFixtureDevtap(client, devtap),
     controls: createFixtureControls({ fixture: true, activity }),
+    kanban,
   };
 }

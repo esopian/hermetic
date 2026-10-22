@@ -46,6 +46,8 @@ const TOOL_RENDER: Record<string, ToolRender> = {
   ...FILE_REQUEST_TOOL_RENDER,
   // The files plugin handing the operator a file through the outbox.
   share_file: "file_share",
+  // Hermes' kanban toolset filing a card; the result carries its `task_id`.
+  kanban_create: "kanban_task",
 };
 
 /** The spellings upstream has used for a tool's arguments, most specific first. */

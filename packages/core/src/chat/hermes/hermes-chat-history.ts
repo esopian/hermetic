@@ -229,7 +229,24 @@ export function mapHistory(box: BoxAddress, session: string, raw: unknown): Chat
     // below ever sees the marker. The id, again, comes from the raw row.
     const steer = role === "user" ? steerOf(original) : null;
     // A hidden row only gets this far as a compaction summary, whatever its role.
-    const lead = kind === "hidden" || (role === "user" && !steer) ? leadingNoticeOf(original) : null;
+    let card = kind === "hidden" || (role === "user" && !steer) ? leadingNoticeOf(original) : null;
+    // A batch of kanban notices is one row (`session_notifications.py:454`):
+    // every card but the last gets a `<id>:notice[:n]` row of its own.
+    for (let n = 0; card?.block.event === "kanban" && typeof card.rest === "string"; n++) {
+      out.push({
+        id: n === 0 ? `${id}:notice` : `${id}:notice:${n}`,
+        session,
+        role: "system",
+        author: authorRef(box, original.author ?? original.from),
+        at,
+        blocks: [card.block],
+        usage: null,
+        error: null,
+        incomplete: null,
+      });
+      card = parseLeadingNotice(card.rest);
+    }
+    const lead = card;
     // A notice that opens a row the operator also wrote in (a gateway recovery
     // note before their new message, a compaction summary merged into their
     // ask): the notice goes first under `<id>:notice`, and the operator's part
