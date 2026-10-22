@@ -23,11 +23,13 @@ jobs:
     name: publish
     runs-on: macos-14
     timeout-minutes: 30
-    # The `release` environment holds UPDATE_SIGNING_KEY, the key every
-    # installed app trusts to replace itself. GitHub hands an environment's
-    # secrets only to a job that names it, only on a `v*` tag (its deployment
-    # policy), and only after a required reviewer approves the run — so no
-    # other workflow, branch or pull request can read the key.
+    # The `release` environment holds every secret this job reads: the
+    # Developer ID certificate and notary key, and UPDATE_SIGNING_KEY, the key
+    # every installed app trusts to replace itself. GitHub hands an
+    # environment's secrets only to a job that names it, only on a `v*` tag
+    # (its deployment policy), and only after a required reviewer approves the
+    # run — so no other workflow, branch or pull request can read them. The
+    # repository holds no secrets of its own.
     environment: release
     permissions:
       # contents: write — publishes the GitHub Release and uploads packages/app/artifacts/*

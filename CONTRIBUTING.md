@@ -518,17 +518,19 @@ One-time setup, as the Apple Developer team's Account Holder:
 
 1. Create a **Developer ID Application** certificate (developer.apple.com → Certificates, or Xcode → Settings → Accounts → Manage Certificates). It is not the iOS distribution certificate the phone app uses. Export it with its private key from Keychain Access as a `.p12` with a password.
 2. Create an App Store Connect API key (App Store Connect → Users and Access → Integrations → Team Keys, Developer access is enough) and download its `.p8`. Note the key ID and the issuer ID.
-3. Set the repository secrets the `publish` job reads:
+3. Set the secrets the `publish` job reads. They belong to the `release` environment, not the repository: only `publish` names that environment, and it runs only on a `v*` tag after a required reviewer approves (see "Update signing" below), so no other workflow, branch or pull request can read them. The repository itself holds no secrets.
 
 ```
-base64 -i DeveloperID.p12 | gh secret set MACOS_SIGNING_CERT_P12
-gh secret set MACOS_SIGNING_CERT_PASSWORD
-gh secret set ELECTROBUN_DEVELOPER_ID --body "Developer ID Application: <Name> (<TEAMID>)"
-gh secret set ELECTROBUN_TEAMID --body <TEAMID>
-gh secret set ELECTROBUN_APPLEAPIISSUER --body <issuer-id>
-gh secret set ELECTROBUN_APPLEAPIKEY --body <key-id>
-gh secret set APPLE_API_KEY_P8 < AuthKey_<key-id>.p8
+base64 -i DeveloperID.p12 | gh secret set MACOS_SIGNING_CERT_P12 --env release
+gh secret set MACOS_SIGNING_CERT_PASSWORD --env release
+gh secret set ELECTROBUN_DEVELOPER_ID --env release --body "Developer ID Application: <Name> (<TEAMID>)"
+gh secret set ELECTROBUN_TEAMID --env release --body <TEAMID>
+gh secret set ELECTROBUN_APPLEAPIISSUER --env release --body <issuer-id>
+gh secret set ELECTROBUN_APPLEAPIKEY --env release --body <key-id>
+gh secret set APPLE_API_KEY_P8 --env release < AuthKey_<key-id>.p8
 ```
+
+GitHub never returns a secret's value, so keep the `.p12`, its password and the `.p8` somewhere you can read them: rotating or moving a secret means setting it again from the original.
 
 To sign a local stable build, import the certificate into your login keychain and run `bun run app:build` with the same `ELECTROBUN_*` variables and `ELECTROBUN_APPLEAPIKEYPATH` pointing at the `.p8`.
 
