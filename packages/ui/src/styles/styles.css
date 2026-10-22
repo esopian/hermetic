@@ -3739,6 +3739,13 @@ button:focus-visible,
   display: inline-flex;
   align-items: baseline;
 }
+.foot-link {
+  color: inherit;
+  text-decoration: none;
+}
+.foot-link:hover {
+  text-decoration: underline;
+}
 /* A count nobody has read yet: present, but not claiming to be a number. */
 .viewnav .badge.pending {
   color: var(--fg3);

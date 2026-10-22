@@ -57,7 +57,7 @@ import { installMenu, type MenuItemModel } from "./menu.ts";
 import { createNotifier } from "./notify.ts";
 import { markQuarantined } from "./quarantine.ts";
 import { bundlePaths } from "./paths.ts";
-import { createUpdater } from "./updates.ts";
+import { createUpdater, RELEASES_URL } from "./updates.ts";
 import { applyNavigationRules, installNavigationGuard, mainNavigationRules } from "./navigation.ts";
 import { externalUrl } from "../external-url.ts";
 import { applyMinimumSize } from "./min-size.ts";
@@ -75,19 +75,6 @@ import { createWindows, DEFAULT_FRAME, MIN_FRAME, type OpenedWindow, openingFram
 const GUI_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 
 /**
- * What `app.info` reports as this build.
- *
- * A bundle has no `package.json` to read and no git checkout to ask, so the
- * version is stamped into the environment by the build and falls back to a
- * label that cannot be mistaken for a release.
- *
- * TODO(evan): stamp this (and the build number and commit) with `--define` at
- * bundle time, so a release pushed from a built app carries the same
- * provenance as one pushed from a source checkout.
- */
-const APP_VERSION = process.env["HERMETIC_APP_VERSION"] ?? "0.0.0-dev";
-
-/**
  * The release channel this bundle was built for, read once.
  *
  * Every accessor on the devkit's `Updater.localInfo` is async — it reads the
@@ -100,8 +87,11 @@ const APP_VERSION = process.env["HERMETIC_APP_VERSION"] ?? "0.0.0-dev";
 const APP_CHANNEL = await Updater.localInfo.channel();
 
 /**
- * The bundle's own version, from the same `version.json`, for the updater's
- * "is the offered release actually newer" comparison (`main/updates.ts`).
+ * The bundle's own version, from the same `version.json`: what `app.info`
+ * reports (Settings › About & updates) and what the updater compares an offered
+ * release against (`main/updates.ts`). Electrobun stamps it from the root
+ * `package.json` (`electrobun.config.ts`), so the app and the core it bundles
+ * ship one version number.
  */
 const BUNDLE_VERSION = await Updater.localInfo.version();
 
@@ -422,10 +412,11 @@ const windows = createWindows({
        */
       native: {
         info: () => ({
-          version: APP_VERSION,
+          version: BUNDLE_VERSION,
           channel: APP_CHANNEL,
           home: paths.home,
           logPath: paths.logPath,
+          releasesUrl: RELEASES_URL,
         }),
         openExternal: (url) => Utils.openExternal(url),
         checkForUpdate: () => updater.check({ interactive: true }),

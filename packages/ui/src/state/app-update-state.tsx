@@ -14,6 +14,7 @@
  */
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
+import { settingsHash } from "../nav/settings-nav.ts";
 // Type-only, and deliberately so: this module is in the browser bundle's graph
 // and `transport-rpc.ts` must not be. It imports `electrobun/view`, which
 // resolves only behind `views://` — Bun's bundler cannot even find it — so the
@@ -104,13 +105,14 @@ export function AppUpdateNotice(): ReactElement | null {
   // is a fact about the other function, and `data-app-update` below reads the
   // record directly. Narrowing it here says so to the compiler and to a reader.
   if (update === null || text === null) return null;
+  // A link to Settings › About & updates, where the check and the download are.
   return (
-    <span className="foot-tick" data-app-update={update.status}>
+    <a href={settingsHash("about")} className="foot-tick foot-link" data-app-update={update.status}>
       <i
         className="tick-dot"
         style={{ background: update.status === "error" ? "var(--bad)" : "var(--warn)" }}
       />
       {text}
-    </span>
+    </a>
   );
 }

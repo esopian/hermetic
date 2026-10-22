@@ -290,7 +290,13 @@ function nativeWith(
   pickFolder: () => Promise<string | null> = async () => null,
 ): NonNullable<HandlerContext["native"]> {
   return {
-    info: () => ({ version: "0.0.0", channel: "dev", home: ":memory:", logPath: null }),
+    info: () => ({
+      version: "0.0.0",
+      channel: "dev",
+      home: ":memory:",
+      logPath: null,
+      releasesUrl: "https://example.com/releases",
+    }),
     openExternal: () => undefined,
     checkForUpdate: async () => undefined,
     installCli: async () => ({ path: "/x", elevated: false }),

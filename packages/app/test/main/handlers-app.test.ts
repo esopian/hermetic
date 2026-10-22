@@ -44,6 +44,7 @@ function fakeNative(calls: Calls): NativeDeps {
       channel: "canary",
       home: "/tmp/home",
       logPath: "/tmp/home/app.log",
+      releasesUrl: "https://example.com/releases",
     }),
     openExternal: (url) => {
       calls.opened.push(url);
@@ -110,6 +111,7 @@ describe("the native requests, with a desktop head behind them", () => {
       channel: "canary",
       home: "/tmp/home",
       logPath: "/tmp/home/app.log",
+      releasesUrl: "https://example.com/releases",
     });
   });
 

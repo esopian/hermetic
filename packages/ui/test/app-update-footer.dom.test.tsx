@@ -100,6 +100,8 @@ describe("AppUpdateNotice", () => {
     render(<Host />);
     const notice = await screen.findByText("Update v9.9.9 available");
     expect(notice.closest(".footer")).not.toBe(null);
+    // The notice is the way to the check and the download.
+    expect(notice.closest("a")?.getAttribute("href")).toBe("#settings/about");
   });
 
   test("a later push replaces the line", async () => {
